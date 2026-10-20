@@ -20,13 +20,27 @@
  *
  * Prints "MOUNTPROBE OK" or "MOUNTPROBE FAIL: reason", or CLAIMPROBE in the
  * `claim` mode. Freestanding; direct system calls (probe.h).
+ *
+ * Given `machine=native` (probe_args.h), on a machine that is already up, the
+ * probe runs every row but the `claim` mode's in its working directory, a
+ * workspace whose absolute path is short enough for a mount's record, with
+ * `hello` and `stdintest` in it: the mount points are `mnt` and `mnt2` there,
+ * and the long target a name there. The vfat source is the first device of
+ * `loops=DEVICE,DEVICE`, an empty FAT32 volume attached and not mounted, on
+ * which the writable mount writes `hello.txt` and a copy of `hello`; the
+ * second is a KRFFS volume, in place of /dev/disk0p1. The unprivileged
+ * caller is the uid `ids=OLD:NEW,...` gives for 1000; the exec child reads a
+ * pipe the probe holds open in place of the console; and the unmount record
+ * is looked for in the whole of the kernel's ring.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define O_CREAT   0100
 #define O_RDONLY  0
 #define O_WRONLY  1
+#define O_TRUNC   01000
 #define O_CLOEXEC 02000000
 #define F_DUPFD   0
 
@@ -228,6 +242,127 @@ static unsigned char buf[4096];
 #define SRC "/dev/disk0p2"
 #define MNT "/mnt"
 
+/* The paths the rows use: the test image's, or a native run's (`native_paths`).
+ * `mnt_abs` is the mount point's absolute path, as /proc/mounts and the
+ * unmount record write it, and has the room a mount's record has. */
+static const char *src = SRC;
+static const char *krffs_src = "/dev/disk0p1";
+static const char *mnt = MNT;
+static const char *mnt2 = "/mnt2";
+static char mnt_abs[64] = MNT;
+
+/** `a`, `b` and `c` joined in `out` of `cap` bytes, cut to fit; returns
+ * `out`. */
+static char *join3(char *out, int cap, const char *a, const char *b, const char *c)
+{
+    const char *parts[3];
+    int k = 0, i, j;
+
+    parts[0] = a;
+    parts[1] = b;
+    parts[2] = c;
+    for (j = 0; j < 3; j++) {
+        for (i = 0; parts[j][i] != '\0' && k < cap - 1; i++) {
+            out[k++] = parts[j][i];
+        }
+    }
+    out[k] = '\0';
+    return out;
+}
+
+/** The mount point's path followed by `rest`, in the next of four buffers,
+ * so that a call may take two of them. */
+static const char *in_mnt(const char *rest)
+{
+    static char paths[4][96];
+    static int next;
+    char *p = paths[next];
+
+    next = (next + 1) % 4;
+    return join3(p, (int)sizeof(paths[0]), mnt, rest, "");
+}
+
+/** The path of `name`, a file at the root of the test image or in the
+ * workspace of a native run. */
+static const char *at_top(const char *name)
+{
+    static char paths[2][64];
+    static int next;
+    char *p = paths[next];
+
+    next = (next + 1) % 2;
+    return join3(p, (int)sizeof(paths[0]), probe_native() ? "" : "/", name, "");
+}
+
+/** Copy the `n`th device of `loops` to `out`, of `cap` bytes; fail when
+ * there is none. */
+static const char *loop_device(int n, char *out, int cap)
+{
+    const char *s = probe_arg("loops", "");
+    int k = 0;
+
+    for (; n > 0 && *s != '\0'; s++) {
+        if (*s == ',') {
+            n--;
+        }
+    }
+    while (*s != '\0' && *s != ',' && k < cap - 1) {
+        out[k++] = *s++;
+    }
+    out[k] = '\0';
+    if (k == 0) {
+        fail("loops= names no device for a volume");
+    }
+    return out;
+}
+
+/** Set the paths of a native run: the mount points in the working directory,
+ * and the two volumes from `loops`. */
+static void native_paths(void)
+{
+    static char vfat_dev[48], other_dev[48];
+    char cwd[64];
+    int n = syscall2(SYS_GETCWD, (long)cwd, (int)sizeof(cwd));
+
+    if (n <= 0 || (int)strlen(cwd) + 5 > (int)sizeof(mnt_abs)) {
+        fail("the working directory's path is too long for a mount's record");
+    }
+    join3(mnt_abs, (int)sizeof(mnt_abs), cwd, "/mnt", "");
+    mnt = "mnt";
+    mnt2 = "mnt2";
+    src = loop_device(0, vfat_dev, (int)sizeof(vfat_dev));
+    krffs_src = loop_device(1, other_dev, (int)sizeof(other_dev));
+}
+
+/** Write `hello.txt` and a copy of the program `hello` on the writable mount
+ * of a native run's empty volume, as the mount suite puts them on its own. */
+static void fill_volume(void)
+{
+    static const char text[] = "hello from the mount suite\n";
+    int in, out, n;
+
+    out = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (out < 0 || syscall3(SYS_WRITE, out, (long)text, (int)sizeof(text) - 1) != 27) {
+        fail("hello.txt is written on the writable mount");
+    }
+    syscall1(SYS_CLOSE, out);
+    in = syscall3(SYS_OPEN, (long)"hello", O_RDONLY, 0);
+    out = syscall3(SYS_OPEN, (long)in_mnt("/hello"), O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (in < 0 || out < 0) {
+        fail("hello is copied to the writable mount");
+    }
+    while ((n = syscall3(SYS_READ, in, (long)buf, (int)sizeof(buf))) > 0) {
+        if (syscall3(SYS_WRITE, out, (long)buf, n) != n) {
+            fail("hello is copied to the writable mount");
+        }
+    }
+    syscall1(SYS_CLOSE, in);
+    syscall1(SYS_CLOSE, out);
+    if (n < 0) {
+        fail("hello is copied to the writable mount");
+    }
+}
+
 /** Read the /proc file `path` into `buf` as text, with one read of at most
  * 4095 bytes; fail when it does not open or read. */
 static void read_text(const char *path)
@@ -261,78 +396,81 @@ static void rows_placing(void)
 {
     int fd, d;
 
-    fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)at_top("hello"), O_RDONLY, 0);
     d = syscall3(SYS_FCNTL, fd, F_DUPFD, 10);
     if (fd < 0 || d != 10) {
         fail("F_DUPFD on the root");
     }
     syscall1(SYS_CLOSE, d);
     syscall1(SYS_CLOSE, fd);
-    if (syscall2(SYS_MKDIR, (long)MNT, 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)mnt, 0755) != 0) {
         fail("mkdir " MNT);
     }
-    if (do_mount(SRC, MNT, 0, 0) != 0) {
+    if (do_mount(src, mnt, 0, 0) != 0) {
         fail("a writable mount is placed");
     }
     {
         int rfd, xfd;
 
-        if (syscall2(SYS_MKDIR, (long)MNT "/rdir", 0755) != 0) {
+        if (syscall2(SYS_MKDIR, (long)in_mnt("/rdir"), 0755) != 0) {
             fail("mkdir on the writable mount");
         }
-        rfd = syscall3(SYS_OPEN, (long)MNT "/rdir", O_RDONLY, 0);
-        if (rfd < 0 || syscall2(SYS_RENAME, (long)MNT "/rdir", (long)MNT "/rdir2") != 0) {
+        rfd = syscall3(SYS_OPEN, (long)in_mnt("/rdir"), O_RDONLY, 0);
+        if (rfd < 0 || syscall2(SYS_RENAME, (long)in_mnt("/rdir"), (long)in_mnt("/rdir2")) != 0) {
             fail("open and rename a directory on the mount");
         }
         xfd = syscall4(SYS_OPENAT, rfd, (long)"x", O_WRONLY | O_CREAT, 0644);
-        if (xfd < 0 || xstat(MNT "/rdir2/x") != 0) {
+        if (xfd < 0 || xstat(in_mnt("/rdir2/x")) != 0) {
             fail("a directory descriptor follows its directory's rename");
         }
         syscall1(SYS_CLOSE, xfd);
         syscall1(SYS_CLOSE, rfd);
-        if (syscall1(SYS_UNLINK, (long)MNT "/rdir2/x") != 0) {
+        if (syscall1(SYS_UNLINK, (long)in_mnt("/rdir2/x")) != 0) {
             fail("unlink on the writable mount");
         }
-        if (syscall1(SYS_RMDIR, (long)MNT "/rdir2") != 0) {
+        if (syscall1(SYS_RMDIR, (long)in_mnt("/rdir2")) != 0) {
             fail("unlink and rmdir on the writable mount");
         }
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (probe_native()) {
+        fill_volume();
+    }
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("the writable mount is taken away");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY | MS_REMOUNT, 0) != -EINVAL ||
-        do_mount(SRC, MNT, MS_RDONLY | MS_BIND, 0) != -ENOTDIR ||
-        do_mount(SRC, MNT, MS_RDONLY | MS_MOVE, 0) != -EINVAL) {
+    if (do_mount(src, mnt, MS_RDONLY | MS_REMOUNT, 0) != -EINVAL ||
+        do_mount(src, mnt, MS_RDONLY | MS_BIND, 0) != -ENOTDIR ||
+        do_mount(src, mnt, MS_RDONLY | MS_MOVE, 0) != -EINVAL) {
         fail("MS_REMOUNT of no mount and MS_MOVE are EINVAL, and MS_BIND of a device ENOTDIR");
     }
-    if (do_mount(SRC, "/proc", MS_RDONLY, 0) != -EINVAL) {
+    if (do_mount(src, "/proc", MS_RDONLY, 0) != -EINVAL) {
         fail("a target on /proc is EINVAL");
     }
-    if (do_mount(SRC, "/", MS_RDONLY, 0) != -EINVAL) {
+    if (do_mount(src, "/", MS_RDONLY, 0) != -EINVAL) {
         fail("the root as a target is EINVAL");
     }
-    if (do_mount("/dev/null", MNT, MS_RDONLY, 0) != -EINVAL) {
+    if (do_mount("/dev/null", mnt, MS_RDONLY, 0) != -EINVAL) {
         fail("a source that is not a partition window is EINVAL");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, "nosuch=1") != -EINVAL) {
+    if (do_mount(src, mnt, MS_RDONLY, "nosuch=1") != -EINVAL) {
         fail("an unknown option is EINVAL");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
+    if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the read-only mount");
     }
-    if (do_mount("/dev/disk0p1", MNT, MS_RDONLY, 0) != -EBUSY) {
+    if (do_mount(krffs_src, mnt, MS_RDONLY, 0) != -EBUSY) {
         fail("a second mount on the same target is EBUSY");
     }
-    if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != -ENOENT) {
+    if (do_mount(src, mnt2, MS_RDONLY, 0) != -ENOENT) {
         fail("a missing target is ENOENT");
     }
-    if (syscall2(SYS_MKDIR, (long)"/mnt2", 0755) != 0) {
+    if (syscall2(SYS_MKDIR, (long)mnt2, 0755) != 0) {
         fail("mkdir /mnt2");
     }
-    if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != -EBUSY) {
+    if (do_mount(src, mnt2, MS_RDONLY, 0) != -EBUSY) {
         fail("a second mount over a claimed range is EBUSY");
     }
-    if (do_mount("/dev/disk0p1", "/mnt2", MS_RDONLY, 0) != -EINVAL) {
+    if (do_mount(krffs_src, mnt2, MS_RDONLY, 0) != -EINVAL) {
         fail("the KRFFS partition is not a vfat volume");
     }
 }
@@ -351,10 +489,10 @@ static void rows_reading(void)
 {
     int fd, n;
 
-    if (xstat(MNT "/hello.txt") != 0) {
+    if (xstat(in_mnt("/hello.txt")) != 0) {
         fail("stat of a file on the mount");
     }
-    fd = syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY, 0);
     if (fd < 0) {
         fail("open on the mount");
     }
@@ -367,20 +505,20 @@ static void rows_reading(void)
         fail("the file's bytes");
     }
     syscall1(SYS_CLOSE, fd);
-    if (syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_WRONLY, 0) != -EROFS) {
+    if (syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_WRONLY, 0) != -EROFS) {
         fail("a write-open on the read-only mount is EROFS");
     }
-    if (syscall2(SYS_MKDIR, (long)MNT "/newdir", 0755) != -EROFS) {
+    if (syscall2(SYS_MKDIR, (long)in_mnt("/newdir"), 0755) != -EROFS) {
         fail("mkdir on the read-only mount is EROFS");
     }
-    if (syscall2(SYS_SYMLINK, (long)"x", (long)MNT "/hello.txt") != -EEXIST ||
-        syscall2(SYS_SYMLINK, (long)"x", (long)MNT "/newlink") != -EROFS) {
+    if (syscall2(SYS_SYMLINK, (long)"x", (long)in_mnt("/hello.txt")) != -EEXIST ||
+        syscall2(SYS_SYMLINK, (long)"x", (long)in_mnt("/newlink")) != -EROFS) {
         fail("symlink on the read-only mount is EEXIST for a name that exists, else EROFS");
     }
-    if (syscall1(SYS_UNLINK, (long)MNT "/hello.txt") != -EROFS) {
+    if (syscall1(SYS_UNLINK, (long)in_mnt("/hello.txt")) != -EROFS) {
         fail("unlink on the read-only mount is EROFS");
     }
-    fd = syscall3(SYS_OPEN, (long)MNT, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)mnt, O_RDONLY, 0);
     if (fd < 0) {
         fail("open the mount root");
     }
@@ -400,31 +538,31 @@ static void rows_reading(void)
         syscall1(SYS_CLOSE, f2);
     }
     syscall1(SYS_CLOSE, fd);
-    if (probe_statfs(MNT "/hello.txt", buf) != 0 || *(unsigned *)buf != STATFS_MAGIC_VFAT) {
+    if (probe_statfs(in_mnt("/hello.txt"), buf) != 0 || *(unsigned *)buf != STATFS_MAGIC_VFAT) {
         fail("statfs64 on the mount is vfat's");
     }
-    if (xstat(MNT "/nosuch") != -ENOENT) {
+    if (xstat(in_mnt("/nosuch")) != -ENOENT) {
         fail("a missing name on the mount is ENOENT");
     }
-    if (xstat(MNT "/hello.txt/x") != -ENOTDIR) {
+    if (xstat(in_mnt("/hello.txt/x")) != -ENOTDIR) {
         fail("a file used as a directory on the mount is ENOTDIR");
     }
-    if (xstat(MNT "/../mnt/hello.txt") != 0) {
+    if (xstat(in_mnt("/../mnt/hello.txt")) != 0) {
         fail("dot-dot climbs out of the mount and back in");
     }
-    if (xstat(MNT "/../etc") != 0) {
+    if (xstat(in_mnt(probe_native() ? "/../hello" : "/../etc")) != 0) {
         fail("dot-dot at the mount root reaches the parent file system");
     }
-    if (syscall2(SYS_RENAME, (long)MNT "/hello.txt", (long)"/hello-moved") != -EXDEV) {
+    if (syscall2(SYS_RENAME, (long)in_mnt("/hello.txt"), (long)at_top("hello-moved")) != -EXDEV) {
         fail("rename across mounts is EXDEV");
     }
-    if (syscall1(SYS_RMDIR, (long)MNT) != -EBUSY) {
+    if (syscall1(SYS_RMDIR, (long)mnt) != -EBUSY) {
         fail("rmdir of the mount point is EBUSY");
     }
-    if (syscall1(SYS_UNLINK, (long)MNT) != -EBUSY) {
+    if (syscall1(SYS_UNLINK, (long)mnt) != -EBUSY) {
         fail("unlink of the mount point is EBUSY");
     }
-    if (syscall2(SYS_RENAME, (long)MNT, (long)"/mnt3") != -EBUSY) {
+    if (syscall2(SYS_RENAME, (long)mnt, (long)at_top("mnt3")) != -EBUSY) {
         fail("rename of the mount point is EBUSY");
     }
 }
@@ -432,8 +570,12 @@ static void rows_reading(void)
 /** /proc/mounts lists the mount, and /proc/filesystems the types. */
 static void rows_proc(void)
 {
+    char want[128];
+
     read_text("/proc/mounts");
-    if (!contains((const char *)buf, SRC " " MNT " vfat ro")) {
+    join3(want, (int)sizeof(want), src, " ", mnt_abs);
+    join3(want + strlen(want), (int)(sizeof(want) - strlen(want)), " vfat ro", "", "");
+    if (!contains((const char *)buf, want)) {
         fail("/proc/mounts names the mount");
     }
     read_text("/proc/filesystems");
@@ -461,7 +603,7 @@ static void row_working_directory(void)
     if (pid == 0) {
         syscall1(SYS_CLOSE, opened[0]);
         syscall1(SYS_CLOSE, go[1]);
-        if (syscall1(SYS_CHDIR, (long)MNT) != 0) {
+        if (syscall1(SYS_CHDIR, (long)mnt) != 0) {
             sys_exit(9);
         }
         syscall3(SYS_WRITE, opened[1], (long)"c", 1);
@@ -474,14 +616,14 @@ static void row_working_directory(void)
         fail("the chdir child did not enter the mount");
     }
     syscall1(SYS_CLOSE, opened[0]);
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EBUSY) {
         fail("umount2 with a working directory inside is EBUSY");
     }
     syscall1(SYS_CLOSE, go[1]);
     if (wait_status(pid) != 0) {
         fail("the chdir child");
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 after the working directory left");
     }
 }
@@ -505,15 +647,15 @@ static void row_working_directory(void)
 static void rows_lifetime(void)
 {
     int fd, d1, d2, d3, dfd, pid, started;
-    int opened[2], go[2];
+    int opened[2], go[2], input[2];
     char byte = 0;
 
-    fd = syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_RDONLY, 0);
-    dfd = syscall3(SYS_OPEN, (long)MNT, O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY, 0);
+    dfd = syscall3(SYS_OPEN, (long)mnt, O_RDONLY, 0);
     if (fd < 0 || dfd < 0) {
         fail("open for the lifetime rows");
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EBUSY) {
         fail("umount2 with a file open is EBUSY");
     }
     d1 = syscall1(SYS_DUP, fd);
@@ -536,12 +678,12 @@ static void rows_lifetime(void)
     }
     syscall1(SYS_CLOSE, fd);
     syscall1(SYS_CLOSE, dfd);
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EBUSY) {
         fail("umount2 with duplicates open is EBUSY");
     }
     syscall1(SYS_CLOSE, d1);
     syscall1(SYS_CLOSE, d2);
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EBUSY) {
         fail("umount2 with the last duplicate open is EBUSY");
     }
     go[0] = -1; /* the kernel fills the pair through the cast address */
@@ -561,40 +703,46 @@ static void rows_lifetime(void)
     }
     syscall1(SYS_CLOSE, go[0]);
     syscall1(SYS_CLOSE, d3);
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EBUSY) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EBUSY) {
         fail("umount2 with a child's inherited descriptor is EBUSY");
     }
     syscall1(SYS_CLOSE, go[1]);
     wait_status(pid);
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 once every description is closed");
     }
-    if (xstat(MNT "/hello.txt") != -ENOENT) {
+    if (xstat(in_mnt("/hello.txt")) != -ENOENT) {
         fail("the mount is gone after umount2");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
+    if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the mount again after umount2");
     }
 
     opened[0] = -1; /* the kernel fills the pair through the cast address */
     opened[1] = -1;
-    if (syscall1(SYS_PIPE, (long)opened) != 0) {
+    input[0] = -1;
+    input[1] = -1;
+    if (syscall1(SYS_PIPE, (long)opened) != 0 ||
+        (probe_native() && syscall1(SYS_PIPE, (long)input) != 0)) {
         fail("a pipe for the exec child");
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         char *av[2];
 
-        av[0] = (char *)"/stdintest";
+        av[0] = (char *)(probe_native() ? "./stdintest" : "/stdintest");
         av[1] = 0;
-        fd = syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_RDONLY | O_CLOEXEC, 0);
+        fd = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY | O_CLOEXEC, 0);
         if (fd < 0) {
             sys_exit(7);
+        }
+        if (probe_native() && syscall2(SYS_DUP2, input[0], 0) != 0) {
+            sys_exit(6);
         }
         syscall3(SYS_WRITE, opened[1], (long)"o", 1);
         syscall1(SYS_CLOSE, opened[1]);
         syscall1(SYS_CLOSE, opened[0]);
-        syscall3(SYS_EXECVE, (long)"/stdintest", (long)av, (long)(av + 1));
+        syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1));
         sys_exit(8);
     }
     syscall1(SYS_CLOSE, opened[1]);
@@ -608,13 +756,17 @@ static void rows_lifetime(void)
     if (started < 0) {
         fail("the exec child ended before it ran stdintest");
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 after the close-on-exec descriptor was dropped by execve");
     }
     if (syscall2(SYS_KILL, pid, 9) != 0 || (wait_status(pid) & 0x7f) != 9) {
         fail("the exec child was not alive across the unmount");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
+    if (probe_native()) {
+        syscall1(SYS_CLOSE, input[0]);
+        syscall1(SYS_CLOSE, input[1]);
+    }
+    if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the mount once more");
     }
 
@@ -631,15 +783,15 @@ static void rows_flags(void)
     char *av[2];
     int pid;
 
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EINVAL) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EINVAL) {
         fail("umount2 of a directory that is not a mount point is EINVAL");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
+    if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the mount for the flag rows");
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, MNT_DETACH) != -EINVAL ||
-        syscall2(SYS_UMOUNT2, (long)MNT, MNT_FORCE) != -EINVAL ||
-        syscall2(SYS_UMOUNT2, (long)MNT, UMOUNT_NOFOLLOW) != -EINVAL) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, MNT_DETACH) != -EINVAL ||
+        syscall2(SYS_UMOUNT2, (long)mnt, MNT_FORCE) != -EINVAL ||
+        syscall2(SYS_UMOUNT2, (long)mnt, UMOUNT_NOFOLLOW) != -EINVAL) {
         fail("MNT_DETACH, MNT_FORCE and UMOUNT_NOFOLLOW are EINVAL");
     }
     if (syscall2(SYS_UMOUNT2, (long)"/proc", 0) != -EBUSY ||
@@ -649,13 +801,13 @@ static void rows_flags(void)
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        if (syscall1(SYS_SETUID, 1000) != 0) {
+        if (syscall1(SYS_SETUID, probe_id(1000)) != 0) {
             sys_exit(3);
         }
-        if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != -EPERM) {
+        if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EPERM) {
             sys_exit(4);
         }
-        if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != -EPERM) {
+        if (do_mount(src, mnt2, MS_RDONLY, 0) != -EPERM) {
             sys_exit(5);
         }
         sys_exit(0);
@@ -663,27 +815,27 @@ static void rows_flags(void)
     if (wait_status(pid) != 0) {
         fail("an unprivileged caller is refused with EPERM");
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 before the noexec rows");
     }
 
-    if (do_mount(SRC, MNT, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
+    if (do_mount(src, mnt, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
         fail("the noexec mount");
     }
-    av[0] = (char *)MNT "/hello";
+    av[0] = (char *)in_mnt("/hello");
     av[1] = 0;
-    if (syscall3(SYS_EXECVE, (long)MNT "/hello", (long)av, (long)(av + 1)) != -EACCES) {
+    if (syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1)) != -EACCES) {
         fail("execve on a noexec mount is EACCES");
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 after the noexec row");
     }
-    if (do_mount(SRC, MNT, MS_RDONLY, "umask=000") != 0) {
+    if (do_mount(src, mnt, MS_RDONLY, "umask=000") != 0) {
         fail("the executable mount");
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        int xr = syscall3(SYS_EXECVE, (long)MNT "/hello", (long)av, (long)(av + 1));
+        int xr = syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1));
 
         sys_exit(-xr);
     }
@@ -703,12 +855,13 @@ static void rows_flags(void)
             fail(why);
         }
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 after running from the mount");
     }
 
     {
         static char longname[80];
+        const char *target;
         int i;
 
         longname[0] = '/';
@@ -716,15 +869,15 @@ static void rows_flags(void)
             longname[i] = 'n';
         }
         longname[70] = 0;
-        if (syscall2(SYS_MKDIR, (long)longname, 0755) != 0) {
+        target = probe_native() ? longname + 1 : longname;
+        if (syscall2(SYS_MKDIR, (long)target, 0755) != 0) {
             fail("mkdir of the long target");
         }
-        if (do_mount(SRC, longname, MS_RDONLY, 0) != -ENAMETOOLONG) {
+        if (do_mount(src, target, MS_RDONLY, 0) != -ENAMETOOLONG) {
             fail("a long target is ENAMETOOLONG");
         }
-        syscall1(SYS_RMDIR, (long)longname);
-        if (do_mount(SRC, "/mnt2", MS_RDONLY, 0) != 0 ||
-            syscall2(SYS_UMOUNT2, (long)"/mnt2", 0) != 0) {
+        syscall1(SYS_RMDIR, (long)target);
+        if (do_mount(src, mnt2, MS_RDONLY, 0) != 0 || syscall2(SYS_UMOUNT2, (long)mnt2, 0) != 0) {
             fail("the source mounts after the refused long target");
         }
     }
@@ -777,6 +930,38 @@ static void rows_claim(void)
     sys_exit(0);
 }
 
+/** Whether the kernel's ring, read through /dev/bootlog to its end, has the
+ * text `want`, which is shorter than 128 bytes; a native run's record comes
+ * after more of the ring than one read takes. */
+static int ring_has(const char *want)
+{
+    static char log[4096 + 128];
+    int len = (int)strlen(want);
+    int fd = syscall3(SYS_OPEN, (long)"/dev/bootlog", O_RDONLY, 0);
+    int keep = 0, n, i, j;
+
+    if (fd < 0) {
+        fail("open /dev/bootlog");
+    }
+    while ((n = syscall3(SYS_READ, fd, (long)(log + keep), 4096)) > 0) {
+        n += keep;
+        for (i = 0; i + len <= n; i++) {
+            for (j = 0; j < len && log[i + j] == want[j]; j++) {
+            }
+            if (j == len) {
+                syscall1(SYS_CLOSE, fd);
+                return 1;
+            }
+        }
+        keep = n < len - 1 ? n : len - 1;
+        for (i = 0; i < keep; i++) {
+            log[i] = log[n - keep + i];
+        }
+    }
+    syscall1(SYS_CLOSE, fd);
+    return 0;
+}
+
 /** The unmount record counts descriptions, not descriptors: one open and
  * three duplicates, then a duplication that fails on a table filled to a
  * limit of sixteen and one refused past the limit, end in a record of one
@@ -784,14 +969,15 @@ static void rows_claim(void)
 static void rows_record(void)
 {
     static char log[16384 + 1];
+    static char want[128];
     unsigned rl[4];
     int fd, d, filler[16], nfill = 0, i, n;
-    static const char want[] = "unmounted " MNT ": 1 opens, 1 releases";
 
-    if (do_mount(SRC, MNT, MS_RDONLY, 0) != 0) {
+    join3(want, (int)sizeof(want), "unmounted ", mnt_abs, ": 1 opens, 1 releases");
+    if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the mount for the record row");
     }
-    fd = syscall3(SYS_OPEN, (long)MNT "/hello.txt", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY, 0);
     if (fd < 0) {
         fail("open for the record row");
     }
@@ -821,8 +1007,14 @@ static void rows_record(void)
     for (i = 3; i < 16; i++) {
         syscall1(SYS_CLOSE, i);
     }
-    if (syscall2(SYS_UMOUNT2, (long)MNT, 0) != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 for the record row");
+    }
+    if (probe_native()) {
+        if (!ring_has(want)) {
+            fail("the unmount record does not say 1 opens, 1 releases");
+        }
+        return;
     }
     fd = syscall3(SYS_OPEN, (long)"/dev/bootlog", O_RDONLY, 0);
     if (fd < 0) {
@@ -834,7 +1026,7 @@ static void rows_record(void)
         fail("read /dev/bootlog");
     }
     log[n] = 0;
-    for (i = 0; i + (int)sizeof(want) - 1 <= n; i++) {
+    for (i = 0; i + (int)strlen(want) <= n; i++) {
         int j = 0;
 
         while (want[j] && log[i + j] == want[j]) {
@@ -847,16 +1039,21 @@ static void rows_record(void)
     fail("the unmount record does not say 1 opens, 1 releases");
 }
 
-/** Run the `claim` rows when argv[1] begins with c; otherwise run every
- * other group of rows in order and remove the mount points. */
+/** Run the `claim` rows when the first positional argument begins with c;
+ * otherwise run every other group of rows in order and remove the mount
+ * points. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
+    const char *mode;
 
-    if (argc >= 2 && argv[1][0] == 'c') {
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1);
+    if (mode != 0 && mode[0] == 'c') {
         claim_mode = 1;
         rows_claim();
+    }
+    if (probe_native()) {
+        native_paths();
     }
     rows_placing();
     rows_reading();
@@ -864,8 +1061,8 @@ void probe_main(unsigned long *sp)
     rows_lifetime();
     rows_flags();
     rows_record();
-    syscall1(SYS_RMDIR, (long)"/mnt2");
-    syscall1(SYS_RMDIR, (long)MNT);
+    syscall1(SYS_RMDIR, (long)mnt2);
+    syscall1(SYS_RMDIR, (long)mnt);
     puts("MOUNTPROBE OK");
     sys_exit(0);
 }
