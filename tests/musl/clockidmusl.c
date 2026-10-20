@@ -454,7 +454,7 @@ static int sleeps(void)
         return fail("a relative sleep of 50 ms took less than 50 ms of time since boot");
     }
     start = ns_of(CLOCK_MONOTONIC);
-    to_kts(start - 1000000000LL, &req);
+    to_kts(start / 2, &req);
     if (sleep_raw(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL) != 0 ||
         ns_of(CLOCK_MONOTONIC) - start > 1000000000LL) {
         return fail("an absolute sleep to a time already past did not return");
