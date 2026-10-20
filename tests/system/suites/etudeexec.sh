@@ -54,7 +54,8 @@ rm -f "$WORK" "$TAR" "$LOG" "$FEED" "$RESULTS"
 
 # The files the guest needs, by their paths in the repository.
 FILES="tools/etude utils/sha256.c utils/sha256.h tests/host/etude_exec_hosttest.c
-tests/host/compat/fixdir_host.c tests/host/compat/fixdir_host.h tests/auxvprobe.c
+tests/host/compat/fixdir_host.c tests/host/compat/fixdir_host.h
+tests/host/compat/pathmax_host.h tests/auxvprobe.c
 tests/system/etudeexec_guest.sh"
 
 # The results the guest script must give, each as `etudeexec: NAME: ok`.
