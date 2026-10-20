@@ -231,7 +231,8 @@ static int peer(const char *port, const char *mode)
  * Be the tool `argv[2]`: `scan FILE TEXT` exits 0 when FILE has TEXT;
  * `report CASE` reports one assertion of CASE as a guest program does;
  * `killguest FILE` kills the etude-guest whose PID FILE has; and `peer PORT
- * MODE MARK` is a service, MARK naming its row among the processes.
+ * MODE MARK` is a service, whose MARK has its row and this run's fixture
+ * directory, so that the test finds it among the processes.
  */
 static int tool(int argc, char **argv)
 {
@@ -790,9 +791,9 @@ static int scenario_guest(struct etude_case *c, int real)
 }
 
 /* The arguments of a service's start: the tool `peer`, the case's first
- * port, a mode, and the mark of the row. */
+ * port, a mode, and the mark of the row in this run, ETUDE_TEST_MARK. */
 struct peer_args {
-    char port[16], mark[96];
+    char port[16], mark[PATH_MAX + 8];
     char *argv[6];
 };
 
@@ -800,7 +801,7 @@ struct peer_args {
 static char *const *peer_args(struct etude_case *c, struct peer_args *a, const char *mode)
 {
     snprintf(a->port, sizeof(a->port), "%u", etude_port(c, 0));
-    snprintf(a->mark, sizeof(a->mark), "mark=%s", getenv("ETUDE_TEST_ROW"));
+    snprintf(a->mark, sizeof(a->mark), "mark=%s", getenv("ETUDE_TEST_MARK"));
     a->argv[0] = "tool";
     a->argv[1] = "peer";
     a->argv[2] = a->port;
@@ -1545,7 +1546,8 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
 }
 
 /** Make the environment of row `r`'s scenario: this program's, with the
- * row, the nonce, the stand-in's mode and its files. */
+ * row, the nonce, the stand-in's mode and its files, and the mark of the
+ * row's services, a path in this run's fixture directory. */
 static char **row_env(const struct row *r, char *bufs[6])
 {
     size_t n = 0, i;
@@ -1568,7 +1570,7 @@ static char **row_env(const struct row *r, char *bufs[6])
     snprintf(bufs[2], PATH_MAX, "ETUDE_FAKE_QEMU=%s", r->mode != NULL ? r->mode : "");
     snprintf(bufs[3], PATH_MAX, "ETUDE_FAKE_STAGE=%s", fix_dir());
     snprintf(bufs[4], PATH_MAX, "ETUDE_FAKE_GUEST_PID=%s/%s.guest", fix_dir(), r->name);
-    snprintf(bufs[5], PATH_MAX, "ETUDE_TEST_UNUSED=1");
+    snprintf(bufs[5], PATH_MAX, "ETUDE_TEST_MARK=%s/%s", fix_dir(), r->name);
     for (i = 0; i < 6; i++)
         env[n + i] = bufs[i];
     return env;
@@ -1665,31 +1667,54 @@ static int pid_order(const void *a, const void *b)
 }
 
 /**
- * Put in `pids`, sorted, the processes of row `name` that run, found by the
- * marks in their arguments: the scenario and its keepers by its invocation,
- * the stand-ins for QEMU by the copies of its scratch, and its services by
- * their mark; give their count, or -1 when ps cannot be read.
+ * Put in `pids`, sorted, the processes that run with one of the texts of
+ * `any`, a list that NULL ends, in their arguments, and with `need` too when
+ * it is not NULL; give their count, or -1 when ps cannot be read.
+ *
+ * ps lists every process of the machine, among them those of other runs of
+ * this test, which ci's runners and the worker copies start at the same
+ * time. Each caller's texts contain the path of this run's fixture
+ * directory, which no other run has, so that a run neither counts nor kills
+ * another's processes.
  */
-static int row_procs(const char *name, long pids[ROW_PROCS])
+static int find_procs(const char *need, const char *const any[], long pids[ROW_PROCS])
 {
-    char line[8192], inv[160], scratch[160], mark[160];
+    char line[8192];
     FILE *f = popen("ps -ww -eo pid=,args=", "r");
-    int n = 0;
+    int n = 0, i;
 
     if (f == NULL)
         return -1;
-    snprintf(inv, sizeof(inv), "/%s.invocation.json", name);
-    snprintf(scratch, sizeof(scratch), "/%s.scratch/", name);
-    snprintf(mark, sizeof(mark), " mark=%s\n", name);
-    while (fgets(line, sizeof(line), f) != NULL)
-        if ((strstr(line, inv) != NULL || strstr(line, scratch) != NULL ||
-             strstr(line, mark) != NULL) &&
-            n < ROW_PROCS)
+    while (fgets(line, sizeof(line), f) != NULL) {
+        for (i = 0; any[i] != NULL; i++)
+            if (strstr(line, any[i]) != NULL)
+                break;
+        if (any[i] != NULL && (need == NULL || strstr(line, need) != NULL) && n < ROW_PROCS)
             pids[n++] = strtol(line, NULL, 10);
+    }
     if (pclose(f) != 0)
         return -1;
     qsort(pids, (size_t)n, sizeof(pids[0]), pid_order);
     return n;
+}
+
+/**
+ * Put in `pids`, sorted, the processes of row `name` in this run, found by
+ * their arguments: the scenario and its keepers by its invocation, the
+ * stand-ins for QEMU and the services by the copies and programs in its
+ * scratch, and its services by their mark; give their count, or -1 when ps
+ * cannot be read. Each of the three contains a path in this run's fixture
+ * directory.
+ */
+static int row_procs(const char *name, long pids[ROW_PROCS])
+{
+    char inv[PATH_MAX + 64], scratch[PATH_MAX + 64], mark[PATH_MAX + 64];
+    const char *any[] = {inv, scratch, mark, NULL};
+
+    fix_format(inv, sizeof(inv), "%s/%s.invocation.json", fix_dir(), name);
+    fix_format(scratch, sizeof(scratch), "%s/%s.scratch/", fix_dir(), name);
+    fix_format(mark, sizeof(mark), " mark=%s/%s\n", fix_dir(), name);
+    return find_procs(NULL, any, pids);
 }
 
 /**
@@ -1825,14 +1850,18 @@ static void test_isolation(const struct site *s)
     row_gone("hold");
 }
 
-/** Say whether a process of the stand-ins' or etude-guest's is left. */
+/** Say whether a stand-in for QEMU of this run, or an etude-guest it ran, is
+ * left: this program run with `-accel` and with paths in this run's fixture
+ * directory, its kernel's in the store among them. */
 static int machines_left(void)
 {
-    char cmd[PATH_MAX + 64];
+    char qemu[PATH_MAX + 16], dir[PATH_MAX + 2];
+    const char *any[] = {dir, NULL};
+    long pids[ROW_PROCS];
 
-    fix_format(cmd, sizeof(cmd),
-               "ps -eo args | grep -F -e '%s -accel' | grep -v -e grep >/dev/null", self);
-    return system(cmd) == 0;
+    fix_format(qemu, sizeof(qemu), "%s -accel", self);
+    fix_format(dir, sizeof(dir), "%s/", fix_dir());
+    return find_procs(qemu, any, pids) != 0;
 }
 
 /** Copy the file at `from` to `to`, executable when `mode` says so. */
