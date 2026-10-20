@@ -144,7 +144,7 @@ etude_main()
                 root=$root/etude
             fi ;;
         rach2*)
-            flags='-std=c99 -static' ;;
+            flags='-std=c99 -static -D__rach2__' ;;
     esac
     if [ -z "$root" ]; then
         [ -n "${HOME:-}" ] || etude_fail 'HOME is not set'

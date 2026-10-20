@@ -2,6 +2,10 @@
  * process.c: the process helpers of the POSIX executor: the identity and
  * state of a process, the children and the descriptors of this one, and the
  * messages between the controller and a keeper.
+ *
+ * Linux and Rach2 share one adapter, since Rach2 has Linux's /proc files and
+ * its prctl(PR_SET_CHILD_SUBREAPER). Rach2's TinyCC defines no __linux__, so
+ * a build for Rach2 defines __rach2__, as bootstrap.sh's recipe does.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -14,7 +18,8 @@
 #include <time.h>
 #include <unistd.h>
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__rach2__)
+#define ETUDE_PROC_LINUX 1
 #include <sys/prctl.h>
 #endif
 #if defined(__APPLE__)
@@ -132,7 +137,7 @@ void posix_close_others(const int *keep, int n)
             close((int)fd);
 }
 
-#if defined(__linux__)
+#if defined(ETUDE_PROC_LINUX)
 
 int posix_subreaper(void)
 {

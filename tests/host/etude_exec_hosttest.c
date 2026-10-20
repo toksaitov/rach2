@@ -14,11 +14,13 @@
  * and memory, output past the bound kept with a report after it, and a
  * program that checks its descriptors, signals and session. Each must keep
  * its own attempt, process, output and end, and leave no process behind. On
- * Linux each case's process must be seen held before its exec when it is
- * registered. With `posix_only`, a reported descendant must still be ended,
- * an unreported one in its own session must leave the cleanup unconfirmed,
- * and processor time of an orphan must be a lower bound; on Linux, without
- * it, the keeper must end and count both. A refused registration and a
+ * Linux and Rach2 each case's process must be seen held before its exec when
+ * it is registered. With `posix_only`, a reported descendant must still be
+ * ended, an unreported one in its own session must leave the cleanup
+ * unconfirmed, and processor time of an orphan must be a lower bound; on
+ * Linux and Rach2, without it, the keeper must end and count both. A build
+ * for Rach2 defines __rach2__, as etude's recipe there does. A refused
+ * registration and a
  * failed exec must leave nothing running, a killed keeper must give a lost
  * end, and a controller that ends must have its case ended by the keeper.
  */
@@ -351,7 +353,7 @@ struct registration {
 static struct registration regs[64];
 static int nregs;
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__rach2__)
 
 /** Say whether the command line of `pid` names a case, or it has none left. */
 static int ran_case(long pid)
@@ -372,6 +374,10 @@ static int ran_case(long pid)
     buf[n] = '\0';
     return n == 0 || strstr(buf, "--case") != NULL;
 }
+
+#endif
+
+#if defined(__linux__)
 
 /**
  * Say whether process `pid` is held before its exec: seen blocked in
@@ -400,6 +406,44 @@ static int held(long pid)
             return !ran_case(pid);
         if (ran_case(pid))
             return 0;
+    }
+}
+
+#elif defined(__rach2__)
+
+/** Give the state letter of `pid` from /proc/PID/stat, or 0 for none. */
+static char state_of(long pid)
+{
+    char path[64], buf[256], *p;
+    size_t n;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "/proc/%ld/stat", pid);
+    f = fopen(path, "r");
+    if (f == NULL)
+        return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    p = strrchr(buf, ')');
+    return p != NULL && p[1] == ' ' ? p[2] : 0;
+}
+
+/**
+ * Say whether process `pid` is held before its exec: seen asleep while its
+ * command line is still this program's own. Rach2 has no /proc/PID/syscall;
+ * before its exec the case's process sleeps only in the read(2) that waits
+ * for the keeper's go. Waits until it is in one state or has run.
+ *
+ * @return 1 when held, 0 when it ran first.
+ */
+static int held(long pid)
+{
+    for (;;) {
+        if (ran_case(pid))
+            return 0;
+        if (state_of(pid) == 'S')
+            return !ran_case(pid);
     }
 }
 
@@ -608,7 +652,7 @@ static void test_concurrent(struct etude_exec *ex)
         CHECK(etude_proc_result(a[6].p)->children == 1, "g");
     if (a[7].p != NULL)
         CHECK(etude_proc_result(a[7].p)->children == 0, "h");
-#if defined(__linux__)
+#if defined(__linux__) || defined(__rach2__)
     if (a[8].p != NULL)
         check_usage(&a[8], ETUDE_QUALITY_EXACT);
 #else
@@ -669,7 +713,7 @@ static void test_posix_only(struct etude_exec *ex)
  */
 static void test_reaper(struct etude_exec *ex)
 {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__rach2__)
     struct want w[] = {
         {"escape", "s", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
         {"orphan", "t", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED},
