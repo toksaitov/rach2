@@ -32,7 +32,6 @@ tests/loopprobe.c: 1 sleep
 tests/memprobe.c: 1 sleep
 tests/modeprobe.c: 1 sleep
 tests/mountprobe.c: 1 sleep
-tests/mouseprobe.c: 1 sleep
 tests/musl/callsmusl.c: 3 sleep
 tests/musl/capmusl.c: 1 sleep
 tests/musl/clockidmusl.c: 4 sleep

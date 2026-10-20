@@ -85,17 +85,19 @@ static void put_int(int v)
 PROBE_SP_ENTRY;
 
 /**
- * Open the mouse, read until a movement arrives or fifteen seconds pass, and
- * judge the movement summed over the packets read.
+ * Open the mouse, read until a movement arrives, and judge the movement
+ * summed over the packets read.
  *
  * Opening the device empties the queue, so the movement has to arrive after
  * the open: the suite moves the mouse while this is already reading, and a
- * person at a machine is told to. The wait is fifteen seconds in turns of ten
- * milliseconds, long enough for a hand and short enough for a suite that
- * never moves the mouse. The suite moves the mouse right by 20 and up by 8,
- * so that axes swapped for each other or a sign turned the wrong way fail
- * rather than pass as some movement. Up is positive here and negative on the
- * wire, which is the turn the class driver makes (rach2/sys/usb/hid.c).
+ * person at a machine is told to. A read of the device does not wait, and
+ * answers 0 while the queue is empty, so the probe reads again, yielding
+ * between reads, until a packet with a movement arrives; it counts none of
+ * the reads, and the suite's wait for its word bounds a machine on which no
+ * movement comes. The suite moves the mouse right by 20 and up by 8, so that
+ * axes swapped for each other or a sign turned the wrong way fail rather than
+ * pass as some movement. Up is positive here and negative on the wire, which
+ * is the turn the class driver makes (rach2/sys/usb/hid.c).
  */
 void probe_main(unsigned long *sp)
 {
@@ -104,7 +106,6 @@ void probe_main(unsigned long *sp)
     int any = argc >= 2 && argv[1][0] == 'a';
     int fd;
     int n;
-    int tries;
     int moved = 0;
     int total_x = 0;
     int total_y = 0;
@@ -115,9 +116,7 @@ void probe_main(unsigned long *sp)
     }
 
     puts("MOUSEPROBE: move the mouse");
-    for (tries = 0; tries < 1500 && !moved; tries++) {
-        static const long pause[2] = {0, 10000000};
-
+    while (!moved) {
         n = syscall3(SYS_READ, fd, (long)packet, (int)sizeof(packet));
         if (n < 0) {
             syscall3(SYS_CLOSE, fd, 0, 0);
@@ -135,14 +134,11 @@ void probe_main(unsigned long *sp)
             }
         }
         if (!moved) {
-            syscall3(SYS_NANOSLEEP, (long)pause, 0, 0);
+            syscall0(SYS_SCHED_YIELD);
         }
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
 
-    if (!moved) {
-        fail("no movement arrived");
-    }
     if (any) {
         puts("MOUSEPROBE: moved x ");
         put_int(total_x);
