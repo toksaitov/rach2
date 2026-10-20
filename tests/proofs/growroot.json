@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "proof": "growroot",
+  "summary": "growroot_hosttest.c's rows on the partition table writer and the phase measurements, with faults in utils/growroot.c, which the test includes from the private copy",
+  "tree": "private",
+  "sources": [
+    "utils/growroot.c"
+  ],
+  "artifacts": [
+    "${WORK}/growroot_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I ${SRC}/utils -I utils tests/host/growroot_hosttest.c utils/gptdisk.c -o ${WORK}/growroot_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/growroot_hosttest"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "growroot-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "unchecked-read",
+      "summary": "a writer that checks the first sector only when it reads whole, and reads it again before it writes",
+      "edits": [
+        {
+          "file": "utils/growroot.c",
+          "find": "    if (read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {\n        close(fd);\n        return fail(dev, \"the first sector did not read; nothing written\");\n    }\n    {\n",
+          "replace": "    if (read(fd, sector, sizeof(sector)) == (ssize_t)sizeof(sector)) {\n"
+        },
+        {
+          "file": "utils/growroot.c",
+          "find": "    e = sector + MBR_ENTRIES + 16 * (entry - 1);\n",
+          "replace": "    if (lseek(fd, 0, SEEK_SET) != 0 ||\n        read(fd, sector, sizeof(sector)) != (ssize_t)sizeof(sector)) {\n        close(fd);\n        return fail(dev, \"the first sector did not read\");\n    }\n    e = sector + MBR_ENTRIES + 16 * (entry - 1);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "growroot-test: fail: a failed or short writer read makes no write",
+          "growroot-test: fail: the writer uses the sector it checked without rereading"
+        ]
+      }
+    },
+    {
+      "name": "zero",
+      "summary": "the counters zeroed before the report",
+      "edits": [
+        {
+          "file": "utils/growroot.c",
+          "find": "    printf(\"growroot: measure: %s %s monotonic-us %llu disk-commands %llu disk-flushes %llu\\n\",\n",
+          "replace": "    us = commands = flushes = 0;\n    printf(\"growroot: measure: %s %s monotonic-us %llu disk-commands %llu disk-flushes %llu\\n\",\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "growroot-test: fail: phase samples match the independent operation counters"
+        ]
+      }
+    },
+    {
+      "name": "attribution",
+      "summary": "a phase's after sample taken before its command runs",
+      "edits": [
+        {
+          "file": "utils/growroot.c",
+          "find": "    rc = run(tool, arg, part_node);\n    if (measured(phase, \"after\")) {\n        return -2;\n    }\n",
+          "replace": "    if (measured(phase, \"after\")) {\n        return -2;\n    }\n    rc = run(tool, arg, part_node);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "growroot-test: fail: phase samples match the independent operation counters"
+        ]
+      }
+    }
+  ]
+}

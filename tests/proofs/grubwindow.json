@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "proof": "grubwindow",
+  "summary": "The grubslot, partition and devfs host tests on the boot loader's window, with faults in utils/grubslot.c and the kernel's partition and devfs code",
+  "tree": "private",
+  "sources": [
+    "utils/grubslot.c",
+    "rach2/sys/block/partition.c",
+    "rach2/sys/fs/devfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/grubslot_hosttest",
+    "${WORK}/partition_hosttest",
+    "${WORK}/devfs_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\" \"$t/tests/host\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp -R utils \"$t/utils\"\ncp -R tests/host/compat \"$t/tests/host/compat\"\ncp tests/host/grubslot_hosttest.c tests/host/partition_hosttest.c tests/host/devfs_hosttest.c \"$t/tests/host/\"\ncp -R ${SRC}/. \"$t/\"\ncd \"$t\"\nfor x in grubslot_hosttest partition_hosttest devfs_hosttest; do\n    deps=$(grep -oE 'host-deps:[^*]*' tests/host/$x.c | sed 's/host-deps://' | tr '\\n' ' ')\n    ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I utils -I ${TREE}/krffs -I tests/host/compat -o ${WORK}/$x tests/host/$x.c $deps\ndone"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "r=0\ns=0\n${WORK}/grubslot_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\ns=0\n${WORK}/partition_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\ns=0\n${WORK}/devfs_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\nexit $r"
+    ],
+    "bound_s": 120
+  },
+  "faults": [
+    {
+      "name": "tails",
+      "summary": "the window's tails taken as the gap's constant, whatever the window is",
+      "edits": [
+        {
+          "file": "utils/grubslot.c",
+          "find": "    tail = (uint32_t)((sectors - 1u) / 2u);\n",
+          "replace": "    tail = GRUBSLOT_TAIL_SECTORS;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "two tails of 1006 sectors"
+        ]
+      }
+    },
+    {
+      "name": "bound",
+      "summary": "a candidate judged against the longest tail, not this window's",
+      "edits": [
+        {
+          "file": "utils/grubslot.c",
+          "find": "    if (sectors - 1u > w->tail) {\n",
+          "replace": "    if (sectors > GRUBSLOT_MAX_IMAGE_SECTORS) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "one of 1008 does not"
+        ]
+      }
+    },
+    {
+      "name": "active",
+      "summary": "a running image judged against the longest tail, not this window's",
+      "edits": [
+        {
+          "file": "utils/grubslot.c",
+          "find": "    if (len == 0u || (uint32_t)len > w->tail) {\n",
+          "replace": "    if (len == 0u || (uint32_t)len > GRUBSLOT_TAIL_SECTORS) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an image longer than the partition's tail"
+        ]
+      }
+    },
+    {
+      "name": "other-array",
+      "summary": "the unread copy's entry array forgotten",
+      "edits": [
+        {
+          "file": "rach2/sys/block/partition.c",
+          "find": "    if (ranges_meet(start, n, other_array, g->array_sectors)) {\n",
+          "replace": "    if (other_array == 1) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "though the primary never read that array"
+        ]
+      }
+    },
+    {
+      "name": "one-entry",
+      "summary": "the first BIOS boot partition taken where a second makes it unclear",
+      "edits": [
+        {
+          "file": "rach2/sys/block/partition.c",
+          "find": "            if (found) {\n                return -1;\n            }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "since which one is meant is not known"
+        ]
+      }
+    },
+    {
+      "name": "own-array",
+      "summary": "the serving header's own entry array forgotten",
+      "edits": [
+        {
+          "file": "rach2/sys/block/partition.c",
+          "find": "        ranges_meet(start, n, g->array_lba, g->array_sectors)) {\n",
+          "replace": "        0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an entry over the primary array is no window"
+        ]
+      }
+    },
+    {
+      "name": "past-disk",
+      "summary": "a partition past the disk's end published all the same",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "    if (count > backing->sector_count || first > backing->sector_count - count) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "nor one whose partition runs past the disk"
+        ]
+      }
+    }
+  ]
+}
