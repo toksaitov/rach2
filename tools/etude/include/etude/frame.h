@@ -56,7 +56,8 @@
 #define ETUDE_EV_STORED  "stored"  /* CMD NAME SHA256 */
 #define ETUDE_EV_STARTED "started" /* CMD ATTEMPT PID START */
 #define ETUDE_EV_OUT     "out"     /* CMD ATTEMPT FD OFFSET BASE64 */
-#define ETUDE_EV_EXIT    "exit"    /* CMD ATTEMPT KIND VALUE, SIZE TOTAL SHA256 per stream */
+#define ETUDE_EV_EXIT    "exit"    /* CMD ATTEMPT KIND VALUE */
+#define ETUDE_EV_STREAM  "stream"  /* CMD ATTEMPT FD SIZE TOTAL SHA256 */
 #define ETUDE_EV_USAGE   "usage"   /* CMD ATTEMPT CPU-US METHOD PEAK METHOD */
 #define ETUDE_EV_CLEANED "cleaned" /* CMD ATTEMPT confirmed|unconfirmed */
 #define ETUDE_EV_STATE   "state"   /* CMD ATTEMPT STATE */

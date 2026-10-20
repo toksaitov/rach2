@@ -435,9 +435,9 @@ static void ledger_run(struct peer *p, const char *run, const char *counter)
     snprintf(name, sizeof(name), "%s/work/out.txt", tok);
     peer_send(p, ETUDE_CMD_RUN, r6);
     CHECK(peer_events(p, ev1, sizeof(ev1)) && strncmp(ev1, "started 6 ", 10) == 0 &&
-              strstr(ev1, "\nexit 6 ") != NULL && strstr(ev1, " exited 0 ") != NULL &&
+              strstr(ev1, "\nexit 6 ") != NULL && strstr(ev1, " exited 0\nstream 6 ") != NULL &&
               strstr(ev1, "\ncleaned 6 ") != NULL && strstr(ev1, " confirmed\n") != NULL,
-          "a run gives started, its output, exit, usage and cleaned");
+          "a run gives started, its output, exit, its streams, usage and cleaned");
     peer_send(p, ETUDE_CMD_RUN, r6);
     CHECK(peer_events(p, ev2, sizeof(ev2)) && strcmp(ev1, ev2) == 0,
           "a repeated run is answered by the same events");
@@ -655,8 +655,9 @@ static void test_raw_recovery(void)
                   strcmp(p->f.field[2], "ended") == 0,
               "an attempt whose responder was killed has ended");
         CHECK(peer_events(p, ev, sizeof(ev)) && strstr(ev, "\nexit 4 ") != NULL &&
-                  strstr(ev, " lost - ") != NULL && strstr(ev, " unconfirmed\n") != NULL,
-              "its end is lost and its cleanup unconfirmed");
+                  strstr(ev, " lost -\nstream 4 ") != NULL && strstr(ev, " 2 - - -\n") != NULL &&
+                  strstr(ev, " unconfirmed\n") != NULL,
+              "its end is lost, its streams unknown and its cleanup unconfirmed");
         peer_call(p, ETUDE_CMD_BYE, bye, ETUDE_CMD_BYE);
     }
     peer_end(p);

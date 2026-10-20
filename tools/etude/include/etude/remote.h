@@ -107,9 +107,9 @@ struct etude_remote_result {
     struct etude_measure cpu_us, peak_bytes;
     char cpu_method[64], peak_method[64];
     enum etude_cleanup cleanup;
-    int complete;        /* `started`, `exit`, `usage` and `cleaned` arrived,
-                            agreed with each other, and the output matched
-                            its sizes and digests */
+    int complete;        /* `started`, `exit`, each `stream`, `usage` and
+                            `cleaned` arrived, agreed with each other, and
+                            the output matched its sizes and digests */
     unsigned reconnects; /* connections made again during the attempt */
 };
 

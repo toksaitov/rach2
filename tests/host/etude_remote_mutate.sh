@@ -33,7 +33,8 @@ faults = {
     'seal': ('        if (s->put.got != s->put.size || strcmp(hex, s->put.sha) != 0) {',
              '        if (s->put.got != s->put.size) {'),
     'order': ('    if (f->seq != (s->has_ack ? s->seq_in + 1 : 0))', '    if (0)'),
-    'truncated': ('    return c->have_exit && c->have_usage && c->have_cleaned;',
+    'truncated': ('    return c->have_exit && c->have_stream[0] && c->have_stream[1] && c->have_usage &&\n'
+                  '           c->have_cleaned;',
                   '    return c->have_exit;'),
     'output': ('        if (o->kept != c->sent[fd] || strcmp(hex, c->sha[fd]) != 0)',
                '        if (o->kept != c->sent[fd])'),

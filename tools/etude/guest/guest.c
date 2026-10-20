@@ -1550,31 +1550,31 @@ static void drop_attempt(struct attempt *a)
     free(a);
 }
 
-/** Write in `out` the fields of stream `fdn` (1 or 2) for `exit`: the bytes
+/** Write in `out` the `stream` event of stream `fdn` (1 or 2): the bytes
  * sent, the bytes read and the SHA-256 of those sent. */
-static void stream_fields(char *out, size_t cap, struct attempt *a, int fdn)
+static void stream_event(char *out, size_t cap, struct attempt *a, int fdn)
 {
     unsigned char d[32];
     char hex[65];
 
     sha256_final(&a->sent[fdn], d);
     sha256_hex(d, hex);
-    snprintf(out, cap, "%llu %llu %s", a->off[fdn], a->total[fdn], hex);
+    snprintf(out, cap, "%s %s %s %d %llu %llu %s", ETUDE_EV_STREAM, a->cmd, a->token, fdn,
+             a->off[fdn], a->total[fdn], hex);
 }
 
 /**
  * Send and record an attempt's final events once its child has ended and
- * its pipes are closed, or its time to close them has passed: how it ended
- * with the sizes and digests of its output, the processor time and peak
- * memory of the child and the descendants it reaped, and whether every
+ * its pipes are closed, or its time to close them has passed: how it ended,
+ * the sizes and digest of each stream of its output, the processor time and
+ * peak memory of the child and the descendants it reaped, and whether every
  * process of the attempt is gone.
  */
 static void finish(struct attempt *a)
 {
-    char line[3][LINE_CAP];
-    char finals[3 * LINE_CAP + 4];
+    char line[5][LINE_CAP];
+    char finals[5 * LINE_CAP + 6];
     char end[24];
-    char out[2][128];
     char peak[64];
     long long cpu;
     long long rss = (long long)a->ru.ru_maxrss;
@@ -1587,10 +1587,9 @@ static void finish(struct attempt *a)
         snprintf(end, sizeof(end), "signaled %d", WTERMSIG(a->status));
     else
         snprintf(end, sizeof(end), "exited %d", WEXITSTATUS(a->status));
-    stream_fields(out[0], sizeof(out[0]), a, 1);
-    stream_fields(out[1], sizeof(out[1]), a, 2);
-    snprintf(line[0], LINE_CAP, "%s %s %s %s %s %s", ETUDE_EV_EXIT, a->cmd, a->token, end, out[0],
-             out[1]);
+    snprintf(line[0], LINE_CAP, "%s %s %s %s", ETUDE_EV_EXIT, a->cmd, a->token, end);
+    stream_event(line[1], LINE_CAP, a, 1);
+    stream_event(line[2], LINE_CAP, a, 2);
     cpu = (long long)a->ru.ru_utime.tv_sec * 1000000 + a->ru.ru_utime.tv_usec +
           (long long)a->ru.ru_stime.tv_sec * 1000000 + a->ru.ru_stime.tv_usec;
 #if !defined(__APPLE__)
@@ -1600,13 +1599,14 @@ static void finish(struct attempt *a)
         snprintf(peak, sizeof(peak), "%lld+ %s", rss, METHOD_PEAK);
     else
         snprintf(peak, sizeof(peak), "- -");
-    snprintf(line[1], LINE_CAP, "%s %s %s %lld+ %s %s", ETUDE_EV_USAGE, a->cmd, a->token, cpu,
+    snprintf(line[3], LINE_CAP, "%s %s %s %lld+ %s %s", ETUDE_EV_USAGE, a->cmd, a->token, cpu,
              METHOD_CPU, peak);
-    snprintf(line[2], LINE_CAP, "%s %s %s %s", ETUDE_EV_CLEANED, a->cmd, a->token,
+    snprintf(line[4], LINE_CAP, "%s %s %s %s", ETUDE_EV_CLEANED, a->cmd, a->token,
              clean ? "confirmed" : "unconfirmed");
-    snprintf(finals, sizeof(finals), "%s\n%s\n%s\n", line[0], line[1], line[2]);
+    snprintf(finals, sizeof(finals), "%s\n%s\n%s\n%s\n%s\n", line[0], line[1], line[2], line[3],
+             line[4]);
     attempt_record(a, clean ? ST_CLEANED : ST_ENDED, finals);
-    for (i = 0; i < 3; i++)
+    for (i = 0; i < 5; i++)
         cmd_event(a->cmd, line[i]);
     drop_attempt(a);
 }
@@ -1870,7 +1870,7 @@ static void settle_orphan(const char *token, char *record)
     unsigned long long owner_start = 0;
     unsigned long long child_start = 0;
     char *p;
-    char finals[3 * LINE_CAP];
+    char finals[5 * LINE_CAP];
     char path[PATH_CAP];
     char text[4096];
     int gone;
@@ -1885,8 +1885,10 @@ static void settle_orphan(const char *token, char *record)
     if (child > 0 && same_process((pid_t)child, child_start))
         kill(-(pid_t)child, SIGKILL);
     gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);
-    snprintf(finals, sizeof(finals), "%s %s %s lost - - - - - - -\n%s %s %s - - - -\n%s %s %s %s\n",
-             ETUDE_EV_EXIT, cmd, token, ETUDE_EV_USAGE, cmd, token, ETUDE_EV_CLEANED, cmd, token,
+    snprintf(finals, sizeof(finals),
+             "%s %s %s lost -\n%s %s %s 1 - - -\n%s %s %s 2 - - -\n%s %s %s - - - -\n%s %s %s %s\n",
+             ETUDE_EV_EXIT, cmd, token, ETUDE_EV_STREAM, cmd, token, ETUDE_EV_STREAM, cmd, token,
+             ETUDE_EV_USAGE, cmd, token, ETUDE_EV_CLEANED, cmd, token,
              gone ? "confirmed" : "unconfirmed");
     snprintf(text, sizeof(text), "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nstate %s\n%s",
              cmd, sess, (long)self_pid, self_start, child, child_start, gone ? "cleaned" : "ended",

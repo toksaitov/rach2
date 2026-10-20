@@ -9,8 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* The most fields a frame may have after its type: an `exit`'s ten. */
-#define WIRE_FIELDS_MAX 10
+/* The most fields a frame may have after its type: a `stream`'s six. */
+#define WIRE_FIELDS_MAX 6
 
 /* One parsed frame. The strings point into the line the parser was given. */
 struct wire_frame {

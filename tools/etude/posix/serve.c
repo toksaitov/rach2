@@ -522,7 +522,7 @@ static int replay_one(void *ctx, const char *type, char **field, int n)
 
 /* What a run's record says of its attempt. */
 struct run_state {
-    int started, ended, usage, cleaned, confirmed, error;
+    int started, ended, stream[2], usage, cleaned, confirmed, error;
 };
 
 /** Note one event of a run's record. */
@@ -535,6 +535,9 @@ static int note_run(void *ctx, const char *type, char **field, int n)
         st->started = 1;
     else if (strcmp(type, ETUDE_EV_EXIT) == 0)
         st->ended = 1;
+    else if (strcmp(type, ETUDE_EV_STREAM) == 0 && n == 6 &&
+             (strcmp(field[2], "1") == 0 || strcmp(field[2], "2") == 0))
+        st->stream[field[2][0] - '1'] = 1;
     else if (strcmp(type, ETUDE_EV_USAGE) == 0)
         st->usage = 1;
     else if (strcmp(type, ETUDE_EV_ERROR) == 0)
@@ -607,12 +610,12 @@ static int record_event(int fd, const char *type, const char *const *field, int 
 
 /**
  * Record the end of an attempt that no responder supervises: its end lost,
- * its usage unknown and its cleanup unconfirmed, or the run failed when the
- * attempt never started.
+ * its output's sizes and its usage unknown and its cleanup unconfirmed, or
+ * the run failed when the attempt never started.
  */
 static void record_lost(int fd, const char *cmd, const char *token, const struct run_state *st)
 {
-    const char *f[10] = {cmd, token, "lost", "-", "-", "-", "-", "-", "-", "-"};
+    const char *f[6] = {cmd, token, "lost", "-", "-", "-"};
 
     if (!st->started) {
         f[1] = ETUDE_ERR_FAILED;
@@ -620,7 +623,13 @@ static void record_lost(int fd, const char *cmd, const char *token, const struct
         return;
     }
     if (!st->ended)
-        record_event(fd, ETUDE_EV_EXIT, f, 10);
+        record_event(fd, ETUDE_EV_EXIT, f, 4);
+    f[2] = "1";
+    if (!st->stream[0])
+        record_event(fd, ETUDE_EV_STREAM, f, 6);
+    f[2] = "2";
+    if (!st->stream[1])
+        record_event(fd, ETUDE_EV_STREAM, f, 6);
     f[2] = "-";
     if (!st->usage)
         record_event(fd, ETUDE_EV_USAGE, f, 6);
@@ -1217,10 +1226,10 @@ static void measure_field(const struct etude_measure *m, char *value, size_t cap
 static void finish(struct server *s, struct attempt *a)
 {
     const struct etude_exec_result *r = etude_proc_result(a->proc);
-    char value[24], sizes[4][24], sums[2][65], cpu[24], peak[24];
+    char value[24], sizes[2][24], sum[65], cpu[24], peak[24];
     unsigned char d[32];
     struct attempt **pp;
-    const char *f[10], *kind;
+    const char *f[6], *kind;
     int fd;
 
     stream_output(s, a);
@@ -1242,24 +1251,23 @@ static void finish(struct server *s, struct attempt *a)
         snprintf(value, sizeof(value), "%d", r->value);
     else
         strcpy(value, "-");
-    for (fd = 0; fd < 2; fd++) {
-        sha256_final(&a->hash[fd], d);
-        sha256_hex(d, sums[fd]);
-        snprintf(sizes[2 * fd], sizeof(sizes[0]), "%llu", (unsigned long long)a->sent[fd]);
-        snprintf(sizes[2 * fd + 1], sizeof(sizes[0]), "%llu",
-                 (unsigned long long)(fd == 0 ? r->out.total : r->err.total));
-    }
     f[0] = a->cmd;
     f[1] = a->token;
     f[2] = kind;
     f[3] = value;
-    f[4] = sizes[0];
-    f[5] = sizes[1];
-    f[6] = sums[0];
-    f[7] = sizes[2];
-    f[8] = sizes[3];
-    f[9] = sums[1];
-    emit(s, a->ledger, 0, ETUDE_EV_EXIT, f, 10);
+    emit(s, a->ledger, 0, ETUDE_EV_EXIT, f, 4);
+    for (fd = 0; fd < 2; fd++) {
+        sha256_final(&a->hash[fd], d);
+        sha256_hex(d, sum);
+        snprintf(sizes[0], sizeof(sizes[0]), "%llu", (unsigned long long)a->sent[fd]);
+        snprintf(sizes[1], sizeof(sizes[1]), "%llu",
+                 (unsigned long long)(fd == 0 ? r->out.total : r->err.total));
+        f[2] = fd == 0 ? "1" : "2";
+        f[3] = sizes[0];
+        f[4] = sizes[1];
+        f[5] = sum;
+        emit(s, a->ledger, 0, ETUDE_EV_STREAM, f, 6);
+    }
     measure_field(&r->cpu_us, cpu, sizeof(cpu), &f[3]);
     measure_field(&r->peak_bytes, peak, sizeof(peak), &f[5]);
     f[2] = cpu;

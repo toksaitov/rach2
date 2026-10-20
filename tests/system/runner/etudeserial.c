@@ -513,7 +513,7 @@ struct ending {
     char kind[16];
     char value[16];
     char cleaned[16];
-    int sizes_ok; /* exit gives the size and digest of the output that came */
+    int sizes_ok; /* stream 1 gives the size and digest of the output that came */
     int usage_ok; /* usage gives each value, or -, with a method */
 };
 
@@ -557,12 +557,14 @@ static int collect(const char *what, const char *cmd, struct ending *r)
                 r->out[off + (size_t)n] = '\0';
             }
         } else if (strcmp(e->type, ETUDE_EV_EXIT) == 0) {
-            char hex[65];
             snprintf(r->kind, sizeof(r->kind), "%.15s", e->field[2]);
             snprintf(r->value, sizeof(r->value), "%.15s", e->field[3]);
+        } else if (strcmp(e->type, ETUDE_EV_STREAM) == 0 && e->nfields == 6 &&
+                   strcmp(e->field[2], "1") == 0) {
+            char hex[65];
             digest(r->out, strlen(r->out), hex);
-            r->sizes_ok = e->nfields == 10 && strtoul(e->field[4], NULL, 10) == strlen(r->out) &&
-                          strcmp(e->field[6], hex) == 0;
+            r->sizes_ok =
+                strtoul(e->field[3], NULL, 10) == strlen(r->out) && strcmp(e->field[5], hex) == 0;
         } else if (strcmp(e->type, ETUDE_EV_USAGE) == 0) {
             r->usage_ok = e->nfields == 6 && measure_ok(e->field[2], e->field[3]) &&
                           measure_ok(e->field[4], e->field[5]);
@@ -697,7 +699,8 @@ static void step_pass(void)
                strcmp(r.value, "0") == 0 && strcmp(r.cleaned, "confirmed") == 0,
            "a pass reports its output and exit status 0", "%s %s %s, output %s", r.kind, r.value,
            r.cleaned, r.out);
-    report(r.sizes_ok, "a pass's exit gives the size and digest of its output", "output %s", r.out);
+    report(r.sizes_ok, "a pass's stream gives the size and digest of its output", "output %s",
+           r.out);
     report(r.usage_ok, "a pass's usage gives each value with its method", "");
     memset(&again, 0, sizeof(again));
     if (send_frame(30, ETUDE_CMD_RUN, c, "00000000000000a1", inv, (char *)NULL) == 0 &&
@@ -779,6 +782,8 @@ static void step_interruption(void)
     e = expect("status reads the end again", ETUDE_EV_EXIT, c);
     ok = ok && e && strcmp(e->field[2], "stopped") == 0;
     free(e);
+    free(expect("status reads the end again", ETUDE_EV_STREAM, c));
+    free(expect("status reads the end again", ETUDE_EV_STREAM, c));
     free(expect("status reads the end again", ETUDE_EV_USAGE, c));
     free(expect("status reads the end again", ETUDE_EV_CLEANED, c));
     report(ok, "status reads the end again", "");

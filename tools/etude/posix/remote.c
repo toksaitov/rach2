@@ -716,9 +716,9 @@ struct collect {
     const char *cmd;
     size_t output_max;
     size_t cap[2];
-    char started[96], exit[512], usage[256], cleaned[64];
-    int have_exit, have_usage, have_cleaned;
-    int sizes_known;
+    char started[96], exit[64], stream[2][160], usage[256], cleaned[64];
+    int have_exit, have_stream[2], have_usage, have_cleaned;
+    int sizes_known[2];
     uint64_t sent[2];
     char sha[2][65];
 };
@@ -827,15 +827,14 @@ static void take_measure(struct etude_measure *m, char *method, size_t cap, cons
     m->method = method;
 }
 
-/** Take `exit`, the end and the output's sizes and digests; 0 if it agrees. */
+/** Take `exit CMD ATTEMPT KIND VALUE`, the end; 0 when it agrees. */
 static int take_exit(struct collect *c, struct wire_frame *f)
 {
     struct etude_remote_result *res = c->res;
     uint64_t v;
     const char *k;
-    int fd;
 
-    if (f->nfields != 10 || same_or_set(c->exit, sizeof(c->exit), &c->have_exit, f) != 0)
+    if (f->nfields != 4 || same_or_set(c->exit, sizeof(c->exit), &c->have_exit, f) != 0)
         return -1;
     k = f->field[2];
     res->end = strcmp(k, "exited") == 0     ? ETUDE_END_EXITED
@@ -847,15 +846,28 @@ static int take_exit(struct collect *c, struct wire_frame *f)
         res->value = (int)v;
     if ((res->end == ETUDE_END_EXITED || res->end == ETUDE_END_SIGNALED) && res->value < 0)
         return -1;
-    c->sizes_known = 1;
-    for (fd = 0; fd < 2; fd++) {
-        if (decimal(f->field[4 + 3 * fd], &c->sent[fd]) != 0 ||
-            decimal(f->field[5 + 3 * fd], &v) != 0 || strlen(f->field[6 + 3 * fd]) != 64) {
-            c->sizes_known = 0;
-            continue;
-        }
-        (fd == 0 ? &res->out : &res->err)->total = v;
-        memcpy(c->sha[fd], f->field[6 + 3 * fd], 65);
+    return 0;
+}
+
+/**
+ * Take `stream CMD ATTEMPT FD SIZE TOTAL SHA256`; 0 when it agrees with what
+ * arrived. A stream whose fields are "-" has sizes that are not known.
+ */
+static int take_stream(struct collect *c, struct wire_frame *f)
+{
+    uint64_t total;
+    int fd;
+
+    if (f->nfields != 6 || (strcmp(f->field[2], "1") != 0 && strcmp(f->field[2], "2") != 0))
+        return -1;
+    fd = f->field[2][0] == '1' ? 0 : 1;
+    if (same_or_set(c->stream[fd], sizeof(c->stream[fd]), &c->have_stream[fd], f) != 0)
+        return -1;
+    c->sizes_known[fd] = decimal(f->field[3], &c->sent[fd]) == 0 &&
+                         decimal(f->field[4], &total) == 0 && strlen(f->field[5]) == 64;
+    if (c->sizes_known[fd]) {
+        (fd == 0 ? &c->res->out : &c->res->err)->total = total;
+        memcpy(c->sha[fd], f->field[5], 65);
     }
     return 0;
 }
@@ -934,6 +946,8 @@ static int take_event(struct etude_remote *r, struct collect *c, struct wire_fra
         ok = c->res->started ? take_output(c, f) : -1;
     else if (strcmp(t, ETUDE_EV_EXIT) == 0)
         ok = take_exit(c, f);
+    else if (strcmp(t, ETUDE_EV_STREAM) == 0)
+        ok = take_stream(c, f);
     else if (strcmp(t, ETUDE_EV_USAGE) == 0)
         ok = take_usage(c, f);
     else if (strcmp(t, ETUDE_EV_CLEANED) == 0)
@@ -944,17 +958,19 @@ static int take_event(struct etude_remote *r, struct collect *c, struct wire_fra
         fail(r, "the responder sent a %s that disagrees with the attempt", t);
         return READ_FAULT;
     }
-    return c->have_exit && c->have_usage && c->have_cleaned;
+    return c->have_exit && c->have_stream[0] && c->have_stream[1] && c->have_usage &&
+           c->have_cleaned;
 }
 
-/** Check the output that arrived against the sizes and digests of its end. */
+/** Check the output that arrived against the sizes and digests of its
+ * streams. */
 static int output_matches(struct collect *c)
 {
     struct etude_output *o;
     char hex[65];
     int fd;
 
-    if (!c->sizes_known)
+    if (!c->sizes_known[0] || !c->sizes_known[1])
         return c->res->end == ETUDE_END_LOST;
     for (fd = 0; fd < 2; fd++) {
         o = fd == 0 ? &c->res->out : &c->res->err;

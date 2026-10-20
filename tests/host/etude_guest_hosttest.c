@@ -370,17 +370,18 @@ struct ending {
     char kind[16];
     char value[16];
     char cleaned[16];
-    char total[2][24]; /* the bytes each stream carried, as exit gives them */
+    char total[2][24]; /* the bytes each stream carried, as its stream gives them */
     char cpu[24];
     char cpu_method[64];
     char peak[24];
-    int sizes_ok; /* exit's sizes and digests are those of the output that came */
+    int stream_ok[2]; /* a stream's size and digest are those of its output */
+    int sizes_ok;     /* both streams' are */
     long pid;
     int events;
 };
 
-/** Whether the fields of one stream in `exit`, from `field`, give the size
- * and digest of `text`, and a total no smaller than the size. */
+/** Whether the fields of a `stream` from its size, from `field`, give the
+ * size and digest of `text`, and a total no smaller than the size. */
 static int stream_agrees(char field[][8192], const char *text)
 {
     char hex[65];
@@ -402,14 +403,30 @@ static int unknown(char field[][8192], int n)
     return 1;
 }
 
-/** Read an attempt's frames, from started to cleaned, into `e`; 0 or -1. */
-static int collect(struct ending *e, const char *c, const char *token, int ms)
+/** Whether the next frames are the `stream` of standard output and then
+ * that of standard error, which sent `err_size` bytes. */
+static int streams_follow(const char *err_size)
+{
+    struct got g;
+
+    return expect(&g, ETUDE_EV_STREAM, 5000) == 0 && strcmp(g.field[2], "1") == 0 &&
+           expect(&g, ETUDE_EV_STREAM, 5000) == 0 && strcmp(g.field[2], "2") == 0 &&
+           strcmp(g.field[3], err_size) == 0;
+}
+
+/** Read an attempt's frames, from started to cleaned, into `e`; 0 or -1.
+ * Every frame must fit `bound`. */
+static int collect_within(struct ending *e, const char *c, const char *token, int ms, size_t bound)
 {
     struct got g;
     long long until = now_ms() + ms;
 
     memset(e, 0, sizeof(*e));
     while (now_ms() < until && next_frame(&g, (int)(until - now_ms())) == 0) {
+        if (strlen(g.line) + 1 > bound) {
+            fprintf(stderr, "etude_guest_hosttest: a frame over %zu bytes: %s\n", bound, g.line);
+            return -1;
+        }
         if (strcmp(g.type, ETUDE_CMD_ACK) == 0)
             continue;
         e->events++;
@@ -428,23 +445,31 @@ static int collect(struct ending *e, const char *c, const char *token, int ms)
                 return -1;
             memcpy(dst + off, bytes, (size_t)n);
             dst[off + (size_t)n] = '\0';
-        } else if (strcmp(g.type, ETUDE_EV_EXIT) == 0) {
+        } else if (strcmp(g.type, ETUDE_EV_EXIT) == 0 && g.nfields == 4) {
             snprintf(e->kind, sizeof(e->kind), "%.15s", g.field[2]);
             snprintf(e->value, sizeof(e->value), "%.15s", g.field[3]);
-            e->sizes_ok = g.nfields == 10 && stream_agrees(g.field + 4, e->out) &&
-                          stream_agrees(g.field + 7, e->err);
-            snprintf(e->total[0], sizeof(e->total[0]), "%.23s", g.field[5]);
-            snprintf(e->total[1], sizeof(e->total[1]), "%.23s", g.field[8]);
+        } else if (strcmp(g.type, ETUDE_EV_STREAM) == 0 && g.nfields == 6 &&
+                   (strcmp(g.field[2], "1") == 0 || strcmp(g.field[2], "2") == 0)) {
+            int i = g.field[2][0] - '1';
+            e->stream_ok[i] = stream_agrees(g.field + 3, i == 0 ? e->out : e->err);
+            snprintf(e->total[i], sizeof(e->total[i]), "%.23s", g.field[4]);
         } else if (strcmp(g.type, ETUDE_EV_USAGE) == 0 && g.nfields == 6) {
             snprintf(e->cpu, sizeof(e->cpu), "%.23s", g.field[2]);
             snprintf(e->cpu_method, sizeof(e->cpu_method), "%.63s", g.field[3]);
             snprintf(e->peak, sizeof(e->peak), "%.23s", g.field[4]);
         } else if (strcmp(g.type, ETUDE_EV_CLEANED) == 0) {
             snprintf(e->cleaned, sizeof(e->cleaned), "%.15s", g.field[2]);
+            e->sizes_ok = e->stream_ok[0] && e->stream_ok[1];
             return 0;
         }
     }
     return -1;
+}
+
+/** Read an attempt's frames over standard I/O, as collect_within does. */
+static int collect(struct ending *e, const char *c, const char *token, int ms)
+{
+    return collect_within(e, c, token, ms, ETUDE_FRAME_STDIO_MAX);
 }
 
 /** The number of lines of the marks file, where the scripts count their
@@ -661,6 +686,7 @@ static void check_pass_fail_repeat(void)
     CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
               strcmp(g.field[3], "3") == 0,
           "status sends the exit again");
+    CHECK(streams_follow("7"), "status sends each stream again");
     CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && expect(&g, ETUDE_EV_CLEANED, 5000) == 0,
           "status sends usage and cleaned again");
     send_cmd(ETUDE_CMD_GET, new_cmd(c2), "00000000000000b1/out.2", (char *)NULL);
@@ -695,7 +721,7 @@ static void check_pass_fail_repeat(void)
     bye(0);
 }
 
-/** The sizes and digests of an attempt's output in its exit, first and
+/** The sizes and digests of an attempt's output in its streams, first and
  * repeated, with output past the invocation's bound, and its usage. */
 static void check_sizes(void)
 {
@@ -712,7 +738,7 @@ static void check_sizes(void)
     send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000f1", inv, (char *)NULL);
     CHECK(collect(&e, c, "00000000000000f1", 10000) == 0 && strcmp(e.out, "out\n") == 0 &&
               strcmp(e.err, "err\n") == 0 && e.sizes_ok,
-          "the exit gives the sizes and digests of the output sent");
+          "the streams give the sizes and digests of the output sent");
     CHECK(strlen(e.cpu) > 1 && e.cpu[strlen(e.cpu) - 1] == '+' &&
               strcmp(e.cpu_method, "wait-reaped-descendants-v1") == 0 && strlen(e.peak) > 1 &&
               e.peak[strlen(e.peak) - 1] == '+',
@@ -721,7 +747,7 @@ static void check_sizes(void)
     CHECK(collect(&again, c, "00000000000000f1", 10000) == 0 && again.sizes_ok,
           "a repeated run's exit agrees with the output it sends again");
 
-    /* Output past the bound is not sent, and the exit counts it. */
+    /* Output past the bound is not sent, and its stream counts it. */
     case_keep = 1000;
     put_case("flooding", flood, "00000000000000f2", "ordinary", 30000, inv);
     case_keep = 65536;
@@ -729,7 +755,7 @@ static void check_sizes(void)
     CHECK(collect(&e, c, "00000000000000f2", 10000) == 0 && strlen(e.out) == 1000 &&
               strspn(e.out, "0") == 1000 && e.err[0] == '\0' && e.sizes_ok &&
               strcmp(e.total[0], "1200") == 0 && strcmp(e.total[1], "0") == 0,
-          "the exit gives the bytes each stream carried beyond those sent");
+          "each stream gives the bytes it carried beyond those sent");
     bye(0);
 }
 
@@ -814,6 +840,8 @@ static void check_interruptions(void)
     CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
               strcmp(g.field[2], "stopped") == 0,
           "and the stopped end of the attempt");
+    CHECK(expect(&g, ETUDE_EV_STREAM, 5000) == 0 && expect(&g, ETUDE_EV_STREAM, 5000) == 0,
+          "and its streams");
     CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && expect(&g, ETUDE_EV_CLEANED, 5000) == 0 &&
               strcmp(g.field[2], "confirmed") == 0,
           "and its confirmed cleanup");
@@ -848,9 +876,14 @@ static void check_orphan(void)
     hello(ETUDE_FRAME_STDIO_MAX);
     send_cmd(ETUDE_CMD_STATUS, new_cmd(c2), "00000000000000d4", (char *)NULL);
     CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0, "status answers for an orphaned attempt");
-    CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && g.nfields == 10 &&
-              strcmp(g.field[2], "lost") == 0 && unknown(g.field + 3, 7),
-          "an orphaned attempt's end is lost, with its sizes unknown");
+    CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && g.nfields == 4 &&
+              strcmp(g.field[2], "lost") == 0 && unknown(g.field + 3, 1),
+          "an orphaned attempt's end is lost");
+    CHECK(expect(&g, ETUDE_EV_STREAM, 5000) == 0 && g.nfields == 6 &&
+              strcmp(g.field[2], "1") == 0 && unknown(g.field + 3, 3) &&
+              expect(&g, ETUDE_EV_STREAM, 5000) == 0 && g.nfields == 6 &&
+              strcmp(g.field[2], "2") == 0 && unknown(g.field + 3, 3),
+          "an orphaned attempt's streams are unknown");
     CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && g.nfields == 6 && unknown(g.field + 2, 4),
           "an orphaned attempt's usage is unknown");
     CHECK(expect(&g, ETUDE_EV_CLEANED, 5000) == 0, "and its cleanup follows");
@@ -878,10 +911,36 @@ static void check_stdio_damage(void)
 }
 
 /**
+ * On the serial transport, the end of an attempt with the longest command
+ * number, a signal and output past its bound on both streams, which in one
+ * frame with the streams' sizes and digests would be over 255 bytes. The
+ * bound is of both streams together, so standard output keeps it all.
+ */
+static void check_long_end(void)
+{
+    static const char flood[] = "#!/bin/sh\nhead -c 10000000 /dev/zero | tr '\\0' 0\n"
+                                "head -c 10000000 /dev/zero | tr '\\0' 1 >&2\nkill -TERM $$\n";
+    static const char long_cmd[] = "999999999999999999";
+    static struct ending e;
+    char inv[65];
+
+    case_keep = 1000;
+    put_case("flooding2", flood, "00000000000000e2", "ordinary", 30000, inv);
+    case_keep = 65536;
+    send_cmd(ETUDE_CMD_RUN, long_cmd, "00000000000000e2", inv, (char *)NULL);
+    CHECK(collect_within(&e, long_cmd, "00000000000000e2", 30000, ETUDE_FRAME_SERIAL_MAX) == 0 &&
+              strcmp(e.kind, "signaled") == 0 && strcmp(e.value, "15") == 0 && e.sizes_ok &&
+              strlen(e.out) == 1000 && e.err[0] == '\0' && strcmp(e.total[0], "10000000") == 0 &&
+              strcmp(e.total[1], "10000000") == 0,
+          "the end of a long attempt comes whole on the serial console");
+}
+
+/**
  * The serial transport: an unacknowledged frame is sent again with the same
  * bytes, a damaged frame and a frame past a gap are dropped and the last
  * frame in order is acknowledged, a repeated frame is not acted on twice,
- * and exec runs a case of the init role in etude-guest's own place.
+ * the end of an attempt fits the frame bound, and exec runs a case of the
+ * init role in etude-guest's own place.
  */
 static void check_serial(void)
 {
@@ -946,6 +1005,8 @@ static void check_serial(void)
     for (before = 0; before < 10 && next_frame(&g, 600) == 0; before++)
         CHECK(strcmp(g.type, ETUDE_CMD_ACK) == 0 && g.ack == seq - 1,
               "a repeated frame is acknowledged, not acted on");
+
+    check_long_end();
 
     /* exec: the program becomes this process, writes on the console itself,
      * and its exit is the process's. */

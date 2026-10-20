@@ -3,13 +3,14 @@
 # a repeated command run again, a cancellation reported as a signal, an
 # acknowledgement that releases nothing, an exec that runs the program as a
 # child, an output digest that misses the bytes sent, a stream's total that
-# misses the bytes not kept, and an orphaned attempt settled as stopped. Each
-# must fail the test, and the restored copy must pass it.
+# misses the bytes not kept, an orphaned attempt settled as stopped, and an
+# exit that carries both streams' sizes and digests in one frame. Each must
+# fail the test, and the restored copy must pass it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# Change the unique fault text in a private source, or just locate it.
+# Change each unique text of a fault in a private source, or just locate it.
 apply_fault()
 {
     python3 - "$1" "$2" <<'PY'
@@ -30,20 +31,33 @@ faults = {
              '    _exit(0);'),
     'digest': ('    sha256_update(&a->sent[fdn], buf, (size_t)r);\n', ''),
     'total': ('    a->total[fdn] += (unsigned long long)r;\n', ''),
-    'orphan': ('"%s %s %s lost - - - - - - -\\n', '"%s %s %s stopped - - - - - - -\\n'),
+    'orphan': ('"%s %s %s lost -\\n', '"%s %s %s stopped -\\n'),
+    'split': [('#include "wire.h"\n',
+               '#include "wire.h"\n#undef WIRE_FIELDS_MAX\n#define WIRE_FIELDS_MAX 10\n'),
+              ('    snprintf(line[0], LINE_CAP, "%s %s %s %s", ETUDE_EV_EXIT, a->cmd, a->token, end);\n'
+               '    stream_event(line[1], LINE_CAP, a, 1);\n'
+               '    stream_event(line[2], LINE_CAP, a, 2);\n',
+               '    stream_event(line[1], LINE_CAP, a, 1);\n'
+               '    stream_event(line[2], LINE_CAP, a, 2);\n'
+               '    snprintf(line[0], LINE_CAP, "%s %s %s %s %s %s", ETUDE_EV_EXIT, a->cmd, a->token,\n'
+               '             end, line[1] + strlen(a->cmd) + 27, line[2] + strlen(a->cmd) + 27);\n')],
 }
-old, new = faults[sys.argv[2]]
-if source.count(old) != 1:
-    raise SystemExit('etude-guest-mutation: fault text is not unique')
+pairs = faults[sys.argv[2]]
+if isinstance(pairs, tuple):
+    pairs = [pairs]
+for old, new in pairs:
+    if source.count(old) != 1:
+        raise SystemExit('etude-guest-mutation: fault text is not unique')
+    source = source.replace(old, new)
 if not os.environ.get('RACH2_FAULT_TEXTS'):
-    path.write_text(source.replace(old, new))
+    path.write_text(source)
 PY
 }
 
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in repeat stopped ack exec digest total orphan; do
+    for fault in repeat stopped ack exec digest total orphan split; do
         apply_fault tools/etude/guest/guest.c "$fault"
     done
     echo 'etude-guest-mutation: texts: every fault found once'
@@ -114,8 +128,9 @@ fault repeat 'a repeated run is answered by the same events'
 fault stopped 'a cancelled attempt is stopped and cleaned'
 fault ack 'an acknowledged frame is not sent again'
 fault exec "the program's exit is the process's"
-fault digest 'the exit gives the sizes and digests of the output sent'
-fault total 'the exit gives the bytes each stream carried beyond those sent'
+fault digest 'the streams give the sizes and digests of the output sent'
+fault total 'each stream gives the bytes it carried beyond those sent'
 fault orphan "an orphaned attempt's end is lost"
+fault split 'the end of a long attempt comes whole on the serial console'
 cp tools/etude/guest/guest.c "$work/guest.c"
 run_phase restored 0
