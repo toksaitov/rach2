@@ -122,6 +122,9 @@ struct etude_legacy_member {
     uint64_t memory_mib; /* the most guest memory its machines ask for at once */
     int serial;          /* it runs before the others, with nothing beside it */
     int stops;           /* its failure cancels the suites not yet started */
+    const char *cases;   /* the manifest whose host cases run the suite, from
+                            the tree's root unless absolute, or NULL for a
+                            suite of the registry */
 };
 
 /* The resources of a machine's ledger that a set's claims take. */
@@ -153,6 +156,8 @@ struct etude_legacy_set_opts {
                                     `store/`, and of each command's output in
                                     `output/` */
     const char *schemas;         /* the directory of etude's schemas */
+    const char *casecheck;       /* casecheck's path, which judges a case's attempt;
+                                    needed when a member has `cases` */
     const char *record;          /* the file of the preparation's record, or NULL for
                                     `prepare.record` under `results` */
     const char *evidence;        /* the directory under which a suite that does not pass

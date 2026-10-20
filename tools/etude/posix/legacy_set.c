@@ -1,10 +1,12 @@
 /*
  * legacy_set.c: the set driver on POSIX systems. It runs the suites of one
  * run of tests/run as one run of etude: it prepares them under a claim of
- * every limited resource of the machine, admits each suite through the
- * machine's ledger with the old runner's host lock and a port block, runs
- * each as `etude-legacy run` under a watchdog of the whole suite, and writes
- * the run's history and its status record.
+ * every limited resource of the machine, admits each suite of the registry,
+ * and each item of a suite run by the host cases of a manifest, through the
+ * machine's ledger with the old runner's host lock and a port block, runs a
+ * suite as `etude-legacy run` under a watchdog of the whole suite and a
+ * case's program under the case's own watchdog, and writes the run's history
+ * and its status record.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -29,6 +31,7 @@
 #include "etude/sched.h"
 #include "etude/status.h"
 #include "etude/watchdog.h"
+#include "legacy_cases.h"
 #include "posix.h"
 #include "sha256.h"
 
@@ -48,6 +51,9 @@ extern char **environ;
 
 /* From the preparation's termination signal to its kill. */
 #define PREP_GRACE_US UINT64_C(15000000)
+
+/* From a case's termination signal to its kill. */
+#define CASE_GRACE_US UINT64_C(5000000)
 
 /* The seconds a watchdog of a whole suite or of the preparation allows past
  * the bound that etude-legacy keeps itself, for it to end and report. */
@@ -105,6 +111,7 @@ struct command {
     char out[PATH_LEN]; /* the file of its output */
     char **argv;
     char **envp;
+    const char *cwd; /* its working directory, the tree's root */
     char offset[40]; /* RACH2_PORT_OFFSET=N */
     struct etude_watchdog_spec wd;
     uint64_t grace_us;
@@ -126,17 +133,31 @@ struct command {
     int filter;          /* it is a suite's, whose result lines are left out */
     int live;            /* its output is printed as it comes */
     long printed;        /* the bytes of its output read for printing */
+    long fed;            /* the bytes of its output fed to its watchdog */
     char line[LINE_LEN]; /* an output line not yet whole */
     size_t nline;
 };
 
-/* One suite of the set, and its item of the plan. */
+/* One item of the plan: a suite of the registry, or a repetition of a case
+ * of a suite's manifest. */
 struct member {
-    const struct etude_legacy_member *m;
-    char case_id[96];
+    const struct etude_legacy_member *m;    /* its suite */
+    const struct legacy_manifest *manifest; /* its case's manifest, or NULL */
+    const struct legacy_case *k;            /* its case, or NULL */
+    long long rep;                          /* its repetition */
+    const char *arch;                       /* its item's architecture */
+    int first;                              /* the first member of its suite */
+    char case_id[160];
+    char label[180]; /* a case's identity, and its repetition after the first */
     char item_id[300];
-    char record_id[300]; /* its attempt record, once written */
-    char work[PATH_LEN]; /* its suite's work, kept when it does not pass */
+    char record_id[300];    /* its attempt record, once written */
+    char work[PATH_LEN];    /* a suite's work or a case's scratch directory, kept
+                               when it does not pass */
+    char program[PATH_LEN]; /* a case's program */
+    char judged_out[PATH_LEN], judge_err[PATH_LEN]; /* casecheck's output */
+    char *judged; /* the results document casecheck gave, or NULL */
+    size_t njudged;
+    char vars[4][PATH_LEN + 32]; /* the variables a case's program is given */
     char inventory[65];
     char workload[400], assertions[400], profile[400]; /* blob references */
     struct command c;
@@ -159,9 +180,13 @@ struct set {
     struct etude_supervisor *sup;
     struct etude_ledger_res cap[3];
     size_t ncap;
-    struct member *mem; /* the serial members first, then the rest as given */
+    struct member *mem; /* the serial suites' members first, then the rest as
+                           given, the members of one suite together */
     size_t n;
-    struct etude_job *jobs; /* beside mem */
+    char tree[PATH_LEN];               /* the tree's absolute path */
+    struct legacy_manifest *manifests; /* by the request's members; a suite
+                                          of the registry has none */
+    struct etude_job *jobs;            /* beside mem */
     struct command prep;
     char prep_step[300];
     char plan_record[300];
@@ -521,6 +546,34 @@ static int result(const struct set *x, const struct command *c, struct cmp_text 
 
 /* ---- The plan. ---- */
 
+/** Keep `n` bytes in the store, with a blob reference to them in `ref`. */
+static int keep_bytes(const struct set *x, const char *bytes, size_t n, char *ref, size_t size)
+{
+    struct cmp_text t = {NULL, 0, 0, 0};
+    int rc = keep(x, bytes, n, &t);
+
+    if (rc == 0 && (t.failed || t.length >= size))
+        rc = -1;
+    if (rc == 0)
+        memcpy(ref, t.data, t.length + 1);
+    free(t.data);
+    return rc;
+}
+
+/** Keep the canonical documents of the case of member `m` as its item's
+ * blobs, and give its inventory digest. */
+static int case_docs(const struct set *x, struct member *m)
+{
+    const struct legacy_case *k = m->k;
+    int rc;
+
+    digest_of(k->inventory.data, k->inventory.len, m->inventory);
+    rc = keep_bytes(x, k->workload.data, k->workload.len, m->workload, sizeof(m->workload));
+    rc |= keep_bytes(x, k->inventory.data, k->inventory.len, m->assertions, sizeof(m->assertions));
+    rc |= keep_bytes(x, k->profile.data, k->profile.len, m->profile, sizeof(m->profile));
+    return rc;
+}
+
 /** Keep the documents of member `m`'s item, and give its inventory digest. */
 static int item_docs(const struct set *x, struct member *m)
 {
@@ -528,6 +581,8 @@ static int item_docs(const struct set *x, struct member *m)
     struct cmp_text d = {NULL, 0, 0, 0};
     int rc = 0;
 
+    if (m->k != NULL)
+        return case_docs(x, m);
     cmp_printf(&d, "{\"schema_version\":1,\"adapter\":\"etude-legacy run\",\"suite\":");
     string(&d, m->m->suite);
     cmp_printf(&d, ",\"target\":\"run-%s\",\"architecture\":\"%s\",\"kernel\":", m->m->suite,
@@ -598,7 +653,49 @@ static int budget_policy(struct set *x)
     return keep_ref(x, &d, x->policy, sizeof(x->policy));
 }
 
-/** Append the reproduction commands of each item: tests/run of its suite. */
+/** Append variable `var`, `NAME=VALUE`, as an entry of an environment,
+ * after a comma unless `first`. */
+static void variable(struct cmp_text *d, const char *var, int first)
+{
+    char name[64];
+
+    snprintf(name, sizeof(name), "%.*s", (int)strcspn(var, "="), var);
+    cmp_printf(d, "%s{\"name\":", first ? "" : ",");
+    string(d, name);
+    cmp_printf(d, ",\"value\":");
+    string(d, var + strcspn(var, "=") + (var[strcspn(var, "=")] != '\0'));
+    cmp_printf(d, "}");
+}
+
+/** Append the reproduction of case member `m`: its program and arguments,
+ * run in the tree with its variables, after make of its artifacts. */
+static void reproduce_case(const struct set *x, const struct member *m, struct cmp_text *d)
+{
+    const struct legacy_case *k = m->k;
+    size_t i;
+
+    cmp_printf(d, ",\"environment\":[");
+    for (i = 0; i < 4 && m->vars[i][0] != '\0'; i++)
+        if (strncmp(m->vars[i], "TMPDIR=", 7) != 0)
+            variable(d, m->vars[i], i == 0);
+    cmp_printf(d, "],\"preparation\":[[\"make\",\"-C\",");
+    string(d, x->tree);
+    cmp_printf(d, ",\"ARCH=%s\"", x->o->arch);
+    for (i = 0; i < k->ngoals; i++) {
+        cmp_printf(d, ",");
+        string(d, k->goals[i]);
+    }
+    cmp_printf(d, "]],\"case\":[");
+    string(d, m->program);
+    for (i = 0; i < k->nargs; i++) {
+        cmp_printf(d, ",");
+        string(d, k->args[i]);
+    }
+    cmp_printf(d, "],\"profile\":{\"reason\":\"the set driver runs no profiler\"}}");
+}
+
+/** Append the reproduction commands of each item: tests/run of its suite,
+ * or the program of its case. */
 static void reproduce(const struct set *x, struct cmp_text *d)
 {
     size_t i;
@@ -608,7 +705,11 @@ static void reproduce(const struct set *x, struct cmp_text *d)
         cmp_printf(d, "%s{\"item_id\":", i ? "," : "");
         string(d, x->mem[i].item_id);
         cmp_printf(d, ",\"directory\":");
-        string(d, x->o->tree);
+        string(d, x->mem[i].k != NULL ? x->tree : x->o->tree);
+        if (x->mem[i].k != NULL) {
+            reproduce_case(x, &x->mem[i], d);
+            continue;
+        }
         cmp_printf(d, ",\"environment\":[{\"name\":\"ARCH\",\"value\":\"%s\"}", x->o->arch);
         if (x->o->kernel != NULL) {
             cmp_printf(d, ",{\"name\":\"RACH2_KERNEL\",\"value\":");
@@ -631,7 +732,7 @@ static void names(const struct set *x, struct cmp_text *d, int (*pick)(const str
     for (i = 0; i < x->n; i++)
         if (pick(&x->mem[i])) {
             cmp_printf(d, n++ ? "," : "");
-            string(d, x->mem[i].m->suite);
+            string(d, x->mem[i].c.name);
         }
     cmp_printf(d, "]");
 }
@@ -648,6 +749,37 @@ static int is_exclusive(const struct member *m)
     return m->c.exclusive;
 }
 
+/** Give the family of member `m`'s item: its manifest's, or its case's. */
+static const char *family_of(const struct member *m)
+{
+    return m->manifest != NULL ? m->manifest->family : m->case_id;
+}
+
+/** Append the selection of the plan: each suite, with its manifest when its
+ * cases run it. */
+static void selection(const struct set *x, struct cmp_text *d)
+{
+    const struct member *m;
+    size_t i, n = 0;
+
+    cmp_printf(d, "{\"schema_version\":1,\"architecture\":\"%s\",\"suites\":[", x->o->arch);
+    for (i = 0; i < x->n; i++) {
+        if (!(m = &x->mem[i])->first)
+            continue;
+        cmp_printf(d, "%s{\"suite\":", n++ ? "," : "");
+        string(d, m->m->suite);
+        cmp_printf(d, ",\"memory_mib\":%llu,\"serial\":%s,\"stops\":%s",
+                   (unsigned long long)m->m->memory_mib, m->m->serial ? "true" : "false",
+                   m->m->stops ? "true" : "false");
+        if (m->manifest != NULL) {
+            cmp_printf(d, ",\"manifest\":");
+            string(d, m->manifest->path);
+        }
+        cmp_printf(d, "}");
+    }
+    cmp_printf(d, "],\"stop_on_fail\":%s}\n", x->o->stop_on_fail ? "true" : "false");
+}
+
 /** Write the plan record. */
 static int write_plan(struct set *x)
 {
@@ -659,15 +791,7 @@ static int write_plan(struct set *x)
     for (i = 0; i < x->n && rc == 0; i++)
         rc = item_docs(x, &x->mem[i]);
     cmp_printf(&t, "{\"purpose\":\"focused\"");
-    cmp_printf(&d, "{\"schema_version\":1,\"architecture\":\"%s\",\"suites\":[", o->arch);
-    for (i = 0; i < x->n; i++) {
-        cmp_printf(&d, "%s{\"suite\":", i ? "," : "");
-        string(&d, x->mem[i].m->suite);
-        cmp_printf(&d, ",\"memory_mib\":%llu,\"serial\":%s,\"stops\":%s}",
-                   (unsigned long long)x->mem[i].m->memory_mib,
-                   x->mem[i].m->serial ? "true" : "false", x->mem[i].m->stops ? "true" : "false");
-    }
-    cmp_printf(&d, "],\"stop_on_fail\":%s}\n", o->stop_on_fail ? "true" : "false");
+    selection(x, &d);
     rc |= part(x, &t, "selection", &d);
     cmp_printf(&t, ",\"items\":[");
     for (i = 0; i < x->n; i++) {
@@ -678,11 +802,11 @@ static int write_plan(struct set *x)
         cmp_printf(&t, ",\"case_id\":");
         string(&t, m->case_id);
         cmp_printf(&t, ",\"family_id\":");
-        string(&t, m->case_id);
+        string(&t, family_of(m));
         cmp_printf(&t,
                    ",\"architecture\":\"%s\",\"domain\":\"host\",\"workload\":%s,"
-                   "\"assertions\":%s,\"profile\":%s,\"repetition\":0,\"attempt_ids\":[",
-                   o->arch, m->workload, m->assertions, m->profile);
+                   "\"assertions\":%s,\"profile\":%s,\"repetition\":%lld,\"attempt_ids\":[",
+                   m->arch, m->workload, m->assertions, m->profile, m->rep);
         string(&t, m->c.id);
         cmp_printf(&t, "]}");
     }
@@ -817,25 +941,37 @@ static unsigned wait_left_ms(const struct set *x, const struct command *c)
     return used >= all ? 1u : (unsigned)(all - used);
 }
 
-/** Fill `c->envp` with this process's environment, with RACH2_PORT_OFFSET
- * set to `offset` when it is not NULL. */
-static int environment(struct command *c, const char *offset)
+/** Say whether `var`, `NAME=VALUE`, has the name of one of the `n`
+ * variables `vars`. */
+static int named(const char *var, char *const *vars, size_t n)
+{
+    size_t i, k;
+
+    for (i = 0; i < n; i++) {
+        k = strcspn(vars[i], "=") + 1;
+        if (strncmp(var, vars[i], k) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/** Fill `c->envp` with this process's environment, with each of the `nvars`
+ * variables `vars`, `NAME=VALUE`, in place of one of its name. */
+static int environment(struct command *c, char *const *vars, size_t nvars)
 {
     size_t n = 0, i, k = 0;
 
     while (environ[n] != NULL)
         n++;
     free(c->envp);
-    c->envp = calloc(n + 2, sizeof(*c->envp));
+    c->envp = calloc(n + nvars + 1, sizeof(*c->envp));
     if (c->envp == NULL)
         return -1;
     for (i = 0; i < n; i++)
-        if (offset == NULL || strncmp(environ[i], "RACH2_PORT_OFFSET=", 18) != 0)
+        if (!named(environ[i], vars, nvars))
             c->envp[k++] = environ[i];
-    if (offset != NULL) {
-        snprintf(c->offset, sizeof(c->offset), "RACH2_PORT_OFFSET=%s", offset);
-        c->envp[k++] = c->offset;
-    }
+    for (i = 0; i < nvars; i++)
+        c->envp[k++] = vars[i];
     c->envp[k] = NULL;
     return 0;
 }
@@ -916,19 +1052,19 @@ static void not_run(struct set *x, struct command *c, enum outcome outcome, cons
     etude_history_now(&c->done);
 }
 
-/** Start command `c`, whose claim and locks are held, with the port block
- * `offset` or the caller's; 0, or -1 with errno set. */
-static int start(struct set *x, struct command *c, const char *offset)
+/** Start command `c`, whose claim and locks are held, with the `n`
+ * variables `vars` added to the environment; 0, or -1 with errno set. */
+static int start(struct set *x, struct command *c, char *const *vars, size_t n)
 {
     const struct etude_supervised_result *r;
 
-    if (environment(c, offset) != 0)
+    if (environment(c, vars, n) != 0)
         return -1;
     memset(&c->spec, 0, sizeof(c->spec));
     c->spec.attempt_id = c->id;
     c->spec.argv = c->argv;
     c->spec.envp = c->envp;
-    c->spec.cwd = x->o->tree;
+    c->spec.cwd = c->cwd;
     c->spec.output_max = 4096;
     c->spec.grace_us = c->grace_us;
     c->spec.reg = etude_ledger_register;
@@ -974,6 +1110,24 @@ static void flush_line(struct set *x, struct command *c)
         fputc('\n', x->out);
     }
     c->nline = 0;
+}
+
+/** Feed the output command `c` has written since the last feed to its
+ * watchdog, whose records of progress are a case's progress. */
+static void feed(struct command *c)
+{
+    char buf[4096];
+    size_t got;
+    FILE *f;
+
+    if (c->sup == NULL || (f = fopen(c->out, "rb")) == NULL)
+        return;
+    if (fseek(f, c->fed, SEEK_SET) == 0)
+        while ((got = fread(buf, 1, sizeof(buf), f)) > 0) {
+            etude_supervised_feed(c->sup, buf, got);
+            c->fed += (long)got;
+        }
+    fclose(f);
 }
 
 /** Print the whole lines of command `c`'s output not printed yet, and with
@@ -1104,6 +1258,33 @@ static void judge_exit(struct command *c, const char *line, int v, int prep)
         came_out(c, INCOMPLETE, 1, "etude-legacy exited with status %d and no result", v);
 }
 
+/** Take the end of command `c` from its result `r`. */
+static void took(struct command *c, const struct etude_supervised_result *r)
+{
+    c->end = r->end;
+    c->value = r->value;
+    c->cleanup = r->cleanup;
+    c->cpu_us = r->proc->cpu_us;
+    c->ended_us = r->finished_us;
+    c->max_gap_us = r->max_gap_us;
+    etude_history_now(&c->done);
+}
+
+/** Settle the outcome of command `c` with its cancellation and its
+ * cleanup: a cancelled command that neither passed nor failed is cancelled,
+ * and one whose cleanup is unconfirmed cannot pass. */
+static void settle(const struct set *x, struct command *c)
+{
+    if (c->cancelled && c->outcome != PASS && c->outcome != FAILURE) {
+        c->disruption[0] = '\0';
+        came_out(c, CANCELLED, 0, "%s", x->stop_reason);
+    }
+    if (c->outcome == PASS && c->cleanup != ETUDE_CLEANUP_CONFIRMED)
+        came_out(c, INCOMPLETE, 1, "its cleanup is unconfirmed");
+    else if (c->cleanup != ETUDE_CLEANUP_CONFIRMED && c->disruption[0] == '\0')
+        snprintf(c->disruption, sizeof(c->disruption), "its cleanup is unconfirmed");
+}
+
 /** Judge command `c`, which has finished, by its end and its last result
  * line; `prep` says it is the preparation. */
 static void judge(struct set *x, struct command *c, int prep)
@@ -1112,13 +1293,7 @@ static void judge(struct set *x, struct command *c, int prep)
     char line[REASON_LEN];
     int v = r->value;
 
-    c->end = r->end;
-    c->value = r->value;
-    c->cleanup = r->cleanup;
-    c->cpu_us = r->proc->cpu_us;
-    c->ended_us = r->finished_us;
-    c->max_gap_us = r->max_gap_us;
-    etude_history_now(&c->done);
+    took(c, r);
     last_result(c, line, sizeof(line));
     if (r->incomplete && r->expiry != ETUDE_EXPIRY_NONE)
         came_out(c, INCOMPLETE, 1, "etude-legacy did not end within its %s bound of %llu s",
@@ -1129,14 +1304,62 @@ static void judge(struct set *x, struct command *c, int prep)
         came_out(c, INCOMPLETE, 1, "the end of etude-legacy was not observed");
     else
         judge_exit(c, line, v, prep);
-    if (c->cancelled && c->outcome != PASS && c->outcome != FAILURE) {
-        c->disruption[0] = '\0';
-        came_out(c, CANCELLED, 0, "%s", x->stop_reason);
-    }
-    if (c->outcome == PASS && c->cleanup != ETUDE_CLEANUP_CONFIRMED)
-        came_out(c, INCOMPLETE, 1, "its cleanup is unconfirmed");
-    else if (c->cleanup != ETUDE_CLEANUP_CONFIRMED && c->disruption[0] == '\0')
-        snprintf(c->disruption, sizeof(c->disruption), "its cleanup is unconfirmed");
+    settle(x, c);
+}
+
+/** Give the end of a case as casecheck takes it from result `r`: stopped
+ * for a watchdog's expiry or a cancellation, lost when it was not observed,
+ * and otherwise exited or signaled. */
+static const char *end_of(const struct etude_supervised_result *r)
+{
+    if (r->expiry != ETUDE_EXPIRY_NONE || r->end == ETUDE_END_STOPPED)
+        return "stopped";
+    return r->end == ETUDE_END_EXITED     ? "exited"
+           : r->end == ETUDE_END_SIGNALED ? "signaled"
+                                          : "lost";
+}
+
+/** Give the outcome of an attempt that casecheck judged `j`. */
+static enum outcome outcome_of(enum legacy_judged j)
+{
+    return j == LEGACY_PASS ? PASS : j == LEGACY_FAILURE ? FAILURE : INCOMPLETE;
+}
+
+/** Judge the case of member `m`, which has finished, by casecheck's
+ * judgement of its output and its end. */
+static void judge_case(struct set *x, struct member *m)
+{
+    struct command *c = &m->c;
+    const struct etude_supervised_result *r = etude_supervised_result(c->sup);
+    struct legacy_judge j;
+    struct legacy_judgement v;
+
+    took(c, r);
+    memset(&j, 0, sizeof(j));
+    j.casecheck = x->o->casecheck;
+    j.schemas = x->o->schemas;
+    j.manifest = m->manifest->path;
+    j.case_id = m->case_id;
+    j.arch = m->arch;
+    j.output = c->out;
+    j.run_id = x->run_id;
+    j.attempt_id = c->id;
+    j.item_id = m->item_id;
+    j.end = end_of(r);
+    j.value = strcmp(j.end, "exited") == 0 || strcmp(j.end, "signaled") == 0 ? r->value : -1;
+    j.results = m->judged_out;
+    j.errors = m->judge_err;
+    legacy_judge_run(&j, &v);
+    m->judged = v.doc;
+    m->njudged = v.len;
+    if (v.outcome == LEGACY_UNJUDGED)
+        came_out(c, INCOMPLETE, 1, "its results could not be judged: %s", v.reason);
+    else if (r->incomplete && r->expiry != ETUDE_EXPIRY_NONE)
+        came_out(c, outcome_of(v.outcome), 0, "it ran past its %s bound of %llu ms: %s",
+                 etude_expiry_name(r->expiry), (unsigned long long)(r->bound_us / 1000u), v.reason);
+    else
+        came_out(c, outcome_of(v.outcome), 0, "%s", v.reason);
+    settle(x, c);
 }
 
 /* ---- The status record. ---- */
@@ -1149,9 +1372,9 @@ struct roll {
     uint64_t now, epoch;
 };
 
-/** Add command `c` of case `case_id` to the attempts of the status record
- * `r`, when it waits or runs. */
-static void status_of(const struct set *x, const struct command *c, const char *case_id,
+/** Add command `c` of case `case_id` on `arch` to the attempts of the
+ * status record `r`, when it waits or runs. */
+static void status_of(const struct command *c, const char *case_id, const char *arch,
                       struct roll *r)
 {
     struct etude_status_attempt *s = &r->a[r->n];
@@ -1159,7 +1382,7 @@ static void status_of(const struct set *x, const struct command *c, const char *
     memset(s, 0, sizeof(*s));
     s->attempt_id = c->id;
     s->case_id = case_id;
-    s->architecture = x->o->arch;
+    s->architecture = arch;
     if (c->state == RUNNING && c->sup != NULL) {
         etude_status_watch(s, etude_supervised_watchdog(c->sup), r->now, r->epoch);
         r->n++;
@@ -1188,9 +1411,9 @@ static void status(struct set *x, int force)
     x->status_us = r.now;
     if ((r.a = calloc(x->n + 1, sizeof(*r.a))) == NULL)
         return;
-    status_of(x, &x->prep, "legacy.prepare", &r);
+    status_of(&x->prep, "legacy.prepare", x->o->arch, &r);
     for (i = 0; i < x->n; i++)
-        status_of(x, &x->mem[i].c, x->mem[i].case_id, &r);
+        status_of(&x->mem[i].c, x->mem[i].case_id, x->mem[i].arch, &r);
     memset(&s, 0, sizeof(s));
     if (etude_process_state((long)getpid(), &s.owner) != 1) {
         memset(&s.owner, 0, sizeof(s.owner));
@@ -1219,7 +1442,8 @@ static const char *end_name(enum etude_end e)
                                      : "lost";
 }
 
-/** Append the results document of member `m`, kept in the store, to `t`. */
+/** Append the results document of member `m`, kept in the store, to `t`:
+ * the one casecheck gave, or one of its termination alone. */
 static int results(const struct set *x, const struct member *m, struct cmp_text *t)
 {
     const struct command *c = &m->c;
@@ -1227,6 +1451,8 @@ static int results(const struct set *x, const struct member *m, struct cmp_text 
     const char *by = "host_process", *check;
     int value = c->value;
 
+    if (m->judged != NULL)
+        return keep(x, m->judged, m->njudged, t);
     if (c->end == ETUDE_END_STOPPED || c->end == ETUDE_END_LOST || !c->ran) {
         by = "executor";
         value = -1;
@@ -1348,6 +1574,31 @@ static int recorded(const struct member *m)
     return m->record_id[0] != '\0';
 }
 
+/** Append the total of the family of member `i`, the first of its suite,
+ * after a comma unless `n` is 0: the attempts of its suite's members that
+ * ran, and their time. */
+static void family_total(const struct set *x, size_t i, size_t n, struct cmp_text *f)
+{
+    const struct member *m;
+    uint64_t sum = 0;
+    size_t j, k = 0;
+
+    cmp_printf(f, n ? ",{\"family_id\":" : "{\"family_id\":");
+    string(f, family_of(&x->mem[i]));
+    cmp_printf(f, ",\"members\":[");
+    for (j = i; j < x->n && x->mem[j].m == x->mem[i].m; j++) {
+        m = &x->mem[j];
+        if (!m->c.ran)
+            continue;
+        sum += m->c.ended_us - m->c.started_us;
+        if (recorded(m)) {
+            cmp_printf(f, k++ ? "," : "");
+            string(f, m->record_id);
+        }
+    }
+    cmp_printf(f, "],\"sum_us\":%llu}", (unsigned long long)sum);
+}
+
 /** Append the run's totals of each stage and of each family. */
 static int totals(const struct set *x, struct cmp_text *t)
 {
@@ -1374,21 +1625,14 @@ static int totals(const struct set *x, struct cmp_text *t)
         if (!x->mem[i].c.ran && recorded(&x->mem[i])) {
             cmp_printf(&d, n++ ? ",{\"record_id\":" : "{\"record_id\":");
             string(&d, x->mem[i].record_id);
-            cmp_printf(&d, ",\"reason\":\"the suite did not start\"}");
+            cmp_printf(&d, ",\"reason\":\"the %s did not start\"}",
+                       x->mem[i].k != NULL ? "case" : "suite");
         }
     cmp_printf(&d, "]}]}\n");
     cmp_printf(&f, "{\"schema_version\":1,\"families\":[");
-    for (i = 0; i < x->n; i++) {
-        const struct member *m = &x->mem[i];
-
-        cmp_printf(&f, i ? ",{\"family_id\":" : "{\"family_id\":");
-        string(&f, m->case_id);
-        cmp_printf(&f, ",\"members\":[");
-        if (m->c.ran && recorded(m))
-            string(&f, m->record_id);
-        cmp_printf(&f, "],\"sum_us\":%llu}",
-                   (unsigned long long)(m->c.ran ? m->c.ended_us - m->c.started_us : 0));
-    }
+    for (i = 0, n = 0; i < x->n; i++)
+        if (x->mem[i].first)
+            family_total(x, i, n++, &f);
     cmp_printf(&f, "]}\n");
     rc = part(x, t, "stage_totals", &d);
     rc |= part(x, t, "family_totals", &f);
@@ -1467,7 +1711,7 @@ static void run_reason(const struct set *x, char *out, size_t size)
     }
     for (i = 0; i < x->n; i++)
         counts[x->mem[i].c.outcome]++;
-    snprintf(out, size, "of %lu suites, %u failed, %u did not finish and %u were cancelled",
+    snprintf(out, size, "of %lu items, %u failed, %u did not finish and %u were cancelled",
              (unsigned long)x->n, counts[FAILURE], counts[INCOMPLETE], counts[CANCELLED]);
 }
 
@@ -1618,7 +1862,7 @@ static int prepare(struct set *x)
             not_run(x, c, INCOMPLETE, c->reason, 1);
         return 1;
     }
-    if (start(x, c, NULL) != 0) {
+    if (start(x, c, NULL, 0) != 0) {
         came_out(c, INCOMPLETE, 1, "etude-legacy could not start: %s", strerror(errno));
         not_run(x, c, INCOMPLETE, c->reason, 1);
         return 1;
@@ -1748,20 +1992,59 @@ static void stop_all(struct set *x, const char *why, const char *what)
     }
 }
 
+/** Give the variables of case member `m`'s program in `vars`, and their
+ * count. */
+static size_t case_vars(struct member *m, char **vars)
+{
+    size_t n = 0;
+
+    while (n < 4 && m->vars[n][0] != '\0') {
+        vars[n] = m->vars[n];
+        n++;
+    }
+    return n;
+}
+
+/** Start the case of member `m`, whose claim and locks are held, with its
+ * scratch directory made when it has one. */
+static void start_case(struct set *x, struct member *m)
+{
+    struct command *c = &m->c;
+    char *vars[4];
+    size_t n = case_vars(m, vars);
+
+    say(x, "run: %s: %s: starting", m->m->suite, m->label);
+    if ((m->k->scratch && make_dir(m->work) != 0) || start(x, c, vars, n) != 0) {
+        came_out(c, INCOMPLETE, 1, "the case could not start: %s", strerror(errno));
+        not_run(x, c, INCOMPLETE, c->reason, 1);
+        write_attempt(x, m);
+        return;
+    }
+    running_changed(x, 1);
+    status(x, 1);
+}
+
 /** Start the suite of member `m`, whose claim and locks are held. */
 static void start_member(struct set *x, struct member *m)
 {
     struct command *c = &m->c;
-    char offset[24];
+    char offset[16], *vars[1];
     const char *off = getenv("RACH2_PORT_OFFSET");
 
+    if (m->k != NULL) {
+        start_case(x, m);
+        return;
+    }
     if (c->bridge != NULL) {
         snprintf(offset, sizeof(offset), "%d", etude_bridge_offset(c->bridge));
         off = offset;
     }
+    if (off != NULL)
+        snprintf(c->offset, sizeof(c->offset), "RACH2_PORT_OFFSET=%s", off);
+    vars[0] = c->offset;
     if (!c->live)
         say(x, "run: %s: starting (idle limit %s s)", c->name, x->idle);
-    if (start(x, c, off) != 0) {
+    if (start(x, c, vars, off != NULL) != 0) {
         came_out(c, INCOMPLETE, 1, "etude-legacy could not start: %s", strerror(errno));
         not_run(x, c, INCOMPLETE, c->reason, 1);
         write_attempt(x, m);
@@ -1769,6 +2052,16 @@ static void start_member(struct set *x, struct member *m)
     }
     running_changed(x, 1);
     status(x, 1);
+}
+
+/** Remove the scratch directory of case member `m` after a pass, and name
+ * it otherwise, as its evidence. */
+static void scratch_end(struct set *x, const struct member *m)
+{
+    if (m->c.outcome != PASS)
+        say(x, "run: %s: %s: evidence: %s", m->m->suite, m->label, m->work);
+    else if (legacy_remove_tree(m->work) != 0)
+        say(x, "run: %s: %s: not removed: %s: %s", m->m->suite, m->label, m->work, strerror(errno));
 }
 
 /** Take the end of the suite `f` that the supervisor gave. */
@@ -1787,13 +2080,20 @@ static void finished(struct set *x, struct etude_supervised *f)
         return;
     }
     c = &m->c;
-    judge(x, c, 0);
+    if (m->k != NULL)
+        judge_case(x, m);
+    else
+        judge(x, c, 0);
     release(x, c, c->cleanup);
     c->state = DONE;
     running_changed(x, -1);
-    if (c->cancelled && c->outcome == CANCELLED && !c->live)
+    if (c->cancelled && c->outcome == CANCELLED && !c->live && m->k != NULL)
+        say(x, "run: %s: %s: stopped before its end; its output so far:", m->m->suite, m->label);
+    else if (c->cancelled && c->outcome == CANCELLED && !c->live)
         say(x, "run: %s: stopped before its end; its output so far:", c->name);
     drain(x, c, 1);
+    if (m->k != NULL && m->k->scratch)
+        scratch_end(x, m);
     etude_supervised_free(f);
     c->sup = NULL;
     write_attempt(x, m);
@@ -1881,6 +2181,8 @@ static void drive(struct set *x)
                 advance(x, i);
             if (c->state == RUNNING) {
                 busy++;
+                if (x->mem[i].k != NULL)
+                    feed(c);
                 if (c->live)
                     drain(x, c, 0);
             }
@@ -1959,6 +2261,47 @@ static int check_given(struct set *x)
     return 0;
 }
 
+/** Give the count of the request's suites of the registry. */
+static size_t registry_suites(const struct etude_legacy_set_opts *o)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < o->nmembers; i++)
+        n += o->members[i].cases == NULL;
+    return n;
+}
+
+/** Read the manifest of each suite run by its cases, and count their
+ * members in `x->n`; 0, or 2 after a refusal. */
+static int check_cases(struct set *x)
+{
+    const struct etude_legacy_set_opts *o = x->o;
+    char why[PATH_LEN + 80];
+    size_t i, k;
+
+    x->n = registry_suites(o);
+    if (x->n == o->nmembers)
+        return 0;
+    if (o->casecheck == NULL)
+        return refuse(x, "a suite run by its cases needs casecheck's path");
+    if (realpath(o->tree, x->tree) == NULL) {
+        snprintf(why, sizeof(why), "%s: %s", o->tree, strerror(errno));
+        return refuse(x, why);
+    }
+    if ((x->manifests = calloc(o->nmembers, sizeof(*x->manifests))) == NULL)
+        return refuse(x, "memory ran out");
+    for (i = 0; i < o->nmembers; i++) {
+        if (o->members[i].cases == NULL)
+            continue;
+        if (legacy_manifest_read(&x->manifests[i], x->tree, o->members[i].cases,
+                                 o->members[i].suite, o->arch) != 0)
+            return refuse(x, x->manifests[i].why);
+        for (k = 0; k < x->manifests[i].ncases; k++)
+            x->n += (size_t)x->manifests[i].cases[k].reps;
+    }
+    return 0;
+}
+
 /** Check the request before anything runs; 0, or 2 after a refusal. */
 static int check(struct set *x)
 {
@@ -1973,11 +2316,11 @@ static int check(struct set *x)
         return 2;
     if (o->commit != NULL && !commit_name(o->commit))
         return refuse(x, "the commit must be 40 or 64 lowercase hexadecimal digits");
-    if (o->locks == NULL &&
+    if (o->locks == NULL && registry_suites(o) > 0 &&
         (offset == NULL || offset[0] == '\0' || offset[strspn(offset, "0123456789")] != '\0'))
         return refuse(x, "without a lock directory, RACH2_PORT_OFFSET must name the port block "
                          "the caller holds");
-    return 0;
+    return check_cases(x);
 }
 
 /** Fill the command of member `m` from the request. */
@@ -1995,6 +2338,8 @@ static int member_command(struct set *x, struct member *m)
         fit(c->out, sizeof(c->out), "%s/%s.log", x->output, m->m->suite) != 0)
         return -1;
     c->name = m->m->suite;
+    c->cwd = o->tree;
+    m->arch = o->arch;
     want[ETUDE_LEGACY_CPU] = o->cpus * 500u > 500u ? o->cpus * 500u : 500u;
     want[ETUDE_LEGACY_MEMORY] = (m->m->memory_mib << 20) + QEMU_BYTES;
     want[ETUDE_LEGACY_DISK] = DISK_BYTES;
@@ -2042,6 +2387,129 @@ static int member_command(struct set *x, struct member *m)
     return 0;
 }
 
+/** Name the files of case member `m`, the repetition `m->rep` of its case:
+ * its item, its attempt, its scratch, its output and casecheck's, its
+ * program, and the variables its program is given; 0, or -1. */
+static int case_paths(struct set *x, struct member *m)
+{
+    const struct legacy_case *k = m->k;
+    struct command *c = &m->c;
+    char tail[200];
+    size_t v = 0;
+
+    if (fit(tail, sizeof(tail), "%s.r%lld", k->case_id, m->rep) != 0 ||
+        fit(m->case_id, sizeof(m->case_id), "%s", k->case_id) != 0 ||
+        (m->rep > 0 ? fit(m->label, sizeof(m->label), "%s r%lld", k->case_id, m->rep)
+                    : fit(m->label, sizeof(m->label), "%s", k->case_id)) != 0 ||
+        fit(m->item_id, sizeof(m->item_id), "%s:%s:%s:r%lld", x->run_id, k->case_id, k->arch,
+            m->rep) != 0 ||
+        fit(c->id, sizeof(c->id), "%s:a0", m->item_id) != 0 ||
+        fit(m->work, sizeof(m->work), "%s/%s.%s", x->o->evidence, x->run_id, tail) != 0 ||
+        fit(c->out, sizeof(c->out), "%s/%s.log", x->output, tail) != 0 ||
+        fit(m->judged_out, sizeof(m->judged_out), "%s/%s.results", x->output, tail) != 0 ||
+        fit(m->judge_err, sizeof(m->judge_err), "%s/%s.judge", x->output, tail) != 0 ||
+        fit(m->program, sizeof(m->program), "%s/%s", x->tree, k->goals[k->program]) != 0)
+        return -1;
+    snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_CASE=%s", k->case_id);
+    if (k->seeded)
+        snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_SEED=%lld", k->seed);
+    if (strcmp(k->arch, "none") != 0)
+        snprintf(m->vars[v++], sizeof(m->vars[0]), "ARCH=%s", k->arch);
+    if (k->scratch)
+        snprintf(m->vars[v++], sizeof(m->vars[0]), "TMPDIR=%s", m->work);
+    return 0;
+}
+
+/** Fill the command of case member `m` from its case: the program under
+ * the case's own bounds, and a claim of its resources held within the
+ * ledger's limits, which takes the old host lock shared and no port. */
+static int case_command(struct set *x, struct member *m)
+{
+    const struct legacy_case *k = m->k;
+    struct command *c = &m->c;
+    uint64_t want[3];
+    size_t i, a = 0;
+
+    if (case_paths(x, m) != 0)
+        return -1;
+    c->name = m->label;
+    c->cwd = x->tree;
+    m->arch = k->arch;
+    want[ETUDE_LEGACY_CPU] = k->cpu_millis;
+    want[ETUDE_LEGACY_MEMORY] = k->memory_bytes;
+    want[ETUDE_LEGACY_DISK] = k->disk_bytes;
+    for (i = 0; i < 3; i++) {
+        if (want[i] == 0)
+            continue;
+        c->res[c->nres].name = resource_names[i];
+        c->res[c->nres++].amount = want[i] < x->cap[i].amount ? want[i] : x->cap[i].amount;
+    }
+    c->exclusive = m->m->serial;
+    c->live = x->n == 1;
+    c->grace_us = CASE_GRACE_US;
+    c->wd.case_us = k->case_us;
+    c->wd.gap_us = k->gap_us;
+    c->wd.witnesses = k->witnesses;
+    c->wd.witness_count = k->nwitnesses;
+    c->cpu_us.method = "the case did not start";
+    c->cleanup = ETUDE_CLEANUP_CONFIRMED;
+    c->end = ETUDE_END_STOPPED;
+    c->value = -1;
+    if ((c->argv = calloc(k->nargs + 6, sizeof(*c->argv))) == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    c->argv[a++] = "/bin/sh";
+    c->argv[a++] = "-c";
+    c->argv[a++] = "exec \"$@\" >\"$0\" 2>&1";
+    c->argv[a++] = c->out;
+    c->argv[a++] = m->program;
+    for (i = 0; i < k->nargs; i++)
+        c->argv[a++] = (char *)k->args[i];
+    return 0;
+}
+
+/** Say whether goal `goal` is among the `n` arguments `argv` that follow a
+ * `-b`. */
+static int given(char *const *argv, size_t n, const char *goal)
+{
+    size_t i;
+
+    for (i = 1; i < n; i++)
+        if (strcmp(argv[i - 1], "-b") == 0 && strcmp(argv[i], goal) == 0)
+            return 1;
+    return 0;
+}
+
+/** Add to the preparation's arguments `argv`, of which `*k` are given, a
+ * `-b` for each artifact of a case member, once. */
+static void case_goals(const struct set *x, char **argv, size_t *k)
+{
+    const struct legacy_case *c;
+    size_t i, g;
+
+    for (i = 0; i < x->n; i++) {
+        if ((c = x->mem[i].k) == NULL)
+            continue;
+        for (g = 0; g < c->ngoals; g++)
+            if (!given(argv, *k, c->goals[g])) {
+                argv[(*k)++] = "-b";
+                argv[(*k)++] = c->goals[g];
+            }
+    }
+}
+
+/** Give the count of the artifacts of the case members, each counted as
+ * often as its members have it. */
+static size_t goal_count(const struct set *x)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < x->n; i++)
+        n += x->mem[i].k != NULL ? x->mem[i].k->ngoals : 0;
+    return n;
+}
+
 /** Fill the command of the preparation from the request. */
 static int prep_command(struct set *x)
 {
@@ -2065,7 +2533,8 @@ static int prep_command(struct set *x)
     c->cleanup = ETUDE_CLEANUP_CONFIRMED;
     c->end = ETUDE_END_STOPPED;
     c->value = -1;
-    if ((c->argv = calloc(x->n + 20, sizeof(*c->argv))) == NULL) {
+    c->cwd = o->tree;
+    if ((c->argv = calloc(x->n + 2 * goal_count(x) + 20, sizeof(*c->argv))) == NULL) {
         errno = ENOMEM;
         return -1;
     }
@@ -2087,8 +2556,10 @@ static int prep_command(struct set *x)
     c->argv[k++] = x->record;
     c->argv[k++] = "-s";
     c->argv[k++] = x->seconds;
+    case_goals(x, c->argv, &k);
     for (i = 0; i < x->n; i++)
-        c->argv[k++] = (char *)x->mem[i].m->suite;
+        if (x->mem[i].k == NULL)
+            c->argv[k++] = (char *)x->mem[i].m->suite;
     return 0;
 }
 
@@ -2146,6 +2617,30 @@ static int make_paths(struct set *x, char dir[PATH_LEN], char path[PATH_LEN])
     return 0;
 }
 
+/** Give suite `s` of the request its members from `k` on: itself, or each
+ * repetition of each case of its manifest; give the next member's place. */
+static size_t take_members(struct set *x, size_t s, size_t k)
+{
+    const struct legacy_manifest *man = x->manifests != NULL ? &x->manifests[s] : NULL;
+    size_t c, from = k;
+    long long r;
+
+    if (x->o->members[s].cases == NULL) {
+        x->mem[k].m = &x->o->members[s];
+        x->mem[k].first = 1;
+        return k + 1;
+    }
+    for (c = 0; c < man->ncases; c++)
+        for (r = 0; r < man->cases[c].reps; r++, k++) {
+            x->mem[k].m = &x->o->members[s];
+            x->mem[k].manifest = man;
+            x->mem[k].k = &man->cases[c];
+            x->mem[k].rep = r;
+            x->mem[k].first = k == from;
+        }
+    return k;
+}
+
 /** Make the run's identity, directories, history, ledger and members; 0,
  * or 2 after a refusal or an error. */
 static int set_up(struct set *x)
@@ -2169,7 +2664,6 @@ static int set_up(struct set *x)
         x->cap[i].amount = o->cap[i];
     }
     x->ncap = 3;
-    x->n = o->nmembers;
     x->mem = calloc(x->n, sizeof(*x->mem));
     x->jobs = calloc(x->n, sizeof(*x->jobs));
     x->sup = etude_supervisor_new();
@@ -2177,14 +2671,15 @@ static int set_up(struct set *x)
         say(x, "etude-legacy: result: error: the run: %s", strerror(ENOMEM));
         return 2;
     }
-    for (i = 0; i < x->n; i++)
+    for (i = 0; i < o->nmembers; i++)
         if (o->members[i].serial)
-            x->mem[k++].m = &o->members[i];
-    for (i = 0; i < x->n; i++)
+            k = take_members(x, i, k);
+    for (i = 0; i < o->nmembers; i++)
         if (!o->members[i].serial)
-            x->mem[k++].m = &o->members[i];
+            k = take_members(x, i, k);
     for (i = 0; i < x->n; i++)
-        if (member_command(x, &x->mem[i]) != 0) {
+        if ((x->mem[i].k != NULL ? case_command(x, &x->mem[i]) : member_command(x, &x->mem[i])) !=
+            0) {
             say(x, "etude-legacy: result: error: the run: %s", strerror(errno));
             return 2;
         }
@@ -2193,6 +2688,23 @@ static int set_up(struct set *x)
         return 2;
     }
     return 0;
+}
+
+/** Give the count of the suites whose members all passed. */
+static unsigned suites_passed(const struct set *x)
+{
+    unsigned n = 0;
+    size_t i, j;
+    int ok;
+
+    for (i = 0; i < x->n; i++) {
+        if (!x->mem[i].first)
+            continue;
+        for (j = i, ok = 1; j < x->n && x->mem[j].m == x->mem[i].m; j++)
+            ok &= x->mem[j].c.outcome == PASS;
+        n += (unsigned)ok;
+    }
+    return n;
 }
 
 /** Free what the run holds. */
@@ -2205,7 +2717,11 @@ static void tear_down(struct set *x)
     for (i = 0; x->mem != NULL && i < x->n; i++) {
         free(x->mem[i].c.argv);
         free(x->mem[i].c.envp);
+        free(x->mem[i].judged);
     }
+    for (i = 0; x->manifests != NULL && i < x->o->nmembers; i++)
+        legacy_manifest_free(&x->manifests[i]);
+    free(x->manifests);
     free(x->prep.argv);
     free(x->prep.envp);
     free(x->mem);
@@ -2250,8 +2766,7 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
         say(&x, "etude-legacy: set: the run record could not be written: %s",
             strerror(errno != 0 ? errno : EIO));
     }
-    for (i = 0; i < x.n; i++)
-        passed += x.mem[i].c.outcome == PASS;
+    passed = suites_passed(&x);
     if (signalled(&x)) {
         rc = 128 + (int)*o->stop;
         say(&x, "etude-legacy: result: stopped by signal %d", (int)*o->stop);
@@ -2260,8 +2775,8 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
         say(&x, "etude-legacy: result: preparation failed: %s", x.prep.reason);
     } else {
         rc = worst == PASS && !x.failed ? 0 : 1;
-        say(&x, "etude-legacy: result: ran: %lu suites, %u passed%s", (unsigned long)x.n, passed,
-            x.failed ? ", with an error of the history or the ledger" : "");
+        say(&x, "etude-legacy: result: ran: %lu suites, %u passed%s", (unsigned long)o->nmembers,
+            passed, x.failed ? ", with an error of the history or the ledger" : "");
     }
 out:
     tear_down(&x);

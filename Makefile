@@ -588,7 +588,8 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
                 tools/etude/include/etude/sched.h tools/etude/include/etude/bridge.h \
                 tools/etude/include/etude/status.h tools/etude/include/etude/history.h \
                 tools/etude/include/etude/qemu.h tools/etude/compare.h \
-                tools/etude/history_json.h tools/etude/capture.h utils/sha256.h
+                tools/etude/history_json.h tools/etude/capture.h utils/sha256.h \
+                tools/etude/posix/legacy_cases.h tools/etude/digest.h tools/etude/json.h
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
