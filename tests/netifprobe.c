@@ -654,9 +654,10 @@ static void tcp_names(void)
  * subnet's gateway is sent through it: the answer can come back only if the
  * frame left by the second card, since the first card's network has no host
  * at that address, and every datagram the socket is given must say that it
- * arrived on the second interface. A second socket, bound to the first
- * interface, may be given nothing that arrived on the other. `raw_fd` is the
- * descriptor for the interface ioctls.
+ * arrived on the second interface. The receive blocks until a frame comes,
+ * and the suite's limit ends a run in which none does. A second socket,
+ * bound to the first interface, may be given nothing that arrived on the
+ * other. `raw_fd` is the descriptor for the interface ioctls.
  */
 static void packet_on_second(int raw_fd)
 {
@@ -745,43 +746,31 @@ static void packet_on_second(int raw_fd)
         fail("the request would not send through the second interface");
     }
 
-    /* The answer, which exists only on the second card's network. */
-    got = 0;
-    for (tries = 0; tries < 200 && !got; tries++) {
-        struct pollfd_probe pfd;
-
-        pfd.fd = on_second;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-        sys_poll(&pfd, 1, 50);
-        for (i = 0; i < (int)sizeof(from); i++) {
-            ((uint8_t *)&from)[i] = 0;
-        }
-        fromlen = sizeof(from);
-        args[0] = (uint32_t)on_second;
-        args[1] = (unsigned long)buf;
-        args[2] = sizeof(buf);
-        args[3] = 0x40; /* MSG_DONTWAIT */
-        args[4] = (unsigned long)&from;
-        args[5] = (unsigned long)&fromlen;
-        if (socketcall(SC_RECVFROM, args) < 0) {
-            continue;
-        }
-        if (from.sll_ifindex != 2) {
-            fail_n("a datagram on the second interface claimed another", from.sll_ifindex);
-        }
-        if (from.sll_hatype != 1) {
-            fail_n("the answer did not arrive over Ethernet", (int)from.sll_hatype);
-        }
-        if (from.sll_pkttype != 0 && from.sll_pkttype != 1) {
-            fail_n("the answer was addressed to neither this machine nor everyone",
-                   (int)from.sll_pkttype);
-        }
-        got = 1;
+    /* The answer, which exists only on the second card's network; the
+     * receive blocks until it comes. */
+    for (i = 0; i < (int)sizeof(from); i++) {
+        ((uint8_t *)&from)[i] = 0;
     }
-    if (!got) {
-        fail("nothing answered on the second interface, so the frame did not "
-             "leave by it");
+    fromlen = sizeof(from);
+    args[0] = (uint32_t)on_second;
+    args[1] = (unsigned long)buf;
+    args[2] = sizeof(buf);
+    args[3] = 0;
+    args[4] = (unsigned long)&from;
+    args[5] = (unsigned long)&fromlen;
+    got = socketcall(SC_RECVFROM, args);
+    if (got < 0) {
+        fail_n("the receive of the answer on the second interface failed", got);
+    }
+    if (from.sll_ifindex != 2) {
+        fail_n("a datagram on the second interface claimed another", from.sll_ifindex);
+    }
+    if (from.sll_hatype != 1) {
+        fail_n("the answer did not arrive over Ethernet", (int)from.sll_hatype);
+    }
+    if (from.sll_pkttype != 0 && from.sll_pkttype != 1) {
+        fail_n("the answer was addressed to neither this machine nor everyone",
+               (int)from.sll_pkttype);
     }
 
     /* What the first interface's socket was given arrived there. */
@@ -1028,7 +1017,7 @@ static void netif_main(void)
 {
     unsigned long args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
-    int inbound, tries, got_inbound, r;
+    int inbound, tries, r;
     /* The kernel writes it through the pointer getsockopt is given. */
     volatile int err;
     struct pollfd_probe pfd;
@@ -1407,19 +1396,15 @@ static void netif_main(void)
         fail("a nonblocking read of the aborted connection did not report why it ended");
     }
 
-    /* With the interface up, the datagram the suite sends arrives. */
+    /* With the interface up, the datagram the suite sends arrives, or the
+     * case above proved nothing; the poll waits until it does. */
     say("NETIFPROBE UP\n");
-    got_inbound = 0;
-    for (tries = 0; tries < 200 && !got_inbound; tries++) {
-        pfd.fd = inbound;
-        pfd.events = POLLIN;
-        pfd.revents = 0;
-        if (sys_poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
-            got_inbound = 1;
-        }
-    }
-    if (!got_inbound) {
-        fail("no datagram arrived once the interface was up, so the case above proved nothing");
+    pfd.fd = inbound;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    r = sys_poll(&pfd, 1, -1);
+    if (r != 1 || !(pfd.revents & POLLIN)) {
+        fail_n("the wait for the datagram once the interface was up ended without one", r);
     }
     sys_close(inbound);
 
