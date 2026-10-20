@@ -68,6 +68,15 @@
 0 -r ./tree timing ./timing.json | tests/delay.txt:2 injected_delay fixture.timing.delay
 0 -r ./tree timing ./timing.json | tests/delay.txt:4 clock_reference fixture.timing.delay
 
+# The family of each manifest, for tests/run, only when no manifest has a
+# finding.
+0 families ./attempt.json ./judge.json | fixture.attempt
+0 families ./attempt.json ./judge.json | /./attempt.json
+0 families ./attempt.json ./judge.json | fixture.judge
+1 families ./judge.json ./rules.json | !fixture.judge
+1 families ./judge.json ./rules.json | report-when: the group way is decided by the report
+2 families
+
 # A report gives a pass only when every assertion it must give passed.
 0 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out | outcome pass
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-notrun.out | assert enoent-open not_run: /no_such_file_errnoprobe exists

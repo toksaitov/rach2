@@ -1067,3 +1067,17 @@ int print_timing(const struct cases *set)
     }
     return 0;
 }
+
+/**
+ * Prints the family of each manifest of `set`, in the order given, as
+ * `FAMILY_ID PATH`; the last part of the family, split at dots, is the suite
+ * that runs its cases.
+ */
+void print_families(const struct cases *set)
+{
+    size_t i;
+
+    for (i = 0; i < set->n; i++) {
+        say("%s %s\n", json_text(set->m[i].doc, "family_id"), set->m[i].path);
+    }
+}

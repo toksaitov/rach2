@@ -46,6 +46,7 @@ const struct json *group_of(const struct json *c, const char *assertion_id,
                             const struct json **alternative);
 int program_reports(const struct json *c);
 int print_timing(const struct cases *set);
+void print_families(const struct cases *set);
 
 int judge_report(struct cases *set, char **args, int n);
 int judge_attempt(struct cases *set, char **args, int n);

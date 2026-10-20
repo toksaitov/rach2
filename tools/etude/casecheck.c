@@ -10,6 +10,9 @@
  *     checks the manifests as `manifest` does and prints each line a timing
  *     assumption declares, as `FILE:LINE KIND CASE`; suitecheck.sh accepts a
  *     sleep or a bound on a duration only at such a line.
+ * casecheck [-s SCHEMAS] [-r ROOT] families FILE...
+ *     checks the manifests as `manifest` does and, when nothing is found,
+ *     prints each one's family as `FAMILY_ID FILE`, in the order given.
  * casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... MANIFEST CASE
  *         ARCH PLACEMENT [OUTPUT]
  *     judges a program's output, standard input without OUTPUT, as the
@@ -377,13 +380,16 @@ static int run(int argc, char **argv)
     memset(&set, 0, sizeof set);
     set.schemas = o.schemas;
     set.root = o.root;
-    if (strcmp(command, "manifest") == 0 || strcmp(command, "timing") == 0) {
+    if (strcmp(command, "manifest") == 0 || strcmp(command, "timing") == 0 ||
+        strcmp(command, "families") == 0) {
         if (n < 1) {
             return 2;
         }
         status = load_manifests(&set, args, n);
         if (status == 0 && strcmp(command, "timing") == 0) {
             print_timing(&set);
+        } else if (status == 0 && strcmp(command, "families") == 0) {
+            print_families(&set);
         }
     } else if (strcmp(command, "report") == 0) {
         status = judge_report(&set, args, n);
@@ -409,7 +415,7 @@ static int run(int argc, char **argv)
 /** Prints the usage. */
 static void usage(void)
 {
-    fprintf(stderr, "usage: casecheck [-s SCHEMAS] [-r ROOT] manifest|timing FILE...\n"
+    fprintf(stderr, "usage: casecheck [-s SCHEMAS] [-r ROOT] manifest|timing|families FILE...\n"
                     "       casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... "
                     "MANIFEST CASE ARCH PLACEMENT [OUTPUT]\n"
                     "       casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... "
