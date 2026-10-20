@@ -6,7 +6,7 @@
 # casecheck, the validator of manifests, reports, results and runs.
 ETUDE_CASECHECK_SRC = tools/etude/casecheck.c tools/etude/cases.c \
                       tools/etude/digest.c tools/etude/judge.c tools/etude/json.c \
-                      tools/etude/processor.c tools/etude/schema.c \
+                      tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c \
                       tools/etude/verdict.c tools/etude/history.c \
                       tools/etude/history_json.c utils/sha256.c
 

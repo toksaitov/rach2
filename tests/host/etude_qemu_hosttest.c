@@ -315,7 +315,7 @@ struct row {
     enum etude_end want;
     int act; /* 'g' types go at the start, 'c' cancels when
                 running, 'C' cancels at once, 'p' types poweroff
-                at the prompt, 'P' cancels at the prompt */
+                at the prompt, 'P' cancels at the prompt, 'b' runs the boundary probe */
     int acted;
     struct etude_qemu_profile profile;
     struct etude_qemu_site site;
@@ -337,6 +337,10 @@ static void row_act(struct row *r)
     const struct etude_machine_result *res = etude_machine_result(r->m);
     long shell;
 
+    if (r->act == 'b' && r->acted == 1 && find(&res->console, "MEMPROBE MemTotal ", 0) >= 0) {
+        r->acted = 2;
+        etude_machine_cancel(r->m);
+    }
     if (r->acted || res->state == ETUDE_MACHINE_ENDED)
         return;
     if (r->act == 'c' && res->state == ETUDE_MACHINE_RUNNING &&
@@ -344,13 +348,17 @@ static void row_act(struct row *r)
         r->acted = 1;
         etude_machine_cancel(r->m);
     }
-    if (r->act != 'p' && r->act != 'P')
+    if (r->act != 'p' && r->act != 'P' && r->act != 'b')
         return;
-    shell = find(&res->console, "Kernel debug shell active.", 0);
+    shell = find(&res->console, "Kernel debug shell active", 0);
     if (shell < 0 || find(&res->console, "\n> ", (size_t)shell) < 0)
         return;
     r->acted = 1;
-    if (r->act == 'p')
+    if (r->act == 'b') {
+        CHECK(etude_machine_type(r->m, "exec /memprobe 5120\r", 19) != 0 && errno == EPERM,
+              "boundary refuses an allocating workload");
+        CHECK(etude_machine_type(r->m, "exec /memprobe total\r", 21) == 0, r->name);
+    } else if (r->act == 'p')
         CHECK(etude_machine_type(r->m, "poweroff\r", 9) == 0, r->name);
     else
         etude_machine_cancel(r->m);
@@ -392,6 +400,16 @@ static void row_spec(struct row *r, struct etude_machine_spec *spec, const char 
     spec->console_path = fix_path(r->console);
     spec->console_max = 1u << 20;
     spec->grace_us = grace;
+    if (r->act == 'b') {
+        static const char *const rescue[] = {"rach2.rescue", NULL};
+
+        r->site.boundary_lazy = 1;
+        r->profile.cpu = "max-nopdpe1gb";
+        r->profile.memory_profile = "bigmem-boundary-v1";
+        r->profile.memory_bytes = ETUDE_BIGMEM_CONFIGURED;
+        r->profile.boot_options = rescue;
+        spec->memory_reserved_bytes = ETUDE_BIGMEM_RESIDENT + ETUDE_BIGMEM_OVERHEAD;
+    }
 }
 
 /** Start the machine of row `r`, and type or cancel at once as it says. */
@@ -643,6 +661,30 @@ static void test_refused_starts(void)
     CHECK(!left_in(fix_dir(), "etude-qemu."), "a refused start removed its directory");
 }
 
+/** Check the same boundary counts as bigmem.sh and record QEMU's peak. */
+static void boundary_result(const struct row *r)
+{
+    const struct etude_machine_result *res = etude_machine_result(r->m);
+    const char *report = strstr(res->console.data, "memory: usable ");
+    unsigned long long usable = 0, unreachable = 0;
+
+    CHECK(r->acted == 2, "boundary reached memprobe total");
+    CHECK(report != NULL && sscanf(report, "memory: usable %llu KiB, unreachable %llu KiB", &usable,
+                                   &unreachable) == 2,
+          "boundary memory report");
+    CHECK(unreachable == 9u * 1024 * 1024, "boundary keeps 9 GiB unreachable");
+    CHECK(usable + 513 == 63u * 1024 * 1024, "boundary keeps 63 GiB below 64 GiB");
+    CHECK(res->qemu->peak_bytes.quality != ETUDE_QUALITY_UNAVAILABLE &&
+              res->qemu->peak_bytes.value > 0 &&
+              res->qemu->peak_bytes.value <= ETUDE_BIGMEM_RESIDENT + ETUDE_BIGMEM_OVERHEAD,
+          "boundary QEMU peak within reservation");
+    printf("etude-qemu-test: boundary: configured %llu, resident allowance %llu, "
+           "overhead %llu, disk backing 0, QEMU peak %llu bytes\n",
+           (unsigned long long)ETUDE_BIGMEM_CONFIGURED, (unsigned long long)ETUDE_BIGMEM_RESIDENT,
+           (unsigned long long)ETUDE_BIGMEM_OVERHEAD,
+           (unsigned long long)res->qemu->peak_bytes.value);
+}
+
 /**
  * Give the path of `name` on PATH in `out`, or NULL when it is not there.
  *
@@ -687,7 +729,7 @@ static int real_files(struct row *r)
  * the real QEMU under TCG, twice, and ask QEMU for an accelerator it does not
  * have. A host without QEMU or a tree without the kernel fails the rows.
  */
-static void test_real(void)
+static void test_real(int boundary)
 {
 #if defined(__APPLE__)
     const enum etude_accel absent = ETUDE_ACCEL_KVM;
@@ -698,6 +740,7 @@ static void test_real(void)
         ROW("real-poweroff", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_SHUTDOWN, 'p'),
         ROW("real-cancel", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 'P'),
         ROW("real-absent", NULL, ETUDE_ACCEL_TCG, "i686", ETUDE_END_ACCEL_FAILED, 0),
+        ROW("real-boundary", NULL, ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_STOPPED, 'b'),
     };
     const char *arch = getenv("ARCH") != NULL && *getenv("ARCH") != '\0' ? getenv("ARCH") : "i686";
     char q32[PATH_MAX], q64[PATH_MAX];
@@ -706,6 +749,15 @@ static void test_real(void)
     struct etude_qemu *q;
 
     rows[2].accel = absent;
+    if (boundary) {
+        CHECK(strcmp(arch, "x86_64") == 0, "boundary requires ARCH=x86_64");
+        if (strcmp(arch, "x86_64") != 0)
+            return;
+        rows[0] = rows[3];
+        n = 1;
+    } else {
+        n = 3;
+    }
     if (strcmp(arch, "i686") != 0 && strcmp(arch, "x86_64") != 0) {
         printf("etude-qemu-test: fail: ARCH is i686 or x86_64, not %s\n", arch);
         fails++;
@@ -741,6 +793,8 @@ static void test_real(void)
             continue;
         }
         res = etude_machine_result(rows[i].m);
+        if (rows[i].act == 'b')
+            boundary_result(&rows[i]);
         if (rows[i].want == ETUDE_END_SHUTDOWN) {
             CHECK(res->accel != NULL && strcmp(res->accel, "tcg") == 0, rows[i].name);
             CHECK(res->by_guest && strcmp(res->reason, "guest-shutdown") == 0, rows[i].name);
@@ -791,7 +845,7 @@ static void test_argv(void)
         "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console "
         "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
         "-append rach2.fsdisk quiet=1";
-    struct etude_qemu_site site = {ETUDE_ACCEL_KVM, "/q/i686", "/q/x86_64", NULL, "/f/ovmf"};
+    struct etude_qemu_site site = {ETUDE_ACCEL_KVM, "/q/i686", "/q/x86_64", NULL, "/f/ovmf", 0};
     struct etude_qemu_profile p;
     struct etude_qemu_profile b;
     char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
@@ -879,6 +933,77 @@ static void test_argv(void)
           "no program before the option");
 }
 
+/** Reject a reduced reservation and any change to the boundary workload. */
+static void test_memory(void)
+{
+    static const char *const rescue[] = {"rach2.rescue", NULL};
+    struct etude_qemu_memory memory;
+    struct etude_qemu_profile p;
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, self, self, NULL, NULL, 1};
+    struct etude_machine_spec spec;
+    struct etude_machine *m = NULL;
+    struct etude_qemu *q = etude_qemu_new();
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+    int i, backend = 0, size = 0;
+
+    CHECK(q != NULL, "memory launcher");
+    if (q == NULL)
+        return;
+    memset(&p, 0, sizeof p);
+    p.architecture = "x86_64";
+    p.kernel = "/not-started";
+    p.initrd = "/not-started";
+    p.cpu = "max-nopdpe1gb";
+    p.processors = 1;
+    p.memory_bytes = ETUDE_BIGMEM_CONFIGURED;
+    p.boot_options = rescue;
+    CHECK(etude_qemu_memory(&p, &memory) == 0 && memory.resident_bytes == ETUDE_BIGMEM_CONFIGURED &&
+              memory.backing_bytes == 0 && memory.overhead_bytes == (128u << 20),
+          "ordinary memory reserves configured RAM");
+    p.memory_profile = "bigmem-boundary-v1";
+    CHECK(etude_qemu_memory(&p, &memory) == 0 &&
+              memory.configured_bytes == ETUDE_BIGMEM_CONFIGURED &&
+              memory.resident_bytes == ETUDE_BIGMEM_RESIDENT &&
+              memory.overhead_bytes == ETUDE_BIGMEM_OVERHEAD && memory.backing_bytes == 0,
+          "boundary memory amounts");
+    CHECK(make(&p, &site, argv, buf, sizeof buf) == 0, "boundary argv");
+    for (i = 0; argv[i] != NULL; i++) {
+        backend |= strcmp(argv[i], "memory-backend-ram,id=etude-ram,size=77309411328B,"
+                                   "prealloc=off,merge=off,dump=off") == 0;
+        size |= strcmp(argv[i], "-m") == 0 && argv[i + 1] != NULL &&
+                strcmp(argv[i + 1], "77309411328B") == 0;
+    }
+    CHECK(backend && size, "boundary keeps 72 GiB with preallocation off");
+    site.boundary_lazy = 0;
+    CHECK(make(&p, &site, argv, buf, sizeof buf) == ENOTSUP, "unproved site backing refused");
+    site.boundary_lazy = 1;
+    memset(&spec, 0, sizeof spec);
+    spec.attempt_id = "unsafe-memory";
+    spec.profile = &p;
+    spec.site = &site;
+    spec.memory_reserved_bytes = ETUDE_BIGMEM_RESIDENT + ETUDE_BIGMEM_OVERHEAD - 1;
+    errno = 0;
+    CHECK(etude_qemu_start(q, &spec, &m) != 0 && errno == ENOMEM && m == NULL,
+          "unsafe boundary allocation refused before execution");
+    p.memory_bytes = UINT64_C(8) << 30;
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "lazy 8 GiB workload refused");
+    p.memory_bytes = ETUDE_BIGMEM_CONFIGURED;
+    p.cpu = "max";
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs 2 MiB page tables");
+    p.cpu = "max-nopdpe1gb";
+    p.architecture = "i686";
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs x86-64");
+    p.architecture = "x86_64";
+    p.processors = 2;
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs one processor");
+    p.processors = 1;
+    p.boot_options = NULL;
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs rescue boot");
+    p.memory_profile = "file";
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "unproved file backing refused");
+    etude_qemu_free(q);
+}
+
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
@@ -891,10 +1016,15 @@ int main(int argc, char **argv)
     }
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         return 1;
-    test_argv();
-    test_ends();
-    test_refused_starts();
-    test_real();
+    if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
+        test_real(1);
+    } else {
+        test_argv();
+        test_memory();
+        test_ends();
+        test_refused_starts();
+        test_real(0);
+    }
     if (fails != 0)
         return 1;
     fix_passed();

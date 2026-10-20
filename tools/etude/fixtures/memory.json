@@ -1,0 +1,1063 @@
+{
+  "schema_version": 1,
+  "family_id": "invalid.memory",
+  "summary": "The 72 GiB boot preserves the 64 GiB mapping boundary with lazy host backing",
+  "cases": [
+    {
+      "case_id": "short",
+      "behavior": "The 72 GiB rescue boot without 1 GiB pages reaches the shell and reports 63 GiB less the holes usable and 9 GiB unreachable",
+      "units": [
+        "bigmem"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "total"
+        ],
+        "inputs": {
+          "configured_mib": 73728,
+          "usable_plus_holes_kib": 66060288,
+          "unreachable_kib": 9437184,
+          "holes_kib": 513
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "boundary_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "The launcher ends QEMU and removes its private sockets after confirmed cleanup"
+      },
+      "steps": [
+        {
+          "step_id": "accounting",
+          "stage": "execute",
+          "machine": "boundary",
+          "does": "boot to the rescue prompt, run exec /memprobe total once, check the memory report and stop QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "boundary",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max-nopdpe1gb",
+            "processors": 1,
+            "memory_bytes": 77309411328,
+            "memory_profile": "bigmem-boundary-v1",
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the rescue shell is reached through 2 MiB page tables",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usable",
+          "checks": "usable plus 513 KiB of holes is 63 GiB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unreachable",
+          "checks": "9 GiB past the 64 GiB mapping boundary is unreachable",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "memtotal",
+          "checks": "memprobe total finishes and prints MemTotal",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "the accounting step has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 4294967295,
+        "disk_bytes": 0,
+        "guest_memory": {
+          "configured_bytes": 77309411328,
+          "resident_bytes": 2147483648,
+          "backing": "lazy"
+        },
+        "locks": [
+          {
+            "lock": "large-memory",
+            "mode": "exclusive"
+          }
+        ],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "boundary_scenario",
+          "node": "tests/cases/machine/boundary_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the exact synthetic memory map and absent 1 GiB page feature require QEMU"
+      }
+    },
+    {
+      "case_id": "wrong-cpu",
+      "behavior": "The 72 GiB rescue boot without 1 GiB pages reaches the shell and reports 63 GiB less the holes usable and 9 GiB unreachable",
+      "units": [
+        "bigmem"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "total"
+        ],
+        "inputs": {
+          "configured_mib": 73728,
+          "usable_plus_holes_kib": 66060288,
+          "unreachable_kib": 9437184,
+          "holes_kib": 513
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "boundary_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "The launcher ends QEMU and removes its private sockets after confirmed cleanup"
+      },
+      "steps": [
+        {
+          "step_id": "accounting",
+          "stage": "execute",
+          "machine": "boundary",
+          "does": "boot to the rescue prompt, run exec /memprobe total once, check the memory report and stop QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "boundary",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 77309411328,
+            "memory_profile": "bigmem-boundary-v1",
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the rescue shell is reached through 2 MiB page tables",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usable",
+          "checks": "usable plus 513 KiB of holes is 63 GiB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unreachable",
+          "checks": "9 GiB past the 64 GiB mapping boundary is unreachable",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "memtotal",
+          "checks": "memprobe total finishes and prints MemTotal",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "the accounting step has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 4294967296,
+        "disk_bytes": 0,
+        "guest_memory": {
+          "configured_bytes": 77309411328,
+          "resident_bytes": 2147483648,
+          "backing": "lazy"
+        },
+        "locks": [
+          {
+            "lock": "large-memory",
+            "mode": "exclusive"
+          }
+        ],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "boundary_scenario",
+          "node": "tests/cases/machine/boundary_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the exact synthetic memory map and absent 1 GiB page feature require QEMU"
+      }
+    },
+    {
+      "case_id": "missing-declaration",
+      "behavior": "The 72 GiB rescue boot without 1 GiB pages reaches the shell and reports 63 GiB less the holes usable and 9 GiB unreachable",
+      "units": [
+        "bigmem"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "total"
+        ],
+        "inputs": {
+          "configured_mib": 73728,
+          "usable_plus_holes_kib": 66060288,
+          "unreachable_kib": 9437184,
+          "holes_kib": 513
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "boundary_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "The launcher ends QEMU and removes its private sockets after confirmed cleanup"
+      },
+      "steps": [
+        {
+          "step_id": "accounting",
+          "stage": "execute",
+          "machine": "boundary",
+          "does": "boot to the rescue prompt, run exec /memprobe total once, check the memory report and stop QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "boundary",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max-nopdpe1gb",
+            "processors": 1,
+            "memory_bytes": 77309411328,
+            "memory_profile": "bigmem-boundary-v1",
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the rescue shell is reached through 2 MiB page tables",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usable",
+          "checks": "usable plus 513 KiB of holes is 63 GiB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unreachable",
+          "checks": "9 GiB past the 64 GiB mapping boundary is unreachable",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "memtotal",
+          "checks": "memprobe total finishes and prints MemTotal",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "the accounting step has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 4294967296,
+        "disk_bytes": 0,
+        "locks": [
+          {
+            "lock": "large-memory",
+            "mode": "exclusive"
+          }
+        ],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "boundary_scenario",
+          "node": "tests/cases/machine/boundary_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the exact synthetic memory map and absent 1 GiB page feature require QEMU"
+      }
+    },
+    {
+      "case_id": "file",
+      "behavior": "The 72 GiB rescue boot without 1 GiB pages reaches the shell and reports 63 GiB less the holes usable and 9 GiB unreachable",
+      "units": [
+        "bigmem"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "total"
+        ],
+        "inputs": {
+          "configured_mib": 73728,
+          "usable_plus_holes_kib": 66060288,
+          "unreachable_kib": 9437184,
+          "holes_kib": 513
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "boundary_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "The launcher ends QEMU and removes its private sockets after confirmed cleanup"
+      },
+      "steps": [
+        {
+          "step_id": "accounting",
+          "stage": "execute",
+          "machine": "boundary",
+          "does": "boot to the rescue prompt, run exec /memprobe total once, check the memory report and stop QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "boundary",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max-nopdpe1gb",
+            "processors": 1,
+            "memory_bytes": 77309411328,
+            "memory_profile": "bigmem-boundary-v1",
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the rescue shell is reached through 2 MiB page tables",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usable",
+          "checks": "usable plus 513 KiB of holes is 63 GiB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unreachable",
+          "checks": "9 GiB past the 64 GiB mapping boundary is unreachable",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "memtotal",
+          "checks": "memprobe total finishes and prints MemTotal",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "the accounting step has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 4294967296,
+        "disk_bytes": 0,
+        "guest_memory": {
+          "configured_bytes": 77309411328,
+          "resident_bytes": 2147483648,
+          "backing": "file"
+        },
+        "locks": [
+          {
+            "lock": "large-memory",
+            "mode": "exclusive"
+          }
+        ],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "boundary_scenario",
+          "node": "tests/cases/machine/boundary_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the exact synthetic memory map and absent 1 GiB page feature require QEMU"
+      }
+    },
+    {
+      "case_id": "ordinary-lazy",
+      "behavior": "The 72 GiB rescue boot without 1 GiB pages reaches the shell and reports 63 GiB less the holes usable and 9 GiB unreachable",
+      "units": [
+        "bigmem"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "total"
+        ],
+        "inputs": {
+          "configured_mib": 73728,
+          "usable_plus_holes_kib": 66060288,
+          "unreachable_kib": 9437184,
+          "holes_kib": 513
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "boundary_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "The launcher ends QEMU and removes its private sockets after confirmed cleanup"
+      },
+      "steps": [
+        {
+          "step_id": "accounting",
+          "stage": "execute",
+          "machine": "boundary",
+          "does": "boot to the rescue prompt, run exec /memprobe total once, check the memory report and stop QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "boundary",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max-nopdpe1gb",
+            "processors": 1,
+            "memory_bytes": 77309411328,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the rescue shell is reached through 2 MiB page tables",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usable",
+          "checks": "usable plus 513 KiB of holes is 63 GiB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unreachable",
+          "checks": "9 GiB past the 64 GiB mapping boundary is unreachable",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "memtotal",
+          "checks": "memprobe total finishes and prints MemTotal",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "the accounting step has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 78383153152,
+        "disk_bytes": 0,
+        "guest_memory": {
+          "configured_bytes": 77309411328,
+          "resident_bytes": 2147483648,
+          "backing": "lazy"
+        },
+        "locks": [
+          {
+            "lock": "large-memory",
+            "mode": "exclusive"
+          }
+        ],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "boundary_scenario",
+          "node": "tests/cases/machine/boundary_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the exact synthetic memory map and absent 1 GiB page feature require QEMU"
+      }
+    },
+    {
+      "case_id": "ordinary-short",
+      "behavior": "The 72 GiB rescue boot without 1 GiB pages reaches the shell and reports 63 GiB less the holes usable and 9 GiB unreachable",
+      "units": [
+        "bigmem"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [
+          "total"
+        ],
+        "inputs": {
+          "configured_mib": 73728,
+          "usable_plus_holes_kib": 66060288,
+          "unreachable_kib": 9437184,
+          "holes_kib": 513
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "boundary_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "The launcher ends QEMU and removes its private sockets after confirmed cleanup"
+      },
+      "steps": [
+        {
+          "step_id": "accounting",
+          "stage": "execute",
+          "machine": "boundary",
+          "does": "boot to the rescue prompt, run exec /memprobe total once, check the memory report and stop QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "boundary",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max-nopdpe1gb",
+            "processors": 1,
+            "memory_bytes": 77309411328,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "shell",
+          "checks": "the rescue shell is reached through 2 MiB page tables",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "usable",
+          "checks": "usable plus 513 KiB of holes is 63 GiB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unreachable",
+          "checks": "9 GiB past the 64 GiB mapping boundary is unreachable",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "memtotal",
+          "checks": "memprobe total finishes and prints MemTotal",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "the accounting step has ended",
+          "limit": 1
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 4294967296,
+        "disk_bytes": 0,
+        "locks": [
+          {
+            "lock": "large-memory",
+            "mode": "exclusive"
+          }
+        ],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "boundary_scenario",
+          "node": "tests/cases/machine/boundary_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the exact synthetic memory map and absent 1 GiB page feature require QEMU"
+      }
+    }
+  ]
+}

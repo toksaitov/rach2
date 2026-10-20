@@ -839,7 +839,7 @@ static int scenario_misuse(struct etude_case *c)
 
 /** Run the rows whose machine does not boot: a failed accelerator, and a
  * damaged kernel. */
-static int scenario_noboot(struct etude_case *c, int damaged)
+static int scenario_noboot(struct etude_case *c, const char *row)
 {
     struct etude_case_machine *m;
     struct etude_termination end;
@@ -848,9 +848,13 @@ static int scenario_noboot(struct etude_case *c, int damaged)
     if (etude_step(c, "boot") != ETUDE_OK)
         return 1;
     st = etude_boot(c, "fixture", NULL, &m, &end);
-    if (damaged) {
+    if (strcmp(row, "damaged") == 0) {
         expect(c, "refused", st, ETUDE_REFUSED);
         etude_assert(c, "damaged", etude_artifact(c, "kernel") == NULL, "the damage was taken");
+    } else if (strcmp(row, "memory") == 0) {
+        expect(c, "refused", st, ETUDE_FAILED);
+        etude_assert(c, "memory-profile", m == NULL && end.end == ETUDE_END_QEMU_EXITED,
+                     "an unsafe memory profile started");
     } else {
         expect(c, "refused", st, ETUDE_FAILED);
         etude_assert(c, "damaged", end.end == ETUDE_END_ACCEL_FAILED && m == NULL,
@@ -1154,8 +1158,8 @@ int etude_scenario(struct etude_case *c)
         return scenario_stop(c);
     if (strcmp(row, "misuse") == 0)
         return scenario_misuse(c);
-    if (strcmp(row, "wrong") == 0 || strcmp(row, "damaged") == 0)
-        return scenario_noboot(c, strcmp(row, "damaged") == 0);
+    if (strcmp(row, "wrong") == 0 || strcmp(row, "damaged") == 0 || strcmp(row, "memory") == 0)
+        return scenario_noboot(c, row);
     if (strcmp(row, "guest") == 0 || strcmp(row, "real-guest") == 0)
         return scenario_guest(c, row[0] == 'r');
     return scenario_services(c, row);
@@ -1310,7 +1314,7 @@ static int write_manifest(const char *path, const struct row *r)
         "{\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\", \"cleanup\": "
         "\"the library\"}, \"steps\": %s, \"machines\": [{\"machine_id\": \"fixture\", "
         "\"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, \"disks\": %s, \"cpu\": \"max\", "
-        "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", \"devices\": "
+        "\"processors\": 1, \"memory_bytes\": 134217728, %s\"firmware\": \"direct\", \"devices\": "
         "[], \"boot_options\": %s}, \"console\": \"serial\", \"qmp\": %s, \"helper\": %s}], "
         "\"assertions\": %s, \"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": "
         "0}, \"progress\": [{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step "
@@ -1328,6 +1332,7 @@ static int write_manifest(const char *path, const struct row *r)
         "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
         "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
         r->name, steps, r->helper ? "\"initrd\"" : "null", r->disk != NULL ? "[\"disk\"]" : "[]",
+        strcmp(r->name, "memory") == 0 ? "\"memory_profile\": \"bigmem-boundary-v1\", " : "",
         r->mode == NULL && r->disk != NULL ? "[\"rach2.fsdisk\"]" : "[]",
         strcmp(r->name, "misuse") == 0 ? "false" : "true", r->helper ? "true" : "false", asserts);
     return write_file(path, text, strlen(text));
@@ -2218,6 +2223,8 @@ static const struct row stand_in_rows[] = {
      "disk", 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"wrong", "wrong", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0,
      NULL, 0},
+    {"memory", "disk", "boot:fixture", "refused memory-profile", "disk", 0, STEP_US, 0, 1, 1, 0,
+     NULL, 0, NULL, 0},
     {"guest", "disk", "run:fixture", "guest-pass guest-exit guest-ran guest-lost guest-lost-end",
      NULL, 1, LOSS_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
 };

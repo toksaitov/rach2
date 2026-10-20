@@ -30,6 +30,7 @@
       "required": ["accel", "qemu_i686", "qemu_x86_64", "ovmf_i686", "ovmf_x86_64"],
       "properties": {
         "accel": {"enum": ["tcg", "kvm", "hvf", "whpx"]},
+        "boundary_lazy": {"type": "boolean"},
         "qemu_i686": {"$ref": "#/$defs/path"},
         "qemu_x86_64": {"$ref": "#/$defs/path"},
         "ovmf_i686": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]},

@@ -165,11 +165,37 @@ static void add_joined(struct line *l, const char *const *list)
     l->argv[l->n] = NULL;
 }
 
+int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memory *out)
+{
+    struct etude_qemu_memory m = {p->memory_bytes, p->memory_bytes, 128u << 20, 0};
+
+    if (p->memory_bytes == 0 || p->memory_bytes % (1u << 20) != 0)
+        return EINVAL;
+    if (p->memory_profile != NULL && strcmp(p->memory_profile, "reserved") != 0) {
+        if (strcmp(p->memory_profile, "bigmem-boundary-v1") != 0 || p->architecture == NULL ||
+            strcmp(p->architecture, "x86_64") != 0 || p->cpu == NULL ||
+            strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
+            p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
+            p->initrd == NULL || count(p->disks) != 0 || count(p->devices) != 0 ||
+            count(p->boot_options) != 1 || strcmp(p->boot_options[0], "rach2.rescue") != 0)
+            return EINVAL;
+        m.resident_bytes = ETUDE_BIGMEM_RESIDENT;
+        m.overhead_bytes = ETUDE_BIGMEM_OVERHEAD;
+    }
+    if (m.resident_bytes > UINT64_MAX - m.overhead_bytes)
+        return EOVERFLOW;
+    *out = m;
+    return 0;
+}
+
 /** Check what QEMU's command line cannot express or would ignore. */
 static int profile_check(const struct etude_qemu_profile *p)
 {
     size_t i;
+    struct etude_qemu_memory memory;
 
+    if (etude_qemu_memory(p, &memory) != 0)
+        return EINVAL;
     if (p->architecture == NULL ||
         (strcmp(p->architecture, "i686") != 0 && strcmp(p->architecture, "x86_64") != 0))
         return EINVAL;
@@ -206,6 +232,9 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
 
     if ((e = profile_check(p)) != 0)
         return e;
+    if (p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0 &&
+        !s->boundary_lazy)
+        return ENOTSUP;
     if (etude_accel_name(s->accel) == NULL || program == NULL)
         return EINVAL;
     if (p->firmware == ETUDE_FIRMWARE_OVMF && ovmf == NULL)
@@ -230,6 +259,15 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     snprintf(number, sizeof(number), "%lluB", (unsigned long long)p->memory_bytes);
     add(&l, 0, "-m");
     add(&l, 0, "%s", number);
+    if (p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0) {
+        add(&l, 0, "-object");
+        add(&l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off,dump=off",
+            number);
+        add(&l, 0, "-machine");
+        add(&l, 0, "memory-backend=etude-ram");
+        add(&l, 0, "-overcommit");
+        add(&l, 0, "mem-lock=off");
+    }
     if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
         add(&l, 0, "-kernel");
         add(&l, 0, "%s", p->kernel);

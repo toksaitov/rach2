@@ -24,6 +24,8 @@ import sys
 path = Path(sys.argv[1])
 source = path.read_text()
 faults = {
+    'memory': ('    p->memory_profile = jtext(qp, \"memory_profile\");\n',
+               '    p->memory_profile = NULL;\n'),
     'state': ('    if (a->copy != NULL)\n        return a->copy;\n',
               '    if (a->copy != NULL)\n        free(a->copy);\n    a->copy = NULL;\n'
               '    if (a->copy != NULL)\n        return a->copy;\n'),
@@ -74,14 +76,14 @@ fault_file()
     esac
 }
 
-faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller'
+faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller memory'
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     for fault in $faults; do
         apply_fault "tools/etude/$(fault_file "$fault")" "$fault"
     done
-    echo 'etude-scenario-mutation: texts: all sixteen faults found once'
+    echo 'etude-scenario-mutation: texts: all seventeen faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -177,5 +179,6 @@ prove port 'no .assert service-ready pass.'
 prove single 'pair: no .assert beta-reached pass.'
 prove wake 'pair: the attempt did not end within'
 prove controller 'kill-pair: [0-9]* of its processes are left'
+prove memory 'memory: no .assert refused pass.'
 restore
 run_phase restored 0

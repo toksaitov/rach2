@@ -573,6 +573,7 @@ static int load_site(struct etude_case *c)
     c->site.qemu_x86_64 = jtext(site, "qemu_x86_64");
     c->site.ovmf_i686 = jtext(site, "ovmf_i686");
     c->site.ovmf_x86_64 = jtext(site, "ovmf_x86_64");
+    c->site.boundary_lazy = jbool(site, "boundary_lazy") == 1;
     if (c->site.qemu_i686 == NULL || c->site.qemu_x86_64 == NULL) {
         diag("the invocation's site names no QEMU");
         return -1;
@@ -1205,6 +1206,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->cpu = jtext(qp, "cpu");
     p->processors = (unsigned)jnum(qp, "processors");
     p->memory_bytes = jnum(qp, "memory_bytes");
+    p->memory_profile = jtext(qp, "memory_profile");
     p->devices = m->devices;
     p->boot_options = m->options;
     if (firmware != NULL && strcmp(firmware, "seabios") == 0)
@@ -1367,6 +1369,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     m->spec.console_path = console;
     m->spec.console_max = (size_t)c->console_max;
     m->spec.grace_us = c->grace_us;
+    m->spec.memory_reserved_bytes = jnum(eh_json_get(c->kase, "resources"), "memory_bytes");
     if (console == NULL || etude_qemu_start(c->q, &m->spec, &m->m) != 0) {
         diag("machine %s: QEMU did not start: %s", machine, strerror(errno));
         free(m);

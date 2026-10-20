@@ -16,6 +16,8 @@ import sys
 path = Path(sys.argv[1])
 source = path.read_text()
 faults = {
+    'memory': ('if (spec->memory_reserved_bytes < memory.resident_bytes + memory.overhead_bytes) {',
+               'if (0) {'),
     'refused': ('if (m->r.state == ETUDE_MACHINE_STARTING && etude_qemu_accel_refused(',
                 'if (0 && etude_qemu_accel_refused('),
     'cancel': ('    if (m->cancelled)\n        return ETUDE_END_STOPPED;\n', ''),
@@ -32,10 +34,10 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in refused cancel accel; do
+    for fault in refused cancel accel memory; do
         apply_fault tools/etude/posix/qemu.c "$fault"
     done
-    echo 'etude-qemu-mutation: texts: all three faults found once'
+    echo 'etude-qemu-mutation: texts: all four faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -103,5 +105,9 @@ cp tools/etude/posix/qemu.c "$work/qemu.c"
 apply_fault "$work/qemu.c" accel
 run_phase accel-mutated 1
 grep -q 'wrong: ended qemu_exited, not accel_failed' "$work/accel-mutated.log"
+cp tools/etude/posix/qemu.c "$work/qemu.c"
+apply_fault "$work/qemu.c" memory
+run_phase memory-mutated 1
+grep -q 'unsafe boundary allocation refused before execution' "$work/memory-mutated.log"
 cp tools/etude/posix/qemu.c "$work/qemu.c"
 run_phase restored 0

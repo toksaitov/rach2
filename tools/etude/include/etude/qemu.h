@@ -31,18 +31,43 @@ enum etude_firmware {
 
 /* A case's QEMU profile with its artifacts resolved to paths. */
 struct etude_qemu_profile {
-    const char *architecture; /* "i686" or "x86_64" */
-    const char *kernel;       /* loaded by direct firmware alone */
-    const char *initrd;       /* NULL for none */
-    const char *const *disks; /* private copies, ended by NULL */
-    const char *cpu;          /* the processor profile (processor.h) */
-    unsigned processors;      /* 1 to 64 */
-    uint64_t memory_bytes;    /* a whole number of mebibytes */
+    const char *architecture;   /* "i686" or "x86_64" */
+    const char *kernel;         /* loaded by direct firmware alone */
+    const char *initrd;         /* NULL for none */
+    const char *const *disks;   /* private copies, ended by NULL */
+    const char *cpu;            /* the processor profile (processor.h) */
+    unsigned processors;        /* 1 to 64 */
+    uint64_t memory_bytes;      /* a whole number of mebibytes */
+    const char *memory_profile; /* NULL or "reserved", or "bigmem-boundary-v1" */
     enum etude_firmware firmware;
     const char *const *devices;      /* ended by NULL */
     const char *const *boot_options; /* the kernel's command line, ended
                                         by NULL; direct firmware alone */
 };
+
+/* Admission amounts for one QEMU, separate from its configured RAM. */
+struct etude_qemu_memory {
+    uint64_t configured_bytes;
+    uint64_t resident_bytes; /* guest pages expected to be touched */
+    uint64_t overhead_bytes; /* QEMU, firmware and the controller */
+    uint64_t backing_bytes;  /* disk backing; zero for anonymous RAM */
+};
+
+#define ETUDE_BIGMEM_CONFIGURED (UINT64_C(72) << 30)
+#define ETUDE_BIGMEM_RESIDENT   (UINT64_C(2) << 30)
+#define ETUDE_BIGMEM_OVERHEAD   (UINT64_C(2) << 30)
+
+/**
+ * Resolve the memory reservation of profile `p` into `out`. Ordinary guests
+ * reserve all configured RAM and 128 MiB of overhead. bigmem-boundary-v1
+ * admits only the x86-64 rescue boot at 72 GiB, with one processor, no
+ * devices or disks, and the max-nopdpe1gb processor profile. Its only guest
+ * command is `exec /memprobe total`.
+ *
+ * @return 0, or EINVAL for another profile or an unsafe boundary profile,
+ *         EOVERFLOW when the reservation cannot be represented.
+ */
+int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memory *out);
 
 /* What the site profile gives the launcher. */
 struct etude_qemu_site {
@@ -51,6 +76,7 @@ struct etude_qemu_site {
     const char *qemu_x86_64; /* and for x86-64 */
     const char *ovmf_i686;   /* the UEFI firmware of each, or NULL */
     const char *ovmf_x86_64;
+    int boundary_lazy; /* the site permits the proved lazy boundary profile */
 };
 
 /* The longest command line the launcher makes, in arguments. */
@@ -83,7 +109,7 @@ struct etude_qemu_line {
  *
  * @return 0, or an error number: EINVAL for a profile the launcher cannot
  *         make, ENOENT for a firmware the site lacks, E2BIG when `out` is too
- *         small.
+ *         small; ENOTSUP for a lazy boundary profile the site has not enabled.
  */
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const struct etude_qemu_line *out);
@@ -107,13 +133,15 @@ struct etude_machine_spec {
     const char *attempt_id;
     const struct etude_qemu_profile *profile;
     const struct etude_qemu_site *site;
-    char *const *envp;        /* QEMU's whole environment */
-    const char *console_path; /* a new file that gets every console byte,
-                                 or NULL */
-    size_t console_max;       /* console bytes kept in memory */
-    uint64_t grace_us;        /* from QMP's quit to a kill, and from the
-                                 termination signal to SIGKILL */
-    etude_register_fn reg;    /* as the executor's */
+    char *const *envp;              /* QEMU's whole environment */
+    const char *console_path;       /* a new file that gets every console byte,
+                                       or NULL */
+    size_t console_max;             /* console bytes kept in memory */
+    uint64_t grace_us;              /* from QMP's quit to a kill, and from the
+                                       termination signal to SIGKILL */
+    uint64_t memory_reserved_bytes; /* admitted memory, including overhead;
+                                      required for the boundary profile */
+    etude_register_fn reg;          /* as the executor's */
     void *reg_ctx;
 };
 
@@ -162,7 +190,9 @@ void etude_qemu_free(struct etude_qemu *q);
  *
  * @return 0 with the machine in `*m`, or -1 with errno set: an error of the
  *         profile as etude_qemu_argv gives it, of the system, or of the
- *         executor's start; nothing of the machine is left.
+ *         executor's start; ENOMEM for a boundary boot without its whole
+ *         reservation, EFBIG for a kernel over 64 MiB or RAM image over
+ *         256 MiB. Nothing of the machine is left.
  */
 int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec,
                      struct etude_machine **m);
@@ -199,7 +229,8 @@ struct etude_exec *etude_qemu_exec(struct etude_qemu *q);
 
 /**
  * Write `n` bytes to the machine's console input, after what was written
- * before.
+ * before. A boundary boot accepts `exec /memprobe total\r` once and
+ * `poweroff\r`; another command returns -1 with errno EPERM.
  *
  * @return 0, or -1 when the console is closed or memory ran out.
  */

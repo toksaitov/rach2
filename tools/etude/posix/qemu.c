@@ -79,12 +79,13 @@ struct etude_machine {
     size_t input_len;
     size_t console_max;
     uint64_t grace_us;
-    uint64_t kill_at; /* when the executor cancels QEMU; 0 for not due */
-    int cancelled;    /* the caller stopped the machine before its end */
-    int accel_wrong;  /* QMP reported another accelerator in use */
-    int qmp_lost;     /* QMP answered what the launcher cannot use */
-    int shutdown;     /* QMP reported SHUTDOWN */
-    int changed;      /* new console bytes or a new state since the last wait */
+    uint64_t kill_at;         /* when the executor cancels QEMU; 0 for not due */
+    int boundary, total_sent; /* restricted lazy boot and its one probe */
+    int cancelled;            /* the caller stopped the machine before its end */
+    int accel_wrong;          /* QMP reported another accelerator in use */
+    int qmp_lost;             /* QMP answered what the launcher cannot use */
+    int shutdown;             /* QMP reported SHUTDOWN */
+    int changed;              /* new console bytes or a new state since the last wait */
     int finished, returned;
     struct qmp_call *calls; /* the caller's commands, newest first */
     long next_id;
@@ -243,6 +244,43 @@ static struct etude_machine *machine_new(const struct etude_machine_spec *spec)
     return m;
 }
 
+/** Check a boundary boot's admitted capacity and the size of its artifacts. */
+static int boundary_check(const struct etude_machine_spec *spec, int *boundary)
+{
+    struct etude_qemu_memory memory;
+    struct stat st;
+    int e = etude_qemu_memory(spec->profile, &memory);
+
+    if (e != 0) {
+        errno = e;
+        return -1;
+    }
+    *boundary = memory.resident_bytes < memory.configured_bytes;
+    if (!*boundary)
+        return 0;
+    if (spec->memory_reserved_bytes < memory.resident_bytes + memory.overhead_bytes) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (spec->profile->kernel == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (stat(spec->profile->kernel, &st) != 0)
+        return -1;
+    if (!S_ISREG(st.st_mode) || st.st_size < 0 || st.st_size > (64u << 20)) {
+        errno = EFBIG;
+        return -1;
+    }
+    if (stat(spec->profile->initrd, &st) != 0)
+        return -1;
+    if (!S_ISREG(st.st_mode) || st.st_size < 0 || st.st_size > (256u << 20)) {
+        errno = EFBIG;
+        return -1;
+    }
+    return 0;
+}
+
 int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec,
                      struct etude_machine **mp)
 {
@@ -256,7 +294,7 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
         errno = ENOMEM;
         return -1;
     }
-    if (machine_dir(m) != 0)
+    if (boundary_check(spec, &m->boundary) != 0 || machine_dir(m) != 0)
         goto fail;
     buf = malloc(QEMU_LINE_BYTES);
     if (buf == NULL) {
@@ -886,6 +924,16 @@ int etude_machine_type(struct etude_machine *m, const char *text, size_t n)
     if (m->finished || (m->console < 0 && m->console_listen < 0)) {
         errno = EPIPE;
         return -1;
+    }
+    if (m->boundary) {
+        int total = n == 21 && memcmp(text, "exec /memprobe total\r", 21) == 0;
+        int poweroff = n == 9 && memcmp(text, "poweroff\r", 9) == 0;
+
+        if ((!total && !poweroff) || (total && m->total_sent)) {
+            errno = EPERM;
+            return -1;
+        }
+        m->total_sent |= total;
     }
     grown = realloc(m->input, m->input_len + n + 1);
     if (grown == NULL)

@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "etude/processor.h"
+#include "etude/qemu.h"
 
 /* The case a rule reads, and the file it came from. */
 struct rule {
@@ -567,6 +568,86 @@ static long long fixture_count(const struct json *list, const char *kind)
     return total;
 }
 
+/** Resolve a manifest's QEMU memory through the launcher's profile rules. */
+static int qemu_memory(const struct rule *r, const struct json *qemu,
+                       struct etude_qemu_memory *memory)
+{
+    static const char *const nonempty[] = {"device", NULL};
+    const struct json *arches = json_member(r->c, "architectures");
+    const struct json *options = json_member(qemu, "boot_options");
+    const char *boot[3] = {NULL, NULL, NULL};
+    struct etude_qemu_profile p;
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = arches->count == 1 ? arches->item[0]->string : "both";
+    p.cpu = json_text(qemu, "cpu");
+    p.initrd = json_text(qemu, "initrd");
+    p.memory_profile = json_text(qemu, "memory_profile");
+    p.memory_bytes = (uint64_t)json_member(qemu, "memory_bytes")->integer;
+    p.processors = json_member(qemu, "processors")->integer <= 64
+                       ? (unsigned)json_member(qemu, "processors")->integer
+                       : 0;
+    p.firmware = same(json_text(qemu, "firmware"), "direct") ? ETUDE_FIRMWARE_DIRECT
+                                                             : ETUDE_FIRMWARE_SEABIOS;
+    p.disks = json_member(qemu, "disks")->count ? nonempty : NULL;
+    p.devices = json_member(qemu, "devices")->count ? nonempty : NULL;
+    if (options->count != 0)
+        boot[0] = options->item[0]->string;
+    if (options->count > 1)
+        boot[1] = "extra";
+    p.boot_options = boot;
+    if (etude_qemu_memory(&p, memory) != 0) {
+        finding(r->file, qemu->line, "%s: unsafe QEMU memory profile", json_text(r->c, "case_id"));
+        return -1;
+    }
+    return 0;
+}
+
+/** Require a reservation for every machine, including QEMU's overhead. */
+static void memory_resources(const struct rule *r, const struct json *res)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    const struct json *guest = json_member(res, "guest_memory");
+    const struct json *qemu = json_member(json_member(r->c, "requirements"), "qemu");
+    struct etude_qemu_memory m, special = {0, 0, 0, 0};
+    uint64_t total = 0;
+    size_t i, n = machines != NULL ? machines->count : qemu != NULL ? 1 : 0;
+    unsigned lazy = 0;
+
+    for (i = 0; i < n; i++) {
+        if (machines != NULL)
+            qemu = json_member(machines->item[i], "qemu");
+        if (qemu_memory(r, qemu, &m) != 0)
+            continue;
+        if (m.resident_bytes < m.configured_bytes) {
+            special = m;
+            lazy++;
+        }
+        if (m.resident_bytes > UINT64_MAX - m.overhead_bytes ||
+            total > UINT64_MAX - (m.resident_bytes + m.overhead_bytes)) {
+            finding(r->file, res->line, "%s: QEMU memory reservation overflows",
+                    json_text(r->c, "case_id"));
+            return;
+        }
+        total += m.resident_bytes + m.overhead_bytes;
+    }
+    if (total > (uint64_t)json_member(res, "memory_bytes")->integer)
+        finding(r->file, res->line, "%s: memory_bytes does not reserve QEMU memory and overhead",
+                json_text(r->c, "case_id"));
+    if (lazy != 0 &&
+        (lazy != 1 || n != 1 || guest == NULL || !same(json_text(guest, "backing"), "lazy") ||
+         (uint64_t)json_member(guest, "configured_bytes")->integer != special.configured_bytes ||
+         (uint64_t)json_member(guest, "resident_bytes")->integer != special.resident_bytes))
+        finding(r->file, res->line, "%s: boundary memory needs its exact guest_memory declaration",
+                json_text(r->c, "case_id"));
+    if (lazy == 0 && guest != NULL &&
+        (!same(json_text(guest, "backing"), "reserved") ||
+         json_member(guest, "resident_bytes")->integer !=
+             json_member(guest, "configured_bytes")->integer))
+        finding(r->file, guest->line, "%s: reduced backing requires the boundary memory profile",
+                json_text(r->c, "case_id"));
+}
+
 /** The reservations cover what the case declares it takes. */
 static void rule_resources(const struct rule *r)
 {
@@ -585,6 +666,7 @@ static void rule_resources(const struct rule *r)
                 "%s: guest_memory is for a guest's profile, resident within what is configured",
                 case_id);
     }
+    memory_resources(r, res);
     unique(r, json_member(res, "locks"), "lock", "the lock");
     if (fixture_count(native, "ports") > json_member(res, "ports")->integer) {
         finding(r->file, res->line, "%s: the native ports fixtures take more ports than reserved",
