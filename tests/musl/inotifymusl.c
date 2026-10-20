@@ -17,6 +17,10 @@
  * table in, as it was, and on x86-64 its RDI, where inotify_init1 takes its
  * flags.
  *
+ * The directory watched is /dev/shm/inotifymusl, or the one the argument
+ * `dir=PATH` names, which must be on a tmpfs, as a native run gives it under
+ * the case's own (tests/native/Readme.md).
+ *
  * Prints `INOTIFYMUSL OK` and exits 0 on success, and prints
  * `INOTIFYMUSL FAIL (detail)` and exits 1 otherwise.
  */
@@ -31,8 +35,25 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 /* On tmpfs, which has hard links, where the KRFFS root has none. */
-#define DIR_PATH "/dev/shm/inotifymusl"
+static const char *dir_path = "/dev/shm/inotifymusl";
+#define DIR_PATH dir_path
+
+/**
+ * The path of `name` in `DIR_PATH`, in one of four buffers used in turn, so
+ * that the paths of the arguments of one call stay apart.
+ */
+static const char *at(const char *name)
+{
+    static char paths[4][256];
+    static int next;
+    char *p = paths[next++ % 4];
+
+    snprintf(p, sizeof(paths[0]), "%s/%s", DIR_PATH, name);
+    return p;
+}
 
 /* An event a read must return: its watch, its mask, and its name or "". */
 struct want {
@@ -108,19 +129,18 @@ static int events(int fd, int *wd)
     if (*wd != 1) {
         return fail("inotify_add_watch of a directory");
     }
-    f = open(DIR_PATH "/a", O_CREAT | O_WRONLY | O_TRUNC, 0644);
+    f = open(at("a"), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (f < 0 || write(f, "x", 1) != 1 || write(f, "y", 1) != 1 || close(f) != 0) {
         return fail("a file to watch");
     }
-    wf = inotify_add_watch(fd, DIR_PATH "/a", IN_ALL_EVENTS);
+    wf = inotify_add_watch(fd, at("a"), IN_ALL_EVENTS);
     if (wf != 2) {
         return fail("inotify_add_watch of a file");
     }
-    f = open(DIR_PATH "/a", O_RDONLY);
-    if (chmod(DIR_PATH "/a", 0600) != 0 || f < 0 || read(f, &c, 1) != 1 || close(f) != 0 ||
-        rename(DIR_PATH "/a", DIR_PATH "/b") != 0 || link(DIR_PATH "/b", DIR_PATH "/c") != 0 ||
-        unlink(DIR_PATH "/c") != 0 || unlink(DIR_PATH "/b") != 0 ||
-        mkdir(DIR_PATH "/d", 0755) != 0 || rmdir(DIR_PATH "/d") != 0) {
+    f = open(at("a"), O_RDONLY);
+    if (chmod(at("a"), 0600) != 0 || f < 0 || read(f, &c, 1) != 1 || close(f) != 0 ||
+        rename(at("a"), at("b")) != 0 || link(at("b"), at("c")) != 0 || unlink(at("c")) != 0 ||
+        unlink(at("b")) != 0 || mkdir(at("d"), 0755) != 0 || rmdir(at("d")) != 0) {
         return fail("the calls watched");
     }
     {
@@ -163,7 +183,7 @@ static int refusals(int fd, int wd)
     char small[8];
     struct pollfd pf;
 
-    close(open(DIR_PATH "/e", O_CREAT | O_WRONLY, 0644));
+    close(open(at("e"), O_CREAT | O_WRONLY, 0644));
     if (read(fd, small, sizeof small) != -1 || errno != EINVAL) {
         return fail("a read too small for an event was not EINVAL");
     }
@@ -184,7 +204,7 @@ static int refusals(int fd, int wd)
     if (inotify_add_watch(fd, "/nonexistent", IN_MODIFY) != -1 || errno != ENOENT) {
         return fail("a watch of no file was not ENOENT");
     }
-    if (inotify_add_watch(fd, DIR_PATH "/e", IN_MODIFY | IN_ONLYDIR) != -1 || errno != ENOTDIR) {
+    if (inotify_add_watch(fd, at("e"), IN_MODIFY | IN_ONLYDIR) != -1 || errno != ENOTDIR) {
         return fail("IN_ONLYDIR of a file was not ENOTDIR");
     }
     if (inotify_add_watch(fd, DIR_PATH, 0) != -1 || errno != EINVAL) {
@@ -217,8 +237,8 @@ static int refusals(int fd, int wd)
     if (inotify_add_watch(fd, DIR_PATH, IN_CREATE | IN_ONESHOT) != 3) {
         return fail("a one-shot watch");
     }
-    close(open(DIR_PATH "/f", O_CREAT | O_WRONLY, 0644));
-    close(open(DIR_PATH "/g", O_CREAT | O_WRONLY, 0644));
+    close(open(at("f"), O_CREAT | O_WRONLY, 0644));
+    close(open(at("g"), O_CREAT | O_WRONLY, 0644));
     if (poll(&pf, 1, 0) != 1 || !(pf.revents & POLLIN)) {
         return fail("an instance with an event did not poll readable");
     }
@@ -271,10 +291,12 @@ static int register_kept(void)
 }
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
     int fd, wd;
 
+    probe_args(argc, argv);
+    dir_path = probe_arg("dir", dir_path);
     mkdir(DIR_PATH, 0755);
     fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (fd < 0 || fcntl(fd, F_GETFD) != FD_CLOEXEC) {
@@ -284,9 +306,9 @@ int main(void)
         return 1;
     }
     close(fd);
-    unlink(DIR_PATH "/e");
-    unlink(DIR_PATH "/f");
-    unlink(DIR_PATH "/g");
+    unlink(at("e"));
+    unlink(at("f"));
+    unlink(at("g"));
     rmdir(DIR_PATH);
     printf("INOTIFYMUSL OK\n");
     return 0;

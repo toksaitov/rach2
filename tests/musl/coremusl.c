@@ -2,6 +2,11 @@
  * coremusl: check core files, made in /dev/shm, a tmpfs that keeps the holes
  * of a file.
  *
+ * The files are made in /dev/shm/coremusl.d, or in the directory the argument
+ * `dir=PATH` names, which must be on a tmpfs, as a native run gives it under
+ * the case's own (tests/native/Readme.md); a relative PATH is taken from the
+ * working directory.
+ *
  * A child that raises its soft RLIMIT_CORE and aborts leaves "core" in its
  * working directory, where a symbolic link had the name: the parent's wait
  * reports SIGABRT with WCOREDUMP, the link's target is never created, and the
@@ -54,9 +59,14 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#define DIR_PATH    "/dev/shm/coremusl.d"
-#define CORE_PATH   DIR_PATH "/core"
-#define TARGET_PATH DIR_PATH "/target"
+#include "../probe_args.h"
+
+/* The directory the cores are made in, absolute, and its two files: the
+ * core and the target of the link that has its name at first. */
+static char dir_path[256], core_path[272], target_path[272];
+#define DIR_PATH    dir_path
+#define CORE_PATH   core_path
+#define TARGET_PATH target_path
 #define MARK        0x5ca1ab1eu
 
 /*
@@ -125,6 +135,32 @@ static unsigned char in_core[1024];
 static int fail(const char *what)
 {
     printf("COREMUSL FAIL (%s: errno %d)\n", what, errno);
+    return 1;
+}
+
+/**
+ * Set `DIR_PATH` from the argument `dir`, made absolute from the working
+ * directory, or to /dev/shm/coremusl.d without it, and the paths of its two
+ * files. Returns 1, or 0 when a path does not fit.
+ */
+static int set_paths(void)
+{
+    const char *dir = probe_arg("dir", "/dev/shm/coremusl.d");
+    char cwd[200];
+    int n;
+
+    if (dir[0] == '/') {
+        n = snprintf(dir_path, sizeof(dir_path), "%s", dir);
+    } else if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        n = snprintf(dir_path, sizeof(dir_path), "%s/%s", cwd, dir);
+    } else {
+        return 0;
+    }
+    if (n < 0 || (size_t)n >= sizeof(dir_path)) {
+        return 0;
+    }
+    snprintf(core_path, sizeof(core_path), "%s/core", dir_path);
+    snprintf(target_path, sizeof(target_path), "%s/target", dir_path);
     return 1;
 }
 
@@ -503,13 +539,17 @@ static int marked_page(const char *path, size_t *size, size_t *whole)
  */
 static int hole_row(void)
 {
-    static const char *const dirs[2] = {DIR_PATH "/short", DIR_PATH "/exact"};
-    static const char *const cores[2] = {DIR_PATH "/short/core", DIR_PATH "/exact/core"};
+    char dirs[2][sizeof(dir_path) + 8];
+    char cores[2][sizeof(dir_path) + 16];
     uint32_t counted[2];
     size_t size[2], whole[2];
     int status[2], marked[2];
     int i, ran = 1;
 
+    snprintf(dirs[0], sizeof(dirs[0]), "%s/short", DIR_PATH);
+    snprintf(dirs[1], sizeof(dirs[1]), "%s/exact", DIR_PATH);
+    snprintf(cores[0], sizeof(cores[0]), "%s/core", dirs[0]);
+    snprintf(cores[1], sizeof(cores[1]), "%s/core", dirs[1]);
     for (i = 0; i < 2; i++) {
         unlink(cores[i]);
         if (mkdir(dirs[i], 0700) != 0 && errno != EEXIST) {
@@ -684,6 +724,10 @@ int main(int argc, char **argv)
     pid_t child;
 
     first_arg = argc > 0 ? (uintptr_t)argv[0] : 0;
+    probe_args(argc, argv);
+    if (!set_paths()) {
+        return fail("the directory's path");
+    }
 
     unlink(CORE_PATH);
     unlink(TARGET_PATH);

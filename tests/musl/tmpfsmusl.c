@@ -32,6 +32,11 @@
  * component inside, reach the parent of the directory it covers; and it is
  * unmounted in turn with /dev/shm and /dev/mqueue.
  *
+ * /proc/mounts and mountinfo name a mount by its path from the machine's root,
+ * so in a private root, as a native run gives one (tests/native/Readme.md),
+ * the argument `root=PATH` gives that root's path on the machine, which the
+ * rows put in front of the mount points they look for.
+ *
  * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
  * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
  * otherwise.
@@ -49,6 +54,8 @@
 #include <sys/statfs.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 #define DIR_PATH    "/tmp/tmpfsmusl"
 #define DEEP_PATH   "/tmp/tmpfsmusl-d"
 #define BIND_SRC    "/tmp/tmpfsmusl-s"
@@ -63,10 +70,24 @@ static int fail(const char *what)
     return 1;
 }
 
+/* The machine's path of the root the program runs in, which /proc/mounts and
+ * mountinfo put in front of a mount point under it: the argument `root`, or
+ * "" for the machine's own root. */
+static const char *root_prefix = "";
+
+/** `format` with its one `%s` replaced by `root_prefix`, in a static buffer. */
+static const char *rooted(const char *format)
+{
+    static char text[384];
+
+    snprintf(text, sizeof(text), format, root_prefix);
+    return text;
+}
+
 /** Whether the text file `path` has a line that begins with `start`. */
 static int has_line(const char *path, const char *start)
 {
-    char line[256];
+    char line[512];
     FILE *f = fopen(path, "r");
     int found = 0;
 
@@ -185,7 +206,7 @@ static int placed(void)
         !holds(DIR_PATH "/f", "E") || !holds(DIR_PATH "/d/g", "tmpfs")) {
         return fail("a rename over a linked file");
     }
-    if (!has_line("/proc/mounts", "none " DIR_PATH " tmpfs rw") ||
+    if (!has_line("/proc/mounts", rooted("none %s" DIR_PATH " tmpfs rw")) ||
         !has_line("/proc/filesystems", "nodev\ttmpfs")) {
         return fail("the /proc files");
     }
@@ -245,7 +266,7 @@ static int shm(void)
         !lists("/dev", "shm", DT_DIR) || statfs("/dev/shm", &sf) != 0 || sf.f_type != TMPFS_MAGIC) {
         return fail("/dev/shm's kind, mode and magic");
     }
-    if (!has_line("/proc/mounts", "tmpfs /dev/shm tmpfs rw,nosuid,nodev")) {
+    if (!has_line("/proc/mounts", rooted("tmpfs %s/dev/shm tmpfs rw,nosuid,nodev"))) {
         return fail("/dev/shm in /proc/mounts");
     }
     unlink("/dev/shm/tmpfsmusl");
@@ -276,7 +297,7 @@ static int shm(void)
 /** Whether a line of /proc/self/mountinfo has `text` in it. */
 static int mountinfo_has(const char *text)
 {
-    char line[256];
+    char line[512];
     FILE *f = fopen("/proc/self/mountinfo", "r");
     int found = 0;
 
@@ -341,7 +362,7 @@ static int bound_mount(void)
         put(BIND_DST "/g", "no") || errno != EROFS || !put(BIND_SRC "/sub/g", "yes")) {
         return fail("a bind remounted read-only refuses a write its source takes");
     }
-    if (!mountinfo_has(" /sub " BIND_DST " ")) {
+    if (!mountinfo_has(rooted(" /sub %s" BIND_DST " "))) {
         return fail("mountinfo gives a bind its root within the file system");
     }
     if (umount2(BIND_SRC, 0) != -1 || errno != EBUSY || umount2(BIND_DST, 0) != 0 ||
@@ -471,8 +492,10 @@ static int krbound(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
+    root_prefix = probe_arg("root", "");
     if (placed() || resized() || deep() || shm() || bound() || bound_mount() || rbound() ||
         kbound() || krbound()) {
         return 1;

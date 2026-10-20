@@ -61,7 +61,10 @@
  * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
  * on an ext2 root, the probe's own directory is made there and must have a
  * symbolic link reported as DT_LNK, and / and /bin of that root are checked
- * too.
+ * too. A relative directory is taken from the working directory, as a native
+ * run gives `.`, its workspace (tests/native/Readme.md). The other user is
+ * 1000, or the NEW of 1000 in `ids=OLD:NEW,...`; the directory is the first
+ * argument without `=`.
  *
  * The program runs as root. It prints `DIRENTMUSL OK`, followed by
  * " (links)" when the file system has symbolic links, and exits 0 on success,
@@ -83,6 +86,8 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The renameat2 flag, which musl does not declare. */
 #define RENAME_NOREPLACE 1
@@ -963,7 +968,7 @@ static int unreadable_taken_rows(void)
     snprintf(exe_slash, sizeof(exe_slash), "%s/", exe);
     pid = fork();
     if (pid == 0) {
-        if (setgid(1000) != 0 || setuid(1000) != 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
             _exit(2);
         }
         _exit(refused(symlink("x", exe), EEXIST) && refused(symlink("x", exe_slash), EEXIST) ? 0
@@ -1138,11 +1143,24 @@ static int proc_texts(void)
 
 int main(int argc, char **argv)
 {
-    const char *dir = argc > 1 ? argv[1] : "/";
-    const char *sep = dir[strlen(dir) - 1] == '/' ? "" : "/";
+    const char *dir;
+    const char *sep;
+    char where[200];
+    int given;
     int links;
     int fd;
 
+    probe_args(argc, argv);
+    given = probe_words() > 0;
+    dir = given ? probe_word(1) : "/";
+    if (dir[0] != '/') {
+        if (getcwd(where, sizeof(where)) == NULL) {
+            return fail("the working directory");
+        }
+        snprintf(where + strlen(where), sizeof(where) - strlen(where), "/%s", dir);
+        dir = where;
+    }
+    sep = dir[strlen(dir) - 1] == '/' ? "" : "/";
     snprintf(base, sizeof(base), "%s%sdirent.d", dir, sep);
     snprintf(file, sizeof(file), "%s/f", base);
     snprintf(sub, sizeof(sub), "%s/s", base);
@@ -1154,7 +1172,7 @@ int main(int argc, char **argv)
     }
     close(fd);
     links = symlink("f", link_name) == 0;
-    if (!links && (argc > 1 || errno != EPERM)) {
+    if (!links && (given || errno != EPERM)) {
         tidy();
         return fail("a symbolic link where the file system has them");
     }
@@ -1180,7 +1198,7 @@ int main(int argc, char **argv)
         !types_agree("/proc/net", 0)) {
         return fail("/proc");
     }
-    if (argc > 1 && (!types_agree("/", 0) || !types_agree("/bin", 0))) {
+    if (given && (!types_agree("/", 0) || !types_agree("/bin", 0))) {
         return fail("the root and /bin");
     }
     if (proc_texts() != 0) {

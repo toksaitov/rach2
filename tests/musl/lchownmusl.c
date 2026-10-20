@@ -13,7 +13,8 @@
  * and AT_SYMLINK_NOFOLLOW change the link and leave its target alone, chown
  * changes the target, an O_PATH descriptor opened with O_NOFOLLOW refers to
  * the link for AT_EMPTY_PATH, and a dangling link can be changed and not
- * followed.
+ * followed. A relative directory is taken from the working directory, as a
+ * native run gives `.`, its workspace (tests/native/Readme.md).
  *
  * The program runs as root. It prints `LCHOWNMUSL OK`, followed by
  * " (links)" when the link rows ran, and exits 0 on success, and prints
@@ -240,11 +241,20 @@ static void tidy(void)
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "/";
-    const char *sep = dir[strlen(dir) - 1] == '/' ? "" : "/";
+    const char *sep;
+    char where[200];
     int links;
     int fd;
     int rc;
 
+    if (dir[0] != '/') {
+        if (getcwd(where, sizeof(where)) == NULL) {
+            return fail("the working directory");
+        }
+        snprintf(where + strlen(where), sizeof(where) - strlen(where), "/%s", dir);
+        dir = where;
+    }
+    sep = dir[strlen(dir) - 1] == '/' ? "" : "/";
     snprintf(file, sizeof(file), "%s%slchown.tmp", dir, sep);
     snprintf(link_name, sizeof(link_name), "%s%slchown.lnk", dir, sep);
     snprintf(dangling, sizeof(dangling), "%s%slchown.dng", dir, sep);
