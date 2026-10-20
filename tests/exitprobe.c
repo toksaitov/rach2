@@ -38,23 +38,10 @@ static int call(int n, long a, long b, long c)
     return syscall3(n, a, b, c);
 }
 
-/** Write the string `s` to standard output, the serial console. */
-static void put(const char *s)
-{
-    int n = 0;
-    while (s[n]) {
-        n++;
-    }
-    call(SYS_WRITE, 1, (long)s, n);
-}
-
 /** Print `kind`, the row and `detail` as one line. */
 static void result(const char *kind, const char *detail)
 {
-    put(kind);
-    put(row);
-    put(detail);
-    put("\n");
+    probe_line(kind, row, detail);
 }
 
 /** Exit without returning to the caller. */

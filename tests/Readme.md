@@ -106,7 +106,7 @@ The order of `PROBES` matters where programs share state: the credential probes 
 
 ## Adding tests
 
-A probe is a C file at this directory's top, added to `PROGS` in `tests/Makefile`; one that tests only calls that i386 alone has goes in `I686_ONLY` as well, both there and, if the `default` suite runs it, in `runtests.c`. A musl program is a C file in `musl/`, which `build.sh` finds without a list. The manifest's `exec-dir` lines stage both; add a manifest line only for a fixture, a mode or an owner.
+A probe is a C file at this directory's top, added to `PROGS` in `tests/Makefile`; one that tests only calls that i386 alone has goes in `I686_ONLY` as well, both there and, if the `default` suite runs it, in `runtests.c`. A musl program is a C file in `musl/`, which `build.sh` finds without a list. The manifest's `exec-dir` lines stage both; add a manifest line only for a fixture, a mode or an owner. A line a suite looks for, such as `KRFFSPROBE OK (write)`, is written with one write(2), as `probe_line` in `probe.h` writes it: a kernel record raised between two writes begins a line of its own on the console, and the suite then does not find the line.
 
 Then give the program its place. Add it to `PROBES` in `system/runner/runtests.c` when it can run in the shared boot of the test image and must exit 0. Otherwise add it to a suite and list it in `probe-suites` with that suite's name, or, for a fixture or a program run by hand, list it in `probe-helpers` with its use. Then give it a native case in [`native/`](native/Readme.md), which runs it on a Rach2 that is already up, or a line of `native/machine` with the reason it needs a machine of QEMU's. A new suite is described in [the system tests' Readme](system/Readme.md#adding-tests).
 

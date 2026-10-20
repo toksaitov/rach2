@@ -1048,9 +1048,7 @@ static void type_mode(const char *type)
     if (rc != 0) {
         fail_with("unmounting the volume that holds the images", rc);
     }
-    syscall3(SYS_WRITE, 1, (long)"LOOPPROBE OK (", 14);
-    syscall3(SYS_WRITE, 1, (long)type, (int)strlen(type));
-    puts(")");
+    probe_line("LOOPPROBE OK (", type, ")");
     sys_exit(0);
 }
 

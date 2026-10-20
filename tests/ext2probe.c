@@ -684,8 +684,6 @@ void probe_main(unsigned long *sp)
     if (syscall2(SYS_UMOUNT2, (long)"/e2", 0) != 0) {
         fail("unmount");
     }
-    syscall3(SYS_WRITE, 1, (long)"EXT2PROBE OK (", 14);
-    syscall3(SYS_WRITE, 1, (long)mode, (int)strlen(mode));
-    puts(")");
+    probe_line("EXT2PROBE OK (", mode, ")");
     sys_exit(0);
 }

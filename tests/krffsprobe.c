@@ -173,9 +173,7 @@ static void success(const char *mode)
     if (cleanup_dirs()) {
         fail("remove mount directories");
     }
-    syscall3(SYS_WRITE, 1, (long)"KRFFSPROBE OK (", 15);
-    syscall3(SYS_WRITE, 1, (long)mode, (int)strlen(mode));
-    puts(")");
+    probe_line("KRFFSPROBE OK (", mode, ")");
     sys_exit(0);
 }
 

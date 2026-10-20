@@ -572,6 +572,33 @@ static __inline__ int sys_failed(long r)
 }
 
 /**
+ * Write `a`, `b` and `c`, each NULL for none, and a newline with one write(2),
+ * so that no kernel record falls inside the line on the console: a record
+ * raised between two writes begins a line of its own, and a suite that looks
+ * for the whole line then does not find it. A line longer than 127 bytes is
+ * cut.
+ */
+static __inline__ void probe_line(const char *a, const char *b, const char *c)
+{
+    char joined[128];
+    const char *pieces[3];
+    int n = 0, i;
+
+    pieces[0] = a;
+    pieces[1] = b;
+    pieces[2] = c;
+    for (i = 0; i < 3; i++) {
+        const char *s = pieces[i];
+
+        while (s != 0 && *s != '\0' && n < (int)sizeof(joined) - 1) {
+            joined[n++] = *s++;
+        }
+    }
+    joined[n++] = '\n';
+    syscall3(SYS_WRITE, 1, (long)joined, n);
+}
+
+/**
  * mmap(2) at the file offset `off` in bytes, which must be a multiple of the
  * page: on i386 through mmap2, which takes the offset in pages, and on
  * x86-64 through mmap. The mapping's address, or a negated errno.
