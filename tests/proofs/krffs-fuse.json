@@ -141,13 +141,29 @@
         {
           "file": "krffs/krffs_fuse_operations.c",
           "find": "(fsblkcnt_t)(total_free_space / StatFS_Block_Size)",
-          "replace": "(fsblkcnt_t)((total_free_space - 1) / StatFS_Block_Size + 1)"
+          "replace": "(fsblkcnt_t)((total_free_space + StatFS_Block_Size - 1) / StatFS_Block_Size)"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
-          "krffs-fuse-test: fail: free blocks rounded down",
+          "krffs-fuse-test: fail: free blocks rounded down"
+        ]
+      }
+    },
+    {
+      "name": "statfs-avail",
+      "summary": "available blocks counted as every block of the image",
+      "edits": [
+        {
+          "file": "krffs/krffs_fuse_operations.c",
+          "find": "statvfs_buffer->f_bavail = statvfs_buffer->f_bfree;",
+          "replace": "statvfs_buffer->f_bavail = statvfs_buffer->f_blocks;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
           "krffs-fuse-test: fail: full image has no free block"
         ]
       }
