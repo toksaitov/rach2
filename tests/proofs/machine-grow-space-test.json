@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "proof": "machine-grow-space-test",
+  "summary": "the work directory, the log writes and the plan check of tools/dev/machine_grow.sh, through tests/system/machine_grow_space_test.sh on the script's own functions, with faults in a private copy of the script",
+  "tree": "private",
+  "sources": [
+    "tools/dev/machine_grow.sh"
+  ],
+  "artifacts": [
+    "${WORK}/machine_grow.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec cp ${SRC}/tools/dev/machine_grow.sh ${WORK}/machine_grow.sh"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "TMPDIR=${WORK}",
+      "/bin/sh",
+      "tests/system/machine_grow_space_test.sh",
+      "${WORK}/machine_grow.sh"
+    ],
+    "bound_s": 1800,
+    "fail_prefix": "machine-grow-space-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "work",
+      "summary": "a work directory in /tmp, not on the store",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "mktemp -d \"$store/machine-grow.XXXXXX\"",
+          "replace": "mktemp -d /tmp/machine-grow.XXXXXX"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-space-test: failed: work returned 1, expected 0"
+        ]
+      }
+    },
+    {
+      "name": "log",
+      "summary": "a failed log write ignored",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "fail \"writing $work/$log_name\"",
+          "replace": ": \"writing $work/$log_name\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-space-test: failed: log returned 0, expected 1"
+        ]
+      }
+    },
+    {
+      "name": "diagnostic",
+      "summary": "a failed growset called an unsupported geometry",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "fail \"creating $work/expected-ranges.txt; growset failed (see $work/growset.log)\"",
+          "replace": "fail \"the seed geometry is not supported\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-space-test: failed: output diagnostic"
+        ]
+      }
+    }
+  ]
+}

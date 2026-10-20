@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "proof": "usbdisk-script",
+  "summary": "build_probe, cleanup and run_logged of tests/system/usbdisk_mutate.sh and the image builder of tests/system/usbdisk_script_test.sh, through private copies of both run on the tree",
+  "tree": "private",
+  "sources": [
+    "tests/system/usbdisk_mutate.sh",
+    "tests/system/usbdisk_script_test.sh"
+  ],
+  "artifacts": [
+    "${WORK}/usbdisk_mutate.sh",
+    "${WORK}/usbdisk_script_test.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "cp ${SRC}/tests/system/usbdisk_mutate.sh ${WORK}/usbdisk_mutate.sh\nexec cp ${SRC}/tests/system/usbdisk_script_test.sh ${WORK}/usbdisk_script_test.sh"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "TMPDIR=${WORK}",
+      "USBDISK_SCRIPT_ROOT=${TREE}",
+      "/bin/sh",
+      "${WORK}/usbdisk_script_test.sh",
+      "${WORK}/usbdisk_mutate.sh"
+    ],
+    "bound_s": 600
+  },
+  "faults": [
+    {
+      "name": "stale",
+      "summary": "a probe built only when none is built",
+      "edits": [
+        {
+          "file": "tests/system/usbdisk_mutate.sh",
+          "find": "    \"${CROSS_CC:-${CROSS}gcc}\"",
+          "replace": "    [ -f \"$work/usbdiskprobe\" ] ||\n    \"${CROSS_CC:-${CROSS}gcc}\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "usbdisk-script: failed: image kept a stale assertion"
+        ]
+      }
+    },
+    {
+      "name": "unknown",
+      "summary": "a probe staged from a manifest that no set-ID allowlist names",
+      "edits": [
+        {
+          "file": "tests/system/usbdisk_mutate.sh",
+          "find": "    \"$repo/build/krffs/stageimage.krffs\" \"$work/usbdisk-proof.manifest\" \"$work/test.krffs\" >> \"$work/image.log\"\n    \"$repo/build/tools/inspect/setidcheck\" \"$work/usbdisk-proof.manifest\"\n    \"$repo/build/tools/inspect/setidcheck\" --image \"$work/test.krffs\" --manifest \"$work/usbdisk-proof.manifest\"\n",
+          "replace": "    \"$repo/build/krffs/stageimage.krffs\" \"$work/unknown-probe.manifest\" \"$work/test.krffs\" >> \"$work/image.log\"\n    \"$repo/build/tools/inspect/setidcheck\" \"$work/unknown-probe.manifest\"\n    \"$repo/build/tools/inspect/setidcheck\" --image \"$work/test.krffs\" --manifest \"$work/unknown-probe.manifest\"\n"
+        },
+        {
+          "file": "tests/system/usbdisk_mutate.sh",
+          "find": "    ' \"$repo/krffs/manifests/usbdisk-proof.manifest\" > \"$work/usbdisk-proof.manifest\"\n",
+          "replace": "    ' \"$repo/krffs/manifests/usbdisk-proof.manifest\" > \"$work/unknown-probe.manifest\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "no allowlist names this manifest",
+          "usbdisk-script: failed: the first image build stopped before extraction"
+        ]
+      }
+    },
+    {
+      "name": "swallowed",
+      "summary": "a builder called in a condition, where errexit is off, so that a failed compile goes unnoticed",
+      "edits": [
+        {
+          "file": "tests/system/usbdisk_script_test.sh",
+          "find": "    sh -eu -c 'REPO=$2; . \"$2/mk/arch.sh\"; . \"$1\"; repo=$2; work=$3; build_probe' \\\n        usbdisk-image \"$root/functions.sh\" \"$repo\" \"$work\"\n",
+          "replace": "    (REPO=$repo; . \"$repo/mk/arch.sh\"; . \"$root/functions.sh\"; build_probe)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "usbdisk-script: failed: compiler failure was swallowed"
+        ]
+      }
+    },
+    {
+      "name": "retained",
+      "summary": "a FIFO kept after cleanup",
+      "edits": [
+        {
+          "file": "tests/system/usbdisk_mutate.sh",
+          "find": "    rm -f \"$work/output\"\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "usbdisk-script: failed: interrupted FIFO or command remains"
+        ]
+      }
+    }
+  ]
+}

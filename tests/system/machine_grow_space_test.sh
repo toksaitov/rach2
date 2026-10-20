@@ -1,7 +1,7 @@
 #!/bin/sh
-# machine_grow_space_test.sh [--mutate | --texts]: check the work directory,
-# the log writes and the plan check of tools/dev/machine_grow.sh on the
-# host, through the script's own functions.
+# machine_grow_space_test.sh [SCRIPT]: check the work directory, the log
+# writes and the plan check of tools/dev/machine_grow.sh, or of SCRIPT, a
+# copy of it, on the host, through the script's own functions.
 #
 # alert, prepare_work, hash_file, check_plan, run_logged and run_measured are
 # copied out of the script, with /proc/mounts, /dev/console and growset
@@ -12,26 +12,25 @@
 # accepted, a range list growset cannot write reported as a write and not as
 # an unsupported geometry, and a target smaller than the seed refused. The
 # measured grow must unmount the store and mount it again, report a failure,
-# and refuse more than 64 KiB of output. --mutate puts the work directory in
-# /tmp, ignores a failed log write, and calls a failed growset an unsupported
-# geometry, and requires each to fail its row; --texts checks that each
-# fault changes the script.
+# and refuse more than 64 KiB of output.
+#
+# tests/proofs/machine-grow-space-test.json gives a private copy of the
+# script that puts the work directory in /tmp, one that ignores a failed log
+# write, and one that calls a failed growset an unsupported geometry, and
+# requires each to fail its row.
 # shellcheck disable=SC2034,SC2016,SC2154
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" machine-grow-space-test "$repo/tests/system/machine_grow_space_test.sh" "$@"
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" machine-grow-space-test "$repo/tests/system/machine_grow_space_test.sh" "$@"
 proof=
-# Put the unmutated script back and remove the scratch directory. A failure,
-# but not a signal, keeps the directory, whose path the run printed.
+# Remove the scratch directory. A failure, but not a signal, keeps it, whose
+# path the run printed.
 # shellcheck disable=SC2329
 cleanup()
 {
     status=$?
     [ -n "$proof" ] || return 0
-    [ ! -f "$proof/original.sh" ] || cp "$proof/original.sh" "$proof/source.sh"
     case $status in
         0|129|130|143) rm -rf "$proof" ;;
     esac
@@ -45,41 +44,9 @@ proof=$(CDPATH='' cd -- "$proof" && pwd -P)
 echo "machine-grow-space-test: logs: $proof"
 # Report $* and exit 1.
 fail() { echo "machine-grow-space-test: failed: $*" >&2; exit 1; }
-[ "$#" = 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || fail 'usage: machine_grow_space_test.sh [--mutate | --texts]'
-cp "$repo/tools/dev/machine_grow.sh" "$proof/original.sh"
-cp "$proof/original.sh" "$proof/source.sh"
+[ "$#" -le 1 ] || fail 'usage: machine_grow_space_test.sh [SCRIPT]'
+cp "${1:-$repo/tools/dev/machine_grow.sh}" "$proof/source.sh"
 
-# mutate_source MUTATION: $proof/source.sh is $proof/original.sh with
-# MUTATION in it, and `diagnostic` the words its failing row prints.
-mutate_source()
-{
-    case "$1" in
-        work)
-            sed 's|mktemp -d "$store/machine-grow.XXXXXX"|mktemp -d /tmp/machine-grow.XXXXXX|' "$proof/original.sh" > "$proof/source.sh"
-            diagnostic='work returned 1, expected 0'
-            ;;
-        log)
-            sed 's/fail "writing $work\/$log_name"/: "writing $work\/$log_name"/' "$proof/original.sh" > "$proof/source.sh"
-            diagnostic='log returned 0, expected 1'
-            ;;
-        diagnostic)
-            sed 's/fail "creating $work\/expected-ranges.txt; growset failed (see $work\/growset.log)"/fail "the seed geometry is not supported"/' "$proof/original.sh" > "$proof/source.sh"
-            diagnostic='output diagnostic'
-            ;;
-    esac
-}
-
-if [ "$*" = --texts ]; then
-    for mutation in work log diagnostic; do
-        mutate_source "$mutation"
-        if cmp -s "$proof/original.sh" "$proof/source.sh"; then
-            echo "machine-grow-space-test: the $mutation fault is not in tools/dev/machine_grow.sh" >&2
-            exit 1
-        fi
-    done
-    echo 'machine-grow-space-test: texts: every fault is once in its source'
-    exit 0
-fi
 cc -O2 -Wall -Wextra -o "$proof/growset" "$repo/tools/inspect/growset.c"
 # shellcheck source=tools/setup/e2fsprogs_path.sh
 . "$repo/tools/setup/e2fsprogs_path.sh"
@@ -231,13 +198,3 @@ run_rows()
     sh -eu -c 'fail() { echo "machine-grow-space-test: failed: $*" >&2; exit 1; }; . "$proof/extract.sh"; . "$proof/rows.sh"; rows "$1"' sh "$1"
 }
 run_rows fixed
-if [ "$#" = 1 ]; then
-    for mutation in work log diagnostic; do
-        mutate_source "$mutation"
-        if run_rows "$mutation" >"$proof/$mutation.log" 2>&1; then fail "$mutation mutation passed"; fi
-        grep -q "$diagnostic" "$proof/$mutation.log" || { cat "$proof/$mutation.log" >&2; fail "$mutation wrong failure"; }
-        echo "machine-grow-space-test: mutation: $mutation detected"
-        cp "$proof/original.sh" "$proof/source.sh"
-        run_rows "$mutation-restored"
-    done
-fi

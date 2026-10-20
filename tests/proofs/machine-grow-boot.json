@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "proof": "machine-grow-boot",
+  "summary": "prepare_boot and keep_recovery of tools/dev/machine_grow.sh, through tests/system/machine_grow_boot.sh on private FAT images, with faults in a private copy of the script",
+  "tree": "private",
+  "sources": [
+    "tools/dev/machine_grow.sh"
+  ],
+  "artifacts": [
+    "${WORK}/machine_grow.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec cp ${SRC}/tools/dev/machine_grow.sh ${WORK}/machine_grow.sh"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/machine_grow_boot.sh",
+      "${WORK}/machine_grow.sh"
+    ],
+    "bound_s": 1800,
+    "fail_prefix": "machine-grow-boot: failed: "
+  },
+  "faults": [
+    {
+      "name": "rewrite",
+      "summary": "a keep_recovery that rewrites an environment that is already right",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "if [ \"$wanted\" = \"$current\" ]; then",
+          "replace": "if false; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-boot: failed: verified recovery was rewritten"
+        ]
+      }
+    },
+    {
+      "name": "repair",
+      "summary": "a repair of the boot environment that writes nothing",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "| reflash \"$disk\" \"$((1048576 + at))\" \"$amount\"; then",
+          "replace": "| cat > /dev/null; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-boot: failed: repair did not reach the torn write"
+        ]
+      }
+    }
+  ]
+}

@@ -1,34 +1,33 @@
 #!/bin/sh
 # shellcheck disable=SC2034,SC2016 # Extracted functions and literal mutations.
-# usbdisk_script_test.sh [--mutate | --texts]: check usbdisk_mutate.sh's
-# build_probe, cleanup and run_logged, copied out of the script and run on
-# their own.
+# usbdisk_script_test.sh [SCRIPT]: check build_probe, cleanup and run_logged
+# of tests/system/usbdisk_mutate.sh, or of SCRIPT, a copy of it, copied out of
+# the script and run on their own.
 #
 # The image row builds the probe and its image twice, with a changed
 # assertion in the probe between, and requires the image to have the changed
 # probe; a compiler that fails must stop the build with its status. The FIFO
 # rows interrupt a command that run_logged runs, and require that the command
 # and the FIFO are gone, that the saved vfs.c is put back, and that run_logged
-# works again afterwards. --mutate also runs four faults, each of which must
-# fail its row: `stale` builds the probe only when none is built; `unknown`
-# stages from a manifest that no set-ID allowlist names, which must stop the
-# build before the probe is extracted; the builder is called in a condition,
-# where errexit is off; and `retained` keeps the FIFO after cleanup. The rows
-# of the restored script must pass after each. --texts checks that each fault
-# changes usbdisk_mutate.sh and that the probe has the assertion the image row
-# changes.
+# works again afterwards. USBDISK_SCRIPT_ROOT, when set, is the tree whose
+# build and sources the rows use, in place of the one that holds this file.
+#
+# tests/proofs/usbdisk-script.json requires each of four faults to fail its
+# row: a probe built only when none is built, a manifest that no set-ID
+# allowlist names, a builder called in a condition, where errexit is off, and
+# a FIFO kept after cleanup.
 set -eu
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" usbdisk-script "$repo/tests/system/usbdisk_script_test.sh" "$@"
-fi
+self=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)/$(basename -- "$0")
+repo=${USBDISK_SCRIPT_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)}
+[ "$#" -le 1 ] || { echo 'usbdisk-script: usage: usbdisk_script_test.sh [SCRIPT]' >&2; exit 2; }
+script=${1:-$repo/tests/system/usbdisk_mutate.sh}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" usbdisk-script "$self" "$@"
 root=
 child=
 keep=
-# Stop the running case and put the saved script back into the copy. Then
-# remove the work directory, unless the test failed after printing its path,
-# which sets `keep`; a signal clears `keep`.
+# Stop the running case. Then remove the work directory, unless the test
+# failed after printing its path, which sets `keep`; a signal clears `keep`.
 cleanup_test()
 {
     exit_status=$?
@@ -37,7 +36,6 @@ cleanup_test()
         wait "$child" 2>/dev/null || :
     fi
     [ -n "$root" ] || return 0
-    [ ! -f "$root/saved.sh" ] || cp "$root/saved.sh" "$root/source.sh"
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
         rm -rf "$root"
     fi
@@ -48,48 +46,12 @@ trap 'keep=; exit 130' INT
 trap 'keep=; exit 143' TERM
 root=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usbdisk-script.XXXXXX")
 echo "usbdisk-script: logs: $root"
-[ "$#" -eq 0 ] || [ "$*" = --mutate ] || [ "$*" = --texts ] || exit 2
-
-# script_edit FAULT SCRIPT: write $root/source.sh as SCRIPT, a copy of
-# usbdisk_mutate.sh, with FAULT in it; fail when the edit changes nothing,
-# since its text has left the script.
-script_edit()
-{
-    case $1 in
-        stale)
-            sed '/^    "${CROSS_CC/i\
-    [ -f "$work/usbdiskprobe" ] ||
-' "$2" > "$root/source.sh" ;;
-        unknown)
-            sed 's|"$work/usbdisk-proof.manifest"|"$work/unknown-probe.manifest"|g' \
-                "$2" > "$root/source.sh" ;;
-        retained)
-            sed '/^    rm -f "$work\/output"$/d' "$2" > "$root/source.sh" ;;
-    esac
-    if cmp -s "$2" "$root/source.sh"; then
-        echo "usbdisk-script: the $1 fault is not in usbdisk_mutate.sh" >&2
-        exit 1
-    fi
-}
-
-if [ "$*" = --texts ]; then
-    for fault in stale unknown retained; do
-        script_edit "$fault" "$repo/tests/system/usbdisk_mutate.sh"
-    done
-    if ! grep -q 'the child volume would not mount' "$repo/tests/usbdiskprobe.c"; then
-        echo 'usbdisk-script: texts: usbdiskprobe.c does not print the assertion the rows edit' >&2
-        exit 1
-    fi
-    echo 'usbdisk-script: texts: every fault is once in its source'
-    exit 0
-fi
 keep=1
 # The architecture, from ARCH as usbdisk_mutate.sh takes it, for the
 # mk/arch.sh the extracted builder sources, which reads RACH2_ARCH alone.
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 export RACH2_ARCH
-cp "$repo/tests/system/usbdisk_mutate.sh" "$root/saved.sh"
-cp "$root/saved.sh" "$root/source.sh"
+cp "$script" "$root/source.sh"
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$root/runutil" "$repo/tests/system/runner/runutil.c"
 
 # Copy build_probe, cleanup and run_logged out of the copy of the script into
@@ -121,12 +83,28 @@ image_case()
     work=$root/$1-image
     mkdir "$work"
     cp "$repo/tests/usbdiskprobe.c" "$work/usbdiskprobe.c"
-    image_build > "$work/first.log" 2>&1 || return 1
+    if ! grep -q 'the child volume would not mount' "$work/usbdiskprobe.c"; then
+        echo 'usbdisk-script: failed: usbdiskprobe.c lacks the assertion the image row changes' >&2
+        return 1
+    fi
+    if ! image_build > "$work/first.log" 2>&1; then
+        cat "$work/first.log" >&2
+        if [ -e "$work/extracted" ]; then
+            echo 'usbdisk-script: failed: the first image build failed after extraction' >&2
+        else
+            echo 'usbdisk-script: failed: the first image build stopped before extraction' >&2
+        fi
+        return 1
+    fi
     cp "$work/extracted" "$work/old-probe"
     sed 's/the child volume would not mount/current-source-assertion/' \
         "$work/usbdiskprobe.c" > "$work/new.c"
     mv "$work/new.c" "$work/usbdiskprobe.c"
-    image_build > "$work/second.log" 2>&1 || return 1
+    if ! image_build > "$work/second.log" 2>&1; then
+        cat "$work/second.log" >&2
+        echo 'usbdisk-script: failed: the second image build failed' >&2
+        return 1
+    fi
     if cmp -s "$work/extracted" "$work/old-probe" ||
         ! strings "$work/extracted" | grep -qx current-source-assertion; then
         echo 'usbdisk-script: failed: image kept a stale assertion' >&2
@@ -218,52 +196,3 @@ rows()
 }
 
 rows fixed
-if [ "$#" -ne 0 ]; then
-    # The stale binary is allowed only on the second invocation, reproducing
-    # a source edit followed by a run that reuses an earlier built probe.
-    script_edit stale "$root/saved.sh"
-    extract
-    status=0
-    image_case stale > "$root/stale.log" 2>&1 || status=$?
-    [ "$status" -eq 1 ]
-    grep -qx 'usbdisk-script: failed: image kept a stale assertion' "$root/stale.log"
-    echo 'usbdisk-script: result: stale probe detected'
-    cp "$root/saved.sh" "$root/source.sh"
-    rows restored-image
-    script_edit unknown "$root/saved.sh"
-    extract
-    status=0
-    image_case unknown > "$root/unknown.log" 2>&1 || status=$?
-    [ "$status" -eq 1 ]
-    grep -q 'no allowlist names this manifest' "$root/unknown-image/first.log"
-    [ ! -e "$root/unknown-image/extracted" ]
-    echo 'usbdisk-script: result: unlisted manifest stops before extraction'
-    cp "$root/saved.sh" "$root/source.sh"
-    rows restored-manifest
-    status=0
-    (
-        REPO=$repo
-        # shellcheck disable=SC1091
-        . "$repo/mk/arch.sh"
-        image_build()
-        {
-            # shellcheck disable=SC1091
-            . "$root/functions.sh"
-            build_probe
-        }
-        image_case swallowed
-    ) > "$root/swallowed.log" 2>&1 || status=$?
-    [ "$status" -eq 1 ]
-    grep -qx 'usbdisk-script: failed: compiler failure was swallowed' "$root/swallowed.log"
-    echo 'usbdisk-script: result: conditional function swallowed failure and was detected'
-    rows restored-shell
-    script_edit retained "$root/saved.sh"
-    extract
-    status=0
-    fifo_case retained > "$root/retained.log" 2>&1 || status=$?
-    [ "$status" -eq 1 ]
-    grep -qx 'usbdisk-script: failed: interrupted FIFO or command remains' "$root/retained.log"
-    echo 'usbdisk-script: result: retained FIFO detected'
-    cp "$root/saved.sh" "$root/source.sh"
-    rows restored-fifo
-fi

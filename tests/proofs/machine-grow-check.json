@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "proof": "machine-grow-check",
+  "summary": "check_plan and check_boot_copy of tools/dev/machine_grow.sh, through tests/system/machine_grow_check.sh on real seed file systems and a whole boot partition, with each check taken out of a private copy of the script",
+  "tree": "private",
+  "sources": [
+    "tools/dev/machine_grow.sh"
+  ],
+  "artifacts": [
+    "${WORK}/machine_grow.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec cp ${SRC}/tools/dev/machine_grow.sh ${WORK}/machine_grow.sh"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/machine_grow_check.sh",
+      "${WORK}/machine_grow.sh"
+    ],
+    "bound_s": 1800,
+    "fail_prefix": "machine-grow-check: failed: "
+  },
+  "faults": [
+    {
+      "name": "ranges",
+      "summary": "a check_plan that does not compare the ranges with the geometry",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "    cmp \"$work/ranges.txt\" \"$work/expected-ranges.txt\" || fail 'ranges differ from the seed and target geometry'\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-check: failed: small omitted range accepted"
+        ]
+      }
+    },
+    {
+      "name": "boot",
+      "summary": "a check_boot_copy that does not compare the boot copy with the disk",
+      "edits": [
+        {
+          "file": "tools/dev/machine_grow.sh",
+          "find": "    [ \"$actual_boot\" = \"$expected_boot\" ] || fail 'the boot backup differs from the disk'\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "machine-grow-check: failed: same-length boot corruption accepted"
+        ]
+      }
+    }
+  ]
+}

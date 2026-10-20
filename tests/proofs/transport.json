@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "proof": "transport",
+  "summary": "the failure records and the stick's disk match of tests/system/accept/metal_accept.sh, through tests/system/accept/transport_test.sh on a fixture transport, with faults in a private copy of the script",
+  "tree": "private",
+  "sources": [
+    "tests/system/accept/metal_accept.sh"
+  ],
+  "artifacts": [
+    "${WORK}/metal_accept.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec cp ${SRC}/tests/system/accept/metal_accept.sh ${WORK}/metal_accept.sh"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/accept/transport_test.sh",
+      "${WORK}/metal_accept.sh"
+    ],
+    "bound_s": 600
+  },
+  "faults": [
+    {
+      "name": "record",
+      "summary": "a failed command left unrecorded",
+      "edits": [
+        {
+          "file": "tests/system/accept/metal_accept.sh",
+          "find": "        : > \"$LOCAL_TMP/command-failed\"\n",
+          "replace": "        :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "uname-fail returned 0, expected 1"
+        ]
+      }
+    },
+    {
+      "name": "disk-prefix",
+      "summary": "a stick matched by the prefix of its node, which writes disk10 when disk1 is named",
+      "edits": [
+        {
+          "file": "tests/system/accept/metal_accept.sh",
+          "find": "grep -E \"^/dev/$STICK(p[0-9]+)?:\"",
+          "replace": "grep \"^/dev/$STICK\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "disk-prefix: disk10 was written"
+        ]
+      }
+    }
+  ]
+}

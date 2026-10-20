@@ -7,18 +7,18 @@
 # A case fails a command, a transfer, a hash or a check of the stick, or
 # boots an ext2 root whose check found a fault, and the script must then
 # exit 1 and never print PASS; RACH2_ACCEPT_DD and RACH2_ACCEPT_BOOTLOG,
-# which the script refuses, must exit 2. With --mutate, two faults in a
-# private copy of the script must be caught: a failed command left
-# unrecorded, and a stick matched by the prefix of its node, which writes
-# disk10 when disk1 is named. --texts checks that the text each fault
-# replaces is once in metal_accept.sh.
+# which the script refuses, must exit 2. SCRIPT is the metal_accept.sh the
+# cases run, the tree's by default; tests/proofs/transport.json gives a
+# private copy with each of its faults in it.
+#
+# Usage: sh tests/system/accept/transport_test.sh [SCRIPT]
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
-fi
+[ "$#" -le 1 ] || { echo 'accept-transport: usage: transport_test.sh [SCRIPT]' >&2; exit 2; }
+script=${1:-$repo/tests/system/accept/metal_accept.sh}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
 work=
 
 # Remove the scratch directory.
@@ -34,37 +34,8 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-test.XXXXXX")
 copy="$work/tests/system/accept"
 mkdir -p "$copy" "$work/bin" "$work/build/krffs" "$work/krffs"
-cp "$repo/tests/system/accept/metal_accept.sh" "$copy/original.sh"
-cp "$copy/original.sh" "$copy/metal_accept.sh"
+cp "$script" "$copy/metal_accept.sh"
 touch "$work/key"
-
-# transport_edit FAULT: the private metal_accept.sh is the saved one with FAULT
-# in it: no failure record (record) or a disk matched by its prefix alone
-# (disk-prefix); fail when the edit changes nothing, since its text has left
-# the script.
-transport_edit()
-{
-    case $1 in
-        record)
-            # shellcheck disable=SC2016 # The private source's variable.
-            sed 's@: > "\$LOCAL_TMP/command-failed"@:@' "$copy/original.sh" > "$copy/metal_accept.sh" ;;
-        disk-prefix)
-            # shellcheck disable=SC2016 # Match the private source's variable.
-            sed 's@grep -E "\^/dev/\$STICK(p\[0-9\]+)?:"@grep "^/dev/$STICK"@' \
-                "$copy/original.sh" > "$copy/metal_accept.sh" ;;
-    esac
-    if cmp -s "$copy/original.sh" "$copy/metal_accept.sh"; then
-        echo "accept-transport: the $1 fault is not in metal_accept.sh" >&2
-        exit 1
-    fi
-}
-
-if [ "${1:-}" = --texts ]; then
-    transport_edit record
-    transport_edit disk-prefix
-    echo 'accept-transport: texts: every fault is once in its source'
-    exit 0
-fi
 
 cat > "$work/bin/ssh" <<'SSH'
 #!/bin/sh
@@ -306,32 +277,4 @@ cases()
 printf '%s\n' 'boot: Rach2 Booting' 'ext2: check: clean' > "$work/healthy-bootlog"
 phase=fixed
 cases
-case "${1:-}" in
-    '') ;;
-    --mutate)
-        transport_edit record
-        phase=mutated
-        if cases > "$work/mutation.log" 2>&1; then
-            echo 'accept-transport: the missing failure record was not detected' >&2
-            exit 1
-        fi
-        grep -q 'uname-fail returned 0, expected 1' "$work/mutation.log"
-        echo 'accept-transport: mutation: the missing failure record was detected'
-        cp "$copy/original.sh" "$copy/metal_accept.sh"
-        phase=restored
-        cases
-        transport_edit disk-prefix
-        phase='disk-mutated'
-        if cases > "$work/disk-mutation.log" 2>&1; then
-            echo 'accept-transport: the disk prefix mutation was not detected' >&2
-            exit 1
-        fi
-        grep -q 'disk-prefix: disk10 was written' "$work/disk-mutation.log"
-        echo 'accept-transport: mutation: the disk prefix match wrote disk10 and was detected'
-        cp "$copy/original.sh" "$copy/metal_accept.sh"
-        phase='disk-restored'
-        cases
-        ;;
-    *) echo 'accept-transport: usage: [--mutate | --texts]' >&2; exit 2 ;;
-esac
 echo "accept-transport: logs: $work"

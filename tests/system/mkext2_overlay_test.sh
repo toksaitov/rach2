@@ -1,5 +1,6 @@
 #!/bin/sh
-# The single-quoted texts below are mkext2.sh's own lines, not expansions.
+# The single-quoted dollars below are the makefile's and the stand-ins', not
+# expansions.
 # shellcheck disable=SC2016
 #
 # mkext2_overlay_test.sh: what an overlay adds to a volume of
@@ -29,27 +30,22 @@
 # with status 1. mkext2.sh must fail, write its own message and the line,
 # and leave no image under the target's name.
 #
-# With --mutate each fault below is put into the copy of mkext2.sh and must
-# fail its row; the rows run again on the copy as it is at the end.
+# MKEXT2 is the mkext2.sh the rows run, the tree's by default;
+# tests/proofs/mkext2-overlay.json gives a private copy with each of its
+# faults in it.
 #
-# --texts puts each fault into the copy and runs no row.
-#
-# Usage: sh tests/system/mkext2_overlay_test.sh [--mutate | --texts]
+# Usage: sh tests/system/mkext2_overlay_test.sh [MKEXT2]
 #
 set -u
 
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'mkext2-overlay-test: usage: mkext2_overlay_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
-
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" mkext2-overlay-test "$repo/tests/system/mkext2_overlay_test.sh" "$@"
-fi
+[ "$#" -le 1 ] || {
+    echo 'mkext2-overlay-test: usage: mkext2_overlay_test.sh [MKEXT2]' >&2
+    exit 2
+}
+mkext2=${1:-$repo/tools/image/mkext2.sh}
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" mkext2-overlay-test "$repo/tests/system/mkext2_overlay_test.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
@@ -59,24 +55,20 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-mkext2-overlay.XXXXXX") || exit 1
 # mkext2.sh finds its tree with `cd` and `pwd`, which fold a doubled slash.
 work=$(CDPATH='' cd -- "$work" && pwd)
 
-mkdir -p "$work/saved" "$work/tools/image" "$work/tools/setup" "$work/tools/inspect" \
-    "$work/build/krffs"
-cp "$repo/tools/image/mkext2.sh" "$work/saved/mkext2.sh"
-cp "$work/saved/mkext2.sh" "$work/tools/image/mkext2.sh"
-if [ "$mutate" -ne 2 ]; then
-    if [ ! -x "$repo/build/krffs/stageimage.krffs" ]; then
-        echo 'mkext2-overlay-test: no build/krffs/stageimage.krffs; run make' >&2
-        exit 1
-    fi
-    cp "$repo/build/krffs/stageimage.krffs" "$work/build/krffs/"
-    cp "$repo/tools/setup/e2fsprogs_path.sh" "$work/tools/setup/"
-    cp "$repo/tools/inspect/setidcheck.c" "$work/tools/inspect/"
-    mkdir -p "$work/mk"
-    cp "$repo/mk/host.mk" "$work/mk/"
-    printf '%s\n' 'include mk/host.mk' \
-        'build/tools/inspect/setidcheck: tools/inspect/setidcheck.c' \
-        '	@mkdir -p $(dir $@)' '	$(HOST_LINK)' > "$work/Makefile"
+mkdir -p "$work/tools/image" "$work/tools/setup" "$work/tools/inspect" "$work/build/krffs" \
+    "$work/mk"
+cp "$mkext2" "$work/tools/image/mkext2.sh"
+if [ ! -x "$repo/build/krffs/stageimage.krffs" ]; then
+    echo 'mkext2-overlay-test: no build/krffs/stageimage.krffs; run make' >&2
+    exit 1
 fi
+cp "$repo/build/krffs/stageimage.krffs" "$work/build/krffs/"
+cp "$repo/tools/setup/e2fsprogs_path.sh" "$work/tools/setup/"
+cp "$repo/tools/inspect/setidcheck.c" "$work/tools/inspect/"
+cp "$repo/mk/host.mk" "$work/mk/"
+printf '%s\n' 'include mk/host.mk' \
+    'build/tools/inspect/setidcheck: tools/inspect/setidcheck.c' \
+    '	@mkdir -p $(dir $@)' '	$(HOST_LINK)' > "$work/Makefile"
 
 cat > "$work/tools/inspect/setid.allow" << 'EOF'
 manifest overlay-test
@@ -209,46 +201,6 @@ rows() {
     refused debugfs 'mkext2: debugfs refused a command (status 1):' ||
         fail 'a failing debugfs leaves its diagnostic and no image'
 }
-
-# fault NAME OLD NEW EXPECT: the copy of mkext2.sh with its one line OLD
-# replaced by NEW must fail the row named EXPECT.
-fault() {
-    OLD=$2 NEW=$3 awk '
-        $0 == ENVIRON["OLD"] { print ENVIRON["NEW"]; n++; next }
-        { print }
-        END { exit n != 1 }' "$work/saved/mkext2.sh" > "$work/tools/image/mkext2.sh" || {
-        echo "mkext2-overlay-test: fault $1: its line is not once in tools/image/mkext2.sh" >&2
-        exit 1
-    }
-    [ "$mutate" -ne 2 ] || return 0
-    before=$failures
-    out=$(rows)
-    failures=$before
-    printf '%s\n' "$out"
-    case $out in
-        *"failed: $4"*) echo "mkext2-overlay-test: result: $1 fails its row" ;;
-        *) echo "mkext2-overlay-test: fault passed: $1" >&2; failures=$((failures + 1)) ;;
-    esac
-}
-
-if [ "$mutate" -ge 1 ]; then
-    line='    find "$TREE" ! -type l \( -perm -020 -o -perm -002 \) -exec chmod go-w {} +'
-    fault no-normalise "$line" '    :' 'the volume made under umask 002 passes the checks'
-    fault links-followed "$line" \
-        '    find "$TREE" \( -perm -020 -o -perm -002 \) -exec chmod go-w {} +' \
-        'the file a link names outside the tree keeps its mode'
-    fault mke2fs-status '    > "$MKLOG" 2>&1 || MKSTATUS=$?' '    > "$MKLOG" 2>&1' \
-        'a failing mke2fs leaves its diagnostic and no image'
-    fault debugfs-status \
-        'debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1 || DBSTATUS=$?' \
-        'debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1' \
-        'a failing debugfs leaves its diagnostic and no image'
-    cp "$work/saved/mkext2.sh" "$work/tools/image/mkext2.sh"
-fi
-if [ "$mutate" -eq 2 ]; then
-    echo 'mkext2-overlay-test: texts: every fault is once in its source'
-    exit 0
-fi
 
 rows
 if [ "$failures" -ne 0 ]; then
