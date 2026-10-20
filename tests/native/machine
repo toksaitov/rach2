@@ -1,0 +1,23 @@
+# The guest programs that have no native case, each with the reason its
+# checks need a machine of QEMU's (Readme.md).
+ahciprobe two disposable AHCI disks, and a KRFFS root on AHCI port 0 by rach2.root=disk
+blockprobe a root mounted by rach2.fsdisk or rach2.root=disk, and the IDE controller
+busprobe the IDE driver's two channels and its 48-bit commands
+calibprobe no suite runs it; tests/system/calibrate.sh does, by hand
+conloadprobe lines typed at the serial console, which the Lenovo lacks
+disksprobe two disks on one controller in the suite's arrangement
+keylatprobe a key typed on a USB keyboard, and rach2.usblatency on the boot line
+lagprobe rach2.blocklag and its companions on the boot line
+mouseprobe a movement of the mouse made after the open
+oomprobe the whole machine run out of frames
+orphanprobe grandchildren reaped by the designated init
+partsprobe four disks of crafted partition tables, booted with rach2.diskdiag
+persistprobe a second boot of the same disk
+survivorprobe the designated init's exit and the debug shell's return
+tlsprobe set_thread_area and %gs of the i686 kernel
+ttyprobe lines and keys typed at the console, and its own window and screen
+usbdiskprobe sticks pulled and plugged through QEMU's monitor
+usbprobe QEMU's USB keyboard, mouse and hub models, and rach2.nousb and rach2.hubtree
+musl/clockloadmusl the emulator stopped by the host and the clocks compared with its time
+musl/creddisk three boots of one disk image after _exit
+musl/saltnoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
