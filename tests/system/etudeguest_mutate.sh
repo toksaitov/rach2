@@ -115,7 +115,7 @@ run_phase()
     expected=$2
     rm -rf "${work:?}/bin"
     make -s -C tools/etude/guest "ARCH=$RACH2_ARCH" "BUILD=$work/bin" \
-        "SRC=$work/src/guest.c wire.c ../history_json.c ../../../utils/sha256.c" \
+        "SRC=$work/src/guest.c fixture.c wire.c ../history_json.c ../../../utils/sha256.c" \
         >"$work/$phase.build.log" 2>&1 || { cat "$work/$phase.build.log"; exit 1; }
     cp "$work/bin/etude-guest" "$work/$phase.etude-guest"
     sh krffs/mkimage.sh "$work/test.manifest" "$work/test.krffs" 13 5120 \

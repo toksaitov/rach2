@@ -1,6 +1,7 @@
 /* Drive etude-guest through pipes, as the controller drives it through SSH
  * and the serial console, and check the contracts of its commands.
- * host-deps: tools/etude/guest/guest.c tools/etude/guest/wire.c
+ * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/guest/wire.c
  * host-deps: tools/etude/history_json.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils
@@ -9,13 +10,16 @@
 #include "sha256.h"
 #include <etude/frame.h>
 #include <errno.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -338,29 +342,76 @@ static void put_file(const char *name, const char *text, size_t n, const char *m
 /* The most output the invocations of put_case keep. */
 static long case_keep = 65536;
 
-/** Store a shell script as `name` and an invocation of it for the attempt
- * `token`; the invocation's digest goes to `inv`. */
-static void put_case(const char *name, const char *script, const char *token, const char *role,
-                     long deadline_ms, char inv[65])
+/* The role, deadline, fixtures and input of an invocation. */
+struct shape {
+    const char *role;
+    long deadline_ms;
+    const char *fixtures; /* a JSON array */
+    const char *input;    /* the text of `input.txt`, its standard input, or NULL */
+};
+
+/** Store a shell script as `name` and an invocation of it of shape `sh` for
+ * the attempt `token`; the invocation's digest goes to `inv`. */
+static void put_invocation(const char *name, const char *script, const char *token,
+                           const struct shape *sh, char inv[65])
 {
+    const char *input = sh->input;
     char text[4096];
+    char files[512];
     char hex[65];
     char c[24];
     int n;
 
     put_file(name, script, strlen(script), "0755", hex, c);
+    n = snprintf(files, sizeof(files),
+                 "{\"name\": \"%s\", \"sha256\": \"%s\", \"size_bytes\": %zu, \"mode\": \"0755\"}",
+                 name, hex, strlen(script));
+    if (input) {
+        put_file("input.txt", input, strlen(input), "0644", hex, c);
+        snprintf(files + n, sizeof(files) - (size_t)n,
+                 ", {\"name\": \"input.txt\", \"sha256\": \"%s\", \"size_bytes\": %zu, "
+                 "\"mode\": \"0644\"}",
+                 hex, strlen(input));
+    }
     n = snprintf(
         text, sizeof(text),
         "{\"schema_version\": 1, \"run_id\": \"etude-guest-hosttest\", "
         "\"attempt_id\": \"attempt-%s\", \"attempt_token\": \"%s\", "
         "\"case_id\": \"host.etude.guest\", \"program\": \"%s\", \"arguments\": [\"a b\"], "
         "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\", "
-        "\"MARKS\": \"%s/marks\"}, \"stdin\": null, \"role\": \"%s\", "
-        "\"files\": [{\"name\": \"%s\", \"sha256\": \"%s\", \"size_bytes\": %zu, "
-        "\"mode\": \"0755\"}], \"fixtures\": [{\"fixture\": \"workspace\", \"given\": []}], "
-        "\"deadline_us\": %ld, \"grace_us\": 500000, \"output_max_bytes\": %ld}",
-        token, token, name, work, role, name, hex, strlen(script), deadline_ms * 1000, case_keep);
+        "\"MARKS\": \"%s/marks\"}, \"stdin\": %s, \"role\": \"%s\", \"files\": [%s], "
+        "\"fixtures\": %s, \"deadline_us\": %ld, \"grace_us\": 500000, "
+        "\"output_max_bytes\": %ld}",
+        token, token, name, work, input ? "\"input.txt\"" : "null", sh->role, files, sh->fixtures,
+        sh->deadline_ms * 1000, case_keep);
     put_file("invocation.json", text, (size_t)n, "0644", inv, c);
+}
+
+/** put_invocation with the workspace alone and no input. */
+static void put_case(const char *name, const char *script, const char *token, const char *role,
+                     long deadline_ms, char inv[65])
+{
+    struct shape sh;
+
+    sh.role = role;
+    sh.deadline_ms = deadline_ms;
+    sh.fixtures = "[{\"fixture\": \"workspace\", \"given\": []}]";
+    sh.input = NULL;
+    put_invocation(name, script, token, &sh, inv);
+}
+
+/** put_invocation of an ordinary case with the fixtures of the JSON array
+ * `fixtures` and the standard input `input`, or none when it is NULL. */
+static void put_case_with(const char *name, const char *script, const char *token,
+                          const char *fixtures, const char *input, char inv[65])
+{
+    struct shape sh;
+
+    sh.role = "ordinary";
+    sh.deadline_ms = 30000;
+    sh.fixtures = fixtures;
+    sh.input = input;
+    put_invocation(name, script, token, &sh, inv);
 }
 
 /* The output, the end and the cleanup an attempt reported. */
@@ -916,6 +967,131 @@ static void check_stdio_damage(void)
  * frame with the streams' sizes and digests would be over 255 bytes. The
  * bound is of both streams together, so standard output keeps it all.
  */
+/** A TCP socket listening on a port of 127.0.0.1 the system chose, whose
+ * number goes to `*port`; the socket, or -1. */
+static int listen_any(int *port)
+{
+    struct sockaddr_in a;
+    socklen_t len = sizeof(a);
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (s < 0 || bind(s, (struct sockaddr *)&a, sizeof(a)) < 0 || listen(s, 1) < 0 ||
+        getsockname(s, (struct sockaddr *)&a, &len) < 0) {
+        if (s >= 0)
+            close(s);
+        return -1;
+    }
+    *port = ntohs(a.sin_port);
+    return s;
+}
+
+/** Run the invocation `inv` of attempt `token` and require `error CODE`
+ * for it, with nothing run. */
+static void refused_run(const char *token, const char *inv, const char *code, const char *what)
+{
+    struct got g;
+    char c[24];
+    int before = marks();
+
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), token, inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_ERROR, 5000) == 0 && strcmp(g.field[0], c) == 0 &&
+              strcmp(g.field[1], code) == 0 && marks() == before,
+          what);
+}
+
+/**
+ * The fixtures a host can make: the ids, ports and peer given to the
+ * program as arguments after its own, with its absolute path as argv[0];
+ * an id that a process has and a port in use refused; fixtures that do not
+ * fit their forms refused; and a pseudo-terminal that is the program's
+ * terminal, written the invocation's input and read as its output.
+ */
+static void check_fixtures(void)
+{
+    static const char args[] = "#!/bin/sh\necho run >> \"$MARKS\"\necho \"$0|$*\"\n";
+    static const char term[] =
+        "#!/bin/sh\necho run >> \"$MARKS\"\n[ -t 0 ] && [ -t 1 ] && [ -t 2 ] "
+        "&& : </dev/tty && read line && echo \"got $line\"\n";
+    static const char *const bad[] = {
+        "[{\"fixture\": \"ids\", \"given\": [\"1000\"]}]",
+        "[{\"fixture\": \"ids\", \"given\": [\"1000:314159001\", \"1001:314159001\"]}]",
+        "[{\"fixture\": \"ports\", \"given\": [\"7470:70000\"]}]",
+        "[{\"fixture\": \"bogus\", \"given\": []}]",
+        "[{\"fixture\": \"workspace\", \"given\": [\"x\"]}]",
+        "[{\"fixture\": \"tmpfs\", \"given\": [\"0\"]}]",
+        "[{\"fixture\": \"volume\", \"given\": [\"krffs\", \"absent.img\", \"mounted\"]}]",
+        "[{\"fixture\": \"root\", \"given\": [\"ext2\", \"args\", \"musl/x\"]}]",
+        "[{\"fixture\": \"mountns\", \"given\": [\"x\"]}]",
+        "[{\"fixture\": \"peer\", \"given\": [\"10.0.2.2\", \"7\", \"gateway\"]}]"};
+    struct ending e;
+    struct stat st;
+    char fixtures[1024];
+    char expected[2048];
+    char token[ETUDE_FRAME_TOKEN_LEN + 1];
+    char inv[65];
+    char c[24];
+    int port = 0, busy_port = 0;
+    int busy = listen_any(&busy_port);
+    int s = listen_any(&port);
+    size_t i;
+
+    if (s >= 0)
+        close(s);
+    CHECK(busy >= 0 && s >= 0, "the test has a port in use and a free one");
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+
+    snprintf(fixtures, sizeof(fixtures),
+             "[{\"fixture\": \"workspace\", \"given\": []}, {\"fixture\": \"ids\", \"given\": "
+             "[\"1000:314159001\", \"5:314159005\"]}, {\"fixture\": \"ports\", \"given\": "
+             "[\"7470:%d\"]}, {\"fixture\": \"peer\", \"given\": [\"10.0.2.2\", \"7\", "
+             "\"gateway=10.0.2.2\"]}, "
+             "{\"fixture\": \"alone\", \"given\": []}]",
+             port);
+    put_case_with("args", args, "000000000000fa01", fixtures, NULL, inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "000000000000fa01", inv, (char *)NULL);
+    CHECK(collect(&e, c, "000000000000fa01", 10000) == 0 && strcmp(e.kind, "exited") == 0 &&
+              strcmp(e.value, "0") == 0 && strcmp(e.cleaned, "confirmed") == 0,
+          "a case with ids, ports and a peer runs and is cleaned");
+    snprintf(expected, sizeof(expected),
+             "%s/state/a/000000000000fa01/work/args|a b ids=1000:314159001,5:314159005 "
+             "ports=7470:%d peer=10.0.2.2:7 gateway=10.0.2.2\n",
+             work, port);
+    CHECK(strcmp(e.out, expected) == 0,
+          "the program is given its ids, ports and peer, and its absolute path");
+    snprintf(expected, sizeof(expected), "%s/state/a", work);
+    CHECK(stat(expected, &st) == 0 && (st.st_mode & 0777) == 0711,
+          "every user may search the attempts' directory to reach a workspace");
+
+    snprintf(fixtures, sizeof(fixtures), "[{\"fixture\": \"ids\", \"given\": [\"1000:%ld\"]}]",
+             (long)getuid());
+    put_case_with("args", args, "000000000000fa02", fixtures, NULL, inv);
+    refused_run("000000000000fa02", inv, ETUDE_ERR_REFUSED, "an id that a process has is refused");
+    snprintf(fixtures, sizeof(fixtures), "[{\"fixture\": \"ports\", \"given\": [\"7470:%d\"]}]",
+             busy_port);
+    put_case_with("args", args, "000000000000fa03", fixtures, NULL, inv);
+    refused_run("000000000000fa03", inv, ETUDE_ERR_REFUSED, "a port in use is refused");
+    for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        snprintf(token, sizeof(token), "000000000000fa%02x", 4 + (int)i);
+        put_case_with("args", args, token, bad[i], NULL, inv);
+        refused_run(token, inv, ETUDE_ERR_REFUSED,
+                    "a fixture that does not fit its form is refused");
+    }
+
+    put_case_with("term", term, "000000000000fa20", "[{\"fixture\": \"pty\", \"given\": []}]",
+                  "hello\n", inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "000000000000fa20", inv, (char *)NULL);
+    CHECK(collect(&e, c, "000000000000fa20", 10000) == 0 && strcmp(e.kind, "exited") == 0 &&
+              strcmp(e.value, "0") == 0 && strstr(e.out, "got hello") != NULL &&
+              strcmp(e.cleaned, "confirmed") == 0,
+          "a case on a pseudo-terminal reads its input there and writes its output");
+    bye(0);
+    close(busy);
+}
+
 static void check_long_end(void)
 {
     static const char flood[] = "#!/bin/sh\nhead -c 10000000 /dev/zero | tr '\\0' 0\n"
@@ -1048,6 +1224,7 @@ int main(void)
     check_interruptions();
     check_orphan();
     check_stdio_damage();
+    check_fixtures();
     check_serial();
     if (failures) {
         fprintf(stderr, "etude_guest_hosttest: %d checks failed\n", failures);

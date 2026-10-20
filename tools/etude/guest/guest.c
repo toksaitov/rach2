@@ -9,6 +9,7 @@
 #define _DEFAULT_SOURCE
 #endif
 #include "wire.h"
+#include "fixture.h"
 #include "history_json.h"
 #include "sha256.h"
 #include <etude/frame.h>
@@ -98,6 +99,7 @@ struct attempt {
     int status;
     struct rusage ru;
     int64_t drain_until; /* the end of the wait for the pipes and the processes */
+    struct fixtures fx;
     struct attempt *next;
 };
 
@@ -1010,6 +1012,7 @@ struct invocation {
     int64_t deadline_us;
     int64_t grace_us;
     int64_t output_max;
+    struct fixtures fx;
 };
 
 /** The integer member `key` of `o`, or -1. */
@@ -1039,6 +1042,12 @@ static const struct eh_json *find_file(const struct invocation *inv, const char 
     return NULL;
 }
 
+/** Whether the invocation `ctx` has a file called `name`, for the fixtures. */
+static int has_file(const void *ctx, const char *name)
+{
+    return find_file(ctx, name) != NULL;
+}
+
 /**
  * Read and check the invocation of digest `sha` for the attempt `token`.
  *
@@ -1054,6 +1063,7 @@ static const char *load_invocation(struct invocation *inv, const char *sha, cons
     char *text;
     const struct eh_json *v;
     const struct eh_json *f;
+    const char *why;
     long n;
     size_t i;
 
@@ -1120,22 +1130,8 @@ static const char *load_invocation(struct invocation *inv, const char *sha, cons
     v = eh_json_get(inv->root, "fixtures");
     if (!v || v->type != 'a')
         return ETUDE_ERR_REFUSED;
-    for (f = v->child; f; f = f->next) {
-        const char *kind = str_member(f, "fixture");
-        const struct eh_json *given = eh_json_get(f, "given");
-        const struct eh_json *g;
-        if (!kind || !given || given->type != 'a')
-            return ETUDE_ERR_REFUSED;
-        if (strcmp(kind, "workspace") == 0 && !given->child)
-            continue;
-        if (strcmp(kind, "stage") == 0) {
-            for (g = given->child; g; g = g->next)
-                if (g->type != 's' || !find_file(inv, g->string))
-                    break;
-            if (!g)
-                continue;
-        }
-        note("invocation %s: fixture %s is not provided", sha, kind);
+    if (fixture_parse(&inv->fx, v, has_file, inv, &why)) {
+        note("invocation %s: fixture %s is not valid", sha, why);
         return ETUDE_ERR_REFUSED;
     }
     return NULL;
@@ -1150,11 +1146,12 @@ static const char *prepare(const struct invocation *inv, const char *dir)
     const struct eh_json *f;
     int rc;
 
-    if (mkdir(dir, 0700) < 0) {
+    if (mkdir(dir, 0711) < 0) {
         note("prepare: %s: %s", dir, strerror(errno));
         return errno == EEXIST ? ETUDE_ERR_CONFLICT : ETUDE_ERR_FAILED;
     }
-    if (path_of(to, "%s/work", dir) < 0 || mkdir(to, 0755) < 0)
+    if (chmod(dir, 0711) < 0 || path_of(to, "%s/work", dir) < 0 || mkdir(to, 0755) < 0 ||
+        chmod(to, 0755) < 0)
         return ETUDE_ERR_FAILED;
     for (f = eh_json_get(inv->root, "files")->child; f; f = f->next) {
         const char *sha = str_member(f, "sha256");
@@ -1172,14 +1169,16 @@ static const char *prepare(const struct invocation *inv, const char *dir)
 }
 
 /** Build the argument and environment vectors of an invocation in `argv`
- * and `envp`, each of ARGS_MAX entries; `${WORKSPACE}` in a value of the
- * environment becomes `work`. The strings are allocated. */
-static int build_vectors(const struct invocation *inv, const char *work, char **argv, char **envp)
+ * and `envp`, each of ARGS_MAX entries, with `self` as argv[0];
+ * `${WORKSPACE}` in a value of the environment becomes `work`. The strings
+ * are allocated. */
+static int build_vectors(const struct invocation *inv, const char *work, const char *self,
+                         char **argv, char **envp)
 {
     const struct eh_json *v;
     int n = 0;
 
-    argv[n++] = strdup(inv->program);
+    argv[n++] = strdup(self);
     for (v = eh_json_get(inv->root, "arguments")->child; v; v = v->next)
         argv[n++] = strdup(v->string);
     argv[n] = NULL;
@@ -1413,6 +1412,14 @@ struct pipes {
     int exe[2];  /* closed on exec, or the exec's errno */
 };
 
+/* What the child of an attempt executes, and where. */
+struct launch {
+    const char *input; /* the file of its standard input, or NULL */
+    const char *work;  /* its workspace */
+    const char *prog;  /* the program's path in the workspace */
+    char **argv, **envp;
+};
+
 /** Close both ends of every pipe of `pp` that is open. */
 static void close_pipes(struct pipes *pp)
 {
@@ -1434,14 +1441,16 @@ static void close_pipes(struct pipes *pp)
 
 /**
  * The child of an attempt, after `fork`: lead a session and a group of its
- * own, wait for etude-guest's byte on the sync pipe, take `input` (or
- * /dev/null when it is NULL) and the output pipes as descriptors 0 to 2, and
- * execute `prog` in `work`. An exec that fails writes its errno on the exec
- * pipe. Never returns.
+ * own, wait for etude-guest's byte on the sync pipe, take the launch's
+ * input (or /dev/null) and the output pipes as descriptors 0 to 2, make the
+ * fixtures of its own process, and execute the program in its workspace, or
+ * in its private root. A fixture or an exec that fails writes its errno on
+ * the exec pipe. Never returns.
  */
-static void run_child(const struct pipes *pp, const char *input, const char *work, const char *prog,
-                      char **argv, char **envp)
+static void run_child(const struct pipes *pp, const struct fixtures *fx, const struct launch *l)
 {
+    char path[PATH_CAP];
+    const char *dir = l->work;
     char byte;
     int code = 0;
     int in;
@@ -1453,21 +1462,50 @@ static void run_child(const struct pipes *pp, const char *input, const char *wor
     close(pp->exe[0]);
     if (read(pp->sync[0], &byte, 1) != 1)
         _exit(127);
-    in = open(input ? input : "/dev/null", O_RDONLY);
+    in = open(l->input ? l->input : "/dev/null", O_RDONLY);
     if (in < 0 || dup2(in, 0) < 0 || dup2(pp->out[1], 1) < 0 || dup2(pp->err[1], 2) < 0)
         code = errno;
     close_from_3(pp->exe[1]);
-    if (code == 0 && chdir(work) < 0)
+    snprintf(path, sizeof(path), "%s", l->prog);
+    if (code == 0)
+        code = fixture_enter(fx, l->work, path, sizeof(path), &dir);
+    if (code == 0 && chdir(dir) < 0)
         code = errno;
     if (code == 0) {
         umask(022);
         default_signals();
-        execve(prog, argv, envp);
+        execve(path, l->argv, l->envp);
         code = errno;
     }
     if (write(pp->exe[1], &code, sizeof(code)) < 0)
         _exit(127);
     _exit(127);
+}
+
+/**
+ * Read a case's output from the master side of its pseudo-terminal, as
+ * standard output, in place of the pipe its slave side replaced, and write
+ * the file `input`, when there is one, to the master side as the case's
+ * input.
+ */
+static void take_terminal(struct attempt *a, const char *input)
+{
+    char buf[4096];
+    ssize_t r;
+    int fd;
+
+    close(a->fd[1]);
+    a->fd[1] = a->fx.pty_master;
+    a->fx.pty_master = -1;
+    fd = input ? open(input, O_RDONLY | O_CLOEXEC) : -1;
+    while (fd >= 0 && (r = read(fd, buf, sizeof(buf))) > 0)
+        if (write_all(a->fd[1], buf, (size_t)r) < 0) {
+            note("spawn: the terminal's input: %s", strerror(errno));
+            break;
+        }
+    if (fd >= 0)
+        close(fd);
+    fcntl(a->fd[1], F_SETFL, O_NONBLOCK);
 }
 
 /**
@@ -1483,29 +1521,46 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
 {
     char *argv[ARGS_MAX + 1];
     char *envp[ARGS_MAX + 1];
+    char dir[PATH_MAX];
     char work[PATH_CAP];
     char prog[PATH_CAP];
     char input[PATH_CAP];
     struct pipes pp = {{-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}};
     int code = 0;
+    int n;
     ssize_t r;
 
-    if (path_of(work, "%s/work", a->dir) < 0 || path_of(prog, "%s/%s", work, inv->program) < 0 ||
+    if (!realpath(a->dir, dir) || path_of(work, "%s/work", dir) < 0 ||
+        path_of(prog, "%s/%s", work, inv->program) < 0 ||
         path_of(input, "%s/%s", work, inv->stdin_name ? inv->stdin_name : "") < 0)
         return ETUDE_ERR_LIMIT;
     argv[0] = NULL;
     envp[0] = NULL;
-    if (build_vectors(inv, work, argv, envp) < 0 || pipe(pp.out) < 0 || pipe(pp.err) < 0 ||
-        pipe(pp.sync) < 0 || pipe(pp.exe) < 0 || fcntl(pp.exe[1], F_SETFD, FD_CLOEXEC) < 0 ||
-        (a->pid = fork()) < 0) {
+    if (build_vectors(inv, work, a->fx.has_root ? a->fx.root_path : prog, argv, envp) < 0)
+        return ETUDE_ERR_FAILED;
+    for (n = 0; argv[n]; n++) {
+    }
+    if (fixture_args(&a->fx, work, argv, n, ARGS_MAX) < 0) {
+        free_vectors(argv, envp);
+        return ETUDE_ERR_LIMIT;
+    }
+    if (pipe(pp.out) < 0 || pipe(pp.err) < 0 || pipe(pp.sync) < 0 || pipe(pp.exe) < 0 ||
+        fcntl(pp.exe[1], F_SETFD, FD_CLOEXEC) < 0 || (a->pid = fork()) < 0) {
         note("spawn: %s", strerror(errno));
         free_vectors(argv, envp);
         close_pipes(&pp);
         a->pid = 0;
         return ETUDE_ERR_FAILED;
     }
-    if (a->pid == 0)
-        run_child(&pp, inv->stdin_name ? input : NULL, work, prog, argv, envp);
+    if (a->pid == 0) {
+        struct launch l;
+        l.input = inv->stdin_name ? input : NULL;
+        l.work = work;
+        l.prog = prog;
+        l.argv = argv;
+        l.envp = envp;
+        run_child(&pp, &a->fx, &l);
+    }
     close(pp.out[1]);
     close(pp.err[1]);
     close(pp.sync[0]);
@@ -1530,6 +1585,8 @@ static const char *spawn(struct attempt *a, const struct invocation *inv)
         note("spawn: %s: %s", prog, strerror(code));
         return ETUDE_ERR_FAILED;
     }
+    if (a->fx.pty)
+        take_terminal(a, inv->stdin_name ? input : NULL);
     return NULL;
 }
 
@@ -1568,7 +1625,7 @@ static void stream_event(char *out, size_t cap, struct attempt *a, int fdn)
  * its pipes are closed, or its time to close them has passed: how it ended,
  * the sizes and digest of each stream of its output, the processor time and
  * peak memory of the child and the descendants it reaped, and whether every
- * process of the attempt is gone.
+ * process of the attempt is gone and its fixtures removed.
  */
 static void finish(struct attempt *a)
 {
@@ -1581,6 +1638,10 @@ static void finish(struct attempt *a)
     int clean = attempt_gone(a);
     int i;
 
+    if (fixture_cleanup(&a->fx, a->dir) < 0) {
+        note("attempt %s: a fixture was left", a->token);
+        clean = 0;
+    }
     if (a->stopped)
         snprintf(end, sizeof(end), "stopped -");
     else if (WIFSIGNALED(a->status))
@@ -1663,7 +1724,9 @@ static void do_run(const struct wire_frame *f, const char *text)
     struct invocation inv;
     struct attempt *a;
     const char *code;
+    const char *why;
     char line[LINE_CAP];
+    int made = 0;
 
     if (f->nfields != 3) {
         cmd_error(cmd, ETUDE_ERR_UNKNOWN);
@@ -1691,13 +1754,20 @@ static void do_run(const struct wire_frame *f, const char *text)
         sha256_init(&a->sent[2]);
         a->keep_max = (unsigned long long)inv.output_max;
         a->grace_us = inv.grace_us;
+        a->fx = inv.fx;
         if (path_of(a->dir, "%s/a/%s", opt.state, a->token) < 0)
             code = ETUDE_ERR_LIMIT;
     }
     if (!code)
         code = prepare(&inv, a->dir);
     if (!code) {
+        made = 1;
         attempt_record(a, ST_PREPARING, NULL);
+        code = fixture_prepare(&a->fx, a->dir, &why);
+        if (code)
+            note("run %s: %s", a->token, why);
+    }
+    if (!code) {
         a->next = attempts;
         attempts = a;
         a->deadline = now_us() + inv.deadline_us;
@@ -1708,8 +1778,12 @@ static void do_run(const struct wire_frame *f, const char *text)
                 waitpid(a->pid, NULL, 0);
                 a->pid = 0;
             }
-            attempt_record(a, ST_CLEANED, NULL);
         }
+    }
+    if (code && made) {
+        if (fixture_cleanup(&a->fx, a->dir) < 0)
+            note("run %s: a fixture was left", a->token);
+        attempt_record(a, ST_CLEANED, NULL);
     }
     eh_json_free(inv.root);
     if (code) {
@@ -1761,7 +1835,7 @@ static void do_exec(const struct wire_frame *f, const char *text)
         return;
     }
     code = load_invocation(&inv, f->field[2], f->field[1]);
-    if (!code && strcmp(inv.role, "init") != 0)
+    if (!code && (strcmp(inv.role, "init") != 0 || !fixture_simple(&inv.fx)))
         code = ETUDE_ERR_REFUSED;
     memset(&a, 0, sizeof(a));
     snprintf(a.token, sizeof(a.token), "%s", f->field[1]);
@@ -1774,7 +1848,7 @@ static void do_exec(const struct wire_frame *f, const char *text)
         code = prepare(&inv, a.dir);
     if (!code &&
         (path_of(work, "%s/work", a.dir) < 0 || path_of(prog, "%s/%s", work, inv.program) < 0 ||
-         build_vectors(&inv, work, argv, envp) < 0))
+         build_vectors(&inv, work, inv.program, argv, envp) < 0))
         code = ETUDE_ERR_LIMIT;
     if (code) {
         eh_json_free(inv.root);
@@ -1885,6 +1959,8 @@ static void settle_orphan(const char *token, char *record)
     if (child > 0 && same_process((pid_t)child, child_start))
         kill(-(pid_t)child, SIGKILL);
     gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);
+    if (path_of(path, "%s/a/%s", opt.state, token) < 0 || fixture_settle(path) < 0)
+        gone = 0;
     snprintf(finals, sizeof(finals),
              "%s %s %s lost -\n%s %s %s 1 - - -\n%s %s %s 2 - - -\n%s %s %s - - - -\n%s %s %s %s\n",
              ETUDE_EV_EXIT, cmd, token, ETUDE_EV_STREAM, cmd, token, ETUDE_EV_STREAM, cmd, token,
@@ -2340,16 +2416,19 @@ static void on_signal(int sig)
     errno = saved;
 }
 
-/** Make the state directories under `opt.state`. */
+/** Make the state directories under `opt.state`: the state directory and
+ * `a`, mode 0711, which a case's other ids search to reach their workspaces,
+ * and `f` and `s`, 0700. */
 static int make_state(void)
 {
     static const char *const sub[] = {"", "/a", "/f", "/s"};
+    static const mode_t mode[] = {0711, 0711, 0700, 0700};
     char path[PATH_CAP];
     size_t i;
 
     for (i = 0; i < sizeof(sub) / sizeof(sub[0]); i++)
         if (path_of(path, "%s%s", opt.state, sub[i]) < 0 ||
-            (mkdir(path, 0700) < 0 && errno != EEXIST))
+            (mkdir(path, mode[i]) < 0 && errno != EEXIST) || chmod(path, mode[i]) < 0)
             return -1;
     if (path_of(path, "%s/guest.log", opt.state) < 0)
         return -1;
