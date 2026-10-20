@@ -423,6 +423,79 @@ static void rule_network(const struct rule *r)
 }
 
 /**
+ * Reports a device of the QEMU profile `qemu` whose bus no device before it
+ * provides, or whose drive is no disk of the profile or is another device's,
+ * a disk on a device that no device attaches, and an identity given twice.
+ */
+static void attached(const struct rule *r, const struct json *qemu)
+{
+    const struct json *disks = json_member(qemu, "disks");
+    const struct json *devices = json_member(qemu, "devices");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i, j, len;
+
+    if (disks == NULL || devices == NULL) {
+        return;
+    }
+    unique(r, disks, "id", "the drive");
+    unique(r, devices, "id", "the device");
+    for (i = 0; i < disks->count; i++) {
+        if (json_text(disks->item[i], "id") != NULL &&
+            !has_member(devices, "drive", json_text(disks->item[i], "id"))) {
+            finding(r->file, disks->item[i]->line, "%s: no device attaches the drive %s", case_id,
+                    json_text(disks->item[i], "id"));
+        }
+    }
+    for (i = 0; i < devices->count; i++) {
+        const struct json *d = devices->item[i];
+        const char *bus = json_text(d, "bus"), *drive = json_text(d, "drive");
+        const char *model = d->type == JSON_OBJECT ? json_text(d, "model") : d->string;
+
+        if (bus != NULL) {
+            len = (size_t)(strrchr(bus, '.') != NULL ? strrchr(bus, '.') - bus : 0);
+            for (j = 0; j < i; j++) {
+                const char *id = json_text(devices->item[j], "id");
+
+                if (id != NULL && strlen(id) == len && strncmp(id, bus, len) == 0) {
+                    break;
+                }
+            }
+            if (j == i) {
+                finding(r->file, d->line,
+                        "%s: the device %s is on the bus %s, which no device before it provides",
+                        case_id, model, bus);
+            }
+        }
+        if (drive != NULL && !has_member(disks, "id", drive)) {
+            finding(r->file, d->line,
+                    "%s: the device %s attaches the drive %s, which is no disk of its profile",
+                    case_id, model, drive);
+        }
+        for (j = 0; drive != NULL && j < i; j++) {
+            if (same(json_text(devices->item[j], "drive"), drive)) {
+                finding(r->file, d->line, "%s: the drive %s is attached twice", case_id, drive);
+                break;
+            }
+        }
+        if (same(model, "vga") && d->type == JSON_OBJECT && d->count > 1) {
+            finding(r->file, d->line, "%s: the device vga has no member but its model", case_id);
+        }
+    }
+}
+
+/** Every QEMU profile attaches its disks and devices as Readme.md says. */
+static void rule_attached(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    attached(r, json_member(json_member(r->c, "requirements"), "qemu"));
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        attached(r, json_member(machines->item[i], "qemu"));
+    }
+}
+
+/**
  * Returns QEMU profile `i` of the case, counted from 0: the requirements'
  * first, then each machine's; NULL for one the case does not give.
  */
@@ -439,10 +512,14 @@ static const struct json *profile_at(const struct rule *r, size_t i)
 
 /**
  * Reports a disk that profile `qemu` gives twice, and disks that the launcher
- * does not attach together.
+ * does not attach together. The identities of disks that devices attach are
+ * the schema's and rule_attached's to check, and each such disk is counted
+ * here under an identity of its place.
  */
 static void profile_disks(const struct rule *r, const struct json *qemu)
 {
+    static const char *const places[ETUDE_QEMU_DISKS + 1] = {"d0", "d1", "d2", "d3", "d4",
+                                                             "d5", "d6", "d7", "d8"};
     const struct json *disks = json_member(qemu, "disks");
     struct etude_qemu_disk d[ETUDE_QEMU_DISKS + 2];
     size_t i, j, n = disks != NULL ? disks->count : 0;
@@ -460,9 +537,12 @@ static void profile_disks(const struct rule *r, const struct json *qemu)
         }
         if (i <= ETUDE_QEMU_DISKS) {
             d[i].path = disk_name(v)->string;
-            d[i].bus = same(json_text(v, "bus"), "nvme") ? ETUDE_BUS_NVME : ETUDE_BUS_IDE;
+            d[i].bus = same(json_text(v, "bus"), "nvme")     ? ETUDE_BUS_NVME
+                       : same(json_text(v, "bus"), "device") ? ETUDE_BUS_DEVICE
+                                                             : ETUDE_BUS_IDE;
             d[i].cdrom = same(json_text(v, "media"), "cdrom");
             d[i].serial = json_text(v, "serial");
+            d[i].id = d[i].bus == ETUDE_BUS_DEVICE ? places[i] : NULL;
         }
     }
     if (etude_qemu_disks_check(d) != 0) {
@@ -897,8 +977,8 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
                        struct etude_qemu_memory *memory)
 {
     static const struct etude_qemu_device device[] = {{.model = "device"}, {0}};
-    static const struct etude_qemu_disk disk[] = {{"disk", ETUDE_BUS_IDE, 0, NULL, 0},
-                                                  {NULL, ETUDE_BUS_IDE, 0, NULL, 0}};
+    static const struct etude_qemu_disk disk[] = {{.path = "disk"}, {.path = NULL}};
+    const struct json *i8042 = json_member(qemu, "i8042");
     const struct json *arches = json_member(r->c, "architectures");
     const struct json *options = json_member(qemu, "boot_options");
     const char *boot[3] = {NULL, NULL, NULL};
@@ -918,6 +998,7 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
                                                              : ETUDE_FIRMWARE_SEABIOS;
     p.disks = json_member(qemu, "disks")->count ? disk : NULL;
     p.devices = json_member(qemu, "devices")->count ? device : NULL;
+    p.no_i8042 = i8042 != NULL && !i8042->integer;
     if (options->count != 0)
         boot[0] = options->item[0]->string;
     if (options->count > 1)
@@ -1179,6 +1260,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_disks(&r);
     rule_processor(&r);
     rule_network(&r);
+    rule_attached(&r);
     rule_steps(&r);
     rule_networks(&r);
     rule_bounds(&r);

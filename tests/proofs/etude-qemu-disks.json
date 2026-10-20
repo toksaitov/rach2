@@ -68,8 +68,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "        if (*d->path == '\\0')\n            return EINVAL;\n",
-          "replace": ""
+          "find": "if (*d->path == '\\0' || (d->id != NULL) != (d->bus == ETUDE_BUS_DEVICE))",
+          "replace": "if ((d->id != NULL) != (d->bus == ETUDE_BUS_DEVICE))"
         }
       ],
       "fails": {

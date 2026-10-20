@@ -1214,11 +1214,12 @@ static void test_accel_names(void)
 /** Check the command lines of profiles, and the profiles that are refused. */
 static void test_argv(void)
 {
-    static const struct etude_qemu_disk disks[] = {{"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0},
-                                                   {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1},
-                                                   {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1},
-                                                   {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0},
-                                                   {NULL, ETUDE_BUS_IDE, 0, NULL, 0}};
+    static const struct etude_qemu_disk disks[] = {
+        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL},
+        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL},
+        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL},
+        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL}};
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
     static const char *const want =
         "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S "
@@ -1770,6 +1771,132 @@ static void test_card(void)
           "a guest forward from outside the card's network");
 }
 
+/** Give the command line of `argv` as one line, its arguments separated by
+ * spaces, in the `size` bytes of `line`. */
+static const char *joined(char *const *argv, char *line, size_t size)
+{
+    size_t used = 0;
+    int i;
+
+    line[0] = '\0';
+    for (i = 0; argv[i] != NULL && used < size; i++)
+        used += (size_t)snprintf(line + used, size - used, "%s%s", i ? " " : "", argv[i]);
+    return line;
+}
+
+/**
+ * Check the command line of a machine of USB devices, a hub and two disks on
+ * them, without the 8042, and refuse each device whose bus, port, drive,
+ * identity or properties QEMU could not take or the profile does not have.
+ */
+static void test_usb(void)
+{
+    static const char *const boot[] = {"rach2.usbdisk", NULL};
+    static const char *const msi[] = {"msi", "on", NULL};
+    static const char *const index0[] = {"bootindex", "0", NULL};
+    static const char *const comma[] = {"serial", "a,b", NULL};
+    static const char *const bus[] = {"bus", "xhci.0", NULL};
+    static const char *const mac[] = {"mac", "52:54:00:12:34:56", NULL};
+    static const char *const odd[] = {"msi", NULL};
+    static const char *const want =
+        "/q/i686 -accel tcg -nodefaults -display none -no-reboot -S -cpu qemu64,"
+        "rdrand=off,rdseed=off,xsave=off,avx=off -smp 1 -m 268435456B -machine i8042=off "
+        "-kernel /k/kernel -initrd /k/test.krffs "
+        "-drive file=/d/stick,,one.img,format=raw,if=none,id=stick "
+        "-drive file=/d/lun1.img,format=raw,if=none,id=lun1,discard=unmap,detect-zeroes=unmap "
+        "-device qemu-xhci,id=xhci,msi=on -device usb-hub,id=hub1,bus=xhci.0,port=1 "
+        "-device usb-kbd,bus=xhci.0,port=1.2 "
+        "-device usb-storage,bus=xhci.0,drive=stick,bootindex=0 "
+        "-device usb-bot,id=bot,bus=xhci.0 -device scsi-hd,bus=bot.0,drive=lun1 "
+        "-netdev user,id=net0 -device e1000,netdev=net0,mac=52:54:00:12:34:58,id=nic "
+        "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console "
+        "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
+        "-append rach2.usbdisk";
+    struct etude_qemu_disk disks[] = {
+        {.path = "/d/stick,one.img", .bus = ETUDE_BUS_DEVICE, .id = "stick"},
+        {.path = "/d/lun1.img", .bus = ETUDE_BUS_DEVICE, .id = "lun1", .discard = 1},
+        {.path = NULL}};
+    struct etude_qemu_device d[] = {
+        {.model = "qemu-xhci", .id = "xhci", .properties = msi},
+        {.model = "usb-hub", .id = "hub1", .bus = "xhci.0", .port = "1"},
+        {.model = "usb-kbd", .bus = "xhci.0", .port = "1.2"},
+        {.model = "usb-storage", .bus = "xhci.0", .drive = "stick", .properties = index0},
+        {.model = "usb-bot", .id = "bot", .bus = "xhci.0"},
+        {.model = "scsi-hd", .bus = "bot.0", .drive = "lun1"},
+        {.model = "e1000", .id = "nic", .mac = "52:54:00:12:34:58"},
+        {.model = NULL}};
+    struct etude_qemu_device keep;
+    struct etude_qemu_disk kept;
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_profile p, b;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "i686";
+    p.kernel = "/k/kernel";
+    p.initrd = "/k/test.krffs";
+    p.disks = disks;
+    p.cpu = "qemu64";
+    p.processors = 1;
+    p.memory_bytes = 256u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = d;
+    p.boot_options = boot;
+    p.no_i8042 = 1;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "usb argv");
+    if (strcmp(joined(argv, line, sizeof(line)), want) != 0) {
+        printf("etude-qemu-test: fail: the usb command line is\n  %s\nnot\n  %s\n", line, want);
+        fails++;
+    }
+    b = p;
+    b.firmware = ETUDE_FIRMWARE_SEABIOS;
+    b.initrd = NULL;
+    b.boot_options = NULL;
+    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0, "seabios from disks on devices alone");
+#define DISK_REFUSED(at, field, value, row)                            \
+    do {                                                               \
+        kept = disks[at];                                              \
+        disks[at].field = value;                                       \
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
+        disks[at] = kept;                                              \
+    } while (0)
+    DISK_REFUSED(1, id, "stick", "a disk's identity given twice");
+    DISK_REFUSED(1, id, "lun.1", "a disk's identity with a dot");
+    DISK_REFUSED(1, id, NULL, "a disk on a device without an identity");
+    DISK_REFUSED(1, bus, ETUDE_BUS_IDE, "an identity of a disk on IDE");
+    DISK_REFUSED(1, cdrom, 1, "a CD on a device");
+    DISK_REFUSED(1, serial, "S1", "a serial of a disk on a device");
+#define DEVICE_REFUSED(at, field, value, row)                          \
+    do {                                                               \
+        keep = d[at];                                                  \
+        d[at].field = value;                                           \
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
+        d[at] = keep;                                                  \
+    } while (0)
+    DEVICE_REFUSED(1, bus, "xhcx.0", "a bus no device provides");
+    DEVICE_REFUSED(0, bus, "hub1.0", "a bus of a later device");
+    DEVICE_REFUSED(1, bus, "xhci", "a bus without its number");
+    DEVICE_REFUSED(1, bus, "xhci.0a", "a bus of a number and more");
+    DEVICE_REFUSED(1, port, "0", "port 0");
+    DEVICE_REFUSED(1, port, "1..2", "a port of an empty number");
+    DEVICE_REFUSED(1, port, "1.", "a port that ends in a dot");
+    DEVICE_REFUSED(2, drive, "lun9", "a drive the profile lacks");
+    DEVICE_REFUSED(2, drive, "stick", "a drive two devices attach");
+    DEVICE_REFUSED(5, drive, NULL, "a disk on a device that no device attaches");
+    DEVICE_REFUSED(2, id, "hub1", "a device's identity given twice");
+    DEVICE_REFUSED(2, id, "1kbd", "an identity that begins with a digit");
+    DEVICE_REFUSED(2, id, "k.bd", "an identity with a dot");
+    DEVICE_REFUSED(4, model, "usb-bot,id=x", "a model with a comma");
+    DEVICE_REFUSED(0, properties, comma, "a property value with a comma");
+    DEVICE_REFUSED(0, properties, bus, "a property the launcher sets");
+    DEVICE_REFUSED(0, properties, mac, "a station address as a property");
+    DEVICE_REFUSED(0, properties, odd, "a property without its value");
+    DEVICE_REFUSED(6, model, "vga", "vga with an identity");
+#undef DISK_REFUSED
+#undef DEVICE_REFUSED
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "the profile is whole again");
+}
+
 /** Reject a reduced reservation and any change to the boundary workload. */
 static void test_memory(void)
 {
@@ -1856,6 +1983,9 @@ static void test_memory(void)
     p.processors = 2;
     CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs one processor");
     p.processors = 1;
+    p.no_i8042 = 1;
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs the 8042");
+    p.no_i8042 = 0;
     p.boot_options = NULL;
     CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs rescue boot");
     p.memory_profile = "file";
@@ -1885,6 +2015,8 @@ int main(int argc, char **argv)
         test_audio();
     } else if (argc == 2 && strcmp(argv[1], "--memory") == 0) {
         test_memory();
+    } else if (argc == 2 && strcmp(argv[1], "--usb") == 0) {
+        test_usb();
     } else if (argc == 2 && strcmp(argv[1], "--argv") == 0) {
         test_argv();
     } else if (argc == 2 && strcmp(argv[1], "--uefi") == 0) {
@@ -1904,6 +2036,7 @@ int main(int argc, char **argv)
         test_card();
         test_audio_argv();
         test_audio();
+        test_usb();
         test_memory();
         test_ends();
         test_refused_starts();

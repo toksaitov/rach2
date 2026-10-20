@@ -22,31 +22,33 @@
  * program with the invocation, its report read from its standard output. A
  * machine boots on a private copy of its disk, writes to it and powers off; a
  * host step reads the write from the copy, and the next boot of the same copy
- * reads it back, and the artifact itself is unchanged. A machine that says it
- * powers off and ends without QEMU's event, one killed by a signal, one whose
- * console closes and one whose QMP closes are each told apart from a shutdown,
- * and a wait on each ends at once with the loss. A wait past its step's bound
- * ends at the bound; a stop signal ends the scenario's wait, its machine and
- * its report, and keeps its copies; a scenario that asks for what its manifest
- * does not declare is refused; a failed accelerator, a damaged artifact and an
- * unsafe memory profile are reported. A case of a boundary machine and an
- * ordinary one whose reservation covers the boundary machine alone has a boot
- * of either refused before QEMU starts; with both covered, the boundary machine
- * boots on the reservation left beside the other, answers QMP's queries and the
- * human monitor's `info`, has every other QMP command refused, and has `help`
- * and a second memory probe refused at its console. Under the stand-in the
- * machine's etude-guest runs a guest program whose report becomes the
- * scenario's, and an etude-guest killed in the middle of a run is a lost end.
- * A media row boots a machine twice with the same empty sparse disk of 4 TiB
- * on NVMe and a CD whose medium is the artifact's object, and the stand-in
- * says the drives it was given; the disk is removed after the pass.
- * A machine's first card has a restricted network that forwards two of the
- * case's ports to the guest, one by TCP and one by UDP, and the guest's
- * connections to 10.0.2.100:7777 to a third through this program as the
- * relay, and its second card has a user network without forwards; a machine
- * that forwards a port the case does not hold is refused before QEMU starts.
- * This program is also the peer that a scenario runs as a service; two machines
- * at once reach it, a service ended unseen is a fault, and failing rows at each
+ * reads it back, and the artifact itself is unchanged. The same holds for a
+ * machine without the 8042 whose disk is a drive of a USB stick on a USB
+ * controller, whose stand-in QEMU requires those arguments. A machine that says
+ * it powers off and ends without QEMU's event, one killed by a signal, one
+ * whose console closes and one whose QMP closes are each told apart from a
+ * shutdown, and a wait on each ends at once with the loss. A wait past its
+ * step's bound ends at the bound; a stop signal ends the scenario's wait, its
+ * machine and its report, and keeps its copies; a scenario that asks for what
+ * its manifest does not declare is refused; a failed accelerator, a damaged
+ * artifact and an unsafe memory profile are reported. A case of a boundary
+ * machine and an ordinary one whose reservation covers the boundary machine
+ * alone has a boot of either refused before QEMU starts; with both covered, the
+ * boundary machine boots on the reservation left beside the other, answers
+ * QMP's queries and the human monitor's `info`, has every other QMP command
+ * refused, and has `help` and a second memory probe refused at its console.
+ * Under the stand-in the machine's etude-guest runs a guest program whose
+ * report becomes the scenario's, and an etude-guest killed in the middle of a
+ * run is a lost end. A media row boots a machine twice with the same empty
+ * sparse disk of 4 TiB on NVMe and a CD whose medium is the artifact's object,
+ * and the stand-in says the drives it was given; the disk is removed after the
+ * pass. A machine's first card has a restricted network that forwards two of
+ * the case's ports to the guest, one by TCP and one by UDP, and the guest's
+ * connections to 10.0.2.100:7777 to a third through this program as the relay,
+ * and its second card has a user network without forwards; a machine that
+ * forwards a port the case does not hold is refused before QEMU starts. This
+ * program is also the peer that a scenario runs as a service; two machines at
+ * once reach it, a service ended unseen is a fault, and failing rows at each
  * stage end their own processes while a held row keeps its own. With the real
  * QEMU, a disk root written at the debug shell and powered off is read back by
  * the next boot, etude-guest runs the test image's /hello, two machines run
@@ -713,6 +715,28 @@ static int fake_network(int argc, char **argv)
            card != NULL && strcmp(card, "mac=52:54:00:12:34:58") == 0;
 }
 
+/** Say whether QEMU's arguments `argv` make the usb row's machine: no 8042,
+ * and its disk `disk` the drive of a stick on a USB controller. */
+static int fake_usb(int argc, char **argv, const char *disk)
+{
+    return fake_arg(argc, argv, "-machine", "i8042=off") != NULL &&
+           fake_arg(argc, argv, "-device", "qemu-xhci,id=xhci,msi=on") != NULL &&
+           fake_arg(argc, argv, "-device", "usb-storage,bus=xhci.0,port=2,drive=stick") != NULL &&
+           disk != NULL && strstr(disk, ",format=raw,if=none,id=stick") != NULL;
+}
+
+/** Give the status the stand-in exits with when the mode `mode` needs
+ * arguments that `argv` lacks: 126 for the network row's, 120 for the usb
+ * row's; 0 when it has them. */
+static int fake_refused(const char *mode, int argc, char **argv, const char *disk)
+{
+    if (strcmp(mode, "network") == 0 && !fake_network(argc, argv))
+        return 126;
+    if (strcmp(mode, "usb") == 0 && !fake_usb(argc, argv, disk))
+        return 120;
+    return 0;
+}
+
 /** Print the value of each `-netdev` of `argv` on the console `fd`, as
  * `fake: netdev VALUE`. */
 static void fake_netdevs(int fd, int argc, char **argv)
@@ -765,8 +789,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     struct pollfd p[2];
     int ok = 1, r;
 
-    if (strcmp(mode, "network") == 0 && !fake_network(argc, argv))
-        return 126;
+    if ((r = fake_refused(mode, argc, argv, disk)) != 0)
+        return r;
     if (accel == NULL)
         return 125;
     if (disk != NULL) {
@@ -1548,6 +1572,13 @@ static int scenario_services(struct etude_case *c, const char *row)
     return 1;
 }
 
+/** Say whether `row` is one of the rows that scenario_reboot runs. */
+static int reboot_row(const char *row)
+{
+    return strcmp(row, "reboot") == 0 || strcmp(row, "usb") == 0 ||
+           strcmp(row, "real-reboot") == 0 || strcmp(row, "network") == 0;
+}
+
 int etude_scenario(struct etude_case *c)
 {
     const char *row = getenv("ETUDE_TEST_ROW");
@@ -1556,8 +1587,7 @@ int etude_scenario(struct etude_case *c)
         return 1;
     if (strncmp(row, "audio-", 6) == 0)
         return scenario_audio(c, strcmp(row, "audio-keep") == 0);
-    if (strcmp(row, "reboot") == 0 || strcmp(row, "real-reboot") == 0 ||
-        strcmp(row, "network") == 0)
+    if (reboot_row(row))
         return scenario_reboot(c, row[0] == 'r' && row[1] == 'e' && row[2] == 'a');
     if (strcmp(row, "lost") == 0 || strcmp(row, "die") == 0 || strcmp(row, "closecon") == 0 ||
         strcmp(row, "closeqmp") == 0)
@@ -1813,6 +1843,16 @@ static int write_manifest(const char *path, const struct row *r)
         fix_format(machine, sizeof(machine), forward_machines,
                    r->mode == NULL ? "\"initrd\"" : "null");
         reserved = 536870912;
+    } else if (strcmp(r->name, "usb") == 0) {
+        fix_format(
+            machine, sizeof(machine),
+            "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": null, "
+            "\"disks\": [{\"name\": \"disk\", \"bus\": \"device\", \"id\": \"stick\"}], "
+            "\"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": "
+            "\"direct\", \"devices\": [{\"model\": \"qemu-xhci\", \"id\": \"xhci\", "
+            "\"properties\": {\"msi\": \"on\"}}, {\"model\": \"usb-storage\", \"bus\": "
+            "\"xhci.0\", \"port\": \"2\", \"drive\": \"stick\"}], \"boot_options\": [], "
+            "\"i8042\": false}, \"console\": \"serial\", \"qmp\": true, \"helper\": false}");
     } else {
         fix_format(
             machine, sizeof(machine),
@@ -2759,6 +2799,10 @@ static const struct row stand_in_rows[] = {
      "second-stop",
      "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
     {"network", "network", "write:fixture check readback:fixture",
+     "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
+     "second-stop",
+     "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
+    {"usb", "usb", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
      "second-stop",
      "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},

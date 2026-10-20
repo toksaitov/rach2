@@ -19,6 +19,12 @@ static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
 /* The places of the IDE controllers of QEMU's PC, two on each channel. */
 #define IDE_PLACES 4
 
+/* The longest identity of a device or disk. */
+#define ID_MAX 32
+
+/* The members of a device that the launcher sets, which a property cannot. */
+static const char *const set_members[] = {"id", "bus", "port", "drive", "netdev", "mac", NULL};
+
 const char *etude_accel_name(enum etude_accel accel)
 {
     return (unsigned)accel < ETUDE_ACCEL_COUNT ? accel_names[accel] : NULL;
@@ -142,6 +148,52 @@ static int word(const char *s)
     return 1;
 }
 
+/** Say whether `s` is a word without a `,` or `=`, as a value of QEMU's. */
+static int plain(const char *s)
+{
+    return word(s) && strpbrk(s, ",=") == NULL;
+}
+
+/**
+ * Say whether `s` is an identity QEMU takes: a letter, then letters, digits,
+ * `-` and `_`, at most ID_MAX in all. A `.` is left out, since it ends the
+ * identity in a bus's name.
+ */
+static int qemu_id(const char *s)
+{
+    size_t n;
+
+    if (s == NULL || !((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z')))
+        return 0;
+    n = strspn(s, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_");
+    return n <= ID_MAX && s[n] == '\0';
+}
+
+/** Say whether `s` is a USB port: numbers from 1, separated by `.`. */
+static int usb_port(const char *s)
+{
+    if (s == NULL)
+        return 0;
+    for (;;) {
+        if (*s < '1' || *s > '9')
+            return 0;
+        s += strspn(s, "0123456789");
+        if (*s == '\0')
+            return 1;
+        if (*s++ != '.')
+            return 0;
+    }
+}
+
+/** Say whether `name` is in `list`, ended by NULL. */
+static int listed(const char *const *list, const char *name)
+{
+    for (; *list != NULL; list++)
+        if (strcmp(*list, name) == 0)
+            return 1;
+    return 0;
+}
+
 /** Count the strings of a list ended by NULL; a NULL list has none. */
 static size_t count(const char *const *list)
 {
@@ -170,15 +222,21 @@ static int serial_word(const char *s)
 
 int etude_qemu_disks_check(const struct etude_qemu_disk *disks)
 {
-    const struct etude_qemu_disk *d;
+    const struct etude_qemu_disk *d, *e;
     size_t ide = 0;
 
     if (disk_count(disks) > ETUDE_QEMU_DISKS)
         return EINVAL;
     for (d = disks; d != NULL && d->path != NULL; d++) {
-        if (*d->path == '\0')
+        if (*d->path == '\0' || (d->id != NULL) != (d->bus == ETUDE_BUS_DEVICE))
             return EINVAL;
-        if (d->bus == ETUDE_BUS_IDE) {
+        if (d->bus == ETUDE_BUS_DEVICE) {
+            if (!qemu_id(d->id) || d->cdrom || d->serial != NULL)
+                return EINVAL;
+            for (e = disks; e != d; e++)
+                if (e->id != NULL && strcmp(e->id, d->id) == 0)
+                    return EINVAL;
+        } else if (d->bus == ETUDE_BUS_IDE) {
             if (++ide > IDE_PLACES || d->serial != NULL || (d->cdrom && d->discard))
                 return EINVAL;
         } else if (d->bus != ETUDE_BUS_NVME || d->cdrom || !serial_word(d->serial)) {
@@ -388,6 +446,97 @@ static size_t device_count(const struct etude_qemu_device *devices)
     return n;
 }
 
+/** Say whether device `d` has no member but its model. */
+static int bare(const struct etude_qemu_device *d)
+{
+    return d->id == NULL && d->bus == NULL && d->port == NULL && d->drive == NULL &&
+           count(d->properties) == 0;
+}
+
+/** Say whether a device of `p` before device `at` has the identity of the
+ * `len` bytes of `id`. */
+static int earlier(const struct etude_qemu_device *p, size_t at, const char *id, size_t len)
+{
+    size_t i;
+
+    for (i = 0; i < at; i++)
+        if (p[i].id != NULL && strlen(p[i].id) == len && strncmp(p[i].id, id, len) == 0)
+            return 1;
+    return 0;
+}
+
+/** Say whether `bus` is `ID.N`, bus N of a device of `p` before device `at`. */
+static int bus_ok(const struct etude_qemu_device *p, size_t at, const char *bus)
+{
+    const char *dot = strrchr(bus, '.');
+
+    return dot != NULL && dot[1] != '\0' && dot[1 + strspn(dot + 1, "0123456789")] == '\0' &&
+           earlier(p, at, bus, (size_t)(dot - bus));
+}
+
+/** Say whether `drive` is a disk of `p` on ETUDE_BUS_DEVICE that no device
+ * before device `at` attaches. */
+static int drive_ok(const struct etude_qemu_profile *p, size_t at, const char *drive)
+{
+    size_t i;
+
+    for (i = 0; i < at; i++)
+        if (p->devices[i].drive != NULL && strcmp(p->devices[i].drive, drive) == 0)
+            return 0;
+    for (i = 0; i < disk_count(p->disks); i++)
+        if (p->disks[i].id != NULL && strcmp(p->disks[i].id, drive) == 0)
+            return 1;
+    return 0;
+}
+
+/** Say whether the properties of `d` are pairs of names and values that are
+ * neither the members the launcher sets nor need QEMU's quoting. */
+static int properties_ok(const struct etude_qemu_device *d)
+{
+    size_t n = count(d->properties), i;
+
+    if (n % 2 != 0)
+        return 0;
+    for (i = 0; i < n; i += 2)
+        if (!plain(d->properties[i]) || !plain(d->properties[i + 1]) ||
+            listed(set_members, d->properties[i]))
+            return 0;
+    return 1;
+}
+
+/**
+ * Check the devices of `p` beyond etude_qemu_devices_check: a model QEMU
+ * takes as it is, `vga` alone, identities given once, a bus that an earlier
+ * device provides, a USB port, a disk on a device that one device alone
+ * attaches, each such disk attached, and properties as properties_ok says.
+ */
+static int attached_check(const struct etude_qemu_profile *p)
+{
+    const struct etude_qemu_device *d = p->devices;
+    size_t i, j;
+
+    for (i = 0; i < device_count(d); i++) {
+        if (!plain(d[i].model) || (strcmp(d[i].model, "vga") == 0 && !bare(&d[i])))
+            return EINVAL;
+        if (d[i].id != NULL && (!qemu_id(d[i].id) || earlier(d, i, d[i].id, strlen(d[i].id))))
+            return EINVAL;
+        if ((d[i].bus != NULL && !bus_ok(d, i, d[i].bus)) ||
+            (d[i].port != NULL && !usb_port(d[i].port)) ||
+            (d[i].drive != NULL && !drive_ok(p, i, d[i].drive)) || !properties_ok(&d[i]))
+            return EINVAL;
+    }
+    for (i = 0; i < disk_count(p->disks); i++) {
+        if (p->disks[i].id == NULL)
+            continue;
+        for (j = 0; j < device_count(d); j++)
+            if (d[j].drive != NULL && strcmp(d[j].drive, p->disks[i].id) == 0)
+                break;
+        if (j == device_count(d))
+            return EINVAL;
+    }
+    return 0;
+}
+
 /**
  * Give local port `i` of profile `p`, or 0 when the profile does not hold it:
  * there is no such port, or it is not one of 1024 to 65535.
@@ -585,20 +734,30 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
 {
     char id[16];
 
-    if (nic_model(d->model)) {
-        snprintf(id, sizeof(id), "net%u", (*nics)++);
-        add_network(l, p, d, id);
-        add(l, 0, "-device");
-        add(l, 0, "%s,netdev=%s%s%s", d->model, id, d->mac ? ",mac=" : "", d->mac ? d->mac : "");
-        return;
-    }
+    const char *const members[] = {"id", d->id, "bus", d->bus, "port", d->port, "drive", d->drive};
+    size_t i;
+
     if (strcmp(d->model, "vga") == 0) {
         add(l, 0, "-vga");
         add(l, 0, "std");
         return;
     }
-    add(l, 0, "-device");
-    add(l, 0, "%s", d->model);
+    if (nic_model(d->model)) {
+        snprintf(id, sizeof(id), "net%u", (*nics)++);
+        add_network(l, p, d, id);
+        add(l, 0, "-device");
+        add(l, 0, "%s,netdev=%s", d->model, id);
+        if (d->mac != NULL)
+            append(l, 0, ",mac=%s", d->mac);
+    } else {
+        add(l, 0, "-device");
+        add(l, 0, "%s", d->model);
+    }
+    for (i = 0; i < sizeof(members) / sizeof(members[0]); i += 2)
+        if (members[i + 1] != NULL)
+            append(l, 0, ",%s=%s", members[i], members[i + 1]);
+    for (i = 0; i < count(d->properties); i += 2)
+        append(l, 0, ",%s=%s", d->properties[i], d->properties[i + 1]);
 }
 
 /** Add the selected audio card and its WAV backend at the launcher's path. */
@@ -628,6 +787,12 @@ static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, 
     const char *discard = d->discard ? ",discard=unmap,detect-zeroes=unmap" : "";
     char format[128], id[32];
 
+    if (d->bus == ETUDE_BUS_DEVICE) {
+        snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s", d->id, discard);
+        add(l, 0, "-drive");
+        add(l, 1, format, d->path);
+        return;
+    }
     if (d->bus == ETUDE_BUS_NVME) {
         snprintf(id, sizeof(id), "etude-disk%u", (unsigned)n);
         snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s", id, discard);
@@ -683,7 +848,7 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
             strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
             p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
             p->initrd == NULL || p->audio != NULL || disk_count(p->disks) != 0 ||
-            device_count(p->devices) != 0 || count(p->boot_options) != 1 ||
+            device_count(p->devices) != 0 || p->no_i8042 || count(p->boot_options) != 1 ||
             strcmp(p->boot_options[0], "rach2.rescue") != 0)
             return EINVAL;
         m.resident_bytes = ETUDE_BIGMEM_RESIDENT;
@@ -712,7 +877,7 @@ static int profile_check(const struct etude_qemu_profile *p)
         return EINVAL;
     if (etude_qemu_disks_check(p->disks) != 0)
         return EINVAL;
-    if (etude_qemu_devices_check(p->devices) != 0)
+    if (etude_qemu_devices_check(p->devices) != 0 || attached_check(p) != 0)
         return EINVAL;
     for (i = 0; i < count(p->boot_options); i++)
         if (!word(p->boot_options[i]))
@@ -793,6 +958,10 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 0, "memory-backend=etude-ram");
         add(&l, 0, "-overcommit");
         add(&l, 0, "mem-lock=off");
+    }
+    if (p->no_i8042) {
+        add(&l, 0, "-machine");
+        add(&l, 0, "i8042=off");
     }
     if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
         add(&l, 0, "-kernel");

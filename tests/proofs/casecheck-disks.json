@@ -269,8 +269,8 @@
       "edits": [
         {
           "file": "tools/etude/schemas/case.schema.json",
-          "find": "\"bus\": {\"enum\": [\"ide\", \"nvme\"]}",
-          "replace": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"usb\"]}"
+          "find": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"device\"]}",
+          "replace": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"device\", \"usb\"]}"
         }
       ],
       "fails": {

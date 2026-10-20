@@ -33,12 +33,14 @@ extern char **environ;
 #define GUEST_EXEC  "exec /etude-guest --stage / --resend-ms "
 
 /* The most disks, devices, boot options, forwards of each kind and words of
- * a relay a profile gives the launcher. */
-#define DISKS_MAX    ETUDE_QEMU_DISKS
-#define DEVICES_MAX  16
-#define OPTIONS_MAX  32
-#define FORWARDS_MAX 16
-#define RELAY_MAX    8
+ * a relay a profile gives the launcher, and the most strings of its devices'
+ * properties: each name, each value, and the end of each device's list. */
+#define DISKS_MAX      ETUDE_QEMU_DISKS
+#define DEVICES_MAX    32
+#define OPTIONS_MAX    32
+#define FORWARDS_MAX   16
+#define RELAY_MAX      8
+#define PROPERTIES_MAX 64
 
 /* The longest invocation, manifest or guest invocation the library reads. */
 #define DOCUMENT_MAX (4u * 1024 * 1024)
@@ -115,6 +117,7 @@ struct disk_decl {
     int cdrom, discard;
     const char *serial; /* NULL for none */
     uint64_t size;      /* an empty disk's size in bytes, or 0 for an artifact's */
+    const char *id;     /* the identity a device's `drive` names, on a device */
 };
 
 struct etude_case_machine {
@@ -125,6 +128,7 @@ struct etude_case_machine {
     char attempt_id[300];
     struct etude_qemu_disk disks[DISKS_MAX + 1];
     struct etude_qemu_device devices[DEVICES_MAX + 1];
+    const char *properties[PROPERTIES_MAX];
     const char *options[OPTIONS_MAX + 1];
     struct etude_qemu_forward forwards[FORWARDS_MAX];
     struct etude_qemu_guest_forward guest_forwards[FORWARDS_MAX];
@@ -360,7 +364,8 @@ static int jhas(const struct eh_json *v, const char *s)
 /**
  * Read `v`, a disk of a profile's `disks`, into `d`: an artifact's name, a
  * private copy on IDE, or an object that gives the name, the bus, the
- * medium, the serial, `discard` and an empty disk's size.
+ * medium, the serial, `discard`, an empty disk's size, and the identity of a
+ * disk that a device attaches.
  *
  * @return 0, or -1 for a disk of another form, or of a bus or medium that
  *         the library does not attach.
@@ -380,6 +385,8 @@ static int disk_decl(const struct eh_json *v, struct disk_decl *d)
     media = jtext(v, "media");
     if (bus != NULL && strcmp(bus, "nvme") == 0)
         d->bus = ETUDE_BUS_NVME;
+    else if (bus != NULL && strcmp(bus, "device") == 0)
+        d->bus = ETUDE_BUS_DEVICE;
     else if (bus != NULL && strcmp(bus, "ide") != 0)
         return -1;
     if (media != NULL && strcmp(media, "cdrom") == 0)
@@ -389,6 +396,7 @@ static int disk_decl(const struct eh_json *v, struct disk_decl *d)
     d->serial = jtext(v, "serial");
     d->discard = jbool(v, "discard") == 1;
     d->size = jnum(v, "size_bytes");
+    d->id = jtext(v, "id");
     return 0;
 }
 
@@ -1305,13 +1313,16 @@ static int strings(const struct eh_json *v, const char **out, size_t max)
 }
 
 /**
- * Read device names or card objects into a list ended by a NULL model.
- * Return 0, or -1 for a malformed entry or more than `max` devices.
+ * Read device names or device objects into a list ended by a NULL model,
+ * and the properties of each into `props`, of `props_max` strings, unless it
+ * is NULL. Return 0, or -1 for a malformed entry, more than `max` devices or
+ * more properties than `props` takes.
  */
-static int devices_of(const struct eh_json *v, struct etude_qemu_device *out, size_t max)
+static int devices_of(const struct eh_json *v, struct etude_qemu_device *out, size_t max,
+                      const char **props, size_t props_max)
 {
-    const struct eh_json *i;
-    size_t n = 0;
+    const struct eh_json *i, *p;
+    size_t n = 0, k = 0;
 
     for (i = v != NULL ? v->child : NULL; i != NULL; i = i->next) {
         if (n == max || (i->type != 's' && i->type != 'o'))
@@ -1320,6 +1331,21 @@ static int devices_of(const struct eh_json *v, struct etude_qemu_device *out, si
         out[n].model = i->type == 's' ? i->string : jtext(i, "model");
         if (out[n].model == NULL)
             return -1;
+        out[n].id = jtext(i, "id");
+        out[n].bus = jtext(i, "bus");
+        out[n].port = jtext(i, "port");
+        out[n].drive = jtext(i, "drive");
+        p = i->type == 'o' ? eh_json_get(i, "properties") : NULL;
+        if (p != NULL && props != NULL) {
+            out[n].properties = props + k;
+            for (p = p->child; p != NULL; p = p->next) {
+                if (k + 3 > props_max || p->type != 's')
+                    return -1;
+                props[k++] = p->key;
+                props[k++] = p->string;
+            }
+            props[k++] = NULL;
+        }
         out[n].net = jtext(i, "net");
         out[n].host = jtext(i, "host");
         out[n].dhcpstart = jtext(i, "dhcpstart");
@@ -1370,7 +1396,9 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     p.memory_profile = jtext(qp, "memory_profile");
     p.audio = jtext(qp, "audio");
     p.firmware = firmware_of(jtext(qp, "firmware"));
-    if (n <= DISKS_MAX && devices_of(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
+    p.no_i8042 = jbool(qp, "i8042") == 0;
+    if (n <= DISKS_MAX &&
+        devices_of(eh_json_get(qp, "devices"), devices, DEVICES_MAX, NULL, 0) == 0 &&
         strings(eh_json_get(qp, "boot_options"), options, OPTIONS_MAX) == 0) {
         p.disks = disks;
         p.devices = devices;
@@ -1527,7 +1555,8 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     struct disk_decl d;
     size_t i;
 
-    if (devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX) != 0 ||
+    if (devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX, m->properties,
+                   PROPERTIES_MAX) != 0 ||
         strings(eh_json_get(qp, "boot_options"), m->options, OPTIONS_MAX) != 0) {
         diag("machine %s: a profile of more devices or options than the launcher takes",
              m->decl->id);
@@ -1555,6 +1584,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         m->disks[i].cdrom = d.cdrom;
         m->disks[i].serial = d.serial;
         m->disks[i].discard = d.discard;
+        m->disks[i].id = d.id;
     }
     m->disks[i].path = NULL;
     p->architecture = c->arch;
@@ -1569,6 +1599,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->devices = m->devices;
     p->boot_options = m->options;
     p->firmware = firmware_of(firmware);
+    p->no_i8042 = jbool(qp, "i8042") == 0;
     if (p->kernel == NULL || (jtext(qp, "initrd") != NULL && p->initrd == NULL)) {
         diag("machine %s: its kernel or RAM image is not an artifact that checks", m->decl->id);
         return ETUDE_REFUSED;

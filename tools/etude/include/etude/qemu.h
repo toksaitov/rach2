@@ -53,15 +53,25 @@ struct etude_qemu_guest_forward {
                                  by NULL */
 };
 
-/* A device, optionally with its user network, the network's restriction,
- * forwards and guest forwards, and its station address. */
+/*
+ * A device of a profile: `-device MODEL` with the members given. The network
+ * members are a card's alone, for rtl8139 and e1000, and NULL leaves QEMU's
+ * default.
+ */
 struct etude_qemu_device {
-    const char *model; /* NULL ends the device list */
-    const char *net;   /* IPv4 network/prefix, or NULL for 10.0.2.0/24 */
-    const char *host;  /* NULL leaves QEMU's default for this network */
+    const char *model;             /* QEMU's name of it; NULL ends a list */
+    const char *id;                /* its identity, or NULL */
+    const char *bus;               /* `ID.N`, bus N of the earlier device ID,
+                                      or NULL */
+    const char *port;              /* a USB port, such as `1.2`, or NULL */
+    const char *drive;             /* the identity of a disk, or NULL */
+    const char *const *properties; /* names and values in turn, ended by
+                                      NULL; NULL for none */
+    const char *net;               /* IPv4 network/prefix, as 10.0.2.0/24 */
+    const char *host;
     const char *dhcpstart;
     const char *dns;
-    const char *mac; /* six hexadecimal octets, or NULL for QEMU's default */
+    const char *mac;                           /* six hexadecimal octets */
     const struct etude_qemu_forward *forwards; /* `forward_count` of them */
     size_t forward_count;
     int restricted; /* the guest reaches only the guest forwards */
@@ -92,8 +102,9 @@ int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *addr
 
 /* The controller a disk of a profile is attached to. */
 enum etude_disk_bus {
-    ETUDE_BUS_IDE, /* one of the four places of the PC's IDE controllers */
-    ETUDE_BUS_NVME /* an NVMe controller of its own */
+    ETUDE_BUS_IDE,   /* one of the four places of the PC's IDE controllers */
+    ETUDE_BUS_NVME,  /* an NVMe controller of its own */
+    ETUDE_BUS_DEVICE /* the device whose `drive` is the disk's `id` */
 };
 
 /* A disk of a profile, its file resolved to a path. */
@@ -104,6 +115,8 @@ struct etude_qemu_disk {
     const char *serial; /* the drive's serial number, or NULL; an NVMe disk has one */
     int discard;        /* the guest's discards, and its writes of zeros, free the
                            file's blocks */
+    const char *id;     /* the identity a device's `drive` names, on
+                           ETUDE_BUS_DEVICE alone */
 };
 
 /* The most disks of a profile, of which four at most are on IDE. */
@@ -132,6 +145,7 @@ struct etude_qemu_profile {
     const unsigned *ports;                   /* the case's local ports, each
                                                 above 1023, `port_count` of them */
     size_t port_count;
+    int no_i8042; /* the machine has no 8042 */
 };
 
 /* Admission amounts for one QEMU, separate from its configured RAM. */
@@ -153,8 +167,8 @@ struct etude_qemu_memory {
  * Resolve the memory reservation of profile `p` into `out`. Ordinary guests
  * reserve all configured RAM and 128 MiB of overhead. bigmem-boundary-v1
  * admits only the x86-64 rescue boot at 72 GiB, with one processor, no
- * devices or disks, and the max-nopdpe1gb processor profile. Its only guest
- * command is `exec /memprobe total`.
+ * devices or disks, the 8042, and the max-nopdpe1gb processor
+ * profile. Its only guest command is `exec /memprobe total`.
  *
  * @return 0, or EINVAL for another profile or an unsafe boundary profile,
  *         EOVERFLOW when the reservation cannot be represented.
@@ -172,14 +186,15 @@ struct etude_qemu_site {
 };
 
 /* The longest command line the launcher makes, in arguments. */
-#define ETUDE_QEMU_ARGS_MAX 128
+#define ETUDE_QEMU_ARGS_MAX 192
 
 /**
  * Check the disks of a profile, `disks` as the profile gives them, against
  * what the launcher attaches: at most ETUDE_QEMU_DISKS, of which at most four
  * are on IDE, CDs among them; a path for each; an NVMe disk with a serial; a
  * serial that is a word of at most ETUDE_QEMU_SERIAL_MAX printable characters
- * without a comma, on NVMe alone; and a CD on IDE, without `discard`.
+ * without a comma, on NVMe alone; a CD on IDE, without `discard`; and an
+ * identity of QEMU's, given once, for each disk on ETUDE_BUS_DEVICE alone.
  *
  * @return 0, or EINVAL.
  */

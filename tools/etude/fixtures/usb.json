@@ -1,0 +1,260 @@
+{
+  "schema_version": 1,
+  "family_id": "fixture.usb",
+  "summary": "A case whose QEMU profile has USB devices, drives on them and no 8042",
+  "cases": [
+    {
+      "case_id": "fixture.usb.stick",
+      "behavior": "A new process starts with the stack, registers, arguments, environment and auxiliary vector of the ABI",
+      "units": [
+        "auxvprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [
+            {
+              "name": "stick",
+              "bus": "device",
+              "id": "stick"
+            },
+            {
+              "name": "lun0",
+              "bus": "device",
+              "id": "lun0"
+            }
+          ],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            {
+              "model": "qemu-xhci",
+              "id": "xhci",
+              "properties": {
+                "msi": "on"
+              }
+            },
+            {
+              "model": "usb-hub",
+              "id": "hub1",
+              "bus": "xhci.0",
+              "port": "1"
+            },
+            {
+              "model": "usb-kbd",
+              "bus": "xhci.0",
+              "port": "1.1"
+            },
+            {
+              "model": "usb-storage",
+              "bus": "xhci.0",
+              "drive": "stick",
+              "properties": {
+                "bootindex": "0"
+              }
+            },
+            {
+              "model": "usb-bot",
+              "id": "bot",
+              "bus": "xhci.0"
+            },
+            {
+              "model": "scsi-hd",
+              "bus": "bot.0",
+              "drive": "lun0",
+              "properties": {
+                "scsi-id": "0",
+                "lun": "0"
+              }
+            },
+            "rtl8139"
+          ],
+          "boot_options": [],
+          "i8042": false
+        }
+      },
+      "execution": {
+        "program": "auxvprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [
+          {
+            "fixture": "disk",
+            "names": [
+              "stick",
+              "lun0"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "nothing to remove"
+      },
+      "assertions": [
+        {
+          "assertion_id": "stack-aligned",
+          "checks": "the stack pointer is 16-byte aligned at entry",
+          "source": "program"
+        },
+        {
+          "assertion_id": "registers-zero",
+          "checks": "every general register but the stack pointer is 0 at entry",
+          "source": "program"
+        },
+        {
+          "assertion_id": "argv",
+          "checks": "argc is at least 1 and argv[argc] is NULL",
+          "source": "program"
+        },
+        {
+          "assertion_id": "envp",
+          "checks": "the environment has at least one entry and ends with NULL",
+          "source": "program"
+        },
+        {
+          "assertion_id": "auxv-end",
+          "checks": "the auxiliary vector ends with AT_NULL",
+          "source": "program"
+        },
+        {
+          "assertion_id": "pagesz",
+          "checks": "AT_PAGESZ is 4096",
+          "source": "program"
+        },
+        {
+          "assertion_id": "phdr",
+          "checks": "AT_PHNUM and AT_PHDR are nonzero",
+          "source": "program"
+        },
+        {
+          "assertion_id": "phent",
+          "checks": "AT_PHENT is 32 on i686 and 56 on x86-64",
+          "source": "program"
+        },
+        {
+          "assertion_id": "clktck",
+          "checks": "AT_CLKTCK is 100",
+          "source": "program"
+        },
+        {
+          "assertion_id": "secure",
+          "checks": "AT_SECURE is present and 0",
+          "source": "program"
+        },
+        {
+          "assertion_id": "entry",
+          "checks": "AT_ENTRY is nonzero",
+          "source": "program"
+        },
+        {
+          "assertion_id": "minsigstksz",
+          "checks": "AT_MINSIGSTKSZ is above 512",
+          "source": "program"
+        },
+        {
+          "assertion_id": "random",
+          "checks": "AT_RANDOM is present and its 16 bytes are not all zero",
+          "source": "program"
+        },
+        {
+          "assertion_id": "random-page",
+          "checks": "AT_RANDOM lies in the stack pointer's page",
+          "source": "program",
+          "where": "tests/auxvprobe.c:298"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "auxvprobe",
+          "node": "tests/auxvprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "stick",
+          "node": "images/stick.img",
+          "per_architecture": true
+        },
+        {
+          "name": "lun0",
+          "node": "images/lun0.img",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    }
+  ]
+}

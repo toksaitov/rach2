@@ -102,15 +102,26 @@
         "audio": {"enum": ["hda", "sb16"]},
         "firmware": {"enum": ["seabios", "ovmf", "direct"]},
         "devices": {"type": "array", "uniqueItems": true, "items": {"oneOf": [
-          {"$ref": "#/$defs/name"}, {"$ref": "#/$defs/network_card"}
+          {"$ref": "#/$defs/name"}, {"$ref": "#/$defs/device"}
         ]}},
-        "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}}
+        "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}},
+        "i8042": {"type": "boolean"}
       }
     },
-    "network_card": {
+    "qemu_id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$"},
+    "device": {
       "type": "object", "additionalProperties": false, "required": ["model"],
       "properties": {
-        "model": {"enum": ["rtl8139", "e1000"]},
+        "model": {"$ref": "#/$defs/name"},
+        "id": {"$ref": "#/$defs/qemu_id"},
+        "bus": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}[.][0-9]+$"},
+        "port": {"type": "string", "pattern": "^[1-9][0-9]*([.][1-9][0-9]*)*$"},
+        "drive": {"$ref": "#/$defs/qemu_id"},
+        "properties": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[a-z][a-z0-9_-]{0,31}$", "not": {"enum": ["id", "bus", "port", "drive", "netdev", "mac"]}},
+          "additionalProperties": {"type": "string", "pattern": "^[A-Za-z0-9._:+-]{1,64}$"}
+        },
         "net": {"type": "string"},
         "host": {"type": "string"},
         "dhcpstart": {"type": "string"},
@@ -148,13 +159,16 @@
           "required": ["name"],
           "properties": {
             "name": {"$ref": "#/$defs/name"},
-            "bus": {"enum": ["ide", "nvme"]},
+            "bus": {"enum": ["ide", "nvme", "device"]},
+            "id": {"$ref": "#/$defs/qemu_id"},
             "media": {"enum": ["disk", "cdrom"]},
             "serial": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"},
             "discard": {"type": "boolean"},
             "size_bytes": {"$ref": "#/$defs/positive"}
           },
           "allOf": [
+            {"if": {"required": ["bus"], "properties": {"bus": {"const": "device"}}},
+             "then": {"required": ["id"], "properties": {"media": {"const": "disk"}}}, "else": {"not": {"required": ["id"]}}},
             {"if": {"required": ["bus"], "properties": {"bus": {"const": "nvme"}}},
              "then": {"required": ["serial"]}, "else": {"not": {"required": ["serial"]}}},
             {"if": {"required": ["media"], "properties": {"media": {"const": "cdrom"}}},

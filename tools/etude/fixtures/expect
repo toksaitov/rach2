@@ -6,6 +6,7 @@
 
 # The examples of the contracts are valid, and judge as their Readme says.
 0 -r ../../.. manifest ../schemas/case.guest.example.json ../schemas/case.host.example.json ../schemas/case.machine.example.json ../schemas/case.fpu.example.json
+0 manifest ./usb.json
 0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-lost: incomplete
 0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-notrun: failure
 0 schema invocation ../schemas/invocation.example.json
@@ -21,6 +22,7 @@
 1 manifest ./json-trailing.json | text follows the document
 1 manifest ./shape.json | /cases/0: has no member "bounds"
 1 manifest ./shape.json | /cases/0/domain: "elsewhere" is not one of the values
+1 manifest ./usb-shape.json | /devices/2/properties/bus: has a form the schema does not allow
 
 # Each rule of a manifest, by the case of rules.json that breaks it.
 1 manifest ./rules.json | scenario-source: enosys-unimplemented has the source scenario
@@ -58,6 +60,14 @@
 1 manifest ./rules.json | feature-unknown: sse9 is no processor feature a profile can declare
 1 manifest ./rules.json | feature-profile: the case requires rdrand present, and its processor profile qemu64 declares it absent
 1 manifest ./rules.json | feature-either: the case requires pdpe1gb either, which its processor profile max does not declare
+1 manifest ./rules.json | usb-bus: the device usb-kbd is on the bus xhcx.0, which no device before it provides
+1 manifest ./rules.json | usb-drive: the device usb-storage attaches the drive stick, which is no disk of its profile
+1 manifest ./rules.json | usb-attached-twice: the drive stick is attached twice
+1 manifest ./rules.json | usb-unattached: no device attaches the drive spare
+1 manifest ./rules.json | usb-id-twice: the device hub1 is declared twice
+1 manifest ./rules.json | usb-drive-id-twice: the drive stick is declared twice
+1 manifest ./rules.json | usb-disk-twice: the disk stick is given twice in a profile
+1 manifest ./rules.json | usb-vga: the device vga has no member but its model
 1 -r ./tree manifest ./rules.json | timing-nofile: tests/absent.c:1: no such file in the tree
 1 -r ./tree manifest ./rules.json | timing-pastend: tests/delay.txt:9: the file ends at line 4
 1 manifest ./prefix.json | fixture.other.vectors: a case of the family fixture.prefix has an identity

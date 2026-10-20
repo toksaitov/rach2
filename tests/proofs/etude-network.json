@@ -48,8 +48,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "d->mac ? d->mac : \"\"",
-          "replace": "\"\""
+          "find": "append(l, 0, \",mac=%s\", d->mac);",
+          "replace": ";"
         }
       ],
       "fails": {
