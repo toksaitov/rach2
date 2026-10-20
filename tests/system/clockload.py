@@ -2,19 +2,19 @@
 """clockload.py: the guest's clocks against the host's while the host stops it.
 
 The clock suite's driver (tests/system/suites/clock.sh). It boots the test
-image to the debug shell, runs musl/clockloadmusl, which prints its
-CLOCK_MONOTONIC and CLOCK_REALTIME once a second while it keeps the machine
-busy, and meanwhile stops the emulator with SIGSTOP and lets it go with
+image to the debug shell, runs musl/clockloadmusl, which samples its
+CLOCK_MONOTONIC and CLOCK_REALTIME while it keeps the machine busy, and
+meanwhile stops the emulator with SIGSTOP and lets it go with
 SIGCONT, STALLS times, each stop STOP_S seconds after RUN_S seconds of
 running. A stopped emulator is what a loaded host makes of a machine: its
 timers fall due while no processor of the machine runs, and the machine
 then sees one interrupt for all the ticks that fell due, or, where the
 hypervisor delivers them again, all of them in a burst.
 
-The judgment is the guest's time between the first and the last line it
-printed against the host's monotonic time between their arrivals, both
-lines printed outside the stops: each clock must agree with the host within
-BOUND_MS. The bound was measured on the testing host, as clock.sh records.
+The guest brackets host UDP timestamps with guest clock reads before and
+again after the stops. It judges the whole error interval against 250 ms;
+serial arrival times have no part in that interval. A reference wider than
+100 ms is retried or reported unavailable, never accepted as a clock pass.
 
 Usage: clockload.py KERNEL IMAGE LOG [tcg]
 
@@ -28,6 +28,7 @@ and 2 for a wrong invocation.
 import os
 import queue
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -36,8 +37,6 @@ import time
 STALLS = 30
 RUN_S = 0.7
 STOP_S = 0.3
-GUEST_S = 45
-BOUND_MS = 250
 
 
 def factor():
@@ -83,11 +82,20 @@ def expect(lines, token, seconds):
             return when, line
 
 
-def stamp(when, line):
-    """(host seconds, monotonic seconds, real seconds) of an AT line."""
-    fields = line.split()
-    at = fields.index("AT")
-    return when, int(fields[at + 1]) / 1e9, int(fields[at + 2]) / 1e9
+def reference(sock, stop):
+    """Answer requests with host timestamps; serial transport is independent."""
+    sock.settimeout(0.2)
+    while not stop.is_set():
+        try:
+            packet, peer = sock.recvfrom(160)
+        except socket.timeout:
+            continue
+        fields = packet.split()
+        if len(fields) != 2 or fields[0] != b"CLOCKREF" or not fields[1].isdigit():
+            continue
+        mono = time.monotonic_ns()
+        real = time.time_ns()
+        sock.sendto(b"CLOCKREF %s %d %d" % (fields[1], mono, real), peer)
 
 
 def stall(pid):
@@ -111,7 +119,7 @@ def command(kernel, image, tcg):
     qemu = env.get("RACH2_QEMU", "qemu-system-x86_64")
     argv = [qemu, "-kernel", kernel, "-initrd", image, "-append", "rach2.rescue",
             "-m", "256", "-serial", "stdio", "-display", "none", "-no-reboot",
-            "-net", "none"]
+            "-netdev", "user,id=clockref", "-device", "rtl8139,netdev=clockref"]
     if tcg:
         env["RACH2_QEMU_ACCEL"] = "tcg"
         if not env.get("RACH2_QEMU_LEDGER"):
@@ -119,52 +127,34 @@ def command(kernel, image, tcg):
     return argv, env
 
 
-def judge(first, last, stopped, label):
-    """Print the comparison of `first` and `last` and return whether it passes."""
-    host = last[0] - first[0]
-    mono = last[1] - first[1]
-    real = last[2] - first[2]
-    off_mono = (mono - host) * 1000.0
-    off_real = (real - host) * 1000.0
-    print("clockload: %s: host %.3f s, %.3f s of it stopped; monotonic %.3f s (%+.0f ms), "
-          "real %.3f s (%+.0f ms); bound %d ms"
-          % (label, host, stopped, mono, off_mono, real, off_real, BOUND_MS))
-    return abs(off_mono) <= BOUND_MS and abs(off_real) <= BOUND_MS
-
-
 def run(kernel, image, logpath, tcg):
     """Boot, run the load under the stops, and judge; return the exit status."""
     label = "tcg" if tcg else os.environ.get("RACH2_QEMU_ACCEL", "default")
     argv, env = command(kernel, image, tcg)
     lines = queue.Queue()
-    with open(logpath, "wb") as log:
+    stop = threading.Event()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock, open(logpath, "wb") as log:
+        sock.bind(("127.0.0.1", 0))
+        server = threading.Thread(target=reference, args=(sock, stop))
         proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, env=env)
+        server.start()
         thread = threading.Thread(target=reader, args=(proc.stdout, lines, log), daemon=True)
         thread.start()
         try:
             expect(lines, "Type 'help'", 240 * factor())
-            proc.stdin.write(b"exec /musl/clockloadmusl %d\n" % GUEST_S)
+            proc.stdin.write(b"exec /musl/clockloadmusl %d\n" % sock.getsockname()[1])
             proc.stdin.flush()
-            first = stamp(*expect(lines, "CLOCKLOAD AT", 60 * factor()))
+            expect(lines, "CLOCKLOAD READY", 60 * factor())
             stopped = stall(proc.pid)
-            last = None
-            deadline = time.monotonic() + (GUEST_S + 120) * factor()
-            while True:
-                when, line = expect(lines, "CLOCKLOAD", deadline - time.monotonic())
-                if "CLOCKLOAD OK" in line:
-                    break
-                last = stamp(when, line)
-            if last is None or last[0] - first[0] < STALLS * (RUN_S + STOP_S):
-                print("clockload: %s: FAIL: the last line came before the stops ended" % label)
-                return 1
-            if not judge(first, last, stopped, label):
-                print("clockload: %s: FAIL: the guest's clock is off the host's by more "
-                      "than %d ms; see %s" % (label, BOUND_MS, logpath))
-                return 1
+            proc.stdin.write(b"\n")
+            proc.stdin.flush()
+            expect(lines, "CLOCKLOAD OK", 120 * factor())
+            print("clockload: %s: host stops %.3f s; guest judged bracketed references"
+                  % (label, stopped))
             print("clockload: %s: ok" % label)
             return 0
-        except RuntimeError as e:
+        except (RuntimeError, OSError) as e:
             print("clockload: %s: FAIL: %s; see %s" % (label, e, logpath))
             return 1
         finally:
@@ -175,6 +165,8 @@ def run(kernel, image, logpath, tcg):
             proc.kill()
             proc.wait()
             thread.join(5)
+            stop.set()
+            server.join()
 
 
 def main():

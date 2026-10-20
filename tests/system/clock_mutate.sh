@@ -5,14 +5,17 @@
 #
 # Usage: sh tests/system/clock_mutate.sh [--texts]
 #
-# The suite runs three times: as the tree has it, where it must pass; with
+# The suite runs four times: as the tree has it, where it must pass; with
 # `timer_tick_clock` in rach2/sys/arch/x86/pit.c returning 1 for every
 # interrupt once the reference keeps time, which is the rule before the
 # reference did, where the stops lose the ticks that fell due and the suite
 # must fail on the clock's difference; and restored, where it must pass
 # again. The fault is put into the tree's source, which the trap restores
-# and touches, and the run builds the kernel each time. --texts checks that
-# the fault's text is once in its source.
+# and touches, and the run builds the kernel each time. A delayed-console
+# phase holds each CLOCKLOAD line for two host seconds before delivery, and
+# the clock fault must still fail with that delay. The interval scorer is
+# also proven with a fault that accepts an overlapping interval. --texts
+# checks that each replacement text is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -42,10 +45,23 @@ fault()
     mutate "$source" '    return due;' '    return 1u;'
 }
 
+# Delay result delivery without changing any reference timestamp.
+delay_transport()
+{
+    mutate tests/system/clockload.py \
+        '            lines.put((time.monotonic(), line.decode("latin-1").rstrip("\r")))' \
+        '            if line.startswith(b"CLOCKLOAD"):
+                time.sleep(2)
+            lines.put((time.monotonic(), line.decode("latin-1").rstrip("\r")))'
+}
+
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     fault
+    mutate tests/clockref.h '    if (low >= -bound && high <= bound)' \
+        '    if (low >= -bound || high <= bound)'
+    delay_transport
     echo 'clock-mutation: texts: every fault is once in its source'
     exit 0
 fi
@@ -75,7 +91,9 @@ stop_child()
 restore()
 {
     cp "$work/pit.c.saved" "$source"
-    touch "$source"
+    cp "$work/clockload.py.saved" tests/system/clockload.py
+    cp "$work/clockref.h.saved" tests/clockref.h
+    touch "$source" tests/clockref.h
     changed=
 }
 
@@ -88,7 +106,7 @@ cleanup()
     stop_child
     if [ -n "$changed" ]; then
         restore
-        make -s rach2 ARCH=x86_64 >"$work/cleanup.build.log" 2>&1 || :
+        make -s rach2 musl-programs build/tests/system/runtests ARCH=x86_64 >"$work/cleanup.build.log" 2>&1 || :
     fi
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
         rm -rf ${work:+"$work"}
@@ -100,6 +118,8 @@ trap 'keep=; exit 130' INT
 trap 'keep=; exit 143' TERM
 work=$(mktemp -d "$repo/build/clock-proof.XXXXXX")
 cp "$source" "$work/pit.c.saved"
+cp tests/system/clockload.py "$work/clockload.py.saved"
+cp tests/clockref.h "$work/clockref.h.saved"
 
 # run_phase PHASE EXPECTED MESSAGE: run the suite and keep its kernel. With
 # EXPECTED `pass` it must pass, otherwise fail, and either way its output
@@ -137,15 +157,36 @@ keep=1
 make -s build/tests/system/runutil >"$work/prepare.log" 2>&1 || {
     cat "$work/prepare.log" >&2; exit 1;
 }
+make -s build/tests/system/runtests >"$work/scorer.build.log" 2>&1
+build/tests/system/runtests --selftest
+changed=1
+mutate tests/clockref.h '    if (low >= -bound && high <= bound)' \
+    '    if (low >= -bound || high <= bound)'
+make -s build/tests/system/runtests >>"$work/scorer.build.log" 2>&1
+if build/tests/system/runtests --selftest >"$work/scorer.out" 2>&1; then
+    echo 'clock-mutation: the interval fault passed' >&2; exit 1
+fi
+cat "$work/scorer.out"
+grep -q 'clock interval' "$work/scorer.out" || exit 1
+restore
+make -s build/tests/system/runtests >>"$work/scorer.build.log" 2>&1
+build/tests/system/runtests --selftest
+echo 'clock-mutation: result: interval fault failed; restored scorer passed'
 run_phase fixed pass 'clock-test: ok: both clocks kept the host'
 
 changed=1
+delay_transport
+run_phase delayed pass 'clock-test: ok: both clocks kept the host'
+
+changed=1
 fault
-run_phase one-per-interrupt fail 'clock-test: FAIL: a clock lost or gained time'
+run_phase one-per-interrupt fail 'CLOCKLOAD FAIL (clock drift)'
 restore
 
 run_phase restored pass 'clock-test: ok: both clocks kept the host'
 cmp "$work/pit.c.saved" "$source"
+cmp "$work/clockload.py.saved" tests/system/clockload.py
+cmp "$work/clockref.h.saved" tests/clockref.h
 if cmp -s "$work/fixed.kernel" "$work/one-per-interrupt.kernel"; then
     echo 'clock-mutation: the kernel did not change' >&2; exit 1
 fi

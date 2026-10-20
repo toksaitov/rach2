@@ -172,7 +172,7 @@ $(WAVCHECK): tests/system/checkers/wavcheck.c
 $(HARNESS): tests/system/runner/harness.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-$(RUNTESTS): tests/system/runner/runtests.c
+$(RUNTESTS): tests/system/runner/runtests.c tests/clockref.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 $(PTYDRIVE): tests/system/runner/ptydrive.c
@@ -1524,7 +1524,7 @@ run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(RUNUTIL) $(MKM
 # suite, as it does for a suite run alone, and hashes them with the rest, so
 # a change to the image while the set runs voids the run.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
-run-gnu: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL) $(MKMBR)
+run-gnu: $(DEMO_CREDS) musl-programs rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL) $(MKMBR)
 	sh tests/system/suites/gnu.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(GNU_TEST_DISK) \
 	    $(GNU_PORT) "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 
@@ -1797,8 +1797,8 @@ run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 # `tests/run clock`: the guest's monotonic and real clocks keeping the host's
-# time within 250 ms over 45 s of load in which the host stops the machine
-# thirty times, under the run's accelerator and under TCG (see
+# time within 250 ms, including reference uncertainty, across thirty host
+# stops, under the run's accelerator and under TCG (see
 # tests/system/suites/clock.sh).
 run-clock: rach2 tests krffs test-image
 	@mkdir -p $(IMAGES_DIR)

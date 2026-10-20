@@ -12,7 +12,13 @@ A script here runs by hand from the top of the tree as `sh tests/system/NAME.sh`
 
 `sh tests/system/bindhold_mutate.sh` removes the boot-root bind identity checks for descriptors and executable holders in turn. For the executable fault it first makes the loader copy boot-root ELF segments, so file mappings cannot retain the file independently, and requires that kernel to pass before removing the executable holder's identity check. The `textbusy` suite runs `musl/bindholdmusl`, which checks a descriptor and its duplicate, a mapping after close, a descriptor in flight on an AF_UNIX socket, a running image and a forked image through a bind remounted read-only. Unlink and rename through the original mount or its writable bind must preserve the file's bytes through replacement allocations, and last close or exit must reclaim its space. Each fault must fail the suite; the unmodified and restored kernels must pass it.
 
+`sh tests/system/clock_mutate.sh` proves the interval scorer, delays each clock result by two seconds, and compiles the rule that counts one tick per interrupt. The correct clock must pass with delayed console delivery, the clock fault must fail for drift under the same delay, and restored sources and artifacts must pass again.
+
 ## Design
+
+The clock checks share [`../clockref.h`](../clockref.h)'s interval judgment. [`../musl/clockref.h`](../musl/clockref.h) obtains an independent host timestamp over a private UDP socket, between guest clock reads. The host monotonic clock measures elapsed time; the host real-time clock supplies the date. Samples wider than 100 ms are retried at most 32 times. A whole error interval inside the bound passes, one wholly outside fails for a clock mismatch, and an interval crossing the bound fails for an uncertain measurement. No reference is a failed measurement, never a clock pass.
+
+`clockload.py` answers reference requests while `clockloadmusl` runs pipe round trips and arithmetic. The first sample precedes the readiness line. The host stops and continues the emulator thirty times with process signals, then sends the command that ends the workload and takes the second sample. Both guest clocks' elapsed intervals must agree with the host monotonic interval to 250 ms, including both samples' uncertainty. Console delays extend the workload without changing its judgment. The GNU ntpd row waits for a new service log record that the daemon set the clock, then runs `clockmusl` against the SNTP server's own time scale.
 
 ### The registry and the recipes
 

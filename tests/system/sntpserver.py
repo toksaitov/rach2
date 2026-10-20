@@ -8,8 +8,10 @@ The server binds a UDP port on 127.0.0.1 that the system picks, prints
 client request with a time that is EPOCH, in seconds since 1970, when it
 starts, and then advances at the host's rate. QEMU's user network delivers a
 guest's datagram for 10.0.2.2 to the host's loopback, so the guest reaches
-the server as 10.0.2.2:N. The server exits when its parent does, so a suite
-that is killed leaves no server behind.
+the server as 10.0.2.2:N. CLOCKREF requests receive the same time scale,
+with host monotonic nanoseconds, for the guest's bracketed comparison. The
+server exits when its parent does, so a suite that is killed leaves no
+server behind.
 """
 
 import os
@@ -62,6 +64,14 @@ def main():
         if not ready:
             continue
         request, client = sock.recvfrom(512)
+        # The reference uses the configured epoch independently of NTP encoding.
+        if request.startswith(b"CLOCKREF "):
+            fields = request.split()
+            if len(fields) == 2 and fields[1].isdigit():
+                mono = time.monotonic_ns()
+                real = int((epoch + time.monotonic() - start) * 1e9)
+                sock.sendto(b"CLOCKREF %s %d %d" % (fields[1], mono, real), client)
+            continue
         received = served(epoch, start)
         answer = reply(request, received, served(epoch, start))
         if answer is not None:

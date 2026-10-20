@@ -1113,28 +1113,36 @@ EOF
     [ $((after - before)) -lt 200 ] || fail "a second start read the disk $((after - before)) times"
 }
 
-# BusyBox's ntpd, which init starts by the servers of /etc/ntp.conf, the NTP
-# pool's on the image. With the suite's SNTP server, RACH2_NTP_SERVER, put
-# in their place and ntpd killed, init starts it again, and it sets the
-# clock to the server's time, which began at RACH2_NTP_EPOCH, and writes the
-# step to the service log.
+# Restart ntpd with the private server, wait for its new step record, then
+# compare the running clock with a bracketed timestamp from that server.
 row_ntpd() {
-    local i=0 now
+    local first line logpid='' logfd stepped=''
     same "the daemon" "$(pgrep -fc '^ntpd -n$')" "1"
     has "the image's servers" "$(cat /etc/ntp.conf)" "server 0.pool.ntp.org"
+    first=$(( $(wc -l < /var/log/services) + 1 ))
+    trap '[ -z "${logpid:-}" ] || { kill "$logpid" 2>/dev/null || :; wait "$logpid" 2>/dev/null || :; }; rm -f "$WORK/ntp-log"' EXIT
+    trap 'exit 143' TERM
+    trap 'exit 130' INT
+    trap 'exit 129' HUP
+    mkfifo "$WORK/ntp-log" || { fail "the service log FIFO"; return; }
+    tail -n +"$first" -f /var/log/services > "$WORK/ntp-log" &
+    logpid=$!
+    exec {logfd}< "$WORK/ntp-log"
     printf 'server %s\n' "${RACH2_NTP_SERVER:-}" > /etc/ntp.conf
     runs "killall" killall ntpd
-    now=$(date +%s)
-    until [ "$now" -ge "$RACH2_NTP_EPOCH" ] || [ $i -ge 90 ]; do
-        sleep 1
-        i=$((i + 1))
-        now=$(date +%s)
+    while IFS= read -r line <&"$logfd"; do
+        case "$line" in
+            *"ntpd: setting time to "*) stepped=$line; break ;;
+        esac
     done
-    [ "$now" -ge "$RACH2_NTP_EPOCH" ] && [ "$now" -lt $((RACH2_NTP_EPOCH + 86400)) ] ||
-        fail "the clock: $(date -u '+%F %T') is not the server's, which began at $(date -u -d "@$RACH2_NTP_EPOCH" '+%F %T')"
+    kill "$logpid" 2>/dev/null || :
+    wait "$logpid" 2>/dev/null || :
+    exec {logfd}<&-
+    trap - EXIT TERM INT HUP
+    rm -f "$WORK/ntp-log"
+    [ -n "$stepped" ] || fail "ntpd did not report setting the clock"
+    runs "the server's clock reference" /tmp/gnu/clockmusl "$RACH2_NTP_PORT"
     same "the daemon started again" "$(pgrep -fc '^ntpd -n$')" "1"
-    has "the service log" "$(grep 'ntpd: setting time' /var/log/services)" \
-        "ntpd: setting time to $(date -u -d "@$RACH2_NTP_EPOCH" +%F)"
 }
 
 if ! declare -F "row_$ROW" > /dev/null; then

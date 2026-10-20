@@ -257,13 +257,19 @@ FAILED=""
 # is given with the server's address.
 NTP_EPOCH=1893456000
 NTP_SERVER=""
+NTP_PORT=""
 case " ${RACH2_GNU_ROWS:-ntpd} " in
     *" ntpd "*)
         python3 -B "$REPO/tests/system/sntpserver.py" "$NTP_EPOCH" > "$SNTP" 2>&1 &
         SNTPPID=$!
         "$RUNUTIL" until "$SNTP" "^sntpserver: port [0-9]" "$(scaled 30)" ||
             fail "the SNTP server did not bind its port: $(cat "$SNTP")"
-        NTP_SERVER="10.0.2.2:$(sed -n 's/^sntpserver: port //p' "$SNTP")"
+        NTP_PORT=$(sed -n 's/^sntpserver: port //p' "$SNTP")
+        NTP_SERVER="10.0.2.2:$NTP_PORT"
+        "$DEADLINE" "$(scaled 120)" scp -P "$PORT" -i "$ROOT_KEY" \
+            -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes \
+            "$REPO/$ARCH_BUILD/tests/musl/clockmusl" root@127.0.0.1:/tmp/gnu/clockmusl ||
+            fail "the clock reference probe could not be staged"
         ;;
 esac
 TOTAL=0
@@ -278,7 +284,7 @@ for row in $ROWS; do
     "$DEADLINE" "$(scaled "${row#*:}")" \
         ssh -i "$ROOT_KEY" -p "$PORT" -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$KNOWN" \
         -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes -o IdentitiesOnly=yes \
-        root@127.0.0.1 "RACH2_NTP_SERVER=$NTP_SERVER RACH2_NTP_EPOCH=$NTP_EPOCH \
+        root@127.0.0.1 "RACH2_NTP_SERVER=$NTP_SERVER RACH2_NTP_PORT=$NTP_PORT \
         /bin/bash /tmp/gnu/rows.sh $name ${RACH2_ARCH:-i686}" > "$DISK.$name.log" 2>&1
     status=$?
     took="$(($("$RUNUTIL" now) - began)) s"

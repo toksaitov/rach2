@@ -155,18 +155,12 @@ run_phase fixed pass 'gnu-test: ntpd: OK'
 
 changed=1
 fault no-server
-run_phase no-server fail "gnu-test: ntpd: FAIL after"
-grep -Fq "the clock:" "$work/no-server.out" || {
-    echo 'ntpd-mutation: no-server did not fail on the clock' >&2; exit 1;
-}
+run_phase no-server fail "gnu-test: ntpd: FAIL: no answer within its bound"
 restore
 
 changed=1
 fault host-time
-run_phase host-time fail "gnu-test: ntpd: FAIL after"
-grep -Fq "the clock:" "$work/host-time.out" || {
-    echo 'ntpd-mutation: host-time did not fail on the clock' >&2; exit 1;
-}
+run_phase host-time fail "gnu-test: ntpd: FAIL"
 restore
 
 run_phase restored pass 'gnu-test: ntpd: OK'

@@ -25,7 +25,7 @@
  * it ends at the boot limit with the shell never seen.
  *
  * Besides the probes, the run scores the kernel's `timing:` record and
- * compares the epoch clockmusl prints with the host's clock. --timeout
+ * requires clockmusl to compare its date with a host UDP reference. --timeout
  * bounds the run, 180 seconds unless given, --steptmo each probe, 20, and
  * --boottmo the wait for the shell, 60, each multiplied by the set's
  * deadline factor. A probe that does not return within its limit ends the
@@ -43,6 +43,9 @@
  * no status to report. `tests/run socket` starts a host echo server for
  * udptest and tcptest, and `tests/run ping` answers pingtest.
  */
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <time.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -54,6 +57,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "../../clockref.h"
 
 /* One boot runs all of these, in order. See the header for the probes that
    have a suite of their own. tools/verify/probecheck.sh reads the names from
@@ -447,7 +451,68 @@ static int score_kernel_timing(const unsigned char *buf, size_t buf_len, char *d
     return ok;
 }
 
+/** Require a complete reference result line inside the probe's own window. */
+static int score_clock_reference(const unsigned char *window, size_t length)
+{
+    static const char result[] = "CLOCKMUSL REFERENCE OK";
+    size_t at;
+
+    for (at = 0; at + sizeof(result) <= length; at++) {
+        size_t end;
+
+        if (at != 0 && window[at - 1] != '\n')
+            continue;
+        if (memcmp(window + at, result, sizeof(result) - 1) != 0)
+            continue;
+        end = at + sizeof(result) - 1;
+        if (end < length && window[end] == '\r')
+            end++;
+        if (end < length && window[end] == '\n')
+            return 1;
+    }
+    return 0;
+}
+
 /* ---- the selftest ---- */
+
+/** Check clock error intervals and complete reference records. */
+static int selftest_clock(int *count)
+{
+    int bad = 0;
+    static const struct {
+        long long low, high, bound;
+        int verdict;
+    } intervals[] = {{-10, 10, 30, 1}, {40, 60, 30, 0},    {-60, -40, 30, 0},
+                     {20, 40, 30, -1}, {-40, -20, 30, -1}, {-1000, 1000, 30, -1},
+                     {5, -5, 30, -1},  {-30, 30, 30, 1}};
+    static const struct {
+        const char *text;
+        int verdict;
+    } references[] = {{"CLOCKMUSL REFERENCE OK\n", 1},
+                      {"boot\nCLOCKMUSL REFERENCE OK\r\nexit\n", 1},
+                      {"probe: CLOCKMUSL REFERENCE OK\n", 0},
+                      {"CLOCKMUSL REFERENCE OK extra\n", 0},
+                      {"CLOCKMUSL REFERENCE OK", 0}};
+    size_t k;
+
+    for (k = 0; k < sizeof(intervals) / sizeof(intervals[0]); k++) {
+        if (clockref_judge(intervals[k].low, intervals[k].high, intervals[k].bound) !=
+            intervals[k].verdict) {
+            printf("runtests: selftest: clock interval %lu failed\n", (unsigned long)k);
+            bad++;
+        }
+        (*count)++;
+    }
+    for (k = 0; k < sizeof(references) / sizeof(references[0]); k++) {
+        if (score_clock_reference((const unsigned char *)references[k].text,
+                                  strlen(references[k].text)) != references[k].verdict) {
+            printf("runtests: selftest: clock record %lu failed\n", (unsigned long)k);
+            bad++;
+        }
+        (*count)++;
+    }
+    return bad;
+}
 
 /**
  * Check the scoring on fixed text, printing each case that fails. Returns 0
@@ -509,8 +574,7 @@ static int selftest(void)
                  {"probe forges the marker text and nothing else happens",
                   "probe: exited with status 0, returning to kernel shell\n", "no exit reported",
                   0}};
-    int bad = 0, i;
-    int n = (int)(sizeof(cases) / sizeof(cases[0]));
+    int n = (int)(sizeof(cases) / sizeof(cases[0])), bad = 0, i;
 
     for (i = 0; i < n; i++) {
         char detail[128];
@@ -600,6 +664,7 @@ static int selftest(void)
         }
         n += group_n;
     }
+    bad += selftest_clock(&n);
     if (bad) {
         printf("runtests: selftest: %d of %d cases failed\n", bad, n);
         return 1;
@@ -618,6 +683,8 @@ static size_t buf_len, buf_cap, consumed;
    exit status, 128 + N after signal N. */
 static pid_t child_pid = -1;
 static int child_out = -1, child_in = -1;
+/* The private UDP reference socket, serviced while serial output is read. */
+static int reference_fd = -1;
 static int child_reaped, child_status;
 /* The transcript --log asks for, or NULL. */
 static FILE *logf;
@@ -713,6 +780,30 @@ static void child_stop(void)
     }
 }
 
+/** Answer one reference request with host monotonic and calendar time. */
+static void reference_reply(void)
+{
+    struct sockaddr_in peer;
+    socklen_t size = sizeof(peer);
+    char packet[160], tail;
+    unsigned sequence;
+    struct timespec mono, real;
+    ssize_t length =
+        recvfrom(reference_fd, packet, sizeof(packet) - 1, 0, (struct sockaddr *)&peer, &size);
+
+    if (length <= 0)
+        return;
+    packet[length] = '\0';
+    if (sscanf(packet, "CLOCKREF %u %c", &sequence, &tail) != 1)
+        return;
+    if (clock_gettime(CLOCK_MONOTONIC, &mono) || clock_gettime(CLOCK_REALTIME, &real))
+        return;
+    length = snprintf(packet, sizeof(packet), "CLOCKREF %u %lld %lld", sequence,
+                      (long long)mono.tv_sec * 1000000000LL + mono.tv_nsec,
+                      (long long)real.tv_sec * 1000000000LL + real.tv_nsec);
+    sendto(reference_fd, packet, (size_t)length, 0, (struct sockaddr *)&peer, size);
+}
+
 /** Read QEMU's output into `buf` and the transcript until `until`, the
  * run's deadline, QEMU's exit or the end of the pipe. */
 static void pump(double until)
@@ -725,9 +816,15 @@ static void pump(double until)
 
         FD_ZERO(&r);
         FD_SET(child_out, &r);
+        FD_SET(reference_fd, &r);
         tv.tv_sec = 0;
         tv.tv_usec = 200000;
-        if (select(child_out + 1, &r, NULL, NULL, &tv) > 0) {
+        if (select((child_out > reference_fd ? child_out : reference_fd) + 1, &r, NULL, NULL, &tv) >
+            0) {
+            if (FD_ISSET(reference_fd, &r))
+                reference_reply();
+            if (!FD_ISSET(child_out, &r))
+                continue;
             n = read(child_out, chunk, sizeof(chunk));
             if (n > 0) {
                 buf_add(chunk, (size_t)n);
@@ -821,12 +918,9 @@ static void send_line(const char *text)
  * before it began, and ends at the marker of its return to the shell. The
  * marker is on the serial line, so it is read even after a probe that left
  * the console terminal in raw mode, as ttyprobe can. The host's time is
- * taken when clockmusl returns, a moment after it printed its epoch, and
- * the two must agree to 30 seconds: that catches a date wrong by hours, as
- * from a CMOS clock kept in local time and read as UTC, which clockmusl
- * cannot see from inside. tests/host/rtc_hosttest.c checks the arithmetic
- * of the kernel's clock exactly. QEMU is given `-rtc base=utc`, its
- * default, since the kernel reads the CMOS clock as UTC.
+ * supplied through a private UDP socket while serial output is read.
+ * clockmusl brackets that independent timestamp with its clock reads and
+ * judges the whole error interval. QEMU reads the CMOS clock as UTC.
  */
 int main(int argc, char **argv)
 {
@@ -843,7 +937,7 @@ int main(int argc, char **argv)
         int ok;
     } results[N_PROBES];
     int n_results = 0, fails = 0;
-    double clock_seen_at = 0;
+    int reference_port;
     int clock_ok = 0;
     char clock_detail[128];
     int selftest_ok = 0;
@@ -878,6 +972,23 @@ int main(int argc, char **argv)
     if (kernel == NULL || initrd == NULL) {
         fprintf(stderr, "runtests: --kernel and --initrd are required\n");
         return 2;
+    }
+
+    {
+        struct sockaddr_in address;
+        socklen_t size = sizeof(address);
+
+        memset(&address, 0, sizeof(address));
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        reference_fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (reference_fd < 0 || bind(reference_fd, (struct sockaddr *)&address, size) ||
+            getsockname(reference_fd, (struct sockaddr *)&address, &size)) {
+            fprintf(stderr, "runtests: cannot bind the clock reference\n");
+            return 2;
+        }
+        fcntl(reference_fd, F_SETFD, FD_CLOEXEC);
+        reference_port = ntohs(address.sin_port);
     }
 
     qemu[nq++] = (char *)qemu_binary();
@@ -962,7 +1073,10 @@ int main(int argc, char **argv)
             n_results++;
             continue;
         }
-        snprintf(line, sizeof(line), "exec %s", PROBES[i]);
+        if (strcmp(PROBES[i], "musl/clockmusl") == 0)
+            snprintf(line, sizeof(line), "exec %s %d", PROBES[i], reference_port);
+        else
+            snprintf(line, sizeof(line), "exec %s", PROBES[i]);
         consumed = start;
         send_line(line);
         end = expect_marker(steptmo);
@@ -987,7 +1101,8 @@ int main(int argc, char **argv)
                          sizeof(results[n_results].detail));
         n_results++;
         if (strcmp(PROBES[i], "musl/clockmusl") == 0) {
-            clock_seen_at = now();
+            clock_ok = results[n_results - 1].ok &&
+                       score_clock_reference(buf + start, (size_t)end - start);
         }
     }
 
@@ -996,26 +1111,9 @@ int main(int argc, char **argv)
     if (logf != NULL)
         fclose(logf);
 
-    snprintf(clock_detail, sizeof(clock_detail), "the probe printed no epoch");
-    {
-        const char *want = "CLOCKMUSL EPOCH ";
-        size_t wlen = strlen(want), at;
-
-        for (at = 0; at + wlen < buf_len; at++) {
-            if (memcmp(buf + at, want, wlen) == 0) {
-                const char *p = (const char *)buf + at + wlen;
-
-                if (*p >= '0' && *p <= '9' && clock_seen_at != 0) {
-                    long guest = strtol(p, NULL, 10);
-                    double skew = clock_seen_at - (double)guest;
-
-                    snprintf(clock_detail, sizeof(clock_detail), "%+d s vs the host", (int)skew);
-                    clock_ok = skew >= -30 && skew <= 30;
-                }
-                break;
-            }
-        }
-    }
+    close(reference_fd);
+    snprintf(clock_detail, sizeof(clock_detail), "%s",
+             clock_ok ? "host reference" : "no valid reference result");
 
     selftest_ok = score_kernel_timing(buf, buf_len, selftest_detail, sizeof(selftest_detail));
 
