@@ -11592,7 +11592,8 @@ static void synth_u32_str(char *out, uint32_t v)
  * the end or once the process, or the thread a thread's directory is of, is
  * gone, which leaves the directory with "." and ".." alone. A thread's
  * directory has the files of the thread with no `task` among them, and its
- * fd directory the thread's descriptors. `task` lists the process's
+ * fd directory the thread's descriptors, and `children` takes the place of
+ * `task`, the last entry, in a thread's directory. `task` lists the process's
  * threads, the leader first, without a thread that has ended and is not yet
  * reaped unless it is the leader.
  */
@@ -11620,15 +11621,23 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         return 0;
     }
     if (sd->kind == VNODE_PROC_PID) {
-        if (n >= (int)(sizeof(files) / sizeof(files[0])) - (sd->tid != 0 ? 1 : 0)) {
+        int last = (int)(sizeof(files) / sizeof(files[0])) - 1;
+        const char *entry;
+
+        if (n > last) {
             return 0;
         }
-        for (i = 0; files[n].name[i]; i++) {
-            name[i] = files[n].name[i];
+        entry = files[n].name;
+        *dtype = files[n].type;
+        if (n == last && sd->tid != 0) {
+            entry = "children";
+            *dtype = DT_REG;
+        }
+        for (i = 0; entry[i]; i++) {
+            name[i] = entry[i];
         }
         name[i] = '\0';
         *ino = procfs_ino_pid(id);
-        *dtype = files[n].type;
         return 1;
     }
     if (sd->kind == VNODE_PROC_NS_DIR) {

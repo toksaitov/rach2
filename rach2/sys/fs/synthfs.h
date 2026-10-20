@@ -140,6 +140,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_SLABINFO    52
 #define SYNTH_PROC_SWAPS       53
 #define SYNTH_PROC_LOCKS       54
+/* /proc/<pid>/task/<tid>/children, which a thread's directory alone has. */
+#define SYNTH_PROC_CHILDREN    55
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

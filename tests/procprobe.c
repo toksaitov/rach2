@@ -971,10 +971,10 @@ static int listing(const char *dir, char *out, int cap)
 }
 
 /** A /proc/<pid> directory lists its files in their order, `task` last, and a
- * thread's directory under `task` lists them but `task`; /proc/self/limits
- * has Linux's header and sixteen limits; /proc lists interrupts and
- * filesystems; and cwd and root are links to the process's directories,
- * which a walk follows. */
+ * thread's directory under `task` lists them with `children` in place of
+ * `task`; /proc/self/limits has Linux's header and sixteen limits; /proc
+ * lists interrupts and filesystems; and cwd and root are links to the
+ * process's directories, which a walk follows. */
 static void pid_dir_rows(void)
 {
     static const char files[] = "stat cmdline fd maps smaps status statm auxv environ comm "
@@ -994,9 +994,12 @@ static void pid_dir_rows(void)
     for (i = 0; files[i]; i++) {
         want[i] = files[i];
     }
-    want[i] = '\0';
+    for (v = 0; "children "[v]; v++) {
+        want[i + v] = "children "[v];
+    }
+    want[i + v] = '\0';
     check(listing(dir, got, (int)sizeof(got)) == 0 && same_str(got, want),
-          "a thread's directory lists the files of /proc/<pid> but task");
+          "a thread's directory lists the files of /proc/<pid>, children in place of task");
     want[i++] = 't';
     want[i++] = 'a';
     want[i++] = 's';

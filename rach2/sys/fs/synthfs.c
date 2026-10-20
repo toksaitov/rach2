@@ -300,8 +300,10 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     out[pos] = '\0';
 }
 
-/** The kind of the /proc/<pid> file `name`, or 0. */
-static int synth_pid_file(struct comp name)
+/** The kind of the /proc/<pid> file `name`, or 0; `task` is 0 in a
+ * thread's directory under `task`, which alone has `children`, as on
+ * Linux. */
+static int synth_pid_file(struct comp name, int task)
 {
     static const struct {
         const char *name;
@@ -330,7 +332,7 @@ static int synth_pid_file(struct comp name)
             return files[i].kind;
         }
     }
-    return 0;
+    return !task && comp_eq(name, "children") ? SYNTH_PROC_CHILDREN : 0;
 }
 
 /* The names of /proc/<pid>/ns's links, in the order of proc/ns.h's NS_
@@ -369,14 +371,14 @@ static int synth_classify_ns(const struct comp *c, int n, struct vpath *vp)
  * the pid, already in `vp->pid`, and `n` counts the components from it. A
  * thread's directory under `task` is classified as the process's directory
  * with the thread's id in `vp->tid`: it has the files of /proc/<tid>, the
- * thread's own where a thread has any, and no `task` of its own (`task` is
- * 0 then). No thread has id 0, which is the kernel's idle context. A path
- * past a file, or past `exe`, which leads to the program's file, is
- * VNODE_ENOTDIR.
+ * thread's own where a thread has any, and `children` in place of a `task`
+ * of its own (`task` is 0 then). No thread has id 0, which is the kernel's
+ * idle context. A path past a file, or past `exe`, which leads to the
+ * program's file, is VNODE_ENOTDIR.
  */
 static int synth_classify_pid(const struct comp *c, int n, struct vpath *vp, int task)
 {
-    int f = n >= 2 ? synth_pid_file(c[1]) : 0;
+    int f = n >= 2 ? synth_pid_file(c[1], task) : 0;
 
     if (n == 1) {
         vp->kind = VNODE_PROC_PID;

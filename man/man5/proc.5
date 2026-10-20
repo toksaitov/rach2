@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd October 20, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -1048,13 +1048,28 @@ have a count of 1.
 names nothing unless TID is one of the threads the directory lists, and
 has the files of
 .Pa /proc/TID ,
-which are the thread's own where a thread has any, and no
+which are the thread's own where a thread has any, and
+.Pa children
+in place of a
 .Pa task
 directory of its own.
 A descriptor open on it, or on its
 .Pa fd ,
 keeps both IDs: its link names that path, and a name relative to it is
 found under it.
+.It Pa /proc/PID/task/TID/children
+The process ID of each child of the process, as the reader's PID
+namespace numbers it, each followed by one space, with no newline at the
+end, in the order of the kernel's process table.
+A child that has ended is listed until it is reaped, and one adopted
+from a descendant, as
+.Xr prctl 2
+describes for a child subreaper, from its adoption.
+The process has no such file of its own, as on Linux.
+Linux lists in each thread's file the children that thread made; this
+kernel records the process that made a child and not the thread, so the
+file of the thread whose ID is the process ID lists every child of the
+process, and the file of any other thread is empty.
 .It Pa /proc/PID/comm
 The program name and a newline.
 .It Pa /proc/PID/oom_score_adj

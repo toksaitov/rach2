@@ -728,9 +728,9 @@ probe threadmusl
 file rach2/sys/syscall_fs.c
 expect THREADMUSL FAIL (a thread's directory lists a task directory
 old
-        if (n >= (int)(sizeof(files) / sizeof(files[0])) - (sd->tid != 0 ? 1 : 0)) {
+        if (n == last && sd->tid != 0) {
 new
-        if (n >= (int)(sizeof(files) / sizeof(files[0]))) {
+        if (n == last && sd->tid != 0 && 0) {
 end
 
 fault thread-dir-link-drops-tid
@@ -787,9 +787,9 @@ probe threadmusl
 file rach2/sys/fs/procfs.c
 expect THREADMUSL FAIL (a sleeping thread's time in its task stat
 old
-        len = procfs_gen_stat(&text, pid, vp->tid == 0);
+        return procfs_gen_stat(t, pid, vp->tid == 0);
 new
-        len = procfs_gen_stat(&text, pid, 1);
+        return procfs_gen_stat(t, pid, 1);
 end
 
 fault mem-transfer-past-page
@@ -853,9 +853,9 @@ probe threadmusl
 file rach2/sys/fs/procfs.c
 expect THREADMUSL FAIL (the process's time in its stat
 old
-        len = procfs_gen_stat(&text, pid, vp->tid == 0);
+        return procfs_gen_stat(t, pid, vp->tid == 0);
 new
-        len = procfs_gen_stat(&text, pid, 0);
+        return procfs_gen_stat(t, pid, 0);
 end
 
 # The path walk, record locks, tmpfs and the disk.
@@ -4915,11 +4915,11 @@ probe direntmusl
 file rach2/sys/fs/procfs.c
 expect DIRENTMUSL FAIL (/proc/self/mounts is not /proc/mounts
 old
-    } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
-        len = procfs_gen_mounts(&text);
+    case SYNTH_PROC_PIDMOUNTS:
+        return procfs_gen_mounts(t);
 new
-    } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
-        len = procfs_gen_cmdline(&text, pid);
+    case SYNTH_PROC_PIDMOUNTS:
+        return procfs_gen_cmdline(t, pid);
 end
 
 fault krffs-statfs-counts-inodes

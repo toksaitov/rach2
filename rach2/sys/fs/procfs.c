@@ -992,6 +992,35 @@ static int procfs_gen_auxv(struct procfs_text *t, int pid)
     return t->len;
 }
 
+/**
+ * /proc/<pid>/task/<tid>/children: the PID of each child of the process,
+ * as the reader's PID namespace sees it, each followed by one space, in the
+ * order of the process list. A child records the process that made it and
+ * not the thread, so the file of the leader, whose id `tid` is the
+ * process's, lists every child, and the file of any other thread is empty;
+ * Linux lists each thread's own.
+ */
+static int procfs_gen_children(struct procfs_text *t, int tid)
+{
+    process_t *self = procfs_proc(tid);
+    process_t *c;
+
+    if (!self) {
+        return -ENOENT;
+    }
+    if (self->pid != self->tgid) {
+        return t->len;
+    }
+    for (c = proc_list; c; c = c->next) {
+        if (c->state != PROC_UNUSED && c->pid == c->tgid && c->parent_pid == self->tgid &&
+            pid_seen(c->pid) != 0) {
+            ap_u32(t, pid_seen(c->pid));
+            ap_ch(t, ' ');
+        }
+    }
+    return t->len;
+}
+
 /** /proc/<pid>/comm: the program name and a newline. */
 static int procfs_gen_comm(struct procfs_text *t, int pid)
 {
@@ -1529,6 +1558,8 @@ static const char *procfs_pid_file_name(int kind)
         return "gid_map";
     case SYNTH_PROC_SETGROUPS:
         return "setgroups";
+    case SYNTH_PROC_CHILDREN:
+        return "children";
     default:
         return "stat";
     }
@@ -5377,6 +5408,45 @@ static int procfs_gen_fdinfo(struct procfs_text *t, int pid, int fd)
     return t->nomem ? -1 : t->len;
 }
 
+/**
+ * Write into `t` the text of the file of a process that `vp` names, the
+ * process or thread `pid` as `procfs_resolve_id` gave it: its `cmdline` for
+ * a kind with no generator of its own. Returns the text's length, or a
+ * negative error from the generator.
+ */
+static int procfs_gen_pid_file(struct procfs_text *t, int pid, const struct vpath *vp)
+{
+    switch (vp->procfile) {
+    case SYNTH_PROC_STAT:
+        return procfs_gen_stat(t, pid, vp->tid == 0);
+    case SYNTH_PROC_MAPS:
+        return procfs_gen_maps(t, pid);
+    case SYNTH_PROC_SMAPS:
+        return procfs_gen_smaps(t, pid);
+    case SYNTH_PROC_STATUS:
+        return procfs_gen_status(t, pid);
+    case SYNTH_PROC_STATM:
+        return procfs_gen_statm(t, pid);
+    case SYNTH_PROC_AUXV:
+        return procfs_gen_auxv(t, pid);
+    case SYNTH_PROC_ENVIRON:
+        return procfs_gen_environ(t, pid);
+    case SYNTH_PROC_PIDMOUNTS:
+        return procfs_gen_mounts(t);
+    case SYNTH_PROC_MOUNTINFO:
+        return procfs_gen_mountinfo(t);
+    case SYNTH_PROC_COMM:
+        return procfs_gen_comm(t, pid);
+    case SYNTH_PROC_LIMITS:
+        return procfs_gen_limits(t, pid);
+    case SYNTH_PROC_CHILDREN:
+        return procfs_gen_children(t, pid);
+    default:
+        return procfs_is_idmap(vp->procfile) ? procfs_gen_idmap(t, pid, vp->procfile)
+                                             : procfs_gen_cmdline(t, pid);
+    }
+}
+
 /** Whether a file of kind `kind` is one of a process, whose process must be
  * there at the open; 0 for the files of /proc outside /proc/<pid> and for
  * those of /sys. */
@@ -5539,32 +5609,8 @@ int procfs_open(const struct vpath *vp, int flags)
         len = procfs_gen_sysvipc(&text, vp->procfile);
     } else if (vp->kind == VNODE_SYS_FILE) {
         len = procfs_gen_sysfile(&text, vp, &pid);
-    } else if (vp->procfile == SYNTH_PROC_STAT) {
-        len = procfs_gen_stat(&text, pid, vp->tid == 0);
-    } else if (vp->procfile == SYNTH_PROC_MAPS) {
-        len = procfs_gen_maps(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_SMAPS) {
-        len = procfs_gen_smaps(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_STATUS) {
-        len = procfs_gen_status(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_STATM) {
-        len = procfs_gen_statm(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_AUXV) {
-        len = procfs_gen_auxv(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_ENVIRON) {
-        len = procfs_gen_environ(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_PIDMOUNTS) {
-        len = procfs_gen_mounts(&text);
-    } else if (vp->procfile == SYNTH_PROC_MOUNTINFO) {
-        len = procfs_gen_mountinfo(&text);
-    } else if (vp->procfile == SYNTH_PROC_COMM) {
-        len = procfs_gen_comm(&text, pid);
-    } else if (vp->procfile == SYNTH_PROC_LIMITS) {
-        len = procfs_gen_limits(&text, pid);
-    } else if (procfs_is_idmap(vp->procfile)) {
-        len = procfs_gen_idmap(&text, pid, vp->procfile);
     } else {
-        len = procfs_gen_cmdline(&text, pid);
+        len = procfs_gen_pid_file(&text, pid, vp);
     }
     /* -1 from a generator that ran out of heap is not -EPERM. */
     if (len < 0 && !text.nomem) {
