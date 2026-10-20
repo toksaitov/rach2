@@ -3,7 +3,8 @@
  * console, with frames the test writes itself and with etude-guest on pipes.
  *
  * host-deps: tools/etude/serial.c tools/etude/capture.c
- * host-deps: tools/etude/guest/guest.c tools/etude/guest/wire.c
+ * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/guest/wire.c
  * host-deps: tools/etude/history_json.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror

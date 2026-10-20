@@ -11,7 +11,8 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/posix/store.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
- * host-deps: tools/etude/guest/guest.c tools/etude/guest/wire.c
+ * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
+ * host-deps: tools/etude/guest/wire.c
  * host-deps: utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror

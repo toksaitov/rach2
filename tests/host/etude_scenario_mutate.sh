@@ -134,8 +134,8 @@ run_phase()
         "$work/posix/qemu.c" tools/etude/qemu_profile.c tools/etude/posix/exec.c \
         "$work/posix/keeper.c" tools/etude/processor.c \
         tools/etude/posix/process.c tools/etude/posix/store.c tools/etude/capture.c \
-        tools/etude/history_json.c tools/etude/guest/guest.c tools/etude/guest/wire.c \
-        utils/sha256.c -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
+        tools/etude/history_json.c tools/etude/guest/guest.c tools/etude/guest/fixture.c \
+        tools/etude/guest/wire.c utils/sha256.c -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
             cat "$work/$phase.compile.log" >&2; exit 1;
         }
     status=0

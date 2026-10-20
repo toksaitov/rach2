@@ -96,8 +96,9 @@ trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-serial-proof.XXXXXX")
 mkdir "$work/tree" "$work/tmp"
 t=tests/host/etude_serial_hosttest.c
-tar cf - tools/etude/include tools/etude/guest/guest.c tools/etude/guest/wire.c \
-    tools/etude/guest/wire.h tools/etude/serial.c tools/etude/serial.h tools/etude/capture.c \
+tar cf - tools/etude/include tools/etude/guest/guest.c tools/etude/guest/fixture.c \
+    tools/etude/guest/fixture.h tools/etude/guest/wire.c tools/etude/guest/wire.h \
+    tools/etude/serial.c tools/etude/serial.h tools/etude/capture.c \
     tools/etude/capture.h tools/etude/history_json.c tools/etude/history_json.h \
     utils/sha256.c utils/sha256.h "$t" | (cd "$work/tree" && tar xf -)
 
