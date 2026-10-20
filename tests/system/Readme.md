@@ -184,7 +184,6 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 
 The other fault proofs are scripts, `*_mutate.sh`. A script builds from a private copy of the sources where it can, and otherwise puts the fault into the tree under the tree lock; its trap stops the test's processes before it restores a source. It writes its logs, and the kernels and checksums it compared, in a directory it prints, under `build/` or the temporary directory, and removes that directory when it passes or a signal stops it; a script that fails keeps it. Every `*_mutate.sh` script, and every script with a `--mutate` mode, also has a `--texts` mode, which checks that each fault's text is in its source and builds nothing; `tools/verify/faulttexts.sh`, which `tests/run style` runs, runs them all, and the driver's `--texts` for every catalogue.
 
-* `probe_faults.sh` proves the `default` suite's rows of files and file systems against the faults listed in `probe_faults.txt`, each a probe, a file, the text replaced and the words the probe prints when its row fails, one fault at a time. `-s K/N` runs one share of the list, and `--check` checks the list alone, which `tests/run style` runs. It runs no test on the unmodified tree: it requires the kernel and the programs rebuilt at the end to equal the first build, and leaves the passing run to the next full set.
 * `harness_input_mutate.sh`: the harness's self-test.
 
 These are tests of scripts, build rules and host helpers, run against private copies and fixtures; most of them are proved the same way, by a `--mutate` mode or by a catalogue in `tests/proofs/` named after the test:
@@ -208,7 +207,7 @@ A suite is a line in `tests/registry` and a `run-NAME` target in `suites.mk`; `t
 
 A suite waits for what the machine prints and bounds each wait; a shell suite writes the bound as `$(scaled N)`, and the harness and `runutil until` scale theirs. A suite that keeps an interval on purpose marks it and lists it in `intervals`. A program the suite runs is listed in `tests/probe-suites` with the suite's name.
 
-A new test is trusted only after it has been made to fail, as `AGENTS.md` says. A row of the `default` suite gets a fault in its probe's catalogue, `tests/proofs/probe-PROBE.json`, or, for a probe of files and file systems, in `probe_faults.txt`; another row gets a catalogue of its own, as the [testing skill](../../.agents/skills/testing/SKILL.md) says.
+A new test is trusted only after it has been made to fail, as `AGENTS.md` says. A row of the `default` suite gets a fault in its probe's catalogue, `tests/proofs/probe-PROBE.json`; another row gets a catalogue of its own, as the [testing skill](../../.agents/skills/testing/SKILL.md) says.
 
 ## Limits
 

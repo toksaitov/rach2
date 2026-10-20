@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "proof": "probe-statmusl",
+  "summary": "musl/statmusl of the default suite, with faults in the kernel that its rows must catch",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/arch/i686/systab.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "--build",
+      "${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/system/default_probe.sh",
+      "musl/statmusl"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "default-probe: fail: "
+  },
+  "faults": [
+    {
+      "name": "statx-time-signed32",
+      "summary": "a fault in syscall_fs.c that fails the row: stat reports -2147483638 for 2147483658 seconds",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    sx->stx_mtime.tv_sec = st->st_mtime;\n",
+          "replace": "    sx->stx_mtime.tv_sec = (int32_t)st->st_mtime;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/statmusl did not pass",
+          "STATMUSL FAIL (stat reports -2147483638 for 2147483658 seconds)"
+        ]
+      }
+    },
+    {
+      "name": "statx-time-unsigned32",
+      "summary": "a fault in syscall_fs.c that fails the row: stat reports 4263431296 for -31536000 seconds",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    sx->stx_mtime.tv_sec = st->st_mtime;\n",
+          "replace": "    sx->stx_mtime.tv_sec = (uint32_t)st->st_mtime;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/statmusl did not pass",
+          "STATMUSL FAIL (stat reports 4263431296 for -31536000 seconds)"
+        ]
+      }
+    },
+    {
+      "name": "utimensat-time64-missing",
+      "summary": "a fault in systab.c that fails the row: utimensat to 2147483658 seconds failed",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/systab.c",
+          "find": "    table[SYS_UTIMENSAT_TIME64] = sys_utimensat_time64;\n",
+          "replace": "    (void)sys_utimensat_time64;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/statmusl did not pass",
+          "STATMUSL FAIL (utimensat to 2147483658 seconds failed)"
+        ]
+      }
+    },
+    {
+      "name": "utimensat-time64-seconds32",
+      "summary": "a fault in syscall_fs.c that fails the row: stat reports -2147483638 for 2147483658 seconds",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        t[1].tv_sec = v[2];\n",
+          "replace": "        t[1].tv_sec = (long)v[2];\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "default-probe: fail: musl/statmusl did not pass",
+          "STATMUSL FAIL (stat reports -2147483638 for 2147483658 seconds)"
+        ]
+      }
+    }
+  ]
+}

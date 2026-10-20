@@ -8,9 +8,8 @@
 # none of the vendored trees. First the script runs the tests of its own
 # parts that need no image: its private log directory
 # (tests/system/verify_temp_test.sh), the probe assignments (probecheck.sh
-# and its test), the native cases (nativecheck.sh and its test), the probe
-# faults' check (probe_faults.sh --check) and the fault texts
-# (faulttexts.sh). A preflight then looks for every tool the
+# and its test), the native cases (nativecheck.sh and its test) and the
+# fault texts (faulttexts.sh). A preflight then looks for every tool the
 # steps run, and a missing tool fails the run. The steps are:
 #
 #   1. The kernel build, under -Werror.
@@ -169,7 +168,6 @@ if ! sh tests/system/verify_temp_test.sh ||
    ! sh tests/system/probecheck_test.sh ||
    ! sh tools/verify/nativecheck.sh ||
    ! sh tests/system/nativecheck_test.sh ||
-   ! sh tests/system/probe_faults.sh --check ||
    ! sh tools/verify/faulttexts.sh; then
     fail=1
 fi
