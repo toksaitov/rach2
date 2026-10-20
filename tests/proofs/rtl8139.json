@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "proof": "rtl8139",
+  "summary": "rtl8139_hosttest.c with one fault in a private copy of rach2/sys/network/driver/rtl8139.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/network/driver/rtl8139.c"
+  ],
+  "artifacts": [
+    "${WORK}/rtl8139_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/t && mkdir -p ${WORK}/t/tests/host && cp -R rach2 ${WORK}/t/ && cp -R ${SRC}/. ${WORK}/t/ && exec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/arch/x86 -I ${WORK}/t/rach2/sys/arch/i686 -I ${WORK}/t/rach2/sys/lib tests/host/rtl8139_hosttest.c ${WORK}/t/rach2/sys/lib/kstring.c ${WORK}/t/rach2/sys/lib/kctypes.c -o ${WORK}/rtl8139_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/rtl8139_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "rtl8139-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "mutated",
+      "summary": "a warning for every receive overflow, not one a boot",
+      "edits": [
+        {
+          "file": "rach2/sys/network/driver/rtl8139.c",
+          "find": "if (!rx_overflow_logged)",
+          "replace": "if (1)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "rtl8139-test: fail: repeated overflows produce one warning per boot"
+        ]
+      }
+    }
+  ]
+}

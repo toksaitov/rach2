@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "proof": "tcp-reset",
+  "summary": "tcp_reset_hosttest.c with seven faults in a private copy of rach2/sys/network/tcp/tcp.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/network/tcp/tcp.c"
+  ],
+  "artifacts": [
+    "${WORK}/tcp_reset_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/t && mkdir -p ${WORK}/t/tests/host && cp -R rach2 ${WORK}/t/ && cp -R ${SRC}/. ${WORK}/t/ && cp tests/host/tcp_reset_hosttest.c ${WORK}/t/tests/host/ && exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/lib -I ${WORK}/t/rach2/sys/proc -I utils -I krffs -I tests/host/compat ${WORK}/t/tests/host/tcp_reset_hosttest.c ${WORK}/t/rach2/sys/lib/kstring.c ${WORK}/t/rach2/sys/lib/kctypes.c ${WORK}/t/rach2/sys/network/tcp/rcvwnd.c tests/host/compat/kheap_host.c tests/host/compat/pressure_host.c -o ${WORK}/tcp_reset_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/tcp_reset_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "  FAIL: "
+  },
+  "faults": [
+    {
+      "name": "in-window",
+      "summary": "a reset inside the window taken as if at the next sequence number",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "        return TCP_RST_CHALLENGE;\n",
+          "replace": "        return TCP_RST_ACCEPT;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a reset inside the window but not at the next sequence number closes nothing"
+        ]
+      }
+    },
+    {
+      "name": "out-of-window",
+      "summary": "a reset outside the window answered",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "    return TCP_RST_IGNORE;\n}\n",
+          "replace": "    return TCP_RST_CHALLENGE;\n}\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a reset outside the window is dropped without an answer"
+        ]
+      }
+    },
+    {
+      "name": "opening-flag",
+      "summary": "a reset taken while opening without the ACK flag",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;",
+          "replace": "return ack_num == tcb->snd_nxt ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a reset with the acknowledgement of the SYN but no ACK flag leaves the open"
+        ]
+      }
+    },
+    {
+      "name": "opening-number",
+      "summary": "a reset taken while opening that acknowledges another number",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "return ((flags & TCP_ACK) && ack_num == tcb->snd_nxt) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;",
+          "replace": "return (flags & TCP_ACK) ? TCP_RST_ACCEPT : TCP_RST_IGNORE;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a reset that acknowledges another number leaves the open"
+        ]
+      }
+    },
+    {
+      "name": "listener-gone",
+      "summary": "a handshake completed after its listener closed left open",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "            tcp_free_half_open(t);\n",
+          "replace": "            (void)t;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "closing the listener frees the handshake in progress and its socket"
+        ]
+      }
+    },
+    {
+      "name": "unkeyed",
+      "summary": "an initial sequence number without the keyed hash",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "return kernel_ticks * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);",
+          "replace": "return kernel_ticks * TCP_ISN_PER_TICK + tcb->local_port;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an active open starts at the clock plus the keyed hash of its addresses and ports"
+        ]
+      }
+    },
+    {
+      "name": "rekeyed",
+      "summary": "a key drawn at every open",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "    isn_keyed = 1;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "later opens and listeners draw no key"
+        ]
+      }
+    }
+  ]
+}
