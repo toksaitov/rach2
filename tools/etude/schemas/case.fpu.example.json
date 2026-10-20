@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.fpu",
+  "summary": "The floating-point state of a process, by the path the kernel saves it with",
+  "cases": [
+    {
+      "case_id": "guest.fpu.fpuprobe",
+      "behavior": "A process's x87 and SSE state is its own across switches, signals and exec, saved with XSAVE where the processor has it",
+      "units": ["fpuprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {"xsave": "either"},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}
+      },
+      "execution": {
+        "program": "fpuprobe", "stdin": null, "role": "ordinary", "privileges": "any",
+        "isolation": [], "children": "reaped", "cleanup": "nothing to remove"
+      },
+      "assertions": [
+        {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87, XMM, control word and MXCSR values across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler starts with the initial state, and the interrupted values survive its clobbering and a nested signal", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with control word 0x37F, an empty stack and MXCSR 0x1F80", "source": "program"},
+        {"assertion_id": "damaged", "checks": "a frame with a reserved MXCSR bit kills its process with SIGSEGV", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": {"features": ["xsave"]},
+         "alternatives": [
+           {"alternative_id": "xsave", "when": "present", "assertions": []},
+           {"alternative_id": "fxsave", "when": "absent", "assertions": []}
+         ]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fpuprobe", "node": "tests/fpuprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.fpu.fpuprobe-x87",
+      "behavior": "With rach2.nofxsr the kernel saves the x87 state alone, and a process's x87 state is its own across switches, signals and exec",
+      "units": ["fpuprobe"],
+      "domain": "guest",
+      "architectures": ["i686"],
+      "workload": {"arguments": ["x87"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nofxsr"]}
+      },
+      "execution": {
+        "program": "fpuprobe", "stdin": null, "role": "boot", "privileges": "any",
+        "isolation": [], "children": "reaped", "cleanup": "nothing to remove"
+      },
+      "assertions": [
+        {"assertion_id": "x87-only", "checks": "an SSE instruction kills its process with SIGILL", "source": "program"},
+        {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87 values and control word across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler starts with the initial x87 state, and the interrupted values survive its clobbering and a nested signal", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with control word 0x37F and an empty stack", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": "report",
+         "alternatives": [
+           {"alternative_id": "fnsave", "when": null, "assertions": []},
+           {"alternative_id": "fxsave", "when": null, "assertions": []},
+           {"alternative_id": "xsave", "when": null, "assertions": []}
+         ]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fpuprobe", "node": "tests/fpuprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot",
+                 "reason": "the kernel saves the x87 state alone only when it boots with rach2.nofxsr"}
+    }
+  ]
+}

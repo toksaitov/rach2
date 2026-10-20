@@ -1,0 +1,180 @@
+/*
+ * probe_report.h: etude's report records for the freestanding probes, which
+ * include it after probe.h. tools/etude/include/etude/report.h defines the
+ * records and tools/etude/Readme.md their contract.
+ *
+ * A probe begins its report with `report_begin`, gives each assertion of its
+ * path once with `report_pass`, `report_fail` or `report_notrun` and each
+ * group's branch with `report_branch`, and ends with `report_end`. Each
+ * record is one write(2) of at most ETUDE_REPORT_LINE_MAX bytes, so that no
+ * kernel record falls inside it on the console; a detail too long for it is
+ * cut, and a byte of it outside printable ASCII becomes '?'.
+ *
+ * A probe that ends at its first failed check plans its path, the
+ * assertions it checks in order, with `report_plan`, reports each that held
+ * with `report_held`, and calls `report_stop` before it exits at a failure:
+ * that assertion fails, those after it are not run, and the report ends.
+ * Only the process that began the report writes these records; a forked
+ * child that stops writes none.
+ *
+ * The records are written beside the probe's own lines, such as "RNGPROBE
+ * OK", which tests/run's suites read and etude does not.
+ */
+#ifndef PROBE_REPORT_H
+#define PROBE_REPORT_H
+
+#include "../tools/etude/include/etude/report.h"
+
+/* The assert, notrun and branch records written so far, which `end` counts. */
+static int report_records;
+
+/* The planned path: its assertions, the next of them, and the process that
+ * began the report. */
+static const char *report_path[16];
+static int report_path_len, report_path_at, report_owner;
+
+/** Append `s` to the record `line`, which has `*n` bytes, as room allows. */
+static __inline__ void report_put(char *line, int *n, const char *s)
+{
+    while (*s != '\0' && *n < ETUDE_REPORT_LINE_MAX - 1) {
+        line[(*n)++] = *s >= ' ' && *s <= '~' ? *s : '?';
+        s++;
+    }
+}
+
+/** Write the record of `verb` and the fields `a`, `b` and `c`, each NULL for
+ * none, with one write(2). */
+static __inline__ void report_record(const char *verb, const char *a, const char *b, const char *c)
+{
+    char line[ETUDE_REPORT_LINE_MAX];
+    const char *field[3];
+    int n = 0, i;
+
+    field[0] = a;
+    field[1] = b;
+    field[2] = c;
+    report_put(line, &n, ETUDE_REPORT_PREFIX);
+    report_put(line, &n, verb);
+    for (i = 0; i < 3; i++) {
+        if (field[i] != 0) {
+            report_put(line, &n, " ");
+            report_put(line, &n, field[i]);
+        }
+    }
+    line[n++] = '\n';
+    syscall3(SYS_WRITE, 1, (long)line, n);
+}
+
+/**
+ * Return the identity of the case the probe runs: ETUDE_CASE of the
+ * environment `envp`, which etude sets, or `own` without it, as in a run by
+ * tests/run.
+ */
+static __inline__ const char *report_case(char **envp, const char *own)
+{
+    static const char name[] = "ETUDE_CASE=";
+    int i, k;
+
+    for (i = 0; envp[i] != 0; i++) {
+        k = 0;
+        while (name[k] != '\0' && envp[i][k] == name[k]) {
+            k++;
+        }
+        if (name[k] == '\0' && envp[i][k] != '\0') {
+            return envp[i] + k;
+        }
+    }
+    return own;
+}
+
+/** Begin the report of the case `case_id`. */
+static __inline__ void report_begin(const char *case_id)
+{
+    report_owner = (int)syscall0(SYS_GETPID);
+    report_record(ETUDE_REPORT_BEGIN, case_id, 0, 0);
+}
+
+/** Report that the assertion `id` held. */
+static __inline__ void report_pass(const char *id)
+{
+    report_record(ETUDE_REPORT_ASSERT, id, ETUDE_REPORT_PASS, 0);
+    report_records++;
+}
+
+/** Report that the assertion `id` did not hold; `detail` says what was seen. */
+static __inline__ void report_fail(const char *id, const char *detail)
+{
+    report_record(ETUDE_REPORT_ASSERT, id, ETUDE_REPORT_FAIL, detail);
+    report_records++;
+}
+
+/** Report that the assertion `id` could not be evaluated, for `reason`. */
+static __inline__ void report_notrun(const char *id, const char *reason)
+{
+    report_record(ETUDE_REPORT_NOTRUN, id, reason, 0);
+    report_records++;
+}
+
+/** Report that the alternative `alternative` of the group `group` ran. */
+static __inline__ void report_branch(const char *group, const char *alternative)
+{
+    report_record(ETUDE_REPORT_BRANCH, group, alternative, 0);
+    report_records++;
+}
+
+/** Write `n`, which is not negative, in decimal into `buf` of 12 bytes, and
+ * return `buf`. */
+static __inline__ char *report_decimal(char *buf, int n)
+{
+    char digits[12];
+    int i = 0, k = 0;
+
+    do {
+        digits[i++] = (char)('0' + n % 10);
+        n /= 10;
+    } while (n > 0 && i < 11);
+    while (i > 0) {
+        buf[k++] = digits[--i];
+    }
+    buf[k] = '\0';
+    return buf;
+}
+
+/** End the report with the count of its records. */
+static __inline__ void report_end(void)
+{
+    char count[12];
+
+    report_record(ETUDE_REPORT_END, report_decimal(count, report_records), 0, 0);
+}
+
+/** Add the assertion `id` to the end of the planned path. */
+static __inline__ void report_plan(const char *id)
+{
+    report_path[report_path_len++] = id;
+}
+
+/** Report that the path's next assertion held. */
+static __inline__ void report_held(void)
+{
+    report_pass(report_path[report_path_at++]);
+}
+
+/** In the process that began the report, report that the path's next
+ * assertion failed with `why`, that those after it were not run, and the
+ * report's end. */
+static __inline__ void report_stop(const char *why)
+{
+    if (report_owner == 0 || (int)syscall0(SYS_GETPID) != report_owner) {
+        return;
+    }
+    if (report_path_at < report_path_len) {
+        report_fail(report_path[report_path_at++], why);
+    }
+    while (report_path_at < report_path_len) {
+        report_notrun(report_path[report_path_at++], "an earlier check failed");
+    }
+    report_end();
+}
+
+#endif

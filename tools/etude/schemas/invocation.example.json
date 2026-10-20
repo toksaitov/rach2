@@ -8,7 +8,8 @@
   "arguments": [],
   "environment": {
     "PATH": "/bin:/usr/bin:/sbin:/usr/sbin",
-    "HOME": "${WORKSPACE}"
+    "HOME": "${WORKSPACE}",
+    "ETUDE_CASE": "guest.default.errnoprobe"
   },
   "stdin": null,
   "role": "ordinary",

@@ -1,0 +1,13 @@
+@etude 1 begin guest.default.xsaveprobe
+@etude 1 branch save xsave
+@etude 1 branch avx avx
+@etude 1 assert osxsave pass
+@etude 1 assert xcr0 fail XCR0 is not x87, SSE, and AVX and AVX-512 where the processor has them
+@etude 1 notrun image-size an earlier check failed
+@etude 1 notrun switches an earlier check failed
+@etude 1 notrun signals an earlier check failed
+@etude 1 notrun header an earlier check failed
+@etude 1 notrun exec an earlier check failed
+@etude 1 notrun ptrace an earlier check failed
+@etude 1 notrun core an earlier check failed
+@etude 1 end 11

@@ -147,6 +147,64 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
+      "case_id": "guest.default.xsaveprobe",
+      "behavior": "The kernel saves a process's extended state with XSAVE where the processor has it, and the YMM registers are a process's own where it has AVX",
+      "units": ["xsaveprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {"xsave": "either", "avx": "either"},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}
+      },
+      "execution": {
+        "program": "xsaveprobe", "stdin": null, "role": "ordinary", "privileges": "any",
+        "isolation": [], "children": "reaped", "cleanup": "the probe removes its core directory on every path"
+      },
+      "assertions": [
+        {"assertion_id": "osxsave", "checks": "cpuid reports OSXSAVE exactly where the processor has XSAVE", "source": "program"},
+        {"assertion_id": "xcr0", "checks": "XCR0 is x87, SSE, and AVX and AVX-512 where the processor has them", "source": "program"},
+        {"assertion_id": "image-size", "checks": "leaf 0xD gives an XSAVE image of 576 to 4096 bytes", "source": "program"},
+        {"assertion_id": "ptrace-enodev", "checks": "without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with ENODEV", "source": "program"},
+        {"assertion_id": "switches", "checks": "a forked child finds the parent's YMM registers, and each keeps its own across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler's frame has the YMM registers in Linux's layout, and sigreturn restores them as the frame gives them", "source": "program"},
+        {"assertion_id": "header", "checks": "a frame with a damaged XSAVE header kills its process with SIGSEGV", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with every YMM register zero", "source": "program"},
+        {"assertion_id": "ptrace", "checks": "a tracer reads and writes the YMM registers through NT_X86_XSTATE", "source": "program"},
+        {"assertion_id": "core", "checks": "a core file has an NT_X86_XSTATE note with the registers' image", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": {"features": ["xsave"]},
+         "alternatives": [
+           {"alternative_id": "xsave", "when": "present", "assertions": ["xcr0", "image-size"]},
+           {"alternative_id": "fxsave", "when": "absent", "assertions": ["ptrace-enodev"]}
+         ]},
+        {"group_id": "avx", "decided_by": {"features": ["avx"]},
+         "alternatives": [
+           {"alternative_id": "avx", "when": "present", "assertions": ["switches", "signals", "header", "exec", "ptrace", "core"]},
+           {"alternative_id": "none", "when": "absent", "assertions": []}
+         ]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "xsaveprobe", "node": "tests/xsaveprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
       "case_id": "guest.default.survivorprobe",
       "behavior": "When the designated init exits with a runnable child, the kernel ends the child and returns to the debug shell",
       "units": ["survivorprobe"],

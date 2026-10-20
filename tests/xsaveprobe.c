@@ -30,20 +30,30 @@
  * * a child that dumps core leaves an NT_X86_XSTATE note named "LINUX" in
  *   its core file with the same image of its registers.
  *
- * Without AVX each of those rows prints "xsaveprobe: ROW: not run: no AVX",
- * which is no failure; without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE
- * must fail with ENODEV. `xsaveprobe noxsave`, for a boot with
- * `rach2.noxsave` or `rach2.nofxsr`, expects OSXSAVE clear where `cpuid`
- * reports XSAVE.
+ * Without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE must fail with ENODEV.
+ * `xsaveprobe noxsave`, for a boot with `rach2.noxsave` or `rach2.nofxsr`,
+ * expects OSXSAVE clear where `cpuid` reports XSAVE.
+ *
+ * The report's two branches say which rows ran, as `cpuid` decides them
+ * before any check: `save` is xsave where the processor has XSAVE and the
+ * kernel was not told to leave it, and fxsave otherwise, whose one row is the
+ * ENODEV of PTRACE_GETREGSET; `avx` is avx where XSAVE is used and the
+ * processor has AVX, with the YMM rows, and none otherwise, with no rows.
+ * Etude judges each branch against the processor it booted on, so that a
+ * profile that promises AVX fails a run without it.
  *
  * On x86-64 the probe's own code is compiled to use the general registers
  * alone, so that nothing but the rows' assembly touches a vector register.
  *
- * Prints "XSAVEPROBE OK" or "XSAVEPROBE FAIL: reason". Freestanding; direct
- * system calls (probe.h).
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, guest.default.xsaveprobe without it, and beside them "XSAVEPROBE OK"
+ * or "XSAVEPROBE FAIL: reason". A failed check ends the probe: its assertion
+ * fails, those after it on the path are not run, and the report ends.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #if defined __x86_64__
 #pragma GCC target("general-regs-only")
@@ -179,32 +189,33 @@ static void puts(const char *s)
     say("\n");
 }
 
-/** Print "XSAVEPROBE FAIL: " and `why`, and exit 1. */
+/** Print "XSAVEPROBE FAIL: " and `why`, report it, and exit 1. */
 static void fail(const char *why)
 {
     say("XSAVEPROBE FAIL: ");
     puts(why);
+    report_stop(why);
     cleanup_core();
     sys_exit(1);
 }
 
-/** Print "XSAVEPROBE FAIL: ", `what`, ": " and `why`, and exit 1. */
+/** Print "XSAVEPROBE FAIL: ", `what`, ": " and `why`, report it, and exit
+ * 1. */
 static void fail2(const char *what, const char *why)
 {
-    say("XSAVEPROBE FAIL: ");
-    say(what);
-    say(": ");
-    puts(why);
-    cleanup_core();
-    sys_exit(1);
-}
+    static char both[200];
+    size_t n = 0;
 
-/** Print that the row `row` did not run, for want of AVX. */
-static void not_run(const char *row)
-{
-    say("xsaveprobe: ");
-    say(row);
-    puts(": not run: no AVX");
+    while (*what && n < sizeof(both) - 3) {
+        both[n++] = *what++;
+    }
+    both[n++] = ':';
+    both[n++] = ' ';
+    while (*why && n < sizeof(both) - 1) {
+        both[n++] = *why++;
+    }
+    both[n] = '\0';
+    fail(both);
 }
 
 /** The time of day in milliseconds, modulo 2^32. */
@@ -251,9 +262,11 @@ static void cpuid(unsigned leaf, unsigned sub, unsigned r[4])
                          : "a"(leaf), "c"(sub));
 }
 
-/* What `cpuid` and XCR0 said: whether AVX is usable, XCR0, the bytes of the
- * XSAVE image for it, and the offset of the AVX component in it. */
-static int avx_usable;
+/* The branches `cpuid` decides: the kernel saves with XSAVE, and the YMM
+ * registers are in its image. Then what XCR0 and leaf 0xD said: XCR0, the
+ * bytes of the XSAVE image for it, and the offset of the AVX component in
+ * it. */
+static int use_xsave, use_avx;
 static unsigned xcr0_lo, xcr0_hi;
 static unsigned xstate_size;
 static unsigned avx_offset;
@@ -537,27 +550,57 @@ static void install(int signo)
 }
 
 /**
- * The checks of `cpuid` and XCR0. With `noxsave`, the kernel was told not
- * to use XSAVE, and OSXSAVE must be clear wherever XSAVE is reported.
+ * Decide the branches from `cpuid`, report them, and plan the path's
+ * assertions. With `noxsave`, the kernel was told not to use XSAVE.
  */
-static void run_cpuid(int noxsave)
+static void decide(int noxsave)
 {
-    unsigned r1[4], r7[4], rd[4], r[4];
-    int xsave, osxsave, avx, avx512;
-    unsigned want_xcr0;
+    unsigned r[4];
 
     cpuid(0, 0, r);
+    report_plan("osxsave");
     if (r[0] < 1) {
         fail("cpuid has no leaf 1");
     }
+    cpuid(1, 0, r);
+    use_xsave = ((r[2] >> 26) & 1u) && !noxsave;
+    use_avx = use_xsave && ((r[2] >> 28) & 1u);
+    report_branch("save", use_xsave ? "xsave" : "fxsave");
+    report_branch("avx", use_avx ? "avx" : "none");
+    if (use_xsave) {
+        report_plan("xcr0");
+        report_plan("image-size");
+    } else {
+        report_plan("ptrace-enodev");
+    }
+    if (use_avx) {
+        report_plan("switches");
+        report_plan("signals");
+        report_plan("header");
+        report_plan("exec");
+        report_plan("ptrace");
+        report_plan("core");
+    }
+}
+
+/**
+ * The checks of `cpuid` and XCR0: OSXSAVE is set exactly where the kernel
+ * saves with XSAVE, and then XCR0 and leaf 0xD's image size.
+ */
+static void run_cpuid(void)
+{
+    unsigned r1[4], r7[4], rd[4], r[4];
+    int osxsave, avx512;
+    unsigned want_xcr0;
+
+    cpuid(0, 0, r);
     cpuid(1, 0, r1);
-    xsave = (r1[2] >> 26) & 1u;
     osxsave = (r1[2] >> 27) & 1u;
-    avx = (r1[2] >> 28) & 1u;
-    if (osxsave != (xsave && !noxsave)) {
+    if (osxsave != use_xsave) {
         fail(osxsave ? "cpuid reports OSXSAVE where the kernel saves no XSAVE state"
                      : "cpuid reports XSAVE but not OSXSAVE");
     }
+    report_held();
     if (!osxsave) {
         puts("xsaveprobe: cpuid: no OSXSAVE, as the kernel keeps no XSAVE state");
         return;
@@ -570,7 +613,10 @@ static void run_cpuid(int noxsave)
     cpuid(0xD, 0, rd);
     avx512 = (r7[1] >> 16) & 1u;
     want_xcr0 = 3u;
-    if (avx && (rd[0] & 4u)) {
+    if (use_avx) {
+        if (!(rd[0] & 4u)) {
+            fail("cpuid reports AVX, and leaf 0xD no AVX state");
+        }
         want_xcr0 |= 4u;
         if (avx512 && (rd[0] & 0xE0u) == 0xE0u) {
             want_xcr0 |= 0xE0u;
@@ -579,18 +625,19 @@ static void run_cpuid(int noxsave)
     if (xcr0_lo != want_xcr0 || xcr0_hi != 0) {
         fail("XCR0 is not x87, SSE, and AVX and AVX-512 where the processor has them");
     }
+    report_held();
     xstate_size = rd[1];
     if (xstate_size < 576u || xstate_size > IMAGE_MAX) {
         fail("leaf 0xD gives an image size out of range");
     }
-    avx_usable = (xcr0_lo & 6u) == 6u;
-    if (avx_usable) {
+    report_held();
+    if (use_avx) {
         cpuid(0xD, 2, r);
         avx_offset = r[1];
     }
     puts(xcr0_lo & 0xE0u ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE, AVX and AVX-512"
-                         : (avx_usable ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE and AVX"
-                                       : "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87 and SSE"));
+                         : (use_avx ? "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87, SSE and AVX"
+                                    : "xsaveprobe: cpuid: OSXSAVE, XCR0 has x87 and SSE"));
 }
 
 /** The switches row: a forked child finds the parent's values, and parent
@@ -1018,9 +1065,10 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** Run `reset` when argv[1] begins with r; otherwise the cpuid checks, with
- * `noxsave` when it begins with n, then every row where AVX is usable, or
- * the rows' not-run lines and, without XSAVE, the ptrace check. */
+/** Run `reset` when argv[1] begins with r; otherwise report the branches,
+ * the cpuid checks, with `noxsave` when it begins with n, and then the rows
+ * of each branch: the YMM rows with AVX, and the ptrace check without
+ * XSAVE. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -1030,26 +1078,30 @@ void probe_main(unsigned long *sp)
     if (argc >= 2 && argv[1][0] == 'r') {
         run_reset();
     }
-    run_cpuid(noxsave);
-    if (!avx_usable) {
-        not_run("switches");
-        not_run("signals");
-        not_run("header");
-        not_run("exec");
-        not_run("ptrace");
-        not_run("core");
-        if (xstate_size == 0) {
-            run_ptrace_without();
-        }
-        puts("XSAVEPROBE OK");
-        sys_exit(0);
+    report_begin(report_case(argv + argc + 1, "guest.default.xsaveprobe"));
+    decide(noxsave);
+    run_cpuid();
+    if (!use_xsave) {
+        run_ptrace_without();
+        report_held();
     }
-    run_switches();
-    run_signals();
-    run_header();
-    run_exec();
-    run_ptrace();
-    run_core();
+    if (!use_avx) {
+        puts("xsaveprobe: branch avx: none, so the YMM rows are not on this path");
+    } else {
+        run_switches();
+        report_held();
+        run_signals();
+        report_held();
+        run_header();
+        report_held();
+        run_exec();
+        report_held();
+        run_ptrace();
+        report_held();
+        run_core();
+        report_held();
+    }
+    report_end();
     puts("XSAVEPROBE OK");
     sys_exit(0);
 }

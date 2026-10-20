@@ -64,5 +64,4 @@ tests/system/suites/exfat.sh: 3 skip
 tests/system/suites/fatwrite.sh: 2 skip
 tests/timeprobe.c: 1 sleep
 tests/waitprobe.c: 1 sleep
-tests/xsaveprobe.c: 1 skip
 tests/xsaveprobe.c: 1 sleep

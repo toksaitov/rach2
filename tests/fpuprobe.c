@@ -23,11 +23,21 @@
  * On x86-64 the probe's own code is compiled to use the general registers
  * alone, so that nothing but the rows' assembly touches an XMM register.
  *
- * Prints "FPUPROBE OK" and exits 0, or "FPUPROBE FAIL: " and the reason and
- * exits 1.
+ * The report's branch `save` is the path by which the kernel saves the
+ * state, as the probe sees it: xsave where `cpuid` reports OSXSAVE, and
+ * otherwise fxsave where a forked child can execute an SSE instruction and
+ * fnsave where the instruction kills it with SIGILL. `fpuprobe x87` must
+ * find fnsave, and the other modes another path.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, guest.fpu.fpuprobe without it, and beside them "FPUPROBE OK" with
+ * exit status 0, or "FPUPROBE FAIL: " and the reason with exit status 1. A
+ * failed check ends the probe: its assertion fails, those after it are not
+ * run, and the report ends.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #if defined __x86_64__
 #pragma GCC target("general-regs-only")
@@ -73,11 +83,12 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-/** Print "FPUPROBE FAIL: " and `why`, and exit 1. */
+/** Print "FPUPROBE FAIL: " and `why`, report it, and exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"FPUPROBE FAIL: ", 15);
     puts(why);
+    report_stop(why);
     sys_exit(1);
 }
 
@@ -534,13 +545,82 @@ static void run_damaged(void)
     }
 }
 
+#define SIGILL 4
+
+/* The paths by which the kernel saves the state, by the names of the
+ * report's alternatives. */
+enum { SAVE_XSAVE, SAVE_FXSAVE, SAVE_FNSAVE };
+static const char *const save_names[] = {"xsave", "fxsave", "fnsave"};
+
+/**
+ * The path by which the kernel saves the state, as user space sees it:
+ * XSAVE where `cpuid` reports OSXSAVE; otherwise FXSAVE when a forked child
+ * executes an SSE instruction and exits, and FNSAVE when the instruction
+ * kills it with SIGILL, since the kernel left SSE off.
+ */
+static int save_path(void)
+{
+    unsigned a = 1, b, c = 0, d;
+    int pid, status;
+
+    __asm__ __volatile__("cpuid" : "+a"(a), "=b"(b), "+c"(c), "=d"(d));
+    if ((c >> 27) & 1u) {
+        return SAVE_XSAVE;
+    }
+    pid = syscall1(SYS_FORK, 0);
+    if (pid < 0) {
+        fail("fork for the SSE instruction");
+    }
+    if (pid == 0) {
+        __asm__ __volatile__("xorps %%xmm0, %%xmm0" : : : "memory");
+        sys_exit(0);
+    }
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
+        fail("waitpid for the SSE instruction");
+    }
+    if (status == 0) {
+        return SAVE_FXSAVE;
+    }
+    if ((status & 0x7F) != SIGILL) {
+        fail("the SSE instruction's child ended neither by exit nor by SIGILL");
+    }
+    return SAVE_FNSAVE;
+}
+
+/** Plan the rows, then report the save path, which `fpuprobe x87` requires
+ * to be fnsave and the other modes not. */
+static void decide(void)
+{
+    int path;
+
+    if (!with_sse) {
+        report_plan("x87-only");
+    }
+    report_plan("switches");
+    report_plan("signals");
+    report_plan("exec");
+    if (with_sse) {
+        report_plan("damaged");
+    }
+    path = save_path();
+    report_branch("save", save_names[path]);
+    if (!with_sse) {
+        if (path != SAVE_FNSAVE) {
+            fail("an SSE instruction ran where the kernel saves the x87 state alone");
+        }
+        report_held();
+    } else if (path == SAVE_FNSAVE) {
+        fail("an SSE instruction is an invalid opcode");
+    }
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
 /** The probe, entered with `sp` at argc: `run_reset` when the first argument
- * begins with 'r', without SSE for `reset-x87`; otherwise the rows in order,
- * without SSE when the argument begins with 'x'. */
+ * begins with 'r', without SSE for `reset-x87`; otherwise the branch and the
+ * rows in order, without SSE when the argument begins with 'x'. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
@@ -553,12 +633,19 @@ void probe_main(unsigned long *sp)
     if (argc >= 2 && argv[1][0] == 'x') {
         with_sse = 0;
     }
+    report_begin(report_case(argv + argc + 1, "guest.fpu.fpuprobe"));
+    decide();
     run_switches();
+    report_held();
     run_signals();
+    report_held();
     run_exec();
+    report_held();
     if (with_sse) {
         run_damaged();
+        report_held();
     }
+    report_end();
     puts("FPUPROBE OK");
     sys_exit(0);
 }

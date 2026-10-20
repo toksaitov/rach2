@@ -1,0 +1,7 @@
+@etude 1 begin guest.fpu.fpuprobe
+@etude 1 branch save fxsave
+@etude 1 assert switches pass
+@etude 1 assert signals pass
+@etude 1 assert exec pass
+@etude 1 assert damaged pass
+@etude 1 end 5

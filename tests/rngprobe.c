@@ -4,23 +4,29 @@
  *
  * First the kernel's `kcpu_id`, compiled into the probe from kcpu.c, must
  * give leaf 7, subleaf 0, as a direct cpuid does; tests/system/rng_mutate.sh
- * puts a fault there. Then the probe follows the boot's entropy source, so
- * that it passes on a processor with RDSEED and RDRAND and on one without.
- * It asks getrandom() for bytes. If that succeeds the source is trusted, and
- * /dev/urandom must return bytes that vary across reads and pass a loose
- * monobit test, which a stuck or zero stream fails. If getrandom() returns
- * -EIO the source is untrusted, and the devices must refuse: /dev/urandom
- * and /dev/random each open and answer a read with -EIO, while
- * getrandom(GRND_INSECURE) still returns its best-effort bytes. The default
- * suite boots `-cpu max` and takes the first branch; `tests/run noentropy`
- * boots a processor with neither instruction and takes the second.
+ * puts a fault there. Then the probe follows the boot's entropy source, the
+ * branch `source` of its report. It asks getrandom() for bytes. If that
+ * succeeds the source is trusted, and /dev/urandom must return bytes that
+ * vary across reads and pass a loose monobit test, which a stuck or zero
+ * stream fails. If getrandom() returns -EIO the source is untrusted, the
+ * branch fail-closed, and the devices must refuse: /dev/urandom and
+ * /dev/random each open and answer a read with -EIO, while
+ * getrandom(GRND_INSECURE) still returns its best-effort bytes. The probe
+ * passes on either branch; etude judges the branch against the processor,
+ * which is trusted where it has RDSEED or RDRAND, so that a kernel that
+ * distrusts them fails. The default suite boots `-cpu max` and takes the
+ * first branch; `tests/run noentropy` boots a processor with neither
+ * instruction and requires the second.
  *
- * Prints "RNGPROBE START", then "RNGPROBE OK (trusted)", "RNGPROBE OK
- * (fail-closed)" or "RNGPROBE FAIL (why)". Freestanding; direct system calls
- * (probe.h).
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, guest.default.rngprobe without it, and beside them "RNGPROBE START",
+ * then "RNGPROBE OK (trusted)", "RNGPROBE OK (fail-closed)" or a "RNGPROBE
+ * FAIL (why)" line for each check that failed. Freestanding; direct system
+ * calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #include "../rach2/sys/arch/x86/kcpu.c"
 
@@ -95,6 +101,21 @@ static int bufs_equal(const unsigned char *a, const unsigned char *b, int n)
     return 1;
 }
 
+/** Append `a` and then `b` to the string `buf`, and return `buf`. */
+static char *strcat2(char *buf, const char *a, const char *b)
+{
+    size_t n = strlen(buf);
+
+    while (*a) {
+        buf[n++] = *a++;
+    }
+    while (*b) {
+        buf[n++] = *b++;
+    }
+    buf[n] = '\0';
+    return buf;
+}
+
 /**
  * True when `path` opens and answers a read with -EIO, as both random devices
  * must while the generator is untrusted. A device that cannot be opened is not
@@ -138,64 +159,121 @@ static int cpuid_subleaf_zero(void)
     return got_a == want_a && got_b == want_b && got_c == want_c && got_d == want_d;
 }
 
-/** The probe's entry: the cpuid check, then the branch getrandom() picks. */
-PROBE_START void _start(void)
+/**
+ * The trusted branch, after a getrandom() that returned `g`: two reads of
+ * /dev/urandom differ, and their bits pass the monobit count. Returns 1 when
+ * both held.
+ */
+static int trusted(int g)
 {
     unsigned char a[32], b[32];
-    int g, fd, bits;
+    char count[12], why[64];
+    int fd, bits, ok = 1;
 
+    report_branch("source", "trusted");
+    if (g != (int)sizeof(a)) {
+        report_fail("trusted-urandom", "getrandom returned neither 32 bytes nor EIO");
+        report_notrun("trusted-monobit", "no bytes were read");
+        puts("RNGPROBE FAIL (getrandom unexpected)\n");
+        return 0;
+    }
+    fd = sys_open("/dev/urandom", O_RDONLY);
+    if (fd < 0) {
+        report_fail("trusted-urandom", "/dev/urandom did not open");
+        report_notrun("trusted-monobit", "no bytes were read");
+        puts("RNGPROBE FAIL (urandom open, trusted)\n");
+        return 0;
+    }
+    if (sys_read(fd, a, (int)sizeof(a)) != (int)sizeof(a) ||
+        sys_read(fd, b, (int)sizeof(b)) != (int)sizeof(b)) {
+        sys_close(fd);
+        report_fail("trusted-urandom", "a read of 32 bytes of /dev/urandom fell short");
+        report_notrun("trusted-monobit", "no bytes were read");
+        puts("RNGPROBE FAIL (urandom read, trusted)\n");
+        return 0;
+    }
+    sys_close(fd);
+    if (bufs_equal(a, b, (int)sizeof(a))) {
+        report_fail("trusted-urandom", "two reads of /dev/urandom gave the same 32 bytes");
+        puts("RNGPROBE FAIL (urandom did not vary)\n");
+        ok = 0;
+    } else {
+        report_pass("trusted-urandom");
+    }
+    /* 512 bits hold about 256 ones; a wide band, so a fair run passes. */
+    bits = popcount_buf(a, (int)sizeof(a)) + popcount_buf(b, (int)sizeof(b));
+    if (bits < 180 || bits > 332) {
+        why[0] = '\0';
+        report_fail("trusted-monobit",
+                    strcat2(why, report_decimal(count, bits), " of 512 bits set"));
+        puts("RNGPROBE FAIL (monobit out of range)\n");
+        return 0;
+    }
+    report_pass("trusted-monobit");
+    return ok;
+}
+
+/** Report the assertion `id` as `held`, with `detail` when it did not. */
+static int check(const char *id, int held, const char *detail, const char *text)
+{
+    if (held) {
+        report_pass(id);
+    } else {
+        report_fail(id, detail);
+        puts(text);
+    }
+    return held;
+}
+
+/**
+ * The fail-closed branch: both devices answer a read with -EIO, and
+ * getrandom(GRND_INSECURE) still gives bytes. Returns 1 when all three held.
+ */
+static int closed(void)
+{
+    unsigned char a[32];
+    int ok;
+
+    report_branch("source", "fail-closed");
+    ok = check("closed-urandom", refuses_read("/dev/urandom"),
+               "/dev/urandom did not open and answer a read with EIO",
+               "RNGPROBE FAIL (urandom not fail-closed)\n");
+    ok &= check("closed-random", refuses_read("/dev/random"),
+                "/dev/random did not open and answer a read with EIO",
+                "RNGPROBE FAIL (random not fail-closed)\n");
+    ok &= check("closed-insecure", getrandom(a, (int)sizeof(a), GRND_INSECURE) == (int)sizeof(a),
+                "getrandom with GRND_INSECURE did not give 32 bytes",
+                "RNGPROBE FAIL (GRND_INSECURE refused)\n");
+    return ok;
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: the cpuid check, then the branch
+ * getrandom() picks, each reported. */
+void probe_main(unsigned long *sp)
+{
+    char **envp = (char **)(sp + 1) + sp[0] + 1;
+    unsigned char a[32];
+    int ok, g;
+
+    report_begin(report_case(envp, "guest.default.rngprobe"));
     puts("RNGPROBE START\n");
-
-    if (!cpuid_subleaf_zero()) {
-        puts("RNGPROBE FAIL (cpuid subleaf zero)\n");
+    ok = check("cpuid-leaf7", cpuid_subleaf_zero(),
+               "kcpu_id of leaf 7 differs from a cpuid of leaf 7, subleaf 0",
+               "RNGPROBE FAIL (cpuid subleaf zero)\n");
+    g = getrandom(a, (int)sizeof(a), 0);
+    if (g == -EIO) {
+        ok &= closed();
+    } else {
+        ok &= trusted(g);
+    }
+    report_end();
+    if (!ok) {
         sys_exit(1);
     }
-
-    g = getrandom(a, (int)sizeof(a), 0);
-
-    if (g == (int)sizeof(a)) {
-        fd = sys_open("/dev/urandom", O_RDONLY);
-        if (fd < 0) {
-            puts("RNGPROBE FAIL (urandom open, trusted)\n");
-            sys_exit(1);
-        }
-        if (sys_read(fd, a, (int)sizeof(a)) != (int)sizeof(a) ||
-            sys_read(fd, b, (int)sizeof(b)) != (int)sizeof(b)) {
-            puts("RNGPROBE FAIL (urandom read, trusted)\n");
-            sys_exit(1);
-        }
-        sys_close(fd);
-        if (bufs_equal(a, b, (int)sizeof(a))) {
-            puts("RNGPROBE FAIL (urandom did not vary)\n");
-            sys_exit(1);
-        }
-        /* 512 bits hold about 256 ones; a wide band, so a fair run passes. */
-        bits = popcount_buf(a, (int)sizeof(a)) + popcount_buf(b, (int)sizeof(b));
-        if (bits < 180 || bits > 332) {
-            puts("RNGPROBE FAIL (monobit out of range)\n");
-            sys_exit(1);
-        }
-        puts("RNGPROBE OK (trusted)\n");
-        sys_exit(0);
-    }
-
-    if (g == -EIO) {
-        if (!refuses_read("/dev/urandom")) {
-            puts("RNGPROBE FAIL (urandom not fail-closed)\n");
-            sys_exit(1);
-        }
-        if (!refuses_read("/dev/random")) {
-            puts("RNGPROBE FAIL (random not fail-closed)\n");
-            sys_exit(1);
-        }
-        if (getrandom(a, (int)sizeof(a), GRND_INSECURE) != (int)sizeof(a)) {
-            puts("RNGPROBE FAIL (GRND_INSECURE refused)\n");
-            sys_exit(1);
-        }
-        puts("RNGPROBE OK (fail-closed)\n");
-        sys_exit(0);
-    }
-
-    puts("RNGPROBE FAIL (getrandom unexpected)\n");
-    sys_exit(1);
+    puts(g == -EIO ? "RNGPROBE OK (fail-closed)\n" : "RNGPROBE OK (trusted)\n");
+    sys_exit(0);
 }

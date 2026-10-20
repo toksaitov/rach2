@@ -1,0 +1,6 @@
+@etude 1 begin guest.default.xsaveprobe
+@etude 1 branch save fxsave
+@etude 1 branch avx none
+@etude 1 assert osxsave pass
+@etude 1 assert ptrace-enodev pass
+@etude 1 end 4
