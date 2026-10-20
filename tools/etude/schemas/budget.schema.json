@@ -14,7 +14,7 @@
       "properties": {
         "machine_id": {"$ref": "#/$defs/id"},
         "os": {"enum": ["linux", "macos", "windows", "rach2"]},
-        "accelerator": {"enum": ["tcg", "kvm", "whpx", "native"]},
+        "accelerator": {"enum": ["tcg", "kvm", "hvf", "whpx", "native"]},
         "capacity": {
           "type": "object", "additionalProperties": false,
           "required": ["cpu_millis", "memory_bytes", "disk_bytes"],

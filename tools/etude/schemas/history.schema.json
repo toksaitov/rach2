@@ -132,7 +132,7 @@
       "properties": {
         "machine_id": {"$ref": "#/$defs/id"}, "boot_id": {"$ref": "#/$defs/id"},
         "os": {"enum": ["linux", "macos", "windows", "rach2"]}, "os_version": {"$ref": "#/$defs/text"},
-        "accelerator": {"enum": ["tcg", "kvm", "whpx", "native"]},
+        "accelerator": {"enum": ["tcg", "kvm", "hvf", "whpx", "native"]},
         "site_profile": {"$ref": "#/$defs/blob"}, "tools": {"$ref": "#/$defs/blob"},
         "capacity": {"$ref": "#/$defs/blob"}, "cache_state": {"$ref": "#/$defs/blob"},
         "load": {"$ref": "#/$defs/blob"}
