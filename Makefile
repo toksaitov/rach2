@@ -578,13 +578,20 @@ $(ETUDEHOST): $(ETUDE_HOST_SRC) tools/etude/include/etude/exec.h tools/etude/pos
 # etude-legacy (tools/etude/posix/etude_legacy.c), the preparation adapter
 # that builds what the suites of tests/registry read before one starts, as
 # tests/run builds it: `components`, `prepare-all` and the artifacts it finds
-# in make's database.
+# in make's database; the suite adapter, which runs one prepared suite; and
+# the set driver, which tests/run runs, over the supervisor, the ledger, the
+# old runner's locks and the history.
 ETUDELEGACY = build/tools/etude/etude-legacy
 $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
                 tools/etude/include/etude/exec.h tools/etude/posix/posix.h \
-                tools/etude/capture.h utils/sha256.h
+                tools/etude/include/etude/watchdog.h tools/etude/include/etude/ledger.h \
+                tools/etude/include/etude/sched.h tools/etude/include/etude/bridge.h \
+                tools/etude/include/etude/status.h tools/etude/include/etude/history.h \
+                tools/etude/include/etude/qemu.h tools/etude/compare.h \
+                tools/etude/history_json.h tools/etude/capture.h utils/sha256.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Iutils
 
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net

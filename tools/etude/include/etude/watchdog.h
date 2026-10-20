@@ -328,6 +328,9 @@ void etude_supervised_cancel(struct etude_supervised *a);
 /** Give what the supervisor observed of an attempt so far. */
 const struct etude_supervised_result *etude_supervised_result(const struct etude_supervised *a);
 
+/** Give the watchdog of an attempt, for a status record. */
+const struct etude_watchdog *etude_supervised_watchdog(const struct etude_supervised *a);
+
 /** Give the machine of a machine attempt, for typing and QMP; else NULL. */
 struct etude_machine *etude_supervised_machine(struct etude_supervised *a);
 

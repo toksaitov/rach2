@@ -680,6 +680,11 @@ const struct etude_supervised_result *etude_supervised_result(const struct etude
     return &a->r;
 }
 
+const struct etude_watchdog *etude_supervised_watchdog(const struct etude_supervised *a)
+{
+    return a->wd;
+}
+
 struct etude_machine *etude_supervised_machine(struct etude_supervised *a)
 {
     return a->m;

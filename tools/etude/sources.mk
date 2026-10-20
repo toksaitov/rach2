@@ -70,12 +70,20 @@ ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
                     tools/etude/history.c tools/etude/history_json.c \
                     tools/etude/history_collect.c utils/sha256.c
 
-# etude-legacy, the preparation adapter of the suites of tests/registry on
-# Linux and macOS.
+# etude-legacy, the preparation and suite adapters of the suites of
+# tests/registry and their set driver, on Linux and macOS.
 ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
-                   tools/etude/posix/exec.c tools/etude/posix/keeper.c \
-                   tools/etude/posix/process.c tools/etude/capture.c \
-                   utils/sha256.c
+                   tools/etude/posix/legacy_set.c tools/etude/posix/exec.c \
+                   tools/etude/posix/keeper.c tools/etude/posix/process.c \
+                   tools/etude/capture.c tools/etude/watchdog.c \
+                   tools/etude/supervise.c tools/etude/qemu_profile.c \
+                   tools/etude/posix/qemu.c tools/etude/processor.c \
+                   tools/etude/ledger.c tools/etude/sched.c \
+                   tools/etude/posix/bridge.c tools/etude/posix/status.c \
+                   tools/etude/compare.c tools/etude/baseline.c \
+                   tools/etude/compare_report.c tools/etude/compare_run.c \
+                   tools/etude/history.c tools/etude/history_json.c \
+                   tools/etude/history_collect.c utils/sha256.c
 
 # etude-load, the load fixture of shuffled and loaded repetitions on Linux
 # and macOS.

@@ -1,15 +1,17 @@
 /*
  * legacy.h: the preparation adapter, which builds what the suites of
  * tests/registry read before a suite starts, as tests/run built it, and
- * records those artifacts, and the suite adapter, which runs one prepared
- * suite under the old runner's supervision. tools/etude/Readme.md describes
- * them.
+ * records those artifacts; the suite adapter, which runs one prepared
+ * suite under the old runner's supervision; and the set driver, which runs
+ * the suites of one run of tests/run through the machine's ledger and writes
+ * the run's history. tools/etude/Readme.md describes them.
  */
 #ifndef ETUDE_LEGACY_H
 #define ETUDE_LEGACY_H
 
 #include <signal.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 
 /* The bound of one step of a preparation when the caller gives none, in
@@ -108,5 +110,87 @@ struct etude_legacy_run_opts {
  *         system; 128 plus the signal's number after a stop.
  */
 int etude_legacy_run(const struct etude_legacy_run_opts *o);
+
+/* One suite of a set, as the caller selects it from the registry. */
+struct etude_legacy_member {
+    const char *suite;
+    uint64_t memory_mib; /* the most guest memory its machines ask for at once */
+    int serial;          /* it runs before the others, with nothing beside it */
+    int stops;           /* its failure cancels the suites not yet started */
+};
+
+/* The resources of a machine's ledger that a set's claims take. */
+enum etude_legacy_resource { ETUDE_LEGACY_CPU, ETUDE_LEGACY_MEMORY, ETUDE_LEGACY_DISK };
+
+/* One run of a set of suites, as the caller asks for it. */
+struct etude_legacy_set_opts {
+    const char *tree;    /* the root of the tree, which the caller holds */
+    const char *arch;    /* i686 or x86_64 */
+    const char *kernel;  /* as for a preparation, or NULL */
+    const char *program; /* the path of etude-legacy, which runs the steps */
+    const struct etude_legacy_member *members;
+    size_t nmembers;
+    const char *ledger;          /* the absolute directory of the machine's ledger */
+    const char *account;         /* the account the claims are made for */
+    uint64_t cap[3];             /* the ledger's limits, by enum etude_legacy_resource */
+    const char *locks;           /* the absolute directory of the old runner's host
+                                    and port locks, which each claim takes; NULL
+                                    when the suites share the port block of the
+                                    caller's RACH2_PORT_OFFSET */
+    unsigned wait;               /* the seconds a request may wait for admission */
+    unsigned seconds;            /* the bound of the preparation and of each suite */
+    unsigned idle;               /* each suite's idle limit, as for a run */
+    unsigned width;              /* the most suites at once; 0 for the ledger's limits alone */
+    unsigned cpus;               /* each machine's processors, as RACH2_CPUS gives them */
+    const char *accel;           /* QEMU's accelerator, as RACH2_QEMU_ACCEL gives it */
+    int stop_on_fail;            /* the first suite that does not pass cancels the rest */
+    const char *results;         /* the directory of the history's `history/` and
+                                    `store/`, and of each command's output in
+                                    `output/` */
+    const char *schemas;         /* the directory of etude's schemas */
+    const char *record;          /* the file of the preparation's record, or NULL for
+                                    `prepare.record` under `results` */
+    const char *evidence;        /* the directory under which a suite that does not pass
+                                    keeps its work */
+    const char *status;          /* the status record, rewritten as the run goes, or NULL */
+    const char *stamp;           /* a file touched once the preparation has ended, or NULL */
+    const char *commit;          /* the tree's commit, or NULL when it has none */
+    const char *args;            /* what the run was asked, for the status record */
+    FILE *out;                   /* the progress, and each suite's output */
+    volatile sig_atomic_t *stop; /* as for a preparation */
+};
+
+/**
+ * Run the suites `o->members` of the tree as one run of etude: prepare them,
+ * admit each through the machine's ledger, run each prepared suite as
+ * etude_legacy_run runs one, under a watchdog of the whole suite, and write
+ * the run's history.
+ *
+ * The preparation is a claim of every limited resource of the ledger, with
+ * the old runner's host lock alone. Each suite is then a claim of its own:
+ * half a processor for each of `o->cpus`, its memory and 128 MiB for QEMU,
+ * and a GiB of disk, each held within the limit. With `o->locks`, its claim
+ * also takes the old host lock, alone for a suite whose memory is more than
+ * half the limit, and a port block, whose offset the suite is given as
+ * RACH2_PORT_OFFSET. The serial members run first, one at a time; the
+ * others run in the order given, as many at once as the ledger and
+ * `o->width` admit. A failure of a member that `stops`, or of any member
+ * with `o->stop_on_fail`, cancels what runs and what has not started.
+ *
+ * The history is one stream under `o->results`, with the plan of one item
+ * for each member, the case `legacy.SUITE` of the family `legacy.SUITE`, a
+ * step for the preparation, an attempt record for each suite started, and
+ * the run record; its blobs go to the store. A suite's output is printed
+ * whole when it ends, or as it comes when the set has one member, and the
+ * output of the suites a stop interrupted is printed with what they wrote.
+ * The status record, when asked for, gives the claims that wait and the
+ * attempts that run.
+ *
+ * @return 0 when every suite passed; 1 when one did not, or when the run
+ *         could not go on after its plan was written; 2 for a request
+ *         refused before anything ran; 3 when the preparation failed; 128
+ *         plus the signal's number after a stop.
+ */
+int etude_legacy_set(const struct etude_legacy_set_opts *o);
 
 #endif
