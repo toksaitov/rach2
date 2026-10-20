@@ -24,10 +24,13 @@
  * LOOP_CLR_FD detaches it.
  *
  * `loopdevprobe pull` is the stick's row: the image lives on a volume of a
- * stick, and the harness pulls the stick while the image is mounted. The row
- * then requires an error from the read in flight, an unmount of the mount
- * over the device that has gone, and an unmount of the volume the file was
- * on, since the attachment let go of it when its medium went.
+ * stick, and the harness pulls the stick while the image is mounted. The
+ * row reads a file of the image, yielding between reads, until a read or
+ * the open before it fails, which is the removal witnessed, however many
+ * reads that takes; the suite's limit ends a run whose reads never fail.
+ * The row then requires an error from the read in flight, an unmount of the
+ * mount over the device that has gone, and an unmount of the volume the
+ * file was on, since the attachment let go of it when its medium went.
  *
  * `loopdevprobe durable` makes DURABLE_WRITES writes to a file in a KRFFS
  * image. KRFFS writes its dirty blocks to the device at a sync point that
@@ -588,7 +591,6 @@ void probe_main(unsigned long *sp)
     }
 
     if (streq(type, "pull")) {
-        int reads = 0;
         int opens = 0;
 
         rc = syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/m", (long)"vfat", 0, 0);
@@ -623,9 +625,7 @@ void probe_main(unsigned long *sp)
                     break;
                 }
             }
-            if (++reads > 100000) {
-                fail("the stick was never pulled");
-            }
+            syscall0(SYS_SCHED_YIELD);
         }
 
         /* The slot is still taken. */
