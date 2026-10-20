@@ -2597,14 +2597,17 @@ static int procfs_gen_vmstat(struct procfs_text *t)
  * Render /proc/usb: one line for each device the USB stack has configured,
  * with the root port it is on, its speed, what it says it is, and the class
  * it was driven as; then one line for each stick that is a disk, with its
- * node, what the drive says it is, its size and whether it is still there;
- * and, on a machine that has had a stick, a last line with how many names
- * are free and how many sticks have been given up since boot. A machine with
- * no controller, or one booted without USB, has the file, empty.
+ * node, what the drive says it is, its size and whether it is still there; on
+ * a machine that has had a stick, a line with how many names are free and how
+ * many sticks have been given up since boot; and, while the stack has not
+ * finished with a device present (`usb_core_busy`), a last line with how
+ * many. A machine with no controller, or one booted without USB, has the
+ * file, empty.
  */
 static int procfs_gen_usb(struct procfs_text *t)
 {
     int i;
+    int busy;
     char line[96];
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
@@ -2629,6 +2632,12 @@ static int procfs_gen_usb(struct procfs_text *t)
         ap_str(t, " free ");
         ap_u32(t, usbdisk_teardowns());
         ap_str(t, " reclaimed\n");
+    }
+    busy = usb_core_busy();
+    if (busy > 0) {
+        ap_str(t, "busy ");
+        ap_u32(t, (uint32_t)busy);
+        ap_str(t, "\n");
     }
     return t->nomem ? -1 : t->len;
 }

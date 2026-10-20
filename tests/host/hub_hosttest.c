@@ -27,9 +27,10 @@
  * below, and its class driver told when its report endpoint had halted; a hub
  * pulled with two devices below closing both children before itself; a
  * power-on after an over-current asked for again until it is queued;
- * `/proc/usb` reading the table with interrupts off; a hub with twenty ports
- * keeping all twenty, a device on port twenty named through its translator;
- * and a hub that stalls its descriptor request closed.
+ * `/proc/usb` reading the table with interrupts off; the stack counted busy
+ * from the hub's arrival until its scan ends and its devices run; a hub with
+ * twenty ports keeping all twenty, a device on port twenty named through its
+ * translator; and a hub that stalls its descriptor request closed.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls are declared by hand as the other host tests declare them.
@@ -134,6 +135,12 @@ void msc_step(uint32_t elapsed_ms)
 int msc_completion(const struct usb_completion *completion)
 {
     (void)completion;
+    return 0;
+}
+
+/** Return 0, as `msc_attach` takes no stick. */
+int msc_starting(void)
+{
     return 0;
 }
 
@@ -1404,6 +1411,33 @@ static void proc_usb_lines(void)
           irq_saves == saves + USB_MAX_DEVICES && irq_depth == 0);
 }
 
+/**
+ * Check that the stack counts itself busy on every pass from the hub's
+ * arrival until the hub's scan has ended and the two devices it found run,
+ * and idle after, with the records read with interrupts off.
+ */
+static void busy_until_settled(void)
+{
+    uint32_t t;
+    int early = 0;
+    int saves;
+
+    model_reset();
+    model.port_kind[1] = KIND_KBD;
+    model.port_kind[5] = KIND_KBD;
+    for (t = 0; t < 2000; t += 10) {
+        pump(10);
+        if (running_count() < 3 && usb_core_busy() == 0) {
+            early = 1;
+        }
+    }
+    CHECK("the stack is busy until the hub and the two devices below it run",
+          running_count() == 3 && !early);
+    saves = irq_saves;
+    CHECK("and idle once they do, read with interrupts off",
+          usb_core_busy() == 0 && irq_saves == saves + 1 && irq_depth == 0);
+}
+
 /** Pull a keyboard whose report endpoint halted before it is quiesced. */
 static void halted_pulled(void)
 {
@@ -1515,6 +1549,7 @@ int main(void)
           model.reset_requests == 1 && model.reset_clears == 1);
     CHECK("and both are running", running_count() == 2);
     proc_usb_lines();
+    busy_until_settled();
 
     /* Power: one request per port, ganged or not, then the power-good wait. */
     model_reset();

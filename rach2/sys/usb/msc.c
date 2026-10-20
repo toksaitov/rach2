@@ -948,6 +948,22 @@ int msc_lun_ident(int index, int lun, struct msc_ident *out)
     return 0;
 }
 
+int msc_starting(void)
+{
+    int i;
+    int starting = 0;
+
+    for (i = 0; i < MSC_MAX_DEVICES; i++) {
+        int state = sticks[i].state;
+
+        if (state != MSC_STATE_FREE && state != MSC_STATE_READY && state != MSC_STATE_REFUSED &&
+            state != MSC_STATE_GONE) {
+            starting++;
+        }
+    }
+    return starting;
+}
+
 /**
  * A gone stick's completions are taken and dropped until its slot is given
  * back; after that the controller can post nothing of its own, and a

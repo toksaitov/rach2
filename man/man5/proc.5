@@ -773,11 +773,23 @@ Write-protected disks append
 .Ql ro ;
 closing disks append
 .Ql holds H .
-After a USB disk has been present, a final line gives free disk names
+After a USB disk has been present, a line gives free disk names
 and disks reclaimed since boot:
 .Dl disks FREE free RECLAIMED reclaimed
-The file is empty when no USB devices are configured and no disk
-accounting remains.
+.Pp
+While the stack has not finished with a device it has found, a last line
+gives how many it has not finished with:
+.Dl busy N
+A device counts while it is being enumerated, recovered or closed, while a
+hub is reading its descriptor, powering its ports or making its first scan
+of them, and while a disk's units are being brought up.
+The line goes once every device at a port is configured, refused, or waiting
+for a controller slot or a free entry in the device table, so a program that waits for it to go and then reads the device
+lines sees the end of enumeration.
+A device a hub has not yet reported is not counted.
+.Pp
+The file is empty when no USB devices are configured, no disk
+accounting remains and the stack is not busy.
 .It Pa /proc/version
 The kernel's name, release and version as
 .Xr uname 2

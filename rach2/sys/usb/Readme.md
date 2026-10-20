@@ -89,6 +89,8 @@ A device moves one step per pass at most. Its port must be connected for 100 ms 
 
 When a device fails or no class driver takes it, its port's bit is set in a bitmap, per controller or in the hub's record, and the port is left alone without spending a record. The bit is cleared when the port shows no connection, so the next device plugged in there is tried. When no record is free, the port is logged once and tried on every pass.
 
+`usb_core_busy` counts the devices the stack has not finished with: records being enumerated, recovered or closed, hubs before the end of their first scan (`hub_starting`), and sticks whose units are being brought up (`msc_starting`). A device waiting for a slot or a free record is not counted, since it may wait for ever. `/proc/usb` gives the count as its `busy` line while it is above zero, so a program that waits for the line to go sees the end of enumeration whatever the speed of the machine.
+
 ### Locations
 
 A device is opened at a `struct usb_location` (`hcd.h`): its root port, its depth, its route string and its transaction translator. The route string has 4 bits for each of 5 tiers (`USB_TREE_TIERS`), the port on the hub nearest the root in the lowest; a device with more than 5 hubs above it is not driven. A port above 15 is written as 15, which the specification allows only for a low- or full-speed device directly below its high-speed translator, whose 8-bit port number gives the real port; anywhere else a device on such a port is not driven.

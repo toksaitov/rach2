@@ -1021,6 +1021,39 @@ static struct block_request *make_request(int write, uint64_t lba, uint32_t coun
 }
 
 /**
+ * Check that a stick refused at its initialization deadline stops counting
+ * as starting, and then bring up a stick that comes up at once, counted as
+ * starting from its attach until it is ready, which `/proc/usb` reports as
+ * the stack's being busy. The ready stick is left for the rows after.
+ */
+static void starting_count(void)
+{
+    int i;
+    int early = 0;
+
+    model_reset();
+    dev.lun_ready_after[0] = 100000;
+    CHECK("a unit that never gets ready attaches", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    for (i = 0; i < 100; i++) {
+        pump(100);
+    }
+    CHECK("and is not starting once refused at its deadline", drops == 1 && msc_starting() == 0);
+
+    model_reset();
+    CHECK("no stick is starting before one is attached", msc_starting() == 0);
+    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
+    CHECK("and is starting once taken", msc_starting() == 1);
+    for (i = 0; i < 100 && msc_count() == 0; i++) {
+        pump(1);
+        if (msc_count() == 0 && msc_starting() != 1) {
+            early = 1;
+        }
+    }
+    CHECK("and comes up, starting on every pass until it is ready", msc_count() == 1 && !early);
+    CHECK("and not starting once it is", msc_starting() == 0);
+}
+
+/**
  * Check that the time of transfers, retries and recovery counts against each
  * unit's ten-second initialization deadline, in every state and stage, and
  * that a pump with no elapsed time counts nothing.
@@ -1167,9 +1200,7 @@ int main(void)
     static unsigned char page[8 * SECTOR];
 
     /* A stick that comes up at once. */
-    model_reset();
-    CHECK("a stick is taken", msc_attach(0, 1, 0, EP_IN, EP_OUT) == 0);
-    CHECK("and comes up", run_until_settled(100));
+    starting_count();
     CHECK("with the capacity the drive reported, which is its last block plus one",
           msc_block_device(0) != 0 && msc_block_device(0)->sector_count == MEDIUM_SECTORS);
     CHECK("and 512-byte sectors", msc_block_device(0)->sector_size == SECTOR);

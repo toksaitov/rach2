@@ -1123,6 +1123,19 @@ void hub_step(uint32_t elapsed_ms)
     }
 }
 
+int hub_starting(void)
+{
+    int i;
+    int starting = 0;
+
+    for (i = 0; i < HUB_MAX; i++) {
+        if (hub_at(i)->used && hub_at(i)->state != HUB_RUNNING) {
+            starting++;
+        }
+    }
+    return starting;
+}
+
 int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out)
 {
     struct hub *h = by_index(owner);

@@ -407,6 +407,12 @@ int hub_completion(const struct usb_completion *completion)
     return 0;
 }
 
+/** Return 0: there is no hub to be starting. */
+int hub_starting(void)
+{
+    return 0;
+}
+
 /** Report nothing connected and return -1: there is no hub port. */
 int hub_port_status(struct xhci_ctrl *hc, int owner, int port, struct usb_port_status *out)
 {
@@ -454,6 +460,12 @@ void msc_step(uint32_t elapsed_ms)
 int msc_completion(const struct usb_completion *completion)
 {
     (void)completion;
+    return 0;
+}
+
+/** Return 0: there is no stick to be starting. */
+int msc_starting(void)
+{
     return 0;
 }
 

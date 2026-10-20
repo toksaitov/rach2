@@ -1752,17 +1752,41 @@ int usb_core_clear_halt(struct xhci_ctrl *hc, int device, int endpoint)
     return usb_core_endpoint_quiesce(hc, device, endpoint);
 }
 
+/** Whether the device `d` is being enumerated, recovered or closed: in any
+ * state but free, running, a tombstone or waiting for a slot. */
+static int in_progress(const struct usb_device_state *d)
+{
+    return d->state != ST_FREE && d->state != ST_RUNNING && d->state != ST_TOMBSTONE &&
+           d->state != ST_SLOTWAIT;
+}
+
 int usb_core_idle(void)
 {
     int i;
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (dev_at(i)->state != ST_FREE && dev_at(i)->state != ST_RUNNING &&
-            dev_at(i)->state != ST_TOMBSTONE && dev_at(i)->state != ST_SLOTWAIT) {
+        if (in_progress(dev_at(i))) {
             return 0;
         }
     }
     return 1;
+}
+
+int usb_core_busy(void)
+{
+    int i;
+    int busy = 0;
+    uint32_t flags;
+
+    flags = kirq_save();
+    for (i = 0; i < USB_MAX_DEVICES; i++) {
+        if (in_progress(dev_at(i))) {
+            busy++;
+        }
+    }
+    busy += hub_starting() + msc_starting();
+    kirq_restore(flags);
+    return busy;
 }
 
 int usb_core_count(void)

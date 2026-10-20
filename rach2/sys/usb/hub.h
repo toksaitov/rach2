@@ -55,6 +55,10 @@ void hub_step(uint32_t elapsed_ms);
  */
 int hub_completion(const struct usb_completion *completion);
 
+/** How many hubs are taken and not yet running: their descriptor, their
+ * ports' power or their first scan is still in progress. */
+int hub_starting(void);
+
 /*
  * The port operations a device below a hub answers to, with `owner` the
  * hub's device index and `port` numbered from zero; `hc` is not used, since

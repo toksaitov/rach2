@@ -96,6 +96,10 @@ struct usb_completion;
  */
 int msc_completion(const struct usb_completion *completion);
 
+/** How many sticks are being brought up: from `msc_attach` until each unit
+ * has answered or been passed over, or the stick is refused or gone. */
+int msc_starting(void);
+
 /**
  * Fill `out` with what logical unit `lun` of the stick at entry `index` is:
  * INQUIRY's names, the unit's serial page, its capacity and write protection,

@@ -232,6 +232,21 @@ int usb_core_idle(void);
 /** How many devices are configured and running; read at boot by `usb_init`. */
 int usb_core_count(void);
 
+/**
+ * How many devices the stack has not finished with: those being enumerated,
+ * recovered or closed, as `usb_core_idle` counts them, the hubs whose class
+ * driver has not ended its first scan (`hub_starting`), and the sticks whose
+ * units are being brought up (`msc_starting`). Zero once every device
+ * present at a port is running, refused or waiting for a slot or an entry,
+ * which is the end of enumeration that `/proc/usb` reports. A change a hub
+ * has not yet reported is not counted.
+ *
+ * Called in process context; the records are read with interrupts off, so a
+ * pass of the pump that moves a device from one count to another is seen
+ * whole or not at all.
+ */
+int usb_core_busy(void);
+
 /* A running device as /sys/bus/usb/devices names it: its bus, the number
  * of its controller from 1; its ports from the root port down, each from 1,
  * `depth` of them; the controller's slot, which is its device number; and
