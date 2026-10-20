@@ -30,3 +30,10 @@ ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
 # etude-load, the load fixture of shuffled and loaded repetitions on Linux
 # and macOS.
 ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c
+
+# etude-proof, the driver of mutation proofs on Linux and macOS.
+ETUDE_PROOF_SRC = tools/etude/posix/etude_proof.c tools/etude/posix/proof.c \
+                  tools/etude/proof.c tools/etude/json.c tools/etude/schema.c \
+                  tools/etude/posix/store.c tools/etude/posix/exec.c \
+                  tools/etude/posix/keeper.c tools/etude/posix/process.c \
+                  tools/etude/capture.c utils/sha256.c

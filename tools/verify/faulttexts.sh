@@ -11,7 +11,9 @@
 # scripts are the *_mutate.sh files under tests/, tools/dev/poll_kernels.sh,
 # and every other script under tests/ or tools/ with a --mutate mode. One
 # without a --texts mode is counted as a failure and not run, since it would
-# start its proof.
+# start its proof. The catalogues of etude's proof driver, tests/proofs/*.json
+# and the example of the contract, are checked by the driver's own --texts,
+# which needs build/tools/etude/etude-proof built.
 #
 # Usage: sh tools/verify/faulttexts.sh
 set -u
@@ -45,8 +47,22 @@ for script in $scripts; do
         failed=$((failed + 1))
     fi
 done
+proof=build/tools/etude/etude-proof
+for catalogue in tests/proofs/*.json tools/etude/schemas/proof.example.json; do
+    [ -e "$catalogue" ] || continue
+    if [ ! -x "$proof" ]; then
+        echo "faulttexts: $proof: not built; make $proof" >&2
+        failed=$((failed + 1))
+    elif "$proof" -t . --texts "$catalogue" >"$log" 2>&1 </dev/null; then
+        checked=$((checked + 1))
+    else
+        echo "faulttexts: $catalogue: a fault's text is not once in its source:" >&2
+        tail -n 5 "$log" >&2
+        failed=$((failed + 1))
+    fi
+done
 if [ "$failed" -ne 0 ]; then
-    echo "faulttexts: result: fail: $failed of $((checked + failed)) fault scripts" >&2
+    echo "faulttexts: result: fail: $failed of $((checked + failed)) fault scripts and catalogues" >&2
     exit 1
 fi
-echo "faulttexts: result: pass: $checked fault scripts, each fault's text in its source"
+echo "faulttexts: result: pass: $checked fault scripts and catalogues, each fault's text in its source"
