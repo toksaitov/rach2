@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "proof": "rehearse-group",
+  "summary": "rehearse_group_test.sh on i686, on an installer root built by the recipe of a private copy of tests/system/suites.mk",
+  "tree": "private",
+  "sources": ["tests/system/suites.mk"],
+  "artifacts": ["${WORK}/root.ext2"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "make -s -j8 build/images/installer-root.ext2 build/images/installer-test.disk build/tools/inspect/growset build/tools/image/mkgpt build/tools/image/mkmbr ARCH=i686 </dev/null && args=$(awk '/^\\$\\(INSTALLER_EXT2\\):/ { f = 1 } f && /^\\tsh tools\\/image\\/mkext2.sh / { for (i = 1; i <= NF; i++) if (p) printf \"%s \", $i; else if ($i == \"$@\") p = 1; exit }' ${SRC}/tests/system/suites.mk) && [ -n \"$args\" ] && rm -f ${WORK}/root.ext2 && sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest ${WORK}/root.ext2 $args"],
+    "bound_s": 1800
+  },
+  "test": {
+    "argv": ["/bin/sh", "tests/system/rehearse_group_test.sh", "${WORK}/root.ext2", "build/images/installer-root.ext2", "build/images/installer-test.disk"],
+    "bound_s": 600
+  },
+  "faults": [
+    {
+      "name": "group",
+      "summary": "the installer root is built with mke2fs's default of 32768 blocks to a group, so its first group is partial",
+      "edits": [
+        {"file": "tests/system/suites.mk", "find": "$@ 64 16384 32768", "replace": "$@ 64 32768 32768"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["root.ext2 has 32768 blocks per group, not 16384", "installer-test: FAIL: growset did not compute the save set", "rehearse-group: the rehearsal stopped at its setup"]
+      }
+    }
+  ]
+}
