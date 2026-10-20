@@ -204,7 +204,77 @@ static int drain(struct keeper *kp, uint64_t bound_us, int again)
     return 1;
 }
 
-/** End what the case left, report the usage and the cleanup, and exit. */
+/** Read and discard what pipe `*fd` holds, and at its end mark it -1. */
+static void discard(int *fd)
+{
+    char buf[4096];
+    ssize_t n;
+
+    while (*fd >= 0) {
+        n = read(*fd, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n == 0)
+            *fd = -1;
+        if (n <= 0)
+            return;
+    }
+}
+
+/**
+ * Read and discard the case's output until both of its pipes reach their
+ * end, or `bound_us` passes.
+ *
+ * @return 1 when no process holds either pipe open for writing, else 0.
+ */
+static int outputs_closed(struct keeper *kp, uint64_t bound_us)
+{
+    uint64_t until = posix_now_us() + bound_us, now, ms;
+    struct pollfd p[2];
+    int i;
+
+    p[0].fd = kp->args->out_r;
+    p[1].fd = kp->args->err_r;
+    for (i = 0; i < 2; i++) {
+        fcntl(p[i].fd, F_SETFL, O_NONBLOCK);
+        p[i].events = POLLIN;
+    }
+    for (;;) {
+        discard(&p[0].fd);
+        discard(&p[1].fd);
+        now = posix_now_us();
+        if (p[0].fd < 0 && p[1].fd < 0)
+            return 1;
+        if (now >= until)
+            return 0;
+        ms = (until - now + 999) / 1000;
+        poll(p, 2, ms < KEEPER_WAIT_MAX_MS ? (int)ms : KEEPER_WAIT_MAX_MS);
+    }
+}
+
+/** Record the cleanup in the attempt's verdict file, when it has one. */
+static void write_verdict(const struct keeper_args *a, int confirmed)
+{
+    const char *text = confirmed ? ETUDE_VERDICT_CONFIRMED : ETUDE_VERDICT_UNCONFIRMED;
+    ssize_t n;
+    int fd;
+
+    if (a->spec->verdict == NULL)
+        return;
+    fd = open(a->spec->verdict, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0666);
+    if (fd < 0)
+        return;
+    n = write(fd, text, strlen(text));
+    (void)n;
+    close(fd);
+}
+
+/**
+ * End what the case left, report the usage and the cleanup, and exit. A
+ * keeper whose controller has gone also requires the case's output to have
+ * closed, as the controller would, and records its finding in the verdict
+ * file, which the ledger reads in place of the controller's report.
+ */
 static void keeper_finish(struct keeper *kp)
 {
     uint64_t grace = kp->args->spec->grace_us;
@@ -228,8 +298,13 @@ static void keeper_finish(struct keeper *kp)
 #else
     peak = (uint64_t)ru.ru_maxrss * 1024u;
 #endif
-    keeper_send(kp->args->ev, KEEP_USAGE, (int64_t)cpu, kp->reaper && confirmed, (int64_t)peak);
-    keeper_send(kp->args->ev, KEEP_CLEANED, confirmed, 0, 0);
+    if (kp->controller &&
+        keeper_send(kp->args->ev, KEEP_USAGE, (int64_t)cpu, kp->reaper && confirmed,
+                    (int64_t)peak) == 0 &&
+        keeper_send(kp->args->ev, KEEP_CLEANED, confirmed, 0, 0) == 0)
+        _exit(0);
+    if (kp->args->spec->verdict != NULL)
+        write_verdict(kp->args, confirmed && outputs_closed(kp, grace));
     _exit(0);
 }
 
@@ -313,21 +388,28 @@ static void supervise(struct keeper *kp)
  */
 static int keeper_fds(struct keeper_args *a, const struct keeper_args *k)
 {
-    int keep[5];
+    int keep[7];
 
     keep[0] = k->ctl;
     keep[1] = k->ev;
     keep[2] = k->in;
     keep[3] = k->out;
     keep[4] = k->err;
-    posix_close_others(keep, 5);
+    keep[5] = k->out_r;
+    keep[6] = k->err_r;
+    posix_close_others(keep, 7);
     *a = *k;
     a->ctl = posix_fd_high(k->ctl);
     a->ev = posix_fd_high(k->ev);
     a->in = posix_fd_high(k->in);
     a->out = posix_fd_high(k->out);
     a->err = posix_fd_high(k->err);
-    return a->ctl < 0 || a->ev < 0 || a->in < 0 || a->out < 0 || a->err < 0 ? -1 : 0;
+    a->out_r = posix_fd_high(k->out_r);
+    a->err_r = posix_fd_high(k->err_r);
+    return a->ctl < 0 || a->ev < 0 || a->in < 0 || a->out < 0 || a->err < 0 || a->out_r < 0 ||
+                   a->err_r < 0
+               ? -1
+               : 0;
 }
 
 /** Make a pipe whose ends are numbered 3 or above and closed on exec. */
@@ -418,6 +500,7 @@ void keeper_main(const struct keeper_args *k)
     if (keeper_launch(&kp) != 0) {
         while (waitpid(-1, NULL, 0) > 0 || errno == EINTR) {
         }
+        write_verdict(&a, 1);
         _exit(1);
     }
     close(a.in);

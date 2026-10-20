@@ -1134,6 +1134,7 @@ static const struct {
     {"concurrent", fx_concurrent},
     {"exec-attempts", fx_exec_attempts},
     {"exec-unrun", fx_exec_unrun},
+    {"ledger", fx_ledger},
 };
 
 /** Find this program's path and directory, and the target's path beside it. */

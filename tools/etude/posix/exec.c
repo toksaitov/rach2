@@ -27,6 +27,8 @@ struct etude_proc {
     char *attempt_id;
     size_t output_max;
     uint64_t grace_us;
+    etude_child_fn child;
+    void *reg_ctx;
     pid_t keeper;
     int ctl, ev, out, err; /* -1 once closed */
     struct keeper_msg msg; /* a message of the keeper's being read */
@@ -65,6 +67,8 @@ static struct etude_proc *proc_new(const struct etude_exec_spec *spec)
     p->keeper = -1;
     p->output_max = spec->output_max;
     p->grace_us = spec->grace_us;
+    p->child = spec->child;
+    p->reg_ctx = spec->reg_ctx;
     p->attempt_id = malloc(strlen(spec->attempt_id) + 1);
     if (p->attempt_id == NULL || capture_init(&p->r.out, spec->output_max) != 0 ||
         capture_init(&p->r.err, spec->output_max) != 0) {
@@ -132,6 +136,8 @@ static int proc_spawn(struct etude_proc *p, const struct etude_exec_spec *spec)
         k.in = fds[FD_IN];
         k.out = fds[FD_OUT_W];
         k.err = fds[FD_ERR_W];
+        k.out_r = fds[FD_OUT_R];
+        k.err_r = fds[FD_ERR_R];
         keeper_main(&k);
     }
     p->ctl = fds[FD_CTL_W];
@@ -241,8 +247,9 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
 
 /**
  * Take a `child` record: a running process that started no earlier than the
- * case's process goes to the keeper to end; one that started earlier cannot
- * be its descendant.
+ * case's process is registered and goes to the keeper to end; one that
+ * started earlier cannot be its descendant. A descendant the registration
+ * refused leaves the cleanup unconfirmed.
  */
 static void child_found(void *ctx, long pid)
 {
@@ -259,6 +266,8 @@ static void child_found(void *ctx, long pid)
         p->r.foreign++;
     } else {
         p->r.children++;
+        if (p->child != NULL && p->child(p->reg_ctx, p->attempt_id, &id) != 0)
+            p->unverified = 1;
         keeper_send(p->ctl, KEEP_CHILD, pid, (int64_t)id.start, 0);
     }
 }

@@ -28,8 +28,10 @@ struct etude_proc {
     struct etude_win_child *child;
     struct capture_lines lines;
     etude_register_fn reg;
+    etude_child_fn child_reg;
     void *reg_ctx;
-    int reg_error; /* the error the registration returned, or 0 */
+    int reg_error;  /* the error the registration returned, or 0 */
+    int unrecorded; /* a descendant's registration failed */
     int cancelled;
     int finished;
     int returned;
@@ -118,6 +120,7 @@ static struct etude_proc *proc_new(const struct etude_exec_spec *spec)
         return NULL;
     p->output_max = spec->output_max;
     p->reg = spec->reg;
+    p->child_reg = spec->child;
     p->reg_ctx = spec->reg_ctx;
     p->attempt_id = malloc(strlen(spec->attempt_id) + 1);
     if (p->attempt_id == NULL || capture_init(&p->r.out, spec->output_max) != 0 ||
@@ -149,12 +152,14 @@ static void proc_release(struct etude_proc *p)
 
 /**
  * Take a `child` record. Every descendant of the case is in its job and ends
- * with it; the record is counted as a child when it names a process of the
- * job, and as foreign otherwise.
+ * with it; the record is counted and registered as a child when it names a
+ * process of the job, and counted as foreign otherwise. A descendant the
+ * registration refused leaves the cleanup unconfirmed.
  */
 static void child_found(void *ctx, long pid)
 {
     struct etude_proc *p = ctx;
+    struct etude_pid id;
     HANDLE h;
     BOOL in = FALSE;
 
@@ -162,10 +167,14 @@ static void child_found(void *ctx, long pid)
     if (h == NULL)
         return;
     if (WaitForSingleObject(h, 0) != WAIT_OBJECT_0) {
-        if (IsProcessInJob(h, p->child->job, &in) && in)
+        if (IsProcessInJob(h, p->child->job, &in) && in) {
             p->r.children++;
-        else
+            if (p->child_reg != NULL &&
+                (identify(h, &id) != 0 || p->child_reg(p->reg_ctx, p->attempt_id, &id) != 0))
+                p->unrecorded = 1;
+        } else {
             p->r.foreign++;
+        }
     }
     CloseHandle(h);
 }
@@ -286,7 +295,7 @@ static void proc_settle(struct etude_proc *p)
         p->r.cpu_us.value = u.user_us + u.kernel_us;
         p->r.cpu_us.method = METHOD_CPU;
     }
-    p->r.cleanup = ETUDE_CLEANUP_CONFIRMED;
+    p->r.cleanup = p->unrecorded ? ETUDE_CLEANUP_UNCONFIRMED : ETUDE_CLEANUP_CONFIRMED;
     p->r.finished_us = etude_win_mono_us();
     p->finished = 1;
 }

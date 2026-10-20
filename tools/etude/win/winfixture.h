@@ -34,4 +34,10 @@ int fx_exec_attempts(void);
  */
 int fx_exec_unrun(void);
 
+/**
+ * The ledger registers an attempt and its reported descendant, and recovery
+ * keeps a claim while its case runs and frees it once the case's job ends.
+ */
+int fx_ledger(void);
+
 #endif

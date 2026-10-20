@@ -54,6 +54,21 @@ enum etude_cleanup {
 typedef int (*etude_register_fn)(void *ctx, const char *attempt_id, const struct etude_pid *keeper,
                                  const struct etude_pid *process);
 
+/**
+ * The registration of a descendant that a case reported in a `child` record
+ * and the executor found running, called before the executor ends it.
+ *
+ * @return 0, or an error number, after which the attempt's cleanup is
+ *         unconfirmed, since the descendant is in no record.
+ */
+typedef int (*etude_child_fn)(void *ctx, const char *attempt_id, const struct etude_pid *child);
+
+/* What the file `verdict` holds when a keeper confirmed its cleanup. */
+#define ETUDE_VERDICT_CONFIRMED "confirmed\n"
+
+/* What it holds when the keeper could not confirm the cleanup. */
+#define ETUDE_VERDICT_UNCONFIRMED "unconfirmed\n"
+
 /* One attempt to run, as the plan fixed it. */
 struct etude_exec_spec {
     const char *attempt_id;
@@ -64,9 +79,13 @@ struct etude_exec_spec {
     size_t output_max;      /* bytes kept of each of standard output and error */
     uint64_t grace_us;      /* from the termination signal to the kill */
     etude_register_fn reg;  /* NULL registers nothing */
-    void *reg_ctx;
-    int posix_only; /* nonzero: use no interface beyond POSIX, as on a
-                       system without a subreaper, as the tests do on Linux */
+    etude_child_fn child;   /* NULL registers no descendant */
+    void *reg_ctx;          /* the context of `reg` and `child` */
+    int posix_only;         /* nonzero: use no interface beyond POSIX, as on a
+                               system without a subreaper, as the tests do on Linux */
+    const char *verdict;    /* where a keeper whose controller has gone records
+                               its cleanup, or NULL; Windows, which has no
+                               keeper, writes none */
 };
 
 /* One output stream of a case. */

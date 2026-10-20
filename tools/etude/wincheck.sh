@@ -41,6 +41,8 @@ env-dup-case|win/winfmt.c|        if (namecmp(vars[i - 1], vars[i]) == 0)|      
 cancel-ignored|win/exec.c|    etude_win_stop(p->child);|    (void)p;|exec-attempts
 no-end-stop|win/exec.c|        etude_win_stop(c);|        (void)c;|exec-attempts
 refusal-ignored|win/exec.c|    return p->reg_error != 0;|    return 0;|exec-unrun
+child-unrecorded|win/exec.c|            if (p->child_reg != NULL \&\&|            if (0 \&\&|ledger
+verdict-on-windows|ledger.c|    if (strcmp(c->system, "win32") != 0 \&\& !verdict_confirmed(l, c->id)) {|    if (!verdict_confirmed(l, c->id)) {|ledger
 EOF
 }
 
@@ -130,11 +132,12 @@ fi
 # copy DIR: copy the sources to DIR.
 copy() {
     mkdir -p "$1/win" "$1/include/etude"
-    cp "$src"/capture.h "$src"/capture.c "$1/"
+    cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$repo"/utils/sha256.h \
+        "$repo"/utils/sha256.c "$1/"
     cp "$src"/include/etude/*.h "$1/include/etude/"
     cp "$src"/win/winexec.h "$src"/win/winexec.c "$src"/win/winsys.c "$src"/win/winfmt.h \
         "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/wintarget.c "$src"/win/winfixture.h \
-        "$src"/win/winfixture.c "$src"/win/winexecfix.c "$1/win/"
+        "$src"/win/winfixture.c "$src"/win/winexecfix.c "$src"/win/winledgerfix.c "$1/win/"
 }
 
 # compile DIR FLAGS: build the two programs in DIR/win. A Windows program
@@ -143,8 +146,8 @@ compile() {
     (
         cd "$1/win"
         # shellcheck disable=SC2086
-        "$cc" $2 -I ../include -o winfixture.exe winfixture.c winexecfix.c exec.c \
-            ../capture.c winexec.c winsys.c winfmt.c -lws2_32
+        "$cc" $2 -I ../include -o winfixture.exe winfixture.c winexecfix.c winledgerfix.c \
+            exec.c ../capture.c ../ledger.c ../sha256.c winexec.c winsys.c winfmt.c -lws2_32
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
     ) </dev/null

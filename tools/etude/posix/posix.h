@@ -44,6 +44,8 @@ struct keeper_args {
     int in;  /* the case's standard input */
     int out; /* the write ends of the case's standard output and error */
     int err;
+    int out_r; /* their read ends, which the keeper reads only once the */
+    int err_r; /* controller has gone */
 };
 
 /** Run the keeper of one attempt in the process just forked; never returns. */
