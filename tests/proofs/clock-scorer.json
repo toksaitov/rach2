@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "proof": "clock-scorer",
+  "summary": "runtests' self-test of the clock suite's interval scorer, built from a private copy of tests/clockref.h, with a judge that accepts an interval that only overlaps the bound",
+  "tree": "private",
+  "sources": [
+    "tests/clockref.h"
+  ],
+  "artifacts": [
+    "${WORK}/runtests"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "mkdir -p ${WORK}/s/tests/system/runner && cp tests/system/runner/runtests.c ${WORK}/s/tests/system/runner/ && cp ${SRC}/tests/clockref.h ${WORK}/s/tests/ && ${HOSTCC:-cc} -O2 -Wall -Wextra -Werror -o ${WORK}/runtests ${WORK}/s/tests/system/runner/runtests.c"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/runtests",
+      "--selftest"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "overlap",
+      "summary": "clockref_judge accepts an interval whose low end or high end is within the bound",
+      "edits": [
+        {
+          "file": "tests/clockref.h",
+          "find": "    if (low >= -bound && high <= bound)",
+          "replace": "    if (low >= -bound || high <= bound)"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "clock interval"
+        ]
+      }
+    }
+  ]
+}

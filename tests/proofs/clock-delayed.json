@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "proof": "clock-delayed",
+  "summary": "the clock suite on x86-64, its one architecture, with each CLOCKLOAD line held two seconds before clockload.py reads it, and the rule that counts one tick for each interrupt",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/arch/x86/pit.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 sh tests/proofs/guest.sh make rach2 test-image && ARCH=x86_64 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "RACH2_CLOCKLOAD_DELAY_S=2 ARCH=x86_64 exec sh tests/proofs/guest.sh run clock 'clock-test: ok: both clocks kept the host'"
+    ],
+    "bound_s": 1800
+  },
+  "faults": [
+    {
+      "name": "one-per-interrupt",
+      "summary": "timer_tick_clock counts one tick for each interrupt once the reference keeps time, so that the host's stops lose the ticks that fell due",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/pit.c",
+          "find": "    return due;",
+          "replace": "    return 1u;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKLOAD FAIL (clock drift)"
+        ]
+      }
+    }
+  ]
+}

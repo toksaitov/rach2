@@ -23,6 +23,11 @@ chose: the runner's shim reads RACH2_QEMU_ACCEL, and a run outside the
 runner gets `-accel tcg` on the command line. The console is copied to LOG.
 Exits 0 when both clocks agree, 1 when one does not or the machine fails,
 and 2 for a wrong invocation.
+
+RACH2_CLOCKLOAD_DELAY_S, when set, holds each CLOCKLOAD line that many
+seconds before the script reads it, as a slow console would. The proof
+tests/proofs/clock-delayed.json sets it, since the judgment must not depend
+on when a result arrives.
 """
 
 import os
@@ -47,8 +52,17 @@ def factor():
         return 1.0
 
 
+def delay():
+    """Seconds each CLOCKLOAD line is held, from RACH2_CLOCKLOAD_DELAY_S."""
+    try:
+        return max(0.0, float(os.environ.get("RACH2_CLOCKLOAD_DELAY_S", "0")))
+    except ValueError:
+        return 0.0
+
+
 def reader(stream, lines, log):
     """Put each line of `stream` on `lines` with the host time it arrived."""
+    held = delay()
     buf = b""
     while True:
         chunk = stream.read1(4096) if hasattr(stream, "read1") else stream.read(1)
@@ -59,6 +73,8 @@ def reader(stream, lines, log):
         buf += chunk
         while b"\n" in buf:
             line, buf = buf.split(b"\n", 1)
+            if held and line.startswith(b"CLOCKLOAD"):
+                time.sleep(held)
             lines.put((time.monotonic(), line.decode("latin-1").rstrip("\r")))
     lines.put((time.monotonic(), None))
 

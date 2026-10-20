@@ -12,7 +12,7 @@ A script here runs by hand from the top of the tree as `sh tests/system/NAME.sh`
 
 `sh tests/system/bindhold_mutate.sh` removes the boot-root bind identity checks for descriptors and executable holders in turn. For the executable fault it first makes the loader copy boot-root ELF segments, so file mappings cannot retain the file independently, and requires that kernel to pass before removing the executable holder's identity check. The `textbusy` suite runs `musl/bindholdmusl`, which checks a descriptor and its duplicate, a mapping after close, a descriptor in flight on an AF_UNIX socket, a running image and a forked image through a bind remounted read-only. Unlink and rename through the original mount or its writable bind must preserve the file's bytes through replacement allocations, and last close or exit must reclaim its space. Each fault must fail the suite; the unmodified and restored kernels must pass it.
 
-`sh tests/system/clock_mutate.sh` proves the interval scorer, delays each clock result by two seconds, and compiles the rule that counts one tick per interrupt. The correct clock must pass with delayed console delivery, the clock fault must fail for drift under the same delay, and restored sources and artifacts must pass again.
+`tests/proofs/clock-scorer.json` proves the interval scorer, and `tests/proofs/clock.json` and `clock-delayed.json` compile the rule that counts one tick per interrupt into the x86-64 kernel; the second sets `RACH2_CLOCKLOAD_DELAY_S=2`, which holds each clock result two seconds before `clockload.py` reads it. The correct clock must pass with and without the delay, the clock fault must fail for drift under each, and restored sources and artifacts must pass again.
 
 ## Design
 
