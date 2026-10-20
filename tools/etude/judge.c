@@ -1,14 +1,16 @@
 /*
- * judge.c: casecheck's judgement of a program's report records, and its
- * check of an attempt's results document against the case.
+ * judge.c: casecheck's judgement of a program's report records, its check
+ * of an attempt's results document against the case, and the results
+ * document it writes for an attempt from the report and the program's end.
  *
- * Both follow the Readme's Report records and Results: an assertion that
+ * All follow the Readme's Report records and Results: an assertion that
  * nothing reported is missing, one the program could not evaluate is not
  * run, and neither is ever a pass. A report that a program wrote is judged
  * here as an executor will judge it; a results document is checked for the
  * assertions it must give, once each, and for an outcome that follows from
  * them, so that a document which leaves an assertion out, or a history that
- * calls a skipped assertion passed, is refused.
+ * calls a skipped assertion passed, is refused. A document written here is
+ * given that check before it is printed.
  */
 #include "casecheck.h"
 
@@ -64,11 +66,38 @@ struct judging {
     const char *decided[32]; /* each group's alternative, or NULL */
     const char *how[32];     /* "feature" or "report", or NULL for neither */
     int reported[32];        /* the group's branch record was read */
+    struct jbuf *texts;      /* an open JSON array of the errors, or NULL */
 };
 
 static int same(const char *a, const char *b)
 {
     return a != NULL && b != NULL && strcmp(a, b) == 0;
+}
+
+/**
+ * Appends `s` to `b` as a JSON string of printable ASCII, a `text` of the
+ * results schema: a byte outside that range becomes `?`.
+ */
+static void put_text(struct jbuf *b, const char *s)
+{
+    jbuf_puts(b, "\"");
+    for (; *s != '\0'; s++) {
+        char c = *s < 0x20 || *s > 0x7e ? '?' : *s;
+
+        if (c == '"' || c == '\\') {
+            jbuf_put(b, "\\", 1);
+        }
+        jbuf_put(b, &c, 1);
+    }
+    jbuf_puts(b, "\"");
+}
+
+/** Appends a comma to the open array `b` unless it has no item yet. */
+static void put_comma(struct jbuf *b)
+{
+    if (b->len > 0 && b->data[b->len - 1] != '[') {
+        jbuf_puts(b, ",");
+    }
 }
 
 /**
@@ -83,6 +112,17 @@ static void report_error(struct judging *j, int line, const char *fmt, ...)
     vsnprintf(what, sizeof what, fmt, ap);
     va_end(ap);
     finding(j->input, line, "%s", what);
+    if (j->texts != NULL) {
+        char text[440];
+
+        if (line > 0) {
+            snprintf(text, sizeof text, "line %d: %s", line, what);
+        } else {
+            snprintf(text, sizeof text, "%s", what);
+        }
+        put_comma(j->texts);
+        put_text(j->texts, text);
+    }
     j->errors++;
 }
 
@@ -762,8 +802,8 @@ static int open_case(struct cases *set, const struct request *q, struct judging 
  * Judges the records of `path`, `-` for standard input, as the report of
  * the case `open_case` opened: each record against the case, each group's
  * branch and each assertion the program must give, and its end. Reports
- * each error as a finding. Returns 0, or 2 when the file cannot be read;
- * the caller frees `j->rec`.
+ * each error as a finding, and in `j->texts` when the caller gave it.
+ * Returns 0, or 2 when the file cannot be read; the caller frees `j->rec`.
  */
 static int judge_text(struct judging *j, const char *path)
 {
@@ -902,6 +942,18 @@ static void check_branches(struct checking *k)
 }
 
 /**
+ * Returns 1 when an attempt of the case `c` placed `placement` has
+ * `etude.kernel`: under QEMU, and natively with the `log` fixture.
+ */
+static int kernel_read(const struct json *c, const char *placement)
+{
+    const struct json *native = json_member(json_member(c, "native"), "fixtures");
+
+    return same(placement, "qemu") ||
+           (same(placement, "native") && has_member(native, "fixture", "log"));
+}
+
+/**
  * Returns the source the results must give for `id`, or NULL when the
  * attempt does not require it.
  */
@@ -920,12 +972,7 @@ static const char *required_source(const struct checking *k, const char *id)
         return program_reports(k->c) ? "executor" : NULL;
     }
     if (same(id, "etude.kernel")) {
-        const struct json *native = json_member(json_member(k->c, "native"), "fixtures");
-
-        return same(placement, "qemu") ||
-                       (same(placement, "native") && has_member(native, "fixture", "log"))
-                   ? "executor"
-                   : NULL;
+        return kernel_read(k->c, placement) ? "executor" : NULL;
     }
     if (a == NULL) {
         return NULL;
@@ -1246,4 +1293,375 @@ int judge_results(const struct cases *set, const char *path, const char *claim)
     json_free(schema);
     free(text);
     return findings() > before ? 1 : 0;
+}
+
+/* ---- the results of an attempt ---- */
+
+/* The pattern of a history identity, results.schema.json's history_id. */
+#define HISTORY_ID_PATTERN "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"
+
+/* How an attempt's program ended, as the executor saw it. */
+struct ending {
+    const char *end; /* exited, signaled, stopped or lost */
+    int value;       /* the status or the signal, or -1 for stopped and lost */
+};
+
+/**
+ * Reads the end `args[0]` and its value `args[1]`, which exited and
+ * signaled take and stopped and lost do not; `n` is 1 or 2. Returns 0, or
+ * -1 after a finding.
+ */
+static int read_ending(char **args, int n, struct ending *e)
+{
+    int valued = same(args[0], "exited") || same(args[0], "signaled");
+    long long value = n == 2 ? count_of(args[1]) : -1;
+
+    e->end = args[0];
+    e->value = -1;
+    if (!valued && !same(args[0], "stopped") && !same(args[0], "lost")) {
+        finding(NULL, 0, "attempt: %s is no end; give exited, signaled, stopped or lost", args[0]);
+        return -1;
+    }
+    if (!valued && n == 2) {
+        finding(NULL, 0, "attempt: the end %s takes no value", args[0]);
+        return -1;
+    }
+    if (valued && (value < 0 || value > 255)) {
+        finding(NULL, 0, "attempt: the end %s takes a value of 0 to 255", args[0]);
+        return -1;
+    }
+    e->value = (int)value;
+    return 0;
+}
+
+/**
+ * Writes into `out` how the end `e` differs from the one the case expects,
+ * and returns `out`; returns NULL when it is the one expected.
+ */
+static const char *ending_detail(const struct judging *j, const struct ending *e, char *out,
+                                 size_t n)
+{
+    const struct json *want = json_member(j->c, "termination");
+    const struct json *value = json_member(want, "value");
+
+    if (same(e->end, "stopped")) {
+        snprintf(out, n, "the executor stopped it");
+    } else if (same(e->end, "lost")) {
+        snprintf(out, n, "the executor did not observe its end");
+    } else if (same(e->end, json_text(want, "end")) && value->type == JSON_INTEGER &&
+               value->integer == e->value) {
+        return NULL;
+    } else {
+        char wanted[80];
+
+        end_text(want, wanted, sizeof wanted);
+        snprintf(out, n, "%s %d, where the case expects %s", e->end, e->value, wanted);
+    }
+    return out;
+}
+
+/**
+ * Appends to the array `b` the assertion `id`, with its `source` unless that
+ * is NULL, as `undeclared` gives it, its outcome and its detail, NULL for
+ * none.
+ */
+static void put_assertion(struct jbuf *b, const char *id, const char *source, int outcome,
+                          const char *detail)
+{
+    put_comma(b);
+    jbuf_puts(b, "{\"assertion_id\":");
+    put_text(b, id);
+    if (source != NULL) {
+        jbuf_puts(b, ",\"source\":");
+        put_text(b, source);
+    }
+    jbuf_puts(b, ",\"outcome\":");
+    put_text(b, OUTCOMES[outcome]);
+    jbuf_puts(b, ",\"detail\":");
+    if (detail != NULL) {
+        put_text(b, detail);
+    } else {
+        jbuf_puts(b, "null");
+    }
+    jbuf_puts(b, "}");
+}
+
+/**
+ * Returns the outcome of the declared assertion `a`, with its detail in
+ * `*detail`, or -1 when the attempt does not require it. An assertion of
+ * the executor or a scenario is missing, since only an executor's console
+ * and a scenario's calls give them.
+ */
+static int declared_outcome(const struct judging *j, const struct json *a, const char **detail)
+{
+    const struct json *group = group_of(j->c, json_text(a, "assertion_id"), NULL);
+    int g = group != NULL ? group_index(j->c, json_text(group, "group_id")) : -1;
+    const struct rec *r;
+    int outcome;
+
+    *detail = NULL;
+    if (!required(j, a)) {
+        return -1;
+    }
+    if (same(json_text(a, "source"), "executor")) {
+        *detail = "casecheck attempt does not read the kernel's records";
+        return OUTCOME_MISSING;
+    }
+    if (same(json_text(a, "source"), "scenario")) {
+        *detail = "casecheck attempt does not read a scenario's calls";
+        return OUTCOME_MISSING;
+    }
+    if (g >= 0 && j->decided[g] == NULL) {
+        *detail = "the program reported no branch of its group";
+        return OUTCOME_MISSING;
+    }
+    outcome = program_outcome(j, a, &r);
+    if (outcome == OUTCOME_MISSING) {
+        *detail = "nothing reported it";
+    } else if (outcome != OUTCOME_PASS) {
+        *detail = r->text;
+    }
+    return outcome;
+}
+
+/**
+ * Appends the assertions an attempt of the case requires, which ended as
+ * `e`, placed `placement` with its report in `state`: the declared ones in
+ * the manifest's order, then the executor's.
+ */
+static void put_assertions(struct jbuf *b, const struct judging *j, const struct ending *e,
+                           const char *placement, const char *state)
+{
+    const struct json *list = json_member(j->c, "assertions");
+    char why[200], seen[64];
+    const char *detail;
+    size_t i;
+    int outcome;
+
+    jbuf_puts(b, "[");
+    for (i = 0; i < list->count; i++) {
+        outcome = declared_outcome(j, list->item[i], &detail);
+        if (outcome >= 0) {
+            put_assertion(b, json_text(list->item[i], "assertion_id"),
+                          json_text(list->item[i], "source"), outcome, detail);
+        }
+    }
+    detail = ending_detail(j, e, why, sizeof why);
+    outcome = detail == NULL ? OUTCOME_PASS : OUTCOME_FAIL;
+    put_assertion(b, "etude.termination", "executor", e->value < 0 ? OUTCOME_MISSING : outcome,
+                  detail);
+    if (kernel_read(j->c, placement)) {
+        put_assertion(b, "etude.kernel", "executor", OUTCOME_MISSING,
+                      "casecheck attempt does not read the console or the kernel's log");
+    }
+    if (program_reports(j->c)) {
+        outcome = report_verdict(state);
+        snprintf(seen, sizeof seen, "the report is %s", state);
+        put_assertion(b, "etude.report", "executor", outcome,
+                      outcome == OUTCOME_PASS ? NULL : seen);
+    }
+    jbuf_puts(b, "]");
+}
+
+/**
+ * Appends each assert and notrun record of an assertion the case does not
+ * declare, with its outcome and its detail.
+ */
+static void put_undeclared(struct jbuf *b, const struct judging *j)
+{
+    size_t i;
+
+    jbuf_puts(b, "[");
+    for (i = 0; i < j->n; i++) {
+        const struct rec *r = &j->rec[i];
+        int outcome = r->verb == VERB_NOTRUN ? OUTCOME_NOT_RUN
+                      : r->failed            ? OUTCOME_FAIL
+                                             : OUTCOME_PASS;
+
+        if ((r->verb == VERB_ASSERT || r->verb == VERB_NOTRUN) && declared(j->c, r->id) == NULL) {
+            put_assertion(b, r->id, NULL, outcome, outcome == OUTCOME_PASS ? NULL : r->text);
+        }
+    }
+    jbuf_puts(b, "]");
+}
+
+/** Appends each group of the case with its alternative and what decided it. */
+static void put_branches(struct jbuf *b, const struct judging *j)
+{
+    const struct json *groups = json_member(j->c, "branches");
+    size_t g;
+
+    jbuf_puts(b, "[");
+    for (g = 0; g < groups->count && g < 32; g++) {
+        put_comma(b);
+        jbuf_puts(b, "{\"group_id\":");
+        put_text(b, json_text(groups->item[g], "group_id"));
+        jbuf_puts(b, ",\"alternative_id\":");
+        if (j->decided[g] != NULL) {
+            put_text(b, j->decided[g]);
+        } else {
+            jbuf_puts(b, "null");
+        }
+        jbuf_puts(b, ",\"decided_by\":");
+        put_text(b, j->how[g] != NULL ? j->how[g] : "undecided");
+        jbuf_puts(b, "}");
+    }
+    jbuf_puts(b, "]");
+}
+
+/**
+ * Appends the termination of the end `e` of an attempt placed `placement`,
+ * and what observed it.
+ */
+static void put_termination(struct jbuf *b, const struct judging *j, const struct ending *e,
+                            const char *placement)
+{
+    char why[200], value[16];
+    const char *detail = ending_detail(j, e, why, sizeof why);
+    const char *by = same(placement, "host") ? "host_process" : "etude_guest";
+
+    snprintf(value, sizeof value, "%d", e->value);
+    jbuf_puts(b, "{\"end\":");
+    put_text(b, e->end);
+    jbuf_puts(b, ",\"value\":");
+    jbuf_puts(b, e->value < 0 ? "null" : value);
+    jbuf_puts(b, ",\"observed_by\":");
+    put_text(b, e->value < 0 ? "executor" : by);
+    jbuf_puts(b, ",\"detail\":");
+    if (detail != NULL) {
+        put_text(b, detail);
+    } else {
+        jbuf_puts(b, "null");
+    }
+    jbuf_puts(b, "}");
+}
+
+/**
+ * Writes into `b` the results document of the attempt the request `q`
+ * names, which ended as `e`, from the judgement `j` of its report: one line
+ * of compact JSON.
+ */
+static void write_document(struct jbuf *b, const struct judging *j, const struct request *q,
+                           const struct ending *e)
+{
+    static const char *const ids[] = {"run_id", "attempt_id", "item_id"};
+    const char *state = program_reports(j->c) ? report_state(j) : "not_used";
+    char hex[65], records[32];
+    size_t i;
+
+    jbuf_puts(b, "{\"schema_version\":1");
+    for (i = 0; i < 3; i++) {
+        jbuf_puts(b, ",");
+        put_text(b, ids[i]);
+        jbuf_puts(b, ":");
+        put_text(b, q->arg[5 + i]);
+    }
+    inventory_digest(j->c, hex);
+    jbuf_puts(b, ",\"case_id\":");
+    put_text(b, json_text(j->c, "case_id"));
+    jbuf_puts(b, ",\"inventory_sha256\":");
+    put_text(b, hex);
+    jbuf_puts(b, ",\"placement\":");
+    put_text(b, q->arg[3]);
+    jbuf_puts(b, ",\"termination\":");
+    put_termination(b, j, e, q->arg[3]);
+    snprintf(records, sizeof records, "%lu", (unsigned long)counted(j));
+    jbuf_puts(b, ",\"report\":{\"state\":");
+    put_text(b, state);
+    jbuf_puts(b, ",\"records\":");
+    jbuf_puts(b, records);
+    jbuf_puts(b, ",\"errors\":");
+    jbuf_puts(b, j->texts->data);
+    jbuf_puts(b, "},\"branches\":");
+    put_branches(b, j);
+    jbuf_puts(b, ",\"assertions\":");
+    put_assertions(b, j, e, q->arg[3], state);
+    jbuf_puts(b, ",\"undeclared\":");
+    put_undeclared(b, j);
+    jbuf_puts(b, "}\n");
+}
+
+/**
+ * Checks the results document `text` as `results` checks one: by the
+ * results schema, and against its case in `set`. Returns the outcome its
+ * assertions give, or -1 after a finding, which is a fault of casecheck.
+ */
+static int recheck(const struct cases *set, const char *text)
+{
+    struct json *schema = read_schema(set->schemas, "results");
+    struct json *doc = NULL;
+    char err[200], why[300];
+    int before = findings(), result = -1;
+
+    if (schema == NULL) {
+        return -1;
+    }
+    if (json_parse(text, strlen(text), 1, &doc, err, sizeof err) != 0) {
+        finding(NULL, 0, "attempt: %s", err);
+    } else if (schema_findings(schema, doc, "attempt") == 0) {
+        result = judge_document(set, doc, "attempt", why, sizeof why);
+    }
+    if (findings() > before) {
+        finding(NULL, 0, "attempt: casecheck wrote a results document that fails its own check");
+        result = -1;
+    }
+    json_free(doc);
+    json_free(schema);
+    return result;
+}
+
+/**
+ * Gives the results document of one attempt. `args` are those of `report`,
+ * with the output's file required, then the run's, the attempt's and the
+ * item's identities, the end and, for exited and signaled, its value.
+ * Judges the output's records as `report` does, without printing the
+ * judgement, and prints the document as one line. Returns 0 when the
+ * attempt passed, 1 when it failed and 3 when it is incomplete; 2, with no
+ * document, for a usage fault, a file that cannot be read, a case not in the
+ * manifest or a placement it cannot have.
+ */
+int judge_attempt(struct cases *set, char **args, int n)
+{
+    struct jbuf texts = {0}, doc = {0};
+    struct request q;
+    struct judging j;
+    struct ending e;
+    int i, result = -1;
+
+    read_request(args, n, &q);
+    if (q.n < 9 || q.n > 10 || read_ending(q.arg + 8, q.n - 8, &e) != 0) {
+        return 2;
+    }
+    for (i = 5; i < 8; i++) {
+        if (!schema_pattern(HISTORY_ID_PATTERN, q.arg[i])) {
+            finding(NULL, 0, "attempt: %s is no identity of a history", q.arg[i]);
+            return 2;
+        }
+    }
+    if (open_case(set, &q, &j) != 0) {
+        return 2;
+    }
+    jbuf_puts(&texts, "[");
+    j.texts = &texts;
+    if (judge_text(&j, q.arg[4]) != 0) {
+        jbuf_free(&texts);
+        return 2;
+    }
+    jbuf_puts(&texts, "]");
+    if (!program_reports(j.c) && (j.n > 0 || j.parse_errors > 0)) {
+        finding(NULL, 0,
+                "%s declares no assertion of its program, and no results can give the "
+                "report records of its output",
+                q.arg[1]);
+    } else {
+        write_document(&doc, &j, &q, &e);
+        result = recheck(set, doc.data);
+    }
+    if (result >= 0) {
+        say_text(doc.data);
+    }
+    free(j.rec);
+    jbuf_free(&texts);
+    jbuf_free(&doc);
+    return result < 0 ? 2 : result == ATTEMPT_PASS ? 0 : result == ATTEMPT_FAILURE ? 1 : 3;
 }

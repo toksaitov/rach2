@@ -1,7 +1,8 @@
 # The self-test of casecheck: one command a line, as `STATUS ARGUMENTS |
-# TEXT`. The command must exit with STATUS and print TEXT among its output.
-# A path that begins ./ or ../ is relative to this directory, and -s is
-# ../schemas unless the line gives it.
+# TEXT`. The command must exit with STATUS and print TEXT among its output,
+# or, when TEXT begins with !, must not print the rest of it. A path that
+# begins ./ or ../ is relative to this directory, and -s is ../schemas
+# unless the line gives it.
 
 # The examples of the contracts are valid, and judge as their Readme says.
 0 -r ../../.. manifest ../schemas/case.guest.example.json ../schemas/case.host.example.json ../schemas/case.machine.example.json ../schemas/case.fpu.example.json
@@ -131,6 +132,55 @@
 1 results ./results-branch.jsonl ../schemas/case.guest.example.json | the group source appears 0 times, not once
 1 results ./results-twice.jsonl ../schemas/case.guest.example.json | enosys-unimplemented appears 2 times
 1 results ./results-missing.jsonl ./rules.json | guest.default.errnoprobe is no case of the manifests given
+
+# An attempt's results document, judged from its report and its end: 0 for a
+# pass, 1 for a failure, 3 for an incomplete attempt. The command prints a
+# document only after `results` would accept it with that outcome, so each
+# line here also checks the two agree.
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | "termination":{"end":"exited","value":0,"observed_by":"host_process","detail":null}
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"complete","records":4,"errors":[]},"branches":[{"group_id":"path","alternative_id":"fast","decided_by":"report"}]
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"fast-count","source":"program","outcome":"pass","detail":null},{"assertion_id":"same"
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | !slow-count
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | !assert parse
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | !branch path
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | !outcome pass
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | !etude.kernel
+0 attempt ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.termination","source":"executor","outcome":"pass","detail":null},{"assertion_id":"etude.report","source":"executor","outcome":"pass","detail":null}],"undeclared":[]}
+1 attempt ./attempt.json fixture.attempt.scan none host ./attempt-nobranch.out run-1 attempt-1 item-1 exited 0 | {"group_id":"path","alternative_id":null,"decided_by":"undecided"}
+1 attempt ./attempt.json fixture.attempt.scan none host ./attempt-nobranch.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"slow-count","source":"program","outcome":"missing","detail":"the program reported no branch of its group"}
+1 attempt ./attempt.json fixture.attempt.scan none host ./attempt-nobranch.out run-1 attempt-1 item-1 exited 0 | "errors":["no branch record for the group path","fast-count was never reported","slow-count was never reported"]
+0 attempt -f rdrand=present -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 native ./report-rng.out run-1 attempt-1 item-1 exited 0 | [{"group_id":"source","alternative_id":"trusted","decided_by":"feature"}]
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fail.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"efault-writev","source":"program","outcome":"fail","detail":"writev returned 0"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-notrun.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"enoent-open","source":"program","outcome":"not_run","detail":"/no_such_file_errnoprobe exists"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-truncated.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"truncated","records":2,"errors":["the report has no end record"]}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-truncated.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"ebadf-close","source":"program","outcome":"missing","detail":"nothing reported it"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-truncated.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.report","source":"executor","outcome":"missing","detail":"the report is truncated"}
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-twice.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"invalid","records":7,"errors":["line 9: ebadf-read is reported twice"]}
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-twice.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.report","source":"executor","outcome":"fail","detail":"the report is invalid"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-absent.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"absent","records":0,"errors":[]}
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-undeclared.out run-1 attempt-1 item-1 exited 0 | "undeclared":[{"assertion_id":"enoent-stat","outcome":"pass","detail":null}]
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 stopped | "termination":{"end":"stopped","value":null,"observed_by":"executor","detail":"the executor stopped it"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 stopped | {"assertion_id":"etude.termination","source":"executor","outcome":"missing","detail":"the executor stopped it"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-truncated.out run-1 attempt-1 item-1 lost | "termination":{"end":"lost","value":null,"observed_by":"executor","detail":"the executor did not observe its end"}
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 1 | {"assertion_id":"etude.termination","source":"executor","outcome":"fail","detail":"exited 1, where the case expects exited 0"}
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled 9 | "detail":"signaled 9, where the case expects exited 0"
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"casecheck attempt does not read the console or the kernel's log"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | "observed_by":"etude_guest"
+1 attempt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"missing","detail":"casecheck attempt does not read the kernel's records"}
+3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"not_used","records":0,"errors":[]}
+3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"stopped","source":"scenario","outcome":"missing","detail":"casecheck attempt does not read a scenario's calls"}
+2 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./attempt-machine.out run-1 attempt-1 item-1 exited 0 | declares no assertion of its program
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited | the end exited takes a value of 0 to 255
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 256 | the end exited takes a value of 0 to 255
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled -1 | the end signaled takes a value of 0 to 255
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 lost 0 | the end lost takes no value
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 finished 0 | finished is no end
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out _run attempt-1 item-1 exited 0 | _run is no identity of a history
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 exited 0
+2 attempt ../schemas/case.guest.example.json guest.default.nosuch i686 native ./report-pass.out run-1 attempt-1 item-1 exited 0 | no case guest.default.nosuch
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 host ./report-pass.out run-1 attempt-1 item-1 exited 0 | cannot be placed host
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./absent.out run-1 attempt-1 item-1 exited 0 | cannot read
+2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./absent.out run-1 attempt-1 item-1 exited 0 | !"schema_version"
 
 # A run's history passes only when the plan has what was asked for, every
 # attempt of each item passed, with results in the store that say so, and the

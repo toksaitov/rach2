@@ -1,0 +1,7 @@
+scan: reading the input
+@etude 1 begin fixture.attempt.scan
+@etude 1 assert parse pass
+@etude 1 branch path fast
+@etude 1 assert fast-count pass
+@etude 1 assert same pass
+@etude 1 end 4

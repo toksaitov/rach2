@@ -16,6 +16,13 @@
  *     report of CASE run on ARCH (i686, x86_64 or none) and placed host,
  *     qemu or native, with the processor's features that a branch group is
  *     decided by; prints each assertion's outcome and the outcome they give.
+ * casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... MANIFEST CASE
+ *         ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]
+ *     judges OUTPUT, a file or `-`, as `report` does, and prints the results
+ *     document of the attempt ATTEMPT of the item ITEM of the run RUN, whose
+ *     program ended as END: `exited` or `signaled` with VALUE, or `stopped`
+ *     or `lost`. The status is 0 for a pass, 1 for a failure and 3 for an
+ *     incomplete attempt; with 2, no document is printed.
  * casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
  *     checks each results document of the JSON Lines file RESULTS against
  *     its schema and its case, and prints each attempt's outcome; with -o,
@@ -41,8 +48,8 @@
  * A finding goes to stderr as `casecheck: FILE:LINE: WHAT`. The exit status
  * is 0 when nothing is found (for `report`, when the report gives a pass;
  * for `verdict`, when the run passed), 1 after a finding, and 2 for a wrong
- * usage or a file that cannot be read, which for `verdict` is only the results
- * schema.
+ * usage or a file that cannot be read, which for `verdict` is only the
+ * results schema; `attempt` gives its own, above.
  * SCHEMAS is tools/etude/schemas by default.
  */
 #include "casecheck.h"
@@ -113,6 +120,16 @@ void say(const char *fmt, ...)
     va_start(ap, fmt);
     emit(stdout, fmt, ap);
     va_end(ap);
+}
+
+/** Prints `text` whole as a command's output, where say() cuts a line short. */
+void say_text(const char *text)
+{
+    if (capture != NULL) {
+        jbuf_puts(capture, text);
+    } else {
+        fputs(text, stdout);
+    }
 }
 
 /** Returns the number of findings so far. */
@@ -370,6 +387,8 @@ static int run(int argc, char **argv)
         }
     } else if (strcmp(command, "report") == 0) {
         status = judge_report(&set, args, n);
+    } else if (strcmp(command, "attempt") == 0) {
+        status = judge_attempt(&set, args, n);
     } else if (strcmp(command, "results") == 0) {
         status = command_results(&set, args, n);
     } else if (strcmp(command, "schema") == 0) {
@@ -393,6 +412,8 @@ static void usage(void)
     fprintf(stderr, "usage: casecheck [-s SCHEMAS] [-r ROOT] manifest|timing FILE...\n"
                     "       casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... "
                     "MANIFEST CASE ARCH PLACEMENT [OUTPUT]\n"
+                    "       casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... "
+                    "MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]\n"
                     "       casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...\n"
                     "       casecheck [-s SCHEMAS] schema NAME FILE...\n"
                     "       casecheck [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] "
@@ -404,9 +425,9 @@ static void usage(void)
 /**
  * Splits the line `line` of the expect file into its expected status, the
  * words of its command line, with `./` and `../` paths taken from `dir` into
- * strings of their own that `owned` marks, and the text its output must
- * contain after ` | `. Returns the number of words, or -1 for a line that
- * has no status.
+ * strings of their own that `owned` marks, and the text after ` | ` that its
+ * output must contain, or with a leading `!` must not. Returns the number of
+ * words, or -1 for a line that has no status.
  */
 static int split_expect(char *line, const char *dir, char **argv, int *owned, char **text,
                         int *expect)
@@ -421,7 +442,7 @@ static int split_expect(char *line, const char *dir, char **argv, int *owned, ch
         *text = bar + 3;
     }
     word = strtok(line, " ");
-    if (word == NULL || word[1] != '\0' || word[0] < '0' || word[0] > '2') {
+    if (word == NULL || word[1] != '\0' || word[0] < '0' || word[0] > '3') {
         return -1;
     }
     *expect = word[0] - '0';
@@ -448,7 +469,7 @@ static int split_expect(char *line, const char *dir, char **argv, int *owned, ch
 static int selftest_line(char *line, int number, const char *dir)
 {
     char *argv[64], *text, *copy = json_alloc(strlen(line) + 1);
-    int owned[64], argc, expect, status, i, bad;
+    int owned[64], argc, expect, status, i, bad, absent;
     struct jbuf out = {0};
 
     strcpy(copy, line);
@@ -462,10 +483,15 @@ static int selftest_line(char *line, int number, const char *dir)
     capture = &out;
     status = run(argc, argv);
     capture = NULL;
-    bad = status != expect || (text != NULL && strstr(out.data, text) == NULL);
+    absent = text != NULL && text[0] == '!';
+    text = absent ? text + 1 : text;
+    bad = status != expect || (text != NULL && (strstr(out.data, text) == NULL) != absent);
     if (bad) {
         fprintf(stderr, "casecheck selftest: line %d: %s\n  exit %d, expected %d%s%s\n%s", number,
-                copy, status, expect, text != NULL ? ", with the text: " : "",
+                copy, status, expect,
+                text == NULL ? ""
+                : absent     ? ", without the text: "
+                             : ", with the text: ",
                 text != NULL ? text : "", out.data);
     }
     for (i = 1; i < argc; i++) {

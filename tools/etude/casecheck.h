@@ -31,6 +31,7 @@ enum attempt { ATTEMPT_PASS, ATTEMPT_FAILURE, ATTEMPT_INCOMPLETE };
 
 void finding(const char *file, int line, const char *fmt, ...);
 void say(const char *fmt, ...);
+void say_text(const char *text);
 int findings(void);
 char *read_file(const char *path, size_t *len);
 struct json *read_json(const char *path, int *status);
@@ -47,6 +48,7 @@ int program_reports(const struct json *c);
 int print_timing(const struct cases *set);
 
 int judge_report(struct cases *set, char **args, int n);
+int judge_attempt(struct cases *set, char **args, int n);
 int judge_results(const struct cases *set, const char *path, const char *claim);
 int judge_document(const struct cases *set, const struct json *doc, const char *file, char *why,
                    size_t n);

@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "family_id": "fixture.attempt",
+  "summary": "A host case whose reports the fixtures of casecheck attempt judge",
+  "cases": [
+    {
+      "case_id": "fixture.attempt.scan",
+      "behavior": "A scanner reads its input by one of two paths and gives the same count by either",
+      "units": ["tests/host/scan_hosttest.c"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["cc"], "features": {}},
+      "execution": {
+        "program": "scan_hosttest", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "nothing outside its scratch directory"
+      },
+      "assertions": [
+        {"assertion_id": "parse", "checks": "the input parses", "source": "program"},
+        {"assertion_id": "fast-count", "checks": "the mapped path counts every line", "source": "program"},
+        {"assertion_id": "slow-count", "checks": "the read path counts every line", "source": "program"},
+        {"assertion_id": "same", "checks": "a second scan gives the same count", "source": "program"}
+      ],
+      "branches": [
+        {
+          "group_id": "path",
+          "decided_by": "report",
+          "alternatives": [
+            {"alternative_id": "fast", "when": null, "assertions": ["fast-count"]},
+            {"alternative_id": "slow", "when": null, "assertions": ["slow-count"]}
+          ]
+        }
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+        "gap": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+        "stages": {}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 16777216, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "scan_hosttest", "node": "tests/host/scan_hosttest", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    }
+  ]
+}
