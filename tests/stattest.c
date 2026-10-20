@@ -13,9 +13,8 @@
  *
  * Given `machine=native` (probe_args.h), the time rows leave out the order
  * of the stamps, since a machine that is already up may have its real-time
- * clock stepped between two of them, and print a line that says so; the
- * writes, the stamps, the part below the tick and the explicit times are
- * still checked.
+ * clock stepped between two of them; the writes, the stamps, the part below
+ * the tick and the explicit times are still checked.
  *
  * Prints a line for each row and exits 0 when every row passed, 1 otherwise.
  * Freestanding; direct system calls (probe.h).
@@ -435,9 +434,6 @@ static int time_rows(void)
         }
         sys_call3(SYS_UNLINK, (long)paths[i], 0, 0);
     }
-    if (probe_native()) {
-        puts("stattest: the order of the stamps: not run: the real-time clock may be stepped");
-    }
     puts(ok ? "STATTIME OK: two writes, fifty stamps, explicit fractions"
             : "STATTIME FAIL: two writes, fifty stamps, explicit fractions");
     return ok;
@@ -459,8 +455,7 @@ void probe_main(unsigned long *sp)
 #endif
     struct stat64 st64;
     int result;
-    int passed = 0;
-    int failed = 0;
+    int passed = 0, failed = 0;
 
     probe_args((int)sp[0], (char **)(sp + 1));
     puts("Stat syscall test starting...");

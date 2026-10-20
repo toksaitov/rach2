@@ -31,8 +31,8 @@
  * Given `machine=native` (probe_args.h), the probe leaves out the two
  * checks of `sleeps_interrupted`, since on a machine that is already up its
  * other processes raise the same count, and a rise would not show that the
- * probe's own sleep was counted; it prints a line for each that says it did
- * not run. The sleeps and their EINTR are still checked.
+ * probe's own sleep was counted. The sleeps and their EINTR are still
+ * checked.
  *
  * Prints "SIGPROBE OK" and exits 0 when all pass, and "SIGPROBE FAIL" with
  * the count of failed checks as its status otherwise.
@@ -109,17 +109,13 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Check `cond` as `check` does, or, given `machine=native`, print that the
- * check `msg` of the machine's count did not run. */
+/** Check `cond` as `check` does, unless given `machine=native`, since the
+ * check is of the machine's count. */
 static void check_count(int cond, const char *msg)
 {
-    if (probe_native()) {
-        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  not run: ", 11);
-        syscall3(SYS_WRITE, STDOUT_FILENO, (long)msg, (int)strlen(msg));
-        puts(": the machine's other processes move the count");
-        return;
+    if (!probe_native()) {
+        check(cond, msg);
     }
-    check(cond, msg);
 }
 
 /**

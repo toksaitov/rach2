@@ -29,8 +29,8 @@
  *       and waits with nothing on the screen if the poll never answers.
  *
  * Given `machine=native` (probe_args.h), (i) leaves out the descriptors 0, 1
- * and 2, which are the kernel's own only for its init, and prints a line that
- * says it did not run; /dev/console is still opened and checked.
+ * and 2, which are the kernel's own only for its init; /dev/console is still
+ * opened and checked.
  *
  * Prints "  FAIL: " and the case for each failure, then "POLLPROBE OK" or
  * "POLLPROBE FAIL", and exits with the count of failures. Freestanding;
@@ -282,10 +282,6 @@ static void console_modes(void)
     struct pollfd pfd[1];
     int fd, i;
 
-    if (probe_native()) {
-        puts("  not run: the kernel's fds 0, 1 and 2 are each open for reading and writing: "
-             "the probe is not the kernel's init");
-    }
     for (i = 0; i <= 2 && !probe_native(); i++) {
         check((syscall3(SYS_FCNTL, i, F_GETFL, 0) & O_ACCMODE) == O_RDWR,
               "the kernel's fds 0, 1 and 2 are each open for reading and writing");

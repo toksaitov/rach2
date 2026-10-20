@@ -17,7 +17,7 @@
  * Given `machine=native` (probe_args.h), the probe still makes and closes
  * the thousands, but leaves out the comparisons of the heap, since the
  * kernel's heap is shared with every process of a machine that is already
- * up, and prints a line for each that says it did not run.
+ * up.
  *
  * Prints "POOLPROBE OK" and exits 0, or "POOLPROBE FAIL: " and the reason
  * and exits 1.
@@ -203,8 +203,8 @@ static void crossed(int kind, int per_child, const char *what)
 
 /** Make and close a thousand objects of `kind` (0 a pipe, 1 a pty master, 2
  * a socket), and fail with `what` unless HeapUsed is unchanged and
- * HeapPages within two pages of where it was; given `machine=native`, print
- * that the comparison did not run. */
+ * HeapPages within two pages of where it was; given `machine=native`, make
+ * no comparison. */
 static void cycle(int kind, const char *what)
 {
     unsigned used0 = probe_meminfo("HeapUsed:"), pages0 = probe_meminfo("HeapPages:");
@@ -231,11 +231,6 @@ static void cycle(int kind, const char *what)
         }
     }
     if (probe_native()) {
-        static const char *const names[] = {"pipes", "ptys", "sockets"};
-
-        syscall3(SYS_WRITE, 1, (long)"poolprobe: the heap after a thousand ", 37);
-        syscall3(SYS_WRITE, 1, (long)names[kind], (int)strlen(names[kind]));
-        puts(": not run: the kernel's heap is shared");
         return;
     }
     used1 = probe_meminfo("HeapUsed:");

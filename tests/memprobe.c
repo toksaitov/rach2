@@ -46,7 +46,7 @@
  * started by (probe_args.h), as a native run starts it from its workspace.
  * Given `machine=native` as well, `memprobe MIB` leaves out the fall of the
  * free memory after the unmap, since on a machine that is already up the
- * other processes move it, and prints a line that says it did not run.
+ * other processes move it.
  *
  * Prints "MEMPROBE OK" or "MEMPROBE FAIL: reason". Freestanding; direct
  * system calls (probe.h).
@@ -208,6 +208,17 @@ static unsigned long meminfo_kib(const char *key)
 static unsigned long mem_free_kib(void)
 {
     return meminfo_kib("MemFree:");
+}
+
+/** Fail unless the free memory has come back after the unmap of `pages`
+ * pages to within 256 KiB of `before`, the mapping's page tables
+ * (TABLE_KIB), which stay with the process, aside; given `machine=native`,
+ * whose other processes move the free memory, make no comparison. */
+static void check_frames_back(unsigned long before, unsigned long pages)
+{
+    if (!probe_native() && mem_free_kib() + 256 + TABLE_KIB(pages) < before) {
+        fail("the frames did not come back");
+    }
 }
 
 /** `memprobe total`: print the MemTotal /proc/meminfo reports and exit. */
@@ -476,7 +487,7 @@ void probe_main(unsigned long *sp)
 {
     const char *mode;
     unsigned mib;
-    unsigned long len, base, pages, i, before, after;
+    unsigned long len, base, pages, i, before;
     int pid, status;
 
     probe_args((int)sp[0], (char **)(sp + 1));
@@ -564,13 +575,7 @@ void probe_main(unsigned long *sp)
     if (syscall2(SYS_MUNMAP, (long)base, (long)len) != 0) {
         fail("munmap");
     }
-    /* The mapping's page tables stay with the process (TABLE_KIB). */
-    after = mem_free_kib();
-    if (probe_native()) {
-        puts("memprobe: the frames came back: not run: the machine's other processes move MemFree");
-    } else if (after + 256 + TABLE_KIB(pages) < before) {
-        fail("the frames did not come back");
-    }
+    check_frames_back(before, pages);
     puts("MEMPROBE OK");
     sys_exit(0);
 }

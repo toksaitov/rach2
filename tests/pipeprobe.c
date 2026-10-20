@@ -37,8 +37,8 @@
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
- * a machine that is already up, and prints a line that says it did not run;
- * the hundred pipes are still made and closed.
+ * a machine that is already up; the hundred pipes are still made and
+ * closed.
  *
  * Prints "PIPEPROBE OK" and exits with the count of the checks that failed.
  * Freestanding; direct system calls (probe.h).
@@ -156,17 +156,12 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Check `cond` as `check` does, or, given `machine=native`, print that the
- * heap check `msg` did not run. */
+/** Check `cond` as `check` does, unless given `machine=native`. */
 static void check_heap(int cond, const char *msg)
 {
-    if (probe_native()) {
-        syscall3(SYS_WRITE, 1, (long)"  not run: ", 11);
-        syscall3(SYS_WRITE, 1, (long)msg, (long)strlen(msg));
-        puts(": the kernel's heap is shared");
-        return;
+    if (!probe_native()) {
+        check(cond, msg);
     }
-    check(cond, msg);
 }
 
 /** Whether the first `n` bytes of `a` and `b` are equal. */
@@ -257,10 +252,9 @@ PROBE_SP_ENTRY;
  * and the next case runs. */
 void probe_main(unsigned long *sp)
 {
-    int p[2];
+    int p[2], i, n, pid, status;
     char buf[64];
     struct k_sigaction ka;
-    int i, n, pid, status;
     unsigned used;
 
     probe_args((int)sp[0], (char **)(sp + 1));

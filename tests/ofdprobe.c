@@ -20,8 +20,8 @@
  * The probe reads `hello.txt` in its working directory, which holds
  * "hello, world\n". Given `machine=native` (probe_args.h), it leaves out the
  * two comparisons of HeapUsed, since the kernel's heap is shared with every
- * process of a machine that is already up, and prints a line for each that
- * says it did not run; the cycles and the forks still run.
+ * process of a machine that is already up; the cycles and the forks still
+ * run.
  *
  * Prints "OFDPROBE OK" on success.
  *
@@ -79,17 +79,12 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Check `cond` as `check` does, or, given `machine=native`, print that the
- * heap check `msg` did not run. */
+/** Check `cond` as `check` does, unless given `machine=native`. */
 static void check_heap(int cond, const char *msg)
 {
-    if (probe_native()) {
-        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  not run: ", 11);
-        syscall3(SYS_WRITE, STDOUT_FILENO, (long)msg, (int)strlen(msg));
-        puts(": the kernel's heap is shared");
-        return;
+    if (!probe_native()) {
+        check(cond, msg);
     }
-    check(cond, msg);
 }
 
 /** Read up to `n` bytes from `fd` into `buf`: the byte count, or a negated
