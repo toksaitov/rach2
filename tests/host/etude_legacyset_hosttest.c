@@ -45,23 +45,22 @@
  * bad accelerator and a relative ledger are refused, with nothing run. The
  * driver leaks no memory.
  *
- * A suite run by its cases gives an item of each repetition of each case
- * that runs on the architecture, or on none, with its program built by the
- * preparation as a goal: the tree's `build/NODE`, or `build/x86_64/NODE` for
- * an artifact of each architecture on x86_64. The program runs in the tree
- * with the driver's environment and the case's identity, seed, architecture
- * and scratch directory, which is removed after a pass and kept otherwise;
- * a case whose progress keeps its gap bound passes. Its attempt has
- * casecheck's outcome and the reason of the assertion that decided it, an
- * attempt that runs past its case bound is incomplete, and `casecheck
- * verdict` passes a run of passing cases and fails the suite of failing
- * ones. A failed case of a suite that `stops` leaves the suite's other
- * cases to run before the set stops. A case suite runs beside a suite of
- * the registry. A manifest that
- * cannot be read, of another suite's family, with a case that is not a host
- * case, reads its input, needs ports, loop devices or a fixture other than
- * scratch, or has no case on the architecture is refused, and so is a case
- * suite without casecheck.
+ * A suite run by its cases gives an item of each repetition of each case that
+ * runs on the architecture, or on none, with its program built by the
+ * preparation as a goal: the tree's `build/NODE`, or `build/x86_64/NODE` for an
+ * artifact of each architecture on x86_64. The program runs in the tree with
+ * the driver's environment, less the driver's own ARCH and ETUDE_SEED, and the
+ * case's identity, seed, architecture and scratch directory, which is removed
+ * after a pass and kept otherwise; a case whose progress keeps its gap bound
+ * passes. Its attempt has casecheck's outcome and the reason of the assertion
+ * that decided it, an attempt that runs past its case bound is incomplete, and
+ * `casecheck verdict` passes a run of passing cases and fails the suite of
+ * failing ones. A failed case of a suite that `stops` leaves the suite's other
+ * cases to run before the set stops. A case suite runs beside a suite of the
+ * registry. A manifest that cannot be read, of another suite's family, with a
+ * case that is not a host case, reads its input, needs ports, loop devices or a
+ * fixture other than scratch, or has no case on the architecture is refused,
+ * and so is a case suite without casecheck.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -1680,6 +1679,8 @@ int main(int argc, char **argv)
     setenv("RACH2_PORT_OFFSET", "7000", 1);
     setenv("RACH2_QEMU_ACCEL", "tcg", 1);
     setenv("RACH2_CPUS", "1", 1);
+    setenv("ARCH", "i686", 1);
+    setenv("ETUDE_SEED", "99", 1);
     unsetenv("RACH2_DEADLINES");
     unsetenv("FIXTURE_BREAK");
     make_tree();

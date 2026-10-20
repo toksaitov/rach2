@@ -131,6 +131,7 @@ struct command {
     struct etude_pid keeper, process;
     uint64_t started_us, ended_us, max_gap_us; /* monotonic */
     int filter;          /* it is a suite's, whose result lines are left out */
+    int is_case;         /* it is a case's program */
     int live;            /* its output is printed as it comes */
     long printed;        /* the bytes of its output read for printing */
     long fed;            /* the bytes of its output fed to its watchdog */
@@ -955,8 +956,13 @@ static int named(const char *var, char *const *vars, size_t n)
     return 0;
 }
 
+/* The variables a case's program is given only by its item, which the
+ * driver's own environment does not pass on. */
+static char *const case_only[] = {"ARCH=", "ETUDE_SEED="};
+
 /** Fill `c->envp` with this process's environment, with each of the `nvars`
- * variables `vars`, `NAME=VALUE`, in place of one of its name. */
+ * variables `vars`, `NAME=VALUE`, in place of one of its name, and for a
+ * case, `c->is_case`, without the variables of case_only. */
 static int environment(struct command *c, char *const *vars, size_t nvars)
 {
     size_t n = 0, i, k = 0;
@@ -968,7 +974,7 @@ static int environment(struct command *c, char *const *vars, size_t nvars)
     if (c->envp == NULL)
         return -1;
     for (i = 0; i < n; i++)
-        if (!named(environ[i], vars, nvars))
+        if (!named(environ[i], vars, nvars) && !(c->is_case && named(environ[i], case_only, 2)))
             c->envp[k++] = environ[i];
     for (i = 0; i < nvars; i++)
         c->envp[k++] = vars[i];
@@ -2465,6 +2471,7 @@ static int case_command(struct set *x, struct member *m)
         c->res[c->nres++].amount = want[i] < x->cap[i].amount ? want[i] : x->cap[i].amount;
     }
     c->exclusive = m->m->serial;
+    c->is_case = 1;
     c->live = x->n == 1;
     c->grace_us = CASE_GRACE_US;
     c->wd.case_us = k->case_us;

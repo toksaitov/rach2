@@ -130,6 +130,23 @@
       }
     },
     {
+      "name": "inherit",
+      "summary": "a case is given the driver's own ARCH and ETUDE_SEED",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        if (!named(environ[i], vars, nvars) && !(c->is_case && named(environ[i], case_only, 2)))\n",
+          "replace": "        if (!named(environ[i], vars, nvars) && !(0 && named(environ[i], case_only, 2)))\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": environment: no architecture and no seed for a case of none: "
+        ]
+      }
+    },
+    {
       "name": "cancelled",
       "summary": "a suite cancelled part way is recorded as a pass",
       "edits": [
