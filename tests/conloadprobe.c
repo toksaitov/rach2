@@ -16,15 +16,23 @@
  *       a fast reader leaving it few, and a required share would fail on
  *       some machine; a drain by the tick alone moves none. The stage's time
  *       is printed and not judged.
- *   (B) 60 lines typed while the probe spins for two seconds without
- *       reading: type-ahead into a session nobody is reading.
+ *   (B) 60 lines typed while the probe does not read, until /proc/console's
+ *       `uart-bytes` has counted every byte of them taken from the port:
+ *       type-ahead into a session nobody is reading.
  *   (C) 200 lines typed while a child in its own group has the terminal and
  *       nobody reads, more than the discipline holds, then an interrupt
  *       character behind them, which must still kill the child and discards
  *       what came before it; then 60 lines read by the parent after it takes
  *       the terminal back.
  *   (D) 40 lines typed before the probe executes itself, read by the new
- *       image.
+ *       image. The exec waits until `uart-bytes` has counted every byte
+ *       of them, as stage B's reading does.
+ *
+ * How long the harness takes to type a stage decides nothing: the probe
+ * waits for the counted bytes, and the suite's wait for its token ends a
+ * run in which they never come. An overrun the port reports ends the wait
+ * as well, since the bytes it lost cannot be counted, and the stage's reading
+ * then finds the lines that are missing.
  *
  * Each stage is announced with `CONLOAD X` and closed with `CONLOAD X OK`;
  * the harness types after the announcement. After each loaded stage the
@@ -51,11 +59,13 @@ struct pollfd {
     short revents;
 };
 
-#define LINES_A   200
-#define LINES_B   60
-#define LINES_C   60
-#define LINES_D   40
-#define LINES_ALL (LINES_A + LINES_B + LINES_C + LINES_D)
+#define LINES_A    200
+#define LINES_B    60
+#define LINES_C    60
+#define LINES_D    40
+#define LINES_ALL  (LINES_A + LINES_B + LINES_C + LINES_D)
+/* `L NNNN `, 20 bytes of payload, a space, eight hex digits and a newline. */
+#define LINE_BYTES 37
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -144,16 +154,6 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/** Sleep for `ms` milliseconds. */
-static void sleep_ms(int ms)
-{
-    long ts[2];
-
-    ts[0] = ms / 1000;
-    ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (long)ts, 0);
-}
-
 /** The time of day in milliseconds, modulo 2^32. */
 static unsigned now_ms(void)
 {
@@ -162,15 +162,6 @@ static unsigned now_ms(void)
     tv[0] = tv[1] = 0;
     syscall2(SYS_GETTIMEOFDAY, (long)tv, 0);
     return (unsigned)tv[0] * 1000u + (unsigned)tv[1] / 1000u;
-}
-
-/** Spin until `ms` have passed, reading nothing. */
-static void spin_ms(unsigned ms)
-{
-    unsigned start = now_ms();
-
-    while (now_ms() - start < ms) {
-    }
 }
 
 static unsigned char block[4096];
@@ -299,9 +290,10 @@ static void print_counters(void);
  * at end of file. A line longer than `line` is cut short.
  *
  * Before each byte the reader waits in poll, so that the port's interrupt
- * has a waiter on the console to wake, for at most five seconds. When no
- * byte arrives in that time it prints what arrived and the counters, stops
- * the load and exits 1, since a read that blocked would print nothing.
+ * has a waiter on the console to wake. The poll's five seconds are a bound
+ * on a run that has stopped: when no byte arrives in that time it prints
+ * what arrived and the counters, stops the load and exits 1, since a read
+ * that blocked would print nothing.
  */
 static int read_line(void)
 {
@@ -455,6 +447,33 @@ static unsigned counter(const char *key)
     return 0xFFFFFFFFu;
 }
 
+/**
+ * Wait, without reading the console, until `uart-bytes` has counted `lines`
+ * whole lines taken from the port since it read `base`, yielding between
+ * looks of /proc/console. A rise of `uart-overruns` above `overruns` ends the
+ * wait too, since a byte the port dropped is never counted; the reading that
+ * follows then fails on the lines that are short. Exits 1 when the counters
+ * cannot be read.
+ */
+static void await_typed(unsigned base, unsigned overruns, int lines)
+{
+    unsigned want = (unsigned)lines * LINE_BYTES, now;
+
+    if (base == 0xFFFFFFFFu || overruns == 0xFFFFFFFFu) {
+        fail("no uart-bytes and uart-overruns in /proc/console");
+    }
+    for (;;) {
+        now = counter("uart-bytes ");
+        if (now == 0xFFFFFFFFu) {
+            fail("no uart-bytes in /proc/console");
+        }
+        if (now - base >= want || counter("uart-overruns ") != overruns) {
+            return;
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
+}
+
 /** Return when `good` is `count`; otherwise print the stage's failure with
  * the counts and the counters, stop the load and exit 1. */
 static void require(int good, int count, const char *stage)
@@ -528,7 +547,7 @@ void probe_main(unsigned long *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     int good;
-    unsigned start, elapsed, irq_before;
+    unsigned start, elapsed, irq_before, typed, overruns;
 
     if (argc >= 2 && argv[1][0] == 'D') {
         /* The image after the exec: the lines typed before it are read. */
@@ -574,8 +593,10 @@ void probe_main(unsigned long *sp)
     print("\n");
 
     /* B: type-ahead into a session that is not reading. */
+    typed = counter("uart-bytes ");
+    overruns = counter("uart-overruns ");
     puts("CONLOAD B");
-    spin_ms(2000);
+    await_typed(typed, overruns, LINES_B);
     good = read_lines(LINES_A, LINES_B);
     require(good, LINES_B, "B");
     writer_progressed("B");
@@ -593,8 +614,10 @@ void probe_main(unsigned long *sp)
     if (load_died) {
         fail("a load process ended on its own");
     }
+    typed = counter("uart-bytes ");
+    overruns = counter("uart-overruns ");
     puts("CONLOAD D");
-    sleep_ms(1000);
+    await_typed(typed, overruns, LINES_D);
     {
         char *args[3];
         char *envp[1];

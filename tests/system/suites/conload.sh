@@ -8,7 +8,10 @@
 # nothing reads; (C) 200 typed while a foreground child has the terminal and
 # nothing reads, an interrupt character behind them, and 60 more read once
 # the child is killed; (D) 40 typed before the probe executes itself. Each
-# line is `L NNNN payload SUM`, SUM the Adler-32 of the text before it. The
+# line is `L NNNN payload SUM`, SUM the Adler-32 of the text before it, 37
+# bytes with the newline; the probe waits for the port to count every byte of
+# stages B and D (`uart-bytes` in /proc/console) before it reads them or
+# executes itself, so how fast they are typed decides nothing. The
 # probe requires every line it reads in order with its sum, and some bytes of
 # stage A moved by the port's interrupt. The time of stage A and the files
 # the writer completed in each of A, B and C are printed and not judged;
