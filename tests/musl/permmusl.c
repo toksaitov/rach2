@@ -32,6 +32,9 @@
  *   0700, stat of ".", an open of a file in it, getcwd and stat of the file by
  *   its absolute path succeed, and stat of "w/other" is EACCES.
  *
+ * Uid and gid 1000 are the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md).
+ *
  * The program runs as root. It prints `PERMMUSL OK` and exits 0, or prints
  * `PERMMUSL FAIL (detail)` and exits 1. Linked against the ported musl.
  */
@@ -45,8 +48,13 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
+#include "../probe_args.h"
+
 /* The directory the dot rows make, in /dev/shm, which anyone may write. */
 #define DOT_DIR "/dev/shm/permmusl.d"
+
+/* The uid and gid of the unprivileged rows, 1000 or its native NEW. */
+#define PERM_ID ((unsigned)probe_id(1000))
 
 /**
  * Check a last "." as uid 1000: the directory `DOT_DIR`, the caller's own,
@@ -105,7 +113,7 @@ static int cwd_rows(void)
     close(fd);
     pid = fork();
     if (pid == 0) {
-        int ok = chdir(CWD_DIR "/in") == 0 && setgid(1000) == 0 && setuid(1000) == 0;
+        int ok = chdir(CWD_DIR "/in") == 0 && setgid(PERM_ID) == 0 && setuid(PERM_ID) == 0;
 
         ok = ok && stat(".", &st) == 0 && (fd = open("f", O_RDONLY)) >= 0;
         ok = ok && getcwd(cwd, sizeof(cwd)) && strcmp(cwd, CWD_DIR "/in") == 0;
@@ -138,7 +146,7 @@ static int deny_rows(void)
 {
     int fd;
 
-    if (setgid(1000) != 0 || setuid(1000) != 0) {
+    if (setgid(PERM_ID) != 0 || setuid(PERM_ID) != 0) {
         printf("PERMMUSL FAIL (drop to 1000)\n");
         return 1;
     }
@@ -159,10 +167,12 @@ static int deny_rows(void)
     return dot_search_rows();
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     int fd;
     struct stat st;
+
+    probe_args(argc, argv);
 
     /* fsync */
     fd = open("/etc/motd", O_RDONLY);
@@ -205,8 +215,8 @@ int main(void)
         printf("PERMMUSL FAIL (chown 0:0: %s)\n", strerror(errno));
         return 1;
     }
-    if (chown("/hello.txt", 1000, 1000) != 0 || stat("/hello.txt", &st) != 0 || st.st_uid != 1000 ||
-        st.st_gid != 1000) {
+    if (chown("/hello.txt", PERM_ID, PERM_ID) != 0 || stat("/hello.txt", &st) != 0 ||
+        st.st_uid != PERM_ID || st.st_gid != PERM_ID) {
         printf("PERMMUSL FAIL (chown 1000:1000 round trip)\n");
         return 1;
     }

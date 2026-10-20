@@ -91,6 +91,12 @@
  *
  * Prints "PWAUTHMUSL OK" on success; any failure prints
  * "PWAUTHMUSL FAIL (detail)" and exits 1.
+ *
+ * The `probe` account is uid and gid 1000. A native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md) and a private root whose account
+ * files and home have the account at the NEW of 1000; the probe then calls su
+ * from that uid, requires that identity of `idreport`, and gives the files it
+ * stages that owner.
  */
 
 #define _GNU_SOURCE /* setresuid, getresuid */
@@ -110,6 +116,7 @@
 #include <sys/wait.h>
 
 #include "pwauth.h"
+#include "../probe_args.h"
 
 #define SALT_ALPHABET "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -119,14 +126,17 @@
 #define PROBE_PASSWORD "probepass"
 #define ROOT_PASSWORD  "rach2"
 
+/* The account's uid and gid, 1000 or their native NEW. */
+#define PROBE_UID ((unsigned)probe_id(1000))
+
 /* The five variables su builds for the target, and the caller's own, which must
  * not reach it. */
 #define SU_ENVIRONMENT                                                 \
     " env=PATH=/bin:/usr/bin env=HOME=/home/probe env=SHELL=/idreport" \
     " env=USER=probe env=LOGNAME=probe"
-#define IDS_1000         "uid=1000 euid=1000 suid=1000 gid=1000 egid=1000 sgid=1000"
-#define EXPECT_LOGIN     IDS_1000 " arg0=-idreport cwd=/home/probe" SU_ENVIRONMENT
-#define EXPECT_NON_LOGIN IDS_1000 " arg0=/idreport cwd=/musl" SU_ENVIRONMENT
+#define EXPECT_IDS       "uid=%u euid=%u suid=%u gid=%u egid=%u sgid=%u"
+#define EXPECT_LOGIN     EXPECT_IDS " arg0=-idreport cwd=/home/probe" SU_ENVIRONMENT
+#define EXPECT_NON_LOGIN EXPECT_IDS " arg0=/idreport cwd=/musl" SU_ENVIRONMENT
 
 /* The exit statuses of a uid-1000 caller that came back from `su` with its
  * identity changed, and of one whose `su` died of a signal. Both are failures
@@ -490,8 +500,8 @@ static int check_rewrite(void)
     int reader;
     int held;
 
-    if (spill("/credmode.txt", before, 0640) != 0 || chown("/credmode.txt", 1000, 1000) != 0 ||
-        chmod("/credmode.txt", 0640) != 0) {
+    if (spill("/credmode.txt", before, 0640) != 0 ||
+        chown("/credmode.txt", PROBE_UID, PROBE_UID) != 0 || chmod("/credmode.txt", 0640) != 0) {
         return fail("could not stage the file the replacement inherits from");
     }
     reader = open("/credmode.txt", O_RDONLY);
@@ -518,8 +528,8 @@ static int check_rewrite(void)
 
         return fail("the published file is not the text that was written");
     }
-    if (stat("/credmode.txt", &st) != 0 || (st.st_mode & 07777) != 0640 || st.st_uid != 1000 ||
-        st.st_gid != 1000) {
+    if (stat("/credmode.txt", &st) != 0 || (st.st_mode & 07777) != 0640 || st.st_uid != PROBE_UID ||
+        st.st_gid != PROBE_UID) {
         close(reader);
 
         return fail("the replacement did not inherit the original's mode and owner");
@@ -544,8 +554,8 @@ static int check_rewrite(void)
         return fail("a reader across the rename read something other than what it opened");
     }
 
-    if (spill("/credmode.txt", before, 0640) != 0 || chown("/credmode.txt", 1000, 1000) != 0 ||
-        chmod("/credmode.txt", 04640) != 0) {
+    if (spill("/credmode.txt", before, 0640) != 0 ||
+        chown("/credmode.txt", PROBE_UID, PROBE_UID) != 0 || chmod("/credmode.txt", 04640) != 0) {
         return fail("could not stage the set-id file the replacement inherits from");
     }
     if (cred_txn_begin("pwauthmusl") != 0) {
@@ -556,8 +566,8 @@ static int check_rewrite(void)
     if (held != CRED_PUBLISHED) {
         return fail("cred_rewrite refused a set-id file it should have published");
     }
-    if (stat("/credmode.txt", &st) != 0 || (st.st_mode & 07777) != 04640 || st.st_uid != 1000 ||
-        st.st_gid != 1000) {
+    if (stat("/credmode.txt", &st) != 0 || (st.st_mode & 07777) != 04640 ||
+        st.st_uid != PROBE_UID || st.st_gid != PROBE_UID) {
         return fail("the replacement did not inherit the original's set-id bit and owner");
     }
 
@@ -2290,7 +2300,8 @@ static void su_caller(const char *cwd, char *const argv[], char *const envp[], c
     pid_t runner;
     int status;
 
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(PROBE_UID, PROBE_UID, PROBE_UID) != 0 ||
+        setresuid(PROBE_UID, PROBE_UID, PROBE_UID) != 0) {
         _exit(CALLER_BROKEN);
     }
     if (chdir(cwd) != 0 || pipe(feed) != 0) {
@@ -2319,8 +2330,8 @@ static void su_caller(const char *cwd, char *const argv[], char *const envp[], c
         _exit(CALLER_SIGNAL);
     }
     if (getresuid(&ruid, &euid, &suid) != 0 || getresgid(&rgid, &egid, &sgid) != 0 ||
-        ruid != 1000 || euid != 1000 || suid != 1000 || rgid != 1000 || egid != 1000 ||
-        sgid != 1000) {
+        ruid != PROBE_UID || euid != PROBE_UID || suid != PROBE_UID || rgid != PROBE_UID ||
+        egid != PROBE_UID || sgid != PROBE_UID) {
         _exit(CALLER_BROKEN);
     }
     _exit(WEXITSTATUS(status) & 0x7f);
@@ -2442,12 +2453,15 @@ static int check_high_signals(void)
  */
 static int check_su(void)
 {
+    char expect_non_login[512], expect_login[512];
     char *caller_env[] = {(char *)"SU_LEAK=1", (char *)"PATH=/nowhere", NULL};
-    char *non_login[] = {(char *)"su", (char *)"probe", (char *)"-c", (char *)EXPECT_NON_LOGIN,
-                         NULL};
-    char *login[] = {(char *)"su", (char *)"-",          (char *)"probe",
-                     (char *)"-c", (char *)EXPECT_LOGIN, NULL};
+    char *non_login[] = {(char *)"su", (char *)"probe", (char *)"-c", expect_non_login, NULL};
+    char *login[] = {(char *)"su", (char *)"-", (char *)"probe", (char *)"-c", expect_login, NULL};
+    unsigned id = PROBE_UID;
     int status;
+
+    snprintf(expect_non_login, sizeof(expect_non_login), EXPECT_NON_LOGIN, id, id, id, id, id, id);
+    snprintf(expect_login, sizeof(expect_login), EXPECT_LOGIN, id, id, id, id, id, id);
 
     status = run_su("/musl", non_login, caller_env, PROBE_PASSWORD);
     if (status == CALLER_BROKEN || status < 0) {
@@ -2563,11 +2577,12 @@ static int finish(void)
  * Snapshot the databases, run the cases in order until one fails, and clean
  * up. Returns 0 on success and 1 otherwise.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     size_t i;
     int rc;
 
+    probe_args(argc, argv);
     for (i = 0; i < 3; i++) {
         Snapshot_len[i] = slurp(Databases[i], Snapshot[i], sizeof(Snapshot[i]));
         if (Snapshot_len[i] < 0) {

@@ -29,6 +29,10 @@
  * exit, and be respawned into the same failure.
  *
  * Prints "LOGINMUSL OK" on success and "LOGINMUSL FAIL (detail)" otherwise.
+ *
+ * A native run gives `ids=OLD:NEW,...` (tests/native/Readme.md) and a private
+ * root whose account files and home have `probe` at the NEW of 1000; the
+ * identity the probe then requires of `idreport` is that uid.
  */
 
 #define _GNU_SOURCE
@@ -47,6 +51,7 @@
 #include <termios.h>
 
 #include "pwauth.h"
+#include "../probe_args.h"
 
 #define LOGIN_PATH "/login"
 #define ETC_PASSWD "/etc/passwd"
@@ -55,7 +60,7 @@
 
 #define PROBE_USER "probe"
 #define PROBE_PASS "probepass"
-#define PROBE_UID  1000
+#define PROBE_UID  ((int)probe_id(1000))
 
 /* The three databases, and their contents as `main` found them, which
  * `restore_databases` writes back. */
@@ -530,11 +535,12 @@ static int check_wedges(void)
  * Take the snapshots, run the cases, write the databases back and print the
  * result. Must run as root. Returns 0 when every case passes, 1 otherwise.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     size_t i;
     int rc;
 
+    probe_args(argc, argv);
     if (getuid() != 0) {
         printf("LOGINMUSL FAIL (the probe must run as root)\n");
 

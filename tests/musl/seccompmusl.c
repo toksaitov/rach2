@@ -22,10 +22,12 @@
  * The strict mode lets write, read and exit through, by the architecture's
  * numbers, and kills the process with SIGKILL at getpid and at close.
  *
- * Run with an argument, the program is the image the filter child execs, and
- * checks that the filters were kept. The parent prints "SECCOMPMUSL OK" and
- * exits 0 on success; a failure prints "SECCOMPMUSL FAIL (detail: errno N)"
- * and the program exits 1.
+ * Run with an argument other than NAME=VALUE ones, the program is the image
+ * the filter child execs, and checks that the filters were kept. The parent
+ * prints "SECCOMPMUSL OK" and exits 0 on success; a failure prints
+ * "SECCOMPMUSL FAIL (detail: errno N)" and the program exits 1. The
+ * unprivileged caller is uid 1000, or the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -40,6 +42,8 @@
 #include <sys/wait.h>
 #include <ucontext.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The seccomp operations, flag and actions, and the classic BPF opcodes. */
 #define SET_MODE_STRICT  0
@@ -193,7 +197,9 @@ static int refusals(void)
     }
     pid = fork();
     if (pid == 0) {
-        _exit(setuid(1000) == 0 && answer(NR_GETPPID, RET_ERRNO | 77, 0) == -1 && errno == EACCES
+        uid_t user = (uid_t)probe_id(1000);
+
+        _exit(setuid(user) == 0 && answer(NR_GETPPID, RET_ERRNO | 77, 0) == -1 && errno == EACCES
                   ? 0
                   : 1);
     }
@@ -349,7 +355,8 @@ int main(int argc, char **argv)
     pid_t pid;
     int status;
 
-    if (argc > 1) {
+    probe_args(argc, argv);
+    if (probe_words() > 0) {
         return after_exec();
     }
     if (refusals() || strict()) {

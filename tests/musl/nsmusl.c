@@ -34,6 +34,11 @@
  * Each check that changes a namespace or an id runs in a child of its own (the
  * mount check forks its own child), so what it changes ends with the child.
  * Prints "NSMUSL OK" on success and "NSMUSL FAIL (detail)" otherwise.
+ *
+ * Uid and gid 1000 are the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md), in the maps it writes and reads
+ * back too; the argument is passed on to suidhelper. 65534 is the id outside
+ * a user namespace's maps, which no argument changes.
  */
 
 #define _GNU_SOURCE
@@ -57,8 +62,13 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 /* The key of the System V segment the first IPC namespace has ("NSMU"). */
 #define SHM_KEY 0x4e534d55
+
+/* The uid and gid the unprivileged checks take, 1000 or its native NEW. */
+#define NS_USER ((unsigned)probe_id(1000))
 
 /** Report one failed check and return 1, a child's failure status. */
 static int fail(const char *what)
@@ -513,7 +523,7 @@ static int sandbox(void)
     long pid;
     int status;
 
-    if (setgid(1000) != 0 || setuid(1000) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0) {
+    if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0) {
         return fail("become uid 1000");
     }
     fflush(stdout);
@@ -536,26 +546,27 @@ static int sandbox(void)
  */
 static int user(void)
 {
-    char buf[128];
+    char buf[128], map[32], back[40];
 
-    if (setgid(1000) != 0 || setuid(1000) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0) {
+    snprintf(map, sizeof(map), "0 %u 1\n", NS_USER);
+    snprintf(back, sizeof(back), "%10u %10u %10u\n", 0u, NS_USER, 1u);
+    if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0) {
         return fail("become uid 1000");
     }
     if (unshare(CLONE_NEWUSER) != 0 || getuid() != 65534 || getgid() != 65534) {
         return fail("ids outside the maps read as 65534");
     }
-    if (put("/proc/self/uid_map", "0 1000 1\n") != 0 || put("/proc/self/setgroups", "deny") != 0 ||
-        put("/proc/self/gid_map", "0 1000 1\n") != 0) {
+    if (put("/proc/self/uid_map", map) != 0 || put("/proc/self/setgroups", "deny") != 0 ||
+        put("/proc/self/gid_map", map) != 0) {
         return fail("write the maps");
     }
     if (getuid() != 0 || geteuid() != 0 || getgid() != 0) {
         return fail("the mapped ids");
     }
-    if (get("/proc/self/uid_map", buf, sizeof(buf)) <= 0 ||
-        strcmp(buf, "         0       1000          1\n") != 0) {
+    if (get("/proc/self/uid_map", buf, sizeof(buf)) <= 0 || strcmp(buf, back) != 0) {
         return fail("the map reads back");
     }
-    if (put("/proc/self/uid_map", "0 1000 1\n") == 0 || errno != EPERM) {
+    if (put("/proc/self/uid_map", map) == 0 || errno != EPERM) {
         return fail("a map is written once");
     }
     if (chroot("/") != 0) {
@@ -570,23 +581,30 @@ static int user(void)
 /**
  * Check that a set-uid program of root's, run in a user namespace that maps
  * only the caller's own ids, runs with those ids: suidhelper's `plain` exits
- * 0 when every id is 1000. Returns 0, or 1 after printing the failure.
+ * 0 when every id is 1000, or the NEW of 1000 in the `ids` argument passed on
+ * to it. Returns 0, or 1 after printing the failure.
  */
 static int setid(void)
 {
+    const char *ids = probe_arg("ids", NULL);
+    char map[32], ids_arg[256];
     pid_t pid;
     int status;
 
-    if (setgid(1000) != 0 || setuid(1000) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
-        unshare(CLONE_NEWUSER) != 0 || put("/proc/self/uid_map", "1000 1000 1\n") != 0 ||
-        put("/proc/self/setgroups", "deny") != 0 ||
-        put("/proc/self/gid_map", "1000 1000 1\n") != 0) {
+    snprintf(map, sizeof(map), "%u %u 1\n", NS_USER, NS_USER);
+    if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
+        unshare(CLONE_NEWUSER) != 0 || put("/proc/self/uid_map", map) != 0 ||
+        put("/proc/self/setgroups", "deny") != 0 || put("/proc/self/gid_map", map) != 0) {
         return fail("map the caller's own ids");
+    }
+    if (ids != NULL) {
+        snprintf(ids_arg, sizeof(ids_arg), "ids=%s", ids);
     }
     fflush(stdout);
     pid = fork();
     if (pid == 0) {
-        execl("/suidhelper.suid", "suidhelper.suid", "plain", (char *)NULL);
+        execl("/suidhelper.suid", "suidhelper.suid", "plain", ids != NULL ? ids_arg : (char *)NULL,
+              (char *)NULL);
         _exit(127);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -624,7 +642,7 @@ static int empty_root(void)
     if (get(path, buf, sizeof(buf)) <= 0 || strcmp(buf, "pos:\t5\nflags:\t02000000\n")) {
         return fail("a file of fdinfo has the offset and the flags");
     }
-    if (setgid(1000) != 0 || setuid(1000) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
+    if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
         unshare(CLONE_NEWUSER) != 0 || (proc = open("/proc", O_RDONLY | O_DIRECTORY)) < 0) {
         return fail("become uid 1000 in a user namespace");
     }
@@ -672,11 +690,12 @@ static int wide_flags(void)
  * Make the System V segment the IPC check looks for, run the checks, and
  * remove the segment. Returns 0 when every check passes, and 1 otherwise.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     int id = shmget(SHM_KEY, 4096, IPC_CREAT | 0600);
     int rc;
 
+    probe_args(argc, argv);
     if (id < 0) {
         return fail("shmget");
     }

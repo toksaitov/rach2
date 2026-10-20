@@ -19,7 +19,9 @@
  *
  * The program runs as root, since it mounts a tmpfs and makes device nodes.
  * It prints `MKNODMUSL OK` and exits 0 on success, and prints
- * `MKNODMUSL FAIL (detail)` and exits 1 otherwise.
+ * `MKNODMUSL FAIL (detail)` and exits 1 otherwise. The caller who is not root
+ * is user and group 1000, or the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -35,6 +37,8 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 #define FIFO_PATH "/tmp/mknodmusl.p"
 #define ATFIFO    "mknodmusl.q"
@@ -202,7 +206,7 @@ static int refusals(void)
     }
     pid = fork();
     if (pid == 0) {
-        if (setgid(1000) != 0 || setuid(1000) != 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
             _exit(2);
         }
         if (!refused(mknod(MNT "/u", S_IFCHR | 0600, makedev(1, 3)), EPERM)) {
@@ -225,8 +229,9 @@ static int refusals(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (on_krffs() || devices() || refusals()) {
         return 1;
     }

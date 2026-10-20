@@ -51,6 +51,11 @@
  * Prints "ADDUSERMUSL OK" on success and "ADDUSERMUSL FAIL (detail)" otherwise.
  * It restores all three databases byte for byte and removes what it created
  * before it exits, since the probes share one boot.
+ *
+ * The `probe` account's uid is 1000, as the test image stages it. A native
+ * run gives `ids=OLD:NEW,...` (tests/native/Readme.md) and a private root
+ * whose account files have the account at the NEW of 1000; the probe then
+ * drops to that uid and offers it to `adduser -u` as the taken one.
  */
 
 #define _GNU_SOURCE /* crypt */
@@ -71,6 +76,7 @@
 #include <sys/wait.h>
 
 #include "pwauth.h"
+#include "../probe_args.h"
 
 #define ADDUSER_PATH "/adduser"
 #define CRASH_PATH   "/adduser-crash"
@@ -88,7 +94,7 @@
 /* The staged account the concurrent case changes the password of. */
 #define PROBE_USER "probe"
 #define PROBE_PASS "probepass"
-#define PROBE_UID  1000
+#define PROBE_UID  ((uid_t)probe_id(1000))
 
 /* The three databases, and their contents as `main` found them, which
  * every case compares against and `restore_databases` writes back. */
@@ -587,6 +593,7 @@ static int check_refusals(void)
     char after[4096];
     char staged[4096];
     char *argv[6];
+    char taken[24];
     size_t used;
     size_t i;
     int status;
@@ -618,7 +625,8 @@ static int check_refusals(void)
     }
 
     /* A uid already taken. */
-    argv[2] = (char *)"1000";
+    snprintf(taken, sizeof(taken), "%lu", (unsigned long)PROBE_UID);
+    argv[2] = taken;
     if (run_with(ADDUSER_PATH, argv, "", report, sizeof(report)) == 0) {
         return fail("adduser handed out a uid that was taken");
     }
@@ -1163,10 +1171,11 @@ static int check_consistent(void)
  * Take the snapshots, run the cases, put back what they changed and print the
  * result. Must run as root. Returns 0 when every case passes, 1 otherwise.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     int rc;
 
+    probe_args(argc, argv);
     if (getuid() != 0) {
         printf("ADDUSERMUSL FAIL (the probe must run as root)\n");
 

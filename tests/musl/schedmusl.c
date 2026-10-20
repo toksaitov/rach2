@@ -50,6 +50,10 @@
  * which is EPERM, nor change root's process. musl has no wrapper for these
  * calls, so they go through `syscall`.
  *
+ * User and group 1000 are the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md), so that PRIO_USER reaches no
+ * process of the machine's own accounts.
+ *
  * It prints "SCHEDMUSL OK" and exits 0 on success, or prints "SCHEDMUSL FAIL
  * (detail)" and exits 1 at the first failure.
  */
@@ -69,6 +73,11 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
+
+/* The user and group the unprivileged rows take, 1000 or its native NEW. */
+#define USER_ID ((unsigned)probe_id(1000))
 
 /**
  * Set in `*set` the id of each processor /proc/cpuinfo lists on a
@@ -321,7 +330,7 @@ static int group(void)
  */
 static int unprivileged(void)
 {
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(USER_ID, USER_ID, USER_ID) != 0 || setresuid(USER_ID, USER_ID, USER_ID) != 0) {
         return 1;
     }
     if (setpriority(PRIO_PROCESS, 0, 10) != 0) {
@@ -333,7 +342,7 @@ static int unprivileged(void)
     if (setpriority(PRIO_PROCESS, getppid(), 10) != -1 || errno != EPERM) {
         return 4;
     }
-    if (setpriority(PRIO_USER, 0, 12) != 0 || getpriority(PRIO_USER, 1000) != 12) {
+    if (setpriority(PRIO_USER, 0, 12) != 0 || getpriority(PRIO_USER, USER_ID) != 12) {
         return 5;
     }
     return 0;
@@ -412,7 +421,7 @@ static int not_root(void)
 {
     cpu_set_t set;
 
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(USER_ID, USER_ID, USER_ID) != 0 || setresuid(USER_ID, USER_ID, USER_ID) != 0) {
         return 1;
     }
     if (set_policy(getppid(), SCHED_OTHER, 0) != -1 || errno != EPERM) {
@@ -651,7 +660,7 @@ static int oom_write(const char *path, const char *text)
  */
 static int become_user(void)
 {
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0 ||
+    if (setresgid(USER_ID, USER_ID, USER_ID) != 0 || setresuid(USER_ID, USER_ID, USER_ID) != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0) {
         return -1;
     }
@@ -793,7 +802,7 @@ static int io_inherited(void)
  */
 static int io_unprivileged(void)
 {
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(USER_ID, USER_ID, USER_ID) != 0 || setresuid(USER_ID, USER_ID, USER_ID) != 0) {
         return 1;
     }
     if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_IDLE, 0)) != 0) {
@@ -841,6 +850,7 @@ static int io_priorities(void)
 /** Run the checks, or the new image's helper when --exec-group is given. */
 int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (argc == 2 && strcmp(argv[1], "--exec-group") == 0) {
         return exec_group_image();
     }

@@ -36,7 +36,9 @@
  * unlink, has the file's size and reads its bytes.
  *
  * It prints "UNIXMUSL OK" and exits 0 on success, or prints "UNIXMUSL FAIL
- * (detail: errno N)" and exits 1 at the first failure.
+ * (detail: errno N)" and exits 1 at the first failure. Ids 1000 and 65534 are
+ * the NEW of each when a native run gives `ids=OLD:NEW,...`
+ * (tests/native/Readme.md), since 65534 is the machine's `nobody`.
  */
 
 #define _GNU_SOURCE
@@ -56,9 +58,16 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 #define SOCK_PATH  "/tmp/unixmusl.sock"
 #define DGRAM_PATH "/tmp/unixmusl.dg"
 #define FROM_PATH  "/tmp/unixmusl.from"
+
+/* The unprivileged user and group of the credential rows, 1000 and 65534,
+ * or their native NEW. */
+#define USER_ID   ((unsigned)probe_id(1000))
+#define NOBODY_ID ((unsigned)probe_id(65534))
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -247,7 +256,7 @@ static int peer_child(int mine, pid_t creator, uid_t uid, gid_t gid)
     struct ucred cr;
     socklen_t len = sizeof(cr);
 
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(USER_ID, USER_ID, USER_ID) != 0 || setresuid(USER_ID, USER_ID, USER_ID) != 0) {
         return 2;
     }
     if (getsockopt(mine, SOL_SOCKET, SO_PEERCRED, &cr, &len) != 0 || len != sizeof(cr) ||
@@ -309,7 +318,7 @@ static int creds(void)
         return fail("no SCM_CREDENTIALS with the child's byte");
     }
     memcpy(&cr, CMSG_DATA(c), sizeof(cr));
-    if (cr.pid != pid || cr.uid != 1000 || cr.gid != 1000) {
+    if (cr.pid != pid || cr.uid != USER_ID || cr.gid != USER_ID) {
         return fail("the SCM_CREDENTIALS values are not the sender's");
     }
     close(sv[0]);
@@ -408,7 +417,7 @@ static int thread_creds(void)
         void *res = &res;
         int sv[2];
 
-        if (getuid() == 0 && (setgid(65534) != 0 || setuid(65534) != 0)) {
+        if (getuid() == 0 && (setgid(NOBODY_ID) != 0 || setuid(NOBODY_ID) != 0)) {
             _exit(2);
         }
         if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0 ||
@@ -1092,8 +1101,9 @@ static int short_control(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||

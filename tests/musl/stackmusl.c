@@ -15,6 +15,9 @@
  * `STACKMUSL FAIL (detail)` and exits 1 otherwise. Run as
  * `stackmusl deep MIB LIMIT`, it is the `deep` half: it exits 2 when its soft
  * limit is not `LIMIT` bytes, and 0 after recursing through `MIB` MiB.
+ *
+ * The unprivileged caller is user and group 1000, or the NEW of 1000 when a
+ * native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -25,6 +28,8 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 #define MIB (1024UL * 1024UL)
 
@@ -70,10 +75,12 @@ static int set_stack(rlim_t soft, rlim_t hard)
  */
 static int unprivileged(void)
 {
+    unsigned id = (unsigned)probe_id(1000);
+
     if (set_stack(1 * MIB, 2 * MIB) != 0) {
         return 1;
     }
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(id, id, id) != 0 || setresuid(id, id, id) != 0) {
         return 2;
     }
     if (set_stack(1 * MIB, 4 * MIB) != -1 || errno != EPERM) {
@@ -123,6 +130,7 @@ int main(int argc, char *argv[])
     pid_t pid;
     int status;
 
+    probe_args(argc, argv);
     if (argc == 4 && strcmp(argv[1], "deep") == 0) {
         if (getrlimit(RLIMIT_STACK, &rl) != 0 ||
             rl.rlim_cur != (rlim_t)strtoul(argv[3], NULL, 10)) {

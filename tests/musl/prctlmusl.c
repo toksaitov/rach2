@@ -43,7 +43,9 @@
  * The program runs itself in the modes `name`, `exe-moved`, `exe-ran`,
  * `exit-now` and `subreaper-kept`, named by its first argument. With none it
  * runs the checks, prints "PRCTLMUSL OK" and exits 0 on success, or prints
- * "PRCTLMUSL FAIL (detail)" and exits 1 at the first failure.
+ * "PRCTLMUSL FAIL (detail)" and exits 1 at the first failure. User and group
+ * 1000 are the NEW of 1000 when a native run gives `ids=OLD:NEW,...`
+ * (tests/native/Readme.md), which it passes on to the helper.
  */
 
 #define _GNU_SOURCE
@@ -63,6 +65,11 @@
 #include <sys/times.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
+
+/* The unprivileged user and group, 1000 or its native NEW. */
+#define OTHER_ID ((unsigned)probe_id(1000))
 
 /* The pipe a grandchild reports its parent-death signal on. */
 static int report_fd = -1;
@@ -297,13 +304,14 @@ static int parent_that_dies(void)
  */
 static int moved_id(int uid)
 {
+    unsigned id = OTHER_ID;
     int sig = -1;
 
     if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1 || prctl(PR_SET_PDEATHSIG, SIGUSR2, 0, 0, 0) != 0 ||
         prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) != 0 || sig != SIGUSR2) {
         return 1;
     }
-    if ((uid ? setresuid(1000, 1000, 1000) : setresgid(1000, 1000, 1000)) != 0) {
+    if ((uid ? setresuid(id, id, id) : setresgid(id, id, id)) != 0) {
         return 2;
     }
     if (prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) != 0 || sig != 0) {
@@ -381,10 +389,13 @@ static int parent_death(void)
  */
 static int unprivileged_exec(void)
 {
-    char *argv[3];
+    const char *ids = probe_arg("ids", NULL);
+    char ids_arg[256];
+    char *argv[4];
+    unsigned id = OTHER_ID;
     int status;
 
-    if (setresgid(1000, 1000, 1000) != 0 || setresuid(1000, 1000, 1000) != 0) {
+    if (setresgid(id, id, id) != 0 || setresuid(id, id, id) != 0) {
         return 10;
     }
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 ||
@@ -400,6 +411,11 @@ static int unprivileged_exec(void)
     argv[0] = (char *)"suidhelper";
     argv[1] = (char *)"plain";
     argv[2] = NULL;
+    argv[3] = NULL;
+    if (ids != NULL) {
+        snprintf(ids_arg, sizeof(ids_arg), "ids=%s", ids);
+        argv[2] = ids_arg;
+    }
     execv("/suidhelper.suid", argv);
     return 13;
 }
@@ -1029,6 +1045,7 @@ static int subreaper(void)
 
 int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (argc > 1 && strcmp(argv[1], "name") == 0) {
         return padded_name();
     }

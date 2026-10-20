@@ -21,6 +21,8 @@
  * and so does umount2 of the tmpfs; both succeed once the process is gone.
  *
  * Prints "CHROOTMUSL OK" on success and "CHROOTMUSL FAIL (detail)" otherwise.
+ * The other uid and gid are 1000, or the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -33,11 +35,16 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 #define SELF  "/musl/chrootmusl"
 #define JAIL  "/tmp/chrootmusl"
 #define EMPTY "/tmp/chrootmusl-e"
 #define TJAIL "/tmp/chrootmusl-t"
 #define PRIV  "/tmp/chrootmusl-p"
+
+/* The uid and gid the unprivileged children take. */
+#define PROBE_ID ((uid_t)probe_id(1000))
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -194,7 +201,7 @@ static int refusals(void)
     }
     pid = fork();
     if (pid == 0) {
-        if (setgid(1000) != 0 || setuid(1000) != 0) {
+        if (setgid(PROBE_ID) != 0 || setuid(PROBE_ID) != 0) {
             _exit(2);
         }
         if (!refused(chroot("/chrootmusl-none"), ENOENT) || !refused(chroot(SELF), ENOTDIR)) {
@@ -223,7 +230,7 @@ static int private_root(void)
     }
     pid = fork();
     if (pid == 0) {
-        if (chroot(PRIV) != 0 || setgid(1000) != 0 || setuid(1000) != 0) {
+        if (chroot(PRIV) != 0 || setgid(PROBE_ID) != 0 || setuid(PROBE_ID) != 0) {
             _exit(2);
         }
         _exit(refused(chdir("/"), EACCES) ? 0 : 3);
@@ -416,6 +423,7 @@ static int clean(void)
  */
 int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (argc == 2 && strcmp(argv[1], "inside") == 0) {
         int st = inside();
 

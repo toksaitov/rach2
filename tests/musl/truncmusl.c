@@ -25,7 +25,9 @@
  * or a device.
  *
  * The program runs as root. It prints `TRUNCMUSL OK` and exits 0 on success,
- * and prints `TRUNCMUSL FAIL (detail)` and exits 1 otherwise.
+ * and prints `TRUNCMUSL FAIL (detail)` and exits 1 otherwise. Uid and gid
+ * 1000 are the NEW of 1000 when a native run gives `ids=OLD:NEW,...`
+ * (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -39,6 +41,8 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The file the rows make and remove, and the file made right after it. */
 #define FILE_PATH "/trunc.tmp"
@@ -129,7 +133,7 @@ static int as_user(off_t length, int want, int err)
     int status;
 
     if (pid == 0) {
-        if (setgid(1000) != 0 || setuid(1000) != 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
             _exit(2);
         }
         if (want == 0) {
@@ -309,8 +313,9 @@ static int descriptor_rows(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (length_rows() != 0 || identity_rows() != 0 || refusal_rows() != 0 ||
         descriptor_rows() != 0) {
         unlink(FILE_PATH);

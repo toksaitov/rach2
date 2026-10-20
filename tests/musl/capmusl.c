@@ -21,10 +21,11 @@
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
- * Run with arguments, the program is the image an exec row runs, and judges
- * its sets by the mode its first argument names. With none it runs the rows,
- * prints "CAPMUSL OK" and exits 0 on success, or prints "CAPMUSL FAIL
- * (detail)" and exits 1 at the first failure.
+ * Run with positional arguments, the program is the image an exec row runs,
+ * and judges its sets by the mode its first argument names. With none it runs
+ * the rows, prints "CAPMUSL OK" and exits 0 on success, or prints "CAPMUSL
+ * FAIL (detail)" and exits 1 at the first failure. User 1000 is the NEW of
+ * 1000 when a native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -47,6 +48,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* _LINUX_CAPABILITY_VERSION_3, whose data is two cap_data: bits 0-31, 32-63. */
 #define VERSION_3 0x20080522u
@@ -483,7 +486,8 @@ static int nothing_regained(void)
     int status;
 
     if (pid == 0) {
-        if (setuid(1000) != 0 || give_up() != 0 || prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0) != 0) {
+        if (setuid((uid_t)probe_id(1000)) != 0 || give_up() != 0 ||
+            prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0) != 0) {
             _exit(2);
         }
         execl("/proc/self/exe", "capmusl", "kept", "0", (char *)NULL);
@@ -521,7 +525,8 @@ static int version_ends_page(void)
 static int make_secret(void)
 {
     int fd = open(SECRET, O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    int ok = fd >= 0 && write(fd, "secret\n", 7) == 7 && fchown(fd, 1000, 1000) == 0;
+    int ok = fd >= 0 && write(fd, "secret\n", 7) == 7 &&
+             fchown(fd, (uid_t)probe_id(1000), (gid_t)probe_id(1000)) == 0;
 
     if (fd >= 0) {
         close(fd);
@@ -622,8 +627,9 @@ int main(int argc, char **argv)
 {
     int row;
 
-    if (argc > 1) {
-        return judge_image(argv[1], argc > 2 ? argv[2] : NULL);
+    probe_args(argc, argv);
+    if (probe_words() > 0) {
+        return judge_image(probe_word(1), probe_word(2));
     }
     if (call_rows() != 0) {
         return 1;

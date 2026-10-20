@@ -16,15 +16,19 @@
  * set-user-ID copy owned by root gives uid 1000 an effective uid of 0, and
  * on a tmpfs mounted nosuid it does not.
  *
- * The program execs copies of itself. With no arguments it is the parent and
- * runs the checks, each exec in a forked child that exits 13 when execve
- * returns EACCES and 99 when it returns anything else. With `child EXE` it is
- * the new image, and exits 0 when /proc/self/exe reads EXE and 20 otherwise;
- * with `euid N` it exits 0 when its effective uid is N and 21 otherwise; and
- * run as a script's interpreter, whose first argument is the script's path,
- * it goes on as the arguments after that say. The parent runs as root, since
- * it mounts and changes owners. It prints `FDEXECMUSL OK` and exits 0 on
- * success, and prints `FDEXECMUSL FAIL (detail)` and exits 1 otherwise.
+ * The program execs copies of itself. With no arguments, or with only
+ * NAME=VALUE ones, it is the parent and runs the checks, each exec in a forked
+ * child that exits 13 when execve returns EACCES and 99 when it returns
+ * anything else. With `child EXE` it is the new image, and exits 0 when
+ * /proc/self/exe reads EXE and 20 otherwise; with `euid N` it exits 0 when its
+ * effective uid is N and 21 otherwise; and run as a script's interpreter, whose
+ * first argument is the script's path, it goes on as the arguments after that
+ * say. The parent runs as root, since it mounts and changes owners. It prints
+ * `FDEXECMUSL OK` and exits 0 on success, and prints `FDEXECMUSL FAIL
+ * (detail)` and exits 1 otherwise.
+ *
+ * Uid 1000 is the NEW of 1000 when a native run gives `ids=OLD:NEW,...`
+ * (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -38,6 +42,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 static const char *const SELF = "/musl/fdexecmusl";
 
@@ -271,9 +277,12 @@ static int through_links(void)
  */
 static int on_tmpfs(void)
 {
+    uid_t other = (uid_t)probe_id(1000);
+    char other_text[16];
     int fd;
     int st;
 
+    snprintf(other_text, sizeof(other_text), "%lu", (unsigned long)other);
     if (mount_tmpfs(MNT, 0) != 0 || mount_tmpfs(NOEXEC, MS_NOEXEC) != 0 ||
         mount_tmpfs(NOSUID, MS_NOSUID) != 0) {
         return fail("mount the tmpfs");
@@ -297,7 +306,7 @@ static int on_tmpfs(void)
         return fail("a copy on a noexec mount was not refused with EACCES");
     }
     fd = open(MNT_COPY, O_PATH | O_CLOEXEC);
-    st = fd < 0 ? -1 : run_fd(fd, 1000, "euid", "0");
+    st = fd < 0 ? -1 : run_fd(fd, other, "euid", "0");
     if (fd >= 0) {
         close(fd);
     }
@@ -305,7 +314,7 @@ static int on_tmpfs(void)
         return fail("a set-user-ID copy run by its descriptor gave no effective uid 0");
     }
     fd = open(NOSUID "/bin", O_PATH | O_CLOEXEC);
-    st = fd < 0 ? -1 : run_fd(fd, 1000, "euid", "1000");
+    st = fd < 0 ? -1 : run_fd(fd, other, "euid", other_text);
     if (fd >= 0) {
         close(fd);
     }
@@ -346,7 +355,8 @@ int main(int argc, char **argv)
 {
     int rc;
 
-    if (argc > 1) {
+    probe_args(argc, argv);
+    if (probe_words() > 0) {
         return image(argc, argv);
     }
     clean();

@@ -21,6 +21,10 @@
  *
  * Prints "SUIDMUSL OK" on success, "SUIDMUSL FAIL ..." otherwise. Linked
  * against the ported musl.
+ *
+ * Uid and gid 1000 are the NEW of 1000 when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md); the parent passes that argument
+ * on to each copy after its mode.
  */
 
 #define _GNU_SOURCE /* getresuid, setresuid, setresgid, clone */
@@ -30,6 +34,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 #include <sys/auxv.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
@@ -37,6 +43,13 @@
 
 #define SUID_COPY  "/musl/suidmusl.suid"
 #define XONLY_COPY "/musl/suidmusl.xonly"
+
+/* The uid and gid the copies run as, 1000 or its native NEW. */
+#define USER_ID ((uid_t)probe_id(1000))
+
+/* The `ids` argument a copy is given after its mode, or NULL without one. */
+static char ids_text[256];
+static char *ids_arg;
 
 /**
  * Check, in the setuid-root copy run by uid 1000, that the real uid is 1000,
@@ -52,7 +65,7 @@ static int run_child(void)
         printf("SUIDMUSL FAIL (getresuid)\n");
         return 1;
     }
-    if (r != 1000 || e != 0 || s != 0) {
+    if (r != USER_ID || e != 0 || s != 0) {
         printf("SUIDMUSL FAIL (ids r=%ld e=%ld s=%ld)\n", (long)r, (long)e, (long)s);
         return 1;
     }
@@ -60,7 +73,7 @@ static int run_child(void)
         printf("SUIDMUSL FAIL (AT_SECURE not 1)\n");
         return 1;
     }
-    if (seteuid(1000) != 0 || geteuid() != 1000 || seteuid(0) != 0 || geteuid() != 0) {
+    if (seteuid(USER_ID) != 0 || geteuid() != USER_ID || seteuid(0) != 0 || geteuid() != 0) {
         printf("SUIDMUSL FAIL (saved-id dance)\n");
         return 1;
     }
@@ -76,7 +89,7 @@ static int run_plain(void)
 {
     uid_t r, e, s;
 
-    if (getresuid(&r, &e, &s) != 0 || r != 1000 || e != 1000 || s != 1000) {
+    if (getresuid(&r, &e, &s) != 0 || r != USER_ID || e != USER_ID || s != USER_ID) {
         printf("SUIDMUSL FAIL (the set-id bit applied: e=%ld s=%ld)\n", (long)e, (long)s);
         return 1;
     }
@@ -96,7 +109,7 @@ static int run_xonly(void)
 {
     uid_t r, e, s;
 
-    if (getresuid(&r, &e, &s) != 0 || r != 1000 || e != 1000 || s != 1000) {
+    if (getresuid(&r, &e, &s) != 0 || r != USER_ID || e != USER_ID || s != USER_ID) {
         printf("SUIDMUSL FAIL (the execute-only copy's ids)\n");
         return 1;
     }
@@ -107,10 +120,12 @@ static int run_xonly(void)
     return 0;
 }
 
-/** Set every uid and gid of the calling process to 1000; 0, or -1. */
+/** Set every uid and gid of the calling process to `USER_ID`; 0, or -1. */
 static int drop(void)
 {
-    return setresgid(1000, 1000, 1000) == 0 && setresuid(1000, 1000, 1000) == 0 ? 0 : -1;
+    uid_t id = USER_ID;
+
+    return setresgid(id, id, id) == 0 && setresuid(id, id, id) == 0 ? 0 : -1;
 }
 
 /**
@@ -131,7 +146,7 @@ static int exec_copy(const char *path, const char *mode, int traced)
         if (drop() != 0 || (traced && ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0)) {
             _exit(1);
         }
-        execl(path, "suidmusl", mode, (char *)0);
+        execl(path, "suidmusl", mode, ids_arg, (char *)0);
         _exit(1);
     }
     if (traced && (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) ||
@@ -160,7 +175,7 @@ static char clone_stack[16384] __attribute__((aligned(16)));
 static int exec_plain(void *arg)
 {
     (void)arg;
-    execl(SUID_COPY, "suidmusl", "plain", (char *)0);
+    execl(SUID_COPY, "suidmusl", "plain", ids_arg, (char *)0);
     return 1;
 }
 
@@ -221,7 +236,7 @@ static int xonly_peek_row(void)
         if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) != 0) {
             _exit(1);
         }
-        execl(XONLY_COPY, "suidmusl", "xonly", (char *)0);
+        execl(XONLY_COPY, "suidmusl", "xonly", ids_arg, (char *)0);
         _exit(1);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) || WSTOPSIG(status) != SIGTRAP) {
@@ -241,6 +256,11 @@ static int xonly_peek_row(void)
  */
 int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
+    if (probe_arg("ids", NULL) != NULL) {
+        snprintf(ids_text, sizeof(ids_text), "ids=%s", probe_arg("ids", NULL));
+        ids_arg = ids_text;
+    }
     if (argc >= 2 && strcmp(argv[1], "child") == 0) {
         return run_child();
     }

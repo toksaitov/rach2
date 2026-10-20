@@ -22,7 +22,8 @@
  * whole, also for a directory opened with O_PATH through another's link.
  *
  * Prints "PROCLINKMUSL OK" on success and "PROCLINKMUSL FAIL (detail)"
- * otherwise.
+ * otherwise. Uids 1000 and 1001 are the NEW of each when a native run gives
+ * `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
 
 #define _GNU_SOURCE
@@ -34,6 +35,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 #define TOP "/tmp/proclinkmusl"
 
@@ -432,7 +435,8 @@ static int other_process(void)
     if (pid == 0) {
         close(ready[0]);
         close(go[1]);
-        if (setgid(1000) != 0 || setuid(1000) != 0 || (d = open(TOP "/d2", O_RDONLY)) < 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
+            (d = open(TOP "/d2", O_RDONLY)) < 0) {
             _exit(2);
         }
         if (write(ready[1], &d, sizeof(d)) != sizeof(d) || read(go[0], &c, 1) != 1) {
@@ -449,9 +453,9 @@ static int other_process(void)
     if (!holds(a, "one")) {
         st = 10;
     } else {
-        st = as_user(1000, a, 0);
+        st = as_user((int)probe_id(1000), a, 0);
         if (st == 0) {
-            st = as_user(1001, a, EACCES);
+            st = as_user((int)probe_id(1001), a, EACCES);
             st = st == 0 ? 0 : 20 + st;
         }
     }
@@ -463,10 +467,12 @@ static int other_process(void)
     return st == 0 ? 0 : fail_step("another process's descriptor", st);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     int d;
     int bad;
+
+    probe_args(argc, argv);
 
     mkdir(TOP, 0755);
     if (mount("none", TOP, "tmpfs", 0, NULL) != 0 || chmod(TOP, 0755) != 0 ||
