@@ -101,8 +101,21 @@
         "memory_profile": {"enum": ["reserved", "bigmem-boundary-v1"]},
         "audio": {"enum": ["hda", "sb16"]},
         "firmware": {"enum": ["seabios", "ovmf", "direct"]},
-        "devices": {"$ref": "#/$defs/names"},
+        "devices": {"type": "array", "uniqueItems": true, "items": {"oneOf": [
+          {"$ref": "#/$defs/name"}, {"$ref": "#/$defs/network_card"}
+        ]}},
         "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}}
+      }
+    },
+    "network_card": {
+      "type": "object", "additionalProperties": false, "required": ["model"],
+      "properties": {
+        "model": {"enum": ["rtl8139", "e1000"]},
+        "net": {"type": "string"},
+        "host": {"type": "string"},
+        "dhcpstart": {"type": "string"},
+        "dns": {"type": "string"},
+        "mac": {"type": "string"}
       }
     },
     "execution": {

@@ -109,32 +109,193 @@ static size_t count(const char *const *list)
     return n;
 }
 
-/**
- * Add the arguments that attach device `name`; `*nics` counts the network
- * cards before it, each of which has a user network of its own.
- */
-static void add_device(struct line *l, const char *name, unsigned *nics)
+/** Say whether a device model has a user network. */
+static int nic_model(const char *model)
 {
-    char id[16];
-    int i;
+    size_t i;
 
-    for (i = 0; nic_models[i] != NULL; i++) {
-        if (strcmp(name, nic_models[i]) == 0) {
-            snprintf(id, sizeof(id), "net%u", (*nics)++);
-            add(l, 0, "-netdev");
-            add(l, 0, "user,id=%s", id);
-            add(l, 0, "-device");
-            add(l, 0, "%s,netdev=%s", name, id);
-            return;
+    for (i = 0; nic_models[i] != NULL; i++)
+        if (strcmp(model, nic_models[i]) == 0)
+            return 1;
+    return 0;
+}
+
+/**
+ * Read four decimal IPv4 octets and leave `end` at the next byte.
+ * Return 0, or EINVAL for malformed octets.
+ */
+static int ipv4(const char *s, uint32_t *value, const char **end)
+{
+    unsigned i, octet, n;
+
+    *value = 0;
+    for (i = 0; i < 4; i++) {
+        const char *start = s;
+
+        for (octet = n = 0; *s >= '0' && *s <= '9'; s++, n++) {
+            octet = octet * 10 + (unsigned)(*s - '0');
+            if (n == 3 || octet > 255)
+                return EINVAL;
+        }
+        if (n == 0 || (n > 1 && *start == '0') || (i < 3 && *s++ != '.'))
+            return EINVAL;
+        *value = (*value << 8) | octet;
+    }
+    *end = s;
+    return 0;
+}
+
+/**
+ * Check the IPv4 network and the addresses supplied for one card.
+ * Return 0, or EINVAL for a malformed network or an address outside it.
+ */
+static int network_check(const struct etude_qemu_device *d)
+{
+    const char *end, *s, *addresses[] = {d->host, d->dhcpstart, d->dns};
+    uint32_t net = UINT32_C(0x0a000200), mask = UINT32_C(0xffffff00), address;
+    unsigned bits = 0;
+    size_t i;
+
+    if (d->net != NULL) {
+        if (ipv4(d->net, &net, &end) != 0 || *end++ != '/')
+            return EINVAL;
+        s = end;
+        while (*end >= '0' && *end <= '9') {
+            bits = bits * 10 + (unsigned)(*end++ - '0');
+            if (bits > 32)
+                return EINVAL;
+        }
+        if (end == s || *end != '\0' || (end - s > 1 && *s == '0'))
+            return EINVAL;
+        mask = bits == 0 ? 0 : UINT32_MAX << (32 - bits);
+        if ((net & mask) != net)
+            return EINVAL;
+    }
+    for (i = 0; i < sizeof addresses / sizeof addresses[0]; i++) {
+        if (addresses[i] == NULL)
+            continue;
+        if (ipv4(addresses[i], &address, &end) != 0 || *end != '\0' || (address & mask) != net ||
+            address == net || address == (net | ~mask))
+            return EINVAL;
+    }
+    return 0;
+}
+
+/**
+ * Read six hexadecimal octets of a nonzero unicast station address.
+ * Return 0 with the address in `value`, or EINVAL for an invalid address.
+ */
+static int station(const char *s, uint64_t *value)
+{
+    unsigned i, octet, digit, j;
+
+    *value = 0;
+    for (i = 0; i < 6; i++) {
+        for (octet = j = 0; j < 2; j++) {
+            if (*s >= '0' && *s <= '9')
+                digit = (unsigned)(*s - '0');
+            else if (*s >= 'a' && *s <= 'f')
+                digit = (unsigned)(*s - 'a') + 10;
+            else if (*s >= 'A' && *s <= 'F')
+                digit = (unsigned)(*s - 'A') + 10;
+            else
+                return EINVAL;
+            s++;
+            octet = octet * 16 + digit;
+        }
+        if ((i == 0 && (octet & 1)) || (i < 5 && *s++ != ':'))
+            return EINVAL;
+        *value = (*value << 8) | octet;
+    }
+    return *s == '\0' && *value != 0 ? 0 : EINVAL;
+}
+
+int etude_qemu_devices_check(const struct etude_qemu_device *devices)
+{
+    unsigned char default_used[256] = {0};
+    const uint64_t default_prefix = UINT64_C(0x525400123400);
+    size_t i, j;
+    unsigned last;
+    uint64_t mac, other;
+    const struct etude_qemu_device *d;
+
+    for (i = 0; devices != NULL && devices[i].model != NULL; i++) {
+        d = &devices[i];
+        if (!word(d->model))
+            return EINVAL;
+        if (!nic_model(d->model)) {
+            if (d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
+                d->mac != NULL)
+                return EINVAL;
+            continue;
+        }
+        if (network_check(d) != 0)
+            return EINVAL;
+        if (d->mac == NULL) {
+            for (last = 0x56; last < 0xff && default_used[last]; last++)
+                ;
+            if (last == 0xff)
+                return EINVAL;
+            default_used[last] = 1;
+            continue;
+        }
+        if (station(d->mac, &mac) != 0)
+            return EINVAL;
+        if ((mac & ~UINT64_C(0xff)) == default_prefix) {
+            if (default_used[mac & 0xff])
+                return EINVAL;
+            default_used[mac & 0xff] = 1;
+            continue;
+        }
+        for (j = 0; j < i; j++) {
+            if (nic_model(devices[j].model) && devices[j].mac != NULL) {
+                if (station(devices[j].mac, &other) != 0 || mac == other)
+                    return EINVAL;
+            }
         }
     }
-    if (strcmp(name, "vga") == 0) {
+    return 0;
+}
+
+/** Count the devices of a list ended by a NULL model; NULL has none. */
+static size_t device_count(const struct etude_qemu_device *devices)
+{
+    size_t n = 0;
+
+    while (devices != NULL && devices[n].model != NULL)
+        n++;
+    return n;
+}
+
+/** Add a card's network options to `buf`; validated values fit in 256 bytes. */
+static void network_options(const struct etude_qemu_device *d, char *buf, size_t size)
+{
+    snprintf(buf, size, "%s%s%s%s%s%s%s%s", d->net ? ",net=" : "", d->net ? d->net : "",
+             d->host ? ",host=" : "", d->host ? d->host : "", d->dhcpstart ? ",dhcpstart=" : "",
+             d->dhcpstart ? d->dhcpstart : "", d->dns ? ",dns=" : "", d->dns ? d->dns : "");
+}
+
+/** Attach a device; `*nics` counts the cards already on user networks. */
+static void add_device(struct line *l, const struct etude_qemu_device *d, unsigned *nics)
+{
+    char id[16], options[256];
+
+    if (nic_model(d->model)) {
+        snprintf(id, sizeof(id), "net%u", (*nics)++);
+        network_options(d, options, sizeof(options));
+        add(l, 0, "-netdev");
+        add(l, 0, "user,id=%s%s", id, options);
+        add(l, 0, "-device");
+        add(l, 0, "%s,netdev=%s%s%s", d->model, id, d->mac ? ",mac=" : "", d->mac ? d->mac : "");
+        return;
+    }
+    if (strcmp(d->model, "vga") == 0) {
         add(l, 0, "-vga");
         add(l, 0, "std");
         return;
     }
     add(l, 0, "-device");
-    add(l, 0, "%s", name);
+    add(l, 0, "%s", d->model);
 }
 
 /** Add the selected audio card and its WAV backend at the launcher's path. */
@@ -195,7 +356,7 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
             strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
             p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
             p->initrd == NULL || p->audio != NULL || count(p->disks) != 0 ||
-            count(p->devices) != 0 || count(p->boot_options) != 1 ||
+            device_count(p->devices) != 0 || count(p->boot_options) != 1 ||
             strcmp(p->boot_options[0], "rach2.rescue") != 0)
             return EINVAL;
         m.resident_bytes = ETUDE_BIGMEM_RESIDENT;
@@ -224,9 +385,8 @@ static int profile_check(const struct etude_qemu_profile *p)
         return EINVAL;
     if (count(p->disks) > IDE_DISKS)
         return EINVAL;
-    for (i = 0; i < count(p->devices); i++)
-        if (!word(p->devices[i]))
-            return EINVAL;
+    if (etude_qemu_devices_check(p->devices) != 0)
+        return EINVAL;
     for (i = 0; i < count(p->boot_options); i++)
         if (!word(p->boot_options[i]))
             return EINVAL;
@@ -321,8 +481,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 1, "file=%s,format=raw,if=ide,index=%s,media=disk", p->disks[i], number);
     }
     add_audio(&l, p->audio, audio);
-    for (i = 0; i < count(p->devices); i++)
-        add_device(&l, p->devices[i], &nics);
+    for (i = 0; i < device_count(p->devices); i++)
+        add_device(&l, &p->devices[i], &nics);
     add(&l, 0, "-chardev");
     add(&l, 1, "socket,id=etude-console,path=%s", console);
     add(&l, 0, "-serial");

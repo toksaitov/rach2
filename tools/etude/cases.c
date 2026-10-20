@@ -364,6 +364,45 @@ static void rule_artifacts(const struct rule *r)
     prepared_fixtures(r, native_fixtures(r->c));
 }
 
+/** Check the network options of one QEMU profile with the launcher's rules. */
+static void network_profile(const struct rule *r, const struct json *qemu)
+{
+    const struct json *list = json_member(qemu, "devices");
+    struct etude_qemu_device *devices;
+    const struct json *d;
+    size_t i;
+
+    if (list == NULL)
+        return;
+    devices = json_alloc((list->count + 1) * sizeof(*devices));
+    memset(devices, 0, (list->count + 1) * sizeof(*devices));
+    for (i = 0; i < list->count; i++) {
+        d = list->item[i];
+        devices[i].model = d->type == JSON_STRING ? d->string : json_text(d, "model");
+        devices[i].net = json_text(d, "net");
+        devices[i].host = json_text(d, "host");
+        devices[i].dhcpstart = json_text(d, "dhcpstart");
+        devices[i].dns = json_text(d, "dns");
+        devices[i].mac = json_text(d, "mac");
+    }
+    if (etude_qemu_devices_check(devices) != 0)
+        finding(r->file, list->line,
+                "%s: invalid QEMU network options or duplicate station address",
+                json_text(r->c, "case_id"));
+    free(devices);
+}
+
+/** Check user networks in the guest profile and every scenario machine. */
+static void rule_network(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    network_profile(r, json_member(json_member(r->c, "requirements"), "qemu"));
+    for (i = 0; machines != NULL && i < machines->count; i++)
+        network_profile(r, json_member(machines->item[i], "qemu"));
+}
+
 /** Reports the QEMU profile `qemu` unless it names a processor profile. */
 static void known_processor(const struct rule *r, const struct json *qemu)
 {
@@ -573,6 +612,8 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
                        struct etude_qemu_memory *memory)
 {
     static const char *const nonempty[] = {"device", NULL};
+    static const struct etude_qemu_device device[] = {{"device", NULL, NULL, NULL, NULL, NULL},
+                                                      {0}};
     const struct json *arches = json_member(r->c, "architectures");
     const struct json *options = json_member(qemu, "boot_options");
     const char *boot[3] = {NULL, NULL, NULL};
@@ -591,7 +632,7 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
     p.firmware = same(json_text(qemu, "firmware"), "direct") ? ETUDE_FIRMWARE_DIRECT
                                                              : ETUDE_FIRMWARE_SEABIOS;
     p.disks = json_member(qemu, "disks")->count ? nonempty : NULL;
-    p.devices = json_member(qemu, "devices")->count ? nonempty : NULL;
+    p.devices = json_member(qemu, "devices")->count ? device : NULL;
     if (options->count != 0)
         boot[0] = options->item[0]->string;
     if (options->count > 1)
@@ -851,6 +892,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_role(&r);
     rule_artifacts(&r);
     rule_processor(&r);
+    rule_network(&r);
     rule_steps(&r);
     rule_bounds(&r);
     rule_progress(&r);

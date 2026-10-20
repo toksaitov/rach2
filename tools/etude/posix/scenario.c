@@ -105,7 +105,7 @@ struct etude_case_machine {
     struct etude_machine *m;
     char attempt_id[300];
     const char *disks[DISKS_MAX + 1];
-    const char *devices[DEVICES_MAX + 1];
+    struct etude_qemu_device devices[DEVICES_MAX + 1];
     const char *options[OPTIONS_MAX + 1];
     struct etude_qemu_profile profile;
     struct etude_machine_spec spec;
@@ -1170,6 +1170,33 @@ static int strings(const struct eh_json *v, const char **out, size_t max)
     return 0;
 }
 
+/**
+ * Read device names or card objects into a list ended by a NULL model.
+ * Return 0, or -1 for a malformed entry or more than `max` devices.
+ */
+static int devices_of(const struct eh_json *v, struct etude_qemu_device *out, size_t max)
+{
+    const struct eh_json *i;
+    size_t n = 0;
+
+    for (i = v != NULL ? v->child : NULL; i != NULL; i = i->next) {
+        if (n == max || (i->type != 's' && i->type != 'o'))
+            return -1;
+        memset(&out[n], 0, sizeof(out[n]));
+        out[n].model = i->type == 's' ? i->string : jtext(i, "model");
+        if (out[n].model == NULL)
+            return -1;
+        out[n].net = jtext(i, "net");
+        out[n].host = jtext(i, "host");
+        out[n].dhcpstart = jtext(i, "dhcpstart");
+        out[n].dns = jtext(i, "dns");
+        out[n].mac = jtext(i, "mac");
+        n++;
+    }
+    memset(&out[n], 0, sizeof(out[n]));
+    return 0;
+}
+
 /** Give the firmware a profile's `firmware` names: direct when it names
  * neither SeaBIOS nor OVMF. */
 static enum etude_firmware firmware_of(const char *firmware)
@@ -1190,7 +1217,8 @@ static enum etude_firmware firmware_of(const char *firmware)
 static uint64_t decl_need(const struct etude_case *c, const struct machine_decl *d)
 {
     const struct eh_json *qp = d->qemu;
-    const char *disks[DISKS_MAX + 1], *devices[DEVICES_MAX + 1], *options[OPTIONS_MAX + 1];
+    const char *disks[DISKS_MAX + 1], *options[OPTIONS_MAX + 1];
+    struct etude_qemu_device devices[DEVICES_MAX + 1];
     struct etude_qemu_profile p;
     struct etude_qemu_memory mem;
 
@@ -1204,7 +1232,7 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     p.audio = jtext(qp, "audio");
     p.firmware = firmware_of(jtext(qp, "firmware"));
     if (strings(eh_json_get(qp, "disks"), disks, DISKS_MAX) == 0 &&
-        strings(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
+        devices_of(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
         strings(eh_json_get(qp, "boot_options"), options, OPTIONS_MAX) == 0) {
         p.disks = disks;
         p.devices = devices;
@@ -1258,7 +1286,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     size_t i;
 
     if (strings(eh_json_get(qp, "disks"), names, DISKS_MAX) != 0 ||
-        strings(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX) != 0 ||
+        devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX) != 0 ||
         strings(eh_json_get(qp, "boot_options"), m->options, OPTIONS_MAX) != 0) {
         diag("machine %s: a profile of more disks, devices or options than the launcher takes",
              m->decl->id);

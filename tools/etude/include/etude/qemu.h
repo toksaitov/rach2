@@ -29,6 +29,25 @@ enum etude_firmware {
     ETUDE_FIRMWARE_OVMF     /* the UEFI firmware boots from the disks */
 };
 
+/* A device, optionally with its user network and station address. */
+struct etude_qemu_device {
+    const char *model; /* NULL ends the device list */
+    const char *net;   /* IPv4 network/prefix, or NULL for 10.0.2.0/24 */
+    const char *host;  /* NULL leaves QEMU's default for this network */
+    const char *dhcpstart;
+    const char *dns;
+    const char *mac; /* six hexadecimal octets, or NULL for QEMU's default */
+};
+
+/**
+ * Check device models and network options, including IPv4 subnet membership,
+ * unicast station addresses and duplicate explicit or default addresses.
+ * Network options are valid only for rtl8139 and e1000.
+ *
+ * @return 0, or EINVAL for an invalid device list; NULL is an empty list.
+ */
+int etude_qemu_devices_check(const struct etude_qemu_device *devices);
+
 /* A case's QEMU profile with its artifacts resolved to paths. */
 struct etude_qemu_profile {
     const char *architecture;   /* "i686" or "x86_64" */
@@ -41,9 +60,9 @@ struct etude_qemu_profile {
     const char *memory_profile; /* NULL or "reserved", or "bigmem-boundary-v1" */
     const char *audio;          /* NULL, "hda" or "sb16", recorded through the WAV backend */
     enum etude_firmware firmware;
-    const char *const *devices;      /* ended by NULL */
-    const char *const *boot_options; /* the kernel's command line, ended
-                                        by NULL; direct firmware alone */
+    const struct etude_qemu_device *devices; /* ended by a NULL model */
+    const char *const *boot_options;         /* the kernel's command line, ended
+                                                by NULL; direct firmware alone */
 };
 
 /* Admission amounts for one QEMU, separate from its configured RAM. */

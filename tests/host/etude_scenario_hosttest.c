@@ -615,6 +615,18 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
     }
 }
 
+/** Say whether the manifest's card options reached the stand-in. */
+static int fake_network(int argc, char **argv)
+{
+    const char *net = fake_arg(argc, argv, "-netdev", "user,id=net0,");
+    const char *card = fake_arg(argc, argv, "-device", "e1000,netdev=net0,");
+
+    return net != NULL &&
+           strcmp(net, "net=10.90.0.0/16,host=10.90.0.2,"
+                       "dhcpstart=10.90.0.20,dns=10.90.0.3") == 0 &&
+           card != NULL && strcmp(card, "mac=52:54:00:12:34:58") == 0;
+}
+
 /**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: answer QMP's start, say that
  * the machine runs and the shell is ready, and act on what the console
@@ -631,6 +643,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     struct pollfd p[2];
     int ok = 1, r;
 
+    if (strcmp(mode, "network") == 0 && !fake_network(argc, argv))
+        return 126;
     if (accel == NULL)
         return 125;
     if (disk != NULL) {
@@ -1259,7 +1273,8 @@ int etude_scenario(struct etude_case *c)
         return 1;
     if (strncmp(row, "audio-", 6) == 0)
         return scenario_audio(c, strcmp(row, "audio-keep") == 0);
-    if (strcmp(row, "reboot") == 0 || strcmp(row, "real-reboot") == 0)
+    if (strcmp(row, "reboot") == 0 || strcmp(row, "real-reboot") == 0 ||
+        strcmp(row, "network") == 0)
         return scenario_reboot(c, row[0] == 'r' && row[1] == 'e' && row[2] == 'a');
     if (strcmp(row, "lost") == 0 || strcmp(row, "die") == 0 || strcmp(row, "closecon") == 0 ||
         strcmp(row, "closeqmp") == 0)
@@ -1446,12 +1461,17 @@ static int write_manifest(const char *path, const struct row *r)
             machine, sizeof(machine),
             "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
             "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
-            "%s\"firmware\": \"direct\", \"devices\": [], \"boot_options\": %s}, \"console\": "
+            "%s\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": %s}, \"console\": "
             "\"serial\", \"qmp\": %s, \"helper\": %s}",
             r->helper ? "\"initrd\"" : "null", r->disk != NULL ? "[\"disk\"]" : "[]",
             strcmp(r->name, "memory") == 0       ? "\"memory_profile\": \"bigmem-boundary-v1\", "
             : strncmp(r->name, "audio-", 6) == 0 ? "\"audio\": \"hda\", "
                                                  : "",
+            strcmp(r->name, "network") == 0
+                ? "[{\"model\":\"e1000\",\"net\":\"10.90.0.0/16\",\"host\":\"10.90.0.2\","
+                  "\"dhcpstart\":\"10.90.0.20\",\"dns\":\"10.90.0.3\","
+                  "\"mac\":\"52:54:00:12:34:58\"},\"rtl8139\"]"
+                : "[]",
             r->mode == NULL && r->disk != NULL ? "[\"rach2.fsdisk\"]" : "[]",
             strcmp(r->name, "misuse") == 0 ? "false" : "true", r->helper ? "true" : "false");
     }
@@ -2366,6 +2386,10 @@ static const struct row audio_rows[] = {
 
 static const struct row stand_in_rows[] = {
     {"reboot", "disk", "write:fixture check readback:fixture",
+     "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
+     "second-stop",
+     "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
+    {"network", "network", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
      "second-stop",
      "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},

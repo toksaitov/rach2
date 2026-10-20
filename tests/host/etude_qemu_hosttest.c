@@ -979,11 +979,17 @@ static void test_audio(void)
     CHECK(!left_in(fix_dir(), "etude-qemu."), "audio directories removed");
 }
 
+/* The devices of the complete command-line fixture. */
+static const struct etude_qemu_device argv_devices[] = {{"rtl8139", NULL, NULL, NULL, NULL, NULL},
+                                                        {"e1000", NULL, NULL, NULL, NULL, NULL},
+                                                        {"vga", NULL, NULL, NULL, NULL, NULL},
+                                                        {"ahci", NULL, NULL, NULL, NULL, NULL},
+                                                        {0}};
+
 /** Check the command lines of profiles, and the profiles that are refused. */
 static void test_argv(void)
 {
     static const char *const disks[] = {"/d/one,two.img", "/d/b.img", NULL};
-    static const char *const devices[] = {"rtl8139", "e1000", "vga", "ahci", NULL};
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
     static const char *const five[] = {"a", "b", "c", "d", "e", NULL};
     static const char *const want =
@@ -1014,7 +1020,7 @@ static void test_argv(void)
     p.processors = 2;
     p.memory_bytes = 256u << 20;
     p.firmware = ETUDE_FIRMWARE_DIRECT;
-    p.devices = devices;
+    p.devices = argv_devices;
     p.boot_options = options;
     CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "argv");
     line[0] = '\0';
@@ -1083,6 +1089,132 @@ static void test_argv(void)
           "another option's error");
     CHECK(!etude_qemu_accel_refused(": -accel tcg: at the start of a line\n", ETUDE_ACCEL_TCG),
           "no program before the option");
+}
+
+/** Find an argument after `option` whose whole value is `value`. */
+static int has_argument(char *const argv[], const char *option, const char *value)
+{
+    size_t i;
+
+    for (i = 0; argv[i] != NULL && argv[i + 1] != NULL; i++)
+        if (strcmp(argv[i], option) == 0 && strcmp(argv[i + 1], value) == 0)
+            return 1;
+    return 0;
+}
+
+/** Check DHCP subnets, two cards and the independent network options. */
+static void test_network_argv(void)
+{
+    struct etude_qemu_device devices[] = {
+        {"rtl8139", "192.168.90.0/24", "192.168.90.2", "192.168.90.20", "192.168.90.3",
+         "52:54:00:12:34:56"},
+        {"e1000", "10.0.3.0/24", NULL, NULL, NULL, "52:54:00:12:34:58"},
+        {0}};
+    struct etude_qemu_profile p = {0};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "qemu32", "qemu64", NULL, NULL, 0};
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    p.architecture = "i686";
+    p.kernel = "kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.devices = devices;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "network argv");
+    CHECK(has_argument(argv, "-netdev",
+                       "user,id=net0,net=192.168.90.0/24,host=192.168.90.2,"
+                       "dhcpstart=192.168.90.20,dns=192.168.90.3"),
+          "DHCP network");
+    CHECK(has_argument(argv, "-netdev", "user,id=net1,net=10.0.3.0/24"), "second network");
+    CHECK(has_argument(argv, "-device", "rtl8139,netdev=net0,mac=52:54:00:12:34:56"),
+          "first station address");
+    CHECK(has_argument(argv, "-device", "e1000,netdev=net1,mac=52:54:00:12:34:58"),
+          "second station address");
+    devices[0].model = "e1000";
+    devices[0].net = "10.90.0.0/16";
+    devices[0].host = "10.90.0.2";
+    devices[0].dhcpstart = "10.90.0.20";
+    devices[0].dns = "10.90.0.3";
+    p.architecture = "x86_64";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "wide network argv");
+    CHECK(has_argument(argv, "-netdev",
+                       "user,id=net0,net=10.90.0.0/16,host=10.90.0.2,"
+                       "dhcpstart=10.90.0.20,dns=10.90.0.3"),
+          "DHCP /16 network");
+    devices[0].net = NULL;
+    devices[0].host = "10.0.2.2";
+    devices[0].dhcpstart = "10.0.2.20";
+    devices[0].dns = "10.0.2.3";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "default network with addresses");
+    CHECK(has_argument(argv, "-netdev",
+                       "user,id=net0,host=10.0.2.2,dhcpstart=10.0.2.20,"
+                       "dns=10.0.2.3"),
+          "independent addresses");
+}
+
+/** Refuse malformed networks, foreign addresses and duplicate stations. */
+static void test_network_refused(void)
+{
+    static const char *const bad_net[] = {"",
+                                          "10.0.2.0",
+                                          "10.0.2.0/",
+                                          "10.0.2.0/-1",
+                                          "10.0.2.0/33",
+                                          "10.0.2.0/999999999999",
+                                          "10.0.2.0/24,host=10.0.2.2",
+                                          "10.0.2.1/24",
+                                          "256.0.2.0/24",
+                                          "10.00.2.0/24",
+                                          "10.0.2/24",
+                                          "10.0.2.0/024",
+                                          NULL};
+    static const char *const bad_address[] = {
+        "",         "10.0.3.2",   "10.0.2.256", "10.0.2.2/24", "10.0.2.2,dns=10.0.2.3",
+        "10.0.2.0", "10.0.2.255", "1.2.3",      "10.0.2.02",   NULL};
+    static const char *const bad_mac[] = {"",
+                                          "00:00:00:00:00:00",
+                                          "ff:ff:ff:ff:ff:ff",
+                                          "53:54:00:12:34:56",
+                                          "52:54:00:12:34",
+                                          "52:54:00:12:34:gg",
+                                          "52:54:00:12:34:5",
+                                          "52:54:00:12:34:56,other=1",
+                                          NULL};
+    struct etude_qemu_device devices[] = {
+        {"e1000", NULL, NULL, NULL, NULL, NULL}, {"rtl8139", NULL, NULL, NULL, NULL, NULL}, {0}};
+    size_t i;
+
+    for (i = 0; bad_net[i] != NULL; i++) {
+        devices[0].net = bad_net[i];
+        CHECK(etude_qemu_devices_check(devices) == EINVAL, "bad network");
+    }
+    devices[0].net = NULL;
+    for (i = 0; bad_address[i] != NULL; i++) {
+        devices[0].host = bad_address[i];
+        CHECK(etude_qemu_devices_check(devices) == EINVAL, "bad host address");
+        devices[0].host = NULL;
+        devices[0].dns = bad_address[i];
+        CHECK(etude_qemu_devices_check(devices) == EINVAL, "bad DNS address");
+        devices[0].dns = NULL;
+        devices[0].dhcpstart = bad_address[i];
+        CHECK(etude_qemu_devices_check(devices) == EINVAL, "bad DHCP address");
+        devices[0].dhcpstart = NULL;
+    }
+    for (i = 0; bad_mac[i] != NULL; i++) {
+        devices[0].mac = bad_mac[i];
+        CHECK(etude_qemu_devices_check(devices) == EINVAL, "bad station address");
+    }
+    devices[0].mac = "52:54:aa:bb:cc:dd";
+    devices[1].mac = "52:54:AA:BB:CC:DD";
+    CHECK(etude_qemu_devices_check(devices) == EINVAL, "duplicate station address");
+    devices[0].mac = NULL;
+    devices[1].mac = "52:54:00:12:34:56";
+    CHECK(etude_qemu_devices_check(devices) == EINVAL, "duplicate default station address");
+    devices[0].mac = "52:54:00:12:34:57";
+    devices[1].mac = NULL;
+    CHECK(etude_qemu_devices_check(devices) == 0, "default skips used station address");
+    devices[0].model = "ahci";
+    CHECK(etude_qemu_devices_check(devices) == EINVAL, "network options on another device");
 }
 
 /** Reject a reduced reservation and any change to the boundary workload. */
@@ -1192,6 +1324,9 @@ int main(int argc, char **argv)
         return 1;
     if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
         test_real(1);
+    } else if (argc == 2 && strcmp(argv[1], "--network") == 0) {
+        test_network_argv();
+        test_network_refused();
     } else if (argc == 2 && strcmp(argv[1], "--audio") == 0) {
         test_audio_argv();
         test_audio();
@@ -1199,6 +1334,8 @@ int main(int argc, char **argv)
         test_memory();
     } else {
         test_argv();
+        test_network_argv();
+        test_network_refused();
         test_audio_argv();
         test_audio();
         test_memory();

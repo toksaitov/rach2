@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "proof": "etude-network",
+  "summary": "card network options reach QEMU and invalid addresses are refused",
+  "tree": "private",
+  "sources": [
+    "tools/etude/qemu_profile.c"
+  ],
+  "artifacts": [
+    "${WORK}/test"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude -I tools/etude/posix -I tools/etude/guest -I utils tests/host/etude_qemu_hosttest.c tools/etude/capture.c tools/etude/history_json.c ${SRC}/tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/posix/qemu.c tools/etude/processor.c -o ${WORK}/test"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/test",
+      "--network"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "network-omitted",
+      "summary": "network omitted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "\"user,id=%s%s\", id, options",
+          "replace": "\"user,id=%s\", id"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "DHCP network"
+        ]
+      }
+    },
+    {
+      "name": "station-omitted",
+      "summary": "station omitted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "d->mac ? d->mac : \"\"",
+          "replace": "\"\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "first station address"
+        ]
+      }
+    },
+    {
+      "name": "subnet-unchecked",
+      "summary": "subnet unchecked",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "network_check(d) != 0",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "bad host address"
+        ]
+      }
+    },
+    {
+      "name": "duplicate-unchecked",
+      "summary": "duplicate unchecked",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "|| mac == other",
+          "replace": "|| 0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "duplicate station address"
+        ]
+      }
+    }
+  ]
+}
