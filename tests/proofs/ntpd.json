@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "proof": "ntpd",
+  "summary": "the gnu suite's ntpd row on x86-64, with faults in the row's configuration and in the SNTP server; both scripts run as they are, so nothing is built",
+  "tree": "shared",
+  "sources": [
+    "tests/system/gnu_rows.sh",
+    "tests/system/sntpserver.py"
+  ],
+  "artifacts": [
+    "${WORK}/gnu_rows.sh",
+    "${WORK}/sntpserver.py"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "cp tests/system/gnu_rows.sh tests/system/sntpserver.py ${WORK}/"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 RACH2_GNU_ROWS=ntpd exec sh tests/proofs/guest.sh run gnu 'gnu-test: ntpd: OK'"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "no-server",
+      "summary": "the row writes /etc/ntp.conf with its server line commented out, so init starts no ntpd and the clock is never set",
+      "edits": [
+        {
+          "file": "tests/system/gnu_rows.sh",
+          "find": "    printf 'server %s\\n' \"${RACH2_NTP_SERVER:-}\" > /etc/ntp.conf",
+          "replace": "    printf '# server %s\\n' \"${RACH2_NTP_SERVER:-}\" > /etc/ntp.conf"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "gnu-test: ntpd: FAIL: no answer within its bound"
+        ]
+      }
+    },
+    {
+      "name": "host-time",
+      "summary": "the SNTP server serves the host's own time in place of the time that began in 2030, so ntpd keeps the clock near the host's",
+      "edits": [
+        {
+          "file": "tests/system/sntpserver.py",
+          "find": "    return epoch + time.monotonic() - start",
+          "replace": "    return time.time()"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "gnu-test: ntpd: FAIL"
+        ]
+      }
+    }
+  ]
+}

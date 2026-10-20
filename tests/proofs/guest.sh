@@ -20,6 +20,10 @@
 #                                    output and the console's log, with
 #                                    `guest: fail: PROBE did not pass` when
 #                                    the runner did not pass PROBE
+#   guest.sh run SUITE LINE...       run `tests/run SUITE` and print its
+#                                    output; a run that passes must print
+#                                    each LINE, or the test fails with
+#                                    `guest: fail: SUITE passed without LINE`
 #
 # A catalogue's artifacts are the copies, whose paths do not depend on the
 # architecture. The image is not one, since its bytes depend on more than its
@@ -47,7 +51,7 @@ qemu()
 
 usage()
 {
-    echo 'guest: usage: guest.sh make TARGET... | copy WORK PATH... | image WORK MIB ENTRY... | boot WORK ARG... | default PROBE' >&2
+    echo 'guest: usage: guest.sh make TARGET... | copy WORK PATH... | image WORK MIB ENTRY... | boot WORK ARG... | default PROBE | run SUITE LINE...' >&2
     exit 2
 }
 
@@ -123,6 +127,28 @@ case $verb in
         elif ! grep -Eq "^  (musl/)?$probe +.* PASS\$" "$scratch/out"; then
             echo "guest: fail: $probe did not pass"
             [ "$status" -ne 0 ] || status=1
+        fi
+        exit "$status"
+        ;;
+    run)
+        suite=$1
+        shift
+        scratch=
+        trap 'rm -rf ${scratch:+"$scratch"}' EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        scratch=$(mktemp -d "${TMPDIR:-/tmp}/rach2-guest.XXXXXX")
+        status=0
+        ARCH=$RACH2_ARCH tests/run "$suite" >"$scratch/out" 2>&1 </dev/null || status=$?
+        cat "$scratch/out"
+        if [ "$status" -eq 0 ]; then
+            for line in "$@"; do
+                if ! grep -Fq -- "$line" "$scratch/out"; then
+                    echo "guest: fail: $suite passed without $line"
+                    status=1
+                fi
+            done
         fi
         exit "$status"
         ;;
