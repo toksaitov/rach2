@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../json.h"
 #include "etude/remote.h"
 
 /** Print the usage and return 2. */
@@ -22,6 +23,7 @@ int main(int argc, char **argv)
     char boot[ETUDE_FRAME_TOKEN_LEN + 1];
     int i, stdio = 0;
 
+    json_program = "etude-remote";
     memset(&conf, 0, sizeof(conf));
     conf.in = 0;
     conf.out = 1;

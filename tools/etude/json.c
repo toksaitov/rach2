@@ -28,13 +28,15 @@ struct parser {
     int failed;
 };
 
+const char *json_program = "casecheck";
+
 /** malloc that exits with status 2 when memory runs out; never NULL. */
 void *json_alloc(size_t n)
 {
     void *p = calloc(1, n ? n : 1);
 
     if (p == NULL) {
-        fprintf(stderr, "casecheck: out of memory\n");
+        fprintf(stderr, "%s: out of memory\n", json_program);
         exit(2);
     }
     return p;
@@ -52,7 +54,7 @@ void jbuf_put(struct jbuf *b, const char *s, size_t n)
         }
         grown = realloc(b->data, cap);
         if (grown == NULL) {
-            fprintf(stderr, "casecheck: out of memory\n");
+            fprintf(stderr, "%s: out of memory\n", json_program);
             exit(2);
         }
         b->data = grown;
@@ -114,7 +116,7 @@ static void add_item(struct json *v, struct json *child)
     struct json **grown = realloc(v->item, (v->count + 1) * sizeof *grown);
 
     if (grown == NULL) {
-        fprintf(stderr, "casecheck: out of memory\n");
+        fprintf(stderr, "%s: out of memory\n", json_program);
         exit(2);
     }
     v->item = grown;

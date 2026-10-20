@@ -11,6 +11,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "../json.h"
 #include "etude/proof.h"
 
 /* The signal that asked the proof to stop, or 0. */
@@ -75,6 +76,7 @@ int main(int argc, char **argv)
     const char *sdir = NULL, *tdir = ".";
     int i, check = 0, status;
 
+    json_program = "etude-proof";
     memset(&o, 0, sizeof(o));
     for (i = 1; i < argc && argv[i][0] == '-'; i++) {
         if (strcmp(argv[i], "--texts") == 0)
