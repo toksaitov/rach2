@@ -1,14 +1,16 @@
 #!/bin/sh
 #
-# release_resume_test.sh: release.sh resumes a release from its record.
+# release_resume_test.sh: release.sh resumes a release from its record, and
+# keeps the contracts of its clean builds, its reruns, intermittent failures
+# and the acceptance of the Lenovo.
 #
 # Each row writes a record to a scratch STATE and runs a private copy of
 # tools/flow/release.sh, in a scratch tree, against stand-ins for gh, ssh,
-# git, sleep, board.sh and notify.sh that append each call to a list. The
-# machine answers the reads of `where`, `bootctl status` and
-# /etc/rach2/release, takes a write of that file as the row says, and
-# refuses every other command; the board says what the row gives; gh lists
-# no runs unless the row says otherwise.
+# git, make, sleep, board.sh, notify.sh, testing.sh and metal_accept.sh that
+# append each call to a list. The machine answers the reads of `where`,
+# `bootctl status` and /etc/rach2/release, takes a write of that file as the
+# row says and `bootctl commit`, and refuses every other command; the board
+# says what the row gives; gh lists no runs unless the row says otherwise.
 # The rows check that a release whose steps are all done only reports, closes
 # the phase and removes its worktree, and one whose full run is done goes to the
 # build without a second; that a void or failed record stays in place while the
@@ -20,14 +22,20 @@
 # closes the phase, and fails without closing it when the file does not read
 # back or when the machine's flush of it fails though it reads back; and that a
 # record with `closing` finishes that phase whatever phase was given, checking
-# an open phase for readiness again; and that a candidate whose only commits
-# since a failed full run close the issues of its failures gets a run of only
-# the suites that failed, while a commit that closes nothing, one that closes
-# another issue, or an architecture that failed with no issue gives it a full
-# run. With --mutate each fault below is put into
-# the copy and must fail its own row; the copy is restored before the rows run
-# again at the end. --texts puts each fault into the copy and requires only that
-# it changes the file, and runs no row.
+# an open phase for readiness again; that a candidate whose only commits since
+# a failed full run close the issues of its failures gets a run of only the
+# suites that failed, while a commit that closes nothing, one that closes
+# another issue, an architecture that failed with no issue, or an issue still
+# open gives it a full run; that the same commit, given again while the issue
+# of its failure is open as intermittent, gets a full run of its own and
+# leaves the issue as it is; that a new candidate's run tests every suite, and
+# its build for the Lenovo starts with `make clean`; and that metal_accept.sh
+# passing on the trial boot leads to `bootctl commit`, while its failure ends
+# the release with no commit. With
+# --mutate each fault below is put into the copy and must fail its own row; the
+# copy is restored before the rows run again at the end. --texts puts each
+# fault into the copy and requires only that it changes the file, and runs no
+# row.
 #
 # Usage: sh tests/system/release_resume_test.sh [--mutate | --texts]
 #
@@ -61,8 +69,12 @@ mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
 # back; the phase of a record with `closing` is ignored; an open phase is
 # closed without its readiness checked again; a rerun is never chosen; a
 # commit that closes nothing, or that closes another issue, is taken for a
-# fix; an architecture that failed with no issue is ignored; and a rerun is
-# started for every suite.
+# fix; an architecture that failed with no issue is ignored; a rerun is
+# started for every suite; an issue still open is taken for a fix; the new
+# record keeps the failed run of the old one; a full run is given the suites
+# of a rerun; the build for the Lenovo keeps the last build's objects; the
+# status of metal_accept.sh is ignored; and the candidate is not committed
+# after the acceptance.
 fault()
 {
     # shellcheck disable=SC2016 # the dollars are in the texts sed matches
@@ -91,13 +103,20 @@ fault()
         closes) sed 's/^            case " \$issues " in \*" \$n "\*) ;; \*) return 0 ;; esac$/            :/' ;;
         arches) sed 's/^        case " \$arches " in \*" \$a "\*) ;; \*) return 0 ;; esac$/        :/' ;;
         suites) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        :/' ;;
+        open) sed 's/\^CLOSED Release tests fail on/^[A-Z]* Release tests fail on/' ;;
+        stale) sed 's/^                grep .^touched . "\$state\/record" | tail -n 1$/                grep -e "^touched " -e "^run " "$state\/record"/' ;;
+        partial) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        set -- "$@" -f suites="$only"/' ;;
+        unclean) sed 's/"ARCH=x86_64 make clean && /"/' ;;
+        unaccepted) sed 's/^\(        sh tests\/system\/accept\/metal_accept\.sh .*\) ||$/\1 || true ||/' ;;
+        uncommitted) sed 's/^        lenovo .bootctl commit. >/        echo "bootctl: committed: candidate" >/' ;;
     esac < "$repo/tools/flow/release.sh" > "$tree/tools/flow/release.sh"
     [ "$1" = none ] || ! cmp -s "$repo/tools/flow/release.sh" "$tree/tools/flow/release.sh"
 }
 
+faults='undone full aside touched started reboot unrecorded unsynced unread closing ready
+    chosen unclosed closes arches suites open stale partial unclean unaccepted uncommitted'
 if [ "$mode" = texts ]; then
-    for f in undone full aside touched started reboot unrecorded unsynced unread closing ready \
-        chosen unclosed closes arches suites; do
+    for f in $faults; do
         fault "$f" || { echo "release-test: fault $f changes nothing" >&2; exit 1; }
     done
     exit 0
@@ -134,11 +153,11 @@ esac
 EOF
 
 # ssh answers the testing host and the machine's reads, as the Lenovo
-# running its system's candidate slot, and refuses every other command but a
-# write of /etc/rach2/release. RELEASE_TEST_WRITES says what that write does:
-# `yes` keeps it in RELEASE_TEST_CALLS.release and reports status 0, `lost`
-# reports status 0 and keeps nothing, `unsynced` keeps it and reports the
-# flush's error and status 1, and `no` refuses it.
+# running its system's candidate slot, takes `bootctl commit`, and refuses
+# every other command but a write of /etc/rach2/release. RELEASE_TEST_WRITES
+# says what that write does: `yes` keeps it in RELEASE_TEST_CALLS.release and
+# reports status 0, `lost` reports status 0 and keeps nothing, `unsynced` keeps
+# it and reports the flush's error and status 1, and `no` refuses it.
 cat > "$work/bin/ssh" <<'EOF'
 #!/bin/sh
 for a; do host=$command command=$a; done
@@ -153,6 +172,9 @@ case $command in
     'bootctl status')
         printf 'machine read\n' >> "$RELEASE_TEST_CALLS"
         echo 'bootctl: next_entry: empty' ;;
+    'bootctl commit')
+        printf 'machine write bootctl commit\n' >> "$RELEASE_TEST_CALLS"
+        echo 'bootctl: committed: candidate' ;;
     'cat /etc/rach2/release 2> /dev/null; echo answered')
         printf 'machine read\n' >> "$RELEASE_TEST_CALLS"
         cat "$RELEASE_TEST_CALLS.release" 2> /dev/null
@@ -176,22 +198,61 @@ case $command in
         exit 1 ;;
 esac
 EOF
-# git fails, unless RELEASE_TEST_LOG is set: then the fetch and the ancestry
-# check pass, one commit follows the last candidate, its message is
-# RELEASE_TEST_LOG, and the registry has agents and bigmem on x86_64 and fs
-# on both architectures.
+# git fails, unless RELEASE_TEST_GIT is set: then the fetch, the ancestry
+# check and the worktree's removal and pruning pass; a range between two
+# commits has one commit, whose message is RELEASE_TEST_LOG, and the range
+# from a commit to itself none; the registry has agents and bigmem on x86_64
+# and fs on both architectures; and a new worktree has the stand-in for
+# testing.sh.
 cat > "$work/bin/git" <<'EOF'
 #!/bin/sh
 printf 'git %s\n' "$*" >> "$RELEASE_TEST_CALLS"
-[ -n "$RELEASE_TEST_LOG" ] || exit 1
-case $3 in
+[ -n "$RELEASE_TEST_GIT" ] || exit 1
+[ "$1" != -C ] || shift 2
+case $1 in
     fetch|merge-base) ;;
-    rev-list) echo 3333333333333333333333333333333333333333 ;;
+    rev-list) [ "${3%%..*}" = "${3#*..}" ] || echo 3333333333333333333333333333333333333333 ;;
     log) printf '%s\n' "$RELEASE_TEST_LOG" ;;
-    show) printf '%s\n' '# the suites' 'agents|qemu|full||4096|x86_64' 'fs|qemu|full' \
-        'bigmem|qemu|full||73728|x86_64' ;;
+    show)
+        case $2 in
+            *:tests/registry)
+                printf '%s\n' '# the suites' 'agents|qemu|full||4096|x86_64' 'fs|qemu|full' \
+                    'bigmem|qemu|full||73728|x86_64' ;;
+            *) exit 1 ;;
+        esac ;;
+    worktree)
+        [ "$2" != add ] || {
+            mkdir -p "$5/tools/dev" && cp "${RELEASE_TEST_CALLS%/*}/testing.sh" "$5/tools/dev/testing.sh"
+        } ;;
     *) exit 1 ;;
 esac
+EOF
+
+# testing.sh, in a worktree that git makes, keeps the copy it was given and
+# its arguments in the calls, and says that the testing host did not answer.
+cat > "$work/testing.sh" <<'EOF'
+printf 'testing %s %s\n' "$RACH2_TESTING_COPY" "$*" >> "$RELEASE_TEST_CALLS"
+echo 'testing: the host did not answer'
+exit 1
+EOF
+
+# metal_accept.sh, in the worktree of every row, keeps its arguments in the
+# calls, and passes when RELEASE_TEST_ACCEPT is `pass` and fails otherwise.
+cat > "$work/metal_accept.sh" <<'EOF'
+printf 'accept %s\n' "$*" >> "$RELEASE_TEST_CALLS"
+if [ "$RELEASE_TEST_ACCEPT" = pass ]; then
+    echo 'metal-accept: PASS'
+else
+    echo '  FAIL: the hub section found no hub'
+    echo 'metal-accept: FAIL (1)'
+    exit 1
+fi
+EOF
+
+# make builds nothing and keeps its arguments in the calls.
+cat > "$work/bin/make" <<'EOF'
+#!/bin/sh
+printf 'make %s\n' "$*" >> "$RELEASE_TEST_CALLS"
 EOF
 
 # sleep returns at once, and stops a script that waits more than twenty times.
@@ -202,15 +263,15 @@ echo "$1" >> "$RELEASE_TEST_CALLS.sleeps"
 EOF
 chmod +x "$work/bin/"*
 
-issues='' statuses='' runs='' log=''
 H=1111111111111111111111111111111111111111
 C=2222222222222222222222222222222222222222
 T=2026-10-10T00:00:00Z
+issues='' statuses='' runs='' log='' git='' accept=''
 
 # The records of the rows. `head` has a candidate whose full run passed,
 # `built` adds every step up to the transfer, `installing` the installer's
-# start, `accepted` every step up to the acceptance, and `finished` the
-# installed record.
+# start, `tried` every step up to the trial boot, `accepted` the acceptance,
+# and `finished` the installed record.
 head="phase 7
 sha $H
 chosen $T
@@ -225,9 +286,10 @@ transfer done $T kernel and root in /dev/shm
 kernel done $T candidate slot"
 installing="$built
 install started $T"
-accepted="$installing
+tried="$installing
 install done $T root r
-trial done $T the new kernel runs from the candidate slot
+trial done $T the new kernel runs from the candidate slot"
+accepted="$tried
 accept done $T metal-accept: PASS; committed"
 finished="$accepted
 record done $T /etc/rach2/release names $H"
@@ -240,17 +302,19 @@ void: ready: no: work: #14"
 # run P RECORD BOARD [STATE [WRITES]]: write RECORD, have the board report
 # BOARD for phase 7, gh report the phase as STATE, OPEN unless given, and the
 # machine take a write of /etc/rach2/release as WRITES says, no unless given,
-# as for ssh above, and run the
-# copy for phase P, keeping its output in out and its status in `result`. The
-# variables issues, statuses, runs and log, empty unless a row sets them, are
-# RELEASE_TEST_ISSUES, RELEASE_TEST_STATUSES, RELEASE_TEST_RUNS and
-# RELEASE_TEST_LOG.
+# as for ssh above, and run the copy for phase P, keeping its output in out
+# and its status in `result`. The variables issues, statuses, runs, log, git
+# and accept are RELEASE_TEST_ISSUES, RELEASE_TEST_STATUSES,
+# RELEASE_TEST_RUNS, RELEASE_TEST_LOG, RELEASE_TEST_GIT and
+# RELEASE_TEST_ACCEPT. The worktree has the stand-in for metal_accept.sh.
 run()
 {
     rm -rf "$work/state" "$work/calls" "$work/calls.sleeps" "$work/calls.release"
-    mkdir -p "$work/state/wt/krffs" "$work/state/wt/build/x86_64/images"
+    mkdir -p "$work/state/wt/krffs" "$work/state/wt/build/x86_64/images" \
+        "$work/state/wt/tests/system/accept"
     : > "$work/state/wt/krffs/rach2_demo_ed25519"
     : > "$work/state/wt/build/x86_64/images/release.sha256"
+    cp "$work/metal_accept.sh" "$work/state/wt/tests/system/accept/metal_accept.sh"
     : > "$work/calls"
     printf '%s\n' "$2" > "$work/state/record"
     cp "$work/state/record" "$work/before"
@@ -259,7 +323,8 @@ run()
         RELEASE_TEST_BOARD="phase: #7 phase: seven
 $3" RELEASE_TEST_STATE=${4:-OPEN} RELEASE_TEST_WRITES=${5:-no} \
         RELEASE_TEST_ISSUES=$issues RELEASE_TEST_STATUSES=$statuses \
-        RELEASE_TEST_RUNS=$runs RELEASE_TEST_LOG=$log \
+        RELEASE_TEST_RUNS=$runs RELEASE_TEST_LOG=$log RELEASE_TEST_GIT=$git \
+        RELEASE_TEST_ACCEPT=$accept \
         sh "$tree/tools/flow/release.sh" -s "$work/state" "$1" > "$work/out" 2>&1 < /dev/null ||
         result=$?
 }
@@ -270,17 +335,18 @@ aside()
     (cd "$work/state" && ls) | grep "^$1" | grep -v '\.sha256$'
 }
 
-# failed_at LOG STATUSES: run a new candidate C after a record whose full run
-# 101 failed at H, with #20 filed for agents and bigmem on x86_64, the commit
-# since H having the message LOG and run 101 having set STATUSES on H.
+# failed_at LOG STATUSES [STATE]: run a new candidate C after a record whose
+# full run 101 failed at H, with #20 filed for agents and bigmem on x86_64 and
+# in STATE, CLOSED unless given, the commit since H having the message LOG and
+# run 101 having set STATUSES on H.
 failed_at()
 {
-    issues='20 CLOSED Release tests fail on x86_64: agents, bigmem'
-    statuses=$2 log=$1
+    issues="20 ${3:-CLOSED} Release tests fail on x86_64: agents, bigmem"
+    statuses=$2 log=$1 git=yes
     run 7 "$(printf '%s\n' "$ended" | sed '$d')
 filed 101 #20
 failed full: run 101 failed; ci filed its failures as #20" "ready: yes $C"
-    issues='' statuses='' log=''
+    issues='' statuses='' log='' git=''
 }
 
 # called PATTERN: succeed when a call matches the grep PATTERN.
@@ -387,7 +453,7 @@ Closes #20" 'ci/full/i686 success
 ci/full/x86_64 failure'
             [ "$result" -eq 75 ] &&
                 [ "$(sed -n 4p "$work/state/record")" = "rerun 101 $H x86_64:agents x86_64:bigmem" ] ;;
-        rerun-other|rerun-unfixed|rerun-unfiled)
+        rerun-other|rerun-unfixed|rerun-unfiled|rerun-open)
             case $1 in
                 rerun-other) failed_at "Fix agents" 'ci/full/i686 success
 ci/full/x86_64 failure' ;;
@@ -396,10 +462,14 @@ ci/full/x86_64 failure' ;;
 Closes #20
 Closes #30" 'ci/full/i686 success
 ci/full/x86_64 failure' ;;
-                *) failed_at "Fix agents
+                rerun-unfiled) failed_at "Fix agents
 
 Closes #20" 'ci/full/i686 failure
 ci/full/x86_64 failure' ;;
+                *) failed_at "Fix agents
+
+Closes #20" 'ci/full/i686 success
+ci/full/x86_64 failure' OPEN ;;
             esac
             [ "$result" -eq 75 ] && [ "$(sed -n 2p "$work/state/record")" = "sha $C" ] &&
                 ! grep -q '^rerun ' "$work/state/record" ;;
@@ -413,6 +483,55 @@ touched $T" "ready: yes $C"
             runs=''
             [ "$result" -eq 75 ] &&
                 [ "$(grep '^dispatch ' "$work/calls")" = "dispatch workflow run full.yml --repo toksaitov/rach2 --ref master -f sha=$C -f title=Release tests of 22222222 for phase #7: again only agents on x86_64 -f suites=x86_64:agents" ] ;;
+        intermittent)
+            issues='20 OPEN Release tests fail on x86_64: agents, bigmem' git=yes runs=none
+            run 7 "phase 7
+sha $H
+chosen $T
+touched $T
+dispatched 1760054400
+run 101 failure
+filed 101 #20
+failed full: run 101 failed; ci filed its failures as #20" "ready: yes $H"
+            issues='' git='' runs=''
+            a=$(aside 7-11111111-)
+            [ "$result" -eq 75 ] && [ -n "$a" ] && cmp -s "$work/before" "$work/state/$a" &&
+                [ "$(sed -n '1,2p; 4p' "$work/state/record")" = "phase 7
+sha $H
+touched $T" ] && ! grep -q '^rerun \|^run ' "$work/state/record" &&
+                [ "$(grep '^dispatch ' "$work/calls")" = "dispatch workflow run full.yml --repo toksaitov/rach2 --ref master -f sha=$H -f title=Release tests of 11111111 for phase #7" ] &&
+                ! called '^gh issue close\|^gh issue edit\|^gh issue reopen' ;;
+        full-every)
+            runs=none
+            run 7 "phase 7
+sha $C
+chosen $T
+touched $T" "ready: yes $C"
+            runs=''
+            [ "$result" -eq 75 ] &&
+                [ "$(grep '^dispatch ' "$work/calls")" = "dispatch workflow run full.yml --repo toksaitov/rach2 --ref master -f sha=$C -f title=Release tests of 22222222 for phase #7" ] ;;
+        build-clean)
+            git=yes
+            run 7 "$head" "ready: yes $H"
+            git=''
+            [ "$result" -eq 75 ] && ! grep -q '^build done ' "$work/state/record" &&
+                called '^testing /home/testing/rach2-clean run ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all && ' ;;
+        accept-pass)
+            accept=pass
+            run 7 "$tried" "ready: yes $H" OPEN yes
+            accept=''
+            a=$(aside 7-11111111-)
+            [ "$result" -eq 0 ] && [ -n "$a" ] &&
+                [ "$(grep '^accept \|^machine write\|^gh issue close' "$work/calls" | tr '\n' ,)" = \
+                    'accept 192.168.0.106,machine write bootctl commit,machine write release,gh issue close 7,' ] &&
+                grep -q '^accept done .* metal-accept: PASS; committed$' "$work/state/$a" ;;
+        accept-fail)
+            accept=fail
+            run 7 "$tried" "ready: yes $H" OPEN yes
+            accept=''
+            [ "$result" -eq 1 ] &&
+                tail -n 1 "$work/state/record" | grep -q '^failed accept: metal_accept.sh failed: .*FAIL: the hub section found no hub' &&
+                called '^accept 192.168.0.106$' && ! called '^machine write\|^gh issue close' ;;
         *) return 1 ;;
     esac
 }
@@ -423,7 +542,8 @@ rows()
     failed=
     for name in all-done full-done void-waits void-aside failed-aside \
         install-stops install-reboot record-write record-refused record-unsynced closing-other closing-open closing-unready \
-        rerun-chosen rerun-other rerun-unfixed rerun-unfiled rerun-dispatch; do
+        rerun-chosen rerun-other rerun-unfixed rerun-unfiled rerun-open rerun-dispatch intermittent \
+        full-every build-clean accept-pass accept-fail; do
         if ! row "$name"; then
             echo "release-test: failed: $name" >&2
             cat "$work/out" "$work/calls" >&2
@@ -466,8 +586,14 @@ if [ "$mode" = mutate ]; then
     caught closes rerun-unfixed
     caught arches rerun-unfiled
     caught suites rerun-dispatch
+    caught open rerun-open
+    caught stale intermittent
+    caught partial full-every
+    caught unclean build-clean
+    caught unaccepted accept-fail
+    caught uncommitted accept-pass
     fault none || exit 1
     rows || exit 1
-    echo 'release-test: result: pass: 16 faults caught and restored'
+    echo 'release-test: result: pass: 22 faults caught and restored'
 fi
-echo 'release-test: result: pass: 18 rows'
+echo 'release-test: result: pass: 24 rows'

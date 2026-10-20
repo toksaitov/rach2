@@ -17,7 +17,7 @@ ci|600|ci reports and bisection|sh tests/system/ci_test.sh
 board|600|board groups, take and the phase in progress|sh tests/system/board_test.sh
 limited|600|the loops' reading of a usage limit|sh tests/system/limited_test.sh
 worker_park|600|the worker loop's parking during a hold and rest of a handed-back intermittent issue|sh tests/system/worker_park_test.sh
-release_resume|600|a release resumed from its record|sh tests/system/release_resume_test.sh
+release_resume|600|a release resumed from its record, with its runs, reruns and acceptance|sh tests/system/release_resume_test.sh
 tidy|600|the loops' cleanup of finished work|sh tests/system/tidy_test.sh
 agents_guest|600|the agents guest's scratch removed on every exit|sh tests/system/agents_guest_test.sh
 testing_run|600|testing.sh run's quoted commands and a worktree's sync|sh tests/system/testing_run_test.sh
