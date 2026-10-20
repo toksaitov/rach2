@@ -1,6 +1,6 @@
 # Host tests
 
-The host tests compile kernel and user sources as ordinary programs for the build machine and run them under AddressSanitizer and UndefinedBehaviorSanitizer. A test drives the real code against models of what surrounds it (a device's registers, a disk, a scheduler, a peer on the network), so a bounds fault, an overflow or a wrong branch shows in a few seconds on the host rather than as a fault inside QEMU. What needs the machine itself, a system call through the trap path, a privilege change, a real device or a whole subsystem at once, is tested by the guest suites of [`tests/system/`](../system/Readme.md). This directory has the 160 `*_hosttest.c` programs, the headers, models and fixture builders they share, and the mutation scripts that prove them.
+The host tests compile kernel and user sources as ordinary programs for the build machine and run them under AddressSanitizer and UndefinedBehaviorSanitizer. A test drives the real code against models of what surrounds it (a device's registers, a disk, a scheduler, a peer on the network), so a bounds fault, an overflow or a wrong branch shows in a few seconds on the host rather than as a fault inside QEMU. What needs the machine itself, a system call through the trap path, a privilege change, a real device or a whole subsystem at once, is tested by the guest suites of [`tests/system/`](../system/Readme.md). This directory has the 161 `*_hosttest.c` programs, the headers, models and fixture builders they share, and the mutation scripts that prove them.
 
 ## Running
 
@@ -17,6 +17,8 @@ The suite has no option to run one test. To run one by hand, print the compile c
     build/tests/host-suite/fat32_hosttest
 
 With `HOST_PRINT_COMMANDS` set, `host.sh` prints the command of each test and checker and compiles nothing; `tools/verify/coverage.sh` and `tools/dev/gen_compile_commands.sh` read the same output.
+
+The `icmp_hosttest.c` model sends pings with timer interrupts still pending at each attempt. It checks the deadline before and at its expiry, the tick count's wrap, release of the deadline, and a reply received before the timer handler catches up.
 
 ## Results
 

@@ -78,6 +78,8 @@ A datagram to this machine never reaches a card. `ip_tx_from` copies it onto a r
 
 `ip/icmp.c` answers an echo request from the address it was sent to. A report that a TCP segment in flight was too big goes to `tcp_path_mtu`, and a port unreachable to `udp_refused`, which gives the UDP socket connected to that peer `ECONNREFUSED`. An error this machine sends quotes as much of the datagram as fits 576 bytes, goes to no source of 0.0.0.0, broadcast or multicast, and, unless it goes to this machine, is limited to one a second after a burst of six.
 
+The kernel's ping ([ping(2)](../../../man/man2/ping.2)) makes at most four attempts, each with a deadline 100 ticks from the current tick, including ticks whose interrupts are still pending. The timer handler's count ends the wait. The returned round-trip count also includes ticks whose interrupts are pending.
+
 `udp/udp.c` keeps one list of bindings, a record from the heap for each bound socket, with the effective user ID that bound it; [bind(2)](../../../man/man2/bind.2) gives the rules for sharing a port. A datagram goes to the socket connected to its sender, else to one bound to its destination address, else to one bound to any. A socket's record queues up to `SOCK_DGRAM_SLOTS` (8) datagrams of up to 1500 bytes, and one that finds the queue full is dropped.
 
 ### TCP
@@ -130,7 +132,7 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 
 ## Tests
 
-`tests/run host` runs the host tests `tests/host/NAME_hosttest.c` of `arp`, `packet`, `tcp`, `tcp_reset`, `rcvwnd`, `socket_wake`, `raw`, `netif`, `netconf`, `netdev`, `netconsole`, `rtl8139`, `e1000` and `rtl8168`, which compile the stack's files natively under the sanitizers and drive them with crafted frames, segments and calls, the last two against a software model of the chip ([`tests/host/Readme.md`](../../../tests/host/Readme.md)). The `ip`, `network`, `netif`, `netconfig`, `rtl8139`, `tcp` and `tcp_reset` mutation scripts, `tests/host/NAME_mutate.sh`, require their rows to fail when a fault is compiled in.
+`tests/run host` runs the host tests `tests/host/NAME_hosttest.c` of `arp`, `icmp`, `packet`, `tcp`, `tcp_reset`, `rcvwnd`, `socket_wake`, `raw`, `netif`, `netconf`, `netdev`, `netconsole`, `rtl8139`, `e1000` and `rtl8168`, which compile the stack's files natively under the sanitizers and drive them with crafted frames, segments and calls, the last two against a software model of the chip ([`tests/host/Readme.md`](../../../tests/host/Readme.md)). The `ip`, `network`, `netif`, `netconfig`, `rtl8139`, `tcp` and `tcp_reset` mutation scripts, `tests/host/NAME_mutate.sh`, require their rows to fail when a fault is compiled in.
 
 The suites boot QEMU on the RTL8139 unless they say otherwise; [`tests/system/suites.md`](../../../tests/system/suites.md) says what each proves, and [`tests/Readme.md`](../../../tests/Readme.md) how to run one.
 

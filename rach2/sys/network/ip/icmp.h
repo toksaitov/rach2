@@ -74,9 +74,12 @@ int icmp_ping(uint32_t dst_ip);
  * ping is in flight, -EMSGSIZE for a `size` past `ICMP_PING_DATA_MAX`, or
  * -EINTR when a signal ended the wait.
  *
- * Up to four requests go, a second apart, each with its own sequence number,
- * `size` bytes of data, each byte its offset modulo 256 as iputils fills
- * them, and the hop limit `ttl`; only an answer to the latest ends the wait.
+ * Up to four requests go, a second apart, each with its own sequence number.
+ * Deadlines are measured from the current tick, including ticks whose
+ * interrupts have not yet been taken. The handler's count ends each wait.
+ * Each request has `size` bytes of data, each byte its offset modulo 256 as
+ * iputils fills them, and the hop limit `ttl`; only an answer to the latest
+ * ends the wait.
  * The answer's ICMP length, which a peer may make shorter or longer than the
  * request, goes to `*got`, and the hop limit it arrived with to `*got_ttl`,
  * unless `got` is NULL.

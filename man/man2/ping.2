@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd October 20, 2026
 .Dt PING 2
 .Os
 .Sh NAME
@@ -50,6 +50,8 @@ Operation 0x1000 sends no data with the hop limit 64.
 The call sends an ICMP echo request and waits for a reply.
 It makes at most four attempts, each with a deadline of 100 ticks
 or one second.
+The starting tick includes ticks whose interrupts are still pending;
+delayed timer interrupts do not shorten an attempt's wait.
 A request to a next hop not in the ARP cache waits for the ARP reply
 and is sent when it comes.
 The caller sleeps while waiting, allowing other processes to run.

@@ -30,6 +30,7 @@
  */
 
 #include "../../klog.h"
+#include "../../rtc.h"
 #include "icmp.h"
 #include "ip.h"
 #include "../net.h"
@@ -324,7 +325,7 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
         ping_peer_ip = dst_ip;
         ping_seq_wait = seq;
         ping_replied = 0;
-        start = kernel_ticks;
+        start = rtc_ticks_now();
         ping_deadline = start + ICMP_PING_WAIT;
         if (ping_deadline == 0) {
             ping_deadline = 1;
@@ -354,7 +355,7 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
         }
 
         if (ping_replied) {
-            rc = (int)(kernel_ticks - start);
+            rc = (int)(rtc_ticks_now() - start);
             if (got) {
                 *got = ping_reply_len;
                 *got_ttl = ping_reply_ttl;
