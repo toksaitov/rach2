@@ -583,6 +583,8 @@ case_checkers() {
     check dryrun verify_dryrun.log sh "$REPO/tests/system/dryrun_test.sh"
     check build-rules verify_build_rules.log sh "$REPO/tests/system/build_rules_test.sh"
     check style-scope verify_style_scope.log sh "$REPO/tests/system/style_scope_test.sh"
+    built style-cases "$CASECHECK" && built style-cases "$ASCIISCAN" &&
+        check style-cases verify_style_cases.log sh "$REPO/tests/system/style_cases_test.sh"
     check verify-temp verify_temp.log sh "$REPO/tests/system/verify_temp_test.sh"
 }
 
