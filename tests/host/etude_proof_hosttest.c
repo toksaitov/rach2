@@ -30,7 +30,9 @@
  * build runs in it under one path, and the driver's TMPDIR gets nothing: a
  * faulty test's scratch there is kept with the work after a failure and
  * removed with it after a pass, with a directory the test left unwritable.
- * A work that cannot be removed after a pass is named with the reason.
+ * Each build and test gets the driver's sanitizer settings in place of the
+ * inherited ones. A work that cannot be removed after a pass is named with
+ * the reason.
  * A shared proof needs the tree's run lock, puts its faults into the tree and
  * restores it, also when a signal stops it while a faulty test runs.
  */
@@ -749,6 +751,45 @@ static void test_scratch(void)
         unsetenv("TMPDIR");
 }
 
+/* A command's first line: the sanitizers' settings it was given. */
+#define SANITIZERS "echo san: $ASAN_OPTIONS $UBSAN_OPTIONS ${LSAN_OPTIONS-none}; "
+
+/**
+ * Every build and test runs with the driver's own sanitizer settings, which
+ * end a report with status 1, and no inherited one, which could let it pass.
+ */
+static void test_sanitizers(void)
+{
+    static const char *const names[] = {"ASAN_OPTIONS", "UBSAN_OPTIONS", "LSAN_OPTIONS"};
+    struct cat c = {"private", SANITIZERS BUILD, SANITIZERS TEST, 30, F_VALUE};
+    const char *want = "san: halt_on_error=1:abort_on_error=0:exitcode=1 "
+                       "halt_on_error=1:abort_on_error=0:exitcode=1 none\n";
+    char tree[1024], old[3][256];
+    const char *v;
+    struct outcome out;
+    int before = fails;
+    size_t i;
+
+    for (i = 0; i < 3; i++) {
+        v = getenv(names[i]);
+        fix_format(old[i], sizeof old[i], "%s", v != NULL ? v : "");
+        setenv(names[i], "exitcode=0:abort_on_error=1", 1);
+    }
+    make_tree("sanitizers", tree);
+    prove("sanitizers", tree, &c, NULL, 1, &out);
+    CHECK(out.status == 0, "sanitizers: the proof passes");
+    CHECK(work_has(out.work, "base.build.out", want) &&
+              work_has(out.work, "fault-value.test.out", want) &&
+              work_has(out.work, "restored-value.test.out", want),
+          "sanitizers: every command has the driver's settings and no inherited one");
+    show("sanitizers", &out, before);
+    for (i = 0; i < 3; i++)
+        if (old[i][0] != '\0')
+            setenv(names[i], old[i], 1);
+        else
+            unsetenv(names[i]);
+}
+
 /* A test that leaves in the work, once, a directory whose path is longer than
  * PATH_MAX: two chains of 25 names of 100 characters, one moved to the end of
  * the other. Each name is made and entered from its parent so that no call
@@ -937,6 +978,7 @@ int main(void)
     test_refused();
     test_bound();
     test_scratch();
+    test_sanitizers();
     test_unremoved();
     test_relative();
     test_shared();

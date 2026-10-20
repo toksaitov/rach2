@@ -8,7 +8,8 @@
 # text found twice, a shared tree taken as held when it is not, a source
 # left no newer than an artifact whose time is ahead, a stopped proof that
 # keeps its work or leaves its faults in the tree, commands given the
-# driver's TMPDIR, a relative work path left relative, a work that keeps an
+# driver's TMPDIR, commands given no sanitizer settings of the driver's or
+# the inherited ones, a relative work path left relative, a work that keeps an
 # unwritable directory after a pass, a work left after a pass with no line
 # that names it, builds given TMPDIRs of different paths, a build's TMPDIR
 # removed in place of being kept for its phase, a Mach-O artifact compared
@@ -52,6 +53,10 @@ faults = {
     'stop-restore': ('        if (!s->dirty)\n            continue;\n',
                      '        if (!s->dirty || *r->stop)\n            continue;\n'),
     'tmpdir': ('        spec.envp = env;\n', '        spec.envp = environ;\n'),
+    'sanitizers': ('        env[k++] = (char *)sanitizer_env[i];\n',
+                   '        (void)sanitizer_env[i];\n'),
+    'inherited': ('    "TMPDIR=", "ASAN_OPTIONS=", "UBSAN_OPTIONS=", "LSAN_OPTIONS="};\n',
+                  '    "TMPDIR="};\n'),
     'absolute': ("    if (r->work != NULL && r->work[0] != '/') {\n", '    if (0) {\n'),
     'writable': ('    chmod(path, (st.st_mode & 07777) | S_IRWXU);\n', ''),
     'unremoved': ('        if (remove_tree(r->work) != 0)\n',
@@ -85,13 +90,13 @@ if [ "${1:-}" = --texts ]; then
     export RACH2_FAULT_TEXTS
     apply_fault tools/etude/proof.c once
     for fault in unreached restored passed status lines only kept held newer stop-work \
-        stop-restore tmpdir absolute writable unremoved build-tmp renamed compared; do
+        stop-restore tmpdir sanitizers inherited absolute writable unremoved build-tmp renamed compared; do
         apply_fault tools/etude/posix/proof.c "$fault"
     done
     for fault in oso time uuid signature code; do
         apply_fault tools/etude/macho.c "$fault"
     done
-    echo 'etude-proof-mutation: texts: all twenty-four faults found once'
+    echo 'etude-proof-mutation: texts: all twenty-six faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -182,6 +187,8 @@ prove posix/proof.c newer 'sound: a build that judges by time stamps ahead of th
 prove posix/proof.c stop-work 'stopped: the work is removed'
 prove posix/proof.c stop-restore 'stopped: the tree is restored'
 prove posix/proof.c tmpdir "scratch: the faulty test's TMPDIR is its own in the work"
+prove posix/proof.c sanitizers 'sanitizers: every command has the driver'
+prove posix/proof.c inherited 'sanitizers: every command has the driver'
 prove posix/proof.c absolute 'relative: a relative work directory gives the commands an absolute'
 prove posix/proof.c writable 'scratch: the work is removed after a pass, with an unwritable'
 prove posix/proof.c unremoved 'unremoved: a work that cannot be removed after a pass is named'

@@ -34,6 +34,19 @@ extern char **environ;
 /* How often a running command is looked at for its bound and a signal. */
 #define PROOF_TICK_MS 100
 
+/* The sanitizers' settings of every command, whatever the driver's
+ * environment says: a report ends the process with status 1 on every
+ * platform, where macOS would otherwise abort it with SIGABRT. */
+static const char *const sanitizer_env[] = {
+    "ASAN_OPTIONS=halt_on_error=1:abort_on_error=0:exitcode=1",
+    "UBSAN_OPTIONS=halt_on_error=1:abort_on_error=0:exitcode=1",
+};
+
+/* The inherited variables a command does not get: its scratch directory, and
+ * the sanitizers' settings, which sanitizer_env replaces. */
+static const char *const dropped_env[] = {
+    "TMPDIR=", "ASAN_OPTIONS=", "UBSAN_OPTIONS=", "LSAN_OPTIONS="};
+
 /* The kinds of phase, each judged by its own rule. */
 enum kind { BASE, FAULT, RESTORED };
 
@@ -496,27 +509,42 @@ static void await(const struct run *r, struct etude_proc *p, uint64_t bound_us, 
     }
 }
 
+/** Say whether `var` is one of the inherited variables dropped_env lists. */
+static int dropped(const char *var)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(dropped_env) / sizeof(dropped_env[0]); i++)
+        if (strncmp(var, dropped_env[i], strlen(dropped_env[i])) == 0)
+            return 1;
+    return 0;
+}
+
 /**
  * Give the environment of a command: the driver's, with `TMPDIR` naming
- * `tmp`, or NULL when memory ran out. The array and its first entry, the
- * `TMPDIR`, are from malloc; env_free frees them.
+ * `tmp` and the sanitizers' settings replaced by sanitizer_env, or NULL when
+ * memory ran out. The array and its first entry, the `TMPDIR`, are from
+ * malloc; env_free frees them.
  */
 static char **command_env(const char *tmp)
 {
     size_t n = 0, k = 1, i, len = strlen(tmp) + sizeof("TMPDIR=");
+    size_t fixed = sizeof(sanitizer_env) / sizeof(sanitizer_env[0]);
     char **env;
 
     while (environ[n] != NULL)
         n++;
-    env = calloc(n + 2, sizeof(*env));
+    env = calloc(n + fixed + 2, sizeof(*env));
     if (env == NULL || (env[0] = malloc(len)) == NULL) {
         free(env);
         return NULL;
     }
     snprintf(env[0], len, "TMPDIR=%s", tmp);
     for (i = 0; i < n; i++)
-        if (strncmp(environ[i], "TMPDIR=", 7) != 0)
+        if (!dropped(environ[i]))
             env[k++] = environ[i];
+    for (i = 0; i < fixed; i++)
+        env[k++] = (char *)sanitizer_env[i];
     return env;
 }
 
