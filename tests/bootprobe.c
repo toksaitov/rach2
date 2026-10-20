@@ -28,15 +28,21 @@
  * proved at each of its layers in every boot: content, the /proc listing,
  * stat/fstat identity, and the fd's readlink origin.
  *
+ * Given `machine=native` (probe_args.h), on a machine that is already up,
+ * the probe makes the checks of /proc/cmdline that hold on any boot and no
+ * others: it does not judge the boot line's options or run a mode, which
+ * need a boot of their own and a disk to write.
+ *
  * Prints "BOOTPROBE OK", "BOOTPROBE ABSENT OK", "BOOTPROBE RAMROOT OK",
- * "BOOTPROBE WIDE OK", "BOOTPROBE SHARED OK", "BOOTPROBE AUTH ORDINARY OK"
- * or "BOOTPROBE AUTH RECOVERY OK", and "BOOTPROBE FAILED" when a check
- * failed.
+ * "BOOTPROBE WIDE OK", "BOOTPROBE SHARED OK", "BOOTPROBE AUTH ORDINARY OK",
+ * "BOOTPROBE AUTH RECOVERY OK" or, with `machine=native`, "BOOTPROBE CMDLINE
+ * OK", and "BOOTPROBE FAILED" when a check failed.
  *
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -121,7 +127,8 @@ static int contains(const char *hay, const char *needle)
     return needle[0] == 0;
 }
 
-static char cmdline[300];
+/* Room for the longest line the kernel keeps, 510 bytes, and its newline. */
+static char cmdline[600];
 static char statbuf[KSTAT_SIZE];
 static char fstatbuf[KSTAT_SIZE];
 static char sector[SECTOR];
@@ -677,23 +684,21 @@ static void proc_listing_case(void)
     }
 }
 
-/**
- * Check /proc/cmdline, then run the boot's mode, each ending with its token:
- * `shared`, `ramroot`, `auth`, `wide`, the absent device when no mode is
- * named, and the fixture. The RAM-root, wide and auth boots ask for no disk
- * root, and the others for `rach2.fsdisk`.
- *
- * A machine that mounted a RAM image and no disk file system still has a
- * disk, and both of its level-one devices: the boot partition it may have to
- * repair, and the gap that holds the boot loader. A device's mode stops a
- * caller other than root at open and nothing else, since the credential
- * check passes uid 0 whatever the mode says; so the write handler checks
- * again, and a descriptor opened while privileged and carried across a drop
- * of privilege must stop writing.
- */
-PROBE_START void _start(void)
+/** Return whether the boot line names a mode that boots from a RAM root. */
+static int ram_root_boot(void)
 {
-    int fd, rc, n, fixture;
+    return contains(cmdline, "rach2.bootprobe=ramroot") ||
+           contains(cmdline, "rach2.bootprobe=wide") || contains(cmdline, "rach2.bootprobe=auth");
+}
+
+/**
+ * Read /proc/cmdline into `cmdline` and check it: the boot line's root,
+ * unless `native` is set, its final newline, the origin /proc/self/fd gives
+ * its descriptor, and the mode and inode that stat and fstat agree on.
+ */
+static void cmdline_case(int native)
+{
+    int fd, rc, n;
     unsigned int mode, ino_stat, ino_fstat;
 
     fd = syscall3(SYS_OPEN, (long)"/proc/cmdline", O_RDONLY, 0);
@@ -703,11 +708,10 @@ PROBE_START void _start(void)
     if (n > 0) {
         cmdline[n] = '\0';
     }
-    if (contains(cmdline, "rach2.bootprobe=ramroot") || contains(cmdline, "rach2.bootprobe=wide") ||
-        contains(cmdline, "rach2.bootprobe=auth")) {
-        check(!contains(cmdline, "rach2.fsdisk"), "a RAM-root boot asks for no disk root");
-    } else {
-        check(contains(cmdline, "rach2.fsdisk"), "cmdline has rach2.fsdisk");
+    if (!native) {
+        check(contains(cmdline, "rach2.fsdisk") == !ram_root_boot(),
+              ram_root_boot() ? "a RAM-root boot asks for no disk root"
+                              : "cmdline has rach2.fsdisk");
     }
     check(n > 0 && cmdline[n - 1] == '\n', "cmdline ends with a newline");
     {
@@ -748,8 +752,42 @@ PROBE_START void _start(void)
     check(mode == *(unsigned int *)(fstatbuf + KSTAT_MODE) && ino_fstat == 0x101,
           "fstat agrees on mode and the cmdline inode");
     syscall1(SYS_CLOSE, fd);
+}
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * Check /proc/cmdline, then run the boot's mode, each ending with its token:
+ * `shared`, `ramroot`, `auth`, `wide`, the absent device when no mode is
+ * named, and the fixture. The RAM-root, wide and auth boots ask for no disk
+ * root, and the others for `rach2.fsdisk`. With `machine=native`, the checks
+ * of /proc/cmdline that hold on any boot alone.
+ *
+ * A machine that mounted a RAM image and no disk file system still has a
+ * disk, and both of its level-one devices: the boot partition it may have to
+ * repair, and the gap that holds the boot loader. A device's mode stops a
+ * caller other than root at open and nothing else, since the credential
+ * check passes uid 0 whatever the mode says; so the write handler checks
+ * again, and a descriptor opened while privileged and carried across a drop
+ * of privilege must stop writing.
+ */
+void probe_main(unsigned long *sp)
+{
+    int fd, rc, n, fixture, native;
+    unsigned int mode;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
+    native = probe_native();
+
+    cmdline_case(native);
     proc_listing_case();
+
+    if (native) {
+        puts(fails ? "BOOTPROBE FAILED" : "BOOTPROBE CMDLINE OK");
+        sys_exit(fails != 0);
+    }
 
     fixture = contains(cmdline, "rach2.bootprobe=fixture");
 

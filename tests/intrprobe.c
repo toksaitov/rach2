@@ -30,11 +30,18 @@
  *   vector has no line and the fallback count is zero. The timer's own
  *   vector is required to have counted in every one of them.
  *
+ * Given `machine=native` (probe_args.h), on a machine that is already up
+ * and on which nothing can type, the probe requires only what holds on any
+ * boot: the timer's count, the whole file within the buffer, and a fallback
+ * line whose count is zero. It neither waits for reports nor judges the
+ * controller's counts or the boot line's profiles.
+ *
  * Prints "INTRPROBE OK" with the counts it read and exits 0. Freestanding;
  * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -401,74 +408,21 @@ static int count_for_named(const char *kind, const char *name, const char *file)
 }
 
 /**
- * Read the boot line and /proc/interrupts, print the counts, and require
- * those of the machine the boot line and /proc/usb describe. The timer's
- * vector must have counted on every machine. The counts are printed before
- * any is judged, so that a failing run logs them. The kernel acts on
- * `rach2.msidrop` only with a count above zero, so a count of zero, or one
- * that is not a number, is the ordinary boot.
- *
- * The audio controller's vector is printed and not judged: whether it has
- * taken anything depends on whether this boot played a sound, which is the
- * audio suite's business. On the ordinary boot the controller's vector must
- * have taken at least two interrupts for the reports the suite's input made;
- * one message and no more is what a kernel that never ends the interrupt at
- * the processor takes, while the machine goes on typing on the timer's pump.
- * A device has one report transfer outstanding, which the stack queues again
- * only after it has taken the report before, and the event that completes it
- * raises an interrupt of its own; so three reports or more cannot all arrive
- * on one message, however the controller batches the events it has.
+ * Judge the counts of the controller's vector, the fallback line and the
+ * controller's PCI line against the profile the boot line names: no
+ * messages, a number of messages dropped, no USB device, or the ordinary
+ * boot with `devices` USB devices. With `native` set, the fallback count
+ * alone.
  */
-PROBE_START void _start(void)
+static void judge(int native, int vector, int fallback, int line, int devices)
 {
-    int vector, audio, fallback, drop, devices, n, line;
-    int key_reports, mouse_reports, all_reports;
+    int drop = option_value("rach2.msidrop=");
 
-    if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
-        fail("/proc/cmdline would not open");
-    }
-    await_reports(usb_devices(" class 3 protocol 1 reports ", &key_reports),
-                  usb_devices(" class 3 protocol 2 reports ", &mouse_reports));
-    devices = usb_devices("", &all_reports);
-    usb_devices(" class 3 protocol 1 reports ", &key_reports);
-    usb_devices(" class 3 protocol 2 reports ", &mouse_reports);
-    n = slurp("/proc/interrupts", text, (int)sizeof(text));
-    if (n < 0) {
-        fail("/proc/interrupts would not open");
-    }
-    if (n >= (int)sizeof(text) - 1) {
-        fail("/proc/interrupts filled this program's buffer, so it was cut");
-    }
-    if (count_for("32:", text) <= 0) {
-        fail("the timer's vector has taken no interrupts");
-    }
-    vector = count_for_named("MSI", "xhci", text);
-    audio = count_for_named("MSI", "hda", text);
-    line = count_for_named("IO-APIC", "xhci", text);
-    if (line < 0) {
-        line = count_for_named("PIC", "xhci", text);
-    }
-    fallback = count_for("FBK:", text);
-    if (fallback < 0) {
-        fail("there is no fallback line");
-    }
-    drop = option_value("rach2.msidrop=");
-
-    puts("INTRPROBE READ vector ");
-    putnum(vector);
-    puts(", audio ");
-    putnum(audio);
-    puts(", fallback ");
-    putnum(fallback);
-    puts(", line ");
-    putnum(line);
-    puts(", keyboard reports ");
-    putnum(key_reports);
-    puts(", mouse reports ");
-    putnum(mouse_reports);
-    puts("\n");
-
-    if (find(cmdline, "rach2.nomsi") >= 0) {
+    if (native) {
+        if (fallback != 0) {
+            fail("the timer's pump found work the messages or the line should have brought");
+        }
+    } else if (find(cmdline, "rach2.nomsi") >= 0) {
         if (vector >= 0) {
             fail("a machine with no messages has a line for the controller's vector");
         }
@@ -500,6 +454,86 @@ PROBE_START void _start(void)
             fail("the timer's pump found work the messages should have brought");
         }
     }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * Read the boot line and /proc/interrupts, print the counts, and require
+ * those of the machine the boot line and /proc/usb describe. The timer's
+ * vector must have counted on every machine. The counts are printed before
+ * any is judged, so that a failing run logs them. The kernel acts on
+ * `rach2.msidrop` only with a count above zero, so a count of zero, or one
+ * that is not a number, is the ordinary boot.
+ *
+ * The audio controller's vector is printed and not judged: whether it has
+ * taken anything depends on whether this boot played a sound, which is the
+ * audio suite's business. On the ordinary boot the controller's vector must
+ * have taken at least two interrupts for the reports the suite's input made;
+ * one message and no more is what a kernel that never ends the interrupt at
+ * the processor takes, while the machine goes on typing on the timer's pump.
+ * A device has one report transfer outstanding, which the stack queues again
+ * only after it has taken the report before, and the event that completes it
+ * raises an interrupt of its own; so three reports or more cannot all arrive
+ * on one message, however the controller batches the events it has. With
+ * `machine=native` it makes only the checks the opening comment names for a
+ * native run.
+ */
+void probe_main(unsigned long *sp)
+{
+    int vector, audio, fallback, devices, n, line, native;
+    int key_reports, mouse_reports, all_reports;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
+    native = probe_native();
+    if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
+        fail("/proc/cmdline would not open");
+    }
+    if (!native) {
+        await_reports(usb_devices(" class 3 protocol 1 reports ", &key_reports),
+                      usb_devices(" class 3 protocol 2 reports ", &mouse_reports));
+    }
+    devices = usb_devices("", &all_reports);
+    usb_devices(" class 3 protocol 1 reports ", &key_reports);
+    usb_devices(" class 3 protocol 2 reports ", &mouse_reports);
+    n = slurp("/proc/interrupts", text, (int)sizeof(text));
+    if (n < 0) {
+        fail("/proc/interrupts would not open");
+    }
+    if (n >= (int)sizeof(text) - 1) {
+        fail("/proc/interrupts filled this program's buffer, so it was cut");
+    }
+    if (count_for("32:", text) <= 0) {
+        fail("the timer's vector has taken no interrupts");
+    }
+    vector = count_for_named("MSI", "xhci", text);
+    audio = count_for_named("MSI", "hda", text);
+    line = count_for_named("IO-APIC", "xhci", text);
+    if (line < 0) {
+        line = count_for_named("PIC", "xhci", text);
+    }
+    fallback = count_for("FBK:", text);
+    if (fallback < 0) {
+        fail("there is no fallback line");
+    }
+
+    puts("INTRPROBE READ vector ");
+    putnum(vector);
+    puts(", audio ");
+    putnum(audio);
+    puts(", fallback ");
+    putnum(fallback);
+    puts(", line ");
+    putnum(line);
+    puts(", keyboard reports ");
+    putnum(key_reports);
+    puts(", mouse reports ");
+    putnum(mouse_reports);
+    puts("\n");
+
+    judge(native, vector, fallback, line, devices);
 
     puts("INTRPROBE OK vector ");
     putnum(vector);

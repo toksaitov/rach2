@@ -9,11 +9,16 @@
  * warm-up, runs CYCLES fork, exit and wait cycles, and requires the free
  * memory not to have fallen by more than SLACK.
  *
+ * Given `machine=native` (probe_args.h), the probe runs the cycles and
+ * leaves out the bound, since on a running machine other processes move
+ * the free memory by more than SLACK.
+ *
  * Prints "FORKLEAK OK" and exits 0, or "FORKLEAK FAIL: " with the reason and
  * exits 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -115,13 +120,19 @@ static void churn(void)
     }
 }
 
-/** The probe's entry: the warm-up, the count, the cycles and the count. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: the warm-up, the count, the cycles
+ * and the count. */
+void probe_main(unsigned long *sp)
 {
     struct sysinfo si;
     unsigned long base_free, end_free;
     int i;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     /* What the first forks take for good is taken before the count. */
     for (i = 0; i < WARMUP; i++) {
         churn();
@@ -141,7 +152,7 @@ PROBE_START void _start(void)
     }
     end_free = si.freeram;
 
-    if (base_free > end_free && base_free - end_free > SLACK) {
+    if (!probe_native() && base_free > end_free && base_free - end_free > SLACK) {
         fail("free memory fell across fork churn: a per-fork resource leaks");
     }
 

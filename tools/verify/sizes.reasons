@@ -264,8 +264,8 @@ tests/auxvprobe.c:probe_main lines 121 a probe, one sequence of steps in the ord
 
 tests/bigfileprobe.c:write_mode lines 116 a probe, one sequence of steps in the order the log records them
 
-tests/bootprobe.c:_start complexity 42 a probe, one sequence of steps in the order the log records them
-tests/bootprobe.c:_start lines 320 a probe, one sequence of steps in the order the log records them
+tests/bootprobe.c:probe_main complexity 42 a probe, one sequence of steps in the order the log records them
+tests/bootprobe.c:probe_main lines 320 a probe, one sequence of steps in the order the log records them
 tests/bootprobe.c:auth_case lines 158 a probe, one sequence of steps in the order the log records them
 
 tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the order the log records them
