@@ -379,6 +379,1121 @@
       }
     },
     {
+      "case_id": "fixture.networks.guest-address",
+      "behavior": "A forward of connections to the address of the host, 10.0.2.2",
+      "units": [
+        "dropbear",
+        "tcp"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "marker": "ssh-key-login-ok"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [
+          "ssh"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "ssh-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "boot the copy, log in as root at the console and start dropbear on port 22"
+        },
+        {
+          "step_id": "login",
+          "stage": "execute",
+          "does": "run ssh with root's key against 127.0.0.1 at the case's first port and read the marker it prints"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "ssh-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.2",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "ssh"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "the console reaches a root prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh exits 0 and prints the marker that the remote command echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh-disk",
+          "node": "images/ssh-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh_scenario",
+          "node": "tests/cases/machine/ssh_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the host reaches the guest's SSH server only through the forward of a QEMU user network"
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-subnet",
+      "behavior": "A forward of connections to an address outside the card's network, 192.168.90.0/24",
+      "units": [
+        "dropbear",
+        "tcp"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "marker": "ssh-key-login-ok"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [
+          "ssh"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "ssh-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "boot the copy, log in as root at the console and start dropbear on port 22"
+        },
+        {
+          "step_id": "login",
+          "stage": "execute",
+          "does": "run ssh with root's key against 127.0.0.1 at the case's first port and read the marker it prints"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "ssh-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "192.168.90.0/24",
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "ssh"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "the console reaches a root prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh exits 0 and prints the marker that the remote command echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh-disk",
+          "node": "images/ssh-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh_scenario",
+          "node": "tests/cases/machine/ssh_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the host reaches the guest's SSH server only through the forward of a QEMU user network"
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-past",
+      "behavior": "A forward of connections to the second port of a case that reserves one",
+      "units": [
+        "dropbear",
+        "tcp"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "marker": "ssh-key-login-ok"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [
+          "ssh"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "ssh-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "boot the copy, log in as root at the console and start dropbear on port 22"
+        },
+        {
+          "step_id": "login",
+          "stage": "execute",
+          "does": "run ssh with root's key against 127.0.0.1 at the case's first port and read the marker it prints"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "ssh-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 1,
+                    "relay": [
+                      "ssh"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "the console reaches a root prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh exits 0 and prints the marker that the remote command echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh-disk",
+          "node": "images/ssh-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh_scenario",
+          "node": "tests/cases/machine/ssh_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the host reaches the guest's SSH server only through the forward of a QEMU user network"
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-both",
+      "behavior": "The first port forwarded to the guest by TCP and from it",
+      "units": [
+        "dropbear",
+        "tcp"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "marker": "ssh-key-login-ok"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [
+          "ssh"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "ssh-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "boot the copy, log in as root at the console and start dropbear on port 22"
+        },
+        {
+          "step_id": "login",
+          "stage": "execute",
+          "does": "run ssh with root's key against 127.0.0.1 at the case's first port and read the marker it prints"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "ssh-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "forwards": [
+                  {
+                    "protocol": "tcp",
+                    "port": 0,
+                    "guest_port": 22
+                  }
+                ],
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "ssh"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "the console reaches a root prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh exits 0 and prints the marker that the remote command echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh-disk",
+          "node": "images/ssh-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh_scenario",
+          "node": "tests/cases/machine/ssh_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the host reaches the guest's SSH server only through the forward of a QEMU user network"
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-twice",
+      "behavior": "Connections to one address and port forwarded to two ports",
+      "units": [
+        "dropbear",
+        "tcp"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "marker": "ssh-key-login-ok"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [
+          "ssh"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "ssh-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "boot the copy, log in as root at the console and start dropbear on port 22"
+        },
+        {
+          "step_id": "login",
+          "stage": "execute",
+          "does": "run ssh with root's key against 127.0.0.1 at the case's first port and read the marker it prints"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "ssh-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "ssh"
+                    ]
+                  },
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 1,
+                    "relay": [
+                      "ssh"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "the console reaches a root prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh exits 0 and prints the marker that the remote command echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh-disk",
+          "node": "images/ssh-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh_scenario",
+          "node": "tests/cases/machine/ssh_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the host reaches the guest's SSH server only through the forward of a QEMU user network"
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-relay",
+      "behavior": "A relay that is neither a tool of the case nor an artifact of its preparation",
+      "units": [
+        "dropbear",
+        "tcp"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "marker": "ssh-key-login-ok"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [
+          "ssh"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "ssh-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "boot the copy, log in as root at the console and start dropbear on port 22"
+        },
+        {
+          "step_id": "login",
+          "stage": "execute",
+          "does": "run ssh with root's key against 127.0.0.1 at the case's first port and read the marker it prints"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "ssh-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "guest_forwards": [
+                  {
+                    "address": "10.0.2.100",
+                    "guest_port": 443,
+                    "port": 0,
+                    "relay": [
+                      "curl",
+                      "relay"
+                    ]
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "the console reaches a root prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh exits 0 and prints the marker that the remote command echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh-disk",
+          "node": "images/ssh-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ssh_scenario",
+          "node": "tests/cases/machine/ssh_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "network",
+        "reason": "the host reaches the guest's SSH server only through the forward of a QEMU user network"
+      }
+    },
+    {
       "case_id": "fixture.networks.guest-boot",
       "behavior": "A guest case whose boot forwards a port, which no scenario reaches",
       "units": [
@@ -418,6 +1533,301 @@
                   "protocol": "tcp",
                   "port": 0,
                   "guest_port": 22
+                }
+              ]
+            }
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "errnoprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {
+          "assertion_id": "enosys-out-of-range",
+          "checks": "number 909 returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enoent-open",
+          "checks": "open of a missing path returns -ENOENT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-close",
+          "checks": "close(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-read",
+          "checks": "read(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "efault-writev",
+          "checks": "writev with an iovec at -4096 returns -EFAULT",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "errnoprobe",
+          "node": "tests/errnoprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-boot-restricted",
+      "behavior": "A guest case whose boot has a restricted network, which no scenario has",
+      "units": [
+        "errnoprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "missing_path": "/no_such_file_errnoprobe",
+          "closed_fd": 999
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            {
+              "model": "rtl8139",
+              "restrict": true
+            }
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "errnoprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {
+          "assertion_id": "enosys-out-of-range",
+          "checks": "number 909 returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enoent-open",
+          "checks": "open of a missing path returns -ENOENT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-close",
+          "checks": "close(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-read",
+          "checks": "read(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "efault-writev",
+          "checks": "writev with an iovec at -4096 returns -EFAULT",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "errnoprobe",
+          "node": "tests/errnoprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "fixture.networks.guest-boot-relay",
+      "behavior": "A guest case whose boot forwards the guest's connections, which no scenario has",
+      "units": [
+        "errnoprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "missing_path": "/no_such_file_errnoprobe",
+          "closed_fd": 999
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            {
+              "model": "rtl8139",
+              "guest_forwards": [
+                {
+                  "address": "10.0.2.100",
+                  "guest_port": 443,
+                  "port": 0,
+                  "relay": [
+                    "relay"
+                  ]
                 }
               ]
             }

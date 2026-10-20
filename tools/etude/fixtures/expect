@@ -272,9 +272,21 @@
 1 manifest ./disks-shape.json | /disks/8/format: is a member the schema does not allow
 
 # A machine's cards forward only the ports the case reserves, each once by a
-# protocol; the cards of a guest case's boot forward none.
+# protocol; the cards of a guest case's boot forward none and are not
+# restricted. A guest forward joins an address of its card's network that
+# QEMU can forward to a port that QEMU does not listen on, once, through a
+# relay that the case has.
 0 -r ../../.. manifest ../schemas/case.forward.example.json
+0 -r ../../.. manifest ../schemas/case.relay.example.json
 0 manifest ./networks-ok.json
 1 manifest ./networks.json | fixture.networks.past: the machine server forwards port 1, but the case reserves 1
 1 manifest ./networks.json | fixture.networks.twice: the machine server forwards its tcp port 0 twice
-1 manifest ./networks.json | fixture.networks.guest-boot: a guest case's boot has no forwards, since only a scenario reaches a forward
+1 manifest ./networks.json | fixture.networks.guest-address: the machine server forwards connections to 10.0.2.2, which QEMU cannot forward
+1 manifest ./networks.json | fixture.networks.guest-subnet: the machine server forwards connections to 10.0.2.100, which QEMU cannot forward
+1 manifest ./networks.json | fixture.networks.guest-past: the machine server forwards port 1, but the case reserves 1
+1 manifest ./networks.json | fixture.networks.guest-both: the machine server forwards port 0 both to the guest and from it
+1 manifest ./networks.json | fixture.networks.guest-twice: the machine server forwards connections to 10.0.2.100:443 twice
+1 manifest ./networks.json | fixture.networks.guest-relay: the machine server relays through curl, which is neither a tool of its requirements nor an artifact that prepare lists
+1 manifest ./networks.json | fixture.networks.guest-boot: a guest case's boot has no forwards, no guest forwards and no restricted network, which only a scenario's machines are given
+1 manifest ./networks.json | fixture.networks.guest-boot-restricted: a guest case's boot has no forwards, no guest forwards and no restricted network, which only a scenario's machines are given
+1 manifest ./networks.json | fixture.networks.guest-boot-relay: a guest case's boot has no forwards, no guest forwards and no restricted network, which only a scenario's machines are given

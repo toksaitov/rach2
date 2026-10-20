@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.fakeapi",
+  "summary": "The GNU system on a restricted network reaches the fake API server on the host only through an address of its user network that QEMU forwards to the server's port",
+  "cases": [
+    {
+      "case_id": "machine.fakeapi.curl",
+      "behavior": "curl in the guest plays the server's script at https://10.0.2.100/, which QEMU joins to the server's port through `fakeapi.py relay`, while the host reaches the guest's SSH port and nothing else is reachable",
+      "units": ["fakeapi", "tcp"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"script": "fakeapi-test.json"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "fakeapi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["gnu-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case stops the server and the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "server", "stage": "execute",
+         "does": "start the server on the case's second port with the script and a certificate for 10.0.2.100"},
+        {"step_id": "boot", "stage": "execute", "machine": "gnu",
+         "does": "boot the copy and wait for init to start the SSH server"},
+        {"step_id": "play", "stage": "execute",
+         "does": "run curl in the guest over SSH, through the case's first port, against https://10.0.2.100/ and read what it prints"}
+      ],
+      "machines": [
+        {"machine_id": "gnu",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": ["gnu-disk"], "cpu": "max", "processors": 1,
+                  "memory_bytes": 1073741824, "firmware": "direct",
+                  "devices": [{"model": "rtl8139", "restrict": true,
+                               "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}],
+                               "guest_forwards": [{"address": "10.0.2.100", "guest_port": 443, "port": 1,
+                                                   "relay": ["fakeapi", "relay"]}]}],
+                  "boot_options": ["rach2.root=ext2"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [
+        {"service_id": "fakeapi", "program": "fakeapi", "ready": "fakeapi: listening on",
+         "does": "play the script to each connection that reaches its port and record what it got"}
+      ],
+      "assertions": [
+        {"assertion_id": "ssh", "checks": "the guest answers SSH through the case's first port", "source": "scenario"},
+        {"assertion_id": "script", "checks": "curl gets each answer of the script, and the server's record says that every step was played", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1342177280, "disk_bytes": 4294967296,
+                    "locks": [], "ports": 2, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-disk", "node": "vendor/gnu/root.disk", "per_architecture": true},
+        {"name": "fakeapi", "node": "tests/system/fakeapi/fakeapi.py", "per_architecture": false},
+        {"name": "fakeapi_scenario", "node": "tests/cases/machine/fakeapi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the guest reaches the server only through the forward of an address of a restricted QEMU user network"}
+    }
+  ]
+}

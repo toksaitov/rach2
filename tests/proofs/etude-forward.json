@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-forward",
-  "summary": "the QEMU launcher forwards the profile's ports on its cards' user networks, after each card's network options, and refuses a forward it cannot make",
+  "summary": "the QEMU launcher forwards the profile's ports on its cards' user networks, after each card's network options, restricts a network, forwards the guest's connections from the addresses of the card's network that QEMU can forward through relays, and refuses a forward it cannot make",
   "tree": "private",
   "sources": [
     "tools/etude/qemu_profile.c"
@@ -40,7 +40,9 @@
         "lines": [
           "forwards: the command line is",
           "a card's network options and its forwards: the command line is",
-          "a forward on the second card: the command line is"
+          "a forward on the second card: the command line is",
+          "guest forwards: the command line is",
+          "a card with every option: the command line is"
         ]
       }
     },
@@ -57,7 +59,9 @@
       "fails": {
         "status": 1,
         "lines": [
-          "forwards: the command line is"
+          "forwards: the command line is",
+          "guest forwards: the command line is",
+          "a card with every option: the command line is"
         ]
       }
     },
@@ -91,7 +95,8 @@
       "fails": {
         "status": 1,
         "lines": [
-          "a forward of a port below 1024"
+          "a forward of a port below 1024",
+          "a guest forward to a port below 1024"
         ]
       }
     },
@@ -136,14 +141,48 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "d->mac != NULL || d->forward_count != 0)",
-          "replace": "d->mac != NULL)"
+          "find": "d->mac != NULL || d->forward_count != 0 ||",
+          "replace": "d->mac != NULL ||"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           "a forward on a device that is no network card"
+        ]
+      }
+    },
+    {
+      "name": "restriction-unchecked",
+      "summary": "a restriction on a device that is no network card is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "d->restricted ||",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a restriction on a device that is no network card"
+        ]
+      }
+    },
+    {
+      "name": "guest-card-unchecked",
+      "summary": "a guest forward on a device that is no network card is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "d->guest_forward_count != 0;",
+          "replace": "0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a guest forward on a device that is no network card"
         ]
       }
     },
@@ -162,6 +201,420 @@
         "lines": [
           "a forward to the guest's port 0",
           "a forward to the guest's port 65536"
+        ]
+      }
+    },
+    {
+      "name": "restrict-dropped",
+      "summary": "a restricted card is given a network without restrict=on",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "append(l, 0, \",restrict=on\");",
+          "replace": "(void)0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "guest forwards: the command line is",
+          "a card with every option: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "guest-forwards-dropped",
+      "summary": "a card's guest forwards are left off its -netdev",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "add_guest_forward(l, p, &d->guest_forwards[i]);",
+          "replace": "(void)0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "guest forwards: the command line is",
+          "a card with every option: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "commas-unquoted",
+      "summary": "a comma of a relay's word is not doubled",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "append(l, QUOTE_COMMAS | QUOTE_SHELL, \"'%s' \", g->relay[i]);",
+          "replace": "append(l, QUOTE_SHELL, \"'%s' \", g->relay[i]);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "guest forwards: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "quote-unescaped",
+      "summary": "a single quote of a relay's word is written as it is",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (*s == '\\'' && (quote & QUOTE_SHELL)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "guest forwards: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "subnet-ignored",
+      "summary": "a guest forward from an address outside the card's network is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "(a & mask) == net && ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address QEMU cannot forward: 10.0.3.100",
+          "an address of a card's network QEMU cannot forward: 10.0.2.100",
+          "a guest forward from outside the card's network"
+        ]
+      }
+    },
+    {
+      "name": "ends-taken",
+      "summary": "the network's own address and its broadcast address are taken for a guest forward",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "a != net && a != (net | ~mask) &&",
+          "replace": "1 &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address QEMU cannot forward: 10.0.2.0",
+          "an address QEMU cannot forward: 10.0.2.255",
+          "an address of a card's network QEMU cannot forward: 192.168.90.255"
+        ]
+      }
+    },
+    {
+      "name": "host-taken",
+      "summary": "the host's address is taken for a guest forward",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "a != address_or(d->host, net | (UINT32_C(0x0202) & ~mask)) &&",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address QEMU cannot forward: 10.0.2.2",
+          "a guest forward from the host's address",
+          "an address of a card's network QEMU cannot forward: 192.168.90.1",
+          "an address of a wide network QEMU cannot forward: 10.90.2.2"
+        ]
+      }
+    },
+    {
+      "name": "card-host-ignored",
+      "summary": "QEMU's default host address is refused in place of the card's own",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "address_or(d->host, net | (UINT32_C(0x0202) & ~mask))",
+          "replace": "(net | (UINT32_C(0x0202) & ~mask))"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address of a card's network QEMU cannot forward: 192.168.90.1",
+          "an address of a card's network QEMU can forward: 192.168.90.2"
+        ]
+      }
+    },
+    {
+      "name": "host-byte",
+      "summary": "the default host address of a wide network is placed in the network's last byte",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "UINT32_C(0x0202)",
+          "replace": "UINT32_C(0x02)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address of a wide network QEMU cannot forward: 10.90.2.2",
+          "an address of a wide network QEMU can forward: 10.90.0.2"
+        ]
+      }
+    },
+    {
+      "name": "dns-taken",
+      "summary": "the name server's address is taken for a guest forward",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "a != address_or(d->dns, net | (UINT32_C(0x0203) & ~mask)) && ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address QEMU cannot forward: 10.0.2.3",
+          "an address of a card's network QEMU cannot forward: 192.168.90.40",
+          "an address of a wide network QEMU cannot forward: 10.90.2.3"
+        ]
+      }
+    },
+    {
+      "name": "card-dns-ignored",
+      "summary": "QEMU's default name server address is refused in place of the card's own",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "address_or(d->dns, net | (UINT32_C(0x0203) & ~mask))",
+          "replace": "(net | (UINT32_C(0x0203) & ~mask))"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address of a card's network QEMU cannot forward: 192.168.90.40",
+          "an address of a card's network QEMU can forward: 192.168.90.3"
+        ]
+      }
+    },
+    {
+      "name": "dhcp-taken",
+      "summary": "an address that DHCP gives is taken for a guest forward",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "(a < dhcp || a - dhcp > 15)",
+          "replace": "1"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address QEMU cannot forward: 10.0.2.15",
+          "a guest forward from an address DHCP gives",
+          "an address of a card's network QEMU cannot forward: 192.168.90.50",
+          "an address of a wide network QEMU cannot forward: 10.90.2.15"
+        ]
+      }
+    },
+    {
+      "name": "dhcp-short",
+      "summary": "the last of the sixteen addresses that DHCP gives is taken for a guest forward",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "a - dhcp > 15",
+          "replace": "a - dhcp > 14"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address QEMU cannot forward: 10.0.2.30",
+          "an address of a card's network QEMU cannot forward: 192.168.90.65",
+          "an address of a wide network QEMU cannot forward: 10.90.2.30"
+        ]
+      }
+    },
+    {
+      "name": "dhcpstart-ignored",
+      "summary": "QEMU's default DHCP addresses are refused in place of the card's own",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "address_or(d->dhcpstart, net | (UINT32_C(0x020f) & ~mask))",
+          "replace": "(net | (UINT32_C(0x020f) & ~mask))"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address of a card's network QEMU cannot forward: 192.168.90.50",
+          "an address of a card's network QEMU can forward: 192.168.90.15"
+        ]
+      }
+    },
+    {
+      "name": "dhcp-byte",
+      "summary": "the default DHCP addresses of a wide network are placed in the network's last byte",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "UINT32_C(0x020f)",
+          "replace": "UINT32_C(0x0f)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address of a wide network QEMU cannot forward: 10.90.2.15",
+          "an address of a wide network QEMU can forward: 10.90.0.15"
+        ]
+      }
+    },
+    {
+      "name": "refused-card-taken",
+      "summary": "an address of a card whose network options are refused is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "network_check(d) == 0 && ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an address of a card whose host is outside its network"
+        ]
+      }
+    },
+    {
+      "name": "listened-taken",
+      "summary": "a guest forward to a port that a TCP forward makes QEMU listen on is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "forwarded_tcp(p, held_port(p, g->port)) || ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a guest forward to a port QEMU listens on",
+          "a guest forward to a port forwarded to the guest by TCP"
+        ]
+      }
+    },
+    {
+      "name": "udp-listened",
+      "summary": "a port forwarded to the guest by UDP is taken for one QEMU listens on",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (!f->udp && held_port(p, f->port) == port)",
+          "replace": "if (held_port(p, f->port) == port)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "guest forwards: the launcher refuses the profile"
+        ]
+      }
+    },
+    {
+      "name": "relay-unchecked",
+      "summary": "a relay's word with a control character is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (*s < ' ' || *s > '~')",
+          "replace": "if (0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a relay with a control character",
+          "a relay with a delete character"
+        ]
+      }
+    },
+    {
+      "name": "program-empty-taken",
+      "summary": "a relay whose program is empty is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": " || relay[0][0] == '\\0'",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a relay whose program is empty"
+        ]
+      }
+    },
+    {
+      "name": "guest-twice-taken",
+      "summary": "connections to one address and port forwarded twice are taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "guest_forwarded_before(d, j, g))",
+          "replace": "0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "connections to one address and port forwarded twice"
+        ]
+      }
+    },
+    {
+      "name": "address-ignored",
+      "summary": "connections to one guest port at two addresses are refused as one forwarded twice",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "strcmp(d->guest_forwards[k].address, g->address) == 0 &&",
+          "replace": "1 &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "guest forwards of one guest port from two addresses: the launcher refuses the profile"
+        ]
+      }
+    },
+    {
+      "name": "line-truncated",
+      "summary": "a line whose buffer ends inside an argument is cut short without an error, two bytes before the end",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "    if (l->used + 1 >= l->size) {\n        l->error = E2BIG;\n        return;\n    }\n    l->buf[l->used++] = c;",
+          "replace": "    if (l->used + 2 >= l->size)\n        return;\n    l->buf[l->used++] = c;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the smallest buffer that takes the line has it whole"
         ]
       }
     }

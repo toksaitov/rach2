@@ -39,8 +39,22 @@ struct etude_qemu_forward {
     unsigned guest_port; /* 1 to 65535 */
 };
 
-/* A device, optionally with its user network, its forwards and its station
- * address. */
+/* A forward of the guest's connections to a TCP port of an address of the
+ * card's user network to one of the case's local ports: QEMU runs `relay` for
+ * each connection, with the local port as its last argument and the
+ * connection as its standard input, output and error. */
+struct etude_qemu_guest_forward {
+    const char *address;      /* dotted decimal, which etude_qemu_guest_address
+                                 takes */
+    unsigned guest_port;      /* 1 to 65535 */
+    unsigned port;            /* which of the profile's `ports`, counted
+                                 from 0 */
+    const char *const *relay; /* the program and its first arguments, ended
+                                 by NULL */
+};
+
+/* A device, optionally with its user network, the network's restriction,
+ * forwards and guest forwards, and its station address. */
 struct etude_qemu_device {
     const char *model; /* NULL ends the device list */
     const char *net;   /* IPv4 network/prefix, or NULL for 10.0.2.0/24 */
@@ -50,16 +64,31 @@ struct etude_qemu_device {
     const char *mac; /* six hexadecimal octets, or NULL for QEMU's default */
     const struct etude_qemu_forward *forwards; /* `forward_count` of them */
     size_t forward_count;
+    int restricted; /* the guest reaches only the guest forwards */
+    /* `guest_forward_count` guest forwards */
+    const struct etude_qemu_guest_forward *guest_forwards;
+    size_t guest_forward_count;
 };
 
 /**
  * Check device models and network options, including IPv4 subnet membership,
  * unicast station addresses and duplicate explicit or default addresses.
- * Network options and forwards are valid only for rtl8139 and e1000.
+ * Network options, the restriction, forwards and guest forwards are valid
+ * only for rtl8139 and e1000.
  *
  * @return 0, or EINVAL for an invalid device list; NULL is an empty list.
  */
 int etude_qemu_devices_check(const struct etude_qemu_device *devices);
+
+/**
+ * Say whether `address` can be the address of a guest forward on the user
+ * network of card `d`: a dotted decimal address of the network that is not
+ * the network's own, its broadcast address, the host's, its name server's or
+ * one of the sixteen that DHCP gives from `dhcpstart`, each as the card gives
+ * it or as QEMU's default for the network. A card whose network options
+ * etude_qemu_devices_check refuses has no such address.
+ */
+int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *address);
 
 /* The controller a disk of a profile is attached to. */
 enum etude_disk_bus {
@@ -184,8 +213,9 @@ struct etude_qemu_line {
  *
  * @return 0, or an error number: EINVAL for a profile the launcher cannot
  *         make, among them a forward of a port that is not one of the
- *         profile's `ports` and a local port forwarded twice by one
- *         protocol; ENOENT for a firmware the site lacks, E2BIG when `out` is
+ *         profile's `ports`, a local port forwarded twice by one protocol or
+ *         both to the guest and from it, and a guest forward that QEMU could
+ *         not make; ENOENT for a firmware the site lacks, E2BIG when `out` is
  *         too small; ENOTSUP for a lazy boundary profile the site has not
  *         enabled.
  */

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-forward-scenario",
-  "summary": "the forward rows of etude_scenario_hosttest.c, under the stand-in and the real QEMU, find a forward the library or the launcher loses",
+  "summary": "the forward rows of etude_scenario_hosttest.c, under the stand-in and the real QEMU, find a forward, a restriction or a guest forward that the library or the launcher loses",
   "tree": "private",
   "sources": [
     "tools/etude/posix/scenario.c",
@@ -82,6 +82,78 @@
           "forward: no `assert forwarded pass`",
           "real-forward: no `assert tcp-forward pass`",
           "real-forward: no `assert udp-forward pass`"
+        ]
+      }
+    },
+    {
+      "name": "restrict-dropped",
+      "summary": "the library gives the launcher every card unrestricted",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "m->devices[i].restricted = d->type == 'o' && jbool(d, \"restrict\") == 1;",
+          "replace": "m->devices[i].restricted = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert forwarded pass`",
+          "real-forward: no `assert restricted pass`"
+        ]
+      }
+    },
+    {
+      "name": "guest-forwards-dropped",
+      "summary": "the library gives the launcher none of a card's guest forwards",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "dev->guest_forward_count++;",
+          "replace": "(void)0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert forwarded pass`",
+          "real-forward: no `assert guest-forward pass`"
+        ]
+      }
+    },
+    {
+      "name": "relay-unresolved",
+      "summary": "the library gives the launcher the relay's name in place of its path",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "m->relays[*k][i] = i == 0 ? program_path(m->c, w->string) : w->string;",
+          "replace": "m->relays[*k][i] = w->string;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert forwarded pass`",
+          "real-forward: no `assert guest-forward pass`"
+        ]
+      }
+    },
+    {
+      "name": "address-moved",
+      "summary": "the library gives the launcher another address than the manifest's",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "gf->address = jtext(g, \"address\");",
+          "replace": "gf->address = \"10.0.2.101\";"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert forwarded pass`",
+          "real-forward: no `assert guest-forward pass`"
         ]
       }
     }

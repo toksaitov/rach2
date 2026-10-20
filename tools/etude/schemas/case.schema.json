@@ -116,7 +116,9 @@
         "dhcpstart": {"type": "string"},
         "dns": {"type": "string"},
         "mac": {"type": "string"},
-        "forwards": {"type": "array", "items": {"$ref": "#/$defs/forward"}}
+        "restrict": {"type": "boolean"},
+        "forwards": {"type": "array", "items": {"$ref": "#/$defs/forward"}},
+        "guest_forwards": {"type": "array", "items": {"$ref": "#/$defs/guest_forward"}}
       }
     },
     "forward": {
@@ -126,6 +128,16 @@
         "protocol": {"enum": ["tcp", "udp"]},
         "port": {"$ref": "#/$defs/count"},
         "guest_port": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "guest_forward": {
+      "type": "object", "additionalProperties": false,
+      "required": ["address", "guest_port", "port", "relay"],
+      "properties": {
+        "address": {"type": "string"},
+        "guest_port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "port": {"$ref": "#/$defs/count"},
+        "relay": {"type": "array", "items": {"type": "string", "pattern": "^[ -~]*$"}, "minItems": 1}
       }
     },
     "disk": {

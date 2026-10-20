@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-forward-casecheck",
-  "summary": "casecheck refuses the forwards of a machine's cards that the QEMU launcher would refuse, and those of a guest case's cards",
+  "summary": "casecheck refuses the forwards and guest forwards of a machine's cards that the QEMU launcher would refuse, and the forwards, guest forwards and restriction of a guest case's cards",
   "tree": "private",
   "sources": [
     "tools/etude/cases.c"
@@ -83,14 +83,169 @@
       "edits": [
         {
           "file": "tools/etude/cases.c",
-          "find": "if (json_member(devs->item[i], \"forwards\") != NULL) {",
-          "replace": "if (0) {"
+          "find": "json_member(dev, \"forwards\") != NULL || ",
+          "replace": ""
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           "with the text: fixture.networks.guest-boot:"
+        ]
+      }
+    },
+    {
+      "name": "boot-relay-taken",
+      "summary": "guest forwards of a card of a guest case's boot are taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "json_member(dev, \"guest_forwards\") != NULL ||",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-boot-relay:"
+        ]
+      }
+    },
+    {
+      "name": "boot-restricted-taken",
+      "summary": "a restricted card of a guest case's boot is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "(restricted != NULL && restricted->integer != 0)",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-boot-restricted:"
+        ]
+      }
+    },
+    {
+      "name": "guest-address-taken",
+      "summary": "a guest forward from an address QEMU cannot forward is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (!etude_qemu_guest_address(&card, address)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-address:",
+          "with the text: fixture.networks.guest-subnet:"
+        ]
+      }
+    },
+    {
+      "name": "card-network-ignored",
+      "summary": "guest forwards are judged on the default network in place of the card's own",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "card_of(dev, &card);",
+          "replace": "card_of(dev, &card);\n    card.net = NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-subnet:",
+          "0 manifest ./networks-ok.json"
+        ]
+      }
+    },
+    {
+      "name": "guest-past-taken",
+      "summary": "a guest forward to a port past those the case reserves is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (local >= ports) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-past:"
+        ]
+      }
+    },
+    {
+      "name": "guest-both-taken",
+      "summary": "a port forwarded by TCP both to the guest and from it is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (forwarded_tcp(devs, local)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-both:"
+        ]
+      }
+    },
+    {
+      "name": "guest-twice-taken",
+      "summary": "connections to one address and port forwarded twice are taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "json_member(list->item[k], \"guest_port\")->integer == guest) {",
+          "replace": "json_member(list->item[k], \"guest_port\")->integer == guest && 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-twice:"
+        ]
+      }
+    },
+    {
+      "name": "relay-taken",
+      "summary": "a relay that the case does not have is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (command != NULL && !listed(tools, command) &&",
+          "replace": "if (0 && command != NULL && !listed(tools, command) &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-relay:"
+        ]
+      }
+    },
+    {
+      "name": "udp-listening",
+      "summary": "a port forwarded to the guest by UDP is taken for one QEMU listens on by TCP",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (same(json_text(list->item[j], \"protocol\"), \"tcp\") &&",
+          "replace": "if ("
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "0 manifest ./networks-ok.json"
         ]
       }
     }

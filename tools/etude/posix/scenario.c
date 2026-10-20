@@ -32,12 +32,13 @@ extern char **environ;
 #define SHELL_READY "Type 'help' for available commands."
 #define GUEST_EXEC  "exec /etude-guest --stage / --resend-ms "
 
-/* The most disks, devices, boot options and forwards a profile gives the
- * launcher. */
+/* The most disks, devices, boot options, forwards of each kind and words of
+ * a relay a profile gives the launcher. */
 #define DISKS_MAX    ETUDE_QEMU_DISKS
 #define DEVICES_MAX  16
 #define OPTIONS_MAX  32
 #define FORWARDS_MAX 16
+#define RELAY_MAX    8
 
 /* The longest invocation, manifest or guest invocation the library reads. */
 #define DOCUMENT_MAX (4u * 1024 * 1024)
@@ -126,6 +127,8 @@ struct etude_case_machine {
     struct etude_qemu_device devices[DEVICES_MAX + 1];
     const char *options[OPTIONS_MAX + 1];
     struct etude_qemu_forward forwards[FORWARDS_MAX];
+    struct etude_qemu_guest_forward guest_forwards[FORWARDS_MAX];
+    const char *relays[FORWARDS_MAX][RELAY_MAX + 1];
     struct etude_qemu_profile profile;
     struct etude_machine_spec spec;
     unsigned boot;               /* the machine's boot, counted from 1 */
@@ -1420,19 +1423,70 @@ static long jport(const struct eh_json *o, const char *key)
     return (long)v->number;
 }
 
+static const char *program_path(struct etude_case *c, const char *name);
+
 /**
- * Give the cards of boot `m` the forwards of the devices of its manifest's
- * profile, `list`, which devices_of has read into `m->devices`: each forward
- * with its protocol, the case's local port it names, counted from 0, and the
- * guest's port. The launcher refuses a port the case does not hold.
+ * Give card `dev` of boot `m` the guest forwards of its manifest's card `d`,
+ * from the `*k`th of the boot's guest forwards on: each with its address,
+ * the guest's port, the case's local port and the relay, whose program is a
+ * tool or an executable copy of an artifact of the case's.
+ */
+static enum etude_status make_guest_forwards(struct etude_case_machine *m,
+                                             struct etude_qemu_device *dev, const struct eh_json *d,
+                                             size_t *k)
+{
+    struct etude_qemu_guest_forward *gf;
+    const struct eh_json *g, *w;
+    size_t i;
+
+    dev->guest_forwards = m->guest_forwards + *k;
+    g = d->type == 'o' ? eh_json_get(d, "guest_forwards") : NULL;
+    for (g = g != NULL ? g->child : NULL; g != NULL; g = g->next, (*k)++) {
+        if (*k == FORWARDS_MAX || jtext(g, "address") == NULL || jport(g, "guest_port") < 0 ||
+            jport(g, "port") < 0)
+            goto unread;
+        gf = &m->guest_forwards[*k];
+        gf->address = jtext(g, "address");
+        gf->guest_port = (unsigned)jport(g, "guest_port");
+        gf->port = (unsigned)jport(g, "port");
+        w = eh_json_get(g, "relay");
+        for (i = 0, w = w != NULL ? w->child : NULL; w != NULL; w = w->next, i++) {
+            if (i == RELAY_MAX || w->type != 's')
+                goto unread;
+            m->relays[*k][i] = i == 0 ? program_path(m->c, w->string) : w->string;
+            if (m->relays[*k][i] == NULL) {
+                diag("machine %s: the relay %s is no tool or artifact of the case's", m->decl->id,
+                     w->string);
+                return ETUDE_REFUSED;
+            }
+        }
+        m->relays[*k][i] = NULL;
+        gf->relay = m->relays[*k];
+        dev->guest_forward_count++;
+    }
+    return ETUDE_OK;
+unread:
+    diag("machine %s: more guest forwards or words of a relay than the launcher takes, or a "
+         "guest forward it cannot read",
+         m->decl->id);
+    return ETUDE_REFUSED;
+}
+
+/**
+ * Give the cards of boot `m` the user networks of the devices of its
+ * manifest's profile, `list`, which devices_of has read into `m->devices`:
+ * whether each is restricted, each forward with its protocol, the case's
+ * local port it names, counted from 0, and the guest's port, and each guest
+ * forward. The launcher refuses a port the case does not hold.
  */
 static enum etude_status make_networks(struct etude_case_machine *m, const struct eh_json *list)
 {
     const struct eh_json *d, *f;
     const char *protocol;
-    size_t i = 0, k = 0;
+    size_t i = 0, k = 0, g = 0;
 
     for (d = list != NULL ? list->child : NULL; d != NULL; d = d->next, i++) {
+        m->devices[i].restricted = d->type == 'o' && jbool(d, "restrict") == 1;
         m->devices[i].forwards = m->forwards + k;
         f = d->type == 'o' ? eh_json_get(d, "forwards") : NULL;
         for (f = f != NULL ? f->child : NULL; f != NULL; f = f->next, k++) {
@@ -1446,6 +1500,8 @@ static enum etude_status make_networks(struct etude_case_machine *m, const struc
             m->forwards[k].guest_port = (unsigned)jport(f, "guest_port");
             m->devices[i].forward_count++;
         }
+        if (make_guest_forwards(m, &m->devices[i], d, &g) != ETUDE_OK)
+            return ETUDE_REFUSED;
     }
     m->profile.ports = m->c->ports;
     m->profile.port_count = m->c->port_count;

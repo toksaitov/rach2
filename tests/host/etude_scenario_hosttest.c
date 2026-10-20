@@ -40,8 +40,10 @@
  * A media row boots a machine twice with the same empty sparse disk of 4 TiB
  * on NVMe and a CD whose medium is the artifact's object, and the stand-in
  * says the drives it was given; the disk is removed after the pass.
- * A machine's first card forwards the case's two ports, one by TCP and one by
- * UDP, and its second card has a user network without forwards; a machine
+ * A machine's first card has a restricted network that forwards two of the
+ * case's ports to the guest, one by TCP and one by UDP, and the guest's
+ * connections to 10.0.2.100:7777 to a third through this program as the
+ * relay, and its second card has a user network without forwards; a machine
  * that forwards a port the case does not hold is refused before QEMU starts.
  * This program is also the peer that a scenario runs as a service; two machines
  * at once reach it, a service ended unseen is a fault, and failing rows at each
@@ -49,9 +51,10 @@
  * QEMU, a disk root written at the debug shell and powered off is read back by
  * the next boot, etude-guest runs the test image's /hello, two machines run
  * /tcptest against the peer, QEMU accepts a connection at the forwarded TCP
- * port and has bound the forwarded UDP port, and the kernel finds the size of
- * the media row's empty disk. With ETUDE_TEST_FORWARD set the program runs the
- * two forward rows alone.
+ * port and has bound the forwarded UDP port, /tcptest reaches the peer through
+ * the guest forward and is refused it at the gateway, and the kernel finds the
+ * size of the media row's empty disk. With ETUDE_TEST_FORWARD set the program
+ * runs the two forward rows alone.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -93,13 +96,16 @@ static int fails;
 
 /* The completion bounds of an attempt under the stand-in and the real QEMU,
  * and the step bounds of the rows: the bound row's, the lost rows', which a
- * loss must not wait out, and the others'. */
+ * loss must not wait out, the others', and that of the real forward row's
+ * step in which the guest is refused a connection, which a connection let
+ * through must not wait out. */
 #define FAKE_ATTEMPT_MS 30000
 #define REAL_ATTEMPT_MS 150000
 #define SHORT_US        1000000u
 #define LOSS_US         10000000u
 #define STEP_US         60000000u
 #define REAL_US         120000000u
+#define CLOSED_US       30000000u
 
 /* The hold row's bound on the step in which the other rows fail beside it,
  * and on its attempt; the bound in which a killed row's processes end; and
@@ -335,12 +341,74 @@ static int peer(const char *port, const char *mode)
     }
 }
 
+/** Write the `len` bytes at `buf` to `fd`; 0, or -1 for an error. */
+static int write_bytes(int fd, const char *buf, size_t len)
+{
+    ssize_t n;
+
+    while (len > 0) {
+        n = write(fd, buf, len);
+        if (n <= 0)
+            return -1;
+        buf += n;
+        len -= (size_t)n;
+    }
+    return 0;
+}
+
+/**
+ * Be the relay of a guest forward, as QEMU runs it for each connection:
+ * join standard input and output, the guest's connection, to a connection to
+ * `port` of 127.0.0.1, half-close each side when the other's bytes end, and
+ * exit 0 once both have ended. Standard error is the guest's connection too,
+ * so the relay says nothing.
+ */
+static int relay(const char *port)
+{
+    struct sockaddr_in a = loopback(strtol(port, NULL, 10));
+    struct pollfd p[2];
+    char buf[4096];
+    ssize_t n;
+    int s, from_guest = 1, to_guest = 1;
+
+    s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0 || connect(s, (struct sockaddr *)&a, sizeof(a)) != 0)
+        return 1;
+    while (from_guest || to_guest) {
+        p[0].fd = from_guest ? 0 : -1;
+        p[1].fd = to_guest ? s : -1;
+        p[0].events = p[1].events = POLLIN;
+        if (poll(p, 2, -1) < 0)
+            continue;
+        if (p[0].revents != 0) {
+            n = read(0, buf, sizeof(buf));
+            if (n <= 0) {
+                shutdown(s, SHUT_WR);
+                from_guest = 0;
+            } else if (write_bytes(s, buf, (size_t)n) != 0) {
+                return 1;
+            }
+        }
+        if (p[1].revents != 0) {
+            n = read(s, buf, sizeof(buf));
+            if (n <= 0) {
+                shutdown(1, SHUT_WR);
+                to_guest = 0;
+            } else if (write_bytes(1, buf, (size_t)n) != 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /**
  * Be the tool `argv[2]`: `scan FILE TEXT` exits 0 when FILE has TEXT;
  * `report CASE` reports one assertion of CASE as a guest program does;
- * `killguest FILE` kills the etude-guest whose PID FILE has; and `peer PORT
+ * `killguest FILE` kills the etude-guest whose PID FILE has; `peer PORT
  * MODE MARK` is a service, whose MARK has its row and this run's fixture
- * directory, so that the test finds it among the processes.
+ * directory, so that the test finds it among the processes; and `relay
+ * PORT` is the relay of a guest forward.
  */
 static int tool(int argc, char **argv)
 {
@@ -352,6 +420,8 @@ static int tool(int argc, char **argv)
         return file_has(argv[3], argv[4]) ? 0 : 1;
     if (argc == 6 && strcmp(argv[2], "peer") == 0)
         return peer(argv[3], argv[4]);
+    if (argc == 4 && strcmp(argv[2], "relay") == 0)
+        return relay(argv[3]);
     if (argc == 4 && strcmp(argv[2], "report") == 0) {
         printf("guest: running\n");
         printf("@etude 1 begin %s\n@etude 1 assert guest-ran pass\n@etude 1 end 1\n", argv[3]);
@@ -1060,75 +1130,18 @@ static int scenario_guest(struct etude_case *c, int real)
     return 0;
 }
 
-/**
- * Run the forward rows. The machine fixture forwards the case's first port
- * by TCP to the guest's port 22 and its second by UDP to the guest's port
- * 9999, on the user network of its first card; its second card has a user
- * network without forwards. Under the stand-in QEMU's `-netdev` values say
- * so, and the machine other, which forwards a third port the case does not
- * hold, is refused before QEMU starts. Under the real QEMU a connection to
- * the first port is accepted, and the second port is bound, once the shell
- * is up.
- */
-static int scenario_forward(struct etude_case *c, int real)
-{
-    struct etude_case_machine *m;
-    struct etude_termination end;
-    struct sockaddr_in a;
-    char line[160];
-    uint64_t at;
-    int fd;
-
-    if (etude_step(c, "boot") != ETUDE_OK)
-        return 1;
-    expect(c, "booted", etude_boot(c, "fixture", NULL, &m, &end), ETUDE_OK);
-    if (m == NULL)
-        return 0;
-    if (real) {
-        expect(c, "shell", etude_console_wait(m, "Type 'help'", 0, &at), ETUDE_OK);
-        a = loopback((long)etude_port(c, 0));
-        fd = socket(AF_INET, SOCK_STREAM, 0);
-        etude_assert(c, "tcp-forward",
-                     fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0,
-                     "nothing accepts a connection at the first port");
-        if (fd >= 0)
-            close(fd);
-        a = loopback((long)etude_port(c, 1));
-        fd = socket(AF_INET, SOCK_DGRAM, 0);
-        etude_assert(c, "udp-forward",
-                     fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 &&
-                         errno == EADDRINUSE,
-                     "nothing has bound the second port");
-        if (fd >= 0)
-            close(fd);
-        return 0;
-    }
-    snprintf(line, sizeof(line),
-             "fake: netdev user,id=net0,hostfwd=tcp:127.0.0.1:%u-:22,"
-             "hostfwd=udp:127.0.0.1:%u-:9999\r",
-             etude_port(c, 0), etude_port(c, 1));
-    expect(c, "forwarded", etude_console_wait(m, line, 0, &at), ETUDE_OK);
-    expect(c, "second-card", etude_console_wait(m, "fake: netdev user,id=net1\r", 0, &at),
-           ETUDE_OK);
-    if (etude_step(c, "other") != ETUDE_OK)
-        return 1;
-    expect(c, "unheld-refused", etude_boot(c, "other", NULL, &m, &end), ETUDE_FAILED);
-    etude_assert(c, "unheld-unstarted", m == NULL && end.end == ETUDE_END_QEMU_EXITED,
-                 "a forward of a port the case does not hold started");
-    return 0;
-}
-
-/* The arguments of a service's start: the tool `peer`, the case's first
- * port, a mode, and the mark of the row in this run, ETUDE_TEST_MARK. */
+/* The arguments of a service's start: the tool `peer`, one of the case's
+ * ports, a mode, and the mark of the row in this run, ETUDE_TEST_MARK. */
 struct peer_args {
     char port[16], mark[PATH_MAX + 8];
     char *argv[6];
 };
 
-/** Make the arguments of the peer in `mode` on the case's first port. */
-static char *const *peer_args(struct etude_case *c, struct peer_args *a, const char *mode)
+/** Make the arguments of the peer in `mode` on the case's port `i`. */
+static char *const *peer_args_on(struct etude_case *c, struct peer_args *a, const char *mode,
+                                 unsigned i)
 {
-    snprintf(a->port, sizeof(a->port), "%u", etude_port(c, 0));
+    snprintf(a->port, sizeof(a->port), "%u", etude_port(c, i));
     snprintf(a->mark, sizeof(a->mark), "mark=%s", getenv("ETUDE_TEST_MARK"));
     a->argv[0] = "tool";
     a->argv[1] = "peer";
@@ -1137,6 +1150,12 @@ static char *const *peer_args(struct etude_case *c, struct peer_args *a, const c
     a->argv[4] = a->mark;
     a->argv[5] = NULL;
     return a->argv;
+}
+
+/** Make the arguments of the peer in `mode` on the case's first port. */
+static char *const *peer_args(struct etude_case *c, struct peer_args *a, const char *mode)
+{
+    return peer_args_on(c, a, mode, 0);
 }
 
 /** Boot `machine` in step `step` and wait for its shell; NULL when it does
@@ -1410,6 +1429,107 @@ static int scenario_media(struct etude_case *c, int real)
     return 0;
 }
 
+/**
+ * Under the real QEMU, have machine `m`, whose shell's greeting ends at
+ * `at`, reach the peer `s` through the guest forward of 10.0.2.100:7777 in
+ * step relay, and be refused the peer at the gateway, 10.0.2.2, which the
+ * restricted network does not forward, in step closed. The kernel may log the
+ * reset between the words of tcptest's first test, so the refusal is a
+ * `FAILED` after them.
+ */
+static void forward_real(struct etude_case *c, struct etude_case_machine *m,
+                         struct etude_case_service *s, uint64_t at)
+{
+    char line[64];
+    uint64_t from;
+
+    if (etude_step(c, "relay") != ETUDE_OK)
+        return;
+    from = wait_for(c, m, "guest-forward", "\n> ", at);
+    etude_type(m, "exec /tcptest peer=10.0.2.100:7777 closed=7778\r");
+    expect(c, "guest-forward", etude_console_wait(m, "All TCP tests passed!", from, &at), ETUDE_OK);
+    expect(c, "relay-closed", etude_service_wait(s, "peer: closed", 0, &from), ETUDE_OK);
+    if (etude_step(c, "closed") != ETUDE_OK)
+        return;
+    from = wait_for(c, m, "restricted", "\n> ", at);
+    snprintf(line, sizeof(line), "exec /tcptest peer=10.0.2.2:%u closed=9\r", etude_port(c, 2));
+    etude_type(m, line);
+    from = wait_for(c, m, "restricted", "Test 1: connect to echo server... ", from);
+    expect(c, "restricted", etude_console_wait(m, "FAILED", from, &at), ETUDE_OK);
+}
+
+/**
+ * Run the forward rows. The machine fixture has a restricted user network on
+ * its first card, which forwards the case's first port by TCP to the guest's
+ * port 22, its second by UDP to the guest's port 9999, and the guest's
+ * connections to 10.0.2.100:7777 to its third, where the peer serves,
+ * through this program as the relay; its second card has a user network
+ * without forwards. Under the stand-in QEMU's `-netdev` values say so, and
+ * the machine other, which forwards a fourth port the case does not hold,
+ * is refused before QEMU starts. Under the real QEMU a connection to the
+ * first port is accepted and the second port is bound once the shell is up,
+ * and the guest reaches the peer through the guest forward alone.
+ */
+static int scenario_forward(struct etude_case *c, int real)
+{
+    struct etude_case_machine *m;
+    struct etude_case_service *s = NULL;
+    struct etude_termination end;
+    struct peer_args pa;
+    struct sockaddr_in a;
+    char line[PATH_MAX + 512];
+    uint64_t at;
+    int fd;
+
+    if (etude_step(c, "serve") != ETUDE_OK)
+        return 1;
+    if (real)
+        expect(c, "service-ready",
+               etude_service(c, "peer", peer_args_on(c, &pa, "serve", 2), &s, &end), ETUDE_OK);
+    if (etude_step(c, "boot") != ETUDE_OK)
+        return 1;
+    expect(c, "booted", etude_boot(c, "fixture", NULL, &m, &end), ETUDE_OK);
+    if (m == NULL)
+        return 0;
+    if (real) {
+        expect(c, "shell", etude_console_wait(m, "Type 'help'", 0, &at), ETUDE_OK);
+        a = loopback((long)etude_port(c, 0));
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        etude_assert(c, "tcp-forward",
+                     fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0,
+                     "nothing accepts a connection at the first port");
+        if (fd >= 0)
+            close(fd);
+        a = loopback((long)etude_port(c, 1));
+        fd = socket(AF_INET, SOCK_DGRAM, 0);
+        etude_assert(c, "udp-forward",
+                     fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 &&
+                         errno == EADDRINUSE,
+                     "nothing has bound the second port");
+        if (fd >= 0)
+            close(fd);
+        if (s == NULL)
+            return 1;
+        forward_real(c, m, s, at);
+        expect(c, "service-stopped", etude_service_stop(s, &end), ETUDE_OK);
+        return 0;
+    }
+    fix_format(line, sizeof(line),
+               "fake: netdev user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:%u-:22,"
+               "hostfwd=udp:127.0.0.1:%u-:9999,guestfwd=tcp:10.0.2.100:7777-cmd:"
+               "'%s.scratch/bin/scanner' 'tool' 'relay' %u\r",
+               etude_port(c, 0), etude_port(c, 1), getenv("ETUDE_TEST_MARK"), etude_port(c, 2));
+    expect(c, "forwarded", etude_console_wait(m, line, 0, &at), ETUDE_OK);
+    expect(c, "second-card", etude_console_wait(m, "fake: netdev user,id=net1\r", 0, &at),
+           ETUDE_OK);
+    if (etude_step(c, "other") != ETUDE_OK)
+        return 1;
+    expect(c, "unheld-refused", etude_boot(c, "other", NULL, &m, &end), ETUDE_FAILED);
+    etude_assert(c, "unheld-unstarted", m == NULL && end.end == ETUDE_END_QEMU_EXITED,
+                 "a forward of a port the case does not hold started");
+    return 0;
+}
+
 /** Run row `row` of a case with services, or give 1 for an unknown row. */
 static int scenario_services(struct etude_case *c, const char *row)
 {
@@ -1625,27 +1745,36 @@ static const char *row_disks(const struct row *r)
     return r->disk != NULL ? "[\"disk\"]" : "[]";
 }
 
-/* The machines of the forward rows: fixture, whose first card forwards the
- * case's two ports, and other, which forwards a third that the case does not
- * hold. The first `%s` is fixture's initrd. */
+/* The machines of the forward rows: fixture, whose first card has a
+ * restricted network that forwards the case's first two ports to the guest
+ * and the guest's connections to 10.0.2.100:7777 to its third, and other,
+ * which forwards a fourth that the case does not hold. The first `%s` is
+ * fixture's initrd. */
 static const char forward_machines[] =
     "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
     "\"disks\": [], \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
-    "\"firmware\": \"direct\", \"devices\": [{\"model\": \"rtl8139\", \"forwards\": "
-    "[{\"protocol\": \"tcp\", \"port\": 0, \"guest_port\": 22}, {\"protocol\": \"udp\", "
-    "\"port\": 1, \"guest_port\": 9999}]}, \"e1000\"], \"boot_options\": []}, \"console\": "
-    "\"serial\", \"qmp\": true, \"helper\": false}, {\"machine_id\": \"other\", \"qemu\": "
-    "{\"kernel\": \"kernel\", \"initrd\": null, \"disks\": [], \"cpu\": \"max\", "
-    "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", \"devices\": "
-    "[{\"model\": \"rtl8139\", \"forwards\": [{\"protocol\": \"tcp\", \"port\": 2, "
-    "\"guest_port\": 22}]}], \"boot_options\": []}, \"console\": \"serial\", \"qmp\": true, "
-    "\"helper\": false}";
+    "\"firmware\": \"direct\", \"devices\": [{\"model\": \"rtl8139\", \"restrict\": true, "
+    "\"forwards\": [{\"protocol\": \"tcp\", \"port\": 0, \"guest_port\": 22}, "
+    "{\"protocol\": \"udp\", \"port\": 1, \"guest_port\": 9999}], \"guest_forwards\": "
+    "[{\"address\": \"10.0.2.100\", \"guest_port\": 7777, \"port\": 2, \"relay\": "
+    "[\"scanner\", \"tool\", \"relay\"]}]}, \"e1000\"], \"boot_options\": []}, "
+    "\"console\": \"serial\", \"qmp\": true, \"helper\": false}, {\"machine_id\": "
+    "\"other\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": null, \"disks\": [], "
+    "\"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": "
+    "\"direct\", \"devices\": [{\"model\": \"rtl8139\", \"forwards\": [{\"protocol\": "
+    "\"tcp\", \"port\": 3, \"guest_port\": 22}]}], \"boot_options\": []}, \"console\": "
+    "\"serial\", \"qmp\": true, \"helper\": false}";
+
+/* The service of the forward rows, the peer that the guest forward reaches. */
+static const char forward_services[] =
+    ", \"services\": [{\"service_id\": \"peer\", \"program\": \"scanner\", \"ready\": \"peer: "
+    "listening\", \"does\": \"echo what the guest forward relays to the case's third port\"}]";
 
 /* The case's ports in a forward row, each free when the row starts: the
- * first for TCP and the second for UDP. */
+ * first for TCP and the second for UDP. The third is the peer's, row_port. */
 static unsigned forward_ports[2];
 
-/** Say whether row `r` is a forward row, whose case has two ports. */
+/** Say whether row `r` is a forward row, whose case has three ports. */
 static int forward_row(const struct row *r)
 {
     return strcmp(r->name, "forward") == 0 || strcmp(r->name, "real-forward") == 0;
@@ -1672,7 +1801,7 @@ static unsigned free_port(int type)
  * memory-share and memory-qmp the other's as well. */
 static int write_manifest(const char *path, const struct row *r)
 {
-    char steps[2048], asserts[4096], machine[2048], text[16384];
+    char steps[2048], asserts[4096], machine[4096], text[16384];
     unsigned long long reserved = 268435456;
 
     json_list(steps, sizeof(steps), r->steps, 1);
@@ -1713,7 +1842,7 @@ static int write_manifest(const char *path, const struct row *r)
         "\"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\", "
         "\"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}, "
         "{\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\", \"cleanup\": "
-        "\"the library\"}, \"steps\": %s, \"machines\": [%s], \"assertions\": %s, "
+        "\"the library\"}, \"steps\": %s, \"machines\": [%s]%s, \"assertions\": %s, "
         "\"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": 0}, \"progress\": "
         "[{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step "
         "ended\", \"limit\": 8}, {\"witness_id\": \"waiting\", \"kind\": \"quiet\", \"means\": "
@@ -1729,7 +1858,8 @@ static int write_manifest(const char *path, const struct row *r)
         "\"node\": \"v\", \"per_architecture\": false}, {\"name\": \"killer\", \"node\": \"x\", "
         "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
         "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
-        r->name, steps, machine, asserts, reserved, forward_row(r) ? 2 : 0);
+        r->name, steps, machine, forward_row(r) ? forward_services : "", asserts, reserved,
+        forward_row(r) ? 3 : 0);
     return write_file(path, text, strlen(text));
 }
 
@@ -1800,7 +1930,7 @@ struct site {
 static int write_scenario(const char *path, const struct row *r, const struct site *s,
                           const char *manifest, const char *scratch)
 {
-    char steps[1024] = "", one[160], word[64], text[8192], ports[32] = "";
+    char steps[1024] = "", one[160], word[64], text[8192], ports[48] = "";
     const char *p = r->steps;
     size_t n;
 
@@ -1817,7 +1947,8 @@ static int write_scenario(const char *path, const struct row *r, const struct si
     if (r->pair)
         fix_format(ports, sizeof(ports), "%u", row_port);
     if (forward_row(r))
-        fix_format(ports, sizeof(ports), "%u, %u", forward_ports[0], forward_ports[1]);
+        fix_format(ports, sizeof(ports), "%u, %u, %u", forward_ports[0], forward_ports[1],
+                   row_port);
     fix_format(text, sizeof(text),
                "{\"schema_version\": 1, \"run_id\": \"test-run\", \"attempt_id\": \"test-%s\", "
                "\"manifest\": \"%s\", \"case_id\": \"test.scenario.%s\", \"architecture\": "
@@ -2174,7 +2305,7 @@ static void row_start(struct row_run *rr, const struct row *r, const struct site
     if (rr->o == NULL)
         exit(1);
     fix_format(mark, sizeof(mark), "%s/%s", fix_dir(), r->name);
-    rr->port = row_port = r->pair ? reserve_peer(&rr->peer, mark) : 0;
+    rr->port = row_port = r->pair || forward_row(r) ? reserve_peer(&rr->peer, mark) : 0;
     if (forward_row(r)) {
         forward_ports[0] = free_port(SOCK_STREAM);
         forward_ports[1] = free_port(SOCK_DGRAM);
@@ -2183,8 +2314,9 @@ static void row_start(struct row_run *rr, const struct row *r, const struct site
     fix_format(inv, sizeof(inv), "%s/%s.invocation.json", fix_dir(), r->name);
     fix_format(rr->scratch, sizeof(rr->scratch), "%s/%s.scratch", fix_dir(), r->name);
     if ((r->pair && row_port == 0) ||
-        (forward_row(r) && (forward_ports[0] == 0 || forward_ports[1] == 0 ||
-                            forward_ports[0] == forward_ports[1])) ||
+        (forward_row(r) &&
+         (row_port == 0 || forward_ports[0] == 0 || forward_ports[1] == 0 ||
+          forward_ports[0] == forward_ports[1] || forward_ports[1] == row_port)) ||
         mkdir(rr->scratch, 0700) != 0 ||
         (r->pair ? write_pair_manifest(manifest, r) : write_manifest(manifest, r)) != 0 ||
         write_scenario(inv, r, s, manifest, rr->scratch) != 0) {
@@ -2691,11 +2823,13 @@ static const struct row real_rows[] = {
 
 /* The forward rows, under the stand-in and under the real QEMU. */
 static const struct row forward_rows[] = {
-    {"forward", "disk", "boot:fixture other:other",
+    {"forward", "disk", "serve boot:fixture other:other",
      "booted forwarded second-card unheld-refused unheld-unstarted", NULL, 0, STEP_US, 0, 1, 1, 0,
      NULL, 0, NULL, 0},
-    {"real-forward", NULL, "boot:fixture", "booted shell tcp-forward udp-forward", NULL, 0, REAL_US,
-     0, 1, 0, 0, NULL, 0, NULL, 0},
+    {"real-forward", NULL, "serve boot:fixture relay closed",
+     "service-ready booted shell tcp-forward udp-forward guest-forward relay-closed restricted "
+     "service-stopped",
+     NULL, 0, REAL_US, 0, 1, 0, 0, "closed", CLOSED_US, NULL, 0},
 };
 
 /** Run the audio rows and, unless ETUDE_TEST_AUDIO_ONLY is set, the stand-in

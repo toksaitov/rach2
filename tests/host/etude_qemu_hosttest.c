@@ -45,8 +45,22 @@
  * forwards, and a card's network options before its forwards. They refuse a
  * forward on a device that is no network card, a forward of a port the
  * profile does not hold or that is below 1024, one to the guest's port 0 or
- * 65536, and a local port forwarded twice by one protocol. With `--forwards`
- * the program runs only these rows.
+ * 65536, and a local port forwarded twice by one protocol.
+ *
+ * The guest forward rows check a restricted network whose guest reaches two
+ * local ports through relays, with a relay's comma and quote quoted for QEMU
+ * and for its shell parser, one guest port forwarded from two addresses, and
+ * the addresses QEMU can forward on the default network, on a card's own and
+ * on a wide one. They refuse an address of the host, of DHCP or outside the
+ * network, a guest's port of 0 or 65536, a local port not held, below 1024 or
+ * listened on by a TCP forward, a relay without a program or with a control
+ * character, one address and port forwarded twice, and a restriction or a
+ * guest forward on a device that is no network card. The smallest buffer
+ * that takes the line must have it whole. One card has every
+ * option of its user network in its one `-netdev`: its network, host, DHCP
+ * and name server addresses, the restriction, forwards and guest forwards,
+ * with its station address on its `-device`. With `--forwards` the program
+ * runs only the forward and guest forward rows.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -1498,7 +1512,9 @@ static void test_forwards(void)
         change;                                                        \
         CHECK(make(&b, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
     } while (0)
-    devices[0].forwards = fw;
+    bad = fw[0];
+    bad.port = 1;
+    devices[0].forwards = &bad;
     devices[0].forward_count = 1;
     NET_REFUSED((void)0, "a forward on a device that is no network card");
     devices[0].forwards = NULL;
@@ -1525,6 +1541,233 @@ static void test_forwards(void)
     has(&p, &site, "-netdev user,id=net1,hostfwd=tcp:127.0.0.1:40002-:7502 -device e1000",
         "a forward on the second card");
 #undef NET_REFUSED
+}
+
+/**
+ * Require etude_qemu_guest_address to judge each address of `list`, ended by
+ * NULL, on the network of card `d` as `want` says; `row` names the check.
+ */
+static void guest_addresses(const struct etude_qemu_device *d, const char *const *list, int want,
+                            const char *row)
+{
+    size_t i;
+
+    for (i = 0; list[i] != NULL; i++)
+        if (!etude_qemu_guest_address(d, list[i]) != !want) {
+            printf("etude-qemu-test: fail: %s: %s\n", row, list[i]);
+            fails++;
+        }
+}
+
+/**
+ * Check the addresses QEMU can forward from: on the default network, on a
+ * card's network with its own host, DHCP and name server addresses, and on a
+ * wide network with QEMU's defaults for them. A card whose host is outside its
+ * network, and a network with host bits set, have none.
+ */
+static void test_guest_addresses(void)
+{
+    static const char *const refused[] = {"10.0.2.0",   "10.0.2.2",  "10.0.2.3",   "10.0.2.15",
+                                          "10.0.2.22",  "10.0.2.30", "10.0.2.255", "10.0.3.100",
+                                          "10.0.2.256", "10.0.2.04", "10.0.2",     "",
+                                          NULL};
+    static const char *const taken[] = {"10.0.2.1",   "10.0.2.4",   "10.0.2.14", "10.0.2.31",
+                                        "10.0.2.100", "10.0.2.254", NULL};
+    static const char *const card_refused[] = {"192.168.90.1",
+                                               "192.168.90.40",
+                                               "192.168.90.50",
+                                               "192.168.90.65",
+                                               "192.168.90.255",
+                                               "10.0.2.100",
+                                               NULL};
+    static const char *const card_taken[] = {"192.168.90.2",  "192.168.90.3",  "192.168.90.15",
+                                             "192.168.90.49", "192.168.90.66", NULL};
+    static const char *const wide_refused[] = {"10.90.2.2", "10.90.2.3", "10.90.2.15", "10.90.2.30",
+                                               NULL};
+    static const char *const wide_taken[] = {"10.90.0.2", "10.90.0.15", "10.90.2.31", NULL};
+    struct etude_qemu_device d = {.model = "rtl8139"};
+    struct etude_qemu_device card = {.model = "e1000",
+                                     .net = "192.168.90.0/24",
+                                     .host = "192.168.90.1",
+                                     .dhcpstart = "192.168.90.50",
+                                     .dns = "192.168.90.40"};
+    struct etude_qemu_device wide = {.model = "e1000", .net = "10.90.0.0/16"};
+
+    guest_addresses(&d, refused, 0, "an address QEMU cannot forward");
+    guest_addresses(&d, taken, 1, "an address QEMU can forward");
+    guest_addresses(&card, card_refused, 0, "an address of a card's network QEMU cannot forward");
+    guest_addresses(&card, card_taken, 1, "an address of a card's network QEMU can forward");
+    guest_addresses(&wide, wide_refused, 0, "an address of a wide network QEMU cannot forward");
+    guest_addresses(&wide, wide_taken, 1, "an address of a wide network QEMU can forward");
+    card.host = "10.0.2.2";
+    CHECK(!etude_qemu_guest_address(&card, "192.168.90.100"),
+          "an address of a card whose host is outside its network");
+    card.host = "192.168.90.1";
+    card.net = "192.168.90.1/24";
+    CHECK(!etude_qemu_guest_address(&card, "192.168.90.100"), "an address of no network");
+}
+
+/**
+ * Check a restricted network with guest forwards: the relays' words quoted
+ * for QEMU and for its shell parser, the guest forwards the launcher refuses,
+ * and a line that the smallest buffer that takes it has whole.
+ */
+static void test_guest_forwards(void)
+{
+    static const unsigned ports[] = {40001, 40002, 40003, 1023};
+    static const char *const relay[] = {"/r/relay,one", "it's", NULL};
+    static const char *const two[] = {"/r/two", NULL};
+    static const char *const none[] = {NULL};
+    static const char *const empty[] = {"", NULL};
+    static const char *const newline[] = {"/r/two", "a\nb", NULL};
+    static const char *const del[] = {"/r/two", "a\177b", NULL};
+    static const char *const want =
+        "-netdev user,id=net0,restrict=on,hostfwd=tcp:127.0.0.1:40001-:22,"
+        "hostfwd=udp:127.0.0.1:40002-:9999,"
+        "guestfwd=tcp:10.0.2.100:443-cmd:'/r/relay,,one' 'it'\\''s' 40002,"
+        "guestfwd=tcp:10.0.2.100:80-cmd:'/r/two' 40003 -device rtl8139,netdev=net0 -chardev";
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_forward fw[2] = {{0, 0, 22}, {1, 1, 9999}};
+    struct etude_qemu_guest_forward gf[2] = {{"10.0.2.100", 443, 1, relay},
+                                             {"10.0.2.100", 80, 2, two}};
+    struct etude_qemu_device devices[] = {{.model = "rtl8139",
+                                           .forwards = fw,
+                                           .forward_count = 2,
+                                           .restricted = 1,
+                                           .guest_forwards = gf,
+                                           .guest_forward_count = 2},
+                                          {0}};
+    struct etude_qemu_profile p, b;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], *small[ETUDE_QEMU_ARGS_MAX], *tight;
+    size_t i, size;
+    int status = -1;
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "i686";
+    p.kernel = "/k/kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = devices;
+    p.ports = ports;
+    p.port_count = 3;
+    has(&p, &site, want, "guest forwards");
+#define GUEST_REFUSED(change, row)                                     \
+    do {                                                               \
+        gf[1].address = "10.0.2.100";                                  \
+        gf[1].guest_port = 80;                                         \
+        gf[1].port = 2;                                                \
+        gf[1].relay = two;                                             \
+        b = p;                                                         \
+        change;                                                        \
+        CHECK(make(&b, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
+    } while (0)
+    GUEST_REFUSED(gf[1].address = "10.0.2.2", "a guest forward from the host's address");
+    GUEST_REFUSED(gf[1].address = "10.0.2.20", "a guest forward from an address DHCP gives");
+    GUEST_REFUSED(gf[1].address = NULL, "a guest forward without an address");
+    GUEST_REFUSED(gf[1].guest_port = 0, "a guest forward from the guest's port 0");
+    GUEST_REFUSED(gf[1].guest_port = 65536, "a guest forward from the guest's port 65536");
+    GUEST_REFUSED(gf[1].port = 3, "a guest forward to a port the case does not hold");
+    GUEST_REFUSED(gf[1].port = 3; b.port_count = 4, "a guest forward to a port below 1024");
+    GUEST_REFUSED(gf[1].port = 0, "a guest forward to a port QEMU listens on");
+    GUEST_REFUSED(gf[1].relay = NULL, "a guest forward without a relay");
+    GUEST_REFUSED(gf[1].relay = none, "a relay without a program");
+    GUEST_REFUSED(gf[1].relay = empty, "a relay whose program is empty");
+    GUEST_REFUSED(gf[1].relay = newline, "a relay with a control character");
+    GUEST_REFUSED(gf[1].relay = del, "a relay with a delete character");
+    GUEST_REFUSED(gf[1].guest_port = 443, "connections to one address and port forwarded twice");
+    GUEST_REFUSED(devices[0].guest_forwards = NULL, "guest forwards without their list");
+    devices[0].guest_forwards = gf;
+    devices[0].model = "vga";
+    devices[0].forward_count = 0;
+    GUEST_REFUSED(devices[0].guest_forward_count = 0,
+                  "a restriction on a device that is no network card");
+    devices[0].guest_forward_count = 2;
+    GUEST_REFUSED(devices[0].restricted = 0, "a guest forward on a device that is no network card");
+    devices[0].restricted = 1;
+    devices[0].forward_count = 2;
+    devices[0].model = "rtl8139";
+#undef GUEST_REFUSED
+    fw[1].udp = 0;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL,
+          "a guest forward to a port forwarded to the guest by TCP");
+    fw[1].udp = 1;
+    gf[1].address = "10.0.2.101";
+    gf[1].guest_port = 443;
+    has(&p, &site, "guestfwd=tcp:10.0.2.101:443-cmd:'/r/two' 40003 ",
+        "guest forwards of one guest port from two addresses");
+    for (size = 1; size <= sizeof(buf); size++) {
+        tight = malloc(size);
+        if (tight == NULL)
+            break;
+        status = make(&p, &site, small, tight, size);
+        if (status == 0) {
+            make(&p, &site, argv, buf, sizeof(buf));
+            for (i = 0; argv[i] != NULL && small[i] != NULL; i++)
+                if (strcmp(argv[i], small[i]) != 0)
+                    break;
+            CHECK(argv[i] == NULL && small[i] == NULL,
+                  "the smallest buffer that takes the line has it whole");
+        }
+        free(tight);
+        if (status != E2BIG)
+            break;
+    }
+    CHECK(status == 0, "a buffer too small has E2BIG, and a large one takes the line");
+}
+
+/**
+ * Check one card with every option of its user network in its one
+ * `-netdev`: its own network, host, DHCP and name server addresses, the
+ * restriction, forwards of the case's ports by TCP and by UDP, and guest
+ * forwards from addresses of its network, with its station address on its
+ * `-device`.
+ */
+static void test_card(void)
+{
+    static const unsigned ports[] = {40001, 40002, 40003};
+    static const char *const relay[] = {"/r/relay", NULL};
+    static const char *const want =
+        "-netdev user,id=net0,net=192.168.90.0/24,host=192.168.90.1,dhcpstart=192.168.90.50,"
+        "dns=192.168.90.40,restrict=on,hostfwd=tcp:127.0.0.1:40001-:22,"
+        "hostfwd=udp:127.0.0.1:40002-:9999,"
+        "guestfwd=tcp:192.168.90.100:443-cmd:'/r/relay' 40003,"
+        "guestfwd=tcp:192.168.90.2:80-cmd:'/r/relay' 40003 "
+        "-device e1000,netdev=net0,mac=52:54:00:12:34:60 -chardev";
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_forward fw[2] = {{0, 0, 22}, {1, 1, 9999}};
+    struct etude_qemu_guest_forward gf[2] = {{"192.168.90.100", 443, 2, relay},
+                                             {"192.168.90.2", 80, 2, relay}};
+    struct etude_qemu_device devices[] = {{.model = "e1000",
+                                           .net = "192.168.90.0/24",
+                                           .host = "192.168.90.1",
+                                           .dhcpstart = "192.168.90.50",
+                                           .dns = "192.168.90.40",
+                                           .mac = "52:54:00:12:34:60",
+                                           .forwards = fw,
+                                           .forward_count = 2,
+                                           .restricted = 1,
+                                           .guest_forwards = gf,
+                                           .guest_forward_count = 2},
+                                          {0}};
+    struct etude_qemu_profile p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "x86_64";
+    p.kernel = "/k/kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = devices;
+    p.ports = ports;
+    p.port_count = 3;
+    has(&p, &site, want, "a card with every option");
+    gf[1].address = "10.0.2.100";
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL,
+          "a guest forward from outside the card's network");
 }
 
 /** Reject a reduced reservation and any change to the boundary workload. */
@@ -1648,11 +1891,17 @@ int main(int argc, char **argv)
         test_uefi();
     } else if (argc == 2 && strcmp(argv[1], "--forwards") == 0) {
         test_forwards();
+        test_guest_addresses();
+        test_guest_forwards();
+        test_card();
     } else {
         test_argv();
         test_network_argv();
         test_network_refused();
         test_forwards();
+        test_guest_addresses();
+        test_guest_forwards();
+        test_card();
         test_audio_argv();
         test_audio();
         test_memory();

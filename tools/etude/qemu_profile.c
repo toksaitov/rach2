@@ -46,29 +46,50 @@ struct line {
     int error;
 };
 
+/* How emit writes a string: with its commas doubled, as QEMU's option syntax
+ * needs inside a value, and with each single quote written as '\'', as a
+ * word that a shell's single quotes enclose needs. */
+#define QUOTE_COMMAS 1
+#define QUOTE_SHELL  2
+
+/** Write byte `c` at the end of the line's bytes, and keep room for a NUL. */
+static void put(struct line *l, char c)
+{
+    if (l->used + 1 >= l->size) {
+        l->error = E2BIG;
+        return;
+    }
+    l->buf[l->used++] = c;
+}
+
 /**
  * Write `format` and a NUL at the end of the line's bytes, each `%s`
- * replaced by the next string of `ap`, with its commas doubled when `quote`
- * is set, as QEMU's option syntax needs inside a value.
+ * replaced by the next string of `ap`, quoted as the flags `quote` say. A
+ * line without room for all of it has the error E2BIG.
  */
 static void emit(struct line *l, int quote, const char *format, va_list ap)
 {
     const char *f, *s;
 
-    for (f = format; *f != '\0'; f++) {
-        if (f[0] == '%' && f[1] == 's') {
-            for (s = va_arg(ap, const char *); *s != '\0'; s++) {
-                if (l->used + 2 >= l->size)
-                    break;
-                if (*s == ',' && quote)
-                    l->buf[l->used++] = ',';
-                l->buf[l->used++] = *s;
-            }
-            f++;
-        } else if (l->used + 1 < l->size) {
-            l->buf[l->used++] = *f;
+    for (f = format; *f != '\0' && !l->error; f++) {
+        if (f[0] != '%' || f[1] != 's') {
+            put(l, *f);
+            continue;
         }
+        for (s = va_arg(ap, const char *); *s != '\0'; s++) {
+            if (*s == ',' && (quote & QUOTE_COMMAS))
+                put(l, ',');
+            if (*s == '\'' && (quote & QUOTE_SHELL)) {
+                put(l, '\'');
+                put(l, '\\');
+                put(l, '\'');
+            }
+            put(l, *s);
+        }
+        f++;
     }
+    if (l->error)
+        return;
     if (l->used + 1 >= l->size) {
         l->error = E2BIG;
         return;
@@ -204,31 +225,41 @@ static int ipv4(const char *s, uint32_t *value, const char **end)
 }
 
 /**
+ * Read network `s`, four decimal IPv4 octets, a slash and a decimal prefix of
+ * 0 to 32, into `net` and `mask`.
+ * Return 0, or EINVAL for a malformed network or one with host bits set.
+ */
+static int subnet(const char *s, uint32_t *net, uint32_t *mask)
+{
+    const char *end, *digits;
+    unsigned bits = 0;
+
+    if (ipv4(s, net, &end) != 0 || *end++ != '/')
+        return EINVAL;
+    digits = end;
+    while (*end >= '0' && *end <= '9') {
+        bits = bits * 10 + (unsigned)(*end++ - '0');
+        if (bits > 32)
+            return EINVAL;
+    }
+    if (end == digits || *end != '\0' || (end - digits > 1 && *digits == '0'))
+        return EINVAL;
+    *mask = bits == 0 ? 0 : UINT32_MAX << (32 - bits);
+    return (*net & *mask) == *net ? 0 : EINVAL;
+}
+
+/**
  * Check the IPv4 network and the addresses supplied for one card.
  * Return 0, or EINVAL for a malformed network or an address outside it.
  */
 static int network_check(const struct etude_qemu_device *d)
 {
-    const char *end, *s, *addresses[] = {d->host, d->dhcpstart, d->dns};
+    const char *end, *addresses[] = {d->host, d->dhcpstart, d->dns};
     uint32_t net = UINT32_C(0x0a000200), mask = UINT32_C(0xffffff00), address;
-    unsigned bits = 0;
     size_t i;
 
-    if (d->net != NULL) {
-        if (ipv4(d->net, &net, &end) != 0 || *end++ != '/')
-            return EINVAL;
-        s = end;
-        while (*end >= '0' && *end <= '9') {
-            bits = bits * 10 + (unsigned)(*end++ - '0');
-            if (bits > 32)
-                return EINVAL;
-        }
-        if (end == s || *end != '\0' || (end - s > 1 && *s == '0'))
-            return EINVAL;
-        mask = bits == 0 ? 0 : UINT32_MAX << (32 - bits);
-        if ((net & mask) != net)
-            return EINVAL;
-    }
+    if (d->net != NULL && subnet(d->net, &net, &mask) != 0)
+        return EINVAL;
     for (i = 0; i < sizeof addresses / sizeof addresses[0]; i++) {
         if (addresses[i] == NULL)
             continue;
@@ -268,6 +299,13 @@ static int station(const char *s, uint64_t *value)
     return *s == '\0' && *value != 0 ? 0 : EINVAL;
 }
 
+/** Say whether device `d` gives an option that only a network card can have. */
+static int card_options(const struct etude_qemu_device *d)
+{
+    return d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
+           d->mac != NULL || d->forward_count != 0 || d->restricted || d->guest_forward_count != 0;
+}
+
 int etude_qemu_devices_check(const struct etude_qemu_device *devices)
 {
     unsigned char default_used[256] = {0};
@@ -282,8 +320,7 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
         if (!word(d->model))
             return EINVAL;
         if (!nic_model(d->model)) {
-            if (d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
-                d->mac != NULL || d->forward_count != 0)
+            if (card_options(d))
                 return EINVAL;
             continue;
         }
@@ -313,6 +350,32 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
         }
     }
     return 0;
+}
+
+/**
+ * Give address `s`, one that network_check has taken, or `fallback` when the
+ * card does not give it.
+ */
+static uint32_t address_or(const char *s, uint32_t fallback)
+{
+    const char *end;
+    uint32_t address;
+
+    return s != NULL && ipv4(s, &address, &end) == 0 ? address : fallback;
+}
+
+int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *address)
+{
+    uint32_t net = UINT32_C(0x0a000200), mask = UINT32_C(0xffffff00), a, dhcp;
+    const char *end;
+
+    if (address == NULL || ipv4(address, &a, &end) != 0 || *end != '\0' ||
+        (d->net != NULL && subnet(d->net, &net, &mask) != 0))
+        return 0;
+    dhcp = address_or(d->dhcpstart, net | (UINT32_C(0x020f) & ~mask));
+    return network_check(d) == 0 && (a & mask) == net && a != net && a != (net | ~mask) &&
+           a != address_or(d->host, net | (UINT32_C(0x0202) & ~mask)) &&
+           a != address_or(d->dns, net | (UINT32_C(0x0203) & ~mask)) && (a < dhcp || a - dhcp > 15);
 }
 
 /** Count the devices of a list ended by a NULL model; NULL has none. */
@@ -356,9 +419,87 @@ static int forwarded_before(const struct etude_qemu_profile *p, size_t i, size_t
 }
 
 /**
+ * Say whether a TCP forward of profile `p` forwards local port `port` to the
+ * guest, so that QEMU listens there.
+ */
+static int forwarded_tcp(const struct etude_qemu_profile *p, unsigned port)
+{
+    const struct etude_qemu_forward *f;
+    size_t i, j;
+
+    for (i = 0; i < device_count(p->devices); i++)
+        for (j = 0; j < p->devices[i].forward_count; j++) {
+            f = &p->devices[i].forwards[j];
+            if (!f->udp && held_port(p, f->port) == port)
+                return 1;
+        }
+    return 0;
+}
+
+/**
+ * Say whether a guest forward of card `d` that comes before guest forward `j`
+ * has the address and the guest port of `g`.
+ */
+static int guest_forwarded_before(const struct etude_qemu_device *d, size_t j,
+                                  const struct etude_qemu_guest_forward *g)
+{
+    size_t k;
+
+    for (k = 0; k < j; k++)
+        if (strcmp(d->guest_forwards[k].address, g->address) == 0 &&
+            d->guest_forwards[k].guest_port == g->guest_port)
+            return 1;
+    return 0;
+}
+
+/**
+ * Say whether `relay` is a program, a nonempty word, with its arguments, each
+ * of printable ASCII.
+ */
+static int relay_words(const char *const *relay)
+{
+    const char *s;
+    size_t i;
+
+    if (relay == NULL || relay[0] == NULL || relay[0][0] == '\0')
+        return 0;
+    for (i = 0; relay[i] != NULL; i++)
+        for (s = relay[i]; *s != '\0'; s++)
+            if (*s < ' ' || *s > '~')
+                return 0;
+    return 1;
+}
+
+/**
+ * Check the guest forwards of card `d` of profile `p`: each from an address
+ * of the card's network that QEMU can forward, to a local port the profile
+ * holds and that no TCP forward makes QEMU listen on, through a relay QEMU
+ * can run, and none from an address and a port that another has.
+ */
+static int guest_forward_check(const struct etude_qemu_profile *p,
+                               const struct etude_qemu_device *d)
+{
+    const struct etude_qemu_guest_forward *g;
+    size_t j;
+
+    if (d->guest_forward_count > 0 && d->guest_forwards == NULL)
+        return EINVAL;
+    for (j = 0; j < d->guest_forward_count; j++) {
+        g = &d->guest_forwards[j];
+        if (!etude_qemu_guest_address(d, g->address) || g->guest_port < 1 ||
+            g->guest_port > 65535 || held_port(p, g->port) == 0 ||
+            forwarded_tcp(p, held_port(p, g->port)) || !relay_words(g->relay) ||
+            guest_forwarded_before(d, j, g))
+            return EINVAL;
+    }
+    return 0;
+}
+
+/**
  * Check the forwards of the cards of profile `p`: each from a local port the
- * profile holds to a port of the guest, and no local port forwarded twice by
- * one protocol, which QEMU could not listen on twice.
+ * profile holds to a port of the guest, no local port forwarded twice by one
+ * protocol, which QEMU could not listen on twice, and guest forwards that
+ * guest_forward_check takes.
  */
 static int forward_check(const struct etude_qemu_profile *p)
 {
@@ -376,6 +517,8 @@ static int forward_check(const struct etude_qemu_profile *p)
                 forwarded_before(p, i, j, f))
                 return EINVAL;
         }
+        if (guest_forward_check(p, d) != 0)
+            return EINVAL;
     }
     return 0;
 }
@@ -389,8 +532,27 @@ static void network_options(const struct etude_qemu_device *d, char *buf, size_t
 }
 
 /**
+ * Append guest forward `g` of profile `p` to a `-netdev`: QEMU runs the
+ * relay's words, each in a shell's single quotes, and the local port.
+ */
+static void add_guest_forward(struct line *l, const struct etude_qemu_profile *p,
+                              const struct etude_qemu_guest_forward *g)
+{
+    char guest[16], port[16];
+    size_t i;
+
+    snprintf(guest, sizeof(guest), "%u", g->guest_port);
+    snprintf(port, sizeof(port), "%u", held_port(p, g->port));
+    append(l, 0, ",guestfwd=tcp:%s:%s-cmd:", g->address, guest);
+    for (i = 0; g->relay[i] != NULL; i++)
+        append(l, QUOTE_COMMAS | QUOTE_SHELL, "'%s' ", g->relay[i]);
+    append(l, 0, "%s", port);
+}
+
+/**
  * Add the `-netdev` of card `d`, whose id is `id`: a user network with the
- * card's options and its forwards of the local ports of profile `p`.
+ * card's options, its restriction, its forwards of the local ports of profile
+ * `p` and its guest forwards.
  */
 static void add_network(struct line *l, const struct etude_qemu_profile *p,
                         const struct etude_qemu_device *d, const char *id)
@@ -402,12 +564,16 @@ static void add_network(struct line *l, const struct etude_qemu_profile *p,
     network_options(d, options, sizeof(options));
     add(l, 0, "-netdev");
     add(l, 0, "user,id=%s%s", id, options);
+    if (d->restricted)
+        append(l, 0, ",restrict=on");
     for (i = 0; i < d->forward_count; i++) {
         f = &d->forwards[i];
         snprintf(port, sizeof(port), "%u", held_port(p, f->port));
         snprintf(guest, sizeof(guest), "%u", f->guest_port);
         append(l, 0, ",hostfwd=%s:127.0.0.1:%s-:%s", f->udp ? "udp" : "tcp", port, guest);
     }
+    for (i = 0; i < d->guest_forward_count; i++)
+        add_guest_forward(l, p, &d->guest_forwards[i]);
 }
 
 /**

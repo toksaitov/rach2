@@ -376,27 +376,34 @@ static void rule_artifacts(const struct rule *r)
     prepared_fixtures(r, native_fixtures(r->c));
 }
 
+/**
+ * Fills `d` with the model and the network options of device `v` of a
+ * profile, a name or a card object.
+ */
+static void card_of(const struct json *v, struct etude_qemu_device *d)
+{
+    memset(d, 0, sizeof(*d));
+    d->model = v->type == JSON_STRING ? v->string : json_text(v, "model");
+    d->net = json_text(v, "net");
+    d->host = json_text(v, "host");
+    d->dhcpstart = json_text(v, "dhcpstart");
+    d->dns = json_text(v, "dns");
+    d->mac = json_text(v, "mac");
+}
+
 /** Check the network options of one QEMU profile with the launcher's rules. */
 static void network_profile(const struct rule *r, const struct json *qemu)
 {
     const struct json *list = json_member(qemu, "devices");
     struct etude_qemu_device *devices;
-    const struct json *d;
     size_t i;
 
     if (list == NULL)
         return;
     devices = json_alloc((list->count + 1) * sizeof(*devices));
     memset(devices, 0, (list->count + 1) * sizeof(*devices));
-    for (i = 0; i < list->count; i++) {
-        d = list->item[i];
-        devices[i].model = d->type == JSON_STRING ? d->string : json_text(d, "model");
-        devices[i].net = json_text(d, "net");
-        devices[i].host = json_text(d, "host");
-        devices[i].dhcpstart = json_text(d, "dhcpstart");
-        devices[i].dns = json_text(d, "dns");
-        devices[i].mac = json_text(d, "mac");
-    }
+    for (i = 0; i < list->count; i++)
+        card_of(list->item[i], &devices[i]);
     if (etude_qemu_devices_check(devices) != 0)
         finding(r->file, list->line,
                 "%s: invalid QEMU network options or duplicate station address",
@@ -655,9 +662,90 @@ static int forwarded_before(const struct json *devs, size_t i, size_t j, const s
 }
 
 /**
+ * Returns 1 when a TCP forward of the devices `devs` forwards the local port
+ * `port` to the guest, so that QEMU listens there.
+ */
+static int forwarded_tcp(const struct json *devs, long long port)
+{
+    const struct json *list;
+    size_t i, j;
+
+    for (i = 0; i < devs->count; i++) {
+        list = json_member(devs->item[i], "forwards");
+        for (j = 0; list != NULL && j < list->count; j++) {
+            if (same(json_text(list->item[j], "protocol"), "tcp") &&
+                json_member(list->item[j], "port")->integer == port) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Reports what the launcher would refuse of the guest forwards of card `dev`
+ * of machine `id`, one of the devices `devs`: an address of the card's
+ * network that QEMU cannot forward, a local port past those the case
+ * reserves or one that a TCP forward makes QEMU listen on, an address and a
+ * port forwarded twice, and a relay that is neither a tool of the case's
+ * requirements nor an artifact that prepare lists.
+ */
+static void guest_forwards(const struct rule *r, const char *id, const struct json *devs,
+                           const struct json *dev, long long ports)
+{
+    const struct json *list = json_member(dev, "guest_forwards");
+    const struct json *tools = json_member(json_member(r->c, "requirements"), "tools");
+    const char *case_id = json_text(r->c, "case_id");
+    struct etude_qemu_device card;
+    size_t i, k;
+
+    card_of(dev, &card);
+    for (i = 0; list != NULL && i < list->count; i++) {
+        const struct json *g = list->item[i], *relay = json_member(g, "relay");
+        const char *address = json_text(g, "address");
+        const char *command = relay != NULL && relay->count > 0 ? relay->item[0]->string : NULL;
+        long long local = json_member(g, "port")->integer;
+        long long guest = json_member(g, "guest_port")->integer;
+
+        if (!etude_qemu_guest_address(&card, address)) {
+            finding(r->file, g->line,
+                    "%s: the machine %s forwards connections to %s, which QEMU cannot forward",
+                    case_id, id, address);
+        }
+        if (local >= ports) {
+            finding(r->file, g->line,
+                    "%s: the machine %s forwards port %lld, but the case reserves %lld", case_id,
+                    id, local, ports);
+        }
+        if (forwarded_tcp(devs, local)) {
+            finding(r->file, g->line,
+                    "%s: the machine %s forwards port %lld both to the guest and from it", case_id,
+                    id, local);
+        }
+        for (k = 0; k < i; k++) {
+            if (same(json_text(list->item[k], "address"), address) &&
+                json_member(list->item[k], "guest_port")->integer == guest) {
+                finding(r->file, g->line,
+                        "%s: the machine %s forwards connections to %s:%lld twice", case_id, id,
+                        address, guest);
+                break;
+            }
+        }
+        if (command != NULL && !listed(tools, command) &&
+            !has_member(json_member(r->c, "prepare"), "name", command)) {
+            finding(r->file, g->line,
+                    "%s: the machine %s relays through %s, which is neither a tool of its "
+                    "requirements nor an artifact that prepare lists",
+                    case_id, id, command);
+        }
+    }
+}
+
+/**
  * Reports what the launcher would refuse of the forwards of the cards of
- * machine `m`: a forward of a local port past those the case reserves, and a
- * local port forwarded twice by one protocol.
+ * machine `m`: a forward of a local port past those the case reserves, a
+ * local port forwarded twice by one protocol, and what guest_forwards
+ * reports.
  */
 static void machine_networks(const struct rule *r, const struct json *m)
 {
@@ -683,12 +771,14 @@ static void machine_networks(const struct rule *r, const struct json *m)
                         case_id, id, json_text(f, "protocol"), port);
             }
         }
+        guest_forwards(r, id, devs, devs->item[i], ports);
     }
 }
 
 /**
  * A machine's forwards are those the launcher takes, and the cards of a guest
- * case's boot have none, since only a scenario reaches a forward.
+ * case's boot have no forwards, no guest forwards and no restriction, which
+ * only a scenario's machines are given.
  */
 static void rule_networks(const struct rule *r)
 {
@@ -698,10 +788,13 @@ static void rule_networks(const struct rule *r)
     size_t i;
 
     for (i = 0; devs != NULL && i < devs->count; i++) {
-        if (json_member(devs->item[i], "forwards") != NULL) {
-            finding(r->file, devs->item[i]->line,
-                    "%s: a guest case's boot has no forwards, since only a scenario reaches a "
-                    "forward",
+        const struct json *dev = devs->item[i], *restricted = json_member(dev, "restrict");
+
+        if (json_member(dev, "forwards") != NULL || json_member(dev, "guest_forwards") != NULL ||
+            (restricted != NULL && restricted->integer != 0)) {
+            finding(r->file, dev->line,
+                    "%s: a guest case's boot has no forwards, no guest forwards and no "
+                    "restricted network, which only a scenario's machines are given",
                     json_text(r->c, "case_id"));
         }
     }
