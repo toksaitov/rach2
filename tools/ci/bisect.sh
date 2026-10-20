@@ -25,11 +25,23 @@
 # `run: result: failed`, or passes without a `run: NAME: PASS in` line for
 # each suite asked for, a set's as the commit's tests/registry lists them,
 # is untestable, and an untestable commit ends the search with the range
-# unresolved. BAD is tested first, unless -c says that an earlier run did
-# so: a failure that does not repeat is labelled `intermittent` and the
-# issue stays open. Otherwise the first-parent commits between GOOD and BAD
-# are halved until one fails and its parent passes, and both are tested once
-# more; the commit is named only when both results repeat.
+# unresolved. A `run: result: failed:` line that names `runner` where no
+# suite of that name was asked for is a fault of the runner, and the commit
+# untestable as well. A commit whose tools/ci/run.sh has `results=history`
+# reads etude's history: each run of tests/run writes it under the test's
+# log through RACH2_RESULTS, and the commit's `casecheck verdict` judges it
+# against the commit's tests/cases, as run.sh does. The run then passes only
+# when the verdict passes and tests/run exits 0, and fails only when an item
+# of a suite asked for failed, the verdict does not name `runner`, and
+# tests/run exits with a failure. Anything else is untestable: an item that
+# did not finish, a case left out of the plan, a failed preparation, a
+# history missing or in doubt, no verdict, or a status that disagrees with
+# it. So is an unfinished run of such a commit whose run.sh lists `runner`
+# among its failures. BAD is tested first, unless -c says that an earlier
+# run did so: a failure that does not repeat is labelled `intermittent` and
+# the issue stays open. Otherwise the first-parent commits between GOOD and
+# BAD are halved until one fails and its parent passes, and both are tested
+# once more; the commit is named only when both results repeat.
 #
 # RUN is the ID of the ci run that started the bisection. With -r, a failure
 # that does not repeat is labelled `intermittent` only when the newest
@@ -288,23 +300,86 @@ admitted() { # admitted build|run COMMAND...
     return "$rc"
 }
 
+# Whether the tested commit's tools/ci/run.sh reads etude's history.
+historic() {
+    grep -qx 'results=history' tools/ci/run.sh 2> /dev/null
+}
+
 # Run tests/run with ARGS, its output on the log: 0 when it passes with a
 # result line for each suite of ARGS, 1 when it ran its suites and failed, 2
-# when it refused, stopped before its result or left a suite without one.
+# when it refused, stopped before its result, left a suite without one, or
+# named a fault of the runner. A commit that reads etude's history is judged
+# by judged() instead.
 suites() { # suites ARGS...
+    historic && { judged "$@"; return; }
+    before=$(wc -l < "$log.log")
     admitted run tests/run "$@" >> "$log.log" 2>&1
     rc=$?
-    case $rc/$(grep '^run: result: ' "$log.log" | tail -n 1) in
+    case $rc/$(tail -n +"$((before + 1))" "$log.log" | grep '^run: result: ' | tail -n 1) in
         0/*) asked=$(members "$@") || return 2
              for s in $asked; do
-                 grep -q "^run: $s: PASS in " "$log.log" || {
+                 tail -n +"$((before + 1))" "$log.log" | grep -q "^run: $s: PASS in " || {
                      echo "ci: bisect: untestable: tests/run passed without a result for $s" >> "$log.log"
                      return 2
                  }
              done
              return 0 ;;
-        '1/run: result: failed') return 1 ;;
+        '1/run: result: failed')
+            case " $(tail -n +"$((before + 1))" "$log.log" | sed -n 's/^run: result: failed: //p' | tail -n 1) " in
+                *' runner '*)
+                    members "$@" | grep -qx runner || {
+                        echo "ci: bisect: untestable: tests/run reports a fault of the runner" >> "$log.log"
+                        return 2
+                    } ;;
+            esac
+            return 1 ;;
     esac
+    return 2
+}
+
+# Run tests/run with ARGS as suites() does, with etude's history of the run
+# going to the directory LOG.history.N, the test's Nth run, and judge it
+# with the commit's `casecheck verdict` against its tests/cases and the
+# suites of ARGS: 0 when the verdict passed and tests/run exited 0; 1 when an
+# item of a suite of ARGS failed, the verdict does not name `runner` and
+# tests/run failed; 2 for anything else, as the header says.
+judged() { # judged ARGS...
+    runs=$((runs + 1))
+    results=$log.history.$runs
+    mkdir -p "$results/history" "$results/store"
+    RACH2_RESULTS=$results; export RACH2_RESULTS
+    admitted run tests/run "$@" >> "$log.log" 2>&1
+    rc=$?
+    unset RACH2_RESULTS
+    why=
+    asked=$(members "$@") || why="the commit has no tests/registry to list its suites"
+    case $rc in
+        124|125|137) why="tests/run did not finish" ;;
+    esac
+    if [ -z "$why" ]; then
+        build/tools/etude/casecheck verdict -b "$results/store" -c "$(git rev-parse HEAD)" "$ARCH" bisect \
+            "$(echo "$asked" | awk '!seen[$0]++' | tr '\n' , | sed 's/,$//')" "$results/history" \
+            > "$results/verdict" 2>&1
+        verdict=$?
+        cat "$results/verdict" >> "$log.log"
+        names=$(sed -n 's/^casecheck: result: failed: //p' "$results/verdict")
+        if [ "$verdict" = 0 ] && grep -qx 'casecheck: result: passed' "$results/verdict"; then
+            [ "$rc" != 0 ] || return 0
+            why="tests/run exited $rc, and the verdict on its history passed"
+        elif [ "$verdict" != 1 ] || [ -z "$names" ]; then
+            why="casecheck gave no verdict on the history"
+        elif [ "$rc" = 0 ]; then
+            why="tests/run exited 0, and the verdict on its history failed"
+        else
+            case " $names " in
+                *' runner '*) why="the history cannot show what ran" ;;
+                *) sed -n 's/^item .*: failure, in \([^ ]*\)$/\1/p' "$results/verdict" |
+                       grep -qxF "$asked" && return 1
+                   why="no item of a suite asked for failed, and the run did not pass" ;;
+            esac
+        fi
+    fi
+    echo "ci: bisect: untestable: $why" >> "$log.log"
     return 2
 }
 
@@ -321,6 +396,7 @@ tested() { # tested COMMIT
     open_or_stop
     attempt=$((attempt + 1))
     log="$logs/$attempt-$(short "$1")"
+    runs=0
     test_end=$(($(date +%s) + limit * 60))
     git checkout -q --detach "$1" > "$log.log" 2>&1 || { mv "$log.log" "$log.untestable.log"; return 2; }
     echo "ci: bisect: testing $(git log -1 --format='%h %s' "$1")"
@@ -332,6 +408,10 @@ tested() { # tested COMMIT
             0) mv "$log.log" "$log.passed.log"; return 0 ;;
             125) mv "$log.log" "$log.untestable.log"; return 2 ;;
         esac
+        if historic && grep -qx runner "$log.run/failed" 2> /dev/null; then
+            echo "ci: bisect: untestable: run.sh failed the runner" >> "$log.log"
+            mv "$log.log" "$log.untestable.log"; return 2
+        fi
         mv "$log.log" "$log.failed.log"; return 1
     fi
     admitted build "$(command -v make)" >> "$log.log" 2>&1

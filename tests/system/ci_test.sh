@@ -8,14 +8,16 @@
 # bisection, a run that passed without a suite's result, a bisection whose
 # issue has been closed, verdict errors, the statuses of a full run of chosen
 # suites, the attempts that etude's history of a run lists in its issue, an
-# intermittent issue that a passing run leaves open, and bisection on a
-# machine where etude admits tests.
+# intermittent issue that a passing run leaves open, bisection on a machine
+# where etude admits tests, bisection that reads etude's history with the
+# tree's casecheck, and a fault of the runner in its lines.
 # The scripts run in a private tree with stand-ins for git, gh, make,
-# timeout, the clock and etude's history_failures. Each row runs in a
-# subshell of its own, and every row runs whatever an earlier one gave. The
-# rows of an admitting machine use the tree's etude-bridge, which the test
-# builds, a ledger and lock files of their own, and runutil, whose host lock
-# the stand-in tests/run takes as the real one does.
+# timeout, the clock and etude's history_failures; casecheck is the tree's,
+# over etude's verdict fixtures. Each row runs in a subshell of its own, and
+# every row runs whatever an earlier one gave. The rows of an admitting
+# machine use the tree's etude-bridge and casecheck, which the test builds, a
+# ledger and lock files of their own, and runutil, whose host lock the
+# stand-in tests/run takes as the real one does.
 # CI_SCRIPTS names the directory report.sh and bisect.sh are copied from, by
 # default the tree's tools/ci; tests/proofs/ci.json runs the rows against
 # copies with faults in them.
@@ -32,8 +34,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-test.XXXXXX")
 mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests/system" "$work/state" "$work/locks"
 cp "${CI_SCRIPTS:-$repo/tools/ci}/report.sh" "$work/report.sh"
 cp "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" "$work/bisect.sh"
-make -s -C "$repo" build/tools/etude/etude-bridge >&2 ||
-    { echo 'ci-test: etude-bridge could not be built' >&2; exit 1; }
+make -s -C "$repo" build/tools/etude/etude-bridge build/tools/etude/casecheck >&2 ||
+    { echo 'ci-test: etude-bridge and casecheck could not be built' >&2; exit 1; }
 cc -O2 -o "$work/runutil" "$repo/tests/system/runner/runutil.c" ||
     { echo 'ci-test: runutil could not be built' >&2; exit 1; }
 bridge=$repo/build/tools/etude/etude-bridge
@@ -46,7 +48,8 @@ cat > "$work/bin/git" <<'EOF'
 #!/bin/sh
 set -eu
 case $1 in
-    rev-parse) echo "$3" ;;
+    rev-parse) [ "$2" != HEAD ] || { echo 0123456789abcdef0123456789abcdef01234567; exit 0; }
+               echo "$3" ;;
     rev-list)
         case $2 in
             --first-parent) echo good ;;
@@ -135,7 +138,11 @@ EOF
 # The stand-in tests/run takes the host lock and a port block as the real one
 # does, through runutil, unless RACH2_PORT_OFFSET names a block: alone for
 # bigmem and shared otherwise. It prints a result for each suite, a set's
-# from the registry, or for `silent` none.
+# from the registry, or for `silent` none, and for `partial` none for
+# `default` in the core set. Given RACH2_RESULTS, it also copies into it
+# etude's history of a run: on BAD the verdict fixtures' streams that
+# CI_TEST_STREAMS names, exiting CI_TEST_STATUS, and elsewhere those of a
+# pass, exiting 0.
 cat > "$work/tree/tests/run" <<'EOF'
 #!/bin/sh
 if [ -z "${RACH2_PORT_OFFSET:-}" ]; then
@@ -151,12 +158,26 @@ case $CI_TEST_RUN/$current in
     fail/bad) echo "run: $1: FAIL in 1s"; echo 'run: result: failed'; exit 1 ;;
     refuse/bad) echo "run: result: refused: unknown suite '$1'" >&2; exit 2 ;;
     silent/bad) echo 'run: result: all 1 suites passed'; exit 0 ;;
+    lost/bad) printf '%s\n' "run: $1: FAIL in 1s" 'run: runner: the run record is missing' \
+                  'run: runner: FAIL in 9s' "run: result: failed: $1 runner" 'run: result: failed'
+              exit 1 ;;
 esac
+status=0
+if [ -n "${RACH2_RESULTS:-}" ]; then
+    streams=$CI_TEST_PASS
+    [ "$current" != bad ] || streams=$CI_TEST_STREAMS status=$CI_TEST_STATUS
+    for f in $streams; do cp "$CI_TEST_FIXTURES/$f" "$RACH2_RESULTS/history/"; done
+    cp "$CI_TEST_FIXTURES"/store/* "$RACH2_RESULTS/store/"
+fi
 for s in "$@"; do
     [ "$s" != core ] || s=$(awk -F'|' '$3 == "core" { print $1 }' tests/registry)
-    for n in $s; do echo "run: $n: PASS in 1s"; done
+    for n in $s; do
+        [ "$CI_TEST_RUN/$current/$1/$n" != partial/bad/core/default ] || continue
+        echo "run: $n: PASS in 1s"
+    done
 done
 echo 'run: result: all suites passed'
+exit "$status"
 EOF
 # The stand-in timeout(1) notes the limit and runs the command without it,
 # or, with CI_TEST_LIMIT, ends it with TERM after that many seconds and exits
@@ -185,17 +206,21 @@ cat > "$work/bin/date" <<'EOF'
 cat "$CI_TEST_WORK/clock"
 EOF
 
-# runsh KINDS: write the stand-in tools/ci/run.sh, which takes the kinds
-# KINDS, written as its case pattern: `core|full` now, `core|night` before.
+# runsh KINDS [RESULTS]: write the stand-in tools/ci/run.sh, which takes the
+# kinds KINDS, written as its case pattern: `core|full` now, `core|night`
+# before, and reads results as RESULTS, `lines` by default, says. A run that
+# fails lists CI_TEST_FAILED in DIR/failed.
 runsh()
 {
     # shellcheck disable=SC2016 # the stand-in reads its own $1
-    printf '#!/bin/sh\nset -eu\ncase $1 in\n    %s) ;;\n    *) exit 2 ;;\nesac\n' "$1" > "$work/tree/tools/ci/run.sh"
+    printf '#!/bin/sh\nset -eu\ncase $1 in\n    %s) ;;\n    *) exit 2 ;;\nesac\nresults=%s\n' \
+        "$1" "${2:-lines}" > "$work/tree/tools/ci/run.sh"
     cat >> "$work/tree/tools/ci/run.sh" <<'EOF'
 current=$(cat "$CI_TEST_WORK/current")
 echo "run $1 $current" >> "$CI_TEST_WORK/events"
 echo $(($(cat "$CI_TEST_WORK/clock") + ${CI_TEST_STEP:-0})) > "$CI_TEST_WORK/clock"
-[ "$CI_TEST_FAIL" = 0 ] || [ "$current" = good ]
+[ "$CI_TEST_FAIL" = 0 ] || [ "$current" = good ] ||
+    { mkdir -p "$2"; echo "${CI_TEST_FAILED:-}" > "$2/failed"; exit 1; }
 EOF
 }
 runsh 'core|full'
@@ -203,7 +228,8 @@ chmod +x "$work/bin/"* "$work/tree/tests/run"
 CI_TEST_WORK=$work
 ETUDE_STATE=$work/state
 RACH2_PORT_DIR=$work/locks
-unset RACH2_PORT_OFFSET SSH_TEST_PORT RACH2_WORKERS RACH2_MEMORY_MIB RACH2_CPUS GITHUB_RUN_ATTEMPT
+unset RACH2_PORT_OFFSET SSH_TEST_PORT RACH2_WORKERS RACH2_MEMORY_MIB RACH2_CPUS GITHUB_RUN_ATTEMPT \
+    RACH2_RESULTS
 export ETUDE_STATE RACH2_PORT_DIR
 GITHUB_REPOSITORY=test/rach2
 GITHUB_SERVER_URL=https://example.invalid
@@ -212,6 +238,21 @@ HISTORY_FAILURES=$work/bin/history_failures
 PATH=$work/bin:$PATH
 export CI_TEST_WORK GITHUB_REPOSITORY GITHUB_SERVER_URL GITHUB_RUN_ID HISTORY_FAILURES PATH
 cd "$work/tree"
+
+# The verdict fixtures of etude's history, which the stand-in tests/run
+# copies and the tree's casecheck judges: the streams of a run that passed,
+# of one whose `default` item failed, of one where it did not finish, and of
+# one where it failed and another stream was cut off.
+CI_TEST_FIXTURES=$repo/tools/etude/fixtures/verdict
+CI_TEST_PASS='pass/plan.jsonl pass/item-d0.jsonl pass/item-d1.jsonl pass/item-h.jsonl pass/run.jsonl'
+failure='pass/plan.jsonl item-d0-failure.jsonl pass/item-d1.jsonl pass/item-h.jsonl run-failure.jsonl'
+unfinished='pass/plan.jsonl item-d0-unfinished.jsonl pass/item-d1.jsonl pass/item-h.jsonl run-unfinished.jsonl'
+cut='pass/plan.jsonl item-d0-failure.jsonl item-d1-lost.jsonl pass/item-h.jsonl run-failure.jsonl'
+export CI_TEST_FIXTURES CI_TEST_PASS
+mkdir -p tools/etude/schemas tests/cases
+for f in case results history; do
+    cp "$repo/tools/etude/schemas/$f.schema.json" tools/etude/schemas/
+done
 
 # clear: drop the passes, the commit's statuses, the open issue, its labels
 # and the runs that rows give the gh stand-in.
@@ -623,6 +664,114 @@ admits()
     esac
 )
 
+# structured CASE: bisect a failure of ITEM, `default` unless CASE says,
+# on commits whose run.sh reads etude's history, judged by the tree's
+# casecheck over the verdict fixtures, and require for CASE:
+#   failure     BAD's `default` failed and GOOD passed: the commit is named,
+#               and each test kept its history and the verdict on it.
+#   pass        BAD passed: the failure did not repeat.
+#   unfinished  BAD's `default` did not finish: unresolved.
+#   cut         BAD's `default` failed and another stream was cut off, so
+#               that the verdict names `runner`: unresolved.
+#   elsewhere   ITEM `host`, and BAD's `default` failed: unresolved, since no
+#               suite asked for failed.
+#   missing     BAD passed what it ran, but its cases have more than the
+#               plan: unresolved.
+#   status      BAD's history passed and tests/run exited 1: unresolved.
+#   hidden      BAD's `default` failed and tests/run exited 0: unresolved.
+#   unjudged    a casecheck that prints a failed item and stops before its
+#               result: unresolved.
+#   run         an unfinished core run whose run.sh lists `runner`:
+#               unresolved, where with lines it is a failure.
+structured()
+(
+    start
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=pass CI_TEST_STATUS=1 CI_TEST_STREAMS=$failure
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN CI_TEST_STATUS CI_TEST_STREAMS
+    item=default cases=cases
+    case $1 in
+        pass) CI_TEST_STATUS=0 CI_TEST_STREAMS=$CI_TEST_PASS ;;
+        unfinished) CI_TEST_STREAMS=$unfinished ;;
+        cut) CI_TEST_STREAMS=$cut ;;
+        elsewhere) item=host ;;
+        missing) CI_TEST_STATUS=0 CI_TEST_STREAMS=$CI_TEST_PASS cases=cases-more ;;
+        status) CI_TEST_STREAMS=$CI_TEST_PASS ;;
+        hidden) CI_TEST_STATUS=0 ;;
+        run) item=unfinished-core CI_TEST_FAILED=runner; export CI_TEST_FAILED ;;
+    esac
+    runsh 'core|full' history
+    cp "$CI_TEST_FIXTURES/$cases"/*.json tests/cases/
+    mkdir -p build/tools/etude
+    if [ "$1" = unjudged ]; then
+        printf '#!/bin/sh\necho "item item-d0: fixture.default.errno on i686: failure, in default"\nexit 2\n' \
+            > build/tools/etude/casecheck
+        chmod +x build/tools/etude/casecheck
+    else
+        cp "$repo/build/tools/etude/casecheck" build/tools/etude/
+    fi
+    status=0
+    sh "$work/bisect.sh" core i686 good bad 7 "$item" > "$work/bisect.log" 2>&1 || status=$?
+    runsh 'core|full'
+    rm -rf build tests/cases/*
+    case $1 in
+        failure)
+            [ "$status" = 0 ] || return 1
+            printf 'make\ntests default bad\nmake\ntests default bad\nmake\ntests default good\n' > "$work/expected"
+            cmp -s "$work/expected" "$work/events" || return 1
+            grep -q 'is the first commit that fails .*; its parent, good, passes' "$work/gh.log" || return 1
+            for n in 1-bad 2-bad 3-good; do
+                [ -f "$RUNNER_TEMP/bisect/$n.history.1/history/plan.jsonl" ] || return 1
+                grep -q '^casecheck: result: ' "$RUNNER_TEMP/bisect/$n.history.1/verdict" || return 1
+            done ;;
+        pass)
+            [ "$status" = 0 ] || return 1
+            grep -q -- '--add-label intermittent' "$work/gh.log" ;;
+        run)
+            [ "$status" = 1 ] && [ "$(cat "$work/events")" = 'run core bad' ] || return 1
+            grep -q 'unresolved: bad could not be tested again' "$work/gh.log" ;;
+        *)
+            [ "$status" = 1 ] || return 1
+            printf 'make\ntests %s bad\n' "$item" > "$work/expected"
+            cmp -s "$work/expected" "$work/events" || return 1
+            grep -q 'unresolved: bad could not be tested again' "$work/gh.log" ;;
+    esac
+)
+
+# faulted ITEM: bisect ITEM where tests/run on BAD reports `default` failed
+# and a fault of the runner, as etude's lines name it, and require the range
+# unresolved for `default`, and the commit named for `runner`, the suite of
+# that name.
+faulted()
+(
+    start
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=lost
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
+    status=0
+    sh "$work/bisect.sh" core i686 good bad 7 "$1" > "$work/bisect.log" 2>&1 || status=$?
+    if [ "$1" = runner ]; then
+        [ "$status" = 0 ] || return 1
+        grep -q 'is the first commit that fails .*; its parent, good, passes' "$work/gh.log"
+    else
+        [ "$status" = 1 ] || return 1
+        grep -q 'unresolved: bad could not be tested again' "$work/gh.log"
+    fi
+)
+
+# scoped: bisect `default` and the core set where tests/run on BAD gives
+# `default` its result in the first run and none in the core set's, and
+# require the range unresolved, since a result of the first run does not
+# stand for the second.
+scoped()
+(
+    start
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=partial
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
+    status=0
+    sh "$work/bisect.sh" core i686 good bad 7 default core > "$work/bisect.log" 2>&1 || status=$?
+    [ "$status" = 1 ] || return 1
+    grep -q 'unresolved: bad could not be tested again' "$work/gh.log"
+)
+
 # attempts CASE: report a core run whose i686 half kept etude's history,
 # which the stand-in reader judges, and whose x86_64 half passed with no
 # history, and require for CASE:
@@ -733,9 +882,11 @@ $assertion
 # run.sh knows only that, continue a bisection in a new run, count only a
 # reported failure of the runner suite as one, set the statuses of a run of
 # chosen suites apart from a full run's, call no history reader for a result
-# without etude's history, report the attempts that a history lists, and
-# bisect on a machine where etude admits tests. Each row that fails is
-# printed as `ci-test: failed: ROW ARGS: the row fails`.
+# without etude's history, report the attempts that a history lists,
+# bisect on a machine where etude admits tests, bisect commits whose run.sh
+# reads etude's history, and leave a range unresolved for a fault of the
+# runner in its lines or a suite's result from another run. Each row that
+# fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
 rows()
 {
     rm -f "$work/reader.log"
@@ -781,6 +932,12 @@ rows()
     for case in bigmem refused unbridged ports; do
         row admits "$case"
     done
+    for case in failure pass unfinished cut elsewhere missing status hidden unjudged run; do
+        row structured "$case"
+    done
+    row faulted default
+    row faulted runner
+    row scoped
     return "$failed"
 }
 
@@ -799,4 +956,4 @@ if ! rows; then
     echo 'ci-test: result: fail: ci report, hold or bisection' >&2
     exit 1
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open and bisection where etude admits tests'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open, bisection where etude admits tests, bisection from etude history and faults of the runner in bisection'

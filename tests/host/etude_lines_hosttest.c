@@ -15,7 +15,8 @@
  * disagree with their attempts. The real tools/ci/run.sh then reads the
  * lines, through a tests/run that runs the formatter, and the real suites
  * function of tools/ci/bisect.sh judges them, with a registry whose core
- * tier is the map's suites, as the tested commit's would be.
+ * tier is the map's suites, as the tested commit's would be: a failure
+ * beside a fault of the runner leaves bisection unresolved.
  *
  * The status writer then records a run's attempts from real watchdogs, and
  * the ledger gets real claims and requests: a claim of this process, one
@@ -482,8 +483,8 @@ static void make_tree(void)
         "log=$1\n"
         "mkdir -p \"$log.tree/tests\" && ln -s \"$PWD/tests/run\" \"$log.tree/tests/run\" &&\n"
         "    awk 'NF && !/^#/ { print $1 \"|qemu|core\" }' \"$ETUDE_LINES_MAP\" \\\n"
-        "        > \"$log.tree/tests/registry\" && cd \"$log.tree\" || exit 3\n"
-        "eval \"$(awk '/^(members|admitted|suites)\\(\\) /,/^}/' "
+        "        > \"$log.tree/tests/registry\" && : > \"$log.log\" && cd \"$log.tree\" || exit 3\n"
+        "eval \"$(awk '/^(members|admitted|historic|suites)\\(\\) /,/^}/' "
         "\"$ETUDE_LINES_REPO/tools/ci/bisect.sh\")\"\n"
         "suites core\n",
         0755);
@@ -641,7 +642,7 @@ static const struct row rows[] = {
      "1 run: fpu: PASS in 2s\n2 run: runner: guest.default.boot on i686 is in no suite of the map\n"
      "2 run: result: failed: runner\n1 run: result: failed",
      "runner\n",
-     1},
+     2},
     {"a suite with no case in the plan did not finish",
      {"empty", 2, {PASS(XSAVE), PASS(BOOT)}, 1, NULL, NULL, 0},
      TWO "usb guest.usb\n",
@@ -674,7 +675,7 @@ static const struct row rows[] = {
      "2 run: runner: the run record gives the run a pass, though an item did not pass\n"
      "2 run: fpu: FAIL in 2s\n2 run: result: failed: fpu runner\n1 run: result: failed",
      "fpu\nrunner\n",
-     1},
+     2},
     {"a run that failed after its cases passed is the runner's fault",
      {"prepared", 1, {PASS(XSAVE)}, 1, "failure", "a preparation step failed", 0},
      "fpu guest.fpu\n",

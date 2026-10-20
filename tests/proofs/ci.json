@@ -343,8 +343,8 @@
       "edits": [
         {
           "file": "tools/ci/bisect.sh",
-          "find": "        '1/run: result: failed') return 1 ;;\n",
-          "replace": "        [1-9]*/*) return 1 ;;\n"
+          "find": "        '1/run: result: failed')\n",
+          "replace": "        [1-9]*/*)\n"
         }
       ],
       "fails": {
@@ -599,7 +599,7 @@
       "edits": [
         {
           "file": "tools/ci/bisect.sh",
-          "find": "                 grep -q \"^run: $s: PASS in \" \"$log.log\" || {\n",
+          "find": "                 tail -n +\"$((before + 1))\" \"$log.log\" | grep -q \"^run: $s: PASS in \" || {\n",
           "replace": "                 true || {\n"
         }
       ],
@@ -607,6 +607,176 @@
         "status": 1,
         "lines": [
           "ci-test: failed: suite silent: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "linesonly",
+      "summary": "a commit that reads etude's history judged by its lines",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    grep -qx 'results=history' tools/ci/run.sh 2> /dev/null\n",
+          "replace": "    false\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured failure: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "unfinishedpass",
+      "summary": "an item that did not finish read as a failure",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "                *) sed -n 's/^item .*: failure, in \\([^ ]*\\)$/\\1/p' \"$results/verdict\" |\n",
+          "replace": "                *) sed -n 's/^item .*: [a-z]*, in \\([^ ]*\\)$/\\1/p' \"$results/verdict\" |\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured unfinished: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "runnerverdict",
+      "summary": "a failure in a history the verdict doubts taken as the commit's",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "                *' runner '*) why=\"the history cannot show what ran\" ;;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured cut: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "anyitem",
+      "summary": "a failed item of no suite asked for taken as the failure",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "                       grep -qxF \"$asked\" && return 1\n",
+          "replace": "                       grep -q . && return 1\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured elsewhere: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "statuspass",
+      "summary": "a passing verdict taken for a pass though tests/run failed",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "            [ \"$rc\" != 0 ] || return 0\n",
+          "replace": "            return 0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured status: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "statusfail",
+      "summary": "a failing verdict taken for a failure though tests/run passed",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        elif [ \"$rc\" = 0 ]; then\n            why=\"tests/run exited 0, and the verdict on its history failed\"\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured hidden: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "noverdict",
+      "summary": "the items of a verdict that gave no result read as a failure",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        elif [ \"$verdict\" != 1 ] || [ -z \"$names\" ]; then\n            why=\"casecheck gave no verdict on the history\"\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured unjudged: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "runrunner",
+      "summary": "an unfinished run whose run.sh failed the runner taken as a failure",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        if historic && grep -qx runner \"$log.run/failed\" 2> /dev/null; then\n",
+          "replace": "        if false; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: structured run: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "linesrunner",
+      "summary": "a fault of the runner in its lines taken as the commit's failure",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "                    members \"$@\" | grep -qx runner || {\n",
+          "replace": "                    true || {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: faulted default: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "scope",
+      "summary": "a suite's result from an earlier run of the test taken for the set's",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "                 tail -n +\"$((before + 1))\" \"$log.log\" | grep -q \"^run: $s: PASS in \" || {\n",
+          "replace": "                 grep -q \"^run: $s: PASS in \" \"$log.log\" || {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: scoped: the row fails"
         ]
       }
     }
