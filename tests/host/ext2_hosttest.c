@@ -1190,7 +1190,7 @@ static void refusal_rows(void)
     check(mount_image() == 0, "the volume mounts for the node row");
     if (mnt.root) {
         void *held[200];
-        int took = 0, i;
+        int nheld = 0, i;
         void *many = walk("/many", &err);
 
         for (i = 0; many && i < 200; i++) {
@@ -1201,19 +1201,19 @@ static void refusal_rows(void)
             if (OPS->lookup(&mnt, many, name, &node) != 0) {
                 break;
             }
-            held[took++] = node;
+            held[nheld++] = node;
         }
-        check(took == 200, "two hundred files are held at once");
+        check(nheld == 200, "two hundred files are held at once");
         if (many) {
             void *node = 0;
 
-            if (took > 150 && OPS->lookup(&mnt, many, "file150.txt", &node) == 0) {
+            if (nheld > 150 && OPS->lookup(&mnt, many, "file150.txt", &node) == 0) {
                 check(node == held[150], "a held name looked up again is the held node");
                 OPS->put(&mnt, node);
             } else {
                 check(0, "a held name looked up again is the held node");
             }
-            for (i = 0; i < took; i++) {
+            for (i = 0; i < nheld; i++) {
                 OPS->put(&mnt, held[i]);
             }
             OPS->put(&mnt, many);

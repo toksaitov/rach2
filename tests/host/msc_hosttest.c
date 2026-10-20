@@ -1077,7 +1077,7 @@ static void initialization_deadline(void)
         pump(500);
     }
     CHECK("each unit gets a separate elapsed deadline",
-          msc_ready(0) && arrivals == 2 && drops == 0 && i * 500 > MSC_READY_MS);
+          msc_ready(0) && arrivals == 2 && drops == 0 && MSC_READY_MS < i * 500);
     msc_step(MSC_READY_MS);
     CHECK("a ready device has no initialization deadline", msc_ready(0) && drops == 0);
 

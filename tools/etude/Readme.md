@@ -1,6 +1,19 @@
 # Etude
 
-Etude is the test runner that replaces `tests/run`: a controller in hosted C99 that runs Rach2's tests on Linux, macOS, Windows and Rach2, and `etude-guest`, its helper inside Rach2. This directory implements the history store and the executor of host processes on POSIX systems, and defines the contracts the runner parts share: the case manifest, the report a test program writes, the results of an attempt, the frames between the controller and `etude-guest`, the invocation of a guest case, the interface of a machine scenario, and the history of runs.
+Etude is the test runner that replaces `tests/run`: a controller in hosted C99 that runs Rach2's tests on Linux, macOS, Windows and Rach2, and `etude-guest`, its helper inside Rach2. This directory implements the history store and the executor of host processes on POSIX systems, and defines the contracts the runner parts share: the case manifest, the report a test program writes, the results of an attempt, the frames between the controller and `etude-guest`, the invocation of a guest case, the interface of a machine scenario, and the history of runs. Its validator, `casecheck`, checks manifests, reports and results against them.
+
+## Use
+
+`casecheck` is built by `make build/tools/etude/casecheck`, and `tests/run style` runs it through [`suitecheck.sh`](../verify/suitecheck.sh) over `tests/cases/*.json` and the examples here, and with `--selftest` over [its fixtures](fixtures/expect). Its commands:
+
+    casecheck [-s SCHEMAS] [-r ROOT] manifest FILE...
+    casecheck [-s SCHEMAS] [-r ROOT] timing FILE...
+    casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... MANIFEST CASE ARCH PLACEMENT [OUTPUT]
+    casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
+    casecheck [-s SCHEMAS] schema NAME FILE...
+    casecheck --selftest DIR
+
+`manifest` checks each manifest's shape by its schema and then the rules below that relate its values: identities given once, alternatives that name declared assertions, an assertion's source that its domain has, a role that agrees with its end and its native plan, artifacts that `prepare` makes, bounds in order and inside the whole case's, the fixtures each placement has, and, with `-r`, a `where` that names a line of the tree at ROOT. `timing` checks them so and prints each line a timing assumption declares, as `FILE:LINE KIND CASE`. `report` judges a program's output as an executor will, by Report records, and prints each assertion the program must give, the report's state and the outcome; it exits 0 only for a pass. `results` checks each document of a JSON Lines file by Results, and with `-o` refuses an attempt whose assertions give another outcome than the one a history records. `schema` checks documents, or the lines of a `.jsonl` file, against `schemas/NAME.schema.json`. A finding goes to stderr as `casecheck: FILE:LINE: WHAT`; the status is 1 after one and 2 for a wrong usage or a file that cannot be read. SCHEMAS is `tools/etude/schemas` by default.
 
 ## Interfaces
 
@@ -17,6 +30,8 @@ Etude is the test runner that replaces `tests/run`: a controller in hosted C99 t
 | [`include/etude/frame.h`](include/etude/frame.h) | The frames between the controller and `etude-guest` |
 | [`include/etude/scenario.h`](include/etude/scenario.h) | The interface of `libetude-case`, which machine scenarios link with |
 | [`include/etude/exec.h`](include/etude/exec.h) | The executor of host processes: an attempt's start, output, cancellation, end, cleanup and resources |
+| [`casecheck.c`](casecheck.c), [`cases.c`](cases.c), [`judge.c`](judge.c) | The validator's commands, its rules for manifests, and its reading of reports and results |
+| [`json.c`](json.c), [`schema.c`](schema.c) | The strict JSON reader and canonical form, and the checker of the schemas' keywords |
 
 The examples beside the schemas describe real tests as their conversions will declare them: [a host program](schemas/case.host.example.json), `tests/host/sha256_hosttest.c`; [guest programs](schemas/case.guest.example.json), four probes of the `default` suite, three of which also run natively and one of which needs the designated init; and [a machine scenario](schemas/case.machine.example.json), the power-off and readback of the `shutdown` suite. [`schemas/invocation.example.json`](schemas/invocation.example.json) runs `errnoprobe` natively, and [`schemas/results.example.jsonl`](schemas/results.example.jsonl) gives six attempts' results: a native pass, a pass by the trusted branch of `rngprobe`, an assertion failure, the designated init's exit, a lost connection and a report with an assertion not run. The inventory digests in the results are those of the guest example's cases; the other digests and the identities are illustrations.
 
@@ -80,7 +95,7 @@ An executor adds these assertions to a case:
 
 * `etude.termination`: the case ended as `termination` expects. The ends are `exited` and `signaled` for an ordinary process, `init_exited` and `init_killed` for the designated init, by the kernel's record that hands the debug shell back, `panic`, `reset` and `shutdown` for a machine, and `halted` for a machine whose processors are all halted with interrupts off. A value is the exit status or the signal, and the ends of a machine have none.
 * `etude.kernel`, under QEMU, and natively with `log`: no panic, oops or fault of the kernel appeared, unless the termination expects a panic. A panic fails it whatever the program reported.
-* `etude.report`, when an assertion's source is the program: the report is complete and valid, as Report records says.
+* `etude.report`, when an assertion's source is the program: it passes when the report is complete, as Report records says, fails when it is invalid, and is missing when it is truncated or absent, since the program then did not finish.
 
 A branch group says that one of its alternatives runs and the others cannot, such as the trusted and the fail-closed paths of `rngprobe`. The assertions of the chosen alternative are required, and those of the others are not. A group decided by `features` takes the alternative whose `when` is `present` when any of the features is present on the profile's processor, and the one whose `when` is `absent` when none is. The program reports the branch it took, and a branch that disagrees with the profile's processor fails `etude.report`. A group decided by `report` takes the alternative the program reports; without that record, every assertion of the group is missing.
 
@@ -94,7 +109,7 @@ A branch group says that one of its alternatives runs and the others cannot, suc
 
 `resources` declares what admission reserves: `cpu_millis`, the first processor reservation in thousandths of a processor, and `cpu_ceiling_millis`, the most any reservation from history may be; `memory_bytes`, the combined peak of the case and its QEMU; `disk_bytes`; `guest_memory`, for the one profile whose configured memory, resident memory and backing differ; the host `locks` it takes shared or exclusive, such as the large-memory suite's exclusive lock; and the counts of local `ports` and native `loop_devices`.
 
-`timing` declares each assumption about time that a case makes, with its file and line. Two kinds exist. A `clock_reference` compares a clock with an independent reference within the stated `uncertainty_us`. An `injected_delay` applies a delay as the stimulus and judges only the order or the state that follows. A completion bound is not an assumption about time. Synchronization by sleeping, a fixed poll or spin count, an assertion on wall time, a race with the host's disk and a forced accelerator have no kind and are refused.
+`timing` declares each assumption about time that a case makes, with its file and line. Two kinds exist. A `clock_reference` compares a clock with an independent reference within the stated `uncertainty_us`. An `injected_delay` applies a delay as the stimulus and judges only the order or the state that follows. A completion bound is not an assumption about time. Synchronization by sleeping, a fixed poll or spin count, an assertion on wall time, a race with the host's disk and a forced accelerator have no kind and are refused. In the sources under `tests/cases/`, `suitecheck.sh` accepts a sleep only at a line an `injected_delay` declares, and an upper bound on a duration only at a line a `clock_reference` declares; a declared line with neither is a fault, and a program there reports a skip as `notrun`, never as printed text.
 
 ### Report records
 
@@ -109,7 +124,7 @@ A program reports on its standard output, in lines that begin with `@etude 1 `, 
 
 `notrun ID REASON` says that an assertion could not be evaluated, `progress WITNESS UNITS` that a witness has completed UNITS in all, and `child PID` that a process the program started may outlive it. A record is at most 255 bytes with its newline, and is written with one write(2), so that on the console it cannot be split by a kernel record. Fields are separated by single spaces; an identity is the manifest's, and a detail or a reason is printable ASCII. `begin` comes first and gives the case's identity. Each declared assertion is reported once, each group's branch once, and `end` last, with the count of `assert`, `notrun` and `branch` records before it. Every other line is the program's own output, kept as evidence and never read as a result.
 
-The report is `complete` when it has all of that and nothing else. It is `truncated` when it has no `end`, and `invalid` when a record does not parse, comes after `end`, repeats an assertion, gives an undeclared one, gives another case's identity, or has a count that does not match. A host program and a guest program under `etude-guest` write the records to a pipe; a program that is the designated init writes them to the console; a machine scenario writes them through `libetude-case`.
+The report is `complete` when it has all of that and nothing else. It is `absent` when it has no record, `truncated` when it has no `end` and no other fault, and `invalid` when a record does not parse, comes after `end`, repeats an assertion, gives an undeclared one, one that is not the program's or one of an alternative that did not run, gives another case's identity or a branch the processor contradicts, moves a witness back or past its limit, names a child of a case whose `children` are not `reported`, or has a count that does not match, and when a report with an `end` lacks an assertion it must give or a group's branch. A host program and a guest program under `etude-guest` write the records to a pipe; a program that is the designated init writes them to the console; a machine scenario writes them through `libetude-case`.
 
 ### Results
 
@@ -203,12 +218,16 @@ The processor time of the tree is the keeper's `RUSAGE_CHILDREN` after the clean
 
 ## Limits
 
-The history store checks record shapes, stream order and local interval arithmetic. The manifest validator, the executors other than the POSIX one, `etude-guest` and `libetude-case` are not implemented, and `tests/cases/` has no manifest. The probes print their own lines and are judged by their exit status, as `tests/run` judges them now. A schema-valid document alone does not establish a complete case, a valid report or a pass. Cross-stream references, hashed content, assertion coverage and aggregate results require the consumer's checks.
+The history store checks record shapes, stream order and local interval arithmetic. The executors other than the POSIX one, `etude-guest` and `libetude-case` are not implemented, and `tests/cases/` has no manifest. The probes print their own lines and are judged by their exit status, as `tests/run` judges them now. A schema-valid document alone does not establish a complete case, a valid report or a pass. Cross-stream references, hashed content, assertion coverage and aggregate results require the consumer's checks.
 
 The POSIX executor has no command of its own and no caller but its test. It waits for the keeper's handshake inside `etude_exec_start`, and is used from one thread. It keeps no ledger: a claim it reports unconfirmed is for the caller to keep. Signals to the case's process group after the case's process has been reaped could reach a group whose number the system has reused. Elsewhere than Linux and macOS a process's start cannot be read, so a `child` record makes the cleanup unconfirmed.
+
+`casecheck report` reads a file of output, not a live transport, and judges only the assertions whose source is the program; the executor's assertions need the end and the console that only an executor sees. The source checks of `suitecheck.sh` read the forms a line shows: a sleep through a probe's own wrapper is found at the wrapper's system call, and a skip only where a line prints it.
 
 ## Tests
 
 `tests/run host` runs `etude_history_hosttest.c` under the sanitizers. It checks all record kinds, existing complete and incomplete examples, rejected shapes and interval arithmetic, concurrent private writers, competing creation of one stream, inherited writer refusal, interrupted tails, interior damage, duplicate IDs, sequence gaps, byte limits, write failure, clocks, missing measurements, overflow and simultaneous memory peaks. `etude_history_mutate.sh` proves the interrupted-tail and missing-processor-scope checks with faults in private source copies, followed by a restored pass. It changes no source in the working tree.
 
 It also runs [`tests/host/etude_exec_hosttest.c`](../../tests/host/etude_exec_hosttest.c), which runs itself as the case's program. Eleven attempts run at once and each must keep its own identity, output and end: two exits, a signal, three cancellations (one obeying SIGTERM, one ignoring it, one with a child stopped by SIGSTOP whose handler must run), reported and unreported descendants, the processor time and memory of a tree, and output past its bound with a record after it. The test also checks POSIX interfaces alone, the subreaper on Linux, a refused registration, a failed exec, a killed keeper and an ended controller.
+
+`casecheck --selftest tools/etude/fixtures` runs each line of [`fixtures/expect`](fixtures/expect), a command over the fixtures with the exit status and a line of output it must give, and `tests/run style` runs it. Each rule of a manifest has a case of `fixtures/rules.json` that breaks that rule alone, and a line that expects its message; the reports and results documents beside it each plant one fault in a valid one. A new rule adds its case, or its document, and its line.

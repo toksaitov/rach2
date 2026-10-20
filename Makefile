@@ -117,6 +117,7 @@ SETIDCHECK      = build/tools/inspect/setidcheck
 CFGCHECK        = build/tools/inspect/cfgcheck
 PROSECHECK      = build/tools/verify/prosecheck
 SIZECHECK       = build/tools/verify/sizecheck
+CASECHECK       = build/tools/etude/casecheck
 GUESTCHECK      = build/tools/verify/guestcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
@@ -425,6 +426,16 @@ $(PROSECHECK): tools/verify/prosecheck.c
 $(SIZECHECK): tools/verify/sizecheck.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
+
+# etude's validator (tools/etude/casecheck.c): the case manifests, report
+# records and results against their contracts, which suitecheck.sh runs. Etude
+# is hosted C99, so the validator is compiled as C99.
+CASECHECK_SRC = tools/etude/casecheck.c tools/etude/cases.c tools/etude/judge.c \
+                tools/etude/json.c tools/etude/schema.c utils/sha256.c
+$(CASECHECK): $(CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/etude/schema.h \
+              utils/sha256.h
+	@mkdir -p $(dir $@)
+	$(HOST_LINK) -std=c99 -Itools/etude -Iutils
 
 # The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
 # check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a
@@ -1136,7 +1147,7 @@ include tests/system/suites.mk
 # after the includes that define them. The KRFFS programs and the host tests
 # have rules of their own, and the generator collects them separately.
 HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) $(SIZECHECK) \
-             $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
+             $(CASECHECK) $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) $(ETUDEHISTORY)

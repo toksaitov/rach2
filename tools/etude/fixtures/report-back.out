@@ -1,0 +1,6 @@
+@etude 1 begin fixture.judge.counter
+@etude 1 progress blocks 1
+@etude 1 progress blocks 3
+@etude 1 progress blocks 2
+@etude 1 assert copied pass
+@etude 1 end 1

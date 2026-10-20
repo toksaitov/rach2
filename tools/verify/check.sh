@@ -51,10 +51,12 @@
 #      rach2/syscalls.md against what `make syscalls` writes, and
 #      man/programs.md against what `make programs-md` writes.
 #  16. Every product a run- target names is built by prepare-all.
-#  17. The suites' waits and criteria (suitecheck.sh): no sleep for a number
-#      of seconds, no wait= step, no upper bound on a duration in a probe,
-#      except an interval marked with a reason that tests/system/intervals
-#      lists.
+#  17. The tests' waits and criteria (suitecheck.sh): no sleep for a fixed
+#      time, no wait= step, no upper bound on a duration and no skip printed
+#      in a test that passes, except an interval marked with a reason that
+#      tests/system/intervals lists, a count of the older tests that
+#      tests/system/unconverted keeps, or a timing a case declares; and etude's
+#      case manifests and examples valid by tools/etude/casecheck.
 #  18. The manual against the machine (mancheck.c): a page or an alias for
 #      every staged program, applet and registered call, every page clean
 #      under mandoc's lint, and the recovery pages staged.
@@ -94,10 +96,11 @@ GUESTCHECK="$REPO/build/tools/verify/guestcheck"
 PROSECHECK="$REPO/build/tools/verify/prosecheck"
 SIZECHECK="$REPO/build/tools/verify/sizecheck"
 SETIDCHECK="$REPO/build/tools/inspect/setidcheck"
+CASECHECK="$REPO/build/tools/etude/casecheck"
 make -C "$REPO" --no-print-directory build/tools/verify/asciiscan \
     build/tests/system/runtests build/tools/verify/guestcheck \
     build/tools/verify/prosecheck build/tools/verify/sizecheck \
-    build/tools/inspect/setidcheck >/dev/null || exit 1
+    build/tools/inspect/setidcheck build/tools/etude/casecheck >/dev/null || exit 1
 cd "$REPO" || exit 1
 # The exit trap keeps the logs only after a failure, for the paths it printed.
 unset VDIR
@@ -565,8 +568,11 @@ fi
 #         different network setups;
 #       * the compilation-database generator joins wrapped recipes, selects
 #         only compile commands, and does not publish an invalid database;
-#       * suitecheck.sh fails each form of a guessed duration and accepts
-#         each marked interval;
+#       * suitecheck.sh fails each form of a guessed duration and of a skip
+#         reported as a pass, and accepts each marked interval, each counted
+#         finding and each timing a case declares;
+#       * casecheck refuses each fault of a manifest, a report and a results
+#         document that its fixtures in tools/etude/fixtures plant;
 #       * recovery_key_test.sh checks the recovery credentials of a KRFFS
 #         image, and dryrun_test.sh the vendor stamps' dry-run test under the
 #         flags the tree passes;
@@ -588,6 +594,7 @@ if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    "$CFGCHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/verify/suitecheck.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   "$CASECHECK" --selftest "$REPO/tools/etude/fixtures" >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tests/system/recovery_key_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tests/system/dryrun_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tests/system/build_rules_test.sh" >>"$VDIR/verify_kernelck.log" 2>&1 &&
@@ -721,15 +728,18 @@ else
     fail=1
 fi
 
-# 17. The suites wait for tokens and assert on counts. A `sleep N` in a
-#     suite, a `wait=N` harness step and an upper bound on a duration in a
-#     probe are guesses at a machine's speed; each fails the check unless it
-#     is an interval marked with a reason that tests/system/intervals lists.
-hr "17/22 suites' waits and criteria (suitecheck)"
+# 17. The tests wait for events, assert on counts and report what they leave
+#     out. A sleep for a fixed time, a `wait=N` harness step and an upper
+#     bound on a duration are guesses at a machine's speed, and a skip printed
+#     in a passing test reports the skip as a pass; each fails the check
+#     unless an interval with a reason that tests/system/intervals lists
+#     marks it, tests/system/unconverted counts it in an older test, or a
+#     case's manifest declares its timing. casecheck checks the manifests.
+hr "17/22 tests' waits and criteria (suitecheck)"
 if sh "$REPO/tools/verify/suitecheck.sh" >"$VDIR/verify_suites.log" 2>&1; then
     echo "  PASS"
 else
-    echo "  FAIL: a suite guesses a duration; see $VDIR/verify_suites.log:"
+    echo "  FAIL: a test guesses a duration or passes a skip; see $VDIR/verify_suites.log:"
     head -5 "$VDIR/verify_suites.log" | sed 's/^/    /'
     fail=1
 fi

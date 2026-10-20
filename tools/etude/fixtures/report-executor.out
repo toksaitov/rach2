@@ -1,0 +1,4 @@
+@etude 1 begin guest.default.survivorprobe
+@etude 1 assert fork pass
+@etude 1 assert shell-returned pass
+@etude 1 end 2

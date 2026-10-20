@@ -1,0 +1,4 @@
+errnoprobe: the program's own line
+@etude 1 begin guest.default.errnoprobe
+@etude 1 assert enosys-unimplemented pass
+@etude 1 assert enosys-out-of-range pass

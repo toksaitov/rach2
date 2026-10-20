@@ -1,0 +1,113 @@
+# The self-test of casecheck: one command a line, as `STATUS ARGUMENTS |
+# TEXT`. The command must exit with STATUS and print TEXT among its output.
+# A path that begins ./ or ../ is relative to this directory, and -s is
+# ../schemas unless the line gives it.
+
+# The examples of the contracts are valid, and judge as their Readme says.
+0 -r ../../.. manifest ../schemas/case.guest.example.json ../schemas/case.host.example.json ../schemas/case.machine.example.json
+0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-lost: incomplete
+0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-notrun: failure
+0 schema invocation ../schemas/invocation.example.json
+0 schema history ../schemas/history.example.jsonl ../schemas/history.incomplete.example.jsonl
+2 manifest ./absent.json | cannot read
+2 inventory
+1 -r ./tree timing ./rules.json
+
+# The reader refuses what the contracts do not allow.
+1 manifest ./json-duplicate.json | names a member twice
+1 manifest ./json-fraction.json | not an integer
+1 manifest ./json-ascii.json | outside ASCII
+1 manifest ./json-trailing.json | text follows the document
+1 manifest ./shape.json | /cases/0: has no member "bounds"
+1 manifest ./shape.json | /cases/0/domain: "elsewhere" is not one of the values
+
+# Each rule of a manifest, by the case of rules.json that breaks it.
+1 manifest ./rules.json | scenario-source: enosys-unimplemented has the source scenario
+1 manifest ./rules.json | host-executor: panic-free has the source executor, but a host case
+1 manifest ./rules.json | native-log: no-oops is a kernel record, which a native run reads only with the log fixture
+1 manifest ./rules.json | alt-undeclared: the alternative one names nothing-such
+1 manifest ./rules.json | alt-twice: ebadf-close is in two alternatives
+1 manifest ./rules.json | feature-undeclared: the group way is decided by rdrand, which requirements.features
+1 manifest ./rules.json | feature-when: the group way is decided by features, so it has two alternatives
+1 manifest ./rules.json | report-when: the group way is decided by the report, so its alternatives have no when
+1 manifest ./rules.json | init-end: the end init_exited needs the role init
+1 manifest ./rules.json | boot-native: a case of the role boot runs under QEMU alone
+1 manifest ./rules.json | machine-end: the end shutdown ends a machine
+1 manifest ./rules.json | unprepared: the program nothing-built is no artifact that prepare lists
+1 manifest ./rules.json | step-etude: the step etude.boot has an identity of the executor's
+1 manifest ./rules.json | step-machine: the step poweroff runs on elsewhere
+1 manifest ./rules.json | bound-order: the case bound has its floor, initial value and ceiling out of order
+1 manifest ./rules.json | bound-gap: the gap bound reaches past the whole case's
+1 manifest ./rules.json | no-boot-stage: a case that boots Rach2 has a bound for its boot stage
+1 manifest ./rules.json | host-boot-stage: a host case boots nothing
+1 manifest ./rules.json | witness-bound: the witness stage has a bound of its own
+1 manifest ./rules.json | cpu-ceiling: the processor reservation is above its ceiling
+1 manifest ./rules.json | isolation-fixture: a host or QEMU placement has no workspace fixture
+1 manifest ./rules.json | native-workspace: a native case has a workspace fixture
+1 manifest ./rules.json | console-alone: the console fixture comes with alone
+1 manifest ./rules.json | arch-class: the native class architecture is for a case of i686 alone
+1 manifest ./rules.json | timing-noline: tests/delay.txt names a file without its line
+1 manifest ./rules.json | timing-twice: the timing assumption at tests/delay.txt:2 is declared twice
+1 manifest ./rules.json | where-outside: ../delay.c:1 is not a path inside the tree
+1 manifest ./rules.json | assertion-twice: the assertion enosys-unimplemented is declared twice
+1 manifest ./rules.json | ports: the native ports fixtures take more ports than reserved
+1 -r ./tree manifest ./rules.json | timing-nofile: tests/absent.c:1: no such file in the tree
+1 -r ./tree manifest ./rules.json | timing-pastend: tests/delay.txt:9: the file ends at line 4
+1 manifest ./prefix.json | fixture.other.vectors: a case of the family fixture.prefix has an identity
+1 manifest ./rules.json ./again.json | fixture.rules.ports: the case is declared in
+1 manifest ./cases/misnamed.json | the family fixture.named has its manifest in misnamed.json
+
+# The timing a case declares, for suitecheck.sh.
+0 -r ./tree timing ./timing.json | tests/delay.txt:2 injected_delay fixture.timing.delay
+0 -r ./tree timing ./timing.json | tests/delay.txt:4 clock_reference fixture.timing.delay
+
+# A report gives a pass only when every assertion it must give passed.
+0 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out | outcome pass
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-notrun.out | assert enoent-open not_run: /no_such_file_errnoprobe exists
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-notrun.out | outcome incomplete
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-missing.out | enoent-open was never reported
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-missing.out | outcome failure
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-truncated.out | report truncated, 2 records
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-truncated.out | outcome incomplete
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-absent.out | report absent, 0 records
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-fail.out | assert efault-writev fail: writev returned 0
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-undeclared.out | enoent-stat is not an assertion of the case
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-twice.out | ebadf-read is reported twice
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-after-end.out | a record follows end
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-count.out | end counts records that the report does not have
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-othercase.out | the first record is not begin guest.default.errnoprobe
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-long.out | a record is longer than 255 bytes
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-parse.out | does not parse
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-spaces.out | does not parse
+1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-version.out | does not parse
+1 report ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./report-executor.out | shell-returned is not the program's to report
+1 report ../schemas/case.guest.example.json guest.default.survivorprobe i686 native ./report-executor.out | cannot be placed native
+0 report -f rdrand=present -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | branch source trusted decided by feature
+1 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | the program took trusted where the processor gives fail-closed
+1 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | assert closed-urandom missing
+1 report -f rdrand=present -f rdseed=present ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng-nobranch.out | no branch record for the group source
+2 report -f rdrand=present ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | give the processor's rdseed
+0 report ./judge.json fixture.judge.tlsprobe i686 qemu ./report-tls.out | outcome pass
+1 report ./judge.json fixture.judge.tlsprobe x86_64 qemu ./report-tls.out | does not apply to x86_64: no plan has an item of it there, and it is neither run nor passed
+0 report ./judge.json fixture.judge.counter i686 qemu ./report-counter.out | outcome pass
+1 report ./judge.json fixture.judge.counter i686 qemu ./report-back.out | the witness blocks goes back
+1 report ./judge.json fixture.judge.counter i686 qemu ./report-limit.out | the witness blocks passes its limit with 5 units
+1 report ./judge.json fixture.judge.counter i686 qemu ./report-witness.out | the witness pages is not the case's
+1 report ./judge.json fixture.judge.counter i686 qemu ./report-child.out | a child record from a case whose children are none
+
+# A results document gives each assertion the attempt requires, once, and an
+# outcome that follows from them.
+1 results ./results-missing.jsonl ../schemas/case.guest.example.json | efault-writev appears 0 times
+0 results ./results-notrun.jsonl ../schemas/case.guest.example.json | incomplete, as enoent-open is not_run
+1 results -o pass ./results-notrun.jsonl ../schemas/case.guest.example.json | the attempt's outcome is incomplete, not pass: enoent-open is not_run
+1 results -o pass ../schemas/results.example.jsonl ../schemas/case.guest.example.json | the attempt's outcome is incomplete, not pass: ebadf-close is missing
+1 results ./results-reportpass.jsonl ../schemas/case.guest.example.json | etude.report is pass for a report that is truncated, where it is missing
+1 results ./results-unchosen.jsonl ../schemas/case.guest.example.json | closed-urandom is not an assertion this attempt requires
+1 results ./results-digest.jsonl ../schemas/case.guest.example.json | the inventory digest is not the case's
+1 results ./results-termination.jsonl ../schemas/case.guest.example.json | etude.termination is pass for the end exited 1, where the case expects exited 0
+1 results ./results-lost.jsonl ../schemas/case.guest.example.json | etude.termination is fail for the end lost
+1 results ./results-undeclared.jsonl ../schemas/case.guest.example.json | the report is invalid, not complete
+1 results ./results-placement.jsonl ../schemas/case.guest.example.json | cannot be placed native
+1 results ./results-branch.jsonl ../schemas/case.guest.example.json | the group source appears 0 times, not once
+1 results ./results-twice.jsonl ../schemas/case.guest.example.json | enosys-unimplemented appears 2 times
+1 results ./results-missing.jsonl ./rules.json | guest.default.errnoprobe is no case of the manifests given

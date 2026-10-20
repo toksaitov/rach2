@@ -208,3 +208,8 @@ unusedStructMember:*tools/etude/include/etude/history.h
 unusedStructMember:*tools/etude/include/etude/exec.h
 unusedStructMember:*tools/etude/capture.h
 unusedStructMember:*tools/etude/posix/posix.h
+
+# casecheck's shared structures: cppcheck checks each header alone, and the
+# members are read in the validator's .c files.
+unusedStructMember:*tools/etude/casecheck.h
+unusedStructMember:*tools/etude/json.h

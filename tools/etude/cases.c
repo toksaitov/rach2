@@ -1,0 +1,882 @@
+/*
+ * cases.c: casecheck's rules for case manifests, beyond the shape that
+ * tools/etude/schemas/case.schema.json gives them.
+ *
+ * A schema checks one value at a time; these rules relate values to each
+ * other: an identity given once, an alternative that names declared
+ * assertions, an artifact that preparation makes, a role that matches the
+ * end it expects, a bound inside its floor and ceiling, a fixture where a
+ * placement has it, and a `where` that names a line of the tree. Each rule
+ * follows a sentence of tools/etude/Readme.md.
+ */
+#include "casecheck.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "sha256.h"
+
+/* The case a rule reads, and the file it came from. */
+struct rule {
+    const char *file;
+    const struct json *c;
+    const char *domain;
+    const char *role;
+    const char *plan;
+};
+
+/**
+ * Returns the line of the member `name` of `v`, or `v`'s own when it has none.
+ */
+static int line_at(const struct json *v, const char *name)
+{
+    const struct json *m = json_member(v, name);
+
+    return m != NULL ? m->line : v->line;
+}
+
+/** Returns 1 when `a` and `b` are both strings and equal. */
+static int same(const char *a, const char *b)
+{
+    return a != NULL && b != NULL && strcmp(a, b) == 0;
+}
+
+/**
+ * Returns 1 when an object of `array` has the string `value` as its `field`.
+ */
+int has_member(const struct json *array, const char *field, const char *value)
+{
+    size_t i;
+
+    for (i = 0; array != NULL && i < array->count; i++) {
+        if (same(json_text(array->item[i], field), value)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Reports each value of `field` that two objects of `array` share. */
+static void unique(const struct rule *r, const struct json *array, const char *field,
+                   const char *what)
+{
+    size_t i, j;
+
+    for (i = 0; array != NULL && i < array->count; i++) {
+        const char *id = json_text(array->item[i], field);
+
+        for (j = 0; j < i; j++) {
+            if (same(id, json_text(array->item[j], field))) {
+                finding(r->file, array->item[i]->line, "%s: %s %s is declared twice",
+                        json_text(r->c, "case_id"), what, id);
+                break;
+            }
+        }
+    }
+}
+
+/** Returns the fixture `kind` of the list `fixtures`, or NULL. */
+static const struct json *fixture(const struct json *fixtures, const char *kind)
+{
+    size_t i;
+
+    for (i = 0; fixtures != NULL && i < fixtures->count; i++) {
+        if (same(json_text(fixtures->item[i], "fixture"), kind)) {
+            return fixtures->item[i];
+        }
+    }
+    return NULL;
+}
+
+/** Returns the native fixtures of the case, or NULL. */
+static const struct json *native_fixtures(const struct json *c)
+{
+    return json_member(json_member(c, "native"), "fixtures");
+}
+
+/** Returns 1 when the alternative `alt` names `assertion_id`. */
+static int names_assertion(const struct json *alt, const char *assertion_id)
+{
+    const struct json *ids = json_member(alt, "assertions");
+    size_t i;
+
+    for (i = 0; ids != NULL && i < ids->count; i++) {
+        if (same(ids->item[i]->string, assertion_id)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Returns the branch group that names `assertion_id` in an alternative, and
+ * the alternative in `*alternative`, or NULL when the assertion is in none.
+ */
+const struct json *group_of(const struct json *c, const char *assertion_id,
+                            const struct json **alternative)
+{
+    const struct json *groups = json_member(c, "branches");
+    size_t g, a;
+
+    for (g = 0; groups != NULL && g < groups->count; g++) {
+        const struct json *alts = json_member(groups->item[g], "alternatives");
+
+        for (a = 0; alts != NULL && a < alts->count; a++) {
+            if (names_assertion(alts->item[a], assertion_id)) {
+                if (alternative != NULL) {
+                    *alternative = alts->item[a];
+                }
+                return groups->item[g];
+            }
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Returns 1 when some declared assertion of the case is the program's to
+ * report.
+ */
+int program_reports(const struct json *c)
+{
+    return has_member(json_member(c, "assertions"), "source", "program");
+}
+
+/* ---- the rules ---- */
+
+/** An assertion's source must be one the case's domain has. */
+static void rule_sources(const struct rule *r)
+{
+    const struct json *list = json_member(r->c, "assertions");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i;
+
+    unique(r, list, "assertion_id", "the assertion");
+    for (i = 0; list != NULL && i < list->count; i++) {
+        const char *source = json_text(list->item[i], "source");
+        const char *id = json_text(list->item[i], "assertion_id");
+        int machine = same(r->domain, "machine");
+
+        if (same(source, "scenario") && !machine) {
+            finding(r->file, list->item[i]->line,
+                    "%s: %s has the source scenario, which only a machine case has", case_id, id);
+        } else if (same(source, "program") && machine) {
+            finding(r->file, list->item[i]->line,
+                    "%s: %s has the source program; a machine scenario reports as scenario",
+                    case_id, id);
+        } else if (same(source, "executor") && same(r->domain, "host")) {
+            finding(r->file, list->item[i]->line,
+                    "%s: %s has the source executor, but a host case has no kernel to record it",
+                    case_id, id);
+        } else if (same(source, "executor") && same(r->plan, "native") &&
+                   fixture(native_fixtures(r->c), "log") == NULL) {
+            finding(r->file, list->item[i]->line,
+                    "%s: %s is a kernel record, which a native run reads only with the log "
+                    "fixture",
+                    case_id, id);
+        }
+    }
+}
+
+/**
+ * Each alternative's assertions must be declared, and in one alternative only.
+ */
+static void rule_alternatives(const struct rule *r, const struct json *group)
+{
+    const struct json *alts = json_member(group, "alternatives");
+    const struct json *declared = json_member(r->c, "assertions");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t a, i;
+
+    unique(r, alts, "alternative_id", "the alternative");
+    for (a = 0; alts != NULL && a < alts->count; a++) {
+        const struct json *ids = json_member(alts->item[a], "assertions");
+
+        for (i = 0; ids != NULL && i < ids->count; i++) {
+            const struct json *alt = NULL;
+            const char *id = ids->item[i]->string;
+
+            if (!has_member(declared, "assertion_id", id)) {
+                finding(r->file, ids->item[i]->line,
+                        "%s: the alternative %s names %s, which "
+                        "the case does not declare",
+                        case_id, json_text(alts->item[a], "alternative_id"), id);
+            } else if (group_of(r->c, id, &alt) != group || alt != alts->item[a]) {
+                finding(r->file, ids->item[i]->line,
+                        "%s: %s is in two alternatives; one of them runs and the others cannot",
+                        case_id, id);
+            }
+        }
+    }
+}
+
+/**
+ * A group decided by features has one alternative for present and one for
+ * absent.
+ */
+static void rule_feature_group(const struct rule *r, const struct json *group)
+{
+    const struct json *names = json_member(json_member(group, "decided_by"), "features");
+    const struct json *features = json_member(json_member(r->c, "requirements"), "features");
+    const struct json *alts = json_member(group, "alternatives");
+    const char *case_id = json_text(r->c, "case_id");
+    const char *group_id = json_text(group, "group_id");
+    size_t i;
+
+    for (i = 0; names != NULL && i < names->count; i++) {
+        if (json_member(features, names->item[i]->string) == NULL) {
+            finding(r->file, names->item[i]->line,
+                    "%s: the group %s is decided by %s, which requirements.features does not "
+                    "declare",
+                    case_id, group_id, names->item[i]->string);
+        }
+    }
+    if (alts->count != 2 || !has_member(alts, "when", "present") ||
+        !has_member(alts, "when", "absent")) {
+        finding(r->file, group->line,
+                "%s: the group %s is decided by features, so it has two alternatives, one when "
+                "present and one when absent",
+                case_id, group_id);
+    }
+}
+
+/**
+ * A group's alternatives name declared assertions, decided as the group says.
+ */
+static void rule_branches(const struct rule *r)
+{
+    const struct json *groups = json_member(r->c, "branches");
+    size_t g, a;
+
+    unique(r, groups, "group_id", "the branch group");
+    for (g = 0; groups != NULL && g < groups->count; g++) {
+        const struct json *group = groups->item[g];
+        const struct json *alts = json_member(group, "alternatives");
+
+        rule_alternatives(r, group);
+        if (json_member(group, "decided_by")->type == JSON_OBJECT) {
+            rule_feature_group(r, group);
+            continue;
+        }
+        for (a = 0; a < alts->count; a++) {
+            if (json_member(alts->item[a], "when")->type != JSON_NULL) {
+                finding(r->file, alts->item[a]->line,
+                        "%s: the group %s is decided by the report, so its alternatives have no "
+                        "when",
+                        json_text(r->c, "case_id"), json_text(group, "group_id"));
+            }
+        }
+    }
+}
+
+/** The role, the expected end and the native plan must agree. */
+static void rule_role(const struct rule *r)
+{
+    const struct json *term = json_member(r->c, "termination");
+    const char *end = json_text(term, "end");
+    const char *native_class = json_text(json_member(r->c, "native"), "class");
+    const char *case_id = json_text(r->c, "case_id");
+    int init_end = same(end, "init_exited") || same(end, "init_killed");
+    int machine_end =
+        same(end, "panic") || same(end, "reset") || same(end, "shutdown") || same(end, "halted");
+
+    if (init_end != same(r->role, "init")) {
+        finding(r->file, term->line,
+                "%s: the end %s needs the role init, and the role init one of its ends", case_id,
+                init_end ? end : "init_exited or init_killed");
+    }
+    if (machine_end && !same(r->role, "boot") && !same(r->role, "init")) {
+        finding(r->file, term->line,
+                "%s: the end %s ends a machine, which only a guest case of the role boot or init "
+                "may expect",
+                case_id, end);
+    }
+    if ((same(r->role, "init") || same(r->role, "boot")) && !same(r->plan, "none")) {
+        finding(r->file, line_at(r->c, "native"),
+                "%s: a case of the role %s runs under QEMU alone, so its native plan is none",
+                case_id, r->role);
+    }
+    if (same(native_class, "init") != same(r->role, "init")) {
+        finding(r->file, line_at(r->c, "native"),
+                "%s: the native class init is for a case of the role init, and that role's "
+                "class",
+                case_id);
+    }
+}
+
+/** Reports `name` unless preparation makes an artifact of that name. */
+static void prepared(const struct rule *r, const struct json *name, const char *what)
+{
+    if (name != NULL && name->type == JSON_STRING &&
+        !has_member(json_member(r->c, "prepare"), "name", name->string)) {
+        finding(r->file, name->line, "%s: %s %s is no artifact that prepare lists",
+                json_text(r->c, "case_id"), what, name->string);
+    }
+}
+
+/** Requires the artifacts of a QEMU profile. */
+static void prepared_qemu(const struct rule *r, const struct json *qemu)
+{
+    const struct json *disks = json_member(qemu, "disks");
+    size_t i;
+
+    if (qemu == NULL) {
+        return;
+    }
+    prepared(r, json_member(qemu, "kernel"), "the kernel");
+    prepared(r, json_member(qemu, "initrd"), "the initial RAM image");
+    for (i = 0; disks != NULL && i < disks->count; i++) {
+        prepared(r, disks->item[i], "the disk");
+    }
+}
+
+/** Requires the artifacts that the fixtures of `list` copy. */
+static void prepared_fixtures(const struct rule *r, const struct json *list)
+{
+    size_t i, j;
+
+    for (i = 0; list != NULL && i < list->count; i++) {
+        const struct json *names = json_member(list->item[i], "names");
+
+        for (j = 0; names != NULL && j < names->count; j++) {
+            prepared(r, names->item[j], "the fixture's file");
+        }
+    }
+}
+
+/** Every artifact the case uses is one that prepare lists, once. */
+static void rule_artifacts(const struct rule *r)
+{
+    const struct json *exec = json_member(r->c, "execution");
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    unique(r, json_member(r->c, "prepare"), "name", "the artifact");
+    prepared(r, json_member(exec, "program"), "the program");
+    prepared(r, json_member(exec, "stdin"), "the standard input");
+    prepared_qemu(r, json_member(json_member(r->c, "requirements"), "qemu"));
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        prepared_qemu(r, json_member(machines->item[i], "qemu"));
+    }
+    prepared_fixtures(r, json_member(exec, "isolation"));
+    prepared_fixtures(r, native_fixtures(r->c));
+}
+
+/** A machine case's steps run on its machines, under identities of its own. */
+static void rule_steps(const struct rule *r)
+{
+    const struct json *steps = json_member(r->c, "steps");
+    const struct json *machines = json_member(r->c, "machines");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i;
+
+    unique(r, steps, "step_id", "the step");
+    unique(r, machines, "machine_id", "the machine");
+    for (i = 0; steps != NULL && i < steps->count; i++) {
+        const char *id = json_text(steps->item[i], "step_id");
+        const char *machine = json_text(steps->item[i], "machine");
+
+        if (id != NULL && strncmp(id, "etude.", 6) == 0) {
+            finding(r->file, steps->item[i]->line,
+                    "%s: the step %s has an identity of the executor's", case_id, id);
+        }
+        if (machine != NULL && !has_member(machines, "machine_id", machine)) {
+            finding(r->file, steps->item[i]->line,
+                    "%s: the step %s runs on %s, which the case does not declare", case_id, id,
+                    machine);
+        }
+    }
+}
+
+/** Reports a bound whose floor, initial value and ceiling are out of order. */
+static void ordered(const struct rule *r, const struct json *bound, const char *what)
+{
+    if (bound != NULL &&
+        (json_member(bound, "floor_us")->integer > json_member(bound, "initial_us")->integer ||
+         json_member(bound, "initial_us")->integer > json_member(bound, "ceiling_us")->integer)) {
+        finding(r->file, bound->line,
+                "%s: the %s bound has its floor, initial value and ceiling out of order",
+                json_text(r->c, "case_id"), what);
+    }
+}
+
+/**
+ * Reports the bound `b` when it is in order but reaches past the whole case's.
+ */
+static void inside(const struct rule *r, const struct json *b, const struct json *whole,
+                   const char *what)
+{
+    ordered(r, b, what);
+    if (json_member(b, "initial_us")->integer > json_member(whole, "initial_us")->integer ||
+        json_member(b, "ceiling_us")->integer > json_member(whole, "ceiling_us")->integer) {
+        finding(r->file, b->line, "%s: the %s bound reaches past the whole case's",
+                json_text(r->c, "case_id"), what);
+    }
+}
+
+/** A bound lies between its floor and ceiling, and inside the whole case's. */
+static void rule_bounds(const struct rule *r)
+{
+    const struct json *bounds = json_member(r->c, "bounds");
+    const struct json *whole = json_member(bounds, "case");
+    const struct json *stages = json_member(bounds, "stages");
+    const char *case_id = json_text(r->c, "case_id");
+    int host = same(r->domain, "host");
+    size_t i;
+
+    ordered(r, whole, "case");
+    inside(r, json_member(bounds, "gap"), whole, "gap");
+    for (i = 0; i < stages->count; i++) {
+        inside(r, stages->item[i], whole, stages->item[i]->name);
+    }
+    if (!host && json_member(stages, "boot") == NULL) {
+        finding(r->file, stages->line, "%s: a case that boots Rach2 has a bound for its boot stage",
+                case_id);
+    }
+    if (host && json_member(stages, "boot") != NULL) {
+        finding(r->file, stages->line, "%s: a host case boots nothing, so it has no boot stage",
+                case_id);
+    }
+}
+
+/** A witness's own bound is a quiet witness's alone. */
+static void rule_progress(const struct rule *r)
+{
+    const struct json *list = json_member(r->c, "progress");
+    size_t i;
+
+    unique(r, list, "witness_id", "the witness");
+    for (i = 0; list != NULL && i < list->count; i++) {
+        const struct json *bound = json_member(list->item[i], "bound");
+
+        if (bound != NULL && !same(json_text(list->item[i], "kind"), "quiet")) {
+            finding(r->file, bound->line,
+                    "%s: the witness %s has a bound of its own, which only a quiet witness has",
+                    json_text(r->c, "case_id"), json_text(list->item[i], "witness_id"));
+        }
+        ordered(r, bound, "witness");
+    }
+}
+
+/**
+ * Returns the sum of `count` over the fixtures `kind` of `list`, 1 for each
+ * without one.
+ */
+static long long fixture_count(const struct json *list, const char *kind)
+{
+    long long total = 0;
+    size_t i;
+
+    for (i = 0; list != NULL && i < list->count; i++) {
+        if (same(json_text(list->item[i], "fixture"), kind)) {
+            const struct json *count = json_member(list->item[i], "count");
+
+            total += count != NULL ? count->integer : 1;
+        }
+    }
+    return total;
+}
+
+/** The reservations cover what the case declares it takes. */
+static void rule_resources(const struct rule *r)
+{
+    const struct json *res = json_member(r->c, "resources");
+    const struct json *memory = json_member(res, "guest_memory");
+    const struct json *native = native_fixtures(r->c);
+    const char *case_id = json_text(r->c, "case_id");
+
+    if (json_member(res, "cpu_millis")->integer > json_member(res, "cpu_ceiling_millis")->integer) {
+        finding(r->file, res->line, "%s: the processor reservation is above its ceiling", case_id);
+    }
+    if (memory != NULL &&
+        (same(r->domain, "host") || json_member(memory, "resident_bytes")->integer >
+                                        json_member(memory, "configured_bytes")->integer)) {
+        finding(r->file, memory->line,
+                "%s: guest_memory is for a guest's profile, resident within what is configured",
+                case_id);
+    }
+    unique(r, json_member(res, "locks"), "lock", "the lock");
+    if (fixture_count(native, "ports") > json_member(res, "ports")->integer) {
+        finding(r->file, res->line, "%s: the native ports fixtures take more ports than reserved",
+                case_id);
+    }
+    if (fixture_count(native, "volume") > json_member(res, "loop_devices")->integer) {
+        finding(r->file, res->line, "%s: the native volumes take more loop devices than reserved",
+                case_id);
+    }
+}
+
+/** Reports each fixture of `list` that is not of the kinds `allowed`. */
+static void allowed_fixtures(const struct rule *r, const struct json *list, const char *allowed,
+                             const char *where)
+{
+    size_t i;
+
+    for (i = 0; list != NULL && i < list->count; i++) {
+        const char *kind = json_text(list->item[i], "fixture");
+        char word[40];
+
+        snprintf(word, sizeof word, " %s ", kind != NULL ? kind : "");
+        if (strstr(allowed, word) == NULL) {
+            finding(r->file, list->item[i]->line, "%s: %s has no %s fixture",
+                    json_text(r->c, "case_id"), where, kind);
+        }
+    }
+}
+
+/** Each placement has the fixtures the Readme gives it. */
+static void rule_fixtures(const struct rule *r)
+{
+    static const char *const single[] = {"workspace", "mountns", "ipcns",   "utsns", "root",
+                                         "log",       "alone",   "console", "pty"};
+    const struct json *native = native_fixtures(r->c);
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i;
+
+    allowed_fixtures(r, json_member(json_member(r->c, "execution"), "isolation"), " scratch disk ",
+                     "a host or QEMU placement");
+    if (native == NULL) {
+        return;
+    }
+    allowed_fixtures(r, native,
+                     " workspace stage volume tmpfs mountns ipcns utsns root ids pty ports peer "
+                     "log alone console ",
+                     "a native run");
+    if (fixture(native, "workspace") == NULL) {
+        finding(r->file, native->line, "%s: a native case has a workspace fixture", case_id);
+    }
+    if (fixture(native, "console") != NULL && fixture(native, "alone") == NULL) {
+        finding(r->file, native->line, "%s: the console fixture comes with alone", case_id);
+    }
+    for (i = 0; i < sizeof single / sizeof single[0]; i++) {
+        if (fixture_count(native, single[i]) > 1) {
+            finding(r->file, native->line, "%s: the fixture %s is given twice", case_id, single[i]);
+        }
+    }
+}
+
+/** The class architecture is for a case of i686 alone. */
+static void rule_native(const struct rule *r)
+{
+    const struct json *archs = json_member(r->c, "architectures");
+    const char *native_class = json_text(json_member(r->c, "native"), "class");
+
+    if (same(native_class, "architecture") &&
+        (archs->type != JSON_ARRAY || archs->count != 1 || !same(archs->item[0]->string, "i686"))) {
+        finding(r->file, line_at(r->c, "native"),
+                "%s: the native class architecture is for a case of i686 alone",
+                json_text(r->c, "case_id"));
+    }
+}
+
+/* ---- where ---- */
+
+/** Splits `where` into its file and its lines; returns 0, or -1 for no line. */
+static int split_where(const char *where, char *file, size_t n, long *first, long *last)
+{
+    const char *colon = strrchr(where, ':');
+    char *end;
+
+    *first = *last = 0;
+    snprintf(file, n, "%.*s", colon ? (int)(colon - where) : (int)strlen(where), where);
+    if (colon == NULL) {
+        return -1;
+    }
+    *first = strtol(colon + 1, &end, 10);
+    *last = *end == '-' ? strtol(end + 1, NULL, 10) : *first;
+    return 0;
+}
+
+/** Returns the number of lines of `path`, or -1 when it cannot be read. */
+static long count_lines(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    long lines = 0;
+    int c, last = '\n';
+
+    if (f == NULL) {
+        return -1;
+    }
+    while ((c = getc(f)) != EOF) {
+        lines += c == '\n';
+        last = c;
+    }
+    fclose(f);
+    return lines + (last != '\n');
+}
+
+/** Reports a `where` that names no file or line of the tree at `root`. */
+static void check_where(const struct rule *r, const struct json *where, const char *root,
+                        int need_line)
+{
+    char file[512], path[1100];
+    long first, last, lines;
+    const char *case_id = json_text(r->c, "case_id");
+    int has_line;
+
+    if (where == NULL) {
+        return;
+    }
+    has_line = split_where(where->string, file, sizeof file, &first, &last) == 0;
+    if (!has_line && need_line) {
+        finding(r->file, where->line, "%s: %s names a file without its line", case_id,
+                where->string);
+        return;
+    }
+    if (file[0] == '/' || strstr(file, "..") != NULL) {
+        finding(r->file, where->line, "%s: %s is not a path inside the tree", case_id,
+                where->string);
+        return;
+    }
+    if (root == NULL) {
+        return;
+    }
+    snprintf(path, sizeof path, "%s/%s", root, file);
+    lines = count_lines(path);
+    if (lines < 0) {
+        finding(r->file, where->line, "%s: %s: no such file in the tree", case_id, where->string);
+    } else if (has_line && (first < 1 || first > last || last > lines)) {
+        finding(r->file, where->line, "%s: %s: the file ends at line %ld", case_id, where->string,
+                lines);
+    }
+}
+
+/** Each `where` names lines of the tree, and each timing assumption its own. */
+static void rule_where(const struct rule *r, const char *root)
+{
+    const struct json *assertions = json_member(r->c, "assertions");
+    const struct json *timing = json_member(r->c, "timing");
+    size_t i;
+
+    for (i = 0; assertions != NULL && i < assertions->count; i++) {
+        check_where(r, json_member(assertions->item[i], "where"), root, 0);
+    }
+    unique(r, timing, "where", "the timing assumption at");
+    for (i = 0; timing != NULL && i < timing->count; i++) {
+        check_where(r, json_member(timing->item[i], "where"), root, 1);
+    }
+}
+
+/* ---- manifests ---- */
+
+/** Applies every rule to the case `c` of the manifest `file`. */
+static void check_case(const char *file, const struct json *c, const char *root)
+{
+    struct rule r;
+
+    r.file = file;
+    r.c = c;
+    r.domain = json_text(c, "domain");
+    r.role = json_text(json_member(c, "execution"), "role");
+    r.plan = json_text(json_member(c, "native"), "plan");
+    rule_sources(&r);
+    rule_branches(&r);
+    rule_role(&r);
+    rule_artifacts(&r);
+    rule_steps(&r);
+    rule_bounds(&r);
+    rule_progress(&r);
+    rule_resources(&r);
+    rule_fixtures(&r);
+    rule_native(&r);
+    rule_where(&r, root);
+}
+
+/** Returns 1 when `path` is a file `NAME.json` of a directory named `cases`. */
+static int in_cases_dir(const char *path, char *name, size_t n)
+{
+    const char *base = strrchr(path, '/');
+    const char *dir;
+    size_t len;
+
+    if (base == NULL || base - path < 5) {
+        return 0;
+    }
+    dir = base - 5;
+    if (strncmp(dir, "cases", 5) != 0 || (dir > path && dir[-1] != '/')) {
+        return 0;
+    }
+    len = strlen(base + 1);
+    if (len < 6 || strcmp(base + 1 + len - 5, ".json") != 0) {
+        return 0;
+    }
+    snprintf(name, n, "%.*s", (int)(len - 5), base + 1);
+    return 1;
+}
+
+/**
+ * Checks the family's name and the identities of its cases against every
+ * manifest before.
+ */
+static void check_family(const struct cases *set, size_t at)
+{
+    const struct manifest *m = &set->m[at];
+    const char *family = json_text(m->doc, "family_id");
+    const struct json *list = json_member(m->doc, "cases");
+    size_t prefix = strlen(family), i;
+    char name[256];
+
+    if (in_cases_dir(m->path, name, sizeof name) && strcmp(name, family) != 0) {
+        finding(m->path, line_at(m->doc, "family_id"),
+                "the family %s has its manifest in %s.json, not %s.json", family, name, family);
+    }
+    for (i = 0; i < list->count; i++) {
+        const char *id = json_text(list->item[i], "case_id");
+        const char *other = NULL;
+        const struct json *before = find_case(set, id, &other);
+
+        if (strncmp(id, family, prefix) != 0 || id[prefix] != '.') {
+            finding(m->path, list->item[i]->line,
+                    "%s: a case of the family %s has an identity "
+                    "that begins %s.",
+                    id, family, family);
+        }
+        if (before != list->item[i]) {
+            finding(m->path, list->item[i]->line, "%s: the case is declared in %s too", id, other);
+        }
+    }
+}
+
+/**
+ * Reads the manifests of `paths` into `set` and checks each: its shape by
+ * the case schema, then the rules of this file. Returns 0 when every
+ * manifest passes, 1 after a finding and 2 when a file cannot be read.
+ * A manifest whose shape is wrong is kept out of `set`.
+ */
+int load_manifests(struct cases *set, char **paths, int n)
+{
+    struct json *schema = read_schema(set->schemas, "case");
+    int status = 0, i, before = findings();
+    size_t j;
+
+    if (schema == NULL) {
+        return 2;
+    }
+    set->m = json_alloc((size_t)(n > 0 ? n : 1) * sizeof *set->m);
+    set->n = 0;
+    for (i = 0; i < n; i++) {
+        int read_status = 0;
+        struct json *doc = read_json(paths[i], &read_status);
+
+        if (doc == NULL) {
+            status = read_status > status ? read_status : status;
+            continue;
+        }
+        if (schema_findings(schema, doc, paths[i]) != 0) {
+            json_free(doc);
+            continue;
+        }
+        set->m[set->n].path = paths[i];
+        set->m[set->n].doc = doc;
+        set->n++;
+        check_family(set, set->n - 1);
+        for (j = 0; j < json_member(doc, "cases")->count; j++) {
+            check_case(paths[i], json_member(doc, "cases")->item[j], set->root);
+        }
+    }
+    json_free(schema);
+    if (status == 0 && findings() > before) {
+        status = 1;
+    }
+    return status;
+}
+
+/** Frees the manifests of `set`. */
+void free_manifests(struct cases *set)
+{
+    size_t i;
+
+    for (i = 0; i < set->n; i++) {
+        json_free(set->m[i].doc);
+    }
+    free(set->m);
+    set->m = NULL;
+    set->n = 0;
+}
+
+/**
+ * Returns the first case `case_id` of `set`, and its file in `*file`, or NULL.
+ */
+const struct json *find_case(const struct cases *set, const char *case_id, const char **file)
+{
+    size_t i, j;
+
+    for (i = 0; i < set->n; i++) {
+        const struct json *list = json_member(set->m[i].doc, "cases");
+
+        for (j = 0; j < list->count; j++) {
+            if (same(json_text(list->item[j], "case_id"), case_id)) {
+                if (file != NULL) {
+                    *file = set->m[i].path;
+                }
+                return list->item[j];
+            }
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Writes the digest of the case's assertion inventory into `hex`: the
+ * SHA-256 of the canonical form of its `case_id`, `assertions`, `branches`
+ * and `termination`, with `schema_version` 1, as the Readme's History says.
+ */
+void inventory_digest(const struct json *c, char hex[65])
+{
+    static const char *const parts[] = {"assertions", "branches", "case_id", "termination"};
+    struct json *items[5];
+    struct json inventory = {0}, version = {0};
+    struct jbuf b = {0};
+    struct sha256 s;
+    unsigned char digest[32];
+    size_t i;
+
+    version.type = JSON_INTEGER;
+    version.integer = 1;
+    version.name = "schema_version";
+    inventory.type = JSON_OBJECT;
+    inventory.item = items;
+    for (i = 0; i < sizeof parts / sizeof parts[0]; i++) {
+        items[inventory.count++] = (struct json *)json_member(c, parts[i]);
+    }
+    items[inventory.count++] = &version;
+    json_canonical(&inventory, &b);
+    sha256_init(&s);
+    sha256_update(&s, (const unsigned char *)b.data, b.len);
+    sha256_final(&s, digest);
+    sha256_hex(digest, hex);
+    jbuf_free(&b);
+}
+
+/**
+ * Prints each line that a timing assumption of `set` declares, as `FILE:LINE
+ * KIND CASE`, for suitecheck.sh to accept at that line and no other.
+ */
+int print_timing(const struct cases *set)
+{
+    size_t i, j, k;
+
+    for (i = 0; i < set->n; i++) {
+        const struct json *list = json_member(set->m[i].doc, "cases");
+
+        for (j = 0; j < list->count; j++) {
+            const struct json *timing = json_member(list->item[j], "timing");
+
+            for (k = 0; k < timing->count; k++) {
+                char file[512];
+                long first, last, line;
+
+                if (split_where(json_text(timing->item[k], "where"), file, sizeof file, &first,
+                                &last) != 0) {
+                    continue;
+                }
+                for (line = first; line <= last; line++) {
+                    say("%s:%ld %s %s\n", file, line, json_text(timing->item[k], "kind"),
+                        json_text(list->item[j], "case_id"));
+                }
+            }
+        }
+    }
+    return 0;
+}

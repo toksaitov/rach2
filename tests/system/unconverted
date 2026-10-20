@@ -1,0 +1,76 @@
+# The findings of tools/verify/suitecheck.sh in the tests that predate etude's
+# case manifests, one line per file and rule as FILE: COUNT RULE. The rules are
+# `sleep`, a sleep that waits for no event; `bound`, an upper bound on a
+# duration; and `skip`, a line that prints a skip in a test that passes. A
+# conversion to etude's cases (dev-log/62-etude/plan.md) declares each in a
+# case's timing or removes it. A file whose count differs from its entry fails
+# the check, so the list only falls. A person reads this list.
+tests/ahciprobe.c: 2 sleep
+tests/conloadprobe.c: 1 sleep
+tests/dgramprobe.c: 1 sleep
+tests/dnstest.c: 1 skip
+tests/exitprobe.c: 2 sleep
+tests/fsbaseprobe.c: 1 sleep
+tests/host/account_mutate.sh: 1 sleep
+tests/host/ata_durable_mutate.sh: 1 sleep
+tests/host/ata_identify_mutate.sh: 1 sleep
+tests/host/ata_wait_mutate.sh: 1 sleep
+tests/host/etude_exec_hosttest.c: 2 skip
+tests/host/exfat_hosttest.c: 1 skip
+tests/host/exfat_scan_mutate.sh: 1 sleep
+tests/host/ext2_batch_mutate.sh: 1 sleep
+tests/host/fat_barriers_mutate.sh: 1 sleep
+tests/host/fat_synced_mutate.sh: 1 sleep
+tests/host/fat32_hosttest.c: 1 skip
+tests/host/ish_mutate.sh: 1 sleep
+tests/host/netif_hosttest.c: 1 sleep
+tests/host/pwauth_hosttest.c: 2 sleep
+tests/jobprobe.c: 1 sleep
+tests/lagprobe.c: 1 sleep
+tests/limitprobe.c: 1 sleep
+tests/loadprobe.c: 1 sleep
+tests/loopprobe.c: 1 sleep
+tests/memprobe.c: 1 sleep
+tests/modeprobe.c: 1 sleep
+tests/mountprobe.c: 1 sleep
+tests/mouseprobe.c: 1 sleep
+tests/musl/callsmusl.c: 3 sleep
+tests/musl/capmusl.c: 1 sleep
+tests/musl/clockidmusl.c: 4 sleep
+tests/musl/clockmusl.c: 1 sleep
+tests/musl/epollmusl.c: 2 sleep
+tests/musl/fifomusl.c: 2 sleep
+tests/musl/ipcmusl.c: 2 sleep
+tests/musl/lockmusl.c: 3 sleep
+tests/musl/pollmusl.c: 1 sleep
+tests/musl/pselectmusl.c: 1 sleep
+tests/musl/ptracemusl.c: 2 skip
+tests/musl/ptracemusl.c: 8 sleep
+tests/musl/pwauthmusl.c: 6 sleep
+tests/musl/sigframemusl.c: 1 sleep
+tests/musl/smpmusl.c: 1 sleep
+tests/musl/sockflagmusl.c: 1 sleep
+tests/musl/stampmusl.c: 1 sleep
+tests/musl/statmusl.c: 1 sleep
+tests/musl/threadmusl.c: 7 sleep
+tests/musl/timemusl.c: 1 bound
+tests/musl/timemusl.c: 1 sleep
+tests/musl/timerfdmusl.c: 1 sleep
+tests/musl/unixmusl.c: 2 sleep
+tests/packetprobe.c: 1 sleep
+tests/pingtest.c: 1 sleep
+tests/pollprobe.c: 1 sleep
+tests/poolprobe.c: 1 sleep
+tests/procprobe.c: 1 sleep
+tests/ptyprobe.c: 1 sleep
+tests/rawprobe.c: 1 sleep
+tests/sigprobe.c: 1 sleep
+tests/system/suites.mk: 3 skip
+tests/system/suites/exfat.sh: 3 skip
+tests/system/suites/fatwrite.sh: 2 skip
+tests/timeprobe.c: 1 sleep
+tests/usbdiskprobe.c: 1 sleep
+tests/usbprobe.c: 1 sleep
+tests/waitprobe.c: 1 sleep
+tests/xsaveprobe.c: 1 skip
+tests/xsaveprobe.c: 1 sleep

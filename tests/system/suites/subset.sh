@@ -40,7 +40,7 @@ run_one() {
         echo "subset-test: $subsystem and run the other three" >&2
         return 1
     fi
-    echo "subset-test: $opt: $subsystem skipped, the rest ran: OK"
+    echo "subset-test: $opt: $subsystem left out, the rest ran: OK"
 }
 
 run_one "rach2.noaudio" audio \

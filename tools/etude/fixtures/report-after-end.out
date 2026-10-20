@@ -1,0 +1,10 @@
+errnoprobe: the program's own line
+@etude 1 begin guest.default.errnoprobe
+@etude 1 assert enosys-unimplemented pass
+@etude 1 assert enosys-out-of-range pass
+@etude 1 assert enoent-open pass
+@etude 1 assert ebadf-close pass
+@etude 1 assert ebadf-read pass
+@etude 1 assert efault-writev pass
+@etude 1 end 6
+@etude 1 assert ebadf-read pass

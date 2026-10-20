@@ -1,0 +1,5 @@
+@etude 1 begin guest.default.rngprobe
+@etude 1 assert cpuid-leaf7 pass
+@etude 1 assert trusted-urandom pass
+@etude 1 assert trusted-monobit pass
+@etude 1 end 3
