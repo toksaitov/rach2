@@ -34,10 +34,10 @@ if sys.argv[2] == "rate":
     new = ""
 else:
     old = "    if (user_callback) {\n" \
-          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
+          "        user_callback(fill_buffer, period_bytes);\n" \
           "    } else {\n" \
-          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
-    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
+          "        ring_read_to_buffer(fill_buffer, period_bytes);\n    }"
+    new = "    ring_read_to_buffer(fill_buffer, period_bytes);"
 if s.count(old) != 1:
     raise SystemExit("sb16-mutation: source pattern is not unique")
 p.write_text(s.replace(old, new))

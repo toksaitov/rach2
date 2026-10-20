@@ -203,6 +203,48 @@ void dma_stop(uint8_t channel)
     outb(mask_port, (channel & 3) | 0x04);
 }
 
+/** Read the count register at `count_port`, low byte then high byte. */
+static uint16_t dma_read_count(uint16_t flipflop_port, uint16_t count_port)
+{
+    uint16_t low;
+
+    outb(flipflop_port, 0);
+    low = inb(count_port);
+    return (uint16_t)(low | ((uint16_t)inb(count_port) << 8));
+}
+
+/**
+ * The register is read a byte at a time while the controller counts down, so
+ * one reading can take its low byte before a borrow into the high byte and
+ * its high byte after, and be 256 short. The count only falls between
+ * reloads, so a reading whose high byte equals that of the reading before it
+ * took no borrow, and that reading is the one returned; a reload between the
+ * two also changes the high byte and is read again.
+ */
+int dma_remaining(uint8_t channel)
+{
+    uint16_t flipflop_port, count_port;
+    uint16_t before, count;
+    int tries;
+
+    if (channel > 7 || channel == 4) {
+        return -1;
+    }
+
+    flipflop_port = (channel < 4) ? DMA1_FLIPFLOP : DMA2_FLIPFLOP;
+    count_port = dma_get_count_port(channel);
+    count = dma_read_count(flipflop_port, count_port);
+    for (tries = 0; tries < 4; tries++) {
+        before = count;
+        count = dma_read_count(flipflop_port, count_port);
+        if ((before >> 8) == (count >> 8)) {
+            break;
+        }
+    }
+
+    return (int)count + 1;
+}
+
 /**
  * ISA DMA reaches only the low 16 MiB. The controller increments the address
  * register but not the page register, so a transfer may not cross a page

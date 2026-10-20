@@ -34,27 +34,30 @@ static bool playing = false;
 static audio_callback_t user_callback = NULL;
 
 /*
- * DMA double-buffer: one contiguous region split into two halves. ISA DMA
- * requires the buffer to lie below 16MB and not cross the page its channel
- * counts in: 64KB for the 8-bit channel, 128KB for the 16-bit one. The
+ * DMA double-buffer: one contiguous region split into two halves of
+ * period_bytes each. ISA DMA requires the buffer to lie below 16MB and not
+ * cross the page its channel counts in: 64KB for the 8-bit channel, 128KB for
+ * the 16-bit one. The region is one aligned page, so it crosses neither. The
  * kernel image, whose .bss this is, is loaded from 1 MiB, and the controller
  * is given the physical address, `virt_to_phys` of it.
  */
-static uint8_t dma_buffer[SB16_BUFFER_SIZE * 2] __attribute__((aligned(16)));
-static int current_buffer = 0; /* half the DMA is currently playing */
+static uint8_t dma_buffer[SB16_PERIOD_MAX * 2] __attribute__((aligned(4096)));
+static uint32_t period_bytes = SB16_PERIOD_FRAMES; /* set by sb16_start */
 static volatile uint32_t irq_count = 0;
 
 /*
  * Ring buffer that decouples the producer (Doom via AUDIO_WRITE) from the
  * consumer (DMA via IRQ), absorbing timing jitter between Doom's frame rate
- * and the fixed DMA consumption rate. Eight DMA periods deep (~116ms at
- * 11025 Hz, about four Doom frames with 160-sample DMA buffers).
+ * and the fixed DMA consumption rate. It holds ring_size bytes, eight DMA
+ * periods (93 ms at 11025 Hz, about three Doom frames), of an array large
+ * enough for eight of the largest.
  */
-#define RING_BUFFER_SIZE (SB16_BUFFER_SIZE * 8)
+#define RING_BUFFER_SIZE (SB16_PERIOD_MAX * 8)
 
 static uint8_t ring_buffer[RING_BUFFER_SIZE];
-static volatile uint32_t ring_read_ptr = 0;  /* IRQ reads here */
-static volatile uint32_t ring_write_ptr = 0; /* write() appends here */
+static uint32_t ring_size = RING_BUFFER_SIZE; /* set by sb16_start */
+static volatile uint32_t ring_read_ptr = 0;   /* IRQ reads here */
+static volatile uint32_t ring_write_ptr = 0;  /* write() appends here */
 
 static volatile uint32_t underrun_count = 0;
 static volatile uint32_t underrun_samples = 0;
@@ -72,7 +75,7 @@ static uint32_t ring_available(void)
     if (w >= r) {
         return w - r;
     }
-    return RING_BUFFER_SIZE - r + w;
+    return ring_size - r + w;
 }
 
 /**
@@ -83,7 +86,7 @@ static uint32_t ring_available(void)
  */
 static uint32_t ring_free(void)
 {
-    return RING_BUFFER_SIZE - 1 - ring_available();
+    return ring_size - 1 - ring_available();
 }
 
 /**
@@ -106,7 +109,7 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 
     for (i = 0; i < to_write; i++) {
         ring_buffer[wp] = data[i];
-        wp = (wp + 1) % RING_BUFFER_SIZE;
+        wp = (wp + 1) % ring_size;
     }
 
     ring_write_ptr = wp;
@@ -136,7 +139,7 @@ static void ring_read_to_buffer(uint8_t *dest, uint32_t count)
 
     for (i = 0; i < to_read; i++) {
         dest[i] = ring_buffer[rp];
-        rp = (rp + 1) % RING_BUFFER_SIZE;
+        rp = (rp + 1) % ring_size;
     }
 
     ring_read_ptr = rp;
@@ -306,19 +309,19 @@ static bool sb16_start_auto_init(void)
     if (is_16bit) {
         dma_channel = SB16_DMA_16BIT;
         dsp_cmd = DSP_16BIT_OUT_AI;
-        mode = 0x10;                             /* signed */
-        block_size = (SB16_BUFFER_SIZE / 2) - 1; /* one half, in 16-bit words */
+        mode = 0x10;                                   /* signed */
+        block_size = (uint16_t)(period_bytes / 2 - 1); /* one half, in 16-bit words */
     } else {
         dma_channel = SB16_DMA_8BIT;
         dsp_cmd = DSP_8BIT_OUT_AI;
-        mode = 0x00;                       /* unsigned */
-        block_size = SB16_BUFFER_SIZE - 1; /* one half, in bytes */
+        mode = 0x00;                               /* unsigned */
+        block_size = (uint16_t)(period_bytes - 1); /* one half, in bytes */
     }
     if (current_channels == 2) {
         mode |= 0x20; /* stereo */
     }
 
-    if (dma_start(dma_channel, addr, SB16_BUFFER_SIZE * 2,
+    if (dma_start(dma_channel, addr, period_bytes * 2,
                   DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTOINIT) < 0) {
         return false;
     }
@@ -329,16 +332,40 @@ static bool sb16_start_auto_init(void)
 }
 
 /**
- * Service the SB16 half-buffer interrupt: refill the half that just drained.
+ * The half of the double buffer the DMA controller is reading, 0 or 1, from
+ * the transfers it has left before the end of the buffer. A count outside the
+ * buffer, which no running transfer gives, is taken as its start.
+ */
+static int sb16_playing_half(void)
+{
+    uint32_t unit = is_16bit ? 2u : 1u;
+    uint32_t total = period_bytes * 2u / unit;
+    int left = dma_remaining(is_16bit ? SB16_DMA_16BIT : SB16_DMA_8BIT);
+
+    if (left < 1 || (uint32_t)left > total) {
+        return 0;
+    }
+    return (total - (uint32_t)left) * unit >= period_bytes ? 1 : 0;
+}
+
+/**
+ * Service the SB16 half-buffer interrupt: refill the half the DMA is not
+ * reading.
  *
  * In auto-init mode the DMA controller cycles the double-buffer on its own and
  * the DSP raises this IRQ as each block completes, so the handler only
- * acknowledges the interrupt and refills the finished half from the callback
- * or the ring buffer; no DMA restart is needed. ring_read_to_buffer() covers
- * any underrun with silence. The 8-bit and 16-bit transfers acknowledge their
- * interrupts through different ports. current_buffer is the half that was
- * playing and has just finished; it is refilled, and the other half becomes
- * current.
+ * acknowledges the interrupt and refills a half from the callback or the ring
+ * buffer; no DMA restart is needed. ring_read_to_buffer() covers any underrun
+ * with silence. The 8-bit and 16-bit transfers acknowledge their interrupts
+ * through different ports.
+ *
+ * The half is found from the controller's position, not by counting
+ * interrupts: two blocks that complete before the first interrupt is serviced
+ * raise it once, and a count would from then on refill the half being read.
+ * An interrupt serviced that late finds the DMA reading a half it has played
+ * already, so that half is heard twice, and the refills stay in step. An
+ * interrupt that finds the DMA still in the half of the last refill refills
+ * the other half again, and the frames of the last refill are not played.
  */
 static void sb16_irq_handler(isr_params_t *params)
 {
@@ -357,14 +384,12 @@ static void sb16_irq_handler(isr_params_t *params)
 
     irq_count++;
 
-    fill_buffer = dma_buffer + (current_buffer * SB16_BUFFER_SIZE);
-
-    current_buffer = 1 - current_buffer;
+    fill_buffer = dma_buffer + (uint32_t)(1 - sb16_playing_half()) * period_bytes;
 
     if (user_callback) {
-        user_callback(fill_buffer, SB16_BUFFER_SIZE);
+        user_callback(fill_buffer, period_bytes);
     } else {
-        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);
+        ring_read_to_buffer(fill_buffer, period_bytes);
     }
 }
 
@@ -450,8 +475,9 @@ static void sb16_shutdown(void)
 /**
  * Begin auto-init playback at the given rate, format, and channel count.
  *
- * Stops any current playback, primes both DMA halves with silence (and the
- * callback's data if one is set), resets the ring buffer, then arms the DSP.
+ * Stops any current playback, sizes the period and the ring for the format and
+ * empties the ring, primes both DMA halves with silence (and the callback's
+ * data if one is set), then arms the DSP.
  * The DSP 4.xx sample-rate command must precede the transfer command, so the
  * rate is programmed before sb16_start_auto_init() issues 0xC6/0xB6.
  *
@@ -474,6 +500,12 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
         return -EINVAL;
     }
 
+    period_bytes = SB16_PERIOD_FRAMES * ((sample_rate + 11024) / 11025) * (is_16bit ? 2u : 1u) *
+                   (channels == 2 ? 2u : 1u);
+    ring_size = period_bytes * 8;
+    ring_read_ptr = 0;
+    ring_write_ptr = 0;
+
     /* DSP 4.xx sample-rate command must precede the transfer command. */
     if (!dsp_write(DSP_SPEAKER_ON) || !dsp_write(DSP_SET_SAMPLE_RATE) ||
         !dsp_write((sample_rate >> 8) & 0xFF) || !dsp_write(sample_rate & 0xFF)) {
@@ -481,18 +513,14 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
     }
 
     /* Silence both halves: 0 for 16-bit signed, 128 for 8-bit unsigned. */
-    k_memset(dma_buffer, is_16bit ? 0 : 128, SB16_BUFFER_SIZE * 2);
-
-    ring_read_ptr = 0;
-    ring_write_ptr = 0;
+    k_memset(dma_buffer, is_16bit ? 0 : 128, period_bytes * 2);
 
     if (user_callback) {
-        user_callback(dma_buffer, SB16_BUFFER_SIZE);
-        user_callback(dma_buffer + SB16_BUFFER_SIZE, SB16_BUFFER_SIZE);
+        user_callback(dma_buffer, period_bytes);
+        user_callback(dma_buffer + period_bytes, period_bytes);
     }
 
     irq_count = 0;
-    current_buffer = 0;
     playing = true;
 
     if (!sb16_start_auto_init()) {

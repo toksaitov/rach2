@@ -1,6 +1,6 @@
 /**
- * SB16 PCM frames, failed setup, callback playback and the shell's scale
- * command against port stubs.
+ * SB16 PCM frames, periods, failed setup, callback playback and the shell's
+ * scale command against port stubs and a model of the DMA position.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
@@ -21,6 +21,7 @@ static int dma_starts;
 static int stopped_channel;
 static int callback_count;
 static int immediate_irq; /* the 8th DSP byte completes a block at once */
+static int dma_half;      /* the half of the buffer the model's DMA reads */
 static uint8_t commands[32];
 static int scale_done;
 static int scale_failed;
@@ -57,8 +58,10 @@ void outb(uint16_t port, uint8_t value)
         if (writes < (int)sizeof(commands))
             commands[writes] = value;
         writes++;
-        if (immediate_irq && writes == 8)
+        if (immediate_irq && writes == 8) {
+            dma_half = 1;
             sb16_irq_handler(NULL);
+        }
     }
 }
 
@@ -68,10 +71,19 @@ int dma_start(uint8_t channel, uint32_t address, uint32_t length, uint8_t mode)
     (void)address;
     dma_starts++;
     CHECK(channel == (is_16bit ? 5 : 1), "dma channel matches format");
-    CHECK(length == SB16_BUFFER_SIZE * 2, "dma covers both halves");
+    CHECK(length == period_bytes * 2, "dma covers both halves");
     CHECK(mode == (DMA_MODE_SINGLE | DMA_MODE_READ | DMA_MODE_AUTOINIT), "dma mode");
     dma_active = !dma_failure;
     return dma_failure ? -1 : 0;
+}
+
+/** Give the count left when the model's DMA begins the half `dma_half`. */
+int dma_remaining(uint8_t channel)
+{
+    uint32_t unit = is_16bit ? 2 : 1;
+
+    CHECK(channel == (is_16bit ? 5 : 1), "position is read on the format's channel");
+    return (int)((uint32_t)(2 - dma_half) * period_bytes / unit);
 }
 
 /** Record masking of the selected channel. */
@@ -105,8 +117,9 @@ static void reset_model(void)
     busy_after = -1;
     writes = resets = dma_failure = dma_active = callback_count = immediate_irq = 0;
     stopped_channel = -1;
-    dma_starts = 0;
+    dma_starts = dma_half = 0;
     ring_read_ptr = ring_write_ptr = 0;
+    ring_size = RING_BUFFER_SIZE;
 }
 
 /** Compare bytes without importing host definitions of kernel types. */
@@ -204,18 +217,54 @@ static void row_setup(void)
           "rate below 5000 refused");
 }
 
+/**
+ * A period is 128 frames for each 11025 Hz of the rate or part of it, the
+ * DSP's block is one period and the ring is eight.
+ */
+static void row_period(void)
+{
+    static const struct {
+        uint32_t rate;
+        audio_format_t format;
+        int channels;
+        uint32_t bytes;
+    } rows[] = {{5000, AUDIO_U8, 1, 128},     {11025, AUDIO_U8, 1, 128},
+                {11026, AUDIO_U8, 1, 256},    {22050, AUDIO_U8, 2, 512},
+                {32000, AUDIO_S16LE, 1, 768}, {44100, AUDIO_S16LE, 2, 2048},
+                {44100, AUDIO_U8, 3, 512}};
+    unsigned int i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        uint32_t unit = rows[i].format == AUDIO_S16LE ? 2 : 1;
+
+        reset_model();
+        CHECK(sb16_start(rows[i].rate, rows[i].format, rows[i].channels) == 0, "period start");
+        CHECK(period_bytes == rows[i].bytes, "period follows rate and format");
+        CHECK((uint32_t)(commands[6] | commands[7] << 8) == rows[i].bytes / unit - 1,
+              "dsp block is one period");
+        CHECK(ring_size == rows[i].bytes * 8, "ring holds eight periods");
+        CHECK(period_bytes * 2 <= sizeof(dma_buffer), "both periods fit the buffer");
+    }
+}
+
 /** Stamp each callback fill so repeated or silent halves can be detected. */
 static void fill_callback(void *buffer, size_t size)
 {
     callback_count++;
-    CHECK(size == SB16_BUFFER_SIZE, "callback fills one half");
+    CHECK(size == period_bytes, "callback fills one half");
     k_memset(buffer, callback_count, size);
 }
 
-/** Callback data must continue beyond the two primed halves. */
+/**
+ * Callback data must continue beyond the two primed halves into the half the
+ * DMA is not reading, wherever the interrupts find it: twice in one half, as
+ * an interrupt does that is serviced after two blocks have completed, and
+ * alternating.
+ */
 static void row_callback(void)
 {
-    int n;
+    static const int reading[] = {0, 1, 1, 0, 0, 0, 1, 0};
+    unsigned int n;
     uint8_t queued = 0x55;
 
     reset_model();
@@ -223,27 +272,35 @@ static void row_callback(void)
     immediate_irq = 1;
     CHECK(sb16_start(44100, AUDIO_S16LE, 2) == 0, "callback start");
     CHECK(callback_count == 3 && irq_count == 1, "immediate irq sees initialized playback");
+    CHECK(dma_buffer[0] == 3 && dma_buffer[period_bytes] == 2,
+          "immediate irq refills the half after the first block");
     CHECK(sb16_write(&queued, 1) == 1, "callback row queues sentinel");
-    for (n = 0; n < 6; n++) {
-        int half = current_buffer;
+    for (n = 0; n < sizeof(reading) / sizeof(reading[0]); n++) {
+        uint8_t kept;
+
+        dma_half = reading[n];
+        kept = dma_buffer[(uint32_t)dma_half * period_bytes];
         sb16_irq_handler(NULL);
-        CHECK(dma_buffer[half * SB16_BUFFER_SIZE] == callback_count,
-              "callback refills completed half");
+        CHECK(dma_buffer[(uint32_t)(1 - dma_half) * period_bytes] == callback_count,
+              "callback refills the half the dma is not reading");
+        CHECK(dma_buffer[(uint32_t)dma_half * period_bytes] == kept,
+              "refill leaves the half the dma reads");
     }
-    CHECK(callback_count == 9, "callback continues after priming");
+    CHECK(callback_count == 11, "callback continues after priming");
     CHECK(ring_available() == 1, "callback leaves ring untouched");
     sb16_stop();
     sb16_irq_handler(NULL);
-    CHECK(callback_count == 9, "stopped playback ignores refill");
+    CHECK(callback_count == 11, "stopped playback ignores refill");
     reset_model();
     CHECK(sb16_start(11025, AUDIO_U8, 1) == 0, "ring start");
     sb16_write(&queued, 1);
     sb16_irq_handler(NULL);
-    CHECK(dma_buffer[0] == queued && dma_buffer[1] == 128, "ring refill remains available");
+    CHECK(dma_buffer[period_bytes] == queued && dma_buffer[period_bytes + 1] == 128,
+          "ring refill remains available");
 }
 
 /** Replace the idle wait with one timer tick and twelve completed DMA
- * blocks. */
+ * blocks, the model's DMA moving to the other half at the end of each. */
 void idle_wait_irq_on(void)
 {
     static const uint32_t half_periods[] = {84, 75, 66, 63, 56};
@@ -255,8 +312,10 @@ void idle_wait_irq_on(void)
         scale_notes |= 1u << note;
     }
     for (block = 0; block < 12; block++) {
-        int half = current_buffer;
-        int16_t *samples = (int16_t *)(dma_buffer + half * SB16_BUFFER_SIZE);
+        int16_t *samples;
+
+        dma_half = 1 - dma_half;
+        samples = (int16_t *)(dma_buffer + (uint32_t)(1 - dma_half) * period_bytes);
         sb16_irq_handler(NULL);
         CHECK(samples[0] == 12000 || samples[0] == -12000, "scale refills contain sound");
         CHECK(samples[0] == samples[1], "scale channels agree");
@@ -346,6 +405,7 @@ int main(int argc, char **argv)
         row_setup();
     }
     if (argc == 1) {
+        row_period();
         row_callback();
         row_scale();
     }

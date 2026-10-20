@@ -51,10 +51,19 @@ elif fault == "setup-dma":
     new = "        (void)0;\n    }\n\n    /* DSP 4.xx auto-init:"
 elif fault == "callback":
     old = "    if (user_callback) {\n" \
-          "        user_callback(fill_buffer, SB16_BUFFER_SIZE);\n" \
+          "        user_callback(fill_buffer, period_bytes);\n" \
           "    } else {\n" \
-          "        ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);\n    }"
-    new = "    ring_read_to_buffer(fill_buffer, SB16_BUFFER_SIZE);"
+          "        ring_read_to_buffer(fill_buffer, period_bytes);\n    }"
+    new = "    ring_read_to_buffer(fill_buffer, period_bytes);"
+elif fault == "position":
+    old = "(uint32_t)(1 - sb16_playing_half()) * period_bytes;"
+    new = "(uint32_t)sb16_playing_half() * period_bytes;"
+elif fault == "period":
+    old = "    period_bytes = SB16_PERIOD_FRAMES * ((sample_rate + 11024) / 11025) *"
+    new = "    period_bytes = SB16_PERIOD_FRAMES *"
+elif fault == "dma-count":
+    old = "        if ((before >> 8) == (count >> 8)) {\n            break;\n        }\n"
+    new = "        (void)before;\n        break;\n"
 elif fault == "mouse-aux":
     old = "    if (!(status & PS2_STATUS_OUTPUT_FULL) || !(status & PS2_STATUS_MOUSE_DATA)) {\n" \
           "        return;\n    }\n    data = inb(PS2_DATA_PORT);\n"
@@ -146,8 +155,14 @@ select_fault()
             failure='failed setup returns failure' ;;
         callback) test=sb16; file=audio/sb16.c
             failure='callback continues after priming' ;;
+        position) test=sb16; file=audio/sb16.c
+            failure='callback refills the half the dma is not reading' ;;
+        period) test=sb16; file=audio/sb16.c
+            failure='period follows rate and format' ;;
         dma-stop) test=dma; file=audio/dma.c
             failure='cascade and invalid channels do no I/O' ;;
+        dma-count) test=dma; file=audio/dma.c
+            failure='across a borrow in the second reading' ;;
         scale) test=sb16; file=audio/audio_debug.c
             failure='sb16 scale selects 44100 hz' ;;
         gfx-enter|gfx-exit) test=vga_gfx; file=display/vga_gfx.c
@@ -193,7 +208,7 @@ select_fault()
 }
 
 faults='frames gfx-enter gfx-exit setup-speaker setup-transfer setup-dma scale
-    callback cursor mouse-aux mouse-reply mouse-drop mouse-reset mouse-y
+    callback position period dma-count cursor mouse-aux mouse-reply mouse-drop mouse-reset mouse-y
     mouse-drain mouse-sti mouse-input mouse-enable mouse-config mouse-ack
     mouse-resend mouse-register mouse-frame mouse-overflow dma-stop kbd-aux insyde
     pm-answers'

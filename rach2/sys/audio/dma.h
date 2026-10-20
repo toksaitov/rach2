@@ -41,6 +41,15 @@ int dma_start(uint8_t channel, uint32_t buffer, uint32_t length, uint8_t mode);
 void dma_stop(uint8_t channel);
 
 /**
+ * The transfers `channel` has left before its terminal count: its count
+ * register plus one, in bytes on channels 0-3 and in words on 5-7. In
+ * auto-initialize mode the register reloads at the terminal count, so this
+ * is the distance to the end of the buffer. Returns -1 for channel 4 and
+ * channels above 7.
+ */
+int dma_remaining(uint8_t channel);
+
+/**
  * Whether `length` bytes at physical `address` are a buffer ISA DMA can move
  * on a channel of the given width: not empty, below 16 MiB, inside one page
  * (64 KiB for an 8-bit channel, 128 KiB for a 16-bit one), and for a 16-bit
