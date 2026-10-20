@@ -588,7 +588,10 @@ static int watch(const char *name)
 
 /** Wait up to `ms` until no process has the FIFO `fd` open for writing,
  * which is when every process of the attempt has exited; whether they have.
- * Call it only after the attempt has run, and it closes `fd`. */
+ * A read returns 0 once no writer is left. macOS's poll does not report the
+ * close of a FIFO's last writer, so poll only bounds each wait between
+ * reads, to 20 ms. Call it only after the attempt has run, and it closes
+ * `fd`. */
 static int all_gone(int fd, int ms)
 {
     long long until = now_ms() + ms;
@@ -596,13 +599,11 @@ static int all_gone(int fd, int ms)
     char buf[64];
     ssize_t r = -1;
 
-    while (fd >= 0 && r != 0 && now_ms() < until) {
+    while (fd >= 0 && (r = read(fd, buf, sizeof(buf))) != 0 && now_ms() < until) {
         p.fd = fd;
         p.events = POLLIN;
         p.revents = 0;
-        if (poll(&p, 1, (int)(until - now_ms())) <= 0)
-            break;
-        r = read(fd, buf, sizeof(buf));
+        poll(&p, 1, 20);
     }
     if (fd >= 0)
         close(fd);
