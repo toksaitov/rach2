@@ -1,0 +1,880 @@
+{
+  "schema_version": 1,
+  "proof": "open",
+  "summary": "open_hosttest.c, the cleanup, errors and locking of an open and the calls by path, with faults in private copies of rach2/sys/syscall_fs.c, block/loop.c and mm/filemap.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/block/loop.c",
+    "rach2/sys/mm/filemap.c"
+  ],
+  "artifacts": [
+    "${WORK}/open_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} rach2/sys rach2/kernel.h rach2/vendor/multiboot.h tests/host\ncd \"$t\"\ns=rach2/sys\nexec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror -Wno-unused-function -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -fsanitize=address,undefined -fno-sanitize-recover=all -I $s -I $s/arch/x86 -I $s/arch/i686 -I $s/lib -I $s/proc tests/host/open_hosttest.c $s/fs/fd.c $s/lib/kstring.c $s/lib/kctypes.c tests/host/compat/park_host.c -o ${WORK}/open_hosttest"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "${WORK}/open_hosttest"
+    ],
+    "bound_s": 120,
+    "fail_prefix": "open-hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "proc-fd-stat-error",
+      "summary": "a stat of a followed /proc/PID/fd/N that drops the getattr error",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = fstat_fill(&e, kst);",
+          "replace": "    fstat_fill(&e, kst);\n    rc = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a followed descriptor stat returns the getattr error"
+        ]
+      }
+    },
+    {
+      "name": "node",
+      "summary": "an O_TRUNC that truncates the node, not the open handle",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "vfs_truncate(ref->mnt, entry->ofd->fhandle, 0)",
+          "replace": "vfs_truncate(ref->mnt, node, 0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: mounted truncation uses a live open handle"
+        ]
+      }
+    },
+    {
+      "name": "release",
+      "summary": "a failed mounted open that keeps its descriptor",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            fd_free(current_proc->fds, fd);\n            return rc;",
+          "replace": "            return rc;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: every open handle released"
+        ]
+      }
+    },
+    {
+      "name": "truncate",
+      "summary": "an open that never truncates",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (flags & O_TRUNC) {\n        rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);",
+          "replace": "    if (0) {\n        rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: only O_TRUNC truncates and clears set-id bits"
+        ]
+      }
+    },
+    {
+      "name": "loop",
+      "summary": "a loop device whose handle is moved for a node of any mounted type",
+      "edits": [
+        {
+          "file": "rach2/sys/block/loop.c",
+          "find": "mnt->type == &vfs_krffs_type && loops[i].handle == from",
+          "replace": "loops[i].handle == from"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: mounted loop handle stays stable when node moves"
+        ]
+      }
+    },
+    {
+      "name": "registration",
+      "summary": "an open that records no node in its description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    entry->ofd->vnode = node;",
+          "replace": "    entry->ofd->vnode = NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: close retains current node identity"
+        ]
+      }
+    },
+    {
+      "name": "unlink-lock",
+      "summary": "an unlink that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "vfs_resolve(0, path, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf,",
+          "replace": "vfs_resolve(0, path, VFS_WALK_PARENT, &parent, leaf,"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: the unlink keeps the file for the open's descriptor"
+        ]
+      }
+    },
+    {
+      "name": "rename-lock",
+      "summary": "a rename of the root's names without the root's lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n    vfs_ns_unlock(opar.mnt);\n",
+          "replace": "    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: the rename keeps the file it replaces for the open's descriptor"
+        ]
+      }
+    },
+    {
+      "name": "rename-unlocked",
+      "summary": "a rename that lets the root's lock go before its change",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    vfs_ns_lock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n    vfs_ns_unlock(opar.mnt);\n",
+          "replace": "    vfs_ns_lock(opar.mnt);\n    vfs_ns_unlock(opar.mnt);\n    rc = rename_root_names(&opar, oleaf, &npar, nleaf, flags, slash);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a lookup in the root runs under the root's lock"
+        ]
+      }
+    },
+    {
+      "name": "rename-locked-walk",
+      "summary": "a rename whose second walk starts with the first walk's lock held",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "vfs_resolve(0, old_buf, VFS_WALK_PARENT, &opar, oleaf,",
+          "replace": "vfs_resolve(0, old_buf, VFS_WALK_PARENT | VFS_WALK_LOCK, &opar, oleaf,"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (rc != 0) {\n        vfs_ref_release(&opar);\n        return rc;\n    }\n    /* rename is within one mount;",
+          "replace": "    if (rc != 0) {\n        vfs_walk_unlock(opar.mnt);\n        vfs_ref_release(&opar);\n        return rc;\n    }\n    /* rename is within one mount;"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "out:\n    vfs_ref_release(&npar);",
+          "replace": "out:\n    vfs_walk_unlock(opar.mnt);\n    vfs_ref_release(&npar);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a walk starts with no namespace lock held"
+        ]
+      }
+    },
+    {
+      "name": "rename-relocked",
+      "summary": "a rename that lets the lock go between its lookups and its change",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {",
+          "replace": "    vfs_ns_unlock(opar->mnt);\n    vfs_ns_lock(opar->mnt);\n    if (npar->mnt->type->ops->lookup(npar->mnt, npar->node, nleaf, &found) == 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: the lookups, the count and the change run under one hold of the root"
+        ]
+      }
+    },
+    {
+      "name": "chmod-walk-unlocked",
+      "summary": "a chmod that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);",
+          "replace": "    rc = resolve_named(name, 0, dir, &ref);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "chown-walk-unlocked",
+      "summary": "a chown that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "(follow ? 0 : VFS_WALK_NOFOLLOW) | VFS_WALK_LOCK, dir, &ref);",
+          "replace": "(follow ? 0 : VFS_WALK_NOFOLLOW), dir, &ref);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "stat64-walk-unlocked",
+      "summary": "a stat64 that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        int rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+          "replace": "        int rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "old-stat-walk-unlocked",
+      "summary": "an old stat that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        int32_t rc =\n            vfs_resolve(0, pathbuf, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+          "replace": "        int32_t rc = vfs_resolve(0, pathbuf, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "fstatat-walk-unlocked",
+      "summary": "an fstatat that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = vfs_resolve(0, path, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), &ref, 0, 0);",
+          "replace": "    rc = vfs_resolve(0, path, follow ? 0 : VFS_WALK_NOFOLLOW, &ref, 0, 0);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "access-walk-unlocked",
+      "summary": "an access that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, dir, &ref);",
+          "replace": "resolve_named(name, VFS_WALK_REAL_IDS, dir, &ref);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "utimensat-walk-unlocked",
+      "summary": "a utimensat by path that walks without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0) | VFS_WALK_LOCK, dir, &ref);",
+          "replace": "((flags & AT_SYMLINK_NOFOLLOW) ? VFS_WALK_NOFOLLOW : 0), dir, &ref);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "utimensat-fd-node-unlocked",
+      "summary": "a utimensat by descriptor that reads the node without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    mnt = entry->ofd->vmnt;\n    vfs_ns_lock(mnt);\n    if (entry->node && fd_node_check(entry) != 0) {\n        rc = -EBADF;\n    } else {\n        rc = utimes_node(mnt, entry->ofd->vnode, times);\n    }\n    vfs_ns_unlock(mnt);\n    return rc;",
+          "replace": "    (void)mnt;\n    (void)rc;\n    if (entry->node && fd_node_check(entry) != 0) {\n        return -EBADF;\n    }\n    return utimes_node(entry->ofd->vmnt, entry->ofd->vnode, times);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: attributes use node identity"
+        ]
+      }
+    },
+    {
+      "name": "open-reserves-after-walk",
+      "summary": "an open that reserves its descriptor only after its walk",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    fd = fd_alloc(current_proc->fds);\n    if (fd < 0) {\n        return fd;\n    }\nagain:\n",
+          "replace": "    if (!fd_can_alloc(current_proc->fds)) {\n        return -EMFILE;\n    }\n    fd = -1;\nagain:\n"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "                     &ref, 0, 0);\n    if (rc == -ENOENT && (flags & O_CREAT)) {",
+          "replace": "                     &ref, 0, 0);\n    if (rc == 0 && fd < 0) {\n        fd = fd_alloc(current_proc->fds);\n        if (fd < 0) {\n            vfs_walk_unlock(ref.mnt);\n            vfs_ref_release(&ref);\n            return -EMFILE;\n        }\n    }\n    if (rc == -ENOENT && (flags & O_CREAT)) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an open that truncates keeps the slot it reserved before its walk"
+        ]
+      }
+    },
+    {
+      "name": "open-enomem",
+      "summary": "an open that answers EMFILE where the heap has no room",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fd < 0) {\n        return fd;\n    }\nagain:",
+          "replace": "    if (fd < 0) {\n        return -EMFILE;\n    }\nagain:"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an open the heap has no room for is ENOMEM"
+        ]
+      }
+    },
+    {
+      "name": "open-emfile",
+      "summary": "an open that answers ENOMEM at the descriptor limit",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fd < 0) {\n        return fd;\n    }\nagain:",
+          "replace": "    if (fd < 0) {\n        return -ENOMEM;\n    }\nagain:"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an open at the descriptor limit is EMFILE"
+        ]
+      }
+    },
+    {
+      "name": "dup-enomem",
+      "summary": "a dup that answers EMFILE where the heap has no room",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    newfd = fd_alloc_from(current_proc->fds, 0);\n    if (newfd < 0) {\n        return newfd;",
+          "replace": "    newfd = fd_alloc_from(current_proc->fds, 0);\n    if (newfd < 0) {\n        return -EMFILE;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a dup the heap has no room for is ENOMEM"
+        ]
+      }
+    },
+    {
+      "name": "dup2-enomem",
+      "summary": "a dup2 that answers EMFILE where the table cannot grow",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = fd_table_reach(current_proc->fds, newfd);\n    if (rc != 0) {\n        return rc;",
+          "replace": "    rc = fd_table_reach(current_proc->fds, newfd);\n    if (rc != 0) {\n        return -EMFILE;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a dup2 past the end of a table the heap cannot grow is ENOMEM"
+        ]
+      }
+    },
+    {
+      "name": "program-holder",
+      "summary": "an unlink that does not count a running program as a holder",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (unix_inflight_holds(node) || filemap_holds(node) || mm_exe_holds(vfs_root_mount(), node)) {",
+          "replace": "    if (unix_inflight_holds(node) || filemap_holds(node)) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an unlink keeps the file a program runs from"
+        ]
+      }
+    },
+    {
+      "name": "program-reclaim-unlocked",
+      "summary": "a program's release that frees its objects after it lets the root's lock go",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        fd_release_objects(&e);\n        vfs_ns_unlock(locked);\n",
+          "replace": "        vfs_ns_unlock(locked);\n        fd_release_objects(&e);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a program's release counts the file's descriptor in the hold it took"
+        ]
+      }
+    },
+    {
+      "name": "root-lock-key",
+      "summary": "locks on a file of the KRFFS root keyed by the description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||",
+          "replace": "    return mnt->type == &vfs_krffs_volume_type ||"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a file of the KRFFS root is keyed by its node"
+        ]
+      }
+    },
+    {
+      "name": "volume-lock-key",
+      "summary": "locks on a file of a KRFFS volume keyed by the description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||",
+          "replace": "    return mnt->type == &vfs_krffs_type ||"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a file of a KRFFS volume is keyed by its node"
+        ]
+      }
+    },
+    {
+      "name": "fat-lock-key",
+      "summary": "locks on a file of a FAT32 or exFAT volume keyed by the description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type ||\n           mnt->type == &vfs_vfat_type || mnt->type == &vfs_exfat_type;",
+          "replace": "    return mnt->type == &vfs_krffs_type || mnt->type == &vfs_krffs_volume_type;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a file of a FAT32 volume is keyed by its node, which a rename keeps"
+        ]
+      }
+    },
+    {
+      "name": "mkdir-walk-unlocked",
+      "summary": "a mkdir that walks to its parent without the namespace lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        return rc; /* a missing parent, or a denied ancestor */",
+          "replace": "rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        return rc; /* a missing parent, or a denied ancestor */"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);\n    vfs_walk_unlock(parent.mnt);\n",
+          "replace": "    rc = leaf_is_dot(leaf) ? -EEXIST : mkdir_in(&parent, leaf, mode, pathbuf);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a mkdir of a name another process made while it waited is EEXIST"
+        ]
+      }
+    },
+    {
+      "name": "orphan-locks-after",
+      "summary": "an orphan freed with its description's locks still on it",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (e->ofd && e->ofd->refcount == 1 && lock_any()) {\n        lock_ofd_gone(e->ofd);\n    }\n    krffs_remove_reserved_node(krffs_fs, node);\n",
+          "replace": "    (void)e;\n    krffs_remove_reserved_node(krffs_fs, node);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a description's locks go before the orphan they are on is freed"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-checked-unlocked",
+      "summary": "an rmdir that checks for holders without the lock its change takes",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT | VFS_WALK_LOCK, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        return rc;\n    }\n    if (leaf_is_dot(leaf)) {\n        rc = leaf[1] == '\\0' ? -EINVAL : -ENOTEMPTY;",
+          "replace": "    rc = vfs_resolve(0, pathbuf, VFS_WALK_PARENT, &parent, leaf, sizeof(leaf));\n    if (rc != 0) {\n        return rc;\n    }\n    if (leaf_is_dot(leaf)) {\n        rc = leaf[1] == '\\0' ? -EINVAL : -ENOTEMPTY;"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        vfs_ns_unlock(parent.mnt);\n    }\n    vfs_walk_unlock(parent.mnt);\n    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2) takes path. */",
+          "replace": "        vfs_ns_unlock(parent.mnt);\n    }\n    vfs_ref_release(&parent);\n    return rc;\n}\n\n/* rmdir(2) takes path. */"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return rc != 0 ? rc : vfs_rmdir(parent->mnt, parent->node, leaf);",
+          "replace": "    if (rc == 0) {\n        vfs_ns_lock(parent->mnt);\n        rc = vfs_rmdir(parent->mnt, parent->node, leaf);\n        vfs_ns_unlock(parent->mnt);\n    }\n    return rc;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an rmdir of a directory an open publishes a descriptor on while it waits is EBUSY"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-descriptions-ignored",
+      "summary": "an rmdir that ignores the descriptions on the directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fd_ofd_holders(mnt, dir, NULL) > 0) {\n        return 1;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an rmdir of a directory a descriptor has open is EBUSY"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-tables-only",
+      "summary": "an rmdir that looks only in the descriptor tables, not at descriptions in flight",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (fd_ofd_holders(mnt, dir, NULL) > 0) {\n        return 1;\n    }\n",
+          "replace": "    for (pr = proc_list; pr; pr = pr->next) {\n        int i;\n\n        for (i = 0; i < fd_table_cap(pr->fds); i++) {\n            if (pr->fds->entries[i].ofd && pr->fds->entries[i].ofd->vmnt == mnt &&\n                pr->fds->entries[i].ofd->vnode == dir) {\n                return 1;\n            }\n        }\n    }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an rmdir of a directory a description in flight has is EBUSY"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-cwd-ignored",
+      "summary": "an rmdir that ignores the working directories",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    for (pr = proc_list; pr; pr = pr->next) {\n        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {\n            return 1;\n        }\n    }\n",
+          "replace": "    (void)pr;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an rmdir of the caller's working directory is EBUSY"
+        ]
+      }
+    },
+    {
+      "name": "rmdir-cwd-caller-only",
+      "summary": "an rmdir that looks only at the caller's working directory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    for (pr = proc_list; pr; pr = pr->next) {\n        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {",
+          "replace": "    for (pr = current_proc; pr; pr = NULL) {\n        if (pr->fs && pr->fs->cwd_mnt == mnt && pr->fs->cwd_node == dir) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an rmdir of another process's working directory is EBUSY"
+        ]
+      }
+    },
+    {
+      "name": "chdir-unpinned",
+      "summary": "a chdir that does not pin the directory while it sleeps",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {\n        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n    }\n    vfs_walk_unlock(ref.mnt);\n",
+          "replace": "    vfs_walk_unlock(ref.mnt);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: the directory is pinned while the chdir sleeps before its record"
+        ]
+      }
+    },
+    {
+      "name": "chdir-walk-unlocked",
+      "summary": "a chdir that pins the node outside the lock of its walk",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    rc = vfs_resolve(0, path, VFS_WALK_LOCK, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {",
+          "replace": "    rc = vfs_resolve(0, path, 0, &ref, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    if (!mnt_is_root(ref.mnt) && ref.mnt->type->ops->pin) {"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n    }\n    vfs_walk_unlock(ref.mnt);\n",
+          "replace": "        rc = ref.mnt->type->ops->pin(ref.mnt, ref.node, &pin);\n    }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a chdir pins the node under the lock of the walk that found it"
+        ]
+      }
+    },
+    {
+      "name": "chdir-unpinned-before-record",
+      "summary": "a chdir that unpins the directory before it records it",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = chdir_mounted(&ref, path);\n        if (pin) {\n            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n",
+          "replace": "        if (pin) {\n            ref.mnt->type->ops->unpin(ref.mnt, pin);\n        }\n        rc = chdir_mounted(&ref, path);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: the directory is pinned when the working directory records it"
+        ]
+      }
+    },
+    {
+      "name": "proc-read-unheld",
+      "summary": "a /proc read that does not hold its description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n    struct open_file *held = ops_offset_held(entry);",
+          "replace": "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a seek waits for a /proc read that sleeps in a page fetch"
+        ]
+      }
+    },
+    {
+      "name": "proc-write-unheld",
+      "summary": "a /proc write that does not hold its description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n    struct open_file *held = ops_offset_held(entry);",
+          "replace": "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n    struct open_file *held = devfs_fd_is_raw(entry) ? entry->ofd : NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a seek waits for a /proc write that sleeps in a page fetch"
+        ]
+      }
+    },
+    {
+      "name": "orphan-release-unlocked",
+      "summary": "the release of a nameless file outside the root's lock",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (!locked) {\n        return;\n    }\n    if (e->type == FD_TYPE_FILE) {\n",
+          "replace": "    if (!locked) {\n        return;\n    }\n    vfs_ns_unlock(locked);\n    if (e->type == FD_TYPE_FILE) {\n"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        fd_fifo_orphan(e);\n    }\n    vfs_ns_unlock(locked);\n}\n",
+          "replace": "        fd_fifo_orphan(e);\n    }\n}\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an allocation on the root waits for the reclaim of a nameless file to end"
+        ]
+      }
+    },
+    {
+      "name": "mapping-left-unlocked",
+      "summary": "a mapping's release that unlinks it before it has the root's lock",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/filemap.c",
+          "find": "    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n    while (*link && *link != m) {\n",
+          "replace": "    while (*link && *link != m) {\n"
+        },
+        {
+          "file": "rach2/sys/mm/filemap.c",
+          "find": "    if (*link) {\n        *link = m->next;\n    }\n    if (m->sh) {\n",
+          "replace": "    if (*link) {\n        *link = m->next;\n    }\n    locked = m->entry.ofd ? fd_release_lock(&m->entry) : NULL;\n    if (m->sh) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a mapping counts among a file's holders until its release has the root's lock"
+        ]
+      }
+    },
+    {
+      "name": "log-read-unheld",
+      "summary": "a /dev/bootlog read that does not hold its description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;\n",
+          "replace": "    return devfs_fd_is_raw(entry) || entry->type == FD_TYPE_PROC ? entry->ofd : NULL;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: a seek waits for a /dev/bootlog read that sleeps in its copy"
+        ]
+      }
+    },
+    {
+      "name": "log-seek-unlocked",
+      "summary": "an _llseek of /dev/bootlog that does not lock the description",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    fd_ofd_lock(entry->ofd);\n    (void)devfs_fd_log_size(entry, &size);\n",
+          "replace": "    (void)devfs_fd_log_size(entry, &size);\n"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    fd_ofd_unlock(entry->ofd);\n    *out = at;\n",
+          "replace": "    *out = at;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an _llseek waits for a /dev/bootlog read that sleeps in its copy"
+        ]
+      }
+    },
+    {
+      "name": "log-seek-wraps",
+      "summary": "an lseek of /dev/bootlog whose sum wraps at 32 bits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        rc = seek_add(entry->ofd->offset, off, &at);\n    } else if (whence == 2) {\n",
+          "replace": "        at = (int32_t)(uint32_t)(entry->ofd->offset + (uint64_t)off);\n    } else if (whence == 2) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an lseek of /dev/bootlog past 4294967295 is EINVAL and leaves the offset"
+        ]
+      }
+    },
+    {
+      "name": "log-seek-past-signed",
+      "summary": "an _llseek of /dev/bootlog that takes a sum past the largest signed offset",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (rc == -EOVERFLOW || (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu))) {\n",
+          "replace": "    if (rc == 0 && (at < 0 || at > (long long)0xFFFFFFFFu)) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "open-hosttest: fail: an _llseek of /dev/bootlog past the largest signed offset is EINVAL"
+        ]
+      }
+    }
+  ]
+}

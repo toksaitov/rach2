@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "proof": "pagecache",
+  "summary": "pagecache_hosttest.c with sys_sync's bounded wait, with faults in private copies of rach2/sys/mm/pagecache.c and the sys_sync of rach2/sys/syscall_fs.c, which the build extracts unchanged",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/mm/pagecache.c",
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/pagecache_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} rach2/sys utils krffs tests/host\ncd \"$t\"\ns=rach2/sys\npython3 tests/host/fixtures/extract.py tests/host/syscall_sync.inc -f $s/syscall_fs.c sys_sync\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -DPAGECACHE_SYNC_HOSTTEST -g -O1 -ffreestanding -Wno-empty-body -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I $s -I $s/arch/x86 -I $s/arch/i686 -I $s/lib -I $s/proc -I utils -I krffs -I tests/host/compat tests/host/pagecache_hosttest.c -o ${WORK}/pagecache_hosttest"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "${WORK}/pagecache_hosttest"
+    ],
+    "bound_s": 120,
+    "fail_prefix": "pagecache-hosttest: failed: "
+  },
+  "faults": [
+    {
+      "name": "pin",
+      "summary": "a pc_writeback that does not pin the page it writes",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/pagecache.c",
+          "find": "    }\n    e->pinned = 1;\n",
+          "replace": "    }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "pagecache-hosttest: failed: pc_test_page(0) == page"
+        ]
+      }
+    },
+    {
+      "name": "busy",
+      "summary": "a pc_writeback that writes a pinned page",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/pagecache.c",
+          "find": "    if (e->pinned) {\n        return -1;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "pagecache-hosttest: failed: fake_attempts[0] == 1"
+        ]
+      }
+    },
+    {
+      "name": "sync",
+      "summary": "a sys_sync that calls pc_sync once, with no retry of busy pages",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    start = kernel_ticks;\n    while (pc_sync() & PC_SYNC_BUSY) {\n        if ((uint32_t)(kernel_ticks - start) >= 3000u) {\n            break;\n        }\n        schedule();\n        idle_wait_irq_on();\n    }\n",
+          "replace": "    pc_sync();\n"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    uint32_t start;\n\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "pagecache-hosttest: failed: fake_disk[0][0] == 0xE2u"
+        ]
+      }
+    }
+  ]
+}

@@ -171,7 +171,7 @@ Beside the authority is the writer reservation, `writer_held` in `struct disk`: 
 * `devfs_hosttest.c`: where `/dev/grubcore` is published.
 * `bcache_hosttest.c`, `bcache_cost_hosttest.c`, `fat32_hosttest.c`, `exfat_hosttest.c`, `ext2_hosttest.c`: link `chain.c`.
 
-`ata_identify_mutate.sh`, `ata_durable_mutate.sh`, `ata_wait_mutate.sh`, `ata_rate_test.sh`, `dma32_mutate.sh`, `grubwindow_mutate.sh` and `loop_attach_mutate.sh` in `tests/host/` prove rows of these tests against faults. `request.c` has no host test; the suites reach it.
+`ata_identify_mutate.sh`, `ata_durable_mutate.sh`, `ata_wait_mutate.sh`, `ata_rate_test.sh`, `dma32_mutate.sh` and `grubwindow_mutate.sh` in `tests/host/`, and `tests/proofs/loop-attach.json`, prove rows of these tests against faults. `request.c` has no host test; the suites reach it.
 
 `tests/run NAME` runs a system suite under QEMU, `RACH2_WORKERS=4 tests/run A B C` several, and `ARCH=x86_64` the other architecture; [tests/system/suites.md](../../../tests/system/suites.md) gives each suite's tier and needs. Those that cover this layer:
 

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "proof": "loop-attach",
+  "summary": "loop_attach_hosttest.c, a loop attachment while a writer moves the file, with a fault in a private copy of rach2/sys/block/loop.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/block/loop.c"
+  ],
+  "artifacts": [
+    "${WORK}/loop_attach_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} rach2/sys tests/host\ncd \"$t\"\ns=rach2/sys\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -ffreestanding -I $s -I $s/lib -I $s/proc tests/host/loop_attach_hosttest.c $s/block/chain.c $s/lib/kstring.c $s/lib/kctypes.c -o ${WORK}/loop_attach_hosttest"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "${WORK}/loop_attach_hosttest"
+    ],
+    "bound_s": 120,
+    "fail_prefix": "loop-attach-hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "stale-resolution",
+      "summary": "a loop_resolve that takes the namespace lock after its one walk and opens the node that walk found",
+      "edits": [
+        {
+          "file": "rach2/sys/block/loop.c",
+          "find": "static int loop_resolve(const char *path, struct vfs_ref *ref)\n{\n    struct vfs_ref first;\n    struct vfs_mount *mnt;\n    int rc;\n\n    rc = vfs_resolve(0, path, 0, &first, 0, 0);\n    if (rc != 0) {\n        return rc;\n    }\n    mnt = first.mnt;\n    vfs_ns_lock(mnt);\n    rc = vfs_resolve(0, path, 0, ref, 0, 0);\n    if (rc == 0 && ref->mnt != mnt) {\n        vfs_ref_release(ref);\n        rc = -EBUSY;\n    }\n    if (rc != 0) {\n        vfs_ns_unlock(mnt);\n    }\n    vfs_ref_release(&first);\n    return rc;\n}",
+          "replace": "static int loop_resolve(const char *path, struct vfs_ref *ref)\n{\n    int rc = vfs_resolve(0, path, 0, ref, 0, 0);\n\n    if (rc == 0) {\n        vfs_ns_lock(ref->mnt);\n    }\n    return rc;\n}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "loop-attach-hosttest: fail: loop read avoids the reused old extent"
+        ]
+      }
+    }
+  ]
+}
