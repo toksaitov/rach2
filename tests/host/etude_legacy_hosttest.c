@@ -17,14 +17,15 @@
  * their digests, once each though make names one both from the tree's root and
  * from the file system's; a second preparation mints no key. A set has
  * `prepare-all` and then the artifacts outside it built, and an e1000 suite its
- * plain twin's. The architecture and the kernel reach every make. A suite
- * unknown, named twice or of another architecture, a tool missing, a set whose
- * preparation lacks a tool, an architecture or a kernel name refused and a tree
- * not held are each refused with nothing built. A failed step stops the
- * preparation and keeps its log; an artifact missing fails it; a step past its
- * bound and one under a stop signal are ended, and nothing of theirs runs
- * after. The record is checked by status and by digest, and a preparation graph
- * publishes it as a fresh node's product.
+ * plain twin's. The architecture and the kernel reach every make, over an
+ * `ARCH` in the environment. A suite unknown, named twice or of another
+ * architecture, a tool missing, a set whose preparation lacks a tool, an
+ * architecture or a kernel name refused and a tree not held are each refused
+ * with nothing built. A failed step stops the preparation and keeps its log; an
+ * artifact missing fails it; a step past its bound and one under a stop signal
+ * are ended, and nothing of theirs runs after. The record is checked by status
+ * and by digest, and a preparation graph publishes it as a fresh node's
+ * product.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -832,6 +833,7 @@ int main(int argc, char **argv)
     setenv("RACH2_TREE_HELD", held, 1);
     setenv("LC_ALL", "POSIX", 1);
     setenv("MAKEFLAGS", "n", 1);
+    setenv("ARCH", "x86_64", 1);
     test_alone();
     test_again();
     test_set();

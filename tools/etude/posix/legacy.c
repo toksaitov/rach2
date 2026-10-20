@@ -1446,7 +1446,7 @@ static int keys(struct prep *p)
     static const char *const demo[] = {"krffs/rach2_demo_ed25519", "krffs/rach2_test_ed25519"};
     char *manifest = format("%s/krffs/manifests/rach2-recovery.manifest", p->tree);
     char *key = format("%s/krffs/recovery_authorized_keys", p->tree), *path;
-    char *cmd[] = {"make", "-C", p->tree, "--no-print-directory", "recovery-key", NULL};
+    char *goal[] = {"recovery-key"};
     struct step s;
     size_t i;
     int status = 0;
@@ -1454,11 +1454,10 @@ static int keys(struct prep *p)
     memset(&s, 0, sizeof(s));
     s.name = "recovery-key";
     s.script = script_log;
-    s.cmd = cmd;
     if (manifest == NULL || key == NULL)
         status = failed(p, "recovery-key: memory ran out");
     else if (access(manifest, F_OK) == 0 && access(key, F_OK) != 0)
-        status = run_step(p, &s);
+        status = run_make(p, &s, goal, 1);
     for (i = 0; status == 0 && i < sizeof(demo) / sizeof(demo[0]); i++) {
         if ((path = format("%s/%s", p->tree, demo[i])) != NULL && access(path, F_OK) == 0 &&
             chmod(path, 0600) != 0)
