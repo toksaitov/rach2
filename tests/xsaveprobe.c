@@ -45,6 +45,12 @@
  * On x86-64 the probe's own code is compiled to use the general registers
  * alone, so that nothing but the rows' assembly touches a vector register.
  *
+ * The core file is made in `/dev/shm/xsaveprobe.d`, and the exec row runs
+ * `/xsaveprobe`. A native run (probe_args.h) gives `core=DIR`, a directory
+ * of its workspace, in place of the first, since `/dev/shm` is the
+ * machine's, and starts the probe by the absolute path of its staged copy,
+ * which the exec row then runs.
+ *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names, guest.default.xsaveprobe without it, and beside them "XSAVEPROBE OK"
  * or "XSAVEPROBE FAIL: reason". A failed check ends the probe: its assertion
@@ -53,6 +59,7 @@
  */
 
 #include "probe.h"
+#include "probe_args.h"
 #include "probe_report.h"
 
 #if defined __x86_64__
@@ -112,9 +119,10 @@
 /* The largest image the probe reads; the kernel keeps no larger. */
 #define IMAGE_MAX 4096
 
-/* The directory a child dumps core in, on tmpfs, and its core file. */
+/* The directory a child dumps core in, on tmpfs, unless `core=DIR` names
+ * another, and the room for the path of its core file. */
 #define CORE_DIR    "/dev/shm/xsaveprobe.d"
-#define CORE_PATH   CORE_DIR "/core"
+#define CORE_ROOM   160
 #define RLIMIT_CORE 4
 #define PT_NOTE     4
 
@@ -147,13 +155,20 @@ struct ymm {
 };
 
 static int core_owner;
+static char core_path[CORE_ROOM];
+
+/** The directory a child dumps core in: the argument `core`, or CORE_DIR. */
+static const char *core_dir(void)
+{
+    return probe_arg("core", CORE_DIR);
+}
 
 /** Remove the core fixture in its parent, including after a failed check. */
 static void cleanup_core(void)
 {
     if (core_owner && syscall1(SYS_GETPID, 0) == core_owner) {
-        syscall1(SYS_UNLINK, (long)CORE_PATH);
-        syscall1(SYS_RMDIR, (long)CORE_DIR);
+        syscall1(SYS_UNLINK, (long)core_path);
+        syscall1(SYS_RMDIR, (long)core_dir());
         core_owner = 0;
     }
 }
@@ -768,7 +783,7 @@ static void run_exec(void)
         argv[0] = (char *)"xsaveprobe";
         argv[1] = (char *)"reset";
         argv[2] = 0;
-        syscall3(SYS_EXECVE, (long)"/xsaveprobe", (long)argv, 0);
+        syscall3(SYS_EXECVE, (long)probe_self("/xsaveprobe"), (long)argv, 0);
         sys_exit(2);
     }
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
@@ -933,7 +948,7 @@ static const unsigned char *core_xstate(unsigned char *notes, unsigned long cap,
     unsigned long phoff, off, len, at;
     int fd;
 
-    fd = (int)syscall2(SYS_OPEN, (long)CORE_PATH, 0);
+    fd = (int)syscall2(SYS_OPEN, (long)core_path, 0);
     if (fd < 0) {
         fail("the core file cannot be opened");
     }
@@ -983,6 +998,27 @@ static const unsigned char *core_xstate(unsigned char *notes, unsigned long cap,
     return 0;
 }
 
+/** Write the path of the core file, core_dir() and "/core", in `core_path`;
+ * a directory too long for it fails the probe. */
+static void make_core_path(void)
+{
+    const char *dir = core_dir();
+    int i;
+
+    for (i = 0; dir[i] != '\0'; i++) {
+        if (i >= CORE_ROOM - 6) {
+            fail("core= names a directory too long");
+        }
+        core_path[i] = dir[i];
+    }
+    core_path[i] = '/';
+    core_path[i + 1] = 'c';
+    core_path[i + 2] = 'o';
+    core_path[i + 3] = 'r';
+    core_path[i + 4] = 'e';
+    core_path[i + 5] = '\0';
+}
+
 /** The core row: a child that loads values and takes SIGQUIT with its core
  * limit raised dumps a core whose NT_X86_XSTATE note has its registers. */
 static void run_core(void)
@@ -995,7 +1031,8 @@ static void run_core(void)
     int pid, status;
     const char *why;
 
-    if (syscall2(SYS_MKDIR, (long)CORE_DIR, 0700) != 0) {
+    make_core_path();
+    if (syscall2(SYS_MKDIR, (long)core_dir(), 0700) != 0) {
         fail("make the core directory");
     }
     core_owner = getpid();
@@ -1004,7 +1041,7 @@ static void run_core(void)
         fail("fork for the core file");
     }
     if (pid == 0) {
-        if (syscall1(SYS_CHDIR, (long)CORE_DIR) != 0 ||
+        if (syscall1(SYS_CHDIR, (long)core_dir()) != 0 ||
             syscall4(SYS_PRLIMIT64, 0, RLIMIT_CORE, 0, (long)&rl) != 0) {
             sys_exit(9);
         }
@@ -1039,7 +1076,7 @@ static void run_core(void)
     if (why) {
         fail2("the core file's NT_X86_XSTATE", why);
     }
-    if (syscall1(SYS_UNLINK, (long)CORE_PATH) != 0 || syscall1(SYS_RMDIR, (long)CORE_DIR) != 0) {
+    if (syscall1(SYS_UNLINK, (long)core_path) != 0 || syscall1(SYS_RMDIR, (long)core_dir()) != 0) {
         fail("remove the core fixture");
     }
     core_owner = 0;
@@ -1065,17 +1102,21 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** Run `reset` when argv[1] begins with r; otherwise report the branches,
- * the cpuid checks, with `noxsave` when it begins with n, and then the rows
- * of each branch: the YMM rows with AVX, and the ptrace check without
- * XSAVE. */
+/** Run `reset` when the first positional argument begins with r; otherwise
+ * report the branches, the cpuid checks, with `noxsave` when it begins with
+ * n, and then the rows of each branch: the YMM rows with AVX, and the ptrace
+ * check without XSAVE. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
-    int noxsave = argc >= 2 && argv[1][0] == 'n';
+    const char *mode;
+    int noxsave;
 
-    if (argc >= 2 && argv[1][0] == 'r') {
+    probe_args(argc, argv);
+    mode = probe_word(1);
+    noxsave = mode != 0 && mode[0] == 'n';
+    if (mode != 0 && mode[0] == 'r') {
         run_reset();
     }
     report_begin(report_case(argv + argc + 1, "guest.default.xsaveprobe"));
