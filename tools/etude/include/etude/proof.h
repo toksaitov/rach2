@@ -100,6 +100,7 @@ struct etude_proof_opts {
     const char *store;           /* the artifact store, or NULL for one in the work
                                     directory */
     char *const *only;           /* the faults to run, ended by NULL, or NULL for all */
+    int base;                    /* nonzero: run the base phase alone, no fault */
     int keep;                    /* nonzero: keep the work directory after a pass */
     FILE *log;                   /* where the progress and the outcome go */
     volatile sig_atomic_t *stop; /* set by the caller's signal handler; the
@@ -111,7 +112,8 @@ struct etude_proof_opts {
  * Run proof `p`: the unmodified sources must build and pass; each fault must
  * change an artifact and make the test fail as it declares; the restored
  * sources must equal the saved ones, build the unmodified artifacts again and
- * pass.
+ * pass. With `o->base` set, the unmodified sources are built and tested alone,
+ * as a suite runs a test whose build only its proof describes.
  *
  * A build or a test runs through the executor in the tree's root, under its
  * bound, and must end with every process it started. In its arguments and its

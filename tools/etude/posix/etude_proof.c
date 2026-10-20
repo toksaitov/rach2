@@ -26,6 +26,7 @@ static void on_signal(int sig)
 static int usage(void)
 {
     fputs("usage: etude-proof [-s SCHEMAS] [-t TREE] [-w WORK] [-b STORE] [-k] PROOF [FAULT...]\n"
+          "       etude-proof [-s SCHEMAS] [-t TREE] [-w WORK] [-b STORE] [-k] --base PROOF\n"
           "       etude-proof [-s SCHEMAS] [-t TREE] --texts PROOF...\n",
           stderr);
     return 2;
@@ -78,6 +79,8 @@ int main(int argc, char **argv)
     for (i = 1; i < argc && argv[i][0] == '-'; i++) {
         if (strcmp(argv[i], "--texts") == 0)
             check = 1;
+        else if (strcmp(argv[i], "--base") == 0)
+            o.base = 1;
         else if (strcmp(argv[i], "-k") == 0)
             o.keep = 1;
         else if (i + 1 >= argc)
@@ -93,7 +96,7 @@ int main(int argc, char **argv)
         else
             return usage();
     }
-    if (i >= argc || (check && (o.keep || o.work || o.store)))
+    if (i >= argc || (check && (o.keep || o.work || o.store || o.base)) || (o.base && i + 1 < argc))
         return usage();
     if (realpath(tdir, tree) == NULL) {
         fprintf(stderr, "etude-proof: %s: %s\n", tdir, strerror(errno));

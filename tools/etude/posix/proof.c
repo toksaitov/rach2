@@ -913,7 +913,7 @@ static int run_phases(struct run *r)
 
     snprintf(r->phase, sizeof r->phase, "base");
     status = phase(r, BASE, NULL);
-    for (i = 0; status == 0 && i < r->p->nfaults; i++)
+    for (i = 0; status == 0 && !r->o->base && i < r->p->nfaults; i++)
         if (selected(r->o, r->p->faults[i].name)) {
             status = prove_fault(r, &r->p->faults[i]);
             proved++;
@@ -922,7 +922,10 @@ static int run_phases(struct run *r)
         snprintf(r->phase, sizeof r->phase, "end");
         status = tree_kept(r);
     }
-    if (status == 0)
+    if (status == 0 && r->o->base)
+        fprintf(r->o->log, "etude-proof: result: pass: %s: the base passed; no fault was run\n",
+                r->p->name);
+    else if (status == 0)
         fprintf(r->o->log,
                 "etude-proof: result: pass: %s: %zu of %zu faults found; the sources and "
                 "artifacts restored\n",

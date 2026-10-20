@@ -42,6 +42,8 @@
 #include "etude/proof.h"
 
 static int fails;
+/* Nonzero: prove() runs the base phase alone, as `--base` asks. */
+static int base_only;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
 #define CHECK(cond, row)                                                                         \
@@ -223,6 +225,7 @@ static void prove(const char *row, const char *tree, const struct cat *c, char *
         o.work = out->work;
         o.only = only;
         o.keep = keep;
+        o.base = base_only;
         o.log = log;
         out->status = etude_proof_run(p, &o);
     }
@@ -414,6 +417,35 @@ static void test_sound(void)
     CHECK(out.status == 0, "sound: a build that judges by time stamps ahead of the clock makes "
                            "its artifact again");
     show("stamps", &out, before);
+}
+
+/** The base phase run alone passes or fails as the unmodified test does,
+ * and makes no fault's artifact. */
+static void test_base(void)
+{
+    struct cat c = {"private", BUILD, TEST, 30, F_VALUE "," F_BOTH};
+    char tree[1024], store[1100];
+    struct outcome out;
+    int before = fails;
+
+    base_only = 1;
+    make_tree("base", tree);
+    prove("base", tree, &c, NULL, 1, &out);
+    fix_format(store, sizeof store, "%s/store", out.work);
+    CHECK(out.status == 0 &&
+              strstr(out.log, "result: pass: toy: the base passed; no fault was run") != NULL,
+          "base: the unmodified sources are built and tested alone");
+    CHECK(objects(store) == 1, "base: no fault's artifact is made");
+    CHECK(tree_intact(tree), "base: the tree is as it was");
+    show("base", &out, before);
+    before = fails;
+    c.test = "echo 'toy-test: fail: quietly'; exit 1";
+    make_tree("base-fails", tree);
+    prove("base-fails", tree, &c, NULL, 0, &out);
+    CHECK(out.status == 1 && strstr(out.log, "base: the test exited 1") != NULL,
+          "base: a test that fails on the unmodified sources fails the run");
+    show("base-fails", &out, before);
+    base_only = 0;
 }
 
 /* A proof that must fail, and the words of its failure. */
@@ -620,6 +652,7 @@ int main(void)
     test_read();
     test_edits();
     test_sound();
+    test_base();
     test_refused();
     test_bound();
     test_shared();
