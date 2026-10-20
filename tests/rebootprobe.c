@@ -17,6 +17,10 @@
  * wrong second magic each return -EINVAL; and an unprivileged caller asking
  * for a power-off gets -EPERM.
  *
+ * An argument `ids=OLD:NEW,...` gives the uid that stands for 1000 in a
+ * native run (probe_args.h), where 1000 is an account of the machine;
+ * without it the uid is 1000.
+ *
  * Prints "REBOOTPROBE OK" at the end, which also shows that nothing here
  * stopped the machine.
  *
@@ -24,6 +28,7 @@
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 
@@ -41,7 +46,9 @@ typedef unsigned int uint32_t;
 #define CMD_KEXEC     0x45584543u
 #define CMD_POWER_OFF 0x4321fedcu
 
-#define PROBE_UID 1000
+/* The unprivileged caller: uid 1000, or the id a native run gives in its
+ * place (probe_args.h). */
+#define PROBE_UID ((int)probe_id(1000))
 
 #define WANT_EPERM  (-1)
 #define WANT_EINVAL (-22)
@@ -151,16 +158,21 @@ static void expect(const char *what, int got, int want)
     failures++;
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * Make each call of the case list and count the answers that differ. The
  * child of the unprivileged case exits 2 when it could not drop root, having
  * made no call, 3 when its power-off was not refused with -EPERM, and 0 when
  * it was. Exits 0 when every case held, else 1.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int child, status = 0;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     puts("reboot(2) probe starting...");
 
     expect("disable-cad with the usual magic", sys_reboot(MAGIC1, MAGIC2, CMD_CAD_OFF), 0);

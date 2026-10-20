@@ -16,13 +16,23 @@
  * Needs the test image's sudo arrangement: the staged `sudo` with its policy
  * file and the accounts it names. A run on an installed machine needs them
  * put there first.
+ *
+ * An argument `ids=OLD:NEW,...` gives the uids that stand for 1000 and 1001
+ * in a native run (probe_args.h), which runs the probe in a private copy of
+ * the test image's root. The probe then writes that copy's `/etc/sudoers`
+ * to list the uid that stands for 1000 before it runs sudo. Without it the
+ * uids are 1000 and 1001, and the staged file is read as it is.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
 
 #define STDOUT 1
+
+#define O_WRONLY 01
+#define O_TRUNC  01000
 
 /* Linux wait-status decode: WIFEXITED guards WEXITSTATUS so a signal-killed
  * child (its signal in the low 7 bits) is not decoded as a clean exit 0. */
@@ -90,16 +100,51 @@ static int run_sudo(int uid)
     return WEXITSTATUS(status);
 }
 
-/** The probe's entry: the permitted uid, then the unlisted one. */
-PROBE_START void _start(void)
+/** Write `/etc/sudoers` as the test image stages it, with `uid` as its one
+ * permitted uid. */
+static void write_sudoers(long uid)
 {
+    static const char head[] = "# uids permitted to run sudo\n";
+    char digits[24];
+    int fd, n = sizeof(digits);
+
+    digits[--n] = '\n';
+    do {
+        digits[--n] = (char)('0' + uid % 10);
+        uid /= 10;
+    } while (uid != 0);
+    fd = syscall3(SYS_OPEN, (long)"/etc/sudoers", O_WRONLY | O_TRUNC, 0);
+    if (fd < 0) {
+        fail("open /etc/sudoers to list the native uid");
+    }
+    if (syscall3(SYS_WRITE, fd, (long)head, sizeof(head) - 1) != (long)sizeof(head) - 1 ||
+        syscall3(SYS_WRITE, fd, (long)(digits + n), (long)sizeof(digits) - n) !=
+            (long)sizeof(digits) - n) {
+        fail("write /etc/sudoers");
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: the permitted uid, then the
+ * unlisted one. */
+void probe_main(unsigned long *sp)
+{
+    probe_args((int)sp[0], (char **)(sp + 1));
+    if (probe_id(1000) != 1000) {
+        write_sudoers(probe_id(1000));
+    }
+
     /* A permitted uid becomes root and the helper confirms it (exit 0). */
-    if (run_sudo(1000) != 0) {
+    if (run_sudo(probe_id(1000)) != 0) {
         fail("permitted uid did not reach root through sudo");
     }
 
     /* A uid absent from sudoers: sudo's own exit 1, before any exec. */
-    if (run_sudo(1001) != 1) {
+    if (run_sudo(probe_id(1001)) != 1) {
         fail("unlisted uid was not refused");
     }
 

@@ -13,13 +13,22 @@
  * uid 0. The root parent then removes every fixture through its override,
  * which is itself the override's proof.
  *
+ * The fixtures are at the root, beside root's 0644 `/hello.txt`. An argument
+ * `ids=OLD:NEW,...` gives the id that stands for 1000 in a native run
+ * (probe_args.h), which runs the probe in a private copy of the test image's
+ * root; without it the id is 1000.
+ *
  * Prints "PERMPROBE OK" and exits 0 on success; prints "PERMPROBE FAIL: "
  * and the failing step and exits 1 otherwise.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
+
+/* The id a native run gives in place of `id` (probe_args.h). */
+#define ID(id) ((u32)probe_id(id))
 
 #define STDOUT   1
 #define EPERM    1
@@ -89,8 +98,8 @@ static void real_id_rows(void)
 {
     int fd;
 
-    if (syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
-        syscall3(SYS_SETRESUID, 1000, 0, 0) != 0) {
+    if (syscall3(SYS_SETRESGID, ID(1000), ID(1000), ID(1000)) != 0 ||
+        syscall3(SYS_SETRESUID, ID(1000), 0, 0) != 0) {
         fail("real uid 1000 under effective uid 0");
     }
     fd = syscall3(SYS_OPEN, (long)"/perm600", O_RDONLY, 0);
@@ -119,7 +128,7 @@ static void child_main(void)
     int fd;
 
     real_id_rows();
-    if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+    if (syscall3(SYS_SETRESUID, ID(1000), ID(1000), ID(1000)) != 0) {
         fail("drop to 1000");
     }
 
@@ -205,6 +214,10 @@ static void child_main(void)
     syscall3(SYS_EXIT, 0, 0, 0);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe: root's own two refusals, the fixtures, the child's walk, and
  * root's removal of the fixtures. /perm.rw is world-writable and not the
@@ -212,12 +225,13 @@ static void child_main(void)
  * pair the utimensat split tells apart; chmod sets its mode again after the
  * creat, which applies the umask.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     static char *exec_argv[2];
     int pid, status;
     int fd;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     fixture_owner = syscall1(SYS_GETPID, 0);
     /* Exec of a file with no execute bit is -EACCES even for root. */
     exec_argv[0] = (char *)"/hello.txt";
@@ -248,7 +262,7 @@ PROBE_START void _start(void)
     syscall3(SYS_CLOSE, fd, 0, 0);
     if (syscall3(SYS_MKDIR, (long)"/perm.priv", 0700, 0) != 0 ||
         syscall3(SYS_MKDIR, (long)"/perm.own", 0700, 0) != 0 ||
-        syscall3(SYS_CHOWN, (long)"/perm.own", 1000, 1000) != 0) {
+        syscall3(SYS_CHOWN, (long)"/perm.own", ID(1000), ID(1000)) != 0) {
         fail("stage directories");
     }
     /* The 0666 fixture, its mode set again past the umask. */

@@ -23,9 +23,15 @@
  * and the `.suid`, `.u5`, `.sgid` and `.nox` copies beside it. They are not
  * in the shipped system image, so a run on an installed machine needs them
  * put there first.
+ *
+ * An argument `ids=OLD:NEW,...` gives the ids that stand for 1000 and 5 in a
+ * native run (probe_args.h), which runs the probe in a private copy of the
+ * test image's root whose owners are mapped the same way; the probe passes
+ * the argument on to each helper. Without it the ids are 1000 and 5.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
 
@@ -65,6 +71,15 @@ static void fail(const char *step)
     syscall1(SYS_EXIT, 1);
 }
 
+/** The whole argument `ids=...`, of which `probe_arg` returns the value, or
+ * NULL when the probe was given none. */
+static char *ids_argument(void)
+{
+    const char *v = probe_arg("ids", 0);
+
+    return v != 0 ? (char *)v - 4 : 0;
+}
+
 /** Exec `path arg` at uid and gid 1000 in a new child: the helper's exit
  * status, 128 + errno when the exec itself was refused, or 200 when the ids
  * could not be dropped. A child killed by a signal fails the probe. */
@@ -77,15 +92,17 @@ static int run_helper(const char *path, const char *arg)
         fail("fork");
     }
     if (pid == 0) {
-        static char *argv[3];
+        static char *argv[4];
+        long user = probe_id(1000);
 
-        if (syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
-            syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+        if (syscall3(SYS_SETRESGID, user, user, user) != 0 ||
+            syscall3(SYS_SETRESUID, user, user, user) != 0) {
             syscall1(SYS_EXIT, 200);
         }
         argv[0] = (char *)path;
         argv[1] = (char *)arg;
-        argv[2] = 0;
+        argv[2] = ids_argument();
+        argv[3] = 0;
         /* Reached only if the exec is refused: report the errno as the code. */
         {
             int e = syscall3(SYS_EXECVE, (long)path, (long)argv, 0);
@@ -113,10 +130,17 @@ static u32 stat_mode(const char *path)
     return *(u32 *)(st + KSTAT_MODE);
 }
 
-/** The probe's entry: the staged mode, then the five execs in order. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: the staged mode, then the five
+ * execs in order. */
+void probe_main(unsigned long *sp)
 {
     int rc;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
 
     /* stat reports all of 07777, the setuid bit with the permission bits. */
     if ((stat_mode("/suidhelper.suid") & 07777u) != 04755u) {

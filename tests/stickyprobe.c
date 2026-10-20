@@ -62,6 +62,10 @@
  * apart before they call it (syscall_fs.c), so a refusal and a missing file
  * answer differently and -EPERM is the sticky rule's answer.
  *
+ * An argument `ids=OLD:NEW,...` gives the ids that stand for 1000 and 1001
+ * in a native run (probe_args.h), which runs the probe in a private copy of
+ * the test image's root; without it the ids are 1000 and 1001.
+ *
  * Each denial is checked to have done nothing and each permission to have
  * been carried out, since an errno alone cannot tell a refusal from a
  * refusal reported after the work was done. The destination victims are
@@ -74,8 +78,12 @@
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
+
+/* The id a native run gives in place of `id` (probe_args.h). */
+#define ID(id) ((u32)probe_id(id))
 
 #define STDOUT 1
 
@@ -303,7 +311,7 @@ static void own_round_trip(const char *step, const char *path)
  * through. Exits 0, or 1 at the first case that fails. */
 static void user_child(void)
 {
-    drop_to(1000);
+    drop_to(ID(1000));
 
     want_eq("sticky: unlink root's file", syscall3(SYS_UNLINK, (long)S_VICTIM, 0, 0), -EPERM);
     want_eq("plain: unlink root's file", syscall3(SYS_UNLINK, (long)P_VICTIM, 0, 0), 0);
@@ -335,7 +343,7 @@ static void user_child(void)
  * at the first case that fails. */
 static void other_child(void)
 {
-    drop_to(1001);
+    drop_to(ID(1001));
 
     own_round_trip("sticky: a third uid's own file", S_OTHOWN);
     own_round_trip("owned: a third uid's own file", OWN_OTHOWN);
@@ -382,6 +390,10 @@ static void run_child(void (*body)(void), const char *what)
     }
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * Check the two staged modes, make the fixtures, run the two children, and
  * require each refusal to have done nothing and each permitted call to have
@@ -390,8 +402,9 @@ static void run_child(void (*body)(void), const char *what)
  * file it is refused. Each case has a fixture of its own, so that no later
  * "the name is gone" can rest on an earlier case having taken it.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
+    probe_args((int)sp[0], (char **)(sp + 1));
     want_mode("staged /st_sticky", STICKY, 01777);
     want_mode("staged /st_plain", PLAIN, 0777);
 
@@ -401,21 +414,21 @@ PROBE_START void _start(void)
     mint_file(S_OTHER, 0666);
     mint_dir(S_RMME, 0755);
     mint_file(S_MINE, 0644);
-    give_to(S_MINE, 1000);
+    give_to(S_MINE, ID(1000));
     mint_file(S_MYRN, 0644);
-    give_to(S_MYRN, 1000);
+    give_to(S_MYRN, ID(1000));
     mint_file(S_MYSRC, 0640);
-    give_to(S_MYSRC, 1000);
+    give_to(S_MYSRC, ID(1000));
 
     mint_file(P_VICTIM, 0666);
     mint_file(P_MOVER, 0666);
     mint_file(P_TARGET, 0666);
     mint_dir(P_RMME, 0755);
     mint_file(P_MYSRC, 0640);
-    give_to(P_MYSRC, 1000);
+    give_to(P_MYSRC, ID(1000));
 
     mint_dir(OWNED, 01777);
-    give_to(OWNED, 1000);
+    give_to(OWNED, ID(1000));
     want_mode("the minted /st_owned", OWNED, 01777);
     mint_file(OWN_VICTIM, 0666);
     mint_file(OWN_OTHER, 0666);

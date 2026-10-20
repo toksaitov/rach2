@@ -78,14 +78,22 @@
  * Every wait checks WIFEXITED before WEXITSTATUS, since a signal death has
  * the signal in the low bits and would read as exit 0.
  *
+ * An argument `ids=OLD:NEW,...` gives the id that stands for 1000 in a
+ * native run (probe_args.h), which runs the probe in a private copy of the
+ * test image's root; without it the id is 1000.
+ *
  * Prints "SEARCHPROBE OK" and exits 0 when every case passed; a failure
  * prints "SEARCHPROBE FAIL: " with the step and the answer it got, and exits
  * 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
+
+/* The id a native run gives in place of `id` (probe_args.h). */
+#define ID(id) ((u32)probe_id(id))
 
 #define STDOUT 1
 
@@ -359,8 +367,8 @@ static int run_exec(const char *path)
  * calls are refused. */
 static void drop_to_1000(void)
 {
-    want_eq("drop the gids", syscall3(SYS_SETRESGID, 1000, 1000, 1000), 0);
-    want_eq("drop the uids", syscall3(SYS_SETRESUID, 1000, 1000, 1000), 0);
+    want_eq("drop the gids", syscall3(SYS_SETRESGID, ID(1000), ID(1000), ID(1000)), 0);
+    want_eq("drop the uids", syscall3(SYS_SETRESUID, ID(1000), ID(1000), ID(1000)), 0);
 }
 
 /* Directory descriptors the parent opens while the ancestor is searchable,
@@ -441,19 +449,19 @@ static void baseline_child(void)
 static void denied_child(void)
 {
     /* The walk is charged by the effective uid 1000, access by the real 0. */
-    want_eq("drop the gids", syscall3(SYS_SETRESGID, 1000, 1000, 1000), 0);
-    want_eq("drop only the effective uid", syscall3(SYS_SETRESUID, 0, 1000, 0), 0);
+    want_eq("drop the gids", syscall3(SYS_SETRESGID, ID(1000), ID(1000), ID(1000)), 0);
+    want_eq("drop only the effective uid", syscall3(SYS_SETRESUID, 0, ID(1000), 0), 0);
     want_eq("denied: open is charged by the effective id", open_ro(LEAF), -EACCES);
     want_eq("denied: access is charged by the real id (root)",
             syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), 0);
 
     /* A set-id program's view, real 1000 and effective 0: the answers swap. */
-    want_eq("take the effective id back", syscall3(SYS_SETRESUID, 1000, 0, 0), 0);
+    want_eq("take the effective id back", syscall3(SYS_SETRESUID, ID(1000), 0, 0), 0);
     want_ok("denied: open under the effective root", open_ro(LEAF));
     want_eq("denied: access is charged by the real id (1000)",
             syscall3(SYS_ACCESS, (long)LEAF, R_OK, 0), -EACCES);
 
-    want_eq("drop the uids", syscall3(SYS_SETRESUID, 1000, 1000, 1000), 0);
+    want_eq("drop the uids", syscall3(SYS_SETRESUID, ID(1000), ID(1000), ID(1000)), 0);
 
     /* The reads, one level and two, and a name that is not there. */
     want_eq("denied: open the one-level leaf", open_ro(LEAF), -EACCES);
@@ -612,6 +620,10 @@ static void mint_dir(const char *path, u32 mode)
     want_eq("chmod a fixture directory", syscall3(SYS_CHMOD, (long)path, (int)mode, 0), 0);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe's entry, the root parent. It checks the staged modes, creates the
  * targets of the changes, and opens the two directory descriptors; runs the
@@ -623,8 +635,9 @@ static void mint_dir(const char *path, u32 mode)
  * them without owning them; `mine` is uid 1000's own, so only the ancestor
  * can refuse its chmod.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
+    probe_args((int)sp[0], (char **)(sp + 1));
     /* The staged tree is as the manifest declares it. */
     want_mode("staged /sp_denied", DENIED, 0777);
     want_mode("staged /sp_denied/deep", DEEP, 0777);
@@ -637,7 +650,7 @@ PROBE_START void _start(void)
     mint_file(VICTIM, 0666);
     mint_file(MOVER, 0666);
     mint_file(MINE, 0644);
-    want_eq("give mine to uid 1000", syscall3(SYS_CHOWN, (long)MINE, 1000, 1000), 0);
+    want_eq("give mine to uid 1000", syscall3(SYS_CHOWN, (long)MINE, ID(1000), ID(1000)), 0);
     mint_dir(RMME, 0755);
     mint_file(PVICTIM, 0666);
     mint_file(PMOVER, 0666);

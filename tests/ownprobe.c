@@ -11,13 +11,23 @@
  * whose saved uid is its own. The probe removes what it creates and restores
  * the umask, so that the boot it shares with the probes after it is clean.
  *
+ * The probe works at the root, on `/own.txt`, `/own.d` and root's 0644
+ * `/hello.txt`. An argument `ids=OLD:NEW,...` gives the ids that stand for
+ * 1000, 2000, 3000 and 4000 in a native run (probe_args.h), which runs the
+ * probe in a private copy of the test image's root; without it the ids are
+ * those numbers.
+ *
  * Prints "OWNPROBE OK" and exits 0 on success; prints the failing step and
  * exits 1 otherwise. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
+
+/* The id a native run gives in place of `id` (probe_args.h). */
+#define ID(id) ((u32)probe_id(id))
 
 #define SIGCONT 18
 #define SIGTERM 15
@@ -113,23 +123,25 @@ static void child_main(void)
     }
 
     /* chown: a uid change is root's; the stored ids come back from stat. */
-    if (syscall3(SYS_CHOWN, (long)"/own.txt", 1000, 1000) != 0 ||
-        stat_field("/own.txt", KSTAT_UID) != 1000 || stat_field("/own.txt", KSTAT_GID) != 1000) {
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", ID(1000), ID(1000)) != 0 ||
+        stat_field("/own.txt", KSTAT_UID) != ID(1000) ||
+        stat_field("/own.txt", KSTAT_GID) != ID(1000)) {
         fail("chown as root");
     }
-    if (syscall3(SYS_FCHOWN, fd, 1000, 2000) != 0 || stat_field("/own.txt", KSTAT_GID) != 2000) {
+    if (syscall3(SYS_FCHOWN, fd, ID(1000), ID(2000)) != 0 ||
+        stat_field("/own.txt", KSTAT_GID) != ID(2000)) {
         fail("fchown as root");
     }
-    if (syscall3(SYS_CHOWN, (long)"/own.d", 1000, 1000) != 0) {
+    if (syscall3(SYS_CHOWN, (long)"/own.d", ID(1000), ID(1000)) != 0) {
         fail("chown dir as root");
     }
 
     /* Real uid 0, effective 1000: the file is 1000's; chmod is not masked. */
-    if (syscall3(SYS_SETREUID, (int)KEEP, 1000, 0) != 0) {
+    if (syscall3(SYS_SETREUID, (int)KEEP, ID(1000), 0) != 0) {
         fail("excursion out");
     }
     if (syscall3(SYS_CREAT, (long)"/own.d/e.txt", 0666, 0) < 0 ||
-        stat_field("/own.d/e.txt", KSTAT_UID) != 1000 ||
+        stat_field("/own.d/e.txt", KSTAT_UID) != ID(1000) ||
         (stat_field("/own.d/e.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("creation stamps euid under umask");
     }
@@ -142,10 +154,10 @@ static void child_main(void)
     }
 
     /* Drop to 1000 with supplementary group 3000 for the rules below. */
-    groups[0] = 3000;
+    groups[0] = ID(3000);
     if (syscall3(SYS_SETGROUPS, 1, (long)groups, 0) != 0 ||
-        syscall3(SYS_SETRESGID, 1000, 1000, 1000) != 0 ||
-        syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+        syscall3(SYS_SETRESGID, ID(1000), ID(1000), ID(1000)) != 0 ||
+        syscall3(SYS_SETRESUID, ID(1000), ID(1000), ID(1000)) != 0) {
         fail("drop to 1000");
     }
 
@@ -162,11 +174,11 @@ static void child_main(void)
         fail("chown uid as non-root not EPERM");
     }
     /* chgrp: the owner, to an own group only. */
-    if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 3000) != 0 ||
-        stat_field("/own.txt", KSTAT_GID) != 3000) {
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, ID(3000)) != 0 ||
+        stat_field("/own.txt", KSTAT_GID) != ID(3000)) {
         fail("owner chgrp to own group");
     }
-    if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, 4000) != -EPERM) {
+    if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, ID(4000)) != -EPERM) {
         fail("owner chgrp to foreign group not EPERM");
     }
     /* A non-owner may not chmod: /hello.txt is root's, the caller 1000. */
@@ -218,6 +230,10 @@ static void child_main(void)
     syscall3(SYS_EXIT, 0, 0, 0);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe's entry, root throughout: runs `child_main`, then the saved-uid
  * case, then removes what the probe created and restores umask 022.
@@ -228,10 +244,11 @@ static void child_main(void)
  * while it stays root, and the child, uid 1000, sends it signal 0, since a
  * real signal would reach the probe itself and could end the run.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int pid, status;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     fixture_owner = syscall1(SYS_GETPID, 0);
     syscall3(SYS_UMASK, 022, 0, 0);
     pid = syscall3(SYS_FORK, 0, 0, 0);
@@ -246,7 +263,7 @@ PROBE_START void _start(void)
     }
 
     /* The saved-uid case: 1000 in the parent's saved slot. */
-    if (syscall3(SYS_SETRESUID, 0, 0, 1000) != 0) {
+    if (syscall3(SYS_SETRESUID, 0, 0, ID(1000)) != 0) {
         fail("park 1000 in the saved slot");
     }
     pid = syscall3(SYS_FORK, 0, 0, 0);
@@ -256,7 +273,7 @@ PROBE_START void _start(void)
     if (pid == 0) {
         int ppid = syscall3(SYS_GETPPID, 0, 0, 0);
 
-        if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+        if (syscall3(SYS_SETRESUID, ID(1000), ID(1000), ID(1000)) != 0) {
             syscall3(SYS_EXIT, 21, 0, 0);
         }
         if (syscall3(SYS_KILL, ppid, 0, 0) != 0) {

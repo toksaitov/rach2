@@ -20,12 +20,18 @@
  * caller's. Any mismatch exits with the failing step number, so the parent
  * probe sees exactly what broke.
  *
+ * An argument `ids=OLD:NEW,...` after the scenario gives the ids that stand
+ * for 1000 and 5 in a native run (probe_args.h), where 1000 is an account
+ * of the machine and 5 its group `tty`; suidprobe and modeprobe pass on the
+ * one they were given. Without it the ids are 1000 and 5.
+ *
  * Freestanding; direct system calls (probe.h). The test image stages it at
  * several modes and owners (04755:0, 04755:5, 02755::5, 0755, 04644;
  * krffs/manifests/test.manifest), for suidprobe and sudoprobe to run.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int u32;
 
@@ -77,7 +83,7 @@ PROBE_SP_ENTRY;
 
 /**
  * Read the ids and AT_SECURE, and exit with the number of the first check of
- * the scenario argv[1] names that fails, or 0: 90 when no scenario is named
+ * the scenario the first positional argument names that fails, or 0: 90 when no scenario is named
  * and 91 or 92 when the ids cannot be read, 1 to 11 for `suid`, 20 to 23 for
  * `suid5`, 30 to 34 for `sgid`, 40 to 44 for `plain`, 50 to 56 for `root`,
  * and 99 for any other name.
@@ -88,11 +94,16 @@ void probe_main(unsigned long *sp)
     char **argv = (char **)(sp + 1);
     u32 ruid = 1, euid = 1, suid = 1;
     u32 rgid = 1, egid = 1, sgid = 1;
-    u32 secure;
+    u32 secure, user, other;
+    const char *scenario;
 
-    if (argc < 2) {
+    probe_args(argc, argv);
+    scenario = probe_word(1);
+    if (scenario == 0) {
         done(90);
     }
+    user = (u32)probe_id(1000);
+    other = (u32)probe_id(5);
     if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0) {
         done(91);
     }
@@ -101,23 +112,23 @@ void probe_main(unsigned long *sp)
     }
     secure = at_secure(sp);
 
-    if (streq(argv[1], "suid")) {
-        if (ruid != 1000)
+    if (streq(scenario, "suid")) {
+        if (ruid != user)
             done(1);
         if (euid != 0)
             done(2);
         if (suid != 0)
             done(3);
-        if (rgid != 1000 || egid != 1000 || sgid != 1000)
+        if (rgid != user || egid != user || sgid != user)
             done(4); /* a setuid bit must not disturb the gids */
         if (secure != 1)
             done(5);
 
-        if (syscall3(SYS_SETRESUID, -1, 1000, -1) != 0)
+        if (syscall3(SYS_SETRESUID, -1, user, -1) != 0)
             done(6);
         if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0)
             done(7);
-        if (euid != 1000)
+        if (euid != user)
             done(8);
         if (syscall3(SYS_SETRESUID, -1, 0, -1) != 0)
             done(9);
@@ -128,33 +139,33 @@ void probe_main(unsigned long *sp)
         done(0);
     }
 
-    if (streq(argv[1], "suid5")) {
-        if (ruid != 1000)
+    if (streq(scenario, "suid5")) {
+        if (ruid != user)
             done(20);
-        if (euid != 5)
+        if (euid != other)
             done(21);
-        if (suid != 5)
+        if (suid != other)
             done(22);
         if (secure != 1)
             done(23);
         done(0);
     }
 
-    if (streq(argv[1], "sgid")) {
-        if (rgid != 1000)
+    if (streq(scenario, "sgid")) {
+        if (rgid != user)
             done(30);
-        if (egid != 5)
+        if (egid != other)
             done(31);
-        if (sgid != 5)
+        if (sgid != other)
             done(32);
-        if (ruid != 1000 || euid != 1000 || suid != 1000)
+        if (ruid != user || euid != user || suid != user)
             done(33); /* a setgid bit must not disturb the uids */
         if (secure != 1)
             done(34);
         done(0);
     }
 
-    if (streq(argv[1], "root")) {
+    if (streq(scenario, "root")) {
         char **envp = (char **)(sp + 1 + argc + 1);
 
         if (ruid != 0)
@@ -174,14 +185,14 @@ void probe_main(unsigned long *sp)
         done(0);
     }
 
-    if (streq(argv[1], "plain")) {
-        if (ruid != 1000)
+    if (streq(scenario, "plain")) {
+        if (ruid != user)
             done(40);
-        if (euid != 1000)
+        if (euid != user)
             done(41);
-        if (suid != 1000)
+        if (suid != user)
             done(42);
-        if (rgid != 1000 || egid != 1000 || sgid != 1000)
+        if (rgid != user || egid != user || sgid != user)
             done(43);
         if (secure != 0)
             done(44);
