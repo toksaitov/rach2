@@ -32,6 +32,8 @@ unrun-undisrupted|posix/repeat.c|    snprintf(a->disruption, sizeof(a->disruptio
 end-undisrupted|posix/repeat.c|        snprintf(a->disruption, sizeof(a->disruption), "its end was %s",|        snprintf(a->reason, sizeof(a->reason), "its end was %s",|end-lost end-lost-gap end-stopped
 case-cleanup-undisrupted|posix/repeat.c|        snprintf(a->disruption, sizeof(a->disruption), "its cleanup is unconfirmed");|        snprintf(a->reason, sizeof(a->reason), "its cleanup is unconfirmed");|case-cleanup failure-cleanup
 load-cleanup-undisrupted|posix/repeat.c|            snprintf(a->disruption, sizeof(a->disruption),|            snprintf(a->reason, sizeof(a->reason),|load-cleanup
+fixed-limits|posix/repeat.c|               (unsigned long long)x->site->budget_limits->goal_us,|               (unsigned long long)UINT64_C(3600000000),|budget
+grace-reserve|posix/repeat.c|               (unsigned long long)x->site->budget_limits->reserve_us);|               (unsigned long long)x->site->load_grace_us);|budget
 file-kept|posix/load.c|    if (fd < 0 \|\| unlink(name) != 0) {|    if (fd < 0) {|load
 END
 }
@@ -99,7 +101,8 @@ run() {
         "$e/posix/supervise.c" "$e/capture.c" "$e/qemu_profile.c" "$e/posix/exec.c" \
         "$e/posix/keeper.c" "$e/posix/process.c" "$e/posix/qemu.c" "$e/processor.c" \
         "$e/compare.c" "$e/baseline.c" "$e/compare_report.c" "$e/compare_run.c" \
-        "$e/history.c" "$e/history_json.c" "$e/history_collect.c" utils/sha256.c \
+        "$e/history.c" "$e/history_json.c" "$e/history_collect.c" "$e/budget.c" \
+        "$e/digest.c" "$e/cost.c" "$e/sched.c" "$e/json.c" "$e/schema.c" utils/sha256.c \
         -o "$work/$1" >"$work/$1.compile.log" 2>&1 || {
         cat "$work/$1.compile.log" >&2
         return 2

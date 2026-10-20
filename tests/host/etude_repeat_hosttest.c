@@ -15,6 +15,8 @@
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
+ * host-deps: tools/etude/budget.c tools/etude/digest.c tools/etude/cost.c
+ * host-deps: tools/etude/sched.c tools/etude/json.c tools/etude/schema.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  * host-seconds: 180
  * host-alone: the width-2 row meets two cases within a gap of 300 ms
@@ -37,6 +39,8 @@
  * Modelled supervisor results cover lost and stopped ends and unconfirmed
  * cleanup; modelled admission covers a ledger with no recoverable room.
  * Each records a disruption in the history, while a case's timeout does not.
+ * A run's budget records the limits of its class under the site's policy,
+ * and the check of the budget passes a run that passed.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -51,6 +55,7 @@
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "../../utils/sha256.h"
+#include "budget.h"
 #include "compare.h"
 #include "etude/repeat.h"
 
@@ -263,6 +268,11 @@ static const struct etude_load LOADS[] = {{"cpu1", ETUDE_LOAD_CPU, 1},
 /* The blob references every plan and case shares, and the plan's members. */
 static char ref[200], plan_fixed[4096];
 
+/* The site's budget policy, whose focused class has limits of its own, and
+ * its blob reference. */
+static struct etude_budget_policy policy;
+static char policy_ref[200];
+
 /* The environment of the cases: this one's, the shared directory's and the
  * ledger's. */
 static char **case_env;
@@ -283,11 +293,49 @@ static void blob(char *out, size_t size, const char *bytes)
              hex, (unsigned long)strlen(bytes));
 }
 
+/** Write the site's budget policy and read it into `policy`; 0, or -1. */
+static int budget_policy(void)
+{
+    static const char limits[] =
+        "{\"goal_us\":3600000000,\"growth_us\":3600000000,\"ceiling_us\":14400000000,"
+        "\"cleanup_reserve_us\":600000000}";
+    const char *path = fix_path("budget.json");
+    char text[2048], err[1200];
+    FILE *f = fopen(path, "w");
+
+    if (f == NULL)
+        return -1;
+    snprintf(text, sizeof(text),
+             "{\"schema_version\":1,\"policy\":\"budget-v1\",\"site\":{\"machine_id\":\"m1\","
+             "\"os\":\"linux\",\"accelerator\":\"native\",\"capacity\":{\"cpu_millis\":3000,"
+             "\"memory_bytes\":1073741824,\"disk_bytes\":1073741824}},\"classes\":{\"push\":%s,"
+             "\"ci\":%s,\"release\":%s,\"focused\":{\"goal_us\":600000000,\"growth_us\":"
+             "60000000,\"ceiling_us\":1200000000,\"cleanup_reserve_us\":30000000},"
+             "\"phase_first_run\":%s},\"one_time_setup\":[]}\n",
+             limits, limits, limits, limits);
+    if (fputs(text, f) == EOF) {
+        fclose(f);
+        return -1;
+    }
+    if (fclose(f) != 0)
+        return -1;
+    if (etude_budget_policy_read("tools/etude/schemas", path, &policy, err, sizeof(err)) != 0) {
+        printf("etude-repeat-test: %s\n", err);
+        return -1;
+    }
+    snprintf(policy_ref, sizeof(policy_ref),
+             "{\"sha256\":\"%s\",\"size_bytes\":%lu,\"locations\":[\"test://budget\"]}",
+             policy.sha256, (unsigned long)policy.size_bytes);
+    return 0;
+}
+
 /** Make the fixtures the runs share; 0, or -1. */
 static int fixtures(void)
 {
     size_t n = 0, i;
 
+    if (budget_policy() != 0)
+        return -1;
     blob(ref, sizeof(ref), "fixed");
     snprintf(plan_fixed, sizeof(plan_fixed),
              "\"purpose\":\"focused\",\"commit\":\"1111111111111111111111111111111111111111\","
@@ -382,7 +430,7 @@ static int run(const char *run_id, const struct etude_repeat_spec *spec,
     struct etude_repeat_site site;
     struct etude_ledger *l = etude_ledger_open(fix_path("ledger"));
     struct etude_history *h;
-    char name[64], stream[80], budget[200];
+    char name[64], stream[80];
     size_t entries = 0;
     int rc;
 
@@ -396,7 +444,6 @@ static int run(const char *run_id, const struct etude_repeat_spec *spec,
             etude_history_close(h);
         return -1;
     }
-    blob(budget, sizeof(budget), "budget");
     memset(&site, 0, sizeof(site));
     site.run_id = run_id;
     site.ledger = l;
@@ -413,7 +460,8 @@ static int run(const char *run_id, const struct etude_repeat_spec *spec,
     site.plan_fixed = plan_fixed;
     site.machine_id = "m1";
     site.boot_id = "b1";
-    site.budget_policy = budget;
+    site.budget_policy = policy_ref;
+    site.budget_limits = &policy.limits[ETUDE_BUDGET_FOCUSED];
     rc = result_fault != ORDINARY || admission_errno ? driver_repeat_run(spec, &site, r)
                                                      : etude_repeat_run(spec, &site, r);
     if (rc != 0)
@@ -937,6 +985,50 @@ static void test_history(void)
     cmp_free(&h);
 }
 
+/* ---- The budget. ---- */
+
+/** Give integer member `name` of `o`, or -1 when it has none. */
+static int64_t member(const struct eh_json *o, const char *name)
+{
+    const struct eh_json *v = eh_json_get(o, name);
+
+    return v != NULL && v->type == 'n' ? v->number : -1;
+}
+
+/**
+ * The budget of a run records the policy and the limits of the plan's
+ * class under it, and the check of the budget by that policy passes the
+ * run of the race that passed.
+ */
+static void test_budget(void)
+{
+    char *path = (char *)fix_path("race-good.jsonl");
+    struct cmp_history h;
+    struct etude_budget_judgement j;
+    const struct eh_json *b;
+    const char *d;
+
+    if (good_run.nitems == 0 || cmp_load(&h, SCHEMA, &path, 1) != 0) {
+        CHECK(0, "budget");
+        return;
+    }
+    b = eh_json_get(data_of(&h, good_run.run_record), "budget");
+    d = cmp_digest(b, "policy");
+    CHECK(d != NULL && strcmp(d, policy.sha256) == 0, "budget");
+    CHECK(member(b, "goal_us") == 600000000 && member(b, "growth_us") == 60000000 &&
+              member(b, "ceiling_us") == 1200000000 && member(b, "cleanup_reserve_us") == 30000000,
+          "budget");
+    CHECK(etude_budget_judge(&h, &policy, "race-good", NULL, 0, &j) == 0, "budget");
+    if (j.report.verdict != ETUDE_BUDGET_PASS)
+        printf("etude-repeat-test: budget of race-good:\n%s",
+               j.report.lines.data != NULL ? j.report.lines.data : "");
+    CHECK(j.report.verdict == ETUDE_BUDGET_PASS && j.report.failed == 0 && j.charged_known &&
+              j.cls == ETUDE_BUDGET_FOCUSED,
+          "budget");
+    etude_budget_report_free(&j.report);
+    cmp_free(&h);
+}
+
 /* ---- Width and loads. ---- */
 
 /**
@@ -1166,12 +1258,14 @@ int main(int argc, char **argv)
     test_record();
     test_race();
     test_history();
+    test_budget();
     test_width();
     test_load();
     test_disruptions();
     etude_repeat_result_free(&bad_run);
     etude_repeat_result_free(&again_run);
     etude_repeat_result_free(&good_run);
+    etude_budget_policy_free(&policy);
     free(case_env);
     alarm(0);
     if (fails != 0)

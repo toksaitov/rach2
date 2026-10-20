@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "budget.h"
 #include "etude/repeat.h"
 #include "posix.h"
 #include "repeat_text.h"
@@ -20,11 +21,6 @@
 
 /* The output kept of a load fixture. */
 #define LOAD_OUTPUT 4096
-
-/* The budget of a full run, which this driver records and does not judge. */
-#define GOAL_US    UINT64_C(3600000000)
-#define GROWTH_US  UINT64_C(3600000000)
-#define CEILING_US UINT64_C(14400000000)
 
 /* The bytes of a JSON fragment the driver writes in one piece. */
 #define PIECE 4096
@@ -1160,9 +1156,10 @@ static int write_run(struct run *x)
                "{\"value\":0,\"method\":\"repeat-driver-v1\",\"quality\":\"exact\","
                "\"interval_us\":null,\"error_bound\":0},\"goal_us\":%llu,\"growth_us\":%llu,"
                "\"ceiling_us\":%llu,\"cleanup_reserve_us\":%llu,\"verdict\":\"unknown\"}",
-               (unsigned long long)GOAL_US, (unsigned long long)GROWTH_US,
-               (unsigned long long)CEILING_US,
-               (unsigned long long)(x->site->load_grace_us > 0 ? x->site->load_grace_us : 1));
+               (unsigned long long)x->site->budget_limits->goal_us,
+               (unsigned long long)x->site->budget_limits->growth_us,
+               (unsigned long long)x->site->budget_limits->ceiling_us,
+               (unsigned long long)x->site->budget_limits->reserve_us);
     cmp_printf(&t, ",\"result\":{\"outcome\":\"%s\",\"reason\":", outcome_names[worst]);
     run_reason(x, reason, sizeof(reason));
     if (worst == ETUDE_REPEAT_PASS)
@@ -1197,7 +1194,7 @@ int etude_repeat_run(const struct etude_repeat_spec *spec, const struct etude_re
 
     memset(&x, 0, sizeof(x));
     memset(r, 0, sizeof(*r));
-    if (spec->width == 0) {
+    if (spec->width == 0 || site->budget_limits == NULL) {
         errno = EINVAL;
         return -1;
     }

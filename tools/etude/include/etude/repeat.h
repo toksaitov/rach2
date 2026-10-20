@@ -194,6 +194,8 @@ int etude_repeat_tally(const struct cmp_history *h, const char *run_id,
 
 /* ---- The driver, on POSIX systems. ---- */
 
+struct etude_budget_limits;
+
 /* Where and how a run of repetitions runs. */
 struct etude_repeat_site {
     const char *run_id;
@@ -216,6 +218,9 @@ struct etude_repeat_site {
     const char *machine_id; /* the domain of the monotonic clock */
     const char *boot_id;
     const char *budget_policy; /* the budget policy's blob reference, as JSON */
+    /* The limits of the plan's class, its purpose, under that policy, as
+     * etude_budget_policy_read gives them; the run's budget records them. */
+    const struct etude_budget_limits *budget_limits;
 };
 
 /* One attempt of a run. */

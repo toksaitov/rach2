@@ -67,6 +67,7 @@
 #include "../../utils/sha256.h"
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
+#include "budget.h"
 #include "compare.h"
 #include "etude/remote.h"
 #include "etude/repeat.h"
@@ -539,6 +540,10 @@ static int relay_main(const char *mode, const char *marker, char **argv)
 /* The blob reference every plan and case shares, and the plan's members. */
 static char ref[200], plan_fixed[4096];
 
+/* The limits of the plans' class, which their budgets record. */
+static const struct etude_budget_limits FOCUSED = {3600 * SECOND, 3600 * SECOND, 14400 * SECOND,
+                                                   600 * SECOND};
+
 /* The environment of the cases, which names the directory they share. */
 static char **case_env;
 
@@ -739,6 +744,7 @@ static void worker_main(const struct worker *w)
     site.machine_id = "m1";
     site.boot_id = "b1";
     site.budget_policy = budget;
+    site.budget_limits = &FOCUSED;
     memset(&r, 0, sizeof(r));
     rc = etude_repeat_run(&spec, &site, &r);
     e = errno;
