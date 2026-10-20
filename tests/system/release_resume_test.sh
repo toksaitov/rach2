@@ -25,13 +25,14 @@
 # an open phase for readiness again; that a candidate whose only commits since
 # a failed full run close the issues of its failures gets a run of only the
 # suites that failed, while a commit that closes nothing, one that closes
-# another issue, an architecture that failed with no issue, or an issue still
-# open gives it a full run; that the same commit, given again while the issue
-# of its failure is open as intermittent, gets a full run of its own and
-# leaves the issue as it is; that a new candidate's run tests every suite, and
-# its build for the Lenovo starts with `make clean`; and that metal_accept.sh
-# passing on the trial boot leads to `bootctl commit`, while its failure ends
-# the release with no commit. With
+# another issue, an architecture that failed with no issue, an issue still
+# open, or a machine of the tests that differs from the failed commit's gives
+# it a full run; that the same commit, given again while the issue of its
+# failure is open as intermittent, gets a full run of its own and leaves the
+# issue as it is; that a new candidate's run tests every suite, and its build
+# for the Lenovo starts with `make clean`; and that metal_accept.sh passing on
+# the trial boot leads to `bootctl commit` and a report that names the machine
+# of the tests, while its failure ends the release with no commit. With
 # --mutate each fault below is put into the copy and must fail its own row; the
 # copy is restored before the rows run again at the end. --texts puts each
 # fault into the copy and requires only that it changes the file, and runs no
@@ -55,8 +56,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-release-test.XXXXXX") || exit 1
 tree=$work/tree
-mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
+mkdir -p "$work/bin" "$tree/tools/flow" "$tree/tools/ci" "$tree/krffs"
 : > "$tree/krffs/rach2_demo_ed25519"
+cp "$repo/tools/ci/site.sh" "$tree/tools/ci/site.sh" || exit 1
 
 # fault NAME: put fault NAME into the private copy of release.sh, or the
 # original for `none`, and fail when a fault leaves the copy unchanged. The
@@ -70,11 +72,11 @@ mkdir -p "$work/bin" "$tree/tools/flow" "$tree/krffs"
 # closed without its readiness checked again; a rerun is never chosen; a
 # commit that closes nothing, or that closes another issue, is taken for a
 # fix; an architecture that failed with no issue is ignored; a rerun is
-# started for every suite; an issue still open is taken for a fix; the new
-# record keeps the failed run of the old one; a full run is given the suites
-# of a rerun; the build for the Lenovo keeps the last build's objects; the
-# status of metal_accept.sh is ignored; and the candidate is not committed
-# after the acceptance.
+# started for every suite; an issue still open is taken for a fix; a change
+# of the site of the tests is ignored; the new record keeps the failed run of
+# the old one; a full run is given the suites of a rerun; the build for the
+# Lenovo keeps the last build's objects; the status of metal_accept.sh is
+# ignored; and the candidate is not committed after the acceptance.
 fault()
 {
     # shellcheck disable=SC2016 # the dollars are in the texts sed matches
@@ -104,6 +106,7 @@ fault()
         arches) sed 's/^        case " \$arches " in \*" \$a "\*) ;; \*) return 0 ;; esac$/        :/' ;;
         suites) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        :/' ;;
         open) sed 's/\^CLOSED Release tests fail on/^[A-Z]* Release tests fail on/' ;;
+        moved) sed 's/^        here=\$(site "\$sha") && \[ "\$(site "\$o")" = "\$here" \] || return 0$/        true || return 0/' ;;
         stale) sed 's/^                grep .^touched . "\$state\/record" | tail -n 1$/                grep -e "^touched " -e "^run " "$state\/record"/' ;;
         partial) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        set -- "$@" -f suites="$only"/' ;;
         unclean) sed 's/"ARCH=x86_64 make clean && /"/' ;;
@@ -114,7 +117,7 @@ fault()
 }
 
 faults='undone full aside touched started reboot unrecorded unsynced unread closing ready
-    chosen unclosed closes arches suites open stale partial unclean unaccepted uncommitted'
+    chosen unclosed closes arches suites open moved stale partial unclean unaccepted uncommitted'
 if [ "$mode" = texts ]; then
     for f in $faults; do
         fault "$f" || { echo "release-test: fault $f changes nothing" >&2; exit 1; }
@@ -131,7 +134,8 @@ cat > "$tree/tools/flow/notify.sh" <<'EOF'
 printf 'notify %s\n' "$*" >> "$RELEASE_TEST_CALLS"
 EOF
 
-# gh comments, closes and gives the phase's state, RELEASE_TEST_STATE; gives
+# gh comments, keeping each comment's arguments in RELEASE_TEST_CALLS.comments,
+# closes and gives the phase's state, RELEASE_TEST_STATE; gives
 # an issue's state and title from the lines `N STATE TITLE` of
 # RELEASE_TEST_ISSUES, and a commit's statuses from RELEASE_TEST_STATUSES;
 # lists no run when RELEASE_TEST_RUNS is `none`, until a run is started, and
@@ -141,7 +145,8 @@ cat > "$work/bin/gh" <<'EOF'
 #!/bin/sh
 printf 'gh %s %s %s\n' "$1" "$2" "$3" >> "$RELEASE_TEST_CALLS"
 case "$1 $2 $*" in
-    'issue comment '*|'issue close '*) ;;
+    'issue comment '*) printf '%s\n' "$*" >> "$RELEASE_TEST_CALLS.comments" ;;
+    'issue close '*) ;;
     'issue view '*'--json state,title'*) printf '%s\n' "$RELEASE_TEST_ISSUES" | sed -n "s/^$3 //p" ;;
     'issue view '*'--json state'*) echo "$RELEASE_TEST_STATE" ;;
     'api repos/'*'/statuses'*) printf '%s\n' "$RELEASE_TEST_STATUSES" ;;
@@ -202,8 +207,9 @@ EOF
 # check and the worktree's removal and pruning pass; a range between two
 # commits has one commit, whose message is RELEASE_TEST_LOG, and the range
 # from a commit to itself none; the registry has agents and bigmem on x86_64
-# and fs on both architectures; and a new worktree has the stand-in for
-# testing.sh.
+# and fs on both architectures; a commit's tools/ci/site gives the runner
+# label and the accelerator of its line `COMMIT LABEL ACCELERATOR` in
+# RELEASE_TEST_SITES; and a new worktree has the stand-in for testing.sh.
 cat > "$work/bin/git" <<'EOF'
 #!/bin/sh
 printf 'git %s\n' "$*" >> "$RELEASE_TEST_CALLS"
@@ -218,6 +224,10 @@ case $1 in
             *:tests/registry)
                 printf '%s\n' '# the suites' 'agents|qemu|full||4096|x86_64' 'fs|qemu|full' \
                     'bigmem|qemu|full||73728|x86_64' ;;
+            *:tools/ci/site)
+                printf '%s\n' "$RELEASE_TEST_SITES" | awk -v c="${2%%:*}" '
+                    $1 == c { print "runner " $2; print "accelerator " $3; found = 1 }
+                    END { exit !found }' ;;
             *) exit 1 ;;
         esac ;;
     worktree)
@@ -267,6 +277,8 @@ H=1111111111111111111111111111111111111111
 C=2222222222222222222222222222222222222222
 T=2026-10-10T00:00:00Z
 issues='' statuses='' runs='' log='' git='' accept=''
+sites="$H rach2 tcg
+$C rach2 tcg"
 
 # The records of the rows. `head` has a candidate whose full run passed,
 # `built` adds every step up to the transfer, `installing` the installer's
@@ -303,18 +315,20 @@ void: ready: no: work: #14"
 # BOARD for phase 7, gh report the phase as STATE, OPEN unless given, and the
 # machine take a write of /etc/rach2/release as WRITES says, no unless given,
 # as for ssh above, and run the copy for phase P, keeping its output in out
-# and its status in `result`. The variables issues, statuses, runs, log, git
-# and accept are RELEASE_TEST_ISSUES, RELEASE_TEST_STATUSES,
-# RELEASE_TEST_RUNS, RELEASE_TEST_LOG, RELEASE_TEST_GIT and
-# RELEASE_TEST_ACCEPT. The worktree has the stand-in for metal_accept.sh.
+# and its status in `result`. The variables issues, statuses, runs, log, git,
+# sites and accept are RELEASE_TEST_ISSUES, RELEASE_TEST_STATUSES,
+# RELEASE_TEST_RUNS, RELEASE_TEST_LOG, RELEASE_TEST_GIT, RELEASE_TEST_SITES
+# and RELEASE_TEST_ACCEPT. The worktree has the stand-in for metal_accept.sh
+# and a tools/ci/site of `runner rach2` and `accelerator tcg`.
 run()
 {
-    rm -rf "$work/state" "$work/calls" "$work/calls.sleeps" "$work/calls.release"
+    rm -rf "$work/state" "$work/calls" "$work/calls.sleeps" "$work/calls.release" "$work/calls.comments"
     mkdir -p "$work/state/wt/krffs" "$work/state/wt/build/x86_64/images" \
-        "$work/state/wt/tests/system/accept"
+        "$work/state/wt/tests/system/accept" "$work/state/wt/tools/ci"
     : > "$work/state/wt/krffs/rach2_demo_ed25519"
     : > "$work/state/wt/build/x86_64/images/release.sha256"
     cp "$work/metal_accept.sh" "$work/state/wt/tests/system/accept/metal_accept.sh"
+    printf '%s\n' 'runner rach2' 'accelerator tcg' > "$work/state/wt/tools/ci/site"
     : > "$work/calls"
     printf '%s\n' "$2" > "$work/state/record"
     cp "$work/state/record" "$work/before"
@@ -324,7 +338,7 @@ run()
 $3" RELEASE_TEST_STATE=${4:-OPEN} RELEASE_TEST_WRITES=${5:-no} \
         RELEASE_TEST_ISSUES=$issues RELEASE_TEST_STATUSES=$statuses \
         RELEASE_TEST_RUNS=$runs RELEASE_TEST_LOG=$log RELEASE_TEST_GIT=$git \
-        RELEASE_TEST_ACCEPT=$accept \
+        RELEASE_TEST_SITES=$sites RELEASE_TEST_ACCEPT=$accept \
         sh "$tree/tools/flow/release.sh" -s "$work/state" "$1" > "$work/out" 2>&1 < /dev/null ||
         result=$?
 }
@@ -453,7 +467,7 @@ Closes #20" 'ci/full/i686 success
 ci/full/x86_64 failure'
             [ "$result" -eq 75 ] &&
                 [ "$(sed -n 4p "$work/state/record")" = "rerun 101 $H x86_64:agents x86_64:bigmem" ] ;;
-        rerun-other|rerun-unfixed|rerun-unfiled|rerun-open)
+        rerun-other|rerun-unfixed|rerun-unfiled|rerun-open|rerun-moved)
             case $1 in
                 rerun-other) failed_at "Fix agents" 'ci/full/i686 success
 ci/full/x86_64 failure' ;;
@@ -466,10 +480,19 @@ ci/full/x86_64 failure' ;;
 
 Closes #20" 'ci/full/i686 failure
 ci/full/x86_64 failure' ;;
-                *) failed_at "Fix agents
+                rerun-open) failed_at "Fix agents
 
 Closes #20" 'ci/full/i686 success
 ci/full/x86_64 failure' OPEN ;;
+                *)
+                    sites="$H rach2 tcg
+$C rach2-mac kvm"
+                    failed_at "Fix agents
+
+Closes #20" 'ci/full/i686 success
+ci/full/x86_64 failure'
+                    sites="$H rach2 tcg
+$C rach2 tcg" ;;
             esac
             [ "$result" -eq 75 ] && [ "$(sed -n 2p "$work/state/record")" = "sha $C" ] &&
                 ! grep -q '^rerun ' "$work/state/record" ;;
@@ -521,10 +544,13 @@ touched $T" "ready: yes $C"
             run 7 "$tried" "ready: yes $H" OPEN yes
             accept=''
             a=$(aside 7-11111111-)
+            # shellcheck disable=SC2016 # the backquotes are Markdown
             [ "$result" -eq 0 ] && [ -n "$a" ] &&
                 [ "$(grep '^accept \|^machine write\|^gh issue close' "$work/calls" | tr '\n' ,)" = \
                     'accept 192.168.0.106,machine write bootctl commit,machine write release,gh issue close 7,' ] &&
-                grep -q '^accept done .* metal-accept: PASS; committed$' "$work/state/$a" ;;
+                grep -q '^accept done .* metal-accept: PASS; committed$' "$work/state/$a" &&
+                grep -q '^\* The release tests ran on the one machine that the commit.s `tools/ci/site` selects, whose runners have the label `rach2`, with QEMU.s accelerator `tcg`\.$' \
+                    "$work/calls.comments" ;;
         accept-fail)
             accept=fail
             run 7 "$tried" "ready: yes $H" OPEN yes
@@ -542,7 +568,7 @@ rows()
     failed=
     for name in all-done full-done void-waits void-aside failed-aside \
         install-stops install-reboot record-write record-refused record-unsynced closing-other closing-open closing-unready \
-        rerun-chosen rerun-other rerun-unfixed rerun-unfiled rerun-open rerun-dispatch intermittent \
+        rerun-chosen rerun-other rerun-unfixed rerun-unfiled rerun-open rerun-moved rerun-dispatch intermittent \
         full-every build-clean accept-pass accept-fail; do
         if ! row "$name"; then
             echo "release-test: failed: $name" >&2
@@ -587,6 +613,7 @@ if [ "$mode" = mutate ]; then
     caught arches rerun-unfiled
     caught suites rerun-dispatch
     caught open rerun-open
+    caught moved rerun-moved
     caught stale intermittent
     caught partial full-every
     caught unclean build-clean
@@ -594,6 +621,6 @@ if [ "$mode" = mutate ]; then
     caught uncommitted accept-pass
     fault none || exit 1
     rows || exit 1
-    echo 'release-test: result: pass: 22 faults caught and restored'
+    echo 'release-test: result: pass: 23 faults caught and restored'
 fi
-echo 'release-test: result: pass: 24 rows'
+echo 'release-test: result: pass: 25 rows'

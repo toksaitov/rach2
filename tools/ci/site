@@ -1,0 +1,5 @@
+# site: the one machine that runs the release tests, and the accelerator they
+# ask QEMU for. full.yml and tools/flow/release.sh read this file, at the
+# commit they test, through tools/ci/site.sh, whose header gives its form.
+runner rach2
+accelerator tcg

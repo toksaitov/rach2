@@ -1,4 +1,5 @@
-# full: every suite on both architectures, built from clean, at one commit.
+# full: every suite on both architectures, built from clean, at one commit,
+# on the one machine that the commit's tools/ci/site selects.
 #
 # tools/flow/release.sh starts a run when a phase's work is finished and
 # reviewed, and a person may start one with `gh workflow run full.yml -f
@@ -8,12 +9,19 @@
 # hash and the phase, and by which it finds the run. The optional input
 # `suites`, `ARCH:SUITE` words such as `x86_64:agents`, makes the run test
 # only those suites; release.sh sets it when the commit differs from a commit
-# that failed a full run only by the fixes of those failures. One full run
-# goes at a time, outside the core runs' group, and none is cancelled; of the
-# runs started while one runs, only the newest waits, since GitHub cancels a
-# waiting run when a newer one joins the group. The run tests the two
-# architectures one after the other on one runner, so that the core runs
-# keep the other. tools/ci/run.sh builds each from clean, keeping the
+# that failed a full run only by the fixes of those failures. The first job,
+# on any runner labelled rach2, checks the inputs, checks out the commit and
+# reads its tools/ci/site with its tools/ci/site.sh: the label of the runners
+# of the machine that runs the release tests, and the accelerator they ask
+# QEMU for. A commit without those files, or whose site the script refuses,
+# gets no run. The second job runs on a self-hosted runner with that label,
+# and sets RACH2_QEMU_ACCEL to the accelerator, so that every machine of the
+# run asks QEMU for it alone, whatever the runner's own environment gives.
+# One full run goes at a time, outside the core runs' group, and none is
+# cancelled; of the runs started while one runs, only the newest waits, since
+# GitHub cancels a waiting run when a newer one joins the group. The run tests
+# the two architectures one after the other on one runner, so that the core
+# runs keep the other. tools/ci/run.sh builds each from clean, keeping the
 # vendored builds, and runs every suite of the architecture, or those that
 # `suites` names, `bigmem` last and alone; the step of an architecture fails
 # when one of its suites fails, and the next one runs all the same;
@@ -55,13 +63,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  full:
-    name: Build and test both architectures
+  site:
+    name: Check the inputs and read the commit's site
     runs-on: [self-hosted, rach2]
-    timeout-minutes: 720
+    timeout-minutes: 30
+    outputs:
+      runner: ${{ steps.site.outputs.runner }}
+      labels: ${{ steps.site.outputs.labels }}
+      accelerator: ${{ steps.site.outputs.accelerator }}
     steps:
       - name: Check the inputs
-        id: commit
         env:
           SHA: ${{ inputs.sha }}
           SUITES: ${{ inputs.suites }}
@@ -80,6 +91,34 @@ jobs:
               exit 1
           done
 
+      - name: Check out the commit
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.sha }}
+          clean: false
+          fetch-depth: 0
+
+      - name: Read the machine and the accelerator of the release tests
+        id: site
+        env:
+          SHA: ${{ inputs.sha }}
+        run: |
+          [ -f tools/ci/site ] && [ -f tools/ci/site.sh ] || {
+              echo "full: refused: $SHA has no tools/ci/site to select the machine of the release tests" >&2
+              exit 1
+          }
+          sh tools/ci/site.sh tools/ci/site > "$RUNNER_TEMP/site" || exit 1
+          cat "$RUNNER_TEMP/site"
+          cat "$RUNNER_TEMP/site" >> "$GITHUB_OUTPUT"
+
+  full:
+    name: Build and test both architectures on ${{ needs.site.outputs.runner }} under ${{ needs.site.outputs.accelerator }}
+    needs: site
+    runs-on: ${{ fromJSON(needs.site.outputs.labels) }}
+    timeout-minutes: 720
+    env:
+      RACH2_QEMU_ACCEL: ${{ needs.site.outputs.accelerator }}
+    steps:
       - name: Check out the commit
         id: checkout
         uses: actions/checkout@v5
@@ -118,10 +157,9 @@ jobs:
           retention-days: 14
 
       - name: Set the commit's status and file failures as issues
-        if: ${{ !cancelled() && steps.commit.outcome == 'success' && steps.checkout.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha }}
           SUITES: ${{ inputs.suites }}
         run: sh tools/ci/report.sh full "$SHA" "$RUNNER_TEMP/results"
-

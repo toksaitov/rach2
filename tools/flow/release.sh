@@ -14,7 +14,9 @@
 #
 # * The candidate: SHA, the commit `board.sh phase` gave, is written to the
 #   record with the time it was chosen, and commented on the phase.
-# * full: `full.yml` runs every suite on both architectures from clean at SHA.
+# * full: `full.yml` runs every suite on both architectures from clean at SHA,
+#   on a runner of the one machine that SHA's `tools/ci/site` selects, which
+#   asks QEMU for the accelerator the file names and no other.
 #   The run is found by its title, `Release tests of SHORT for phase #P`
 #   with SHORT the first eight digits of SHA, and a start after the
 #   candidate was chosen, before another is started, so a release started
@@ -30,9 +32,15 @@
 #   `full` with ci's issues for its failures; every one of those issues is
 #   closed and titled `Release tests fail on ARCH: SUITE, ...` with suites the
 #   registry has for ARCH at SHA; every architecture that the run did not pass
-#   has one; and every first-parent commit since the last candidate closes one
-#   of them, with a `Closes #N` line, and closes no other issue. Anything else,
-#   or anything that cannot be read, gives the candidate a full run.
+#   has one; every first-parent commit since the last candidate closes one
+#   of them, with a `Closes #N` line, and closes no other issue; and SHA's
+#   `tools/ci/site` selects the machine and the accelerator that the last
+#   candidate's did, so that the rerun and the suites the failed run passed
+#   were tested on one machine. Anything else, or anything that cannot be read,
+#   gives the candidate a full run. An issue of the failed run that is still
+#   open, such as one that bisection labelled `intermittent`, has no fix, so
+#   the next candidate, the same commit included, gets a full run; the release
+#   changes no issue but its phase.
 # * The candidate is checked again, here, before the build, before the
 #   install, and before the phase is closed: it is void unless `board.sh
 #   phase` still says `ready: yes SHA`, since a later commit, an open member,
@@ -73,8 +81,9 @@
 #   digest, flushed to the disk with the directories that hold it, and read
 #   back. A flush that fails fails the step, since the read-back may come
 #   from the buffer cache; the phase is not closed until the file names SHA.
-# * close: the phase gets a comment with the commit, the run, the digests and
-#   the verdicts; when the candidate is still ready, the record says
+# * close: the phase gets a comment with the commit, the run, the machine and
+#   the accelerator it tested on, the digests and the verdicts; when the
+#   candidate is still ready, the record says
 #   `closing`, the phase is closed, its cards are archived with `board.sh
 #   archive`, and the owner's phone gets one push. Otherwise the phase stays
 #   In progress for its next release. Only a phase already closed skips the
@@ -287,6 +296,14 @@ failed_run()
     fail full "run $1 failed and no open ci issue names it, so its report filed nothing; read the run's log"
 }
 
+# site REV: print the machine and the accelerator of the release tests that
+# REV's tools/ci/site selects, as tools/ci/site.sh reads them; fail when the
+# file cannot be read or the script refuses it.
+site()
+{
+    git -C "$repo" show "$1:tools/ci/site" 2> /dev/null | sh "$repo/tools/ci/site.sh" 2> /dev/null
+}
+
 # plain ARCH:SUITE...: print the suites as `SUITE on ARCH, ...`.
 plain()
 {
@@ -310,7 +327,8 @@ again()
         git -C "$repo" merge-base --is-ancestor "$o" "$sha" 2> /dev/null &&
         commits=$(git -C "$repo" rev-list --first-parent "$o..$sha" 2> /dev/null) &&
         [ -n "$commits" ] &&
-        registry=$(git -C "$repo" show "$sha:tests/registry" 2> /dev/null) || return 0
+        registry=$(git -C "$repo" show "$sha:tests/registry" 2> /dev/null) &&
+        here=$(site "$sha") && [ "$(site "$o")" = "$here" ] || return 0
     for c in $commits; do
         closes=$(git -C "$repo" log -1 --format=%B "$c" 2> /dev/null |
             sed -n 's/^Closes #\([0-9][0-9]*\)$/\1/p')
@@ -728,9 +746,14 @@ main()
         # shellcheck disable=SC2086 # the rerun is words
         [ -z "$rerun" ] || tests=$(set -- $rerun
             echo "The run https://github.com/$REPO/actions/runs/$run tested again only the suites that failed in https://github.com/$REPO/actions/runs/$1 at commit $(echo "$2" | cut -c 1-8), $(shift 2; plain "$@"), and they passed. Every commit since $(echo "$2" | cut -c 1-8) fixes one of those failures, and the earlier run passed every other suite it ran.")
+        on="the one machine that the commit's \`tools/ci/site\` selects"
+        if machine=$(sh "$repo/tools/ci/site.sh" "$state/wt/tools/ci/site" 2> /dev/null); then
+            on="$on, whose runners have the label \`$(printf '%s\n' "$machine" | sed -n 's/^runner=//p')\`, with QEMU's accelerator \`$(printf '%s\n' "$machine" | sed -n 's/^accelerator=//p')\`"
+        fi
         gh issue comment "$phase" --repo "$REPO" --body "Commit $sha is released: the Lenovo runs it as its default system.
 
 * $tests
+* The release tests ran on $on.
 * The commit was built in $COPY on the testing host with \`ARCH=x86_64 make clean && ARCH=x86_64 make machine GNU_AGENTS=all\`.
 * The SHA-256 digests are $(digest rach2/kernel) for the kernel, $(digest rach2-recovery/kernel) for the recovery kernel, $(digest "$RECOVERY_IMAGE") for the recovery image and $(digest images/os-real-gnu.ext2) for the GNU root.
 * The release updated the recovery partition and installed the kernel and the root from the recovery system. On the trial boot, machine_identity.sh and metal_accept.sh passed; \`bootctl commit\` then made the new system the saved default, and /etc/rach2/release on the machine names $sha." > /dev/null ||
