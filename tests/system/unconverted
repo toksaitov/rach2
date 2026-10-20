@@ -40,7 +40,6 @@ tests/musl/ipcmusl.c: 2 sleep
 tests/musl/lockmusl.c: 1 sleep
 tests/musl/pollmusl.c: 1 sleep
 tests/musl/pselectmusl.c: 1 sleep
-tests/musl/ptracemusl.c: 2 skip
 tests/musl/ptracemusl.c: 7 sleep
 tests/musl/pwauthmusl.c: 5 sleep
 tests/musl/sigframemusl.c: 1 sleep

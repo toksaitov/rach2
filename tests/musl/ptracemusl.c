@@ -53,20 +53,19 @@
  *
  * The rows of the debug exception: a single step over a system call instruction
  * stops after it with the call's result; a system call made on an invalid user
- * stack returns; the hit of a watchpoint on the word a MOV SS loads, which the
- * processor delays past the system call after it, stops the tracee at the
- * call's return, and ends with EINTR a poll that waits forever; and a
- * watchpoint that the kernel's own access to user memory hits stops the tracee
- * at its return to user mode, or, when the tracee waits for SIGTRAP in
- * sigtimedwait, is taken by the wait. PTRACE_INTERRUPT of a tracee in
- * PTRACE_LISTEN stops it before its next instruction.
+ * stack returns; and a watchpoint that the kernel's access to user memory hits
+ * stops the tracee at its return to user mode, or, when the tracee waits for
+ * SIGTRAP in sigtimedwait, is taken by the wait. PTRACE_INTERRUPT of a tracee
+ * in PTRACE_LISTEN stops it before its next instruction.
  *
- * With no argument the program runs every row. With one argument it runs the
- * row of named_rows that has that name, as tests/system/ptrace_debug_mutate.sh
- * does. It prints "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
- * "PTRACEMUSL FAIL (detail: errno N)" and exits 1 at the first failure. Under
- * QEMU TCG the two MOV SS rows print "ptracemusl: not run: debug exception
- * preceded system call" and pass.
+ * With no argument the program runs every ordinary row. With one argument it
+ * runs the named_rows entry of that name, as ptrace_debug_mutate.sh does.
+ * It prints "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
+ * "PTRACEMUSL FAIL (detail: errno N)" and exits 1 at the first failure.
+ * PTRACE_DEBUG_ENTRY builds also have delayed and delayed-poll rows, which
+ * require the debug-entry fixture of ptrace_debug_mutate.sh. They require a
+ * forced TRAP_HWBKPT at the system call's return with SIGTRAP blocked, and
+ * EINTR from an infinite poll. They fail if the debug entry is not exercised.
  */
 
 #define _GNU_SOURCE
@@ -101,7 +100,6 @@
  */
 #if defined __x86_64__
 #define R_BX(r)        ((r).rbx)
-#define R_PTR(r)       ((r).rdi)
 #define R_SP(r)        ((r).rsp)
 #define R_NR(r)        ((r).orig_rax)
 #define R_RET(r)       ((r).rax)
@@ -113,7 +111,6 @@
 typedef struct user_fpregs_struct fxregs_t;
 #else
 #define R_BX(r)        ((r).ebx)
-#define R_PTR(r)       ((r).esi)
 #define R_SP(r)        ((r).esp)
 #define R_NR(r)        ((r).orig_eax)
 #define R_RET(r)       ((r).eax)
@@ -1410,35 +1407,20 @@ static int killed_tracee(void)
     return 0;
 }
 
-/*
- * step_call to step_next bound one system call and the instruction after it.
- * watched_ss loads SS from the word the pointer register addresses, and
- * watched_call is the system call after it, which a processor runs before it
- * delivers a debug exception the load raised.
- */
-extern const char step_call[], step_return[], step_next[], watched_ss[], watched_call[],
-    watched_return[];
+/* The system call and the instruction after it, for register checks. */
+extern const char step_call[], step_return[], step_next[];
 #if defined __x86_64__
 __asm__(".text\n"
-        ".globl step_call, step_return, step_next, watched_ss, watched_call, watched_return\n"
+        ".globl step_call, step_return, step_next\n"
         "step_call: syscall\n"
         "step_return: incq %rbx\n"
-        "step_next: int3\n"
-        "watched_ss: movw (%rdi), %ss\n"
-        "watched_call: syscall\n"
-        "watched_return: int3\n");
-/* The user data selector, the word watched_ss loads into SS. */
-static unsigned short user_ss = 0x2b;
+        "step_next: int3\n");
 #else
 __asm__(".text\n"
-        ".globl step_call, step_return, step_next, watched_ss, watched_call, watched_return\n"
+        ".globl step_call, step_return, step_next\n"
         "step_call: int $0x80\n"
         "step_return: incl %ebx\n"
-        "step_next: int3\n"
-        "watched_ss: movw (%esi), %ss\n"
-        "watched_call: int $0x80\n"
-        "watched_return: int3\n");
-static unsigned short user_ss = 0x23;
+        "step_next: int3\n");
 #endif
 
 /**
@@ -1617,21 +1599,41 @@ static int entry_system_call(void)
     return 0;
 }
 
+#ifdef PTRACE_DEBUG_ENTRY
+/* An armed breakpoint that the fixture classifies as a deferred user hit. */
+static unsigned short debug_word;
+
 /**
- * Check a watched MOV SS followed by a system call made with the user stack
- * pointer 1: the hit, which the processor delays into the call's entry, stops
- * the child with TRAP_HWBKPT at watched_return with getpid's result. QEMU TCG
- * reports the hit before the call, which checks only the debug entry from
- * user mode, and the row then prints that it did not run. On x86-64,
- * tests/system/ptrace_debug_mutate.sh checks the kernel's debug entry with
- * int $1 put at syscall_entry, which does not depend on the processor's
- * delay. Returns 0, or 1 after the failure is printed.
+ * Fork a register child with SIGTRAP blocked. The entry fixture must force
+ * the deferred user hit through that mask. Returns its pid, or -1.
+ */
+static pid_t debug_child(void)
+{
+    sigset_t set, saved;
+    pid_t pid;
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGTRAP);
+    if (sigprocmask(SIG_BLOCK, &set, &saved) != 0) {
+        fail("blocking SIGTRAP for debug entry");
+        return -1;
+    }
+    pid = register_child();
+    sigprocmask(SIG_SETMASK, &saved, NULL);
+    return pid;
+}
+
+/**
+ * Require the fixture's debug interrupt at system-call entry to stop at
+ * step_return with getpid's result, before the increment runs. The invalid
+ * user stack also requires x86-64's debug interrupt stack and GS handling.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int delayed_debug(void)
 {
     struct user_regs_struct regs;
     siginfo_t info;
-    pid_t pid = register_child();
+    pid_t pid = debug_child();
 
     if (pid < 0) {
         return 1;
@@ -1639,12 +1641,12 @@ static int delayed_debug(void)
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
         return abandon(pid, "registers before delayed debug exception");
     }
-    R_IP(regs) = (unsigned long)watched_ss;
+    R_IP(regs) = (unsigned long)step_call;
     R_RET(regs) = SYS_getpid;
     R_NR(regs) = -1;
-    R_PTR(regs) = (unsigned long)&user_ss;
+    R_BX(regs) = 41;
     R_SP(regs) = 1;
-    if (debug_set(pid, 0, (unsigned long)&user_ss) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
+    if (debug_set(pid, 0, (unsigned long)&debug_word) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
         ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
         expect_stop(pid, SIGTRAP, "delayed debug exception did not trap") ||
@@ -1652,31 +1654,25 @@ static int delayed_debug(void)
         ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
         return abandon(pid, "delayed debug exception lost its status");
     }
-    if ((unsigned long)R_IP(regs) == (unsigned long)watched_call && R_RET(regs) == SYS_getpid) {
-        printf("ptracemusl: not run: debug exception preceded system call\n");
-    } else if ((unsigned long)R_IP(regs) != (unsigned long)watched_return ||
-               (unsigned long)R_RET(regs) != (unsigned long)pid) {
+    if ((unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 41 ||
+        R_SP(regs) != 1 || (unsigned long)R_RET(regs) != (unsigned long)pid) {
         return abandon(pid, "delayed debug exception lost its frame or result");
     }
+    printf("ptracemusl: result: delayed: kernel entry, forced TRAP_HWBKPT, getpid result\n");
     finish_register_child(pid);
     return 0;
 }
 
 /**
- * Check that the hit of a watched MOV SS, delayed into the entry of the poll
- * after it, ends that poll, which has no descriptors and no timeout, with EINTR
- * at watched_return. With no descriptors poll reads no user memory, so the
- * kernel does not touch the watched word; x86-64 passes its address as the
- * first argument, which a count of 0 leaves unused. The child keeps its valid
- * user stack for the wait. Under QEMU TCG the hit stops the child before the
- * call, and the row prints that it did not run. Returns 0, or 1 after the
- * failure is printed.
+ * Require the fixture's deferred user hit to end a descriptorless infinite
+ * poll with EINTR at step_return, despite blocked SIGTRAP. No kernel access
+ * to the watched word can raise another hit. Returns 0, or 1 on failure.
  */
 static int delayed_poll(void)
 {
     struct user_regs_struct regs;
     siginfo_t info;
-    pid_t pid = register_child();
+    pid_t pid = debug_child();
 
     if (pid < 0) {
         return 1;
@@ -1684,19 +1680,19 @@ static int delayed_poll(void)
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
         return abandon(pid, "registers before delayed poll");
     }
-    R_IP(regs) = (unsigned long)watched_ss;
+    R_IP(regs) = (unsigned long)step_call;
     R_RET(regs) = SYS_poll;
     R_NR(regs) = -1;
-    R_PTR(regs) = (unsigned long)&user_ss;
+    R_BX(regs) = 0;
 #if defined __x86_64__
+    regs.rdi = 0;
     regs.rsi = 0;
     regs.rdx = -1;
 #else
-    regs.ebx = 0;
     regs.ecx = 0;
     regs.edx = -1;
 #endif
-    if (debug_set(pid, 0, (unsigned long)&user_ss) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
+    if (debug_set(pid, 0, (unsigned long)&debug_word) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
         ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
         expect_stop(pid, SIGTRAP, "delayed infinite poll did not trap") ||
@@ -1704,15 +1700,15 @@ static int delayed_poll(void)
         ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
         return abandon(pid, "delayed poll lost its status");
     }
-    if ((unsigned long)R_IP(regs) == (unsigned long)watched_call && R_RET(regs) == SYS_poll) {
-        printf("ptracemusl: not run: debug exception preceded system call\n");
-    } else if ((unsigned long)R_IP(regs) != (unsigned long)watched_return ||
-               (long)R_RET(regs) != -EINTR) {
+    if ((unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 0 ||
+        (long)R_RET(regs) != -EINTR) {
         return abandon(pid, "delayed poll lost its frame or EINTR result");
     }
+    printf("ptracemusl: result: delayed-poll: kernel entry, forced TRAP_HWBKPT, EINTR\n");
     finish_register_child(pid);
     return 0;
 }
+#endif
 
 /**
  * Check that a write watchpoint on `byte`, which the kernel's copy of a read
@@ -2117,9 +2113,12 @@ static const struct {
     const char *name;
     int (*row)(void);
 } named_rows[] = {
-    {"step", step_system_call},     {"entry", entry_system_call},   {"delayed", delayed_debug},
-    {"delayed-poll", delayed_poll}, {"copy", watched_copy},         {"poll", watched_poll},
-    {"sigwait", watched_sigwait},   {"listen", listen_user_return}, {"tp", thread_pointer},
+#ifdef PTRACE_DEBUG_ENTRY
+    {"delayed", delayed_debug}, {"delayed-poll", delayed_poll},
+#endif
+    {"step", step_system_call}, {"entry", entry_system_call},   {"copy", watched_copy},
+    {"poll", watched_poll},     {"sigwait", watched_sigwait},   {"listen", listen_user_return},
+    {"tp", thread_pointer},
 };
 
 /**
@@ -2140,9 +2139,8 @@ static int first_rows(void)
 static int second_rows(void)
 {
     return seized_fork() || stopped_leader() || traced_thread_usage() || tracer_first() ||
-           killed_tracee() || step_system_call() || entry_system_call() || delayed_debug() ||
-           delayed_poll() || watched_copy() || watched_poll() || watched_sigwait() ||
-           listen_user_return() || thread_pointer();
+           killed_tracee() || step_system_call() || entry_system_call() || watched_copy() ||
+           watched_poll() || watched_sigwait() || listen_user_return() || thread_pointer();
 }
 
 int main(int argc, char **argv)

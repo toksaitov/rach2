@@ -4,25 +4,20 @@
 # x86-64 debug entry, with one small guest image for the architecture ARCH
 # names.
 #
-# The step row must catch PT_STEP taken out of the test at a system call's
-# exit. QEMU TCG does not defer a MOV SS watchpoint through the next
-# instruction, so for the entry row `int $1` is put before syscall_entry
-# changes GS or RSP, which reaches that entry state without depending on the
-# emulator's delay.
-# The fixed entry must preserve a syscall on an invalid user stack. Removing
-# its interrupt stack must end in a double fault. Choosing GS by the saved CS
-# must reset the machine, a triple fault, before any handler prints. On
-# x86-64, which alone defers a kernel hit, removing its post before the
-# pending-signal check must fail the sigwait row. Where /dev/kvm is usable,
-# the delayed and delayed-poll rows also run under KVM, which delays a watched
-# MOV SS's hit into the system-call entry as hardware does. Posting that hit
-# without forcing it must fail delayed; ignoring it in signal_pending must
-# fail delayed-poll. Elsewhere the script says those rows did not run.
-# The original kernel is restored, rebuilt and required to match and pass at
-# the end. The script holds the tree through runlock.sh, as tests/run does,
-# so no suite builds or boots the tree and no other proof saves a source
-# while a fault is in it. --texts checks that each fault is once in its
-# source.
+# The ordinary rows exercise real user and kernel watchpoints. The delayed
+# rows use a fixture: int $1 at the first instruction of the system-call
+# entry, before x86-64 changes GS or RSP. debugreg_defer_user recognizes the
+# saved PC just after that two-byte instruction. The processor builds the
+# debug frame and runs the real entry and return code on either architecture;
+# no MOV SS delay or accelerator-specific behavior is required. DR7 is armed,
+# while SIGTRAP is blocked, so a deferred user hit must force its signal.
+#
+# Each fixture passes before a fault, fails with the fault, and passes again
+# after restoration. Missing injection and a wrong entry PC must fail too.
+# x86-64 additionally checks its interrupt stack and GS selection. The fixture
+# does not test a processor's MOV SS inhibition; it tests the kernel state that
+# a delayed hit reaches. The original kernel is rebuilt and compared at exit.
+# --texts checks that each replacement occurs once without writing a source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -52,8 +47,12 @@ changes = {
     'sigwait': ('rach2/sys/syscall_proc.c',
                 '    arch_debug_deliver();\n    set = current_proc->sig_pending',
                 '    set = current_proc->sig_pending'),
-    'inject': ('rach2/sys/arch/x86_64/isr_handler.s',
-               'syscall_entry:\n    swapgs', 'syscall_entry:\n    int $1\n    swapgs'),
+    'inject': ('rach2/sys/arch/' + os.environ.get('RACH2_ARCH', 'i686') + '/isr_handler.s',
+               'syscall_entry:\n    swapgs' if os.environ.get('RACH2_ARCH') == 'x86_64' else 'isr128:\n    cli',
+               'syscall_entry:\n    int $1\n    swapgs' if os.environ.get('RACH2_ARCH') == 'x86_64' else 'isr128:\n    int $1\n    cli'),
+    'entry-pc': ('rach2/sys/arch/x86/debugreg.c',
+                 '    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {',
+                 '    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY + 2) {'),
     'stack': ('rach2/sys/arch/x86_64/idt.c',
               '    set_gate(1, isr1, GATE_KERNEL, IST_DEBUG);',
               '    set_gate(1, isr1, GATE_KERNEL, 0);'),
@@ -73,8 +72,11 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in step unforced pending sigwait inject stack gs; do
-        apply_fault "$fault" >/dev/null
+    for RACH2_ARCH in i686 x86_64; do
+        export RACH2_ARCH
+        for fault in step unforced pending sigwait inject entry-pc stack gs; do
+            apply_fault "$fault" >/dev/null
+        done
     done
     echo 'ptrace-debug: texts: every fault is once in its source'
     exit 0
@@ -84,6 +86,7 @@ fi
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" ptrace-debug "$repo/tests/system/ptrace_debug_mutate.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
+export RACH2_ARCH
 # shellcheck disable=SC2034
 REPO=$repo
 # shellcheck source=mk/arch.sh
@@ -93,10 +96,10 @@ export RACH2_QEMU
 mkdir -p build/tests
 work=
 sources='rach2/sys/syscall.c rach2/sys/syscall_proc.c rach2/sys/arch/x86/debugreg.c
-    rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s'
+    rach2/sys/arch/x86_64/idt.c rach2/sys/arch/x86_64/isr_handler.s
+    rach2/sys/arch/i686/isr_handler.s'
 child=
 changed=
-kvm=
 keep=
 
 # Stop the running boot's process group and wait until it is gone.
@@ -112,7 +115,7 @@ stop_child()
     fi
 }
 
-# Put back the saved copies of the five sources and touch them.
+# Put back the saved sources and touch them.
 restore()
 {
     for file in $sources; do
@@ -139,7 +142,7 @@ cleanup()
         rebuild >"$work/cleanup.build.log" 2>&1
     fi
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
-        rm -rf ${work:+"$work"}
+        [ -z "$work" ] || rm -rf "$work"
     fi
 }
 trap cleanup EXIT
@@ -160,17 +163,15 @@ mutate()
 }
 
 # run_phase PHASE ROW EXPECTED [DETAIL]: build the kernel and run ptracemusl's
-# ROW, under KVM when `kvm` is set. With EXPECTED `pass` it must pass, and
-# under KVM the watchpoint must have been delayed; otherwise it must fail and
-# print DETAIL.
+# ROW. With EXPECTED `pass` it must pass and print DETAIL when given;
+# otherwise it must fail and print DETAIL. The kernel's exit record and the
+# success token must both agree.
 run_phase()
 {
     phase=$1
     row=$2
     expected=$3
     detail=${4:-}
-    set --
-    [ -z "$kvm" ] || set -- --qemu-arg=-accel --qemu-arg=kvm
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
     cp "$ARCH_BUILD/rach2/kernel" "$work/$phase.kernel"
@@ -178,7 +179,7 @@ run_phase()
         >"$work/$phase.artifacts"
     build/tests/system/runutil group build/tests/system/harness \
         --kernel "$work/$phase.kernel" --initrd "$work/test.krffs" \
-        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max "$@" \
+        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max \
         --append rach2.rescue --timeout 40 --steptmo 15 \
         --ok 'PTRACEMUSL OK' --never 'PTRACEMUSL FAIL' \
         --log "$work/$phase.serial.log" \
@@ -192,9 +193,9 @@ run_phase()
     cat "$work/$phase.log" "$work/$phase.serial.log"
     if [ "$expected" = pass ]; then
         [ "$status" -eq 0 ] || exit 1
-        if [ -n "$kvm" ] && grep -Fq 'not run: debug exception preceded' "$work/$phase.serial.log"; then
-            echo "ptrace-debug: fail: $phase: KVM did not delay the watchpoint" >&2
-            exit 1
+        grep -Eq '^(<[0-7]>\[[0-9.]+\] )?sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell' "$work/$phase.serial.log" || exit 1
+        if [ -n "$detail" ]; then
+            grep -Fq "$detail" "$work/$phase.serial.log" || exit 1
         fi
     else
         if [ "$status" -eq 0 ] ||
@@ -210,7 +211,7 @@ printf 'ptrace-debug: logs: %s\n' "$work"
 keep=1
 make -s ARCH="$RACH2_ARCH" musl build/tests/system/harness build/tests/system/runutil \
     >"$work/build.log" 2>&1
-vendor/musl/muslgcc -O2 -Wall -Wextra -Werror -Wl,-z,noexecstack \
+vendor/musl/muslgcc -DPTRACE_DEBUG_ENTRY -O2 -Wall -Wextra -Werror -Wl,-z,noexecstack \
     -o "$work/ptracemusl" tests/musl/ptracemusl.c >>"$work/build.log" 2>&1
 make -s -C krffs -o libc-check ../build/krffs/mkfs.krffs \
     ../build/krffs/stageimage.krffs ../build/krffs/readfile.krffs "ARCH=$RACH2_ARCH" >>"$work/build.log" 2>&1
@@ -230,48 +231,54 @@ restore
 run_phase step-restored step pass
 cmp "$work/fixed.kernel" "$work/step-restored.kernel"
 run_phase copy copy pass
-run_phase delayed delayed pass
-run_phase delayed-poll delayed-poll pass
+run_phase poll poll pass
 run_phase sigwait sigwait pass
-kvm=
-if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
-    kvm=1
-    run_phase delayed-kvm delayed pass
-    mutate unforced
-    run_phase unforced delayed fail 'delayed debug exception lost its frame or result'
-    restore
-    run_phase unforced-restored delayed pass
-    cmp "$work/fixed.kernel" "$work/unforced-restored.kernel"
-    run_phase delayed-poll-kvm delayed-poll pass
-    mutate pending
-    run_phase no-pending delayed-poll fail 'delayed infinite poll did not trap'
-    restore
-    run_phase pending-restored delayed-poll pass
-    cmp "$work/fixed.kernel" "$work/pending-restored.kernel"
-    kvm=
-else
-    echo 'ptrace-debug: not run: the delayed-watchpoint rows need KVM, which this host does not offer'
-fi
+mutate entry-pc
+run_phase missing-injection delayed fail 'delayed debug exception lost its status'
+mutate inject
+run_phase injected delayed pass 'ptracemusl: result: delayed: kernel entry'
+run_phase injected-poll delayed-poll pass 'ptracemusl: result: delayed-poll: kernel entry'
+mutate unforced
+run_phase unforced delayed fail 'delayed debug exception lost its frame or result'
+restore
+mutate entry-pc
+mutate inject
+run_phase unforced-restored delayed pass 'ptracemusl: result: delayed: kernel entry'
+cmp "$work/injected.kernel" "$work/unforced-restored.kernel"
+mutate pending
+run_phase no-pending delayed-poll fail 'delayed infinite poll did not trap'
+restore
+mutate entry-pc
+mutate inject
+run_phase pending-restored delayed-poll pass 'ptracemusl: result: delayed-poll: kernel entry'
+cmp "$work/injected.kernel" "$work/pending-restored.kernel"
+restore
+mutate inject
+run_phase wrong-entry-pc delayed fail 'delayed debug exception lost its status'
+restore
 if [ "$RACH2_ARCH" = x86_64 ]; then
     mutate sigwait
     run_phase no-sigwait sigwait fail 'watched sigwait did not take SIGTRAP with TRAP_HWBKPT'
     restore
     run_phase sigwait-restored sigwait pass
     cmp "$work/fixed.kernel" "$work/sigwait-restored.kernel"
+    mutate entry-pc
     mutate inject
-    run_phase injected entry pass
+    run_phase entry-injected entry pass
     mutate stack
     run_phase no-stack entry fail 'kernel exception: double fault'
     restore
+    mutate entry-pc
     mutate inject
     run_phase stack-restored entry pass
-    cmp "$work/injected.kernel" "$work/stack-restored.kernel"
+    cmp "$work/entry-injected.kernel" "$work/stack-restored.kernel"
     mutate gs
     run_phase wrong-gs entry fail 'qemu had already exited'
     restore
+    mutate entry-pc
     mutate inject
     run_phase gs-restored entry pass
-    cmp "$work/injected.kernel" "$work/gs-restored.kernel"
+    cmp "$work/entry-injected.kernel" "$work/gs-restored.kernel"
 fi
 restore
 run_phase restored entry pass
