@@ -115,6 +115,8 @@ HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
 RUNUTIL         = build/tests/system/runutil
+# The driver of etude-guest over the serial console (its rule below).
+ETUDESERIAL     = build/tests/system/etudeserial
 # The reader of a framebuffer console's text off QEMU's screen dump, which
 # the uefi suite runs (tests/system/runner/screentext.c), with the kernel's
 # own font compiled beside it.
@@ -179,6 +181,12 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 $(RUNUTIL): tests/system/runner/runutil.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
+# The driver of etude-guest (tests/system/runner/etudeserial.c), with the
+# frame codec that etude-guest itself is built with.
+$(ETUDESERIAL): tests/system/runner/etudeserial.c tools/etude/guest/wire.c utils/sha256.c \
+                tools/etude/guest/wire.h tools/etude/include/etude/frame.h utils/sha256.h
+	@mkdir -p $(dir $@)
+	$(HOST_LINK) -I tools/etude/guest -I tools/etude/include -I utils
 # The probe suite boots the test image headless (-cpu max) and runs every
 # probe, failing if any does not exit 0; `make test` runs it with the rest of
 # the core tier. The few probes with a special contract (fork-exit-code,
@@ -196,6 +204,16 @@ $(RUNUTIL): tests/system/runner/runutil.c
 run-default: rach2 test-image $(RUNTESTS)
 	$(RUNTESTS) $(NIC_DEV) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log
+# `tests/run etudeguest`: etude-guest on the test image's serial console, as
+# the debug shell's designated init, without the debug-exit port. The driver
+# stores the image's /hello and /ish without a transfer and utils' `yes` with
+# one, and requires a pass, an intended failure, a repeated command answered
+# by the same events, a cancellation that leaves no process, and an exec
+# whose exit the kernel records as the designated init's.
+run-etudeguest: rach2 test-image utils $(ETUDESERIAL)
+	$(ETUDESERIAL) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
+	    --hello $(ARCH_BUILD)/tests/hello --ish $(ARCH_BUILD)/ish/ish \
+	    --yes $(ARCH_BUILD)/utils/yes --log $(IMAGES_DIR)/etudeguest-test.log
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
 # invoking their own build would be two Makes against one `build/` tree; with
@@ -212,12 +230,12 @@ run-default: rach2 test-image $(RUNTESTS)
 # invocations so every component finishes before suite products are built.
 components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
-            ports/doom rach2 rach2-metal rach2-recovery tests utils
+            ports/doom rach2 rach2-metal rach2-recovery tests tools/etude/guest utils
 
-prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(HARNESS) $(HOSTPEER) \
-                $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) $(RUNUTIL) \
-                $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image os-simple-image \
-                rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
+prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(ETUDESERIAL) $(HARNESS) \
+                $(HOSTPEER) $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
+                $(RUNUTIL) $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image \
+                os-simple-image rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
                 $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK) $(GROW_GPT_DISK)
 prepare-all: components
 	$(MAKE) --no-print-directory prepare-images prepare-products
