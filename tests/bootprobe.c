@@ -403,16 +403,15 @@ static void window_batch_case(void)
 static char written[SECTOR];
 
 /**
- * Wait until the child is blocked in its raw transfer, after its pipe signal:
- * in the state D, a sleep no signal ends, as Linux reports a process waiting
- * on its disk. The delayed device provides the wait; no elapsed-time
- * assertion is needed. 1 once the state reads D; 0 when the child is a
- * zombie or its stat does not open, or after 100000 reads without a D.
+ * The state letter of process `pid` from /proc/PID/stat, the field after the
+ * parenthesised name: `D` for a sleep no signal ends, `Z` for a zombie. 0
+ * when the stat does not open or has no state field.
  */
-static int raw_child_sleeping(int pid)
+static char raw_child_state(int pid)
 {
-    char path[40], digits[12], status[256];
-    int n = 0, at = 6, fd, got, i, tries;
+    static char status[256];
+    char path[40], digits[12];
+    int n = 0, at = 6, fd, got, i;
     unsigned int value = (unsigned int)pid;
     const char *prefix = "/proc/";
     const char *suffix = "/stat";
@@ -430,26 +429,43 @@ static int raw_child_sleeping(int pid)
     for (i = 0; i <= 5; i++) {
         path[at++] = suffix[i];
     }
-    for (tries = 0; tries < 100000; tries++) {
-        fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
-        if (fd < 0) {
-            return 0;
-        }
-        got = syscall3(SYS_READ, fd, (long)status, sizeof(status));
-        syscall1(SYS_CLOSE, fd);
-        for (i = got - 4; i >= 0; i--) {
-            if (status[i] == ')' && status[i + 1] == ' ') {
-                if (status[i + 2] == 'D') {
-                    return 1;
-                }
-                if (status[i + 2] == 'Z') {
-                    return 0;
-                }
-                break;
-            }
+    fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    got = syscall3(SYS_READ, fd, (long)status, sizeof(status));
+    syscall1(SYS_CLOSE, fd);
+    for (i = got - 4; i >= 0; i--) {
+        if (status[i] == ')' && status[i + 1] == ' ') {
+            return status[i + 2];
         }
     }
     return 0;
+}
+
+/**
+ * Wait until the child is blocked in its raw transfer, after its pipe signal:
+ * in the state D, a sleep no signal ends, as Linux reports a process waiting
+ * on its disk. The delayed device provides the wait, and the parent yields
+ * between looks, so it runs while the child sleeps. 1 once the state reads
+ * D; 0 once the child is a zombie or its stat does not open, since it can
+ * then no longer block. The number of looks decides nothing; the suite's
+ * wait for the probe's token ends a run whose child neither blocks nor ends.
+ */
+static int raw_child_sleeping(int pid)
+{
+    char state;
+
+    for (;;) {
+        state = raw_child_state(pid);
+        if (state == 'D') {
+            return 1;
+        }
+        if (state == 0 || state == 'Z') {
+            return 0;
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
 }
 
 /** Whether `bytes` is sector `which` of the boot fixture's pattern, byte i
@@ -471,7 +487,9 @@ static int raw_pattern(const char *bytes, int which)
  * readv of two sectors on /dev/disk0p1 is seen blocked in its second
  * driver call; a read through the parent's copy of the description then
  * takes the third sector, so the readv reserved its second, and the shared
- * offset ends three sectors in.
+ * offset ends three sectors in. The parent waits for `raw-driver-calls` in
+ * /proc/disk to count the second call, or for the child to end without it,
+ * yielding between looks.
  */
 static void raw_readv_case(void)
 {
@@ -481,7 +499,8 @@ static void raw_readv_case(void)
     } vec[2];
     char bytes[2 * SECTOR], signal;
     unsigned long long before = 0, after = 0;
-    int fd, pid, pipefd[2], rc, status, tries;
+    int fd, pid, pipefd[2], rc, status;
+    char state;
 
     fd = syscall3(SYS_OPEN, (long)"/dev/disk0p1", O_RDONLY, 0);
     check(fd >= 0, "open raw readv description");
@@ -512,10 +531,15 @@ static void raw_readv_case(void)
     syscall1(SYS_CLOSE, pipefd[1]);
     if (pid > 0) {
         check(syscall3(SYS_READ, pipefd[0], (long)&signal, 1) == 1, "child starts raw readv");
-        for (tries = 0; tries < 100000; tries++) {
+        for (;;) {
             if (!proc_disk_field("raw-driver-calls ", &after) || after >= before + 2) {
                 break;
             }
+            state = raw_child_state(pid);
+            if (state == 0 || state == 'Z') {
+                break;
+            }
+            syscall0(SYS_SCHED_YIELD);
         }
         check(after == before + 2 && raw_child_sleeping(pid), "second raw vector blocks");
         rc = syscall3(SYS_READ, fd, (long)bytes, SECTOR);
