@@ -463,6 +463,14 @@ $(MACHINENET): tools/dev/machine_net.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 
+# The import check of etude's Windows programs (tools/etude/win/pecheck.c):
+# no MSYS2 or Cygwin runtime, only Windows's own libraries. It is built here
+# so that its selftest runs under `tests/run style`.
+PECHECK = build/tools/etude/win/pecheck
+$(PECHECK): tools/etude/win/pecheck.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+
 # The guest-build guard (tools/verify/guestcheck.c): the three guest makefiles
 # against the host build they mirror.
 $(GUESTCHECK): tools/verify/guestcheck.c
@@ -1150,7 +1158,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(CASECHECK) $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
-             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) $(ETUDEHISTORY)
+             $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
+             $(ETUDEHISTORY) $(PECHECK)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

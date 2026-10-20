@@ -573,6 +573,9 @@ fi
 #         finding and each timing a case declares;
 #       * casecheck refuses each fault of a manifest, a report and a results
 #         document that its fixtures in tools/etude/fixtures plant;
+#       * pecheck accepts PE images that import only Windows's own libraries,
+#         refuses each MSYS2 and Cygwin runtime and any other library, and
+#         rejects each malformed image;
 #       * recovery_key_test.sh checks the recovery credentials of a KRFFS
 #         image, and dryrun_test.sh the vendor stamps' dry-run test under the
 #         flags the tree passes;
@@ -588,10 +591,12 @@ fi
 hr "13/22 checker selftests"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
+PECHECK="$REPO/build/tools/etude/win/pecheck"
 make -C "$REPO" --no-print-directory build/tools/inspect/elfcheck build/tools/inspect/cfgcheck \
-    >/dev/null || exit 1
+    build/tools/etude/win/pecheck >/dev/null || exit 1
 if "$ELFCHECK" --selftest >"$VDIR/verify_kernelck.log" 2>&1 &&
    "$CFGCHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
+   "$PECHECK" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    sh "$REPO/tools/verify/suitecheck.sh" --selftest >>"$VDIR/verify_kernelck.log" 2>&1 &&
    "$CASECHECK" --selftest "$REPO/tools/etude/fixtures" >>"$VDIR/verify_kernelck.log" 2>&1 &&
