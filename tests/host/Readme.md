@@ -1,6 +1,6 @@
 # Host tests
 
-The host tests compile kernel and user sources as ordinary programs for the build machine and run them under AddressSanitizer and UndefinedBehaviorSanitizer. A test drives the real code against models of what surrounds it (a device's registers, a disk, a scheduler, a peer on the network), so a bounds fault, an overflow or a wrong branch shows in a few seconds on the host rather than as a fault inside QEMU. What needs the machine itself, a system call through the trap path, a privilege change, a real device or a whole subsystem at once, is tested by the guest suites of [`tests/system/`](../system/Readme.md). This directory has the 157 `*_hosttest.c` programs, the headers, models and fixture builders they share, and the mutation scripts that prove them.
+The host tests compile kernel and user sources as ordinary programs for the build machine and run them under AddressSanitizer and UndefinedBehaviorSanitizer. A test drives the real code against models of what surrounds it (a device's registers, a disk, a scheduler, a peer on the network), so a bounds fault, an overflow or a wrong branch shows in a few seconds on the host rather than as a fault inside QEMU. What needs the machine itself, a system call through the trap path, a privilege change, a real device or a whole subsystem at once, is tested by the guest suites of [`tests/system/`](../system/Readme.md). This directory has the 158 `*_hosttest.c` programs, the headers, models and fixture builders they share, and the mutation scripts that prove them.
 
 ## Running
 
@@ -125,6 +125,7 @@ Each entry names a test, the code it compiles, and its cases. The reasoning of a
 * `etude_guest_hosttest.c` runs `etude-guest` of `tools/etude/guest/` in a child process, over standard I/O and as the serial transport: commands repeated and refused, a pass and an intended failure, cancellation, deadlines and a lost connection, damaged, repeated and out-of-order frames, retransmission, and `exec` in place. Its cases and mutation proof are described in [the component Readme](../../tools/etude/Readme.md#tests).
 * `etude_exec_hosttest.c` tests the executor of host processes in `tools/etude/posix/`: registration before the exec, output, cancellation, the descendants a case leaves, and the processor time and memory of its tree.
 * `etude_qemu_hosttest.c` tests the QEMU launcher of `tools/etude/`: the command lines of profiles, and the end of a machine told from QMP's events and QEMU's exit, against a stand-in for QEMU and against the real one with the tree's kernels. `etude_qemu_mutate.sh` proves it.
+* `etude_watchdog_hosttest.c` tests the per-case watchdog of `tools/etude/` and its supervisor: bounds fixed from samples, progress told apart from heartbeats and other output, quiet work, and the end of a busy loop, a stream of heartbeats, a stand-in QEMU whose QMP hangs, the real QEMU idle at its shell and a remote case whose transport is lost. Its cases and mutation proof are described in [the component Readme](../../tools/etude/Readme.md#tests).
 
 ### Kernel libraries, memory and processes
 

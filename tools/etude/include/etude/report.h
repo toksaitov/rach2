@@ -17,7 +17,9 @@
  *   @etude 1 assert ID fail DETAIL     it did not; DETAIL says what was seen
  *   @etude 1 notrun ID REASON          it could not be evaluated
  *   @etude 1 branch GROUP ALTERNATIVE  which alternative of GROUP ran
- *   @etude 1 progress WITNESS UNITS    WITNESS has completed UNITS in all
+ *   @etude 1 progress WITNESS UNITS    WITNESS has completed UNITS in all;
+ *                                      at a quiet witness's present UNITS,
+ *                                      its work begins
  *   @etude 1 child PID                 a process that may outlive the program
  *   @etude 1 end COUNT                 last; COUNT assert, notrun and branch
  *                                      records came before it

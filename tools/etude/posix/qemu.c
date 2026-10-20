@@ -21,8 +21,10 @@
 #include "etude/qemu.h"
 #include "posix.h"
 
-/* The longest QMP line kept; a longer one is counted and skipped. */
-#define QMP_LINE_MAX 65536
+/* The longest QMP line kept, such as the registers of 64 processors; a
+ * longer one is counted and skipped. The buffer grows from QMP_LINE_FIRST. */
+#define QMP_LINE_MAX   (1u << 20)
+#define QMP_LINE_FIRST 4096
 
 /* The bytes kept of QEMU's own standard output and error. */
 #define QEMU_OUTPUT_MAX 65536
@@ -48,6 +50,13 @@ enum qmp_state {
 /* The ids of the launcher's QMP commands, which their replies repeat. */
 enum { ID_CAPS = 1, ID_ACCEL, ID_KVM, ID_CONT, ID_QUIT };
 
+/* A command of the caller's, and its reply once it has come. */
+struct qmp_call {
+    struct qmp_call *next;
+    long id;
+    char *reply; /* the whole line, or NULL */
+};
+
 struct etude_machine {
     struct etude_qemu *q;
     struct etude_machine *next;
@@ -64,7 +73,7 @@ struct etude_machine {
     int proc_done; /* the executor has finished QEMU's attempt */
     enum qmp_state qmp_state;
     char *line; /* a QMP line being read */
-    size_t line_len;
+    size_t line_len, line_cap;
     int line_long;
     char *input; /* console input not yet written */
     size_t input_len;
@@ -77,6 +86,8 @@ struct etude_machine {
     int shutdown;     /* QMP reported SHUTDOWN */
     int changed;      /* new console bytes or a new state since the last wait */
     int finished, returned;
+    struct qmp_call *calls; /* the caller's commands, newest first */
+    long next_id;
     char accel_seen[16];
     struct etude_machine_result r;
 };
@@ -160,6 +171,13 @@ static void machine_close(struct etude_machine *m)
 /** Free a machine and what it holds. */
 static void machine_release(struct etude_machine *m)
 {
+    struct qmp_call *c;
+
+    while ((c = m->calls) != NULL) {
+        m->calls = c->next;
+        free(c->reply);
+        free(c);
+    }
     machine_close(m);
     if (m->proc != NULL)
         etude_proc_free(m->proc);
@@ -202,8 +220,10 @@ static struct etude_machine *machine_new(const struct etude_machine_spec *spec)
     m->accel = spec->site->accel;
     m->console_max = spec->console_max;
     m->grace_us = spec->grace_us;
+    m->next_id = ETUDE_QMP_FIRST_ID;
+    m->line_cap = QMP_LINE_FIRST;
     m->attempt_id = malloc(strlen(spec->attempt_id) + 1);
-    m->line = malloc(QMP_LINE_MAX + 1);
+    m->line = malloc(m->line_cap + 1);
     if (m->attempt_id == NULL || m->line == NULL ||
         capture_init(&m->r.console, spec->console_max) != 0) {
         free(m->attempt_id);
@@ -331,23 +351,30 @@ static void console_read(struct etude_machine *m, size_t limit)
     }
 }
 
-/** Send QMP command `json`; a failed or short write makes QMP unusable. */
-static void qmp_send(struct etude_machine *m, const char *json, enum qmp_state next)
+/** Write QMP command `json`; a failed or short write makes QMP unusable. */
+static int qmp_write(struct etude_machine *m, const char *json)
 {
     size_t len = strlen(json);
     ssize_t n;
 
     if (m->qmp < 0)
-        return;
+        return -1;
     do {
         n = write(m->qmp, json, len);
     } while (n < 0 && errno == EINTR);
     if (n != (ssize_t)len) {
         m->qmp_state = QMP_GONE;
         m->qmp_lost = 1;
-        return;
+        return -1;
     }
-    m->qmp_state = next;
+    return 0;
+}
+
+/** Send the launcher's QMP command `json`, and go to state `next`. */
+static void qmp_send(struct etude_machine *m, const char *json, enum qmp_state next)
+{
+    if (qmp_write(m, json) == 0)
+        m->qmp_state = next;
 }
 
 /** Ask QEMU to quit, and arm the kill that follows if it does not. */
@@ -466,12 +493,30 @@ static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
         snprintf(m->r.reason, sizeof(m->r.reason), "%s", reason->string);
 }
 
+/** Keep the reply `text` to the caller's command `id`. */
+static void call_answered(struct etude_machine *m, long id, const char *text)
+{
+    struct qmp_call *c;
+
+    for (c = m->calls; c != NULL && c->id != id; c = c->next) {
+    }
+    if (c == NULL || c->reply != NULL) {
+        m->r.qmp_bad++;
+        return;
+    }
+    c->reply = malloc(strlen(text) + 1);
+    if (c->reply != NULL)
+        strcpy(c->reply, text);
+    m->changed = 1;
+}
+
 /** Act on one whole line of QMP's. */
 static void qmp_line(struct etude_machine *m, char *text)
 {
     struct eh_json *j;
     const struct eh_json *id;
     size_t len = strlen(text);
+    long n;
 
     if (len > 0 && text[len - 1] == '\r')
         text[len - 1] = '\0';
@@ -490,12 +535,33 @@ static void qmp_line(struct etude_machine *m, char *text)
         qmp_event(m, j);
     } else if (eh_json_get(j, "return") != NULL || eh_json_get(j, "error") != NULL) {
         id = eh_json_get(j, "id");
-        qmp_reply(m, id != NULL && id->type == 'n' ? (long)id->number : -1,
-                  eh_json_get(j, "return"), eh_json_get(j, "error"));
+        n = id != NULL && id->type == 'n' ? (long)id->number : -1;
+        if (n >= ETUDE_QMP_FIRST_ID)
+            call_answered(m, n, text);
+        else
+            qmp_reply(m, n, eh_json_get(j, "return"), eh_json_get(j, "error"));
     } else {
         m->r.qmp_bad++;
     }
     eh_json_free(j);
+}
+
+/** Add byte `c` to the QMP line, growing it up to QMP_LINE_MAX. */
+static void line_add(struct etude_machine *m, char c)
+{
+    char *grown;
+
+    if (m->line_len == m->line_cap && m->line_cap < QMP_LINE_MAX) {
+        grown = realloc(m->line, 2 * m->line_cap + 1);
+        if (grown != NULL) {
+            m->line = grown;
+            m->line_cap *= 2;
+        }
+    }
+    if (m->line_len < m->line_cap)
+        m->line[m->line_len++] = c;
+    else
+        m->line_long = 1;
 }
 
 /** Read what QMP has sent, a line at a time, until it would wait or ends. */
@@ -518,10 +584,7 @@ static void qmp_read(struct etude_machine *m)
         }
         for (i = 0; i < n; i++) {
             if (buf[i] != '\n') {
-                if (m->line_len < QMP_LINE_MAX)
-                    m->line[m->line_len++] = buf[i];
-                else
-                    m->line_long = 1;
+                line_add(m, buf[i]);
                 continue;
             }
             m->line[m->line_len] = '\0';
@@ -769,6 +832,78 @@ void etude_machine_cancel(struct etude_machine *m)
         return;
     m->cancelled = 1;
     machine_quit(m);
+}
+
+/** Say whether `name` is a QMP command's name: letters, digits, - and _. */
+static int command_name(const char *name)
+{
+    if (*name == '\0')
+        return 0;
+    for (; *name != '\0'; name++)
+        if (!((*name >= 'a' && *name <= 'z') || (*name >= 'A' && *name <= 'Z') ||
+              (*name >= '0' && *name <= '9') || *name == '-' || *name == '_'))
+            return 0;
+    return 1;
+}
+
+long etude_machine_qmp(struct etude_machine *m, const char *execute, const char *arguments)
+{
+    struct qmp_call *c;
+    size_t size;
+    char *json;
+    int rc;
+
+    if (!command_name(execute) || (arguments != NULL && strchr(arguments, '\n') != NULL)) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (m->finished || m->qmp < 0 || m->qmp_state == QMP_GONE) {
+        errno = EPIPE;
+        return -1;
+    }
+    if (m->qmp_state != QMP_READY) {
+        errno = EAGAIN;
+        return -1;
+    }
+    size = strlen(execute) + (arguments != NULL ? strlen(arguments) : 0) + 64;
+    json = malloc(size);
+    c = calloc(1, sizeof(*c));
+    if (json == NULL || c == NULL) {
+        free(json);
+        free(c);
+        errno = ENOMEM;
+        return -1;
+    }
+    c->id = m->next_id++;
+    if (arguments != NULL)
+        snprintf(json, size, "{\"execute\":\"%s\",\"arguments\":%s,\"id\":%ld}\n", execute,
+                 arguments, c->id);
+    else
+        snprintf(json, size, "{\"execute\":\"%s\",\"id\":%ld}\n", execute, c->id);
+    c->next = m->calls;
+    m->calls = c;
+    rc = qmp_write(m, json);
+    free(json);
+    if (rc != 0) {
+        errno = EPIPE;
+        return -1;
+    }
+    return c->id;
+}
+
+int etude_machine_reply(const struct etude_machine *m, long id, const char **reply)
+{
+    const struct qmp_call *c;
+
+    for (c = m->calls; c != NULL && c->id != id; c = c->next) {
+    }
+    if (c != NULL && c->reply != NULL) {
+        *reply = c->reply;
+        return 1;
+    }
+    if (c == NULL || m->finished || m->qmp < 0 || m->qmp_state == QMP_GONE)
+        return -1;
+    return 0;
 }
 
 const struct etude_machine_result *etude_machine_result(const struct etude_machine *m)

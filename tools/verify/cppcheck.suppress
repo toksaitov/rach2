@@ -207,15 +207,16 @@ unusedStructMember:*tools/etude/include/etude/scenario.h
 unusedStructMember:*tools/etude/history_json.h
 unusedStructMember:*tools/etude/include/etude/history.h
 
-# The headers of the executor and the QEMU launcher declare the structures
-# that their sources and their callers fill and read. cppcheck judges each
-# header as a file of its own, apart from the sources that include it, and
-# finds no reader of a member.
+# The headers of the executor, the QEMU launcher and the watchdog declare
+# the structures that their sources and their callers fill and read.
+# cppcheck judges each header as a file of its own, apart from the sources
+# that include it, and finds no reader of a member.
 unusedStructMember:*tools/etude/include/etude/exec.h
 unusedStructMember:*tools/etude/include/etude/qemu.h
 unusedStructMember:*tools/etude/capture.h
 unusedStructMember:*tools/etude/posix/posix.h
 unusedStructMember:*tools/etude/include/etude/ledger.h
+unusedStructMember:*tools/etude/include/etude/watchdog.h
 
 # casecheck's shared structures: cppcheck checks each header alone, and the
 # members are read in the validator's .c files.

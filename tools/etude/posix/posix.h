@@ -81,4 +81,13 @@ int posix_children(long *pids, int max);
 /** Ask to be the reaper of every orphan below this process; 0 on success. */
 int posix_subreaper(void);
 
+/**
+ * Sample process `id`: the processor time of it and of the children it has
+ * reaped, in microseconds, and its resident memory.
+ *
+ * @return 1 with the sample; 0 when it has ended or its PID is another
+ *         process's; -1 where the system gives no sample.
+ */
+int posix_usage(const struct etude_pid *id, uint64_t *cpu_us, uint64_t *rss_bytes);
+
 #endif

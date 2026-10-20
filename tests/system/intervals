@@ -38,3 +38,5 @@ tests/system/suites/install.sh: a holder keeps the console's feed open while the
 tests/system/suites/menu.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/metal.sh: a reset before the session is tried again after a second
 tests/system/accept/metal_accept.sh: a reset before the session is tried again after a second
+tests/host/etude_watchdog_hosttest.c: a heartbeat every 20 ms, which is no progress
+tests/host/etude_watchdog_hosttest.c: progress every 20 ms, which the case's bound must end

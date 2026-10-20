@@ -192,7 +192,55 @@ int etude_process_state(long pid, struct etude_pid *id)
     return 1;
 }
 
+/**
+ * Read the processor time and resident memory of process `id` from
+ * /proc/PID/stat: its user and system time and those of the children it
+ * has reaped, fields 14 to 17 of proc(5), and its resident pages, field 24,
+ * once its start, field 22, is still the one `id` gives.
+ */
+int posix_usage(const struct etude_pid *id, uint64_t *cpu_us, uint64_t *rss_bytes)
+{
+    unsigned long long v[21];
+    long tick = sysconf(_SC_CLK_TCK), page = sysconf(_SC_PAGESIZE);
+    char path[64], buf[1024], *p;
+    size_t n;
+    FILE *f;
+    int i;
+
+    snprintf(path, sizeof(path), "/proc/%ld/stat", id->pid);
+    f = fopen(path, "r");
+    if (f == NULL)
+        return errno == ENOENT ? 0 : -1;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    p = strrchr(buf, ')');
+    if (p == NULL || p[1] != ' ' || tick <= 0 || page <= 0)
+        return -1;
+    p += 2;
+    for (i = 0; i < 21; i++) {
+        p = strchr(p, ' ');
+        if (p == NULL || sscanf(p, " %llu", &v[i]) != 1)
+            return -1;
+        p++;
+    }
+    if (!id->start_known || v[18] != id->start)
+        return 0;
+    *cpu_us = (uint64_t)(v[10] + v[11] + v[12] + v[13]) * 1000000u / (uint64_t)tick;
+    *rss_bytes = (uint64_t)v[20] * (uint64_t)page;
+    return 1;
+}
+
 #else
+
+int posix_usage(const struct etude_pid *id, uint64_t *cpu_us, uint64_t *rss_bytes)
+{
+    (void)id;
+    (void)cpu_us;
+    (void)rss_bytes;
+    errno = ENOSYS;
+    return -1;
+}
 
 int posix_subreaper(void)
 {

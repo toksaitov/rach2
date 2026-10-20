@@ -189,6 +189,30 @@ int etude_machine_type(struct etude_machine *m, const char *text, size_t n);
  */
 void etude_machine_cancel(struct etude_machine *m);
 
+/* The first id of the caller's QMP commands; the launcher's own are below. */
+#define ETUDE_QMP_FIRST_ID 100
+
+/**
+ * Send QMP command `execute` of the caller's, with `arguments`, the text of
+ * a JSON object on one line, or NULL. Its reply comes later, by
+ * etude_machine_reply.
+ *
+ * @return the command's id, from ETUDE_QMP_FIRST_ID up; or -1 with errno
+ *         EINVAL for a name or arguments QMP cannot take, EAGAIN before QMP
+ *         has started the machine or once it has asked QEMU to quit, EPIPE
+ *         when QMP is gone, or ENOMEM.
+ */
+long etude_machine_qmp(struct etude_machine *m, const char *execute, const char *arguments);
+
+/**
+ * Give the reply to the caller's QMP command `id`: QMP's whole line, with its
+ * `return` or its `error`.
+ *
+ * @return 1 with the line in `*reply`, 0 while it has not come, or -1 when
+ *         it never will: QMP or the machine is gone, or `id` was not sent.
+ */
+int etude_machine_reply(const struct etude_machine *m, long id, const char **reply);
+
 /** Give what was observed of the machine so far. */
 const struct etude_machine_result *etude_machine_result(const struct etude_machine *m);
 
