@@ -222,6 +222,10 @@ unusedStructMember:*tools/etude/include/etude/sched.h
 unusedStructMember:*tools/etude/cost.h
 unusedStructMember:*tools/etude/include/etude/artifact.h
 
+# The repetitions' structures: cppcheck checks repeat.h alone, and its members
+# are read in repeat.c, posix/repeat.c, posix/load.c and their host test.
+unusedStructMember:*tools/etude/include/etude/repeat.h
+
 # casecheck's shared structures: cppcheck checks each header alone, and the
 # members are read in the validator's .c files.
 unusedStructMember:*tools/etude/casecheck.h

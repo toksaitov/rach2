@@ -624,6 +624,14 @@ void etude_supervised_lost(struct etude_supervised *a)
         a->lost = 1;
 }
 
+void etude_supervised_cancel(struct etude_supervised *a)
+{
+    if (a->r.kind != ETUDE_SUPERVISED_HOST || a->phase != PHASE_RUN || a->proc_done)
+        return;
+    etude_exec_cancel(a->proc);
+    a->phase = PHASE_END;
+}
+
 const struct etude_supervised_result *etude_supervised_result(const struct etude_supervised *a)
 {
     return &a->r;

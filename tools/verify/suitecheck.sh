@@ -53,8 +53,9 @@
 # The check also runs tools/etude/casecheck over the manifests
 # tests/cases/*.json and the examples of tools/etude/schemas: their shape and
 # rules, the lines their `where` names, and the examples of the results, the
-# invocation, the reproduce commands and the history against their schemas
-# and cases. Make builds it: `make build/tools/etude/casecheck`.
+# invocation, the reproduce commands, the repetition record and the history
+# against their schemas and cases. Make builds it:
+# `make build/tools/etude/casecheck`.
 #
 #   sh tools/verify/suitecheck.sh             check the tree
 #   sh tools/verify/suitecheck.sh --selftest  run the check on fixtures
@@ -268,6 +269,7 @@ validate() {
                 >/dev/null || status=$?
             "$CASECHECK" -s "$SCHEMAS" schema invocation "$ex/invocation.example.json" || status=$?
             "$CASECHECK" -s "$SCHEMAS" schema reproduce "$ex/reproduce.example.json" || status=$?
+            "$CASECHECK" -s "$SCHEMAS" schema repeat "$ex/repeat.example.json" || status=$?
             "$CASECHECK" -s "$SCHEMAS" schema history "$ex/history.example.jsonl" \
                 "$ex/history.incomplete.example.jsonl" || status=$?
         fi

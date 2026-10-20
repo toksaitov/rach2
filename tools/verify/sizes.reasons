@@ -315,6 +315,9 @@ tests/host/e1000_hosttest.c:main lines 408 a test's rows, each a case, read as o
 
 tests/host/elf_hosttest.c:vm_insert_file params 7 a stub of vm.c's, whose parameters are the fields of one region
 
+tests/host/etude_repeat_hosttest.c:case_main complexity 29 a dispatcher, one arm per command, read as a table
+tests/host/etude_repeat_hosttest.c:test_history complexity 41 a test's rows, each a case, read as one table
+
 tests/host/exfat_hosttest.c:dirty_rows lines 165 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:dirty_rows nesting 5 a test's rows, each a case, read as one table
 tests/host/exfat_hosttest.c:oracle_ok complexity 42 a test's rows, each a case, read as one table

@@ -469,6 +469,14 @@ $(ETUDEREMOTE): $(ETUDE_REMOTE_SRC) tools/etude/include/etude/remote.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
+# etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
+# starts beside a case, built here so that `make` compiles it under the host
+# flags.
+ETUDELOAD = build/tools/etude/etude-load
+$(ETUDELOAD): $(ETUDE_LOAD_SRC) tools/etude/include/etude/repeat.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1178,7 +1186,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(PECHECK) $(ETUDESERIAL)
+             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(ETUDELOAD) $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

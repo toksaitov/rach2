@@ -310,6 +310,15 @@ void etude_supervised_end(struct etude_supervised *a, enum etude_end end, int va
  */
 void etude_supervised_lost(struct etude_supervised *a);
 
+/**
+ * Cancel a host attempt that the caller no longer needs, such as a load
+ * beside a case that has ended: SIGTERM and SIGCONT, and SIGKILL after the
+ * grace. Its watchdog is not consulted again, so the attempt is not made
+ * incomplete; its end is stopped unless it had ended. An attempt of another
+ * kind, or one whose end has begun, is left as it is.
+ */
+void etude_supervised_cancel(struct etude_supervised *a);
+
 /** Give what the supervisor observed of an attempt so far. */
 const struct etude_supervised_result *etude_supervised_result(const struct etude_supervised *a);
 

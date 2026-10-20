@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "policy": "repeat-splitmix64-v1",
+  "run_id": "example-run-repeat",
+  "seed": 20261020,
+  "pick": 0,
+  "load_percent": 50,
+  "width": 2,
+  "retries": 2,
+  "cases": [
+    {
+      "case_id": "host.sha256.vectors",
+      "architecture": "none",
+      "repetitions": 3
+    },
+    {
+      "case_id": "guest.default.errnoprobe",
+      "architecture": "i686",
+      "repetitions": 2
+    },
+    {
+      "case_id": "guest.default.errnoprobe",
+      "architecture": "x86_64",
+      "repetitions": 2
+    }
+  ],
+  "loads": [
+    {
+      "load_id": "cpu2",
+      "kind": "cpu",
+      "amount": 2
+    },
+    {
+      "load_id": "memory512m",
+      "kind": "memory",
+      "amount": 536870912
+    },
+    {
+      "load_id": "disk256m",
+      "kind": "disk",
+      "amount": 268435456
+    }
+  ],
+  "items": [
+    {
+      "item_id": "example-run-repeat:guest.default.errnoprobe:i686:r1",
+      "case_id": "guest.default.errnoprobe",
+      "architecture": "i686",
+      "repetition": 1,
+      "load_id": null
+    },
+    {
+      "item_id": "example-run-repeat:host.sha256.vectors:none:r1",
+      "case_id": "host.sha256.vectors",
+      "architecture": "none",
+      "repetition": 1,
+      "load_id": null
+    },
+    {
+      "item_id": "example-run-repeat:host.sha256.vectors:none:r2",
+      "case_id": "host.sha256.vectors",
+      "architecture": "none",
+      "repetition": 2,
+      "load_id": "disk256m"
+    },
+    {
+      "item_id": "example-run-repeat:guest.default.errnoprobe:x86_64:r1",
+      "case_id": "guest.default.errnoprobe",
+      "architecture": "x86_64",
+      "repetition": 1,
+      "load_id": null
+    },
+    {
+      "item_id": "example-run-repeat:host.sha256.vectors:none:r0",
+      "case_id": "host.sha256.vectors",
+      "architecture": "none",
+      "repetition": 0,
+      "load_id": null
+    },
+    {
+      "item_id": "example-run-repeat:guest.default.errnoprobe:i686:r0",
+      "case_id": "guest.default.errnoprobe",
+      "architecture": "i686",
+      "repetition": 0,
+      "load_id": null
+    },
+    {
+      "item_id": "example-run-repeat:guest.default.errnoprobe:x86_64:r0",
+      "case_id": "guest.default.errnoprobe",
+      "architecture": "x86_64",
+      "repetition": 0,
+      "load_id": "memory512m"
+    }
+  ]
+}
