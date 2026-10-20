@@ -13,20 +13,24 @@
  * host-alone: a stand-in QEMU must quit within a grace of 300 ms
  *
  * The command lines of profiles, and the profiles the launcher refuses, are
- * checked as text. Thirteen stand-in machines then run at once, each with an
- * end of its own, and each must keep its own console and end: a QEMU that fails
- * before it connects is an unexpected exit, and one that reports that it could
- * not start the accelerator is a failed accelerator; so is one whose QMP
- * reports another accelerator in use, through query-accelerators or, for a QEMU
- * without that command, query-kvm. QMP's SHUTDOWN events of the guest give a
- * shutdown, a reset and a panic; one of the host, or an exit without an event,
- * is an unexpected exit; a cancellation of a machine that obeys QMP's quit, of
- * one that ignores both quit and SIGTERM, and of one that never answers QMP is
- * a cancellation. Each leaves no process and no socket behind. With the real
- * QEMU, the kernel of the architecture ARCH names boots under TCG to the debug
- * shell, whose `poweroff` must give a shutdown; a cancellation at the prompt
- * must give a cancellation, and an accelerator this host's QEMU does not have
- * must give a failed accelerator.
+ * checked as text, disks on IDE and NVMe, a CD and the firmware's flash among
+ * them; `--argv` runs these rows alone. Thirteen stand-in machines then run at
+ * once, each with an end of its own, and each must keep its own console and
+ * end: a QEMU that fails before it connects is an unexpected exit, and one that
+ * reports that it could not start the accelerator is a failed accelerator; so
+ * is one whose QMP reports another accelerator in use, through
+ * query-accelerators or, for a QEMU without that command, query-kvm. QMP's
+ * SHUTDOWN events of the guest give a shutdown, a reset and a panic; one of the
+ * host, or an exit without an event, is an unexpected exit; a cancellation of a
+ * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, and
+ * of one that never answers QMP is a cancellation. Each leaves no process and
+ * no socket behind. With the real QEMU, the kernel of the architecture ARCH
+ * names boots under TCG to the debug shell, whose `poweroff` must give a
+ * shutdown; a cancellation at the prompt must give a cancellation, and an
+ * accelerator this host's QEMU does not have must give a failed accelerator.
+ * OVMF's code image, as tools/setup/ovmf_path.sh finds it, boots from the
+ * launcher's read-only flash with a CD and an empty disk of 4 TiB on NVMe, and
+ * its boot manager must name both; `--uefi` runs this row alone.
  *
  * The memory rows check the reservations of an ordinary profile and of the
  * boundary profile, refuse a changed boundary profile and a site that has not
@@ -37,6 +41,7 @@
  * reservation.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -73,6 +78,12 @@ static int fails;
 /* The grace periods: short for the stand-ins, longer for a real QEMU. */
 #define FAKE_GRACE_US 300000u
 #define REAL_GRACE_US 5000000u
+
+/* The UEFI row's empty disk on NVMe, 4 TiB as the uefi suite's, and what
+ * OVMF's boot manager says on the console of the CD and of that disk. */
+#define BIG_BYTES (UINT64_C(4) << 40)
+#define UEFI_CD   "UEFI QEMU DVD-ROM"
+#define UEFI_NVME "UEFI QEMU NVMe Ctrl rach2big"
 
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
@@ -335,7 +346,8 @@ struct row {
     enum etude_end want;
     int act; /* 'g' types go at the start, 'c' cancels when
                 running, 'C' cancels at once, 'p' types poweroff
-                at the prompt, 'P' cancels at the prompt, 'b' runs the boundary probe */
+                at the prompt, 'P' cancels at the prompt, 'b' runs the boundary probe,
+                'u' boots by OVMF and cancels once it names the CD and the NVMe disk */
     int acted;
     struct etude_qemu_profile profile;
     struct etude_qemu_site site;
@@ -351,11 +363,36 @@ struct row {
 #define ROW(name, mode, accel, arch, want, act) \
     {name, mode, accel, arch, want, act, 0, {0}, {0}, NULL, "", NULL, "", "", ""}
 
+/**
+ * Act on row `r`, whose act is 'p', 'P', 'b' or 'a', once the kernel's debug
+ * shell has given its prompt on the console of `res`, the machine's result:
+ * type poweroff, cancel, start the boundary probe, or start the audio scale.
+ */
+static void row_shell(struct row *r, const struct etude_machine_result *res)
+{
+    long shell = find(&res->console, "Kernel debug shell active", 0);
+
+    if (shell < 0 || find(&res->console, "\n> ", (size_t)shell) < 0)
+        return;
+    r->acted = 1;
+    if (r->act == 'a') {
+        static const char scale[] = "audio test scale 200\r";
+
+        CHECK(etude_machine_type(r->m, scale, sizeof(scale) - 1) == 0, r->name);
+    } else if (r->act == 'b') {
+        CHECK(etude_machine_type(r->m, "exec /memprobe 5120\r", 19) != 0 && errno == EPERM,
+              "boundary refuses an allocating workload");
+        CHECK(etude_machine_type(r->m, "exec /memprobe total\r", 21) == 0, r->name);
+    } else if (r->act == 'p')
+        CHECK(etude_machine_type(r->m, "poweroff\r", 9) == 0, r->name);
+    else
+        etude_machine_cancel(r->m);
+}
+
 /** Act on a row whose machine has changed, as its `act` says. */
 static void row_act(struct row *r)
 {
     const struct etude_machine_result *res = etude_machine_result(r->m);
-    long shell;
 
     if (r->act == 'a' && r->acted == 1 && find(&res->console, "Done.", 0) >= 0) {
         r->acted = 2;
@@ -372,24 +409,13 @@ static void row_act(struct row *r)
         r->acted = 1;
         etude_machine_cancel(r->m);
     }
-    if (r->act != 'p' && r->act != 'P' && r->act != 'b' && r->act != 'a')
-        return;
-    shell = find(&res->console, "Kernel debug shell active", 0);
-    if (shell < 0 || find(&res->console, "\n> ", (size_t)shell) < 0)
-        return;
-    r->acted = 1;
-    if (r->act == 'a') {
-        static const char scale[] = "audio test scale 200\r";
-
-        CHECK(etude_machine_type(r->m, scale, sizeof(scale) - 1) == 0, r->name);
-    } else if (r->act == 'b') {
-        CHECK(etude_machine_type(r->m, "exec /memprobe 5120\r", 19) != 0 && errno == EPERM,
-              "boundary refuses an allocating workload");
-        CHECK(etude_machine_type(r->m, "exec /memprobe total\r", 21) == 0, r->name);
-    } else if (r->act == 'p')
-        CHECK(etude_machine_type(r->m, "poweroff\r", 9) == 0, r->name);
-    else
+    if (r->act == 'u' && find(&res->console, UEFI_CD, 0) >= 0 &&
+        find(&res->console, UEFI_NVME, 0) >= 0) {
+        r->acted = 1;
         etude_machine_cancel(r->m);
+    }
+    if (r->act == 'p' || r->act == 'P' || r->act == 'b' || r->act == 'a')
+        row_shell(r, res);
 }
 
 /**
@@ -428,6 +454,10 @@ static void row_spec(struct row *r, struct etude_machine_spec *spec, const char 
     spec->console_path = fix_path(r->console);
     spec->console_max = 1u << 20;
     spec->grace_us = grace;
+    if (r->act == 'u') {
+        r->profile.firmware = ETUDE_FIRMWARE_OVMF;
+        r->profile.memory_bytes = 256u << 20;
+    }
     if (r->act == 'b') {
         static const char *const rescue[] = {"rach2.rescue", NULL};
 
@@ -858,6 +888,79 @@ static void test_real(int boundary)
 }
 
 /**
+ * Give in `out` the code image of OVMF that tools/setup/ovmf_path.sh finds
+ * for the suites that boot by UEFI, or NULL when it finds none.
+ */
+static const char *ovmf_code(char *out, size_t size)
+{
+    FILE *p = popen(". tools/setup/ovmf_path.sh && printf '%s' \"$OVMF_CODE\"", "r");
+    size_t n;
+
+    if (p == NULL)
+        return NULL;
+    n = fread(out, 1, size - 1, p);
+    out[n] = '\0';
+    return pclose(p) == 0 && n > 0 && access(out, R_OK) == 0 ? out : NULL;
+}
+
+/**
+ * Boot OVMF's code image, as ovmf_code finds it, in the real qemu-system-x86_64
+ * under TCG, with a CD whose medium is the test image of the architecture
+ * ARCH names and an empty sparse disk of 4 TiB on NVMe with a serial; the
+ * firmware's boot manager must name both on the console. A host without QEMU
+ * or OVMF, or a tree without the test image, fails the row.
+ */
+static void test_uefi(void)
+{
+    static struct row rows[] = {
+        ROW("real-uefi", NULL, ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_STOPPED, 'u'),
+    };
+    const char *dir =
+        getenv("ARCH") != NULL && strcmp(getenv("ARCH"), "x86_64") == 0 ? "build/x86_64" : "build";
+    struct etude_qemu_disk disks[3];
+    char q32[PATH_MAX], q64[PATH_MAX], code[PATH_MAX], cd[PATH_MAX];
+    const char *big = fix_path("big.img");
+    struct etude_qemu *q;
+    int fd;
+
+    snprintf(cd, sizeof(cd), "%s/images/test.krffs", dir);
+    if (on_path("qemu-system-i386", q32, sizeof(q32)) == NULL ||
+        on_path("qemu-system-x86_64", q64, sizeof(q64)) == NULL ||
+        ovmf_code(code, sizeof(code)) == NULL || access(cd, R_OK) != 0) {
+        printf("etude-qemu-test: fail: cannot run the UEFI boot: no QEMU or OVMF, or %s is "
+               "not built\n",
+               cd);
+        fails++;
+        return;
+    }
+    fd = open(big, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    CHECK(fd >= 0 && ftruncate(fd, (off_t)BIG_BYTES) == 0, "an empty disk of 4 TiB");
+    if (fd >= 0)
+        close(fd);
+    memset(disks, 0, sizeof(disks));
+    disks[0].path = cd;
+    disks[0].cdrom = 1;
+    disks[1].path = big;
+    disks[1].bus = ETUDE_BUS_NVME;
+    disks[1].serial = "rach2big";
+    disks[1].discard = 1;
+    rows[0].profile.disks = disks;
+    rows[0].site.ovmf_x86_64 = code;
+    q = etude_qemu_new();
+    CHECK(q != NULL, "launcher");
+    if (q != NULL) {
+        row_start(q, &rows[0], q32, q64, REAL_GRACE_US);
+        run_rows(q, rows, 1);
+        row_check(&rows[0]);
+        if (rows[0].m != NULL)
+            CHECK(rows[0].acted, "OVMF names the CD and the NVMe disk with its serial");
+        row_free(&rows[0]);
+        etude_qemu_free(q);
+    }
+    unlink(big);
+}
+
+/**
  * Make the command line of profile `p` on `site` with the test's sockets, in
  * `max` arguments and `size` bytes.
  */
@@ -986,28 +1089,137 @@ static const struct etude_qemu_device argv_devices[] = {{"rtl8139", NULL, NULL, 
                                                         {"ahci", NULL, NULL, NULL, NULL, NULL},
                                                         {0}};
 
+/**
+ * Fill `d` with `ide` disks on IDE and then `nvme` on NVMe, each with a
+ * serial, ended by a NULL path; `d` has room for them and the end.
+ */
+static void fill_disks(struct etude_qemu_disk *d, size_t ide, size_t nvme)
+{
+    size_t i;
+
+    memset(d, 0, (ide + nvme + 1) * sizeof(*d));
+    for (i = 0; i < ide + nvme; i++) {
+        d[i].path = "/d/x.img";
+        if (i >= ide) {
+            d[i].bus = ETUDE_BUS_NVME;
+            d[i].serial = "s";
+        }
+    }
+}
+
+/**
+ * Require the launcher to make the command line of profile `p` with `disks`
+ * in place of its own when `ok`, and to refuse it otherwise.
+ */
+static void disks_row(const struct etude_qemu_profile *p, const struct etude_qemu_site *site,
+                      const struct etude_qemu_disk *disks, int ok, const char *row)
+{
+    struct etude_qemu_profile b = *p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    b.disks = disks;
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == (ok ? 0 : EINVAL), row);
+}
+
+/** Check the disks the launcher attaches together, and those it refuses. */
+static void test_disks(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
+{
+    struct etude_qemu_disk d[ETUDE_QEMU_DISKS + 2];
+
+    fill_disks(d, 4, 4);
+    disks_row(p, site, d, 1, "eight disks, four of them on IDE");
+    fill_disks(d, 5, 0);
+    disks_row(p, site, d, 0, "five disks on IDE");
+    fill_disks(d, 4, 0);
+    d[3].cdrom = 1;
+    disks_row(p, site, d, 1, "four disks on IDE, a CD among them");
+    fill_disks(d, 1, 8);
+    disks_row(p, site, d, 0, "nine disks");
+    fill_disks(d, 0, 1);
+    d[0].serial = "abcdefghijklmnopqrst";
+    disks_row(p, site, d, 1, "a serial of 20 characters");
+    d[0].serial = "abcdefghijklmnopqrstu";
+    disks_row(p, site, d, 0, "a serial of 21 characters");
+    d[0].serial = NULL;
+    disks_row(p, site, d, 0, "an NVMe disk without a serial");
+    d[0].serial = "a,b";
+    disks_row(p, site, d, 0, "a serial with a comma");
+    d[0].serial = "a b";
+    disks_row(p, site, d, 0, "a serial with a space");
+    d[0].serial = "s";
+    d[0].cdrom = 1;
+    disks_row(p, site, d, 0, "a CD on NVMe");
+    fill_disks(d, 1, 0);
+    d[0].serial = "s";
+    disks_row(p, site, d, 0, "a serial on IDE");
+    d[0].serial = NULL;
+    d[0].cdrom = 1;
+    d[0].discard = 1;
+    disks_row(p, site, d, 0, "a CD with discard");
+    d[0].cdrom = 0;
+    d[0].discard = 0;
+    d[0].path = "";
+    disks_row(p, site, d, 0, "a disk of no file");
+    d[0].path = "/d/x.img";
+    d[0].bus = (enum etude_disk_bus)7;
+    d[0].serial = "s";
+    disks_row(p, site, d, 0, "an unknown bus");
+}
+
+/** Check the accelerators' names, and the reading of QEMU's refusal of one. */
+static void test_accel_names(void)
+{
+    enum etude_accel a;
+    int i;
+
+    for (i = 0; i < ETUDE_ACCEL_COUNT; i++)
+        CHECK(etude_accel_parse(etude_accel_name((enum etude_accel)i), &a) == 0 && (int)a == i,
+              "accelerator names");
+    CHECK(etude_accel_parse("kvm:tcg", &a) != 0, "a list of accelerators");
+    CHECK(etude_qemu_accel_refused("qemu-system-x86_64: -accel kvm: failed to initialize kvm: "
+                                   "No such device\n",
+                                   ETUDE_ACCEL_KVM),
+          "kvm refused");
+    CHECK(etude_qemu_accel_refused("warning: x\nqemu-system-x86_64.exe: -accel whpx: "
+                                   "WHPX: No accelerator found, hr=80070057",
+                                   ETUDE_ACCEL_WHPX),
+          "whpx refused");
+    CHECK(!etude_qemu_accel_refused("qemu-system-x86_64: -accel kvm: failed\n", ETUDE_ACCEL_HVF),
+          "another accelerator's refusal");
+    CHECK(!etude_qemu_accel_refused("qemu-system-i386: -cpu bogus: unknown\n", ETUDE_ACCEL_TCG),
+          "another option's error");
+    CHECK(!etude_qemu_accel_refused(": -accel tcg: at the start of a line\n", ETUDE_ACCEL_TCG),
+          "no program before the option");
+}
+
 /** Check the command lines of profiles, and the profiles that are refused. */
 static void test_argv(void)
 {
-    static const char *const disks[] = {"/d/one,two.img", "/d/b.img", NULL};
+    static const struct etude_qemu_disk disks[] = {{"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0},
+                                                   {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1},
+                                                   {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1},
+                                                   {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0},
+                                                   {NULL, ETUDE_BUS_IDE, 0, NULL, 0}};
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
-    static const char *const five[] = {"a", "b", "c", "d", "e", NULL};
     static const char *const want =
         "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S "
         "-cpu qemu64,rdrand=off,rdseed=off,xsave=off,avx=off -smp 2 "
         "-m 268435456B -kernel /k/kernel -initrd /k/test.krffs "
         "-drive file=/d/one,,two.img,format=raw,if=ide,index=0,media=disk "
-        "-drive file=/d/b.img,format=raw,if=ide,index=1,media=disk "
+        "-drive file=/d/big,,img,format=raw,if=none,id=etude-disk1,discard=unmap,"
+        "detect-zeroes=unmap -device nvme,drive=etude-disk1,serial=rach2big "
+        "-drive file=/d/b.img,format=raw,if=ide,index=1,media=disk,discard=unmap,"
+        "detect-zeroes=unmap "
+        "-drive file=/d/r.iso,format=raw,if=ide,index=2,media=cdrom,readonly=on "
         "-netdev user,id=net0 -device rtl8139,netdev=net0 -netdev user,id=net1 "
         "-device e1000,netdev=net1 -vga std -device ahci "
         "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console "
         "-chardev socket,id=etude-qmp,path=/s/q -mon chardev=etude-qmp,mode=control "
         "-append rach2.fsdisk quiet=1";
-    struct etude_qemu_site site = {ETUDE_ACCEL_KVM, "/q/i686", "/q/x86_64", NULL, "/f/ovmf", 0};
+    struct etude_qemu_site site = {ETUDE_ACCEL_KVM, "/q/i686", "/q/x86_64", NULL, "/f/ov,mf", 0};
     struct etude_qemu_profile p;
     struct etude_qemu_profile b;
     char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
-    enum etude_accel a;
     size_t used = 0;
     int i;
 
@@ -1036,8 +1248,9 @@ static void test_argv(void)
     b.firmware = ETUDE_FIRMWARE_OVMF;
     b.initrd = NULL;
     b.boot_options = NULL;
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-bios") == 0 &&
-              strcmp(argv[15], "/f/ovmf") == 0,
+    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-drive") == 0 &&
+              strcmp(argv[15], "if=pflash,format=raw,readonly=on,file=/f/ov,,mf") == 0 &&
+              strcmp(argv[16], "-drive") == 0,
           "ovmf");
     b.cpu = "max-nopdpe1gb";
     CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[8], "-cpu") == 0 &&
@@ -1068,27 +1281,10 @@ static void test_argv(void)
     REFUSED(memory_bytes, (128u << 20) + 4096, "memory not in mebibytes");
     REFUSED(cpu, "qemu64,rdrand=on", "a processor model that is no profile");
     REFUSED(cpu, NULL, "no processor profile");
-    REFUSED(disks, five, "five disks");
     REFUSED(kernel, NULL, "direct without a kernel");
     REFUSED(firmware, (enum etude_firmware)7, "an unknown firmware");
-    for (i = 0; i < ETUDE_ACCEL_COUNT; i++)
-        CHECK(etude_accel_parse(etude_accel_name((enum etude_accel)i), &a) == 0 && (int)a == i,
-              "accelerator names");
-    CHECK(etude_accel_parse("kvm:tcg", &a) != 0, "a list of accelerators");
-    CHECK(etude_qemu_accel_refused("qemu-system-x86_64: -accel kvm: failed to initialize kvm: "
-                                   "No such device\n",
-                                   ETUDE_ACCEL_KVM),
-          "kvm refused");
-    CHECK(etude_qemu_accel_refused("warning: x\nqemu-system-x86_64.exe: -accel whpx: "
-                                   "WHPX: No accelerator found, hr=80070057",
-                                   ETUDE_ACCEL_WHPX),
-          "whpx refused");
-    CHECK(!etude_qemu_accel_refused("qemu-system-x86_64: -accel kvm: failed\n", ETUDE_ACCEL_HVF),
-          "another accelerator's refusal");
-    CHECK(!etude_qemu_accel_refused("qemu-system-i386: -cpu bogus: unknown\n", ETUDE_ACCEL_TCG),
-          "another option's error");
-    CHECK(!etude_qemu_accel_refused(": -accel tcg: at the start of a line\n", ETUDE_ACCEL_TCG),
-          "no program before the option");
+    test_accel_names();
+    test_disks(&p, &site);
 }
 
 /** Find an argument after `option` whose whole value is `value`. */
@@ -1332,6 +1528,10 @@ int main(int argc, char **argv)
         test_audio();
     } else if (argc == 2 && strcmp(argv[1], "--memory") == 0) {
         test_memory();
+    } else if (argc == 2 && strcmp(argv[1], "--argv") == 0) {
+        test_argv();
+    } else if (argc == 2 && strcmp(argv[1], "--uefi") == 0) {
+        test_uefi();
     } else {
         test_argv();
         test_network_argv();
@@ -1342,6 +1542,7 @@ int main(int argc, char **argv)
         test_ends();
         test_refused_starts();
         test_real(0);
+        test_uefi();
     }
     if (fails != 0)
         return 1;

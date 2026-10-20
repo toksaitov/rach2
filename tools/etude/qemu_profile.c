@@ -16,8 +16,8 @@ static const char *const accel_names[ETUDE_ACCEL_COUNT] = {"tcg", "kvm", "hvf", 
 /* The network cards a profile may name, each on a user network of its own. */
 static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
 
-/* The most disks the IDE controllers of QEMU's PC take. */
-#define IDE_DISKS 4
+/* The places of the IDE controllers of QEMU's PC, two on each channel. */
+#define IDE_PLACES 4
 
 const char *etude_accel_name(enum etude_accel accel)
 {
@@ -107,6 +107,42 @@ static size_t count(const char *const *list)
     while (list != NULL && list[n] != NULL)
         n++;
     return n;
+}
+
+/** Count the disks of a list ended by a NULL path; a NULL list has none. */
+static size_t disk_count(const struct etude_qemu_disk *disks)
+{
+    size_t n = 0;
+
+    while (disks != NULL && disks[n].path != NULL)
+        n++;
+    return n;
+}
+
+/** Say whether `s` is a serial number that QEMU's options take as it is. */
+static int serial_word(const char *s)
+{
+    return word(s) && strlen(s) <= ETUDE_QEMU_SERIAL_MAX && strchr(s, ',') == NULL;
+}
+
+int etude_qemu_disks_check(const struct etude_qemu_disk *disks)
+{
+    const struct etude_qemu_disk *d;
+    size_t ide = 0;
+
+    if (disk_count(disks) > ETUDE_QEMU_DISKS)
+        return EINVAL;
+    for (d = disks; d != NULL && d->path != NULL; d++) {
+        if (*d->path == '\0')
+            return EINVAL;
+        if (d->bus == ETUDE_BUS_IDE) {
+            if (++ide > IDE_PLACES || d->serial != NULL || (d->cdrom && d->discard))
+                return EINVAL;
+        } else if (d->bus != ETUDE_BUS_NVME || d->cdrom || !serial_word(d->serial)) {
+            return EINVAL;
+        }
+    }
+    return 0;
 }
 
 /** Say whether a device model has a user network. */
@@ -316,6 +352,30 @@ static void add_audio(struct line *l, const char *card, const char *path)
     }
 }
 
+/**
+ * Add the arguments that attach disk `d`, the `n`th of the profile counted
+ * from 0; `*ide` counts the places of the IDE controllers taken before it.
+ */
+static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, unsigned *ide)
+{
+    const char *discard = d->discard ? ",discard=unmap,detect-zeroes=unmap" : "";
+    char format[128], id[32];
+
+    if (d->bus == ETUDE_BUS_NVME) {
+        snprintf(id, sizeof(id), "etude-disk%u", (unsigned)n);
+        snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s", id, discard);
+        add(l, 0, "-drive");
+        add(l, 1, format, d->path);
+        add(l, 0, "-device");
+        add(l, 0, "nvme,drive=%s,serial=%s", id, d->serial);
+        return;
+    }
+    snprintf(format, sizeof(format), "file=%%s,format=raw,if=ide,index=%u,media=%s%s", (*ide)++,
+             d->cdrom ? "cdrom,readonly=on" : "disk", discard);
+    add(l, 0, "-drive");
+    add(l, 1, format, d->path);
+}
+
 /** Add one argument of the strings of `list` separated by spaces. */
 static void add_joined(struct line *l, const char *const *list)
 {
@@ -355,7 +415,7 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
             strcmp(p->architecture, "x86_64") != 0 || p->cpu == NULL ||
             strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
             p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
-            p->initrd == NULL || p->audio != NULL || count(p->disks) != 0 ||
+            p->initrd == NULL || p->audio != NULL || disk_count(p->disks) != 0 ||
             device_count(p->devices) != 0 || count(p->boot_options) != 1 ||
             strcmp(p->boot_options[0], "rach2.rescue") != 0)
             return EINVAL;
@@ -383,7 +443,7 @@ static int profile_check(const struct etude_qemu_profile *p)
         return EINVAL;
     if (p->memory_bytes == 0 || p->memory_bytes % (1u << 20) != 0)
         return EINVAL;
-    if (count(p->disks) > IDE_DISKS)
+    if (etude_qemu_disks_check(p->disks) != 0)
         return EINVAL;
     if (etude_qemu_devices_check(p->devices) != 0)
         return EINVAL;
@@ -394,7 +454,8 @@ static int profile_check(const struct etude_qemu_profile *p)
         return p->kernel != NULL && *p->kernel != '\0' ? 0 : EINVAL;
     if (p->firmware != ETUDE_FIRMWARE_SEABIOS && p->firmware != ETUDE_FIRMWARE_OVMF)
         return EINVAL;
-    return p->initrd == NULL && count(p->boot_options) == 0 && count(p->disks) > 0 ? 0 : EINVAL;
+    return p->initrd == NULL && count(p->boot_options) == 0 && disk_count(p->disks) > 0 ? 0
+                                                                                        : EINVAL;
 }
 
 /** Check the selected audio card and its launcher-made WAV path. */
@@ -416,7 +477,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     const char *ovmf = x86_64 ? s->ovmf_x86_64 : s->ovmf_i686;
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
     char number[32], cpu[256];
-    unsigned nics = 0;
+    unsigned nics = 0, ide = 0;
     size_t i;
     int e;
 
@@ -472,14 +533,11 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
             add(&l, 0, "%s", p->initrd);
         }
     } else if (p->firmware == ETUDE_FIRMWARE_OVMF) {
-        add(&l, 0, "-bios");
-        add(&l, 0, "%s", ovmf);
-    }
-    for (i = 0; i < count(p->disks); i++) {
-        snprintf(number, sizeof(number), "%u", (unsigned)i);
         add(&l, 0, "-drive");
-        add(&l, 1, "file=%s,format=raw,if=ide,index=%s,media=disk", p->disks[i], number);
+        add(&l, 1, "if=pflash,format=raw,readonly=on,file=%s", ovmf);
     }
+    for (i = 0; i < disk_count(p->disks); i++)
+        add_disk(&l, &p->disks[i], i, &ide);
     add_audio(&l, p->audio, audio);
     for (i = 0; i < device_count(p->devices); i++)
         add_device(&l, &p->devices[i], &nics);

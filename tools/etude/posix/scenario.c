@@ -33,7 +33,7 @@ extern char **environ;
 #define GUEST_EXEC  "exec /etude-guest --stage / --resend-ms "
 
 /* The most disks, devices and boot options a profile gives the launcher. */
-#define DISKS_MAX   4
+#define DISKS_MAX   ETUDE_QEMU_DISKS
 #define DEVICES_MAX 16
 #define OPTIONS_MAX 32
 
@@ -98,13 +98,29 @@ struct made {
     int dir;
 };
 
+/* An empty disk of the attempt, made at its first use. */
+struct blank {
+    struct blank *next;
+    const char *name; /* the manifest's */
+    char *path;
+};
+
+/* A disk of a machine's profile, as the manifest declares it. */
+struct disk_decl {
+    const char *name;
+    enum etude_disk_bus bus;
+    int cdrom, discard;
+    const char *serial; /* NULL for none */
+    uint64_t size;      /* an empty disk's size in bytes, or 0 for an artifact's */
+};
+
 struct etude_case_machine {
     struct etude_case *c;
     struct etude_case_machine *next;
     struct machine_decl *decl;
     struct etude_machine *m;
     char attempt_id[300];
-    const char *disks[DISKS_MAX + 1];
+    struct etude_qemu_disk disks[DISKS_MAX + 1];
     struct etude_qemu_device devices[DEVICES_MAX + 1];
     const char *options[OPTIONS_MAX + 1];
     struct etude_qemu_profile profile;
@@ -164,6 +180,7 @@ struct etude_case {
     struct etude_case_machine *machines;
     struct etude_case_service *services;
     struct made *made;
+    struct blank *blanks;
     char path[4096]; /* the path etude_evidence gave last */
 };
 
@@ -332,6 +349,55 @@ static int jhas(const struct eh_json *v, const char *s)
         if (i->type == 's' && strcmp(i->string, s) == 0)
             return 1;
     return 0;
+}
+
+/**
+ * Read `v`, a disk of a profile's `disks`, into `d`: an artifact's name, a
+ * private copy on IDE, or an object that gives the name, the bus, the
+ * medium, the serial, `discard` and an empty disk's size.
+ *
+ * @return 0, or -1 for a disk of another form, or of a bus or medium that
+ *         the library does not attach.
+ */
+static int disk_decl(const struct eh_json *v, struct disk_decl *d)
+{
+    const char *bus, *media;
+
+    memset(d, 0, sizeof(*d));
+    if (v != NULL && v->type == 's') {
+        d->name = v->string;
+        return 0;
+    }
+    if (v == NULL || v->type != 'o' || (d->name = jtext(v, "name")) == NULL)
+        return -1;
+    bus = jtext(v, "bus");
+    media = jtext(v, "media");
+    if (bus != NULL && strcmp(bus, "nvme") == 0)
+        d->bus = ETUDE_BUS_NVME;
+    else if (bus != NULL && strcmp(bus, "ide") != 0)
+        return -1;
+    if (media != NULL && strcmp(media, "cdrom") == 0)
+        d->cdrom = 1;
+    else if (media != NULL && strcmp(media, "disk") != 0)
+        return -1;
+    d->serial = jtext(v, "serial");
+    d->discard = jbool(v, "discard") == 1;
+    d->size = jnum(v, "size_bytes");
+    return 0;
+}
+
+/** Find the disk `name` of the profile `qp` and read it into `d`; -1 when
+ * the profile has no such disk. */
+static int find_disk(const struct eh_json *qp, const char *name, struct disk_decl *d)
+{
+    const struct eh_json *list = eh_json_get(qp, "disks"), *v;
+
+    if (list == NULL || list->type != 'a')
+        return -1;
+    for (v = list->child; v != NULL; v = v->next)
+        if (disk_decl(v, d) == 0 && name != NULL && strcmp(d->name, name) == 0)
+            return 0;
+    return -1;
 }
 
 /** Say whether `s` is a file name: no slash, not `.` or `..`, printable. */
@@ -844,11 +910,73 @@ static int disk_fixture(const struct etude_case *c, const char *name)
     return 0;
 }
 
+/** Give the size of the empty disk `name` that a machine's profile declares,
+ * or 0 when none does. */
+static uint64_t empty_size(const struct etude_case *c, const char *name)
+{
+    struct disk_decl d;
+    size_t i;
+
+    for (i = 0; i < c->decl_count; i++)
+        if (find_disk(c->decls[i].qemu, name, &d) == 0 && d.size != 0)
+            return d.size;
+    return 0;
+}
+
+/**
+ * Give the path of the empty disk `name` of `size` bytes, a sparse file in
+ * `copies/` of the scratch, made at its first use and given again after.
+ */
+static const char *empty_disk(struct etude_case *c, const char *name, uint64_t size)
+{
+    struct blank *b;
+    char path[4096];
+    int fd;
+
+    for (b = c->blanks; b != NULL; b = b->next)
+        if (strcmp(b->name, name) == 0)
+            return b->path;
+    if (find_artifact(c, name) != NULL || !file_name(name)) {
+        diag("disk %s: an empty disk is no artifact, and its name is a file's", name);
+        c->faults++;
+        return NULL;
+    }
+    if (scratch_path(c, "copies", name, path, sizeof(path)) != 0 ||
+        (fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600)) < 0) {
+        diag("disk %s: no empty disk: %s", name, strerror(errno));
+        c->faults++;
+        return NULL;
+    }
+    if (ftruncate(fd, (off_t)size) != 0) {
+        diag("disk %s: no empty disk of %llu bytes: %s", name, (unsigned long long)size,
+             strerror(errno));
+        close(fd);
+        unlink(path);
+        c->faults++;
+        return NULL;
+    }
+    close(fd);
+    made(c, path, 0);
+    b = calloc(1, sizeof(*b));
+    if (b == NULL || (b->path = dup_text(path)) == NULL) {
+        free(b);
+        c->faults++;
+        return NULL;
+    }
+    b->name = name;
+    b->next = c->blanks;
+    c->blanks = b;
+    return b->path;
+}
+
 const char *etude_private_copy(struct etude_case *c, const char *name)
 {
     struct artifact *a = find_artifact(c, name);
+    uint64_t size = name != NULL ? empty_size(c, name) : 0;
     char path[4096];
 
+    if (size != 0)
+        return empty_disk(c, name, size);
     if (a == NULL || !disk_fixture(c, name)) {
         diag("artifact %s is not a disk of the case's isolation", name != NULL ? name : "(null)");
         c->faults++;
@@ -1217,12 +1345,17 @@ static enum etude_firmware firmware_of(const char *firmware)
 static uint64_t decl_need(const struct etude_case *c, const struct machine_decl *d)
 {
     const struct eh_json *qp = d->qemu;
-    const char *disks[DISKS_MAX + 1], *options[OPTIONS_MAX + 1];
+    const char *options[OPTIONS_MAX + 1];
     struct etude_qemu_device devices[DEVICES_MAX + 1];
+    struct etude_qemu_disk disks[DISKS_MAX + 1];
     struct etude_qemu_profile p;
     struct etude_qemu_memory mem;
+    size_t i, n = jcount(eh_json_get(qp, "disks"));
 
     memset(&p, 0, sizeof(p));
+    memset(disks, 0, sizeof(disks));
+    for (i = 0; i < n && i < DISKS_MAX; i++)
+        disks[i].path = "disk";
     p.architecture = c->arch;
     p.initrd = jtext(qp, "initrd");
     p.cpu = jtext(qp, "cpu");
@@ -1231,8 +1364,7 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     p.memory_profile = jtext(qp, "memory_profile");
     p.audio = jtext(qp, "audio");
     p.firmware = firmware_of(jtext(qp, "firmware"));
-    if (strings(eh_json_get(qp, "disks"), disks, DISKS_MAX) == 0 &&
-        devices_of(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
+    if (n <= DISKS_MAX && devices_of(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
         strings(eh_json_get(qp, "boot_options"), options, OPTIONS_MAX) == 0) {
         p.disks = disks;
         p.devices = devices;
@@ -1275,35 +1407,48 @@ static enum etude_status memory_share(const struct etude_case *c, const struct m
     return ETUDE_OK;
 }
 
-/** Make the launcher's profile of boot `m` with the disks `disks`, names of
- * the profile's own disks, or all of them for NULL. */
+/**
+ * Make the launcher's profile of boot `m` with the disks `disks`, names of
+ * the profile's own disks, or all of them for NULL. A CD's medium is the
+ * artifact's object in the store; any other disk is the attempt's own file.
+ */
 static enum etude_status make_profile(struct etude_case_machine *m, const char *const disks[])
 {
     struct etude_case *c = m->c;
-    const struct eh_json *qp = m->decl->qemu;
-    const char *names[DISKS_MAX + 1], *firmware = jtext(qp, "firmware");
+    const struct eh_json *qp = m->decl->qemu, *v = eh_json_get(qp, "disks");
+    const char *name, *firmware = jtext(qp, "firmware");
     struct etude_qemu_profile *p = &m->profile;
+    struct disk_decl d;
     size_t i;
 
-    if (strings(eh_json_get(qp, "disks"), names, DISKS_MAX) != 0 ||
-        devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX) != 0 ||
+    if (devices_of(eh_json_get(qp, "devices"), m->devices, DEVICES_MAX) != 0 ||
         strings(eh_json_get(qp, "boot_options"), m->options, OPTIONS_MAX) != 0) {
-        diag("machine %s: a profile of more disks, devices or options than the launcher takes",
+        diag("machine %s: a profile of more devices or options than the launcher takes",
              m->decl->id);
         return ETUDE_REFUSED;
     }
-    for (i = 0; (disks != NULL ? disks[i] : names[i]) != NULL; i++) {
-        const char *name = disks != NULL ? disks[i] : names[i];
-
-        if (i == DISKS_MAX || !jhas(eh_json_get(qp, "disks"), name)) {
-            diag("machine %s: disk %s is not one of its profile's", m->decl->id, name);
+    v = v != NULL && v->type == 'a' ? v->child : NULL;
+    for (i = 0; disks != NULL ? disks[i] != NULL : v != NULL; i++) {
+        if (disks != NULL)
+            name = disks[i];
+        else
+            name = disk_decl(v, &d) == 0 ? d.name : "(unread)";
+        if (disks == NULL)
+            v = v->next;
+        if (i == DISKS_MAX || find_disk(qp, name, &d) != 0) {
+            diag("machine %s: disk %s is not one of its profile's, or past the %d it may have",
+                 m->decl->id, name, DISKS_MAX);
             return ETUDE_REFUSED;
         }
-        m->disks[i] = etude_private_copy(c, name);
-        if (m->disks[i] == NULL)
+        m->disks[i].path = d.cdrom ? etude_artifact(c, name) : etude_private_copy(c, name);
+        if (m->disks[i].path == NULL)
             return ETUDE_REFUSED;
+        m->disks[i].bus = d.bus;
+        m->disks[i].cdrom = d.cdrom;
+        m->disks[i].serial = d.serial;
+        m->disks[i].discard = d.discard;
     }
-    m->disks[i] = NULL;
+    m->disks[i].path = NULL;
     p->architecture = c->arch;
     p->kernel = jtext(qp, "kernel") != NULL ? etude_artifact(c, jtext(qp, "kernel")) : NULL;
     p->initrd = jtext(qp, "initrd") != NULL ? etude_artifact(c, jtext(qp, "initrd")) : NULL;
@@ -2316,6 +2461,7 @@ static void case_free(struct etude_case *c)
     struct etude_case_machine *m;
     struct etude_case_service *s;
     struct made *f;
+    struct blank *b;
     size_t i;
 
     while ((m = c->machines) != NULL) {
@@ -2332,6 +2478,11 @@ static void case_free(struct etude_case *c)
         c->made = f->next;
         free(f->path);
         free(f);
+    }
+    while ((b = c->blanks) != NULL) {
+        c->blanks = b->next;
+        free(b->path);
+        free(b);
     }
     for (i = 0; i < c->art_count; i++) {
         free(c->arts[i].path);

@@ -251,3 +251,22 @@
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-mac: invalid QEMU network options or duplicate station address
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-duplicate: invalid QEMU network options or duplicate station address
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-machine: invalid QEMU network options or duplicate station address
+
+# A profile's disks are of the forms the launcher attaches, and attaches
+# together, each given once; an empty disk is no artifact and has one size.
+0 manifest ./disks.json
+1 manifest ./disks-bad.json | twice: the disk stick is given twice in a profile
+1 manifest ./disks-bad.json | ide-five: the launcher attaches at most 8 disks of a profile, four of them on IDE
+1 manifest ./disks-bad.json | nine: the launcher attaches at most 8 disks of a profile, four of them on IDE
+1 manifest ./disks-bad.json | empty-artifact: the empty disk stick is an artifact that prepare lists
+1 manifest ./disks-bad.json | empty-sizes: the empty disk big is given two sizes
+1 manifest ./disks-bad.json | cd-unprepared: the disk nothing-built is no artifact that prepare lists
+1 manifest ./disks-shape.json | /disks/0: has no member "serial"
+1 manifest ./disks-shape.json | /disks/1: has "serial", which this form does not allow
+1 manifest ./disks-shape.json | /disks/2/bus: is not "ide"
+1 manifest ./disks-shape.json | /disks/3: has "size_bytes", which this form does not allow
+1 manifest ./disks-shape.json | /disks/4/discard: is not false
+1 manifest ./disks-shape.json | /disks/5/serial: "abcdefghijklmnopqrstu" does not match
+1 manifest ./disks-shape.json | /disks/6/serial: "a,b" does not match
+1 manifest ./disks-shape.json | /disks/7/bus: "usb" is not one of the values the schema allows
+1 manifest ./disks-shape.json | /disks/8/format: is a member the schema does not allow

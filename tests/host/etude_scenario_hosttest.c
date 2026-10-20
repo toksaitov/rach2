@@ -37,12 +37,16 @@
  * and a second memory probe refused at its console. Under the stand-in the
  * machine's etude-guest runs a guest program whose report becomes the
  * scenario's, and an etude-guest killed in the middle of a run is a lost end.
+ * A media row boots a machine twice with the same empty sparse disk of 4 TiB
+ * on NVMe and a CD whose medium is the artifact's object, and the stand-in
+ * says the drives it was given; the disk is removed after the pass.
  * This program is also the peer that a scenario runs as a service; two machines
  * at once reach it, a service ended unseen is a fault, and failing rows at each
  * stage end their own processes while a held row keeps its own. With the real
  * QEMU, a disk root written at the debug shell and powered off is read back by
- * the next boot, etude-guest runs the test image's /hello, and two machines run
- * /tcptest against the peer.
+ * the next boot, etude-guest runs the test image's /hello, two machines run
+ * /tcptest against the peer, and the kernel finds the size of the media row's
+ * empty disk.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -99,6 +103,13 @@ static int fails;
 #define HOLD_ATTEMPT_MS 300000
 #define GONE_MS         15000
 #define ROW_PROCS       64
+
+/* The media rows' empty disk, 4 TiB as the uefi suite's, on NVMe, and their
+ * CD, whose medium is the artifact `disk`. */
+#define BIG_BYTES (UINT64_C(4) << 40)
+#define MEDIA_DISKS                                                                         \
+    "[{\"name\": \"big\", \"bus\": \"nvme\", \"serial\": \"rach2big\", \"discard\": true, " \
+    "\"size_bytes\": 4398046511104}, {\"name\": \"disk\", \"media\": \"cdrom\"}]"
 
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
@@ -628,9 +639,29 @@ static int fake_network(int argc, char **argv)
 }
 
 /**
+ * Say each `-drive` and `-device` argument of the stand-in's command line
+ * on console `fd`, as `fake: drive ARG` or `fake: device ARG`.
+ */
+static void fake_drives(int fd, int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i + 1 < argc; i++) {
+        if (strcmp(argv[i], "-drive") == 0 || strcmp(argv[i], "-device") == 0) {
+            put(fd, "fake: ");
+            put(fd, argv[i] + 1);
+            put(fd, " ");
+            put(fd, argv[i + 1]);
+            put(fd, "\r\n");
+        }
+    }
+}
+
+/**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: answer QMP's start, say that
  * the machine runs and the shell is ready, and act on what the console
- * types, as fake_console does.
+ * types, as fake_console does. In the mode `media` it first says each of its
+ * `-drive` and `-device` arguments on the console, as fake_drives does.
  */
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
@@ -671,6 +702,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         fputs("recorded samples", wav);
         fclose(wav);
     }
+    if (strcmp(mode, "media") == 0)
+        fake_drives(con.fd, argc, argv);
     put(con.fd, "fake: ready\r\nType 'help' for available commands.\r\n> ");
     for (;;) {
         p[0].fd = con.fd;
@@ -1247,6 +1280,56 @@ static int scenario_real_peer(struct etude_case *c)
     return 0;
 }
 
+/**
+ * Run the media rows: a machine whose disks are an empty sparse disk of
+ * 4 TiB on NVMe and a CD whose medium is the artifact `disk`. Under the
+ * stand-in the machine boots twice, each time with the same empty disk, and
+ * says the arguments it was given; under the real QEMU the kernel finds the
+ * disk's size.
+ */
+static int scenario_media(struct etude_case *c, int real)
+{
+    static const char *const ids[2][3] = {{"sparse", "drives", "stopped"},
+                                          {"same-disk", "drives-again", "second-stop"}};
+    const char *big = NULL, *again, *cd, *shell = real ? "\n> " : "> ";
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    char text[PATH_MAX + 256];
+    struct stat st;
+    uint64_t at = 0;
+    int boot;
+
+    for (boot = 0; boot < (real ? 1 : 2); boot++) {
+        if (etude_step(c, boot == 0 ? "boot" : "again") != ETUDE_OK ||
+            etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+            return 1;
+        again = etude_private_copy(c, "big");
+        if (boot == 0)
+            big = again;
+        cd = etude_artifact(c, "disk");
+        etude_assert(c, ids[boot][0],
+                     again != NULL && again == big && stat(big, &st) == 0 &&
+                         (uint64_t)st.st_size == BIG_BYTES &&
+                         (uint64_t)st.st_blocks * 512u < (1u << 20),
+                     "no sparse empty disk of 4 TiB, or another at the second boot");
+        if (real)
+            fix_format(text, sizeof(text), ": namespace 1: 4194304 MiB");
+        else
+            fix_format(text, sizeof(text),
+                       "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
+                       "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
+                       "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
+                       "media=cdrom,readonly=on\r\n",
+                       big != NULL ? big : "", cd != NULL ? cd : "");
+        etude_assert(c, ids[boot][1], etude_console_wait(m, text, 0, &at) == ETUDE_OK, text);
+        at = wait_for(c, m, ids[boot][2], "Type 'help'", at);
+        wait_for(c, m, ids[boot][2], shell, at);
+        etude_type(m, real ? "poweroff\r" : "poweroff\n");
+        expect(c, ids[boot][2], etude_wait_end(m, &end), ETUDE_OK);
+    }
+    return 0;
+}
+
 /** Run row `row` of a case with services, or give 1 for an unknown row. */
 static int scenario_services(struct etude_case *c, const char *row)
 {
@@ -1291,6 +1374,8 @@ int etude_scenario(struct etude_case *c)
         return scenario_guest(c, row[0] == 'r');
     if (strncmp(row, "memory-", 7) == 0)
         return scenario_memory(c, row);
+    if (strcmp(row, "media") == 0 || strcmp(row, "real-media") == 0)
+        return scenario_media(c, row[0] == 'r');
     return scenario_services(c, row);
 }
 
@@ -1443,6 +1528,21 @@ static int boundary_pair(const struct row *r)
     return strncmp(r->name, "memory-", 7) == 0;
 }
 
+/** Say whether row `r` is a media row, whose machine has the RAM image and
+ * the disks MEDIA_DISKS. */
+static int media(const struct row *r)
+{
+    return strcmp(r->name, "media") == 0 || strcmp(r->name, "real-media") == 0;
+}
+
+/** Give the `disks` of row `r`'s machine, as JSON. */
+static const char *row_disks(const struct row *r)
+{
+    if (media(r))
+        return MEDIA_DISKS;
+    return r->disk != NULL ? "[\"disk\"]" : "[]";
+}
+
 /** Write row `r`'s case, as one family's manifest, to `path`. A memory row
  * of two machines reserves the boundary machine's memory, and in
  * memory-share and memory-qmp the other's as well. */
@@ -1463,7 +1563,7 @@ static int write_manifest(const char *path, const struct row *r)
             "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
             "%s\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": %s}, \"console\": "
             "\"serial\", \"qmp\": %s, \"helper\": %s}",
-            r->helper ? "\"initrd\"" : "null", r->disk != NULL ? "[\"disk\"]" : "[]",
+            r->helper || media(r) ? "\"initrd\"" : "null", row_disks(r),
             strcmp(r->name, "memory") == 0       ? "\"memory_profile\": \"bigmem-boundary-v1\", "
             : strncmp(r->name, "audio-", 6) == 0 ? "\"audio\": \"hda\", "
                                                  : "",
@@ -2421,6 +2521,9 @@ static const struct row stand_in_rows[] = {
      NULL, 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"guest", "disk", "run:fixture", "guest-pass guest-exit guest-ran guest-lost guest-lost-end",
      NULL, 1, LOSS_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
+    {"media", "media", "boot:fixture again:fixture",
+     "sparse drives stopped same-disk drives-again second-stop", NULL, 0, STEP_US, 0, 1, 0, 0, NULL,
+     0, NULL, 0},
 };
 
 /* The stop row, which keeps its copy and gives no end record. */
@@ -2444,6 +2547,8 @@ static const struct row real_rows[] = {
      0, NULL, 0},
     {"real-peer", NULL, "serve alpha:alpha beta:beta",
      "service-ready alpha-tcp beta-tcp both-closed service-stopped", NULL, 0, REAL_US, 0, 1, 0, 1,
+     NULL, 0, NULL, 0},
+    {"real-media", NULL, "boot:fixture", "sparse drives stopped", NULL, 0, REAL_US, 0, 1, 0, 0,
      NULL, 0, NULL, 0},
 };
 

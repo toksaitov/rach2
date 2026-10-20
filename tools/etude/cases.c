@@ -4,10 +4,11 @@
  *
  * A schema checks one value at a time; these rules relate values to each
  * other: an identity given once, an alternative that names declared
- * assertions, an artifact that preparation makes, a role that matches the
- * end it expects, a bound inside its floor and ceiling, a fixture where a
- * placement has it, and a `where` that names a line of the tree. Each rule
- * follows a sentence of tools/etude/Readme.md.
+ * assertions, an artifact that preparation makes, the disks of a profile
+ * that the launcher attaches together, a role that matches the end it
+ * expects, a bound inside its floor and ceiling, a fixture where a placement
+ * has it, and a `where` that names a line of the tree. Each rule follows a
+ * sentence of tools/etude/Readme.md.
  */
 #include "casecheck.h"
 
@@ -316,7 +317,16 @@ static void prepared(const struct rule *r, const struct json *name, const char *
     }
 }
 
-/** Requires the artifacts of a QEMU profile. */
+/**
+ * Returns the name of `v`, a disk of a profile's `disks`: the string itself,
+ * or the object's `name`.
+ */
+static const struct json *disk_name(const struct json *v)
+{
+    return v->type == JSON_OBJECT ? json_member(v, "name") : v;
+}
+
+/** Requires the artifacts of a QEMU profile; an empty disk is none. */
 static void prepared_qemu(const struct rule *r, const struct json *qemu)
 {
     const struct json *disks = json_member(qemu, "disks");
@@ -328,7 +338,9 @@ static void prepared_qemu(const struct rule *r, const struct json *qemu)
     prepared(r, json_member(qemu, "kernel"), "the kernel");
     prepared(r, json_member(qemu, "initrd"), "the initial RAM image");
     for (i = 0; disks != NULL && i < disks->count; i++) {
-        prepared(r, disks->item[i], "the disk");
+        if (json_member(disks->item[i], "size_bytes") == NULL) {
+            prepared(r, disk_name(disks->item[i]), "the disk");
+        }
     }
 }
 
@@ -401,6 +413,108 @@ static void rule_network(const struct rule *r)
     network_profile(r, json_member(json_member(r->c, "requirements"), "qemu"));
     for (i = 0; machines != NULL && i < machines->count; i++)
         network_profile(r, json_member(machines->item[i], "qemu"));
+}
+
+/**
+ * Returns QEMU profile `i` of the case, counted from 0: the requirements'
+ * first, then each machine's; NULL for one the case does not give.
+ */
+static const struct json *profile_at(const struct rule *r, size_t i)
+{
+    const struct json *machines = json_member(r->c, "machines");
+
+    if (i == 0) {
+        return json_member(json_member(r->c, "requirements"), "qemu");
+    }
+    return machines != NULL && i <= machines->count ? json_member(machines->item[i - 1], "qemu")
+                                                    : NULL;
+}
+
+/**
+ * Reports a disk that profile `qemu` gives twice, and disks that the launcher
+ * does not attach together.
+ */
+static void profile_disks(const struct rule *r, const struct json *qemu)
+{
+    const struct json *disks = json_member(qemu, "disks");
+    struct etude_qemu_disk d[ETUDE_QEMU_DISKS + 2];
+    size_t i, j, n = disks != NULL ? disks->count : 0;
+
+    memset(d, 0, sizeof d);
+    for (i = 0; i < n; i++) {
+        const struct json *v = disks->item[i];
+
+        for (j = 0; j < i; j++) {
+            if (same(disk_name(v)->string, disk_name(disks->item[j])->string)) {
+                finding(r->file, v->line, "%s: the disk %s is given twice in a profile",
+                        json_text(r->c, "case_id"), disk_name(v)->string);
+                break;
+            }
+        }
+        if (i <= ETUDE_QEMU_DISKS) {
+            d[i].path = disk_name(v)->string;
+            d[i].bus = same(json_text(v, "bus"), "nvme") ? ETUDE_BUS_NVME : ETUDE_BUS_IDE;
+            d[i].cdrom = same(json_text(v, "media"), "cdrom");
+            d[i].serial = json_text(v, "serial");
+        }
+    }
+    if (etude_qemu_disks_check(d) != 0) {
+        finding(r->file, line_at(qemu, "disks"),
+                "%s: the launcher attaches at most %d disks of a profile, four of them on IDE",
+                json_text(r->c, "case_id"), ETUDE_QEMU_DISKS);
+    }
+}
+
+/**
+ * Reports disk `v`, the `j`th of profile `i`, when it is an empty disk that
+ * prepare lists as an artifact, or that a disk before it gives another size.
+ */
+static void empty_disk(const struct rule *r, const struct json *v, size_t i, size_t j)
+{
+    const struct json *size = json_member(v, "size_bytes"), *w;
+    const char *name = disk_name(v)->string;
+    size_t k, l;
+
+    if (size == NULL) {
+        return;
+    }
+    if (has_member(json_member(r->c, "prepare"), "name", name)) {
+        finding(r->file, v->line, "%s: the empty disk %s is an artifact that prepare lists",
+                json_text(r->c, "case_id"), name);
+    }
+    for (k = 0; k <= i; k++) {
+        const struct json *disks = json_member(profile_at(r, k), "disks");
+
+        for (l = 0; disks != NULL && l < disks->count && (k < i || l < j); l++) {
+            w = json_member(disks->item[l], "size_bytes");
+            if (w != NULL && same(disk_name(disks->item[l])->string, name) &&
+                w->integer != size->integer) {
+                finding(r->file, v->line, "%s: the empty disk %s is given two sizes",
+                        json_text(r->c, "case_id"), name);
+                return;
+            }
+        }
+    }
+}
+
+/**
+ * The disks of each QEMU profile are ones the launcher attaches together,
+ * each given once. An empty disk, one of `size_bytes`, is no artifact of
+ * prepare, and every profile that gives it gives it one size.
+ */
+static void rule_disks(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t profiles = 1 + (machines != NULL ? machines->count : 0), i, j;
+
+    for (i = 0; i < profiles; i++) {
+        const struct json *disks = json_member(profile_at(r, i), "disks");
+
+        profile_disks(r, profile_at(r, i));
+        for (j = 0; disks != NULL && j < disks->count; j++) {
+            empty_disk(r, disks->item[j], i, j);
+        }
+    }
 }
 
 /** Reports the QEMU profile `qemu` unless it names a processor profile. */
@@ -611,9 +725,10 @@ static long long fixture_count(const struct json *list, const char *kind)
 static int qemu_memory(const struct rule *r, const struct json *qemu,
                        struct etude_qemu_memory *memory)
 {
-    static const char *const nonempty[] = {"device", NULL};
     static const struct etude_qemu_device device[] = {{"device", NULL, NULL, NULL, NULL, NULL},
                                                       {0}};
+    static const struct etude_qemu_disk disk[] = {{"disk", ETUDE_BUS_IDE, 0, NULL, 0},
+                                                  {NULL, ETUDE_BUS_IDE, 0, NULL, 0}};
     const struct json *arches = json_member(r->c, "architectures");
     const struct json *options = json_member(qemu, "boot_options");
     const char *boot[3] = {NULL, NULL, NULL};
@@ -631,7 +746,7 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
                        : 0;
     p.firmware = same(json_text(qemu, "firmware"), "direct") ? ETUDE_FIRMWARE_DIRECT
                                                              : ETUDE_FIRMWARE_SEABIOS;
-    p.disks = json_member(qemu, "disks")->count ? nonempty : NULL;
+    p.disks = json_member(qemu, "disks")->count ? disk : NULL;
     p.devices = json_member(qemu, "devices")->count ? device : NULL;
     if (options->count != 0)
         boot[0] = options->item[0]->string;
@@ -891,6 +1006,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_branches(&r);
     rule_role(&r);
     rule_artifacts(&r);
+    rule_disks(&r);
     rule_processor(&r);
     rule_network(&r);
     rule_steps(&r);

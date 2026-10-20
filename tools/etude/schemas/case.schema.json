@@ -94,7 +94,7 @@
       "properties": {
         "kernel": {"$ref": "#/$defs/name"},
         "initrd": {"oneOf": [{"$ref": "#/$defs/name"}, {"type": "null"}]},
-        "disks": {"$ref": "#/$defs/names"},
+        "disks": {"type": "array", "items": {"$ref": "#/$defs/disk"}},
         "cpu": {"$ref": "#/$defs/name"},
         "processors": {"$ref": "#/$defs/positive"},
         "memory_bytes": {"$ref": "#/$defs/positive"},
@@ -117,6 +117,29 @@
         "dns": {"type": "string"},
         "mac": {"type": "string"}
       }
+    },
+    "disk": {
+      "oneOf": [
+        {"$ref": "#/$defs/name"},
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["name"],
+          "properties": {
+            "name": {"$ref": "#/$defs/name"},
+            "bus": {"enum": ["ide", "nvme"]},
+            "media": {"enum": ["disk", "cdrom"]},
+            "serial": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"},
+            "discard": {"type": "boolean"},
+            "size_bytes": {"$ref": "#/$defs/positive"}
+          },
+          "allOf": [
+            {"if": {"required": ["bus"], "properties": {"bus": {"const": "nvme"}}},
+             "then": {"required": ["serial"]}, "else": {"not": {"required": ["serial"]}}},
+            {"if": {"required": ["media"], "properties": {"media": {"const": "cdrom"}}},
+             "then": {"properties": {"bus": {"const": "ide"}, "discard": {"const": false}}, "not": {"required": ["size_bytes"]}}}
+          ]
+        }
+      ]
     },
     "execution": {
       "type": "object", "additionalProperties": false,

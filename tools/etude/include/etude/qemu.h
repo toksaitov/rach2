@@ -48,17 +48,41 @@ struct etude_qemu_device {
  */
 int etude_qemu_devices_check(const struct etude_qemu_device *devices);
 
+/* The controller a disk of a profile is attached to. */
+enum etude_disk_bus {
+    ETUDE_BUS_IDE, /* one of the four places of the PC's IDE controllers */
+    ETUDE_BUS_NVME /* an NVMe controller of its own */
+};
+
+/* A disk of a profile, its file resolved to a path. */
+struct etude_qemu_disk {
+    const char *path; /* the file QEMU opens; NULL ends a list */
+    enum etude_disk_bus bus;
+    int cdrom;          /* a CD drive with the file as its read-only medium, on IDE */
+    const char *serial; /* the drive's serial number, or NULL; an NVMe disk has one */
+    int discard;        /* the guest's discards, and its writes of zeros, free the
+                           file's blocks */
+};
+
+/* The most disks of a profile, of which four at most are on IDE. */
+#define ETUDE_QEMU_DISKS 8
+
+/* The longest serial number, the size of NVMe's and ATA's serial fields. */
+#define ETUDE_QEMU_SERIAL_MAX 20
+
 /* A case's QEMU profile with its artifacts resolved to paths. */
 struct etude_qemu_profile {
-    const char *architecture;   /* "i686" or "x86_64" */
-    const char *kernel;         /* loaded by direct firmware alone */
-    const char *initrd;         /* NULL for none */
-    const char *const *disks;   /* private copies, ended by NULL */
-    const char *cpu;            /* the processor profile (processor.h) */
-    unsigned processors;        /* 1 to 64 */
-    uint64_t memory_bytes;      /* a whole number of mebibytes */
-    const char *memory_profile; /* NULL or "reserved", or "bigmem-boundary-v1" */
-    const char *audio;          /* NULL, "hda" or "sb16", recorded through the WAV backend */
+    const char *architecture;            /* "i686" or "x86_64" */
+    const char *kernel;                  /* loaded by direct firmware alone */
+    const char *initrd;                  /* NULL for none */
+    const struct etude_qemu_disk *disks; /* in the order of the profile, ended by
+                                            one whose path is NULL; NULL for none */
+    const char *cpu;                     /* the processor profile (processor.h) */
+    unsigned processors;                 /* 1 to 64 */
+    uint64_t memory_bytes;               /* a whole number of mebibytes */
+    const char *memory_profile;          /* NULL or "reserved", or "bigmem-boundary-v1" */
+    const char *audio;                   /* NULL, "hda" or "sb16", recorded
+                                            through the WAV backend */
     enum etude_firmware firmware;
     const struct etude_qemu_device *devices; /* ended by a NULL model */
     const char *const *boot_options;         /* the kernel's command line, ended
@@ -97,13 +121,24 @@ struct etude_qemu_site {
     enum etude_accel accel;
     const char *qemu_i686;   /* the program for i686, qemu-system-i386 */
     const char *qemu_x86_64; /* and for x86-64 */
-    const char *ovmf_i686;   /* the UEFI firmware of each, or NULL */
+    const char *ovmf_i686;   /* the code image of each one's OVMF, or NULL */
     const char *ovmf_x86_64;
     int boundary_lazy; /* the site permits the proved lazy boundary profile */
 };
 
 /* The longest command line the launcher makes, in arguments. */
 #define ETUDE_QEMU_ARGS_MAX 128
+
+/**
+ * Check the disks of a profile, `disks` as the profile gives them, against
+ * what the launcher attaches: at most ETUDE_QEMU_DISKS, of which at most four
+ * are on IDE, CDs among them; a path for each; an NVMe disk with a serial; a
+ * serial that is a word of at most ETUDE_QEMU_SERIAL_MAX printable characters
+ * without a comma, on NVMe alone; and a CD on IDE, without `discard`.
+ *
+ * @return 0, or EINVAL.
+ */
+int etude_qemu_disks_check(const struct etude_qemu_disk *disks);
 
 /** Give the name QEMU and QMP use for `accel`, or NULL for none. */
 const char *etude_accel_name(enum etude_accel accel);

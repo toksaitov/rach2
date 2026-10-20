@@ -82,7 +82,10 @@ const char *etude_artifact(struct etude_case *c, const char *name);
 
 /**
  * Give the path of a private writable copy of artifact `name`, made for this
- * attempt and removed in its cleanup unless the attempt failed.
+ * attempt and removed in its cleanup unless the attempt failed. For the name
+ * of an empty disk that a machine's profile declares with `size_bytes`, give
+ * instead a sparse file of that size, made at the first call, given again at
+ * each later one, and removed as a copy is.
  *
  * @return the path, owned by the library, or NULL as for etude_artifact.
  */
@@ -90,8 +93,10 @@ const char *etude_private_copy(struct etude_case *c, const char *name);
 
 /**
  * Boot machine `machine` of the manifest, with `disks`, a list of names of
- * private copies ended by NULL, and, when the machine runs etude-guest, wait
- * until it has answered hello.
+ * disks of its profile ended by NULL, or all of them for NULL, and, when the
+ * machine runs etude-guest, wait until it has answered hello. A CD's medium
+ * is its artifact, read-only; any other disk is the file etude_private_copy
+ * gives.
  *
  * The accelerator is the plan's; a failure to start it returns ETUDE_FAILED
  * with the end ETUDE_END_ACCEL_FAILED in `end`, and is not retried with
