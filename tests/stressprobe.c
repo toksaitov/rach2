@@ -12,9 +12,14 @@
  * prints "STRESSPROBE FAIL:" with the step, the file and the call's result
  * or the offset that differs, and exits 1. A file, 256 KiB, is a
  * thirty-second of the cache's largest size.
+ *
+ * The files are `/s000` to `/s131` at the root, or under the directory the
+ * argument `dir=PATH` names (probe_args.h), which a native run gives for a
+ * KRFFS volume mounted in its workspace.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -69,16 +74,31 @@ static void out_num(unsigned long v)
     }
 }
 
-/** Write "/sNNN" for file `n`, under 1000, to `o`, which has room for six
- * bytes. */
-static void path_of(char *o, unsigned n)
+/* The room for a file's path: the directory's and "/sNNN". */
+#define PATH_ROOM 160
+
+/** Write "DIR/sNNN" for file `n`, under 1000, to `o`, which has room for
+ * PATH_ROOM bytes; DIR is the argument `dir`, or empty, the root, when there
+ * is none. 0, or -1 when DIR is too long. */
+static int path_of(char *o, unsigned n)
 {
-    o[0] = '/';
-    o[1] = 's';
-    o[2] = (char)('0' + (n / 100u) % 10u);
-    o[3] = (char)('0' + (n / 10u) % 10u);
-    o[4] = (char)('0' + n % 10u);
-    o[5] = '\0';
+    const char *dir = probe_arg("dir", "");
+    int k = 0;
+
+    while (dir[k] != '\0') {
+        if (k >= PATH_ROOM - 6) {
+            return -1;
+        }
+        o[k] = dir[k];
+        k++;
+    }
+    o[k] = '/';
+    o[k + 1] = 's';
+    o[k + 2] = (char)('0' + (n / 100u) % 10u);
+    o[k + 3] = (char)('0' + (n / 10u) % 10u);
+    o[k + 4] = (char)('0' + n % 10u);
+    o[k + 5] = '\0';
+    return 0;
 }
 
 /** A byte that depends on the file index and the byte offset. */
@@ -135,17 +155,24 @@ static void fail_at(const char *what, unsigned file, int rc)
     sys_exit(1);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** The probe: write and fsync every file, then read each back, compare it
  * with its pattern and unlink it. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
-    char path[8];
+    char path[PATH_ROOM];
     unsigned f;
     size_t i;
     int fd, rc;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     for (f = 0; f < NFILES; ++f) {
-        path_of(path, f);
+        if (path_of(path, f) != 0) {
+            fail_at("the path under dir=", f, 0);
+        }
         for (i = 0; i < FILE_SIZE; ++i) {
             buf[i] = pattern(f, i);
         }

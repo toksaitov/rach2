@@ -14,12 +14,15 @@
  * Needs: root privilege, a writable KRFFS or ext2 root, mounted /proc and
  * /dev, and absent /vp and /procx paths. The root type in /proc/mounts selects
  * the hard-link result, the statfs magic and the inode counts. An unknown
- * root type fails.
+ * root type fails. A native run (probe_args.h) gives the type as `root=krffs`
+ * or `root=ext2` instead, since it runs the probe in a private root, for
+ * which /proc/mounts lists the machine's own root.
  *
  * Prints "VFSPROBE OK". Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define PHYSICAL_DOTDOT 1
 
@@ -81,8 +84,8 @@ static void fail(const char *why)
 }
 
 /**
- * Read the root type from the mount table independently of statfs, and
- * return its statfs magic.
+ * Read the root type from the argument `root`, or else from the mount table,
+ * independently of statfs, and return its statfs magic.
  *
  * Match the mountpoint and type fields of a complete line. Missing or
  * unsupported roots fail before the probe creates files.
@@ -90,8 +93,22 @@ static void fail(const char *why)
 static unsigned root_magic(void)
 {
     char buf[2048];
+    const char *given = probe_arg("root", 0);
     int fd, n, start, end, p;
 
+    if (given != 0) {
+        if (given[0] == 'k' && given[1] == 'r' && given[2] == 'f' && given[3] == 'f' &&
+            given[4] == 's' && given[5] == '\0') {
+            puts("vfsprobe: root: krffs");
+            return STATFS_MAGIC_KRFFS;
+        }
+        if (given[0] == 'e' && given[1] == 'x' && given[2] == 't' && given[3] == '2' &&
+            given[4] == '\0') {
+            puts("vfsprobe: root: ext2");
+            return STATFS_MAGIC_EXT2;
+        }
+        fail("root= must name krffs or ext2");
+    }
     fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);
     if (fd < 0) {
         fail("open /proc/mounts");
@@ -317,6 +334,10 @@ int stat_marked_file_dotdot(void)
 #endif
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * Make /vp/d/f and run the rows in order, failing at the first with its
  * name: what a path answers, open and openat, the description across unlink
@@ -326,12 +347,14 @@ int stat_marked_file_dotdot(void)
  * description on a file that grows past a neighbour made right after it,
  * so that it cannot grow in place, reads the grown size and the moved bytes.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int fd, dfd, rc;
     char cwd[64];
-    unsigned magic = root_magic();
+    unsigned magic;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    magic = root_magic();
     if (syscall2(SYS_MKDIR, (long)"/vp", 0755) != 0) {
         fail("mkdir /vp");
     }

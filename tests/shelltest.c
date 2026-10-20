@@ -1,12 +1,15 @@
 /**
  * shelltest: the fork, exec and waitpid a shell uses to run a program.
  *
- * The child execs `/hello`; the parent waits and requires an exit status of
- * 0. Prints "All exec syscalls passed!" and exits 0 when it is, and exits 1
- * otherwise. Freestanding; direct system calls (probe.h).
+ * The child execs `/hello`, or the program the argument `hello=PATH` names
+ * (probe_args.h), which a native run gives for the copy staged in its
+ * workspace; the parent waits and requires an exit status of 0. Prints "All
+ * exec syscalls passed!" and exits 0 when it is, and exits 1 otherwise.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -92,6 +95,10 @@ static void print_num(int n)
     }
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe's entry: the parent forks, the child execs `/hello`, and the
  * parent waits and requires the child's status to be 0.
@@ -100,16 +107,21 @@ static void print_num(int n)
  * rather than by a bare word, so that a run whose working directory is not
  * the root fails on what the kernel did and not on where it was started.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int pid;
     int status;
     int child_pid;
     int exec_result;
 
-    const char *program = "/hello";
-    char *const argv[] = {"/hello", (char *)0};
+    const char *program;
+    char *argv[2];
     char *const envp[] = {(char *)0};
+
+    probe_args((int)sp[0], (char **)(sp + 1));
+    program = probe_arg("hello", "/hello");
+    argv[0] = (char *)program;
+    argv[1] = (char *)0;
 
     puts("Shell test (fork+exec+waitpid) starting...");
 

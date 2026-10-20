@@ -24,6 +24,10 @@
 #define O_RDONLY        0
 #define CLOCK_MONOTONIC 1
 
+/* The yield row's marker, in the working directory: the root as the test
+ * image runs the probe, the workspace in a native run. */
+#define MARKER "childran"
+
 /* The kernel's timespec, whose fields are longs. */
 struct timespec {
     long tv_sec;
@@ -110,7 +114,7 @@ static void nap(long ms)
 
 /**
  * The child of the yield row: once /proc shows the parent `parent` asleep,
- * create /childran and exit 0. A parent that has ended, whose state is gone
+ * create the marker and exit 0. A parent that has ended, whose state is gone
  * or Z, ends the child with status 1 and no marker. Does not return.
  */
 static void mark_when_asleep(int parent)
@@ -128,7 +132,7 @@ static void mark_when_asleep(int parent)
         }
         nap(1);
     }
-    fd = syscall2(SYS_CREAT, (long)"/childran", 0644);
+    fd = syscall2(SYS_CREAT, (long)MARKER, 0644);
     if (fd >= 0) {
         syscall3(SYS_WRITE, fd, (long)"x", 1);
         syscall1(SYS_CLOSE, fd);
@@ -137,7 +141,7 @@ static void mark_when_asleep(int parent)
 }
 
 /**
- * Whether the child `pid` created /childran. The parent naps 10 ms at a time,
+ * Whether the child `pid` created the marker. The parent naps 10 ms at a time,
  * so that it sleeps only in nanosleep, until the marker exists or the child
  * has ended, which its state Z shows; 3000 naps end a wait for a child that
  * never sees the parent asleep. The child is left to be reaped.
@@ -147,7 +151,7 @@ static int child_marked(int pid)
     int fd, naps, ended = 0;
 
     for (naps = 0; naps < 3000; naps++) {
-        fd = syscall3(SYS_OPEN, (long)"/childran", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)MARKER, O_RDONLY, 0);
         if (fd >= 0) {
             syscall1(SYS_CLOSE, fd);
             return 1;
@@ -206,7 +210,7 @@ PROBE_START void _start(void)
     check(differ, "two getrandom draws differ");
 
     /* 3. nanosleep waits about N and yields to the child. */
-    syscall1(SYS_UNLINK, (long)"/childran");
+    syscall1(SYS_UNLINK, (long)MARKER);
 
     pid = syscall1(SYS_FORK, 0);
     check(pid >= 0, "fork");
@@ -229,7 +233,7 @@ PROBE_START void _start(void)
 
     check(pid > 0 && child_marked(pid), "child made progress during the sleep (nanosleep yields)");
     check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap child");
-    syscall1(SYS_UNLINK, (long)"/childran");
+    syscall1(SYS_UNLINK, (long)MARKER);
 
     if (fails == 0) {
         puts("TIMEPROBE OK");

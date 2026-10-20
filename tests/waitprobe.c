@@ -38,7 +38,9 @@
 #define AF_INET    2
 #define SOCK_DGRAM 2
 
-#define HELLO "/hello.txt" /* staged "hello, world\n" */
+/* "hello, world\n", in the working directory: the root as the test image
+ * runs the probe, the workspace in a native run. */
+#define HELLO "hello.txt"
 
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status)

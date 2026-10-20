@@ -16,12 +16,17 @@
  * one directory each have a cursor of their own, and each reports the end,
  * the first a second time as well.
  *
+ * The directory is `/unlinkdir`, or the path the argument `dir=PATH` gives
+ * (probe_args.h), which a native run gives so that the probe works in its
+ * workspace or on a volume mounted there.
+ *
  * Prints "UNLINKDIRPROBE OK" and exits 0 on success; a failure prints
  * "UNLINKDIRPROBE FAIL: " with the reason and exits 1. Freestanding; direct
  * system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -134,13 +139,21 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
-/** Build "/unlinkdir/fNN" (or "/unlinkdir" itself when `n` is negative). */
+/* The room for the directory's path and a file name under it. */
+#define PATH_MAX_LEN 160
+
+/** Build "DIR/fNN" (or "DIR" itself when `n` is negative) in `out`, of
+ * PATH_MAX_LEN bytes, where DIR is the argument `dir`, `/unlinkdir` when
+ * there is none. A longer DIR fails the probe. */
 static void path_for(char *out, int n)
 {
-    const char *base = "/unlinkdir";
+    const char *base = probe_arg("dir", "/unlinkdir");
     int i = 0;
 
     while (base[i]) {
+        if (i >= PATH_MAX_LEN - 5) {
+            fail("the directory's path is too long");
+        }
         out[i] = base[i];
         i++;
     }
@@ -155,17 +168,22 @@ static void path_for(char *out, int n)
     out[i] = '\0';
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** The probe's entry: the listing with unlinks, the two descriptors, and
  * the rmdir at the end. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
-    char path[32];
-    char dir[32];
+    char path[PATH_MAX_LEN];
+    char dir[PATH_MAX_LEN];
     char buf[DIRENT_BUF];
     int i, fd, rounds;
     int removed = 0;
     int64_t last_off = 0;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     path_for(dir, -1);
 
     /* Start from nothing, in case an earlier run left the directory behind. */

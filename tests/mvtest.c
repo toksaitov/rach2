@@ -13,7 +13,7 @@
  * -EISDIR. A test that accepted any negative return could not tell them
  * apart. A directory source is refused with -EPERM on KRFFS, whose children
  * name their parent by id, and performed on ext2, which rewrites `..`; the
- * probe reads the root's type from `/proc/mounts`, prints it, and fails the
+ * probe reads the root's type by statfs(2) of `/`, prints it, and fails the
  * row on a root that is neither.
  *
  * Freestanding; direct system calls (probe.h).
@@ -114,43 +114,30 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+/* The f_type statfs(2) reports for each root the directory row knows. */
+#define STATFS_MAGIC_KRFFS 0x4B524646u
+#define STATFS_MAGIC_EXT2  0xEF53u
+
 /**
- * Whether the root under the probe is ext2, read from the mount table rather
+ * Whether the root under the probe is ext2, read by statfs(2) of `/` rather
  * than assumed: the two roots answer a directory's rename differently and both
- * answers are right for their file system. 1 for ext2 and 0 for KRFFS, the
- * type of the line whose mount point is a bare slash, matched whole; -1 for
- * another type, which fails the directory row, or when /proc/mounts cannot be
- * read.
+ * answers are right for their file system. 1 for ext2 and 0 for KRFFS; -1 for
+ * another type, which fails the directory row, or when the call fails.
+ * statfs and not `/proc/mounts`, whose lines name mount points from the
+ * machine's root, so that a run in a private root learns that root's type.
  */
 static int root_is_ext2(void)
 {
-    static char mounts[2048];
-    int fd = sys_open("/proc/mounts", O_RDONLY);
-    int n, i;
+    static char buf[KSTATFS_SIZE];
 
-    if (fd < 0) {
+    if (probe_statfs("/", buf) != 0) {
         return -1;
     }
-    n = syscall3(SYS_READ, (long)fd, (long)mounts, (long)(sizeof(mounts) - 1));
-    sys_close(fd);
-    if (n <= 0) {
-        return -1;
+    if (*(unsigned *)buf == STATFS_MAGIC_EXT2) {
+        return 1;
     }
-    mounts[n] = 0;
-    /* Each line is "device mountpoint type options 0 0". */
-    for (i = 0; i < n; i++) {
-        if (mounts[i] == ' ' && mounts[i + 1] == '/' && mounts[i + 2] == ' ') {
-            const char *t = &mounts[i + 3];
-
-            if (t[0] == 'e' && t[1] == 'x' && t[2] == 't' && t[3] == '2' && t[4] == ' ') {
-                return 1;
-            }
-            if (t[0] == 'k' && t[1] == 'r' && t[2] == 'f' && t[3] == 'f' && t[4] == 's' &&
-                t[5] == ' ') {
-                return 0;
-            }
-            return -1;
-        }
+    if (*(unsigned *)buf == STATFS_MAGIC_KRFFS) {
+        return 0;
     }
     return -1;
 }
