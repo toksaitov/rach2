@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "proof": "legacyset",
+  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver, each fault found by its own row",
+  "tree": "private",
+  "sources": [
+    "tools/etude/posix/legacy_set.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_legacyset_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude -I tools/etude/posix tests/host/etude_legacyset_hosttest.c tools/etude/posix/legacy.c ${SRC}/tools/etude/posix/legacy_set.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c tools/etude/watchdog.c tools/etude/supervise.c tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c tools/etude/posix/bridge.c tools/etude/posix/status.c tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c tools/etude/compare_run.c tools/etude/history.c tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c -o ${WORK}/etude_legacyset_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_legacyset_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "etude-legacyset-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "ports",
+      "summary": "a suite runs with the caller's port block in place of its claim's",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (c->bridge != NULL) {\n        snprintf(offset, sizeof(offset), \"%d\", etude_bridge_offset(c->bridge));\n",
+          "replace": "    if (0) {\n        snprintf(offset, sizeof(offset), \"%d\", etude_bridge_offset(c->bridge));\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": ports: blocks of their own with locks: "
+        ]
+      }
+    },
+    {
+      "name": "width",
+      "summary": "the width does not limit the suites that run at once",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    room = x->o->width == 0 ? x->n : x->o->width > busy ? x->o->width - busy : 0;\n",
+          "replace": "    room = x->n;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": width: one at a time with width 1: "
+        ]
+      }
+    },
+    {
+      "name": "serial",
+      "summary": "the serial members run in the order given, not first",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    for (i = 0; i < x->n; i++)\n        if (o->members[i].serial)\n            x->mem[k++].m = &o->members[i];\n    for (i = 0; i < x->n; i++)\n        if (!o->members[i].serial)\n            x->mem[k++].m = &o->members[i];\n",
+          "replace": "    for (i = 0; i < x->n; i++)\n        x->mem[k++].m = &o->members[i];\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": serial: it runs first: "
+        ]
+      }
+    },
+    {
+      "name": "exclusive",
+      "summary": "a serial member runs beside the others",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    c->exclusive = m->m->serial || c->alone;\n",
+          "replace": "    c->exclusive = c->alone;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": serial: nothing beside it: "
+        ]
+      }
+    },
+    {
+      "name": "first",
+      "summary": "a failure under stop_on_fail does not stop the run",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        } else if (x->o->stop_on_fail) {\n",
+          "replace": "        } else if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": first: the running suite cancelled: "
+        ]
+      }
+    },
+    {
+      "name": "cancelled",
+      "summary": "a suite cancelled part way is recorded as a pass",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        c->disruption[0] = '\\0';\n        came_out(c, CANCELLED, 0, \"%s\", x->stop_reason);\n",
+          "replace": "        c->disruption[0] = '\\0';\n        came_out(c, PASS, 0, \"%s\", x->stop_reason);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": first: the running suite cancelled: "
+        ]
+      }
+    },
+    {
+      "name": "release",
+      "summary": "the claim of a suite that ended is not released",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    judge(x, c, 0);\n    release(x, c, c->cleanup);\n",
+          "replace": "    judge(x, c, 0);\n    c->claim = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": mixed: the ledger has no claim: "
+        ]
+      }
+    },
+    {
+      "name": "preparation",
+      "summary": "a failed preparation exits 1 as a failed suite does",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        rc = 3;\n",
+          "replace": "        rc = 1;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": prepare: failed: "
+        ]
+      }
+    },
+    {
+      "name": "filter",
+      "summary": "etude-legacy's lines of a suite's start and result are printed",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (!c->filter || strncmp(s, \"run: \", 5) != 0 ||",
+          "replace": "    if (1 || strncmp(s, \"run: \", 5) != 0 ||"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": mixed: no line of etude-legacy's result: "
+        ]
+      }
+    },
+    {
+      "name": "signal",
+      "summary": "a stop signal does not stop the suites that run",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        if (signalled(x) && !x->stopping)\n            stop_all(x, x->stop_reason, NULL);\n",
+          "replace": "        if (0)\n            stop_all(x, x->stop_reason, NULL);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": signal: the running suite cancelled: "
+        ]
+      }
+    },
+    {
+      "name": "running",
+      "summary": "the status record leaves out the attempts that run",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (c->state == RUNNING && c->sup != NULL) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": status: the running suite's attempt: "
+        ]
+      }
+    },
+    {
+      "name": "status",
+      "summary": "the status record is left behind when the run ends",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (x->o->status != NULL)\n        remove(x->o->status);\n",
+          "replace": "    if (0)\n        remove(x->o->status);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": status: removed at the end: "
+        ]
+      }
+    },
+    {
+      "name": "offset",
+      "summary": "a set with no lock directory runs with no port block of the caller's",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (o->locks == NULL &&\n        (offset == NULL ||",
+          "replace": "    if (0 &&\n        (offset == NULL ||"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": refused: no port block without locks: "
+        ]
+      }
+    },
+    {
+      "name": "leak",
+      "summary": "the driver does not free its members",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    free(x->prep.envp);\n    free(x->mem);\n",
+          "replace": "    free(x->prep.envp);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": mixed: the driver leaks nothing: "
+        ]
+      }
+    }
+  ]
+}
