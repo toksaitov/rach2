@@ -1398,6 +1398,22 @@ static void exec_program(int argc, char *argv[])
 }
 
 /**
+ * Stop the machine because the boot cannot go on. Never returns.
+ *
+ * The other processors stop first: until the first program runs they spin
+ * for the big lock the boot holds, and a refusal that stopped only this one
+ * would leave them so.
+ */
+static void boot_stop(void)
+{
+    arch_irq_disable();
+    smp_stop_others();
+    for (;;) {
+        arch_stop();
+    }
+}
+
+/**
  * Halt a boot that mounted no root at all, rather than open the debug shell.
  * Returns only when a root is mounted.
  *
@@ -1427,9 +1443,7 @@ static void refuse_unmounted_root(void)
     klog(KLOG_WARN, "boot",
          "refused: no file system mounted and no rach2.rescue: "
          "the debug shell authenticates nobody\n");
-    for (;;) {
-        arch_stop();
-    }
+    boot_stop();
 }
 
 static int root_spec_named(void);
@@ -1558,9 +1572,7 @@ static void boot_init_process(void)
                  "the root is mounted and this is not a rach2.rescue boot, so the "
                  "debug shell, which authenticates nobody, is not the answer to a "
                  "disk that cannot be read\n");
-            for (;;) {
-                arch_stop();
-            }
+            boot_stop();
         }
         vfs_ref_release(&ref);
     }
@@ -1586,9 +1598,7 @@ static void boot_init_process(void)
          "(boot rach2.rescue for the debug shell)\n",
          init_path);
     sched_disable();
-    for (;;) {
-        arch_stop();
-    }
+    boot_stop();
 }
 
 /* The page cache's backing over the RAM-disk module, for `rach2.fswindow`:
