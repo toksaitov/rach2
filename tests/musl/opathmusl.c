@@ -86,13 +86,18 @@ static int on_fs(int fd, long magic)
     return fstatfs(fd, &sf) == 0 && (long)sf.f_type == magic;
 }
 
-/** The number of names in /dev/pts, or -1. */
+/** The number of names in /dev/pts, or -1; 0 in a native run, which leaves
+ * the count out. */
 static int pts_count(void)
 {
-    DIR *d = opendir("/dev/pts");
+    DIR *d;
     struct dirent *de;
     int n = 0;
 
+    if (probe_native()) {
+        return 0;
+    }
+    d = opendir("/dev/pts");
     if (!d) {
         return -1;
     }
@@ -308,9 +313,9 @@ static int synth_rows(void)
         return fail("/dev/null");
     }
     close(fd);
-    before = probe_native() ? 0 : pts_count();
+    before = pts_count();
     fd = open("/dev/ptmx", O_PATH | O_RDWR);
-    if (fd < 0 || before < 0 || (!probe_native() && pts_count() != before) || !refuses_io(fd)) {
+    if (fd < 0 || before < 0 || pts_count() != before || !refuses_io(fd)) {
         return fail("/dev/ptmx allocates no terminal");
     }
     close(fd);

@@ -1141,21 +1141,19 @@ static int proc_texts(void)
     return 0;
 }
 
-int main(int argc, char **argv)
+/**
+ * Name the probe's directory and its entries under `dir`, which is taken from
+ * the working directory when it is relative. Returns 0, or -1 when the working
+ * directory cannot be read.
+ */
+static int name_files(const char *dir)
 {
-    const char *dir;
-    const char *sep;
     char where[200];
-    int given;
-    int links;
-    int fd;
+    const char *sep;
 
-    probe_args(argc, argv);
-    given = probe_words() > 0;
-    dir = given ? probe_word(1) : "/";
     if (dir[0] != '/') {
         if (getcwd(where, sizeof(where)) == NULL) {
-            return fail("the working directory");
+            return -1;
         }
         snprintf(where + strlen(where), sizeof(where) - strlen(where), "/%s", dir);
         dir = where;
@@ -1165,6 +1163,20 @@ int main(int argc, char **argv)
     snprintf(file, sizeof(file), "%s/f", base);
     snprintf(sub, sizeof(sub), "%s/s", base);
     snprintf(link_name, sizeof(link_name), "%s/l", base);
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    int given;
+    int links;
+    int fd;
+
+    probe_args(argc, argv);
+    given = probe_words() > 0;
+    if (name_files(given ? probe_word(1) : "/") != 0) {
+        return fail("the working directory");
+    }
     tidy();
     if (mkdir(base, 0755) != 0 || mkdir(sub, 0755) != 0 ||
         (fd = open(file, O_WRONLY | O_CREAT, 0644)) < 0) {

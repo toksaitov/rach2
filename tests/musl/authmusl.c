@@ -178,21 +178,12 @@ static int account_rows(void)
     return 0;
 }
 
-int main(int argc, char **argv)
+/** The descriptor limit, the host name, and, but in a native run, root's step
+ * of the real time. 0, or 1 once the failure is reported. */
+static int root_rows(void)
 {
     struct rlimit rl;
     char host[64];
-    int fd, nfd, fl;
-    uid_t ru, eu, su;
-    uid_t user;
-    gid_t group;
-
-    probe_args(argc, argv);
-    user = (uid_t)probe_id(1000);
-    group = (gid_t)probe_id(1000);
-    if (account_rows() != 0) {
-        return 1;
-    }
 
     if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
         printf("AUTHMUSL FAIL (getrlimit RLIMIT_NOFILE)\n");
@@ -213,6 +204,22 @@ int main(int argc, char **argv)
     }
     if (!probe_native() && clock_step(100000) != 0) {
         printf("AUTHMUSL FAIL (root sets the real time forward and back)\n");
+        return 1;
+    }
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    int fd, nfd, fl;
+    uid_t ru, eu, su;
+    uid_t user;
+    gid_t group;
+
+    probe_args(argc, argv);
+    user = (uid_t)probe_id(1000);
+    group = (gid_t)probe_id(1000);
+    if (account_rows() != 0 || root_rows() != 0) {
         return 1;
     }
 

@@ -434,6 +434,15 @@ static int run_with(const char *path, char *const argv[], const char *script, ch
     return WEXITSTATUS(status);
 }
 
+/** The uid of `probe` in decimal, in a static buffer. */
+static char *probe_uid_text(void)
+{
+    static char text[24];
+
+    snprintf(text, sizeof(text), "%lu", (unsigned long)PROBE_UID);
+    return text;
+}
+
 /** As `run_with`, for the shipped `adduser` on `name`. */
 static int run_adduser(const char *name, const char *script, char *report, size_t report_size)
 {
@@ -593,7 +602,6 @@ static int check_refusals(void)
     char after[4096];
     char staged[4096];
     char *argv[6];
-    char taken[24];
     size_t used;
     size_t i;
     int status;
@@ -625,8 +633,7 @@ static int check_refusals(void)
     }
 
     /* A uid already taken. */
-    snprintf(taken, sizeof(taken), "%lu", (unsigned long)PROBE_UID);
-    argv[2] = taken;
+    argv[2] = probe_uid_text();
     if (run_with(ADDUSER_PATH, argv, "", report, sizeof(report)) == 0) {
         return fail("adduser handed out a uid that was taken");
     }

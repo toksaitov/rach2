@@ -1388,6 +1388,31 @@ static int two_execs(void)
     return ok ? 0 : fail("two execs at once");
 }
 
+/**
+ * Check an execve from a thread of a forked child that has another thread:
+ * the child becomes the shell the thread runs, which exits 9. Returns 0, or 1
+ * once the failure is reported.
+ */
+static int thread_exec_row(void)
+{
+    pid_t pid;
+    int status;
+
+    pid = fork();
+    if (pid == 0) {
+        pthread_t e, s;
+
+        pthread_create(&s, NULL, idle, NULL);
+        pthread_create(&e, NULL, exec_self, NULL);
+        pthread_join(e, NULL);
+        _exit(1);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
+        return fail("execve from a thread");
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     pthread_t t[THREADS], spare;
@@ -1455,19 +1480,7 @@ int main(int argc, char **argv)
         return fail("/proc/self/task of one thread did not have three links");
     }
 
-    pid = fork();
-    if (pid == 0) {
-        pthread_t e, s;
-
-        pthread_create(&s, NULL, idle, NULL);
-        pthread_create(&e, NULL, exec_self, NULL);
-        pthread_join(e, NULL);
-        _exit(1);
-    }
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
-        return fail("execve from a thread");
-    }
-    if (two_execs() != 0 || robust_exec() != 0) {
+    if (thread_exec_row() != 0 || two_execs() != 0 || robust_exec() != 0) {
         return 1;
     }
 
