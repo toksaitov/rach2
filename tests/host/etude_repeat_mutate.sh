@@ -28,6 +28,10 @@ narrow|posix/repeat.c|        while (x->active < x->spec->width && x->next < x->
 unready|posix/repeat.c|        if (p->out.data == NULL \|\| strstr(p->out.data, ETUDE_LOAD_READY) == NULL)|        if (p->out.data == NULL)|load-broken
 undisrupted|posix/repeat.c|        } else if (s->stage == RUNNING && !s->load_cancelled) {|        } else if (0) {|load-short
 refused-retried|posix/repeat.c|    if (rc == 0 && a->outcome != ETUDE_REPEAT_PASS && !s->refused && a->try < x->spec->retries)|    if (rc == 0 && a->outcome != ETUDE_REPEAT_PASS && a->try < x->spec->retries)|load-wide
+unrun-undisrupted|posix/repeat.c|    snprintf(a->disruption, sizeof(a->disruption), "%s", reason);|    (void)reason;|load-broken load-wide admit-range admit-space case-unstarted
+end-undisrupted|posix/repeat.c|        snprintf(a->disruption, sizeof(a->disruption), "its end was %s",|        snprintf(a->reason, sizeof(a->reason), "its end was %s",|end-lost end-lost-gap end-stopped
+case-cleanup-undisrupted|posix/repeat.c|        snprintf(a->disruption, sizeof(a->disruption), "its cleanup is unconfirmed");|        snprintf(a->reason, sizeof(a->reason), "its cleanup is unconfirmed");|case-cleanup failure-cleanup
+load-cleanup-undisrupted|posix/repeat.c|            snprintf(a->disruption, sizeof(a->disruption),|            snprintf(a->reason, sizeof(a->reason),|load-cleanup
 file-kept|posix/load.c|    if (fd < 0 \|\| unlink(name) != 0) {|    if (fd < 0) {|load
 END
 }

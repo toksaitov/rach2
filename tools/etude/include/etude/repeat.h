@@ -262,9 +262,13 @@ struct etude_repeat_result {
  * is cancelled after its case has ended. The case runs under its watchdog
  * and the load under the load's bounds. An attempt passes when its case
  * exits 0 within its bounds and its cleanup is confirmed; a load that ends
- * before its case is a disruption of the attempt. An attempt that does not
- * pass is retried, under the same load, until `retries` more attempts have
- * run; each retry names the attempt it repeats, and none replaces it.
+ * before its case is a disruption of the attempt. Admission refused, a case
+ * that never starts, a lost end, a stop without a watchdog expiry and
+ * unconfirmed cleanup are also disruptions, recorded with their causes. A
+ * watchdog expiry with cleanup confirmed and its end observed stays the
+ * case's own incomplete result. An attempt that does not pass is retried,
+ * under the same load, until `retries` more attempts have run; each retry
+ * names the attempt it repeats, and none replaces it.
  *
  * Each attempt's results document and the run's totals go to the store, and
  * an attempt record for each attempt and the run record to the history. An

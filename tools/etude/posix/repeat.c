@@ -288,6 +288,7 @@ static void not_run(struct run *x, size_t ai, const char *reason)
 
     a->outcome = ETUDE_REPEAT_INCOMPLETE;
     snprintf(a->reason, sizeof(a->reason), "%s", reason);
+    snprintf(a->disruption, sizeof(a->disruption), "%s", reason);
     a->end = ETUDE_END_STOPPED;
 }
 
@@ -534,6 +535,11 @@ static void judge(struct run *x, size_t ai)
                  res->end == ETUDE_END_EXITED ? "it exited" : "it was killed by signal",
                  res->value);
     }
+    if (a->disruption[0] == '\0' &&
+        (res->end == ETUDE_END_LOST || (res->incomplete && res->expiry == ETUDE_EXPIRY_NONE) ||
+         (res->end == ETUDE_END_STOPPED && res->expiry == ETUDE_EXPIRY_NONE)))
+        snprintf(a->disruption, sizeof(a->disruption), "its end was %s",
+                 res->end == ETUDE_END_STOPPED ? "a stop" : "not observed");
 }
 
 /** Append attempt `a`'s results document, kept in the store, to `t`. */
@@ -710,11 +716,16 @@ static int complete(struct run *x, size_t ai)
 
     if (a->load_cleanup != ETUDE_CLEANUP_CONFIRMED) {
         a->cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+        if (a->disruption[0] == '\0')
+            snprintf(a->disruption, sizeof(a->disruption),
+                     "the cleanup of its load is unconfirmed");
         if (a->outcome == ETUDE_REPEAT_PASS) {
             a->outcome = ETUDE_REPEAT_INCOMPLETE;
             snprintf(a->reason, sizeof(a->reason), "the cleanup of its load is unconfirmed");
         }
     }
+    if (a->cleanup != ETUDE_CLEANUP_CONFIRMED && a->disruption[0] == '\0')
+        snprintf(a->disruption, sizeof(a->disruption), "its cleanup is unconfirmed");
     etude_history_now(&s->done);
     rc = write_attempt(x, ai);
     if (s->cas != NULL)
@@ -760,10 +771,11 @@ static int finished(struct run *x, struct etude_supervised *f)
             snprintf(reason, sizeof(reason), "it ended, %s %d",
                      res->end == ETUDE_END_EXITED ? "exit status" : "end", res->value);
         if (s->stage == LOADING) {
-            snprintf(a->reason, sizeof(a->reason), "the load %s was not ready: %s",
-                     load_of(x, a)->load_id, reason);
-            a->outcome = ETUDE_REPEAT_INCOMPLETE;
-            a->end = ETUDE_END_STOPPED;
+            char why[200];
+
+            snprintf(why, sizeof(why), "the load %s was not ready: %s", load_of(x, a)->load_id,
+                     reason);
+            not_run(x, ai, why);
             release_unrun(x, ai);
             s->stage = DONE;
         } else if (s->stage == RUNNING && !s->load_cancelled) {

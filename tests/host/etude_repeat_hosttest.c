@@ -34,6 +34,9 @@
  * beside their cases, reserved in the ledger while the case runs, and end
  * with their cleanup confirmed; a load that is never ready, one that ends
  * before its case and one that cannot fit beside its case are told apart.
+ * Modelled supervisor results cover lost and stopped ends and unconfirmed
+ * cleanup; modelled admission covers a ledger with no recoverable room.
+ * Each records a disruption in the history, while a case's timeout does not.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -75,6 +78,61 @@ static int fails;
 
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
+
+/* Results supplied to the driver after the real supervisor has finished. */
+enum result_fault {
+    ORDINARY,
+    LOST,
+    LOST_GAP,
+    STOPPED_END,
+    CASE_CLEANUP,
+    LOAD_CLEANUP,
+    FAILURE_CLEANUP
+};
+static enum result_fault result_fault;
+static int admission_errno;
+
+/** Supply one finished result with a lost end or unconfirmed cleanup. */
+static const struct etude_supervised_result *driver_result(const struct etude_supervised *a)
+{
+    const struct etude_supervised_result *r = etude_supervised_result(a);
+    static struct etude_supervised_result changed;
+    size_t n = strlen(r->attempt_id);
+    int load = n >= 5 && strcmp(r->attempt_id + n - 5, ":load") == 0;
+
+    if (!r->finished || result_fault == ORDINARY || load != (result_fault == LOAD_CLEANUP))
+        return r;
+    changed = *r;
+    if (result_fault == LOST || result_fault == LOST_GAP || result_fault == STOPPED_END) {
+        changed.end = result_fault == STOPPED_END ? ETUDE_END_STOPPED : ETUDE_END_LOST;
+        changed.value = -1;
+        changed.incomplete = 1;
+        if (result_fault == LOST_GAP) {
+            changed.expiry = ETUDE_EXPIRY_GAP;
+            changed.bound_us = 300 * MS;
+        }
+    } else {
+        changed.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
+        if (result_fault == FAILURE_CLEANUP)
+            changed.value = 1;
+    }
+    return &changed;
+}
+
+static int driver_repeat_run(const struct etude_repeat_spec *spec,
+                             const struct etude_repeat_site *site, struct etude_repeat_result *r);
+static void driver_repeat_free(struct etude_repeat_result *r);
+
+#define etude_repeat_run           driver_repeat_run
+#define etude_repeat_result_free   driver_repeat_free
+#define etude_supervised_result(a) driver_result(a)
+#define etude_ledger_admit(...) \
+    (admission_errno ? (errno = admission_errno, -1) : etude_ledger_admit(__VA_ARGS__))
+#include "posix/repeat.c"
+#undef etude_ledger_admit
+#undef etude_supervised_result
+#undef etude_repeat_result_free
+#undef etude_repeat_run
 
 /* ---- The cases' program and the loads. ---- */
 
@@ -356,11 +414,26 @@ static int run(const char *run_id, const struct etude_repeat_spec *spec,
     site.machine_id = "m1";
     site.boot_id = "b1";
     site.budget_policy = budget;
-    rc = etude_repeat_run(spec, &site, r);
+    rc = result_fault != ORDINARY || admission_errno ? driver_repeat_run(spec, &site, r)
+                                                     : etude_repeat_run(spec, &site, r);
     if (rc != 0)
         printf("etude-repeat-test: run %s: %s\n", run_id, strerror(errno));
     if (etude_history_close(h) != 0)
         rc = -1;
+    if (result_fault == CASE_CLEANUP || result_fault == LOAD_CLEANUP ||
+        result_fault == FAILURE_CLEANUP) {
+        size_t i;
+
+        CHECK(etude_ledger_list(l, count_visit, &entries) == 0 && entries == 1, "cleanup-claim");
+        for (i = 0; i < r->nattempts; i++) {
+            char id[288];
+
+            snprintf(id, sizeof(id), "%s%s", r->attempts[i].attempt_id,
+                     result_fault == LOAD_CLEANUP ? ":load" : "");
+            CHECK(etude_ledger_finish(l, id, ETUDE_CLEANUP_CONFIRMED) == 0, "cleanup-claim");
+        }
+        entries = 0;
+    }
     if (etude_ledger_list(l, count_visit, &entries) != 0 || entries != 0) {
         printf("etude-repeat-test: run %s left %lu claims in the ledger\n", run_id,
                (unsigned long)entries);
@@ -740,6 +813,39 @@ static char *stored(const struct eh_json *blob_ref)
     return bytes;
 }
 
+/** Require each attempt's disruption in the history and in its tally. */
+static void disrupted_history(const char *run_id, const struct etude_repeat_result *r,
+                              const char *why, int disrupted)
+{
+    struct cmp_history h;
+    struct etude_repeat_tally *t = NULL;
+    char name[64], *path;
+    size_t i, n = 0;
+
+    snprintf(name, sizeof(name), "%s.jsonl", run_id);
+    path = (char *)fix_path(name);
+    if (cmp_load(&h, SCHEMA, &path, 1) != 0) {
+        CHECK(0, run_id);
+        return;
+    }
+    CHECK(h.note_count == 0, run_id);
+    for (i = 0; i < r->nattempts; i++) {
+        const struct eh_json *d = data_of(&h, r->attempts[i].record_id);
+        const struct eh_json *events = eh_json_get(eh_json_get(d, "result"), "disruptions");
+
+        CHECK(events != NULL && (events->child != NULL) == disrupted, run_id);
+        if (disrupted)
+            CHECK(events != NULL && events->child != NULL &&
+                      strstr(events->child->string, why) != NULL,
+                  run_id);
+    }
+    CHECK(etude_repeat_tally(&h, run_id, &t, &n) == 0 && n >= 1, run_id);
+    for (i = 0; i < n; i++)
+        CHECK(t[i].disrupted == (disrupted ? r->nattempts : 0) && !t[i].flaky, run_id);
+    free(t);
+    cmp_free(&h);
+}
+
 /**
  * The history of the race keeps each failure beside the retry that passed:
  * the retry names the attempt it repeats, the run's item has both and is a
@@ -864,6 +970,7 @@ static void test_width(void)
                   strstr(r.attempts[i].reason, "gap bound") != NULL &&
                   r.attempts[i].cleanup == ETUDE_CLEANUP_CONFIRMED,
               "width");
+    disrupted_history("width-1", &r, "", 0);
     etude_repeat_result_free(&r);
 }
 
@@ -943,6 +1050,7 @@ static void test_load(void)
                   strstr(r.attempts[i].reason, "was not ready") != NULL,
               "load-broken");
     CHECK(stat(shared("marked"), &st) != 0, "load-broken");
+    disrupted_history("load-broken", &r, "was not ready", 1);
     etude_repeat_result_free(&r);
 
     cases[0] = make_case(6, "wait-load", "none", 1, &WD, CASE_RES);
@@ -962,7 +1070,65 @@ static void test_load(void)
     CHECK(r.outcome == ETUDE_REPEAT_INCOMPLETE && r.nattempts == 1, "load-wide");
     CHECK(r.nattempts == 1 && strstr(r.attempts[0].reason, "exceed") != NULL, "load-wide");
     CHECK(stat(shared("marked"), &st) != 0, "load-wide");
+    disrupted_history("load-wide", &r, "exceed", 1);
     etude_repeat_result_free(&r);
+}
+
+/** Runner faults keep their causes as disruptions, including in history. */
+static void test_disruptions(void)
+{
+    static const struct {
+        const char *run_id, *why;
+        enum result_fault fault;
+    } rows[] = {{"end-lost", "not observed", LOST},
+                {"end-lost-gap", "not observed", LOST_GAP},
+                {"end-stopped", "a stop", STOPPED_END},
+                {"case-cleanup", "its cleanup is unconfirmed", CASE_CLEANUP},
+                {"load-cleanup", "the cleanup of its load is unconfirmed", LOAD_CLEANUP},
+                {"failure-cleanup", "its cleanup is unconfirmed", FAILURE_CLEANUP},
+                {"admit-range", "machine's limits", ORDINARY},
+                {"admit-space", "only a person can release", ORDINARY},
+                {"case-unstarted", "could not start", ORDINARY}};
+    static const struct etude_ledger_res TOO_WIDE[] = {{"cpu_millis", 5000}};
+    struct etude_repeat_case c;
+    struct etude_repeat_spec spec;
+    struct etude_repeat_result r;
+    size_t i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        c = make_case(0, "mark", "none", 1, &WD, CASE_RES);
+        memset(&spec, 0, sizeof(spec));
+        spec.width = 1;
+        spec.cases = &c;
+        spec.ncases = 1;
+        spec.loads = LOADS;
+        spec.nloads = 1;
+        if (rows[i].fault == LOAD_CLEANUP)
+            spec.load_percent = 100;
+        if (strcmp(rows[i].run_id, "admit-range") == 0) {
+            c.res = TOO_WIDE;
+            spec.retries = 1;
+        }
+        if (strcmp(rows[i].run_id, "admit-space") == 0) {
+            admission_errno = ENOSPC;
+            spec.retries = 1;
+        }
+        if (strcmp(rows[i].run_id, "case-unstarted") == 0)
+            argv_of[0][0] = "/nonexistent/etude-repeat-case";
+        result_fault = rows[i].fault;
+        fresh_shared();
+        CHECK(run(rows[i].run_id, &spec, CAP, 3, load_argv, &r) == 0, rows[i].run_id);
+        CHECK(r.nattempts == 1 &&
+                  r.outcome == (result_fault == FAILURE_CLEANUP ? ETUDE_REPEAT_FAILURE
+                                                                : ETUDE_REPEAT_INCOMPLETE),
+              rows[i].run_id);
+        CHECK(r.nattempts == 1 && strstr(r.attempts[0].disruption, rows[i].why) != NULL,
+              rows[i].run_id);
+        disrupted_history(rows[i].run_id, &r, rows[i].why, 1);
+        etude_repeat_result_free(&r);
+        result_fault = ORDINARY;
+        admission_errno = 0;
+    }
 }
 
 /** Leave through the fixtures' cleanup after a signal. */
@@ -1002,6 +1168,7 @@ int main(int argc, char **argv)
     test_history();
     test_width();
     test_load();
+    test_disruptions();
     etude_repeat_result_free(&bad_run);
     etude_repeat_result_free(&again_run);
     etude_repeat_result_free(&good_run);
