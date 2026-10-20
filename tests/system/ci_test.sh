@@ -5,13 +5,17 @@
 # issue, bisection runs, their time limits and continuation, the run whose
 # issue bisection labels intermittent, a report and a bisection that
 # overlap, the kind an older commit's run.sh takes, a refused run in
-# bisection, a bisection whose issue has been closed, verdict errors, the
-# statuses of a full run of chosen suites, the attempts that etude's history
-# of a run lists in its issue, and an intermittent issue that a passing run
-# leaves open.
+# bisection, a run that passed without a suite's result, a bisection whose
+# issue has been closed, verdict errors, the statuses of a full run of chosen
+# suites, the attempts that etude's history of a run lists in its issue, an
+# intermittent issue that a passing run leaves open, and bisection on a
+# machine where etude admits tests.
 # The scripts run in a private tree with stand-ins for git, gh, make,
 # timeout, the clock and etude's history_failures. Each row runs in a
-# subshell of its own, and every row runs whatever an earlier one gave.
+# subshell of its own, and every row runs whatever an earlier one gave. The
+# rows of an admitting machine use the tree's etude-bridge, which the test
+# builds, a ledger and lock files of their own, and runutil, whose host lock
+# the stand-in tests/run takes as the real one does.
 # CI_SCRIPTS names the directory report.sh and bisect.sh are copied from, by
 # default the tree's tools/ci; tests/proofs/ci.json runs the rows against
 # copies with faults in them.
@@ -25,9 +29,18 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-test.XXXXXX")
-mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests"
+mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests/system" "$work/state" "$work/locks"
 cp "${CI_SCRIPTS:-$repo/tools/ci}/report.sh" "$work/report.sh"
 cp "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" "$work/bisect.sh"
+make -s -C "$repo" build/tools/etude/etude-bridge >&2 ||
+    { echo 'ci-test: etude-bridge could not be built' >&2; exit 1; }
+cc -O2 -o "$work/runutil" "$repo/tests/system/runner/runutil.c" ||
+    { echo 'ci-test: runutil could not be built' >&2; exit 1; }
+bridge=$repo/build/tools/etude/etude-bridge
+printf '%s\n' 'default|qemu|core' 'style|-|core' 'host|-|core' 'runner|-|full' \
+    'bigmem|qemu|full||6144|' > "$work/tree/tests/registry"
+# shellcheck disable=SC2016 # the line is make's, not the shell's
+echo 'PORT = $(shell echo $$((2222 + $${RACH2_PORT_OFFSET:-0})))' > "$work/tree/tests/system/suites.mk"
 
 cat > "$work/bin/git" <<'EOF'
 #!/bin/sh
@@ -95,9 +108,18 @@ case "$1 $2" in
     *) exit 2 ;;
 esac
 EOF
+# The stand-ins of make and tests/run note, in admitted, the port block, the
+# workers, the guest memory and the memory of the claim in the ledger that
+# each ran with.
+cat > "$work/bin/admitted" <<'EOF'
+#!/bin/sh
+claim=$(sed -n 's/^resource memory_bytes //p' "$CI_TEST_WORK/ledger/claims" 2>/dev/null)
+echo "$1 offset=${RACH2_PORT_OFFSET:-} workers=${RACH2_WORKERS:-} memory=${RACH2_MEMORY_MIB:-} claim=$claim" >> "$CI_TEST_WORK/admitted"
+EOF
 cat > "$work/bin/make" <<'EOF'
 #!/bin/sh
 echo make >> "$CI_TEST_WORK/events"
+admitted make
 [ -z "${CI_TEST_MAKE_FAIL:-}" ]
 EOF
 cat > "$work/bin/history_failures" <<'EOF'
@@ -110,22 +132,52 @@ done
 [ -z "${CI_TEST_HISTORY_OUT:-}" ] || printf '%s\n' "$CI_TEST_HISTORY_OUT"
 exit "${CI_TEST_HISTORY_STATUS:-0}"
 EOF
+# The stand-in tests/run takes the host lock and a port block as the real one
+# does, through runutil, unless RACH2_PORT_OFFSET names a block: alone for
+# bigmem and shared otherwise. It prints a result for each suite, a set's
+# from the registry, or for `silent` none.
 cat > "$work/tree/tests/run" <<'EOF'
 #!/bin/sh
+if [ -z "${RACH2_PORT_OFFSET:-}" ]; then
+    RACH2_HOST_LOCK=shared
+    [ "$1" != bigmem ] || RACH2_HOST_LOCK=alone
+    export RACH2_HOST_LOCK
+    exec "$CI_TEST_WORK/runutil" ports "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
+fi
 current=$(cat "$CI_TEST_WORK/current")
 echo "tests $* $current" >> "$CI_TEST_WORK/events"
+admitted tests
 case $CI_TEST_RUN/$current in
     fail/bad) echo "run: $1: FAIL in 1s"; echo 'run: result: failed'; exit 1 ;;
     refuse/bad) echo "run: result: refused: unknown suite '$1'" >&2; exit 2 ;;
+    silent/bad) echo 'run: result: all 1 suites passed'; exit 0 ;;
 esac
-echo "run: $1: PASS in 1s"
-echo 'run: result: all 1 suites passed'
+for s in "$@"; do
+    [ "$s" != core ] || s=$(awk -F'|' '$3 == "core" { print $1 }' tests/registry)
+    for n in $s; do echo "run: $n: PASS in 1s"; done
+done
+echo 'run: result: all suites passed'
 EOF
+# The stand-in timeout(1) notes the limit and runs the command without it,
+# or, with CI_TEST_LIMIT, ends it with TERM after that many seconds and exits
+# 124, as timeout does, so that a run that waits for ever fails its row.
 cat > "$work/bin/timeout" <<'EOF'
 #!/bin/sh
 echo "$3" >> "$CI_TEST_WORK/limits"
 shift 3
-exec "$@"
+[ -n "${CI_TEST_LIMIT:-}" ] || exec "$@"
+exec perl -e '
+    my ($limit, @command) = @ARGV;
+    my $hit = 0;
+    my $pid = fork;
+    defined $pid or die "timeout: fork: $!\n";
+    if ($pid == 0) { exec @command or exit 127 }
+    $SIG{ALRM} = sub { $hit = 1; kill "TERM", $pid };
+    alarm $limit;
+    waitpid $pid, 0;
+    exit 124 if $hit;
+    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+' "$CI_TEST_LIMIT" "$@"
 EOF
 cat > "$work/bin/date" <<'EOF'
 #!/bin/sh
@@ -149,6 +201,10 @@ EOF
 runsh 'core|full'
 chmod +x "$work/bin/"* "$work/tree/tests/run"
 CI_TEST_WORK=$work
+ETUDE_STATE=$work/state
+RACH2_PORT_DIR=$work/locks
+unset RACH2_PORT_OFFSET SSH_TEST_PORT RACH2_WORKERS RACH2_MEMORY_MIB RACH2_CPUS GITHUB_RUN_ATTEMPT
+export ETUDE_STATE RACH2_PORT_DIR
 GITHUB_REPOSITORY=test/rach2
 GITHUB_SERVER_URL=https://example.invalid
 GITHUB_RUN_ID=1
@@ -486,7 +542,8 @@ handoff()
 }
 
 # suite RESULT: bisect the runner suite when tests/run on BAD passes, fails,
-# or refuses, and check that only a failure it reports is counted as one.
+# refuses, or passes without the suite's result, and check that only a
+# failure it reports is counted as one, and only a result it gives as a pass.
 suite()
 {
     CI_TEST_RUN=$1 CI_TEST_GH_FAIL=
@@ -499,13 +556,72 @@ suite()
               verdict='--add-label intermittent' want=0 ;;
         fail) printf 'make\ntests runner bad\nmake\ntests runner bad\nmake\ntests runner good\n' > "$work/expected"
               verdict='is the first commit that fails .*; its parent, good, passes' want=0 ;;
-        refuse) printf 'make\ntests runner bad\n' > "$work/expected"
+        refuse|silent) printf 'make\ntests runner bad\n' > "$work/expected"
                 verdict='unresolved: bad could not be tested again' want=1 ;;
     esac
     [ "$status" = "$want" ] || return 1
     cmp -s "$work/expected" "$work/events" || return 1
     grep -q -- "$verdict" "$work/gh.log"
 }
+
+# enroll [LEDGER]: make this a machine where etude admits tests, with eight
+# processors, 8 GiB and the ledger LEDGER, by default a new one in the work.
+enroll()
+{
+    rm -rf "$work/ledger" "$work/admitted"
+    mkdir "$work/ledger"
+    printf 'etude-machine 1\nhost test\nplatform linux x86_64\ncpus 8\nmemory_bytes 8589934592\nledger %s\n' \
+        "${1:-$work/ledger}" > "$work/state/machine"
+}
+
+# admits CASE: bisect a failure of bigmem on a machine where etude admits
+# tests, each test bounded at 20 seconds, and require for CASE:
+#   bigmem     each build and run a claim in the ledger, the build's a
+#              quarter of the machine and a run's four thirds of bigmem's
+#              memory, which takes the host alone; each run with a port block,
+#              two workers and bigmem's memory; and the commit named. A run
+#              that took the host lock itself would wait for its own claim's.
+#   refused    a failed build, whose claims the bridge refuses: nothing runs
+#              and the range is unresolved, not a failed build.
+#   unbridged  no bridge given: nothing runs and the range is unresolved.
+#   ports      a commit whose suites do not read RACH2_PORT_OFFSET: the build
+#              runs, no suite, and the range is unresolved.
+admits()
+(
+    start
+    enroll
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=fail CI_TEST_LIMIT=20
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN CI_TEST_LIMIT
+    name=$1 item=bigmem
+    set -- -e "$bridge"
+    case $name in
+        refused) : > "$work/file"; enroll "$work/file"; item=build ;;
+        unbridged) set -- ;;
+        ports) mv tests/system/suites.mk "$work/suites.mk" ;;
+    esac
+    status=0
+    sh "$work/bisect.sh" "$@" core i686 good bad 7 "$item" > "$work/bisect.log" 2>&1 || status=$?
+    rm -f "$work/state/machine" "$work/file"
+    [ ! -f "$work/suites.mk" ] || mv "$work/suites.mk" tests/system/suites.mk
+    case $name in
+        bigmem)
+            [ "$status" = 0 ] || return 1
+            printf 'make\ntests bigmem bad\nmake\ntests bigmem bad\nmake\ntests bigmem good\n' > "$work/expected"
+            cmp -s "$work/expected" "$work/events" || return 1
+            grep -q 'is the first commit that fails .*; its parent, good, passes' "$work/gh.log" || return 1
+            [ "$(grep -c '^make offset= workers=2 memory=1536 claim=2147483648$' "$work/admitted")" = 3 ] || return 1
+            [ "$(grep -c '^tests offset=[0-9]* workers=2 memory=6144 claim=8589934592$' "$work/admitted")" = 3 ] ;;
+        refused)
+            [ "$status" = 1 ] && [ ! -s "$work/events" ] || return 1
+            grep -q 'unresolved: bad could not be tested again' "$work/gh.log" ;;
+        unbridged)
+            [ "$status" = 1 ] && [ ! -s "$work/events" ] || return 1
+            grep -q 'unresolved: this machine admits tests through etude' "$work/gh.log" ;;
+        ports)
+            [ "$status" = 1 ] && [ "$(cat "$work/events")" = make ] || return 1
+            grep -q 'unresolved: bad could not be tested again' "$work/gh.log" ;;
+    esac
+)
 
 # attempts CASE: report a core run whose i686 half kept etude's history,
 # which the stand-in reader judges, and whose x86_64 half passed with no
@@ -617,8 +733,9 @@ $assertion
 # run.sh knows only that, continue a bisection in a new run, count only a
 # reported failure of the runner suite as one, set the statuses of a run of
 # chosen suites apart from a full run's, call no history reader for a result
-# without etude's history, and report the attempts that a history lists. Each
-# row that fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
+# without etude's history, report the attempts that a history lists, and
+# bisect on a machine where etude admits tests. Each row that fails is
+# printed as `ci-test: failed: ROW ARGS: the row fails`.
 rows()
 {
     rm -f "$work/reader.log"
@@ -651,7 +768,7 @@ rows()
     row handoff
     row closed
     row chosen
-    for result in pass fail refuse; do
+    for result in pass fail refuse silent; do
         row suite "$result"
     done
     if [ -e "$work/reader.log" ]; then
@@ -660,6 +777,9 @@ rows()
     fi
     for case in flaky repeated hidden unread unbuilt kept; do
         row attempts "$case"
+    done
+    for case in bigmem refused unbridged ports; do
+        row admits "$case"
     done
     return "$failed"
 }
@@ -679,4 +799,4 @@ if ! rows; then
     echo 'ci-test: result: fail: ci report, hold or bisection' >&2
     exit 1
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history and an intermittent issue kept open'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open and bisection where etude admits tests'

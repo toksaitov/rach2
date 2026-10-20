@@ -360,8 +360,8 @@
       "edits": [
         {
           "file": "tools/ci/bisect.sh",
-          "find": "        if limited sh tools/ci/run.sh \"$here\" \"$log.run\" >> \"$log.log\" 2>&1; then\n",
-          "replace": "        if sh tools/ci/run.sh \"$here\" \"$log.run\" >> \"$log.log\" 2>&1; then\n"
+          "find": "    [ -n \"$ledger\" ] || { limited \"$@\"; return; }\n",
+          "replace": "    [ -n \"$ledger\" ] || { \"$@\"; return; }\n"
         }
       ],
       "fails": {
@@ -521,6 +521,92 @@
         "status": 1,
         "lines": [
           "ci-test: failed: lost: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "unadmitted",
+      "summary": "a machine where etude admits tests bisected without claims",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    [ -n \"$ledger\" ] || { limited \"$@\"; return; }\n",
+          "replace": "    limited \"$@\"; return\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: admits bigmem: the row fails",
+          "ci-test: failed: admits refused: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "selflock",
+      "summary": "a run through the bridge without a port block, which takes the host lock its claim holds",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        ports=-p\n",
+          "replace": "        ports=\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: admits bigmem: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "refusalstatus",
+      "summary": "a refusal of the bridge read as the command's status",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    [ \"$(cat \"$log.bridge\" 2>/dev/null)\" = \"exited $rc\" ] || return 125\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: admits refused: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "unsized",
+      "summary": "a run's claim not sized by the largest suite",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        [ \"$most\" -le \"$guest\" ] || guest=$most\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: admits bigmem: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "silentpass",
+      "summary": "a run that passed without a suite's result taken for a pass",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "                 grep -q \"^run: $s: PASS in \" \"$log.log\" || {\n",
+          "replace": "                 true || {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: suite silent: the row fails"
         ]
       }
     }

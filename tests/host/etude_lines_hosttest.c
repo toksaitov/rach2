@@ -14,7 +14,8 @@
  * of no suite, a suite of no case, a cancelled run, and run records that
  * disagree with their attempts. The real tools/ci/run.sh then reads the
  * lines, through a tests/run that runs the formatter, and the real suites
- * function of tools/ci/bisect.sh judges them.
+ * function of tools/ci/bisect.sh judges them, with a registry whose core
+ * tier is the map's suites, as the tested commit's would be.
  *
  * The status writer then records a run's attempts from real watchdogs, and
  * the ledger gets real claims and requests: a claim of this process, one
@@ -477,8 +478,13 @@ static void make_tree(void)
     put("tree/bisect.sh",
         "#!/bin/sh\n"
         "limited() { \"$@\"; }\n"
+        "ledger=\n"
         "log=$1\n"
-        "eval \"$(awk '/^suites\\(\\) /,/^}/' \"$ETUDE_LINES_REPO/tools/ci/bisect.sh\")\"\n"
+        "mkdir -p \"$log.tree/tests\" && ln -s \"$PWD/tests/run\" \"$log.tree/tests/run\" &&\n"
+        "    awk 'NF && !/^#/ { print $1 \"|qemu|core\" }' \"$ETUDE_LINES_MAP\" \\\n"
+        "        > \"$log.tree/tests/registry\" && cd \"$log.tree\" || exit 3\n"
+        "eval \"$(awk '/^(members|admitted|suites)\\(\\) /,/^}/' "
+        "\"$ETUDE_LINES_REPO/tools/ci/bisect.sh\")\"\n"
         "suites core\n",
         0755);
 }

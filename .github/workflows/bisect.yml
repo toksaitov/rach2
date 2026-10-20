@@ -15,8 +15,11 @@
 # `night`, the kind of the nightly runs that full runs replaced, which a
 # bisection started before them passes on. The job runs master's copy of the
 # script from outside the tree, since the script checks out each commit it
-# tests. The run's title names the issue, by which the manager finds and
-# cancels the run of an issue that has been closed.
+# tests, and builds master's etude in the cache of etude's versions, also
+# outside the tree, so that a machine where etude admits tests runs each
+# test through that version's etude-bridge. The run's title names the
+# issue, by which the manager finds and cancels the run of an issue that has
+# been closed.
 name: Bisect a failure
 run-name: 'Bisect #${{ inputs.issue }}: ${{ inputs.items }} on ${{ inputs.arch }}'
 
@@ -90,6 +93,11 @@ jobs:
           case "$ITEMS" in *[!a-z0-9\ -]*) echo "bisect: refused: items '$ITEMS'" >&2; exit 2 ;; esac
           case "$CONFIRMED" in '') set -- ;; yes) set -- -c ;; *) echo "bisect: refused: confirmed '$CONFIRMED'" >&2; exit 2 ;; esac
           case "$RUN" in '') ;; *[!0-9]*) echo "bisect: refused: run '$RUN'" >&2; exit 2 ;; *) set -- "$@" -r "$RUN" ;; esac
+          if version=$(sh tools/etude/version.sh -l); then
+              set -- "$@" -e "${version##* }/bin/etude-bridge"
+          else
+              echo "bisect: etude could not be built, so a machine where etude admits tests cannot bisect" >&2
+          fi
           cp tools/ci/bisect.sh "$RUNNER_TEMP/bisect.sh"
           # shellcheck disable=SC2086 # the items are one word each
           sh "$RUNNER_TEMP/bisect.sh" "$@" -m 700 "$KIND" "$ARCH_IN" "$GOOD" "$BAD" "$ISSUE" $ITEMS

@@ -3,7 +3,7 @@
 # tools/ci/bisect.sh: find the commit that made a ci failure, and say so on
 # its issue.
 #
-#   tools/ci/bisect.sh [-c] [-m MINUTES] [-r RUN]
+#   tools/ci/bisect.sh [-c] [-e BRIDGE] [-m MINUTES] [-r RUN]
 #                      KIND ARCH GOOD BAD ISSUE ITEM...
 #
 # GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or
@@ -21,14 +21,15 @@
 # minutes, so that a run too slow for ci is too slow here; timeout(1) stops
 # it as it stops ci's. A test passes, fails, or cannot be made: a commit
 # that cannot be checked out, that does not build when the failure is a
-# suite's, or whose tests/run refuses or stops before its final
-# `run: result: failed` is untestable, and an untestable commit ends the
-# search with the range unresolved. BAD is tested first, unless -c says that
-# an earlier run did so: a failure that does not repeat is labelled
-# `intermittent` and the issue stays open. Otherwise the first-parent
-# commits between GOOD and BAD are halved until one fails and its parent
-# passes, and both are tested once more; the commit is named only when both
-# results repeat.
+# suite's, or whose tests/run refuses, stops before its final
+# `run: result: failed`, or passes without a `run: NAME: PASS in` line for
+# each suite asked for, a set's as the commit's tests/registry lists them,
+# is untestable, and an untestable commit ends the search with the range
+# unresolved. BAD is tested first, unless -c says that an earlier run did
+# so: a failure that does not repeat is labelled `intermittent` and the
+# issue stays open. Otherwise the first-parent commits between GOOD and BAD
+# are halved until one fails and its parent passes, and both are tested once
+# more; the commit is named only when both results repeat.
 #
 # RUN is the ID of the ci run that started the bisection. With -r, a failure
 # that does not repeat is labelled `intermittent` only when the newest
@@ -48,15 +49,39 @@
 # closed, since a fix has landed, it stops with status 0 and no comment.
 # GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
 #
+# A machine that etude admits tests on has the record `machine` that
+# tools/etude/deploy.sh keeps in ETUDE_STATE, by default
+# `${XDG_STATE_HOME:-$HOME/.local/state}/etude`. There each build and each run
+# of a test is a claim in the record's ledger, made through BRIDGE, the
+# etude-bridge of a version built outside the tree, which -e names; without
+# -e the bisection is unresolved. A claim is a quarter of the machine's
+# processors, memory and disk, the disk being the file system of the ledger.
+# The bridge waits for it and for the old runner's host lock, under
+# RACH2_PORT_DIR or /tmp, until the test's limit, and gives a run a port
+# block of its own in RACH2_PORT_OFFSET, so that the commit's tests/run
+# takes neither lock and cannot wait for the host lock that its own claim
+# holds. The run is given RACH2_WORKERS, the suites the claim's processors
+# hold as tests/run counts them, and RACH2_MEMORY_MIB, three quarters of its
+# memory, or the most that a suite of the test declares in the commit's
+# tests/registry when that is more; the claim is four thirds of that bound,
+# and a claim of more than half the machine's memory takes the host alone,
+# as the bridge's own rule says. A claim that the bridge refuses or whose end
+# it cannot confirm, a run of a commit whose tests/system/suites.mk does not
+# read RACH2_PORT_OFFSET, and one of a commit without tests/registry are
+# untestable. On a machine without the record, each command runs as it is,
+# under the commit's own locks.
+#
 set -u
 
-usage="usage: tools/ci/bisect.sh [-c] [-m MINUTES] [-r RUN] KIND ARCH GOOD BAD ISSUE ITEM..."
+usage="usage: tools/ci/bisect.sh [-c] [-e BRIDGE] [-m MINUTES] [-r RUN] KIND ARCH GOOD BAD ISSUE ITEM..."
 confirmed=""
+bridge=""
 minutes=""
 run=""
-while getopts cm:r: opt; do
+while getopts ce:m:r: opt; do
     case $opt in
         c) confirmed=yes ;;
+        e) bridge=$OPTARG ;;
         m) minutes=$OPTARG ;;
         r) run=$OPTARG ;;
         *) echo "$usage" >&2; exit 2 ;;
@@ -188,13 +213,96 @@ handoff() { # handoff GOOD BAD
     exit 0
 }
 
-# Run tests/run with ARGS, its output on the log: 0 when it passes, 1 when it
-# ran its suites and failed, 2 when it refused or stopped before its result.
+# Print the suites that tests/run runs for ARGS in the tested commit, one a
+# line: a set's suites of ARCH, from the commit's tests/registry, or the
+# names themselves; status 1 for a set in a commit without the registry.
+members() { # members ARGS...
+    for name in "$@"; do
+        case $name in
+            core|all)
+                [ -f tests/registry ] || return 1
+                awk -F'|' -v a="$ARCH" -v set="$name" '
+                    /^[a-z]/ && (set == "all" || $3 == "core") &&
+                        ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
+                ' tests/registry ;;
+            *) echo "$name" ;;
+        esac
+    done
+}
+
+# Print the most guest memory, in MiB, that a suite of the current test
+# declares in the tested commit's tests/registry, 128 for one that declares
+# none, as tests/run reads it; status 1 for a commit without the registry.
+largest() {
+    # shellcheck disable=SC2086 # a suite name is one word by format
+    case $run_kind in
+        core) set -- style host core ;;
+        full) set -- all ;;
+        *) set -- $test_items $test_set ;;
+    esac
+    names=$(members "$@") && [ -f tests/registry ] || {
+        echo "ci: bisect: untestable: the commit has no tests/registry to size its claim" >&2
+        return 1
+    }
+    printf '%s\n' "$names" | awk -F'|' '
+        NR == FNR { asked[$0] = 1; next }
+        /^[a-z]/ && ($1 in asked) { m = $5 ~ /^[0-9]+$/ ? $5 : 128; if (m > most) most = m }
+        END { print most + 0 }
+    ' - tests/registry
+}
+
+# Run COMMAND, a path, in the tested commit under timeout(1) until the end of
+# the current test, and return its status, 124 or 137 at the limit. Where
+# the machine admits tests through etude, the command runs through the
+# bridge as a claim, a `run` with a port block, as the header says, and the
+# status is 125 when the commit cannot be run so, or when the bridge refused
+# the claim or could not confirm the command's end.
+admitted() { # admitted build|run COMMAND...
+    how=$1; shift
+    [ -n "$ledger" ] || { limited "$@"; return; }
+    step=$((step + 1))
+    guest=$((share_memory * 3 / 4 / 1048576))
+    ports=
+    if [ "$how" = run ]; then
+        grep -q RACH2_PORT_OFFSET tests/system/suites.mk 2>/dev/null || {
+            echo "ci: bisect: untestable: the commit's suites do not move their ports by RACH2_PORT_OFFSET" >&2
+            return 125
+        }
+        most=$(largest) || return 125
+        [ "$most" -le "$guest" ] || guest=$most
+        ports=-p
+    fi
+    RACH2_MEMORY_MIB=$guest; export RACH2_MEMORY_MIB
+    left=$((test_end - $(date +%s)))
+    [ "$left" -gt 0 ] || left=1
+    rm -f "$log.bridge"
+    # shellcheck disable=SC2086 # ports is empty or one option
+    limited "$bridge" $ports -d "$locks" -w "$left" -r "$log.bridge" "$ledger" \
+        "bisect:$GITHUB_RUN_ID:${GITHUB_RUN_ATTEMPT:-1}:$step" "$account" shared \
+        "$share_cpu,$((guest * 1048576 * 4 / 3)),$share_disk" "$capacity" "$left" "$@"
+    rc=$?
+    case $rc in
+        124|137) return "$rc" ;;
+    esac
+    [ "$(cat "$log.bridge" 2>/dev/null)" = "exited $rc" ] || return 125
+    return "$rc"
+}
+
+# Run tests/run with ARGS, its output on the log: 0 when it passes with a
+# result line for each suite of ARGS, 1 when it ran its suites and failed, 2
+# when it refused, stopped before its result or left a suite without one.
 suites() { # suites ARGS...
-    limited tests/run "$@" >> "$log.log" 2>&1
+    admitted run tests/run "$@" >> "$log.log" 2>&1
     rc=$?
     case $rc/$(grep '^run: result: ' "$log.log" | tail -n 1) in
-        0/*) return 0 ;;
+        0/*) asked=$(members "$@") || return 2
+             for s in $asked; do
+                 grep -q "^run: $s: PASS in " "$log.log" || {
+                     echo "ci: bisect: untestable: tests/run passed without a result for $s" >> "$log.log"
+                     return 2
+                 }
+             done
+             return 0 ;;
         '1/run: result: failed') return 1 ;;
     esac
     return 2
@@ -219,15 +327,17 @@ tested() { # tested COMMIT
     if [ -n "$run_kind" ]; then
         here=$run_kind
         [ "$here" != full ] || grep -q '^ *core|full)' tools/ci/run.sh || here=night
-        if limited sh tools/ci/run.sh "$here" "$log.run" >> "$log.log" 2>&1; then
-            mv "$log.log" "$log.passed.log"; return 0
-        fi
+        admitted run "$(command -v sh)" tools/ci/run.sh "$here" "$log.run" >> "$log.log" 2>&1
+        case $? in
+            0) mv "$log.log" "$log.passed.log"; return 0 ;;
+            125) mv "$log.log" "$log.untestable.log"; return 2 ;;
+        esac
         mv "$log.log" "$log.failed.log"; return 1
     fi
-    limited make >> "$log.log" 2>&1
+    admitted build "$(command -v make)" >> "$log.log" 2>&1
     case $?/$test_set$test_items in
         0/*) ;;
-        124/*|137/*) mv "$log.log" "$log.untestable.log"; return 2 ;;
+        124/*|125/*|137/*) mv "$log.log" "$log.untestable.log"; return 2 ;;
         */) mv "$log.log" "$log.failed.log"; return 1 ;;
         *) mv "$log.log" "$log.untestable.log"; return 2 ;;
     esac
@@ -242,6 +352,48 @@ tested() { # tested COMMIT
     esac
     return "$verdict"
 }
+
+# Whether TEXT is a whole number above 0.
+whole() { # whole TEXT
+    case $1 in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -gt 0 ]
+}
+
+# The machine's admission, as the header says: the ledger that the record
+# names, the machine's processors, memory and disk as the bridge's capacity,
+# and the share of each that a test claims.
+record=${ETUDE_STATE:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/etude}/machine
+ledger=""
+step=0
+if [ -f "$record" ]; then
+    ledger=$(sed -n 's/^ledger //p' "$record")
+    cpus=$(sed -n 's/^cpus //p' "$record")
+    memory=$(sed -n 's/^memory_bytes //p' "$record")
+    kib=$(df -Pk "$ledger" 2>/dev/null | awk 'NR == 2 { print $2 }')
+    case $ledger in /*) ;; *) kib="" ;; esac
+    if ! whole "$cpus" || ! whole "$memory" || ! whole "$kib"; then
+        say "$on is unresolved: the machine's record $record does not give the ledger, processors, memory and disk that a test claims."
+        exit 1
+    fi
+    [ -n "$bridge" ] && [ -x "$bridge" ] || {
+        say "$on is unresolved: this machine admits tests through etude, and the bisection has no etude-bridge to run them with."
+        exit 1
+    }
+    capacity=$((cpus * 1000)),$memory,$((kib * 1024))
+    share_cpu=$((cpus * 1000 / 4))
+    share_memory=$((memory / 4))
+    share_disk=$((kib * 1024 / 4))
+    locks=${RACH2_PORT_DIR:-/tmp}
+    account=$(id -un)
+    machine_cpus=${RACH2_CPUS:-2}
+    case $machine_cpus in ''|*[!0-9]*|0*) machine_cpus=2 ;; esac
+    RACH2_WORKERS=$((cpus / (2 * machine_cpus)))
+    [ "$RACH2_WORKERS" -ge 1 ] || RACH2_WORKERS=1
+    export RACH2_WORKERS
+    echo "ci: bisect: each test claims a quarter of the machine through $ledger"
+else
+    echo "ci: bisect: $record is missing, so each test runs under its commit's own locks"
+fi
 
 verdict=1
 if [ -z "$confirmed" ]; then
