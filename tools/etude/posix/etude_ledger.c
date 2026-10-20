@@ -14,11 +14,17 @@
 /* The words of enum etude_claim_status. */
 static const char *const STATUS[] = {"owned", "live", "uncertain"};
 
-/* The claim that drop looks for in a listing, and its owner once found. */
+/*
+ * The claim that drop looks for in a listing, and once found, its fields as
+ * struct etude_ledger_claim gives them.
+ */
 struct lookup {
     const char *id;
-    long owner;
     int found;
+    enum etude_claim_status status;
+    long owner;
+    long running;
+    long group;
 };
 
 /** Print the usage and return its status. */
@@ -100,27 +106,55 @@ static int list(struct etude_ledger *l, const char *dir)
     return 0;
 }
 
-/** Note the owner of the claim the lookup `ctx` names, and stop there. */
+/** Note the claim the lookup `ctx` names as the listing judges it, and stop. */
 static int find(const struct etude_ledger_claim *c, void *ctx)
 {
     struct lookup *k = ctx;
 
     if (strcmp(c->id, k->id) != 0)
         return 0;
-    k->owner = c->owner.pid;
     k->found = 1;
+    k->status = c->status;
+    k->owner = c->owner.pid;
+    k->running = c->running;
+    k->group = c->group;
+    return 1;
+}
+
+/** Refuse claim `id`, live as the lookup `k` found it, naming what runs. */
+static int refuse_live(const char *id, const struct lookup *k)
+{
+    if (k->running != 0)
+        fprintf(stderr, "etude-ledger: result: refused: %s: its process %ld runs\n", id,
+                k->running);
+    else if (k->group != 0)
+        fprintf(stderr, "etude-ledger: result: refused: %s: its process group %ld has a member\n",
+                id, k->group);
+    else
+        fprintf(stderr, "etude-ledger: result: refused: %s: a process of it runs\n", id);
     return 1;
 }
 
 /**
- * Drop claim `id` of ledger `l` in `dir`, unless its owner runs.
+ * Drop claim `id` of ledger `l` in `dir`, unless its owner or a process of it
+ * runs.
+ *
+ * The listing judges the claim before the drop, under a lock of its own. A
+ * claim that is not owned has no worker left to register a process, so none
+ * of its processes can start in between.
  *
  * @return 0 once it is dropped, 1 when it is refused, or 2 for an error.
  */
 static int drop(struct etude_ledger *l, const char *dir, const char *id)
 {
-    struct lookup k = {id, 0, 0};
+    struct lookup k;
 
+    memset(&k, 0, sizeof(k));
+    k.id = id;
+    if (etude_ledger_list(l, find, &k) < 0)
+        return failed(dir);
+    if (k.found && k.status == ETUDE_CLAIM_LIVE)
+        return refuse_live(id, &k);
     if (etude_ledger_drop(l, id) == 0) {
         printf("etude-ledger: result: dropped: %s\n", id);
         return 0;
@@ -131,7 +165,7 @@ static int drop(struct etude_ledger *l, const char *dir, const char *id)
     }
     if (errno != EBUSY)
         return failed(dir);
-    if (etude_ledger_list(l, find, &k) >= 0 && k.found)
+    if (k.found)
         fprintf(stderr, "etude-ledger: result: refused: %s: its owner, process %ld, runs\n", id,
                 k.owner);
     else

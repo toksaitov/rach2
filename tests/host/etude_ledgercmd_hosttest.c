@@ -9,8 +9,9 @@
  * leave a claim their owner found unconfirmed, a claim whose keeper never
  * confirmed the cleanup, and a claim whose process still runs. The command,
  * run in a child of this process, must list each with its status and
- * reason, refuse to drop the claim whose owner runs and a claim the ledger
- * lacks, and drop an uncertain claim. A path that is not a ledger and a
+ * reason; refuse to drop the claim whose owner runs, naming the owner, the
+ * claim whose process runs, naming the process, and a claim the ledger
+ * lacks; and drop an uncertain claim. A path that is not a ledger and a
  * ledger whose file does not parse are refused, and neither is changed.
  */
 #include <errno.h>
@@ -259,7 +260,7 @@ static void check_list(const char *dir, long lost, long silent, long held)
         printf("etude-ledgercmd-test: the listing:\n%s%s", r.out, r.err);
 }
 
-/** Check the drops: an owned claim, a missing one and an uncertain one. */
+/** Check the drops of an owned, a live, a missing and an uncertain claim. */
 static void check_drop(struct etude_ledger *l, const char *dir)
 {
     struct ran r;
@@ -270,6 +271,11 @@ static void check_drop(struct etude_ledger *l, const char *dir)
              "etude-ledger: result: refused: owned: its owner, process %ld, runs", (long)getpid());
     CHECK(r.status == 1 && r.out[0] == '\0' && has_line(r.err, line), "an owned claim is refused");
     CHECK(kept(l, "owned"), "an owned claim is refused");
+    run(&r, "drop", dir, "held");
+    snprintf(line, sizeof(line), "etude-ledger: result: refused: held: its process %ld runs",
+             (long)holder);
+    CHECK(r.status == 1 && r.out[0] == '\0' && has_line(r.err, line), "a live claim is refused");
+    CHECK(kept(l, "held"), "a live claim is refused");
     run(&r, "drop", dir, "absent");
     snprintf(line, sizeof(line), "etude-ledger: result: refused: absent: %s",
              "the ledger has no such claim");

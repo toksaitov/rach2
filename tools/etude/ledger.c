@@ -1108,6 +1108,22 @@ static enum judged judge(const struct etude_ledger *l, const struct claim *c, co
 }
 
 /**
+ * Give in `v` what keeps live claim `c` live: a process of it that runs, or
+ * when none does, the process group of its case, which has a member.
+ */
+static void note_running(const struct claim *c, struct etude_ledger_claim *v)
+{
+    size_t i;
+
+    for (i = 0; i < c->nproc && v->running == 0; i++)
+        if (process_check(&c->proc[i].id) == P_RUNS)
+            v->running = c->proc[i].id.pid;
+    for (i = 0; i < c->nproc && v->running == 0 && v->group == 0; i++)
+        if (c->proc[i].role == ROLE_CASE && member_check(&c->proc[i]) == P_RUNS)
+            v->group = c->proc[i].id.pid;
+}
+
+/**
  * Remove from `t` every claim that judge finds free, giving their identities
  * in `*gone` for swept; a claim that memory does not allow to note stays.
  *
@@ -1694,6 +1710,7 @@ int etude_ledger_list(struct etude_ledger *l,
         switch (judge(l, c, &v.why)) {
         case J_LIVE:
             v.status = ETUDE_CLAIM_LIVE;
+            note_running(c, &v);
             break;
         case J_OWNED:
             v.status = ETUDE_CLAIM_OWNED;

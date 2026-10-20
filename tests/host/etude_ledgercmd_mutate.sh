@@ -1,6 +1,6 @@
 #!/bin/sh
 # etude_ledgercmd_mutate.sh: prove etude_ledgercmd_hosttest.c with faults put
-# into private copies of etude-ledger and the ledger it drops claims from.
+# into private copies of etude-ledger and the ledger it lists and drops.
 #
 # Usage: sh tests/host/etude_ledgercmd_mutate.sh [--texts]
 #
@@ -19,6 +19,8 @@ faults() {
     cat <<'EOF'
 owned-dropped|ledger.c|    else if (judge(l, c, &why) == J_OWNED)|    else if (judge(l, c, &why) == J_OWNED && 0)|an owned claim is refused
 owned-reported|posix/etude_ledger.c|    if (etude_ledger_drop(l, id) == 0) {|    if (etude_ledger_drop(l, id) == 0 \|\| errno == EBUSY) {|an owned claim is refused
+live-dropped|posix/etude_ledger.c|    if (k.found && k.status == ETUDE_CLAIM_LIVE)|    if (0)|a live claim is refused
+unnamed|ledger.c|            v->running = c->proc[i].id.pid;|            ;|a live claim is refused
 missing|posix/etude_ledger.c|    if (errno == ENOENT) {|    if (errno == ENOENT && 0) {|a missing claim is refused
 not-written|ledger.c|    e = end(l, &t, e, e == 0);|    e = end(l, &t, e, 0);|an uncertain claim is dropped
 status-word|posix/etude_ledger.c|static const char *const STATUS[] = {"owned", "live", "uncertain"};|static const char *const STATUS[] = {"owned", "uncertain", "live"};|a live claim is listed with its reason

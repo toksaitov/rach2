@@ -42,6 +42,8 @@ struct etude_ledger_claim {
     const struct etude_ledger_res *res;
     size_t nres;
     size_t nproc; /* the processes registered */
+    long running; /* of a live claim: a process of it that runs, or 0 */
+    long group;   /* else its case's process group, which has a member, or 0 */
 };
 
 /**
@@ -175,6 +177,10 @@ int etude_ledger_recover(struct etude_ledger *l, size_t *freed);
 /**
  * Recover, then give each claim and request kept to `visit`, which returns
  * nonzero to stop.
+ *
+ * A live claim names what runs: `running`, a process of it that runs, or
+ * when none does, `group`, the process group of its case, which still has
+ * a member.
  *
  * @return 0, the nonzero value `visit` returned, or -1 with errno set.
  */
