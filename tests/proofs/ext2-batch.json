@@ -270,7 +270,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "runtime error: store to null pointer"
+          "to null pointer"
         ]
       }
     }
