@@ -214,6 +214,20 @@ run-etudeguest: rach2 test-image utils $(ETUDESERIAL)
 	$(ETUDESERIAL) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
 	    --hello $(ARCH_BUILD)/tests/hello --ish $(ARCH_BUILD)/ish/ish \
 	    --yes $(ARCH_BUILD)/utils/yes --log $(IMAGES_DIR)/etudeguest-test.log
+# `tests/run etudeexec`: Rach2 builds etude by its TinyCC recipe, and the POSIX
+# executor, built the same way, passes its test there. Boots os-real from a
+# disk with a second disk that is a tar archive of etude's source and the
+# executor's test, and requires a built and then a reused version, the built
+# casecheck and history_check to pass, and every row of the executor's test,
+# the subreaper's among them, to run and pass. ETUDEEXEC_TREE, empty but in
+# tests/system/etudeexec_mutate.sh, names a copy of the files to archive.
+ETUDEEXEC_TEST_DISK = $(IMAGES_DIR)/etudeexec-test.disk
+ETUDEEXEC_TREE =
+run-etudeexec: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real)
+	@mkdir -p $(IMAGES_DIR)
+	$(MKDISK) krffs/manifests/os-real.manifest $(ETUDEEXEC_TEST_DISK) 64 48
+	sh tests/system/suites/etudeexec.sh $(BOOT_KERNEL) $(ETUDEEXEC_TEST_DISK) \
+	    "`cat krffs/rach2_demo_password`" "$(ETUDEEXEC_TREE)"
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
 # invoking their own build would be two Makes against one `build/` tree; with

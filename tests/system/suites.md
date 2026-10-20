@@ -66,6 +66,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `bus` (full tier; needs qemu, mformat, mtype; 128 MiB): four IDE drives on both channels, an AHCI and an IDE disk together with the root on each in turn, and a disk past 128 GiB.
 * `exitline` (full tier; needs qemu; 128 MiB): the plain process-exit line is printed under the debug shell and nowhere else.
 * `etudeguest` (full tier; needs qemu; 128 MiB): etude-guest on the test image's serial console, as the debug shell's designated init, without the debug-exit port.
+* `etudeexec` (full tier; needs qemu; 512 MiB): Rach2 builds etude by its TinyCC recipe, and the POSIX executor, built the same way, passes its test there.
 * `login` (core tier; needs qemu; 128 MiB): prove the console cannot fall back to an unauthenticated shell.
 * `man` (core tier; needs qemu; 128 MiB): the manual pages on the machine.
 * `metal` (core tier; needs qemu, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image and acceptance of an installed ext2 root.
