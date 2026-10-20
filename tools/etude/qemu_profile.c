@@ -196,6 +196,18 @@ static int listed(const char *const *list, const char *name)
     return 0;
 }
 
+/** Say whether `s` is a nonempty text of printable ASCII, spaces allowed, of
+ * at most `max` bytes. */
+static int text(const char *s, size_t max)
+{
+    size_t n;
+
+    for (n = 0; s[n] != '\0'; n++)
+        if (n == max || s[n] < ' ' || s[n] > '~')
+            return 0;
+    return n > 0;
+}
+
 /** Count the strings of a list ended by NULL; a NULL list has none. */
 static size_t count(const char *const *list)
 {
@@ -1012,6 +1024,8 @@ static int profile_check(const struct etude_qemu_profile *p)
             return EINVAL;
     if (forward_check(p) != 0 || captures_check(p) != 0)
         return EINVAL;
+    if (p->smbios_vendor != NULL && !text(p->smbios_vendor, ETUDE_SMBIOS_VENDOR_MAX))
+        return EINVAL;
     return firmware_check(p);
 }
 
@@ -1032,6 +1046,30 @@ static int machine_x86_64(const struct etude_qemu_profile *p)
            (p->architecture != NULL && strcmp(p->architecture, "x86_64") == 0);
 }
 
+/** Say whether profile `p` has the memory profile of the boundary machine. */
+static int boundary(const struct etude_qemu_profile *p)
+{
+    return p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0;
+}
+
+/**
+ * Add the lazily allocated RAM of the boundary machine, of `size`, QEMU's
+ * size with its unit.
+ */
+static void add_boundary_memory(struct line *l, const char *size)
+{
+    add(l, 0, "-object");
+#if defined(__APPLE__)
+    add(l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off", size);
+#else
+    add(l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off,dump=off", size);
+#endif
+    add(l, 0, "-machine");
+    add(l, 0, "memory-backend=etude-ram");
+    add(l, 0, "-overcommit");
+    add(l, 0, "mem-lock=off");
+}
+
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out)
@@ -1049,8 +1087,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         return e;
     if ((e = audio_check(p->audio, audio)) != 0)
         return e;
-    if (p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0 &&
-        !s->boundary_lazy)
+    if (boundary(p) && !s->boundary_lazy)
         return ENOTSUP;
     if (etude_accel_name(s->accel) == NULL || program == NULL)
         return EINVAL;
@@ -1076,19 +1113,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     snprintf(number, sizeof(number), "%lluB", (unsigned long long)p->memory_bytes);
     add(&l, 0, "-m");
     add(&l, 0, "%s", number);
-    if (p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0) {
-        add(&l, 0, "-object");
-#if defined(__APPLE__)
-        add(&l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off", number);
-#else
-        add(&l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off,dump=off",
-            number);
-#endif
-        add(&l, 0, "-machine");
-        add(&l, 0, "memory-backend=etude-ram");
-        add(&l, 0, "-overcommit");
-        add(&l, 0, "mem-lock=off");
-    }
+    if (boundary(p))
+        add_boundary_memory(&l, number);
     if (p->q35) {
         add(&l, 0, "-machine");
         add(&l, 0, "q35");
@@ -1096,6 +1122,10 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     if (p->no_i8042) {
         add(&l, 0, "-machine");
         add(&l, 0, "i8042=off");
+    }
+    if (p->smbios_vendor != NULL) {
+        add(&l, 0, "-smbios");
+        add(&l, 1, "type=0,vendor=%s", p->smbios_vendor);
     }
     if (p->firmware == ETUDE_FIRMWARE_DIRECT) {
         add(&l, 0, "-kernel");

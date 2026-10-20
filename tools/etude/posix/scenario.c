@@ -1686,6 +1686,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->audio = jtext(qp, "audio");
     p->devices = m->devices;
     p->boot_options = m->options;
+    p->smbios_vendor = jtext(qp, "smbios_vendor");
     p->firmware = firmware_of(firmware);
     p->no_i8042 = jbool(qp, "i8042") == 0;
     p->q35 = jtext(qp, "machine") != NULL && strcmp(jtext(qp, "machine"), "q35") == 0;

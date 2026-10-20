@@ -1,8 +1,9 @@
 #!/bin/sh
-# Prove etude_qemu_hosttest.c with faults in a private copy of the launcher:
-# a refused accelerator, a cancellation, a wrong accelerator in use and a
-# boundary boot started without its whole memory reservation must each be
-# found.
+# Prove etude_qemu_hosttest.c with faults in private copies of the launcher:
+# a refused accelerator, a cancellation, a wrong accelerator in use, a
+# boundary boot started without its whole memory reservation, an SMBIOS
+# vendor whose commas are not doubled and one that is not printable ASCII
+# must each be found.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -23,6 +24,10 @@ faults = {
                 'if (0 && etude_qemu_accel_refused('),
     'cancel': ('    if (m->cancelled)\n        return ETUDE_END_STOPPED;\n', ''),
     'accel': ('if (strcmp(name, etude_accel_name(m->accel)) == 0) {', 'if (name != NULL) {'),
+    'comma': ('add(&l, 1, "type=0,vendor=%s", p->smbios_vendor);',
+              'add(&l, 0, "type=0,vendor=%s", p->smbios_vendor);'),
+    'vendor': ('if (p->smbios_vendor != NULL && !text(p->smbios_vendor, ETUDE_SMBIOS_VENDOR_MAX))',
+               'if (0 && !text(p->smbios_vendor, ETUDE_SMBIOS_VENDOR_MAX))'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -38,7 +43,10 @@ if [ "${1:-}" = --texts ]; then
     for fault in refused cancel accel memory; do
         apply_fault tools/etude/posix/qemu.c "$fault"
     done
-    echo 'etude-qemu-mutation: texts: all four faults found once'
+    for fault in comma vendor; do
+        apply_fault tools/etude/qemu_profile.c "$fault"
+    done
+    echo 'etude-qemu-mutation: texts: all six faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -66,6 +74,7 @@ trap 'stopped=1; exit 130' INT
 trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-qemu-proof.XXXXXX")
 cp tools/etude/posix/qemu.c "$work/qemu.c"
+cp tools/etude/qemu_profile.c "$work/qemu_profile.c"
 
 # Build and run the real host test against the private launcher under the
 # sanitizers, with its fixtures in the scratch, and require `expected` as its
@@ -78,7 +87,7 @@ run_phase()
         -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined \
         -fno-sanitize-recover=all -I tests/host -I tools/etude/include \
         -I tools/etude/posix tests/host/etude_qemu_hosttest.c "$work/qemu.c" \
-        tools/etude/capture.c tools/etude/history_json.c tools/etude/qemu_profile.c \
+        tools/etude/capture.c tools/etude/history_json.c "$work/qemu_profile.c" \
         tools/etude/processor.c tools/etude/posix/exec.c tools/etude/posix/keeper.c \
         tools/etude/posix/process.c \
         -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
@@ -111,4 +120,13 @@ apply_fault "$work/qemu.c" memory
 run_phase memory-mutated 1
 grep -q 'unsafe boundary allocation refused before execution' "$work/memory-mutated.log"
 cp tools/etude/posix/qemu.c "$work/qemu.c"
+apply_fault "$work/qemu_profile.c" comma
+run_phase comma-mutated 1
+grep -q 'an smbios vendor: ' "$work/comma-mutated.log"
+cp tools/etude/qemu_profile.c "$work/qemu_profile.c"
+apply_fault "$work/qemu_profile.c" vendor
+run_phase vendor-mutated 1
+grep -q 'a control character in the smbios vendor: ' "$work/vendor-mutated.log"
+grep -q 'an smbios vendor of 65 bytes: ' "$work/vendor-mutated.log"
+cp tools/etude/qemu_profile.c "$work/qemu_profile.c"
 run_phase restored 0

@@ -1419,6 +1419,35 @@ static void test_firmware(const struct etude_qemu_profile *p, struct etude_qemu_
     CHECK(make(&b, site, argv, buf, sizeof(buf)) == EINVAL, "seabios without a disk");
 }
 
+/**
+ * Check an SMBIOS vendor's argument, its commas doubled, and the vendors
+ * refused. `p` has the direct firmware and no vendor.
+ */
+static void test_smbios(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
+{
+    static const char *const refused[][2] = {
+        {"", "an empty smbios vendor"},
+        {"Insyde\tCorp.", "a control character in the smbios vendor"},
+        {"Insyde \303\251", "a vendor not in ascii"},
+        {"Insyde Corp. Insyde Corp. Insyde Corp. Insyde Corp. Insyde Corp.1",
+         "an smbios vendor of 65 bytes"}};
+    struct etude_qemu_profile b = *p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+    size_t i;
+
+    b.smbios_vendor = "Insyde Corp., v2";
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-smbios") == 0 &&
+              strcmp(argv[15], "type=0,vendor=Insyde Corp.,, v2") == 0 &&
+              strcmp(argv[16], "-kernel") == 0,
+          "an smbios vendor");
+    for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
+        b.smbios_vendor = refused[i][0];
+        CHECK(make(&b, site, argv, buf, sizeof(buf)) == EINVAL, refused[i][1]);
+    }
+    b.smbios_vendor = "Insyde Corp. Insyde Corp. Insyde Corp. Insyde Corp. Insyde Corp.";
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0, "an smbios vendor of 64 bytes");
+}
+
 /** Check the command lines of profiles, and the profiles that are refused. */
 static void test_argv(void)
 {
@@ -1494,6 +1523,7 @@ static void test_argv(void)
     REFUSED(kernel, NULL, "direct without a kernel");
     REFUSED(firmware, (enum etude_firmware)7, "an unknown firmware");
     test_accel_names();
+    test_smbios(&p, &site);
     test_disks(&p, &site);
     test_disk_lines(&p, &site);
 }

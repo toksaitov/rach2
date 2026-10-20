@@ -163,7 +163,13 @@ struct etude_qemu_profile {
                                                   at 0:31.2 has the disks on IDE */
     const struct etude_qemu_capture *captures; /* NULL for none; each card
                                                   at most once */
+    const char *smbios_vendor;                 /* the BIOS vendor the SMBIOS
+                                                  tables name, printable ASCII,
+                                                  or NULL for the firmware's own */
 };
+
+/* The longest SMBIOS vendor a profile may name. */
+#define ETUDE_SMBIOS_VENDOR_MAX 64
 
 /* Admission amounts for one QEMU, separate from its configured RAM. */
 struct etude_qemu_memory {
