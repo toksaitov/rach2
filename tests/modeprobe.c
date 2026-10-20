@@ -603,9 +603,9 @@ static void run_child(void (*body)(void), const char *what)
 PROBE_SP_ENTRY;
 
 /**
- * Enter the directory the first positional argument names, if any, make the fixtures, run root's
- * half, the uid-1000 child and the escalation child, and remove every
- * fixture; exits 0, or 1 at the first case that fails.
+ * Enter the directory the first positional argument names, if any, make the
+ * fixtures, run root's half, the uid-1000 child and the escalation child,
+ * and remove every fixture; exits 0, or 1 at the first case that fails.
  *
  * The fixtures are made in the working directory. With no argument the probe
  * works where it was started, which for the test runner is the root of the

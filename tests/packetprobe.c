@@ -1116,7 +1116,7 @@ two_protocols:
                     frame[4] != 6 || frame[5] != 4) {
                     fail("the ARP socket was given a frame that is not ARP");
                 }
-                /* A reply whose sender is the address asked about answers it. */
+                /* A reply from the address asked about answers it. */
                 if (frame[6] == 0 && frame[7] == 2 && frame[14] == (uint8_t)(asked_ip >> 24) &&
                     frame[15] == (uint8_t)(asked_ip >> 16) &&
                     frame[16] == (uint8_t)(asked_ip >> 8) && frame[17] == (uint8_t)asked_ip) {

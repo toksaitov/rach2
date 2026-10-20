@@ -83,10 +83,10 @@ PROBE_SP_ENTRY;
 
 /**
  * Read the ids and AT_SECURE, and exit with the number of the first check of
- * the scenario the first positional argument names that fails, or 0: 90 when no scenario is named
- * and 91 or 92 when the ids cannot be read, 1 to 11 for `suid`, 20 to 23 for
- * `suid5`, 30 to 34 for `sgid`, 40 to 44 for `plain`, 50 to 56 for `root`,
- * and 99 for any other name.
+ * the scenario the first positional argument names that fails, or 0: 90
+ * when no scenario is named and 91 or 92 when the ids cannot be read, 1 to
+ * 11 for `suid`, 20 to 23 for `suid5`, 30 to 34 for `sgid`, 40 to 44 for
+ * `plain`, 50 to 56 for `root`, and 99 for any other name.
  */
 void probe_main(unsigned long *sp)
 {

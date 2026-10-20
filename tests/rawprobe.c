@@ -44,9 +44,10 @@
  * nobody has, in place of 10.0.2.9. It gives `ids=OLD:NEW,...` for the
  * ordinary user 1000, and `machine=native`, with which the probe leaves out
  * the sends for the capture checker, which only the suite's capture reads,
- * and prints a line that says they did not run. Prints "RAWPROBE START", then "  FAIL: " and the
- * row for each failure, then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and exits with the count
- * of failures. Freestanding; direct system calls (probe.h).
+ * and prints a line that says they did not run. Prints "RAWPROBE START",
+ * then "  FAIL: " and the row for each failure, then "RAWPROBE OK" and exits
+ * 0, or "RAWPROBE FAIL" and exits with the count of failures. Freestanding;
+ * direct system calls (probe.h).
  */
 
 #include "probe.h"
