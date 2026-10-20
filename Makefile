@@ -343,6 +343,8 @@ MANIFEST_DEPS_rach2_recovery := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-r
 MANIFEST_DEPS_rach2_metal_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal-disk.manifest)
 MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.manifest)
 MANIFEST_DEPS_etude_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/etude-disk.manifest)
+MANIFEST_DEPS_shutdown_test := $(shell $(MANIFEST_DEPS) krffs/manifests/shutdown-test.manifest)
+MANIFEST_DEPS_disk_test := $(shell $(MANIFEST_DEPS) krffs/manifests/disk-test.manifest)
 # The targets that build what os-real's manifest stages, and grub-test's,
 # which is os-real's with two more files. Every rule that stages either names
 # them as prerequisites, order-only in the rule of a file, so that a tree with
@@ -352,7 +354,7 @@ MANIFEST_PARTS_os_real = utils check-busybox check-tcc check-pdpmake check-setid
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
-    $(MANIFEST_DEPS_etude_disk))
+    $(MANIFEST_DEPS_etude_disk) $(MANIFEST_DEPS_shutdown_test) $(MANIFEST_DEPS_disk_test))
 STAGED_IN_MANIFESTS = $(filter $(ARCH_MUSL)/% $(TCC_STAGE)/%,$(MANIFEST_INPUTS))
 MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter $(ARCH_MUSL)/%,$(STAGED_IN_MANIFESTS)))
 TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter $(TCC_STAGE)/%,$(STAGED_IN_MANIFESTS)))

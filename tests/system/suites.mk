@@ -727,6 +727,11 @@ run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
 # another suite on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
+# The same disk as a file target, which the cases of machine.crash
+# (tests/cases/machine.crash.json) take as their artifact.
+$(CRASH_TEST_IMAGE): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
+                     build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs tests
+	$(MKDISK) krffs/manifests/disk-test.manifest $@ 64 48
 # The capture `tests/run raw` reads the hop limits and the checksum out of.
 RAW_PCAP = $(IMAGES_DIR)/raw$(NIC_TAG).pcap
 # Its own disk image, so `make -j` cannot have this target and `test-disk`
@@ -1804,6 +1809,12 @@ run-ssh: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(PTYDRIVE)
 # every image checked by offline fsck afterwards, and init killed on four
 # processors leaving all four halted with interrupts off and the disk dirty.
 SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
+# The same disk as a file target, which the cases of machine.shutdown
+# (tests/cases/machine.shutdown.json) take as their artifact.
+$(SHUTDOWN_TEST_DISK): $(DEMO_CREDS) krffs/manifests/shutdown-test.manifest \
+                       $(MANIFEST_DEPS_shutdown_test) $(MKDISK) build/krffs/mkfs.krffs \
+                       build/krffs/stageimage.krffs | preflight krffs utils busybox
+	$(MKDISK) krffs/manifests/shutdown-test.manifest $@ 64 48
 run-shutdown: $(DEMO_CREDS) rach2 utils krffs busybox $(RUNUTIL)
 	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
 	sh tests/system/suites/shutdown.sh $(BOOT_KERNEL) $(SHUTDOWN_TEST_DISK) \
