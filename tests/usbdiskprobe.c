@@ -60,6 +60,8 @@
 
 #define MS_RDONLY 1
 
+#define WNOHANG 1
+
 #define WIFEXITED(s)   (((s) & 0x7F) == 0)
 #define WEXITSTATUS(s) (((s) >> 8) & 0xFF)
 
@@ -219,17 +221,11 @@ static int slurp(const char *path)
     return n;
 }
 
-/** Sleep for `ms` milliseconds. */
-static void sleep_ms(int ms)
+/** Give the processor to any other runnable process between two looks at a
+ * state the probe waits for. */
+static void yield(void)
 {
-    struct {
-        long sec;
-        long nsec;
-    } ts;
-
-    ts.sec = ms / 1000;
-    ts.nsec = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (long)&ts, 0);
+    syscall0(SYS_SCHED_YIELD);
 }
 
 /** Mount `source` of `type` at MNT, made first if missing: 0, or a negated
@@ -466,11 +462,16 @@ static int reads_mbr(const char *node)
 
 /** `keep`: hold a file on the stick through its pull and the plug of the
  * next one. The next stick may be given the name the pulled one had, or the
- * next, as the held record keeps its name or not, so both nodes are read. */
+ * next, as the held record keeps its name or not, so both nodes are read.
+ *
+ * The pull is seen when `/proc/disk` no longer lists disk 0, and the next
+ * stick when one of the nodes answers a read of its table. The probe looks
+ * again, yielding between looks, until each has happened, and counts none
+ * of the looks: the suite's wait for its word bounds a pull or a plug that
+ * never comes. */
 static void part_keep(void)
 {
     int fd;
-    int waited;
 
     if (mount_at(fat_node, "vfat", 0) != 0) {
         fail("the volume would not mount");
@@ -480,23 +481,11 @@ static void part_keep(void)
         fail("the file to hold would not open");
     }
     puts("USBDISKPROBE KEEPING");
-    for (waited = 0; waited < 900; waited++) {
-        if (slurp("/proc/disk") >= 0 && !contains(text, "disk 0 ")) {
-            break;
-        }
-        sleep_ms(100);
+    while (slurp("/proc/disk") < 0 || contains(text, "disk 0 ")) {
+        yield();
     }
-    if (waited == 900) {
-        fail("the stick was never pulled out");
-    }
-    for (waited = 0; waited < 900; waited++) {
-        if (reads_mbr("/dev/disk0") || reads_mbr("/dev/disk1")) {
-            break;
-        }
-        sleep_ms(100);
-    }
-    if (waited == 900) {
-        fail("the stick plugged into the pulled stick's slot never answered a read");
+    while (!reads_mbr("/dev/disk0") && !reads_mbr("/dev/disk1")) {
+        yield();
     }
     syscall1(SYS_CLOSE, fd);
     ok();
@@ -510,8 +499,11 @@ static void part_keep(void)
  *
  * The reads that meet the pull go to the partition's node, which has no
  * cache in front of it: every one of them is a request on the stick, so the
- * process is inside such a request when the stick goes. The file stays open
- * on the mount meanwhile, which is what the unmount must refuse.
+ * process is inside such a request when the stick goes. They go on until one
+ * answers `EIO` or the node is gone, which is the pull itself, and none is
+ * counted: the suite's wait for the probe's word bounds a pull that never
+ * comes. The file stays open on the mount meanwhile, which is what the
+ * unmount must refuse.
  */
 static void part_hold(const char *source, const char *type, int children)
 {
@@ -520,8 +512,7 @@ static void part_hold(const char *source, const char *type, int children)
     int raw;
     int rw;
     int nested = -1;
-    int reads = 0;
-    int gone = 0;
+    int holding = 0;
     char buf[512];
 
     if (mount_at(source, type, 0) != 0) {
@@ -559,31 +550,26 @@ static void part_hold(const char *source, const char *type, int children)
     if (raw < 0) {
         fail("the partition would not open");
     }
-    while (reads < 2000000) {
+    for (;;) {
         int n = syscall3(SYS_READ, raw, (long)buf, (int)sizeof(buf));
 
-        reads++;
         if (n == -EIO) {
-            gone = 1;
             break;
         }
         if (n < 0) {
             fail("a read of the stick failed with something other than EIO");
         }
-        if (reads == 1) {
+        if (!holding) {
+            holding = 1;
             puts("USBDISKPROBE HOLDING");
         }
         if (n == 0) {
             syscall1(SYS_CLOSE, raw);
             raw = syscall3(SYS_OPEN, (long)source, O_RDONLY, 0);
             if (raw < 0) {
-                gone = 1; /* the node went with the stick */
-                break;
+                break; /* the node went with the stick */
             }
         }
-    }
-    if (!gone) {
-        fail("the stick was never pulled out");
     }
     if (syscall3(SYS_GETDENTS64, dir, (long)buf, (int)sizeof(buf)) != -EIO) {
         fail("a cached directory listed after removal");
@@ -716,14 +702,18 @@ static void part_throughput(void)
  * the child starts, so the child's first read cannot leave its data stage
  * before the pull the suite makes on the word, however late the pull comes
  * within the driver's deadline. The child exits 0 on EIO, 3 on another
- * error, 4 when the node went before a read failed, and 5 when no read
- * failed.
+ * error, and 4 when the node went before a read failed; it reads until one
+ * of them happens.
+ *
+ * The parent looks at the counter, yielding between looks, until it is above
+ * zero, or until the child has exited, which ends the wait with no request
+ * of the child's to pull. None of the looks is counted: the suite's wait for
+ * the probe's word bounds a request that never goes out.
  */
 static void part_pullread(void)
 {
     int fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
-    int reads = 0;
-    int child, status, tries;
+    int child, status;
 
     if (fd < 0) {
         fail("/dev/disk0 would not open");
@@ -736,10 +726,9 @@ static void part_pullread(void)
         fail("no child to read the stick");
     }
     if (child == 0) {
-        while (reads < 2000000) {
+        for (;;) {
             int n = syscall3(SYS_READ, fd, (long)big, (int)sizeof(big));
 
-            reads++;
             if (n == -EIO) {
                 syscall1(SYS_EXIT, 0);
             }
@@ -754,16 +743,13 @@ static void part_pullread(void)
                 }
             }
         }
-        syscall1(SYS_EXIT, 5);
     }
     syscall1(SYS_CLOSE, fd);
-    for (tries = 0; tries < 2000000; tries++) {
-        if (disk_counter("disk-in-flight ") > 0) {
-            break;
+    while (disk_counter("disk-in-flight ") <= 0) {
+        if (syscall3(SYS_WAITPID, child, (long)&status, WNOHANG) == child) {
+            fail("no request of the child's was in flight to be pulled");
         }
-    }
-    if (tries == 2000000) {
-        fail("no request of the child's was in flight to be pulled");
+        yield();
     }
     puts("USBDISKPROBE READING");
     if (syscall3(SYS_WAITPID, child, (long)&status, 0) != child) {
@@ -781,7 +767,7 @@ static void part_pullread(void)
     case 4:
         fail("the node went before a read in flight failed");
     default:
-        fail("the stick was never pulled out");
+        fail("the reading child exited with a status it does not use");
     }
 }
 
