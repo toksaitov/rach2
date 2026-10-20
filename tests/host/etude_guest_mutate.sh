@@ -4,15 +4,18 @@
 # acknowledgement that releases nothing, an exec that runs the program as a
 # child, an output digest that misses the bytes sent, a stream's total that
 # misses the bytes not kept, an orphaned attempt settled as stopped, an
-# orphaned attempt's group judged at once after SIGKILL, a run's record
-# given the end it lacks only for an attempt settled at the lock, a run's
-# record given that end after a line cut short, an event sent before it is
-# recorded, an exit that carries both streams' sizes and digests in one
-# frame, ids not checked against the accounts and the processes, on macOS ids
-# not looked up in Directory Services, the ids left out of the program's
-# arguments, a pseudo-terminal whose output is not read, and an attempts'
-# directory that only root may search. Each must fail the test, and the
-# restored copy must pass it.
+# orphaned attempt's group judged at once after SIGKILL, an orphaned
+# attempt's group killed only while its first process runs, an orphaned
+# attempt's group killed whatever the boot of its record, a group of
+# another session taken for an orphaned attempt's, a run's record given the
+# end it lacks only for an attempt settled at the lock, a run's record given
+# that end after a line cut short, an event sent before it is recorded, an
+# exit that carries both streams' sizes and digests in one frame, ids not
+# checked against the accounts and the processes, on macOS ids not looked up
+# in Directory Services, the ids left out of the program's arguments, a
+# pseudo-terminal whose output is not read, and an attempts' directory that
+# only root may search. Each must fail the test, and the restored copy must
+# pass it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -39,9 +42,17 @@ faults = {
     'digest': ('    sha256_update(&a->sent[fdn], buf, (size_t)r);\n', ''),
     'total': ('    a->total[fdn] += (unsigned long long)r;\n', ''),
     'orphan': ('"%s %s %s lost -\\n', '"%s %s %s stopped -\\n'),
-    'immediate': ('    gone = child <= 0 || group_ended((pid_t)child, killed ? SETTLE_US : 0);\n',
-                  '    gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);\n'
-                  '    (void)killed;\n    (void)group_ended;\n'),
+    'immediate': ('    gone = left == 0 || attempt_ended((pid_t)child, child_start, killed ? SETTLE_US : 0);\n',
+                  '    gone = left == 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);\n'
+                  '    (void)killed;\n    (void)attempt_ended;\n'),
+    'leaderless': ('    killed = left > 0 && kill(-(pid_t)child, SIGKILL) == 0;\n',
+                   '    killed = same_process((pid_t)child, child_start) && kill(-(pid_t)child, SIGKILL) == 0;\n'),
+    'boot': ('sscanf(p + 6, "%16s", was) == 1 && strcmp(was, boot) == 0);',
+             'sscanf(p + 6, "%16s", was) == 1);'),
+    'session': [("        if (state != 'Z' && state != 'X' && sid == (long)pgid)\n",
+                 "        if (state != 'Z' && state != 'X')\n"),
+                ('        if (kp[i].kp_proc.p_stat != SZOMB && getsid(kp[i].kp_proc.p_pid) == pgid)\n',
+                 '        if (kp[i].kp_proc.p_stat != SZOMB)\n')],
     'complete': ('        settle_orphan(e->d_name, buf);\n        complete_run(cmd, buf);\n',
                  '        if (settle_orphan(e->d_name, buf))\n            complete_run(cmd, buf);\n'),
     'torn': ("    if (last[1] != '\\0') {", '    if (0) {'),
@@ -79,8 +90,8 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in repeat stopped ack exec digest total orphan immediate complete torn record \
-        split pty search; do
+    for fault in repeat stopped ack exec digest total orphan immediate leaderless boot session \
+        complete torn record split pty search; do
         apply_fault tools/etude/guest/guest.c "$fault"
     done
     for fault in idcheck idargs directory; do
@@ -162,6 +173,9 @@ fault digest 'the streams give the sizes and digests of the output sent'
 fault total 'each stream gives the bytes it carried beyond those sent'
 fault orphan "an orphaned attempt's end is lost"
 fault immediate "an orphaned attempt's cleanup is confirmed once its processes have ended"
+fault leaderless 'an orphaned attempt whose first process has ended has its group killed'
+fault boot 'an orphaned attempt of another boot is settled with nothing killed'
+fault session "a group of another session is not taken for an orphaned attempt's"
 fault complete 'a run whose record lost part of its end is answered with the whole end'
 fault torn 'a run whose record lost part of its end is answered with the whole end'
 fault record 'a run repeated after a kill is answered by each event recorded before it'

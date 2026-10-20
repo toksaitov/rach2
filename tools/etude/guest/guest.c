@@ -790,8 +790,8 @@ static int cmd_begin(const char *cmd, const char *text)
 
 /**
  * Write the record of an attempt, STATE/a/TOKEN/record: its command, its
- * owner, its child, its state and its final events. A later etude-guest
- * reads it to answer `status`.
+ * owner, its child, the boot they run in, its state and its final events. A
+ * later etude-guest reads it to answer `status`.
  */
 static void attempt_record(const struct attempt *a, enum state st, const char *finals)
 {
@@ -800,8 +800,9 @@ static void attempt_record(const struct attempt *a, enum state st, const char *f
 
     if (path_of(path, "%s/record", a->dir) < 0)
         return;
-    snprintf(text, sizeof(text), "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nstate %s\n%s",
-             a->cmd, session, (long)self_pid, self_start, (long)a->pid, a->start, state_name[st],
+    snprintf(text, sizeof(text),
+             "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nboot %s\nstate %s\n%s", a->cmd,
+             session, (long)self_pid, self_start, (long)a->pid, a->start, boot, state_name[st],
              finals ? finals : "");
     if (write_file(path, text, strlen(text)) < 0)
         note("record: %s: %s", path, strerror(errno));
@@ -2027,13 +2028,54 @@ static void do_cancel(const struct wire_frame *f, const char *text)
     cmd_event(cmd, line);
 }
 
+#if defined(__APPLE__)
 /**
- * Whether each process left in group `pgid` is a zombie, as /proc shows:
- * one that has ended and waits only for its parent to reap it, perhaps this
- * process as the boot's init. Without /proc, or when /proc shows no process
- * of the group, the group has ended only when kill(2) finds none in it.
+ * Count the processes of group `pgid` that the sysctl KERN_PROC_PGRP lists:
+ * each one in `*seen`, and in `*live` each one that is not a zombie and is
+ * in session `pgid` as getsid(2) gives it.
+ *
+ * @return 0, or -1 when the list cannot be read.
  */
-static int only_zombies(pid_t pgid)
+static int count_group(pid_t pgid, int *live, int *seen)
+{
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PGRP, 0};
+    struct kinfo_proc *kp = NULL;
+    size_t len = 0;
+    size_t i;
+    int tries;
+
+    mib[3] = (int)pgid;
+    for (tries = 0; tries < 3 && !kp; tries++) {
+        if (sysctl(mib, 4, NULL, &len, NULL, 0) < 0)
+            return -1;
+        len += len / 4 + sizeof(*kp);
+        kp = malloc(len);
+        if (kp && sysctl(mib, 4, kp, &len, NULL, 0) < 0) {
+            free(kp);
+            kp = NULL;
+            if (errno != ENOMEM)
+                return -1;
+        }
+    }
+    if (!kp)
+        return -1;
+    for (i = 0; i < len / sizeof(*kp); i++) {
+        (*seen)++;
+        if (kp[i].kp_proc.p_stat != SZOMB && getsid(kp[i].kp_proc.p_pid) == pgid)
+            (*live)++;
+    }
+    free(kp);
+    return 0;
+}
+#else
+/**
+ * Count the processes of group `pgid` that /proc shows: each one in
+ * `*seen`, and in `*live` each one that is not a zombie and is in session
+ * `pgid`.
+ *
+ * @return 0, or -1 when /proc cannot be read.
+ */
+static int count_group(pid_t pgid, int *live, int *seen)
 {
     static char buf[1024];
     char path[64];
@@ -2041,43 +2083,77 @@ static int only_zombies(pid_t pgid)
     const char *p;
     size_t n;
     long group;
+    long sid;
     char state;
-    int zombies = 0;
-    int live = 0;
     DIR *d = opendir("/proc");
 
     if (!d)
-        return 0;
-    while (!live && (e = readdir(d)) != NULL) {
+        return -1;
+    while ((e = readdir(d)) != NULL) {
         n = strlen(e->d_name);
         if (n == 0 || n > 20 || strspn(e->d_name, "0123456789") != n)
             continue;
         snprintf(path, sizeof(path), "/proc/%.20s/stat", e->d_name);
-        /* After the command's ')' come the state, parent and group. */
+        /* After the command's ')' come the state, parent, group and session. */
         if (read_file(path, buf, sizeof(buf)) <= 0 || !(p = strrchr(buf, ')')) ||
-            sscanf(p + 1, " %c %*d %ld", &state, &group) != 2 || group != (long)pgid)
+            sscanf(p + 1, " %c %*d %ld %ld", &state, &group, &sid) != 3 || group != (long)pgid)
             continue;
-        if (state == 'Z' || state == 'X')
-            zombies++;
-        else
-            live = 1;
+        (*seen)++;
+        if (state != 'Z' && state != 'X' && sid == (long)pgid)
+            (*live)++;
     }
     closedir(d);
-    return !live && (zombies > 0 || (kill(-pgid, 0) < 0 && errno == ESRCH));
+    return 0;
+}
+#endif
+
+/**
+ * Count the processes left running of the group that an attempt's child
+ * made, the child that `child` and `start` name: the processes of group
+ * `child` that are in session `child` too, the session the child made with
+ * setsid(2), while `child` names that process or none at all. A zombie is
+ * not counted, since it has ended and waits only for its parent to reap it,
+ * perhaps this process as the boot's init.
+ *
+ * A group's number is the PID of the process that made it. Linux and macOS
+ * give a new process no PID that a process or a process group still has, as
+ * POSIX requires, and Rach2 gives its PIDs out in order and comes back to
+ * the first only after two thousand million. So while a process of the
+ * attempt's group is left, no other process or group has its number, and
+ * when `child` names another process, the attempt's group has ended. A group
+ * of that number and session is another's only when, in the same boot, the
+ * attempt's group ended, the PIDs came round to the number again, and the
+ * process given it made a session of its own and ended before this look.
+ * The caller rules out a record of another boot, whose PIDs began again.
+ *
+ * @return the count, or -1 when it cannot be told: the processes cannot be
+ * listed, or none of the group is listed and kill(2) finds one.
+ */
+static int attempt_left(pid_t child, unsigned long long start)
+{
+    unsigned long long now = proc_start(child);
+    int live = 0;
+    int seen = 0;
+
+    if (now != 0 && now != start)
+        return 0;
+    if (count_group(child, &live, &seen) < 0 || seen == 0)
+        return kill(-child, 0) < 0 && errno == ESRCH ? 0 : -1;
+    return live;
 }
 
 /**
- * Whether process group `pgid` ends within `bound_us` microseconds: kill(2)
- * finds no process in it, or each one left is a zombie. It is looked at
- * every 10 ms until it has ended or the bound has passed.
+ * Whether no process of the group that an attempt's child made is left
+ * running, as attempt_left counts them, within `bound_us` microseconds. It
+ * is looked at every 10 ms until none is left or the bound has passed.
  */
-static int group_ended(pid_t pgid, int64_t bound_us)
+static int attempt_ended(pid_t child, unsigned long long start, int64_t bound_us)
 {
     int64_t until = now_us() + bound_us;
     struct timespec ts;
 
     for (;;) {
-        if ((kill(-pgid, 0) < 0 && errno == ESRCH) || only_zombies(pgid))
+        if (attempt_left(child, start) == 0)
             return 1;
         if (now_us() >= until)
             return 0;
@@ -2089,11 +2165,14 @@ static int group_ended(pid_t pgid, int64_t bound_us)
 
 /**
  * Settle the record of an attempt whose owner is gone without writing its
- * end, as when an etude-guest was killed: its child, when it is still the
- * process the record names, is killed with its group, and the attempt is
- * recorded as lost, since neither its end nor its output's sizes were seen.
- * Its cleanup is confirmed once the group has ended, which a killed group
- * is given SETTLE_US to do. `record` is given the settled record's text.
+ * end, as when an etude-guest was killed: what is left of the group that its
+ * child made is killed, whether or not the child itself still runs, and the
+ * attempt is recorded as lost, since neither its end nor its output's sizes
+ * were seen. Nothing of an attempt of another boot runs, and nothing is
+ * killed for it; a record that gives no boot is taken as this boot's, and
+ * its boot is written back as `-`. Its cleanup is confirmed once nothing of
+ * the group is left, which a killed group is given SETTLE_US to do.
+ * `record` is given the settled record's text.
  *
  * @return 1 when the record was settled, 0 when it needed nothing.
  */
@@ -2101,6 +2180,7 @@ static int settle_orphan(const char *token, char *record)
 {
     char cmd[24];
     char sess[ETUDE_FRAME_TOKEN_LEN + 1];
+    char was[ETUDE_FRAME_TOKEN_LEN + 1] = "-";
     long owner = 0;
     long child = 0;
     unsigned long long owner_start = 0;
@@ -2109,6 +2189,8 @@ static int settle_orphan(const char *token, char *record)
     char finals[5 * LINE_CAP];
     char path[PATH_CAP];
     char text[4096];
+    int here;
+    int left;
     int killed;
     int gone;
 
@@ -2119,9 +2201,11 @@ static int settle_orphan(const char *token, char *record)
     if (!p || (strncmp(p + 7, "running", 7) != 0 && strncmp(p + 7, "preparing", 9) != 0) ||
         same_process((pid_t)owner, owner_start))
         return 0;
-    killed =
-        child > 0 && same_process((pid_t)child, child_start) && kill(-(pid_t)child, SIGKILL) == 0;
-    gone = child <= 0 || group_ended((pid_t)child, killed ? SETTLE_US : 0);
+    p = strstr(record, "\nboot ");
+    here = !p || (sscanf(p + 6, "%16s", was) == 1 && strcmp(was, boot) == 0);
+    left = child > 0 && here ? attempt_left((pid_t)child, child_start) : 0;
+    killed = left > 0 && kill(-(pid_t)child, SIGKILL) == 0;
+    gone = left == 0 || attempt_ended((pid_t)child, child_start, killed ? SETTLE_US : 0);
     if (path_of(path, "%s/a/%s", opt.state, token) < 0 || fixture_settle(path) < 0)
         gone = 0;
     snprintf(finals, sizeof(finals),
@@ -2129,8 +2213,9 @@ static int settle_orphan(const char *token, char *record)
              ETUDE_EV_EXIT, cmd, token, ETUDE_EV_STREAM, cmd, token, ETUDE_EV_STREAM, cmd, token,
              ETUDE_EV_USAGE, cmd, token, ETUDE_EV_CLEANED, cmd, token,
              gone ? "confirmed" : "unconfirmed");
-    snprintf(text, sizeof(text), "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nstate %s\n%s",
-             cmd, sess, (long)self_pid, self_start, child, child_start, gone ? "cleaned" : "ended",
+    snprintf(text, sizeof(text),
+             "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nboot %s\nstate %s\n%s", cmd, sess,
+             (long)self_pid, self_start, child, child_start, was, gone ? "cleaned" : "ended",
              finals);
     if (path_of(path, "%s/a/%s/record", opt.state, token) == 0)
         write_file(path, text, strlen(text));

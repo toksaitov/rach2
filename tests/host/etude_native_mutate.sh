@@ -37,9 +37,9 @@ faults = {
     'lock': ('        if (lock_session() < 0) {', '        if (0 && lock_session() < 0) {'),
     'supersede': ('            kill((pid_t)pid, SIGTERM);\n', ''),
     'settle': ('            cmd_append(cmd, line + 1);\n', ''),
-    'immediate': ('    gone = child <= 0 || group_ended((pid_t)child, killed ? SETTLE_US : 0);\n',
-                  '    gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);\n'
-                  '    (void)killed;\n    (void)group_ended;\n'),
+    'immediate': ('    gone = left == 0 || attempt_ended((pid_t)child, child_start, killed ? SETTLE_US : 0);\n',
+                  '    gone = left == 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);\n'
+                  '    (void)killed;\n    (void)attempt_ended;\n'),
     'cancelled': ('    c->res->cancelled = 1;\n', ''),
     'reconnect': ('        if (res->reconnects > 0) {', '        if (0) {'),
     'remove': ('    if (code == EXIT_PASS && !o->keep) {', '    if (0) {'),

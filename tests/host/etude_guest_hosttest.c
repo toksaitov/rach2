@@ -107,10 +107,27 @@ static void end_guest(void)
     guest = -1;
 }
 
-/** Reap the guest and remove every fixture, on every exit path. */
+/* The processes that hold the groups of check_unrelated_groups, or -1. */
+static long holders[2] = {-1, -1};
+
+/** Kill the processes that hold the groups made by make_group(). */
+static void end_groups(void)
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        if (holders[i] > 0)
+            kill((pid_t)holders[i], SIGKILL);
+        holders[i] = -1;
+    }
+}
+
+/** Reap the guest, end the groups made here and remove every fixture, on
+ * every exit path. */
 static void cleanup(void)
 {
     end_guest();
+    end_groups();
     if (*work)
         remove_tree(work);
 }
@@ -963,6 +980,181 @@ static void check_orphan(void)
     bye(0);
 }
 
+/** Send `status` for `token` and read the six frames of its answer; whether
+ * they give an orphaned attempt settled as lost and cleaned, its cleanup
+ * confirmed. */
+static int settled_confirmed(const char *token)
+{
+    struct got g;
+    char c[24];
+    int ok;
+
+    send_cmd(ETUDE_CMD_STATUS, new_cmd(c), token, (char *)NULL);
+    ok = expect(&g, ETUDE_EV_STATE, 5000) == 0 && strcmp(g.field[2], "cleaned") == 0;
+    ok = expect(&g, ETUDE_EV_EXIT, 5000) == 0 && strcmp(g.field[2], "lost") == 0 && ok;
+    ok = streams_follow("-") && ok;
+    ok = expect(&g, ETUDE_EV_USAGE, 5000) == 0 && ok;
+    return expect(&g, ETUDE_EV_CLEANED, 5000) == 0 && strcmp(g.field[2], "confirmed") == 0 && ok;
+}
+
+/** A killed etude-guest whose attempt's first process ends after it, and
+ * leaves a process in the attempt's group: the next etude-guest kills what
+ * is left of the group and confirms the cleanup. */
+static void check_orphan_group(void)
+{
+    static const char leaving[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
+                                  "echo $$ > \"$MARKS.leader\"\nsleep 60 &\n"
+                                  "echo $! > \"$MARKS.member\"\necho ready\n"
+                                  "while kill -0 $PPID 2>/dev/null; do sleep 1; done\n";
+    struct got g;
+    char inv[65];
+    char c[24];
+    long long until;
+    long leader;
+    long member;
+    int open_end;
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("leaving", leaving, "00000000000000d9", "ordinary", 60000, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d9", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STARTED, 5000) == 0,
+          "the attempt whose first process leaves its group starts");
+    CHECK(wait_ready() == 0, "the attempt says it is ready");
+    leader = read_pid("marks.leader");
+    member = read_pid("marks.member");
+    end_guest();
+    until = now_ms() + 10000;
+    while (alive(leader) && now_ms() < until)
+        poll(NULL, 0, 20);
+    CHECK(leader > 0 && !alive(leader) && alive(member),
+          "the first process ends after etude-guest and leaves a process in its group");
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    CHECK(settled_confirmed("00000000000000d9"),
+          "an orphaned attempt whose first process has ended has its group killed and its cleanup "
+          "confirmed");
+    CHECK(all_gone(open_end, 2000),
+          "the next etude-guest ends the process an orphaned attempt left in its group");
+    bye(0);
+}
+
+/**
+ * Make a process group whose first process has ended, the shape an attempt
+ * leaves: a first process makes a group of its own, and a session of its
+ * own too when `own_session` is set, starts a second, and exits. The second
+ * holds the FIFO `name` of the scratch directory open for writing and
+ * sleeps. The group's number goes to `*group`; the second's PID, or -1.
+ */
+static long make_group(const char *name, int own_session, long *group)
+{
+    char path[600];
+    long pid = -1;
+    pid_t first;
+    int p[2];
+    int fd;
+    int i;
+
+    snprintf(path, sizeof(path), "%s/%s", work, name);
+    if (pipe(p) < 0)
+        return -1;
+    first = fork();
+    if (first == 0) {
+        if ((own_session ? setsid() : setpgid(0, 0)) < 0 || fork() != 0)
+            _exit(0);
+        pid = (long)getpid();
+        fd = open(path, O_WRONLY);
+        if (fd < 0 || write(p[1], &pid, sizeof(pid)) != (ssize_t)sizeof(pid))
+            _exit(1);
+        i = open("/dev/null", O_RDWR);
+        dup2(i, 0);
+        dup2(i, 1);
+        dup2(i, 2);
+        for (i = 3; i < 1024; i++)
+            if (i != fd)
+                close(i);
+        execl("/bin/sleep", "sleep", "120", (char *)NULL);
+        _exit(127);
+    }
+    close(p[1]);
+    if (first < 0 || read(p[0], &pid, sizeof(pid)) != (ssize_t)sizeof(pid))
+        pid = -1;
+    close(p[0]);
+    if (first > 0)
+        waitpid(first, NULL, 0);
+    *group = (long)first;
+    return pid;
+}
+
+/** Whether a process still holds the FIFO `fd`, opened by watch(), open for
+ * writing: a read finds neither data nor the end. */
+static int still_open(int fd)
+{
+    char buf[64];
+
+    return fd >= 0 && read(fd, buf, sizeof(buf)) < 0 && errno == EAGAIN;
+}
+
+/** Write the record that a killed etude-guest leaves of attempt `token`,
+ * running, with its child `child` in the boot `bootid`; 0, or -1. The
+ * record's session is not the test's, so that `status` settles it. */
+static int orphan_record(const char *token, long child, const char *bootid)
+{
+    char path[700];
+    FILE *f;
+    int ok;
+
+    snprintf(path, sizeof(path), "%s/state/a/%s", work, token);
+    if (mkdir(path, 0700) < 0 && errno != EEXIST)
+        return -1;
+    snprintf(path, sizeof(path), "%s/state/a/%s/record", work, token);
+    f = fopen(path, "w");
+    if (!f)
+        return -1;
+    ok = fprintf(f,
+                 "cmd 9000\nsession 5e551011a00000ff\nowner 0 0\nchild %ld 1\nboot %s\n"
+                 "state running\n",
+                 child, bootid) > 0;
+    return fclose(f) == 0 && ok ? 0 : -1;
+}
+
+/**
+ * Orphaned attempts whose child's number now has a group that is not the
+ * attempt's, made here by hand: a group of the shape an attempt leaves, its
+ * first process ended and its second in the session the first made, named
+ * by a record of another boot; and a group of this boot whose first process
+ * has ended and whose second is in another session. The next etude-guest
+ * settles each attempt, kills neither group, and confirms each cleanup.
+ */
+static void check_unrelated_groups(void)
+{
+    char another[ETUDE_FRAME_TOKEN_LEN + 1];
+    long group[2] = {0, 0};
+    int fd[2];
+
+    fd[0] = watch("group.boot");
+    fd[1] = watch("group.session");
+    holders[0] = make_group("group.boot", 1, &group[0]);
+    holders[1] = make_group("group.session", 0, &group[1]);
+    CHECK(holders[0] > 0 && holders[1] > 0 && still_open(fd[0]) && still_open(fd[1]),
+          "two groups whose first processes have ended are made");
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    snprintf(another, sizeof(another), "%s", boot);
+    another[0] = another[0] == '0' ? '1' : '0';
+    CHECK(orphan_record("00000000000000da", group[0], another) == 0 &&
+              orphan_record("00000000000000db", group[1], boot) == 0,
+          "the records of the orphaned attempts are made");
+    CHECK(settled_confirmed("00000000000000da") && still_open(fd[0]),
+          "an orphaned attempt of another boot is settled with nothing killed");
+    CHECK(settled_confirmed("00000000000000db") && still_open(fd[1]),
+          "a group of another session is not taken for an orphaned attempt's");
+    bye(0);
+    end_groups();
+    CHECK(all_gone(fd[0], 2000) && all_gone(fd[1], 2000), "the groups made here are ended");
+}
+
 /** Read the file `path`, at most `cap - 1` bytes, into `buf` with a NUL;
  * its length, or -1. */
 static long read_text(const char *path, char *buf, size_t cap)
@@ -1423,6 +1615,8 @@ int main(int argc, char **argv)
     check_sizes();
     check_interruptions();
     check_orphan();
+    check_orphan_group();
+    check_unrelated_groups();
     check_unfinished_end();
     check_record_first();
     check_stdio_damage();
