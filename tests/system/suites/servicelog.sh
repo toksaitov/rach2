@@ -22,8 +22,8 @@
 #
 # Usage: servicelog.sh KERNEL HARNESS MKMBR INIT UPDATE BUSYBOX DIR
 #
-# INIT is the init-shell binary, which tests/system/servicelog_mutate.sh builds
-# from a private copy. The disk and the consoles are in DIR.
+# INIT is the init-shell binary, which tests/proofs/servicelog.json builds with
+# each of its faults. The disk and the consoles are in DIR.
 #
 
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
