@@ -167,7 +167,7 @@ static void add_joined(struct line *l, const char *const *list)
 
 int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memory *out)
 {
-    struct etude_qemu_memory m = {p->memory_bytes, p->memory_bytes, 128u << 20, 0};
+    struct etude_qemu_memory m = {p->memory_bytes, p->memory_bytes, ETUDE_QEMU_OVERHEAD, 0};
 
     if (p->memory_bytes == 0 || p->memory_bytes % (1u << 20) != 0)
         return EINVAL;

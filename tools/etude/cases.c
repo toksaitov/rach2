@@ -603,7 +603,11 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
     return 0;
 }
 
-/** Require a reservation for every machine, including QEMU's overhead. */
+/**
+ * Require a reservation that covers every machine of the case together, each
+ * with QEMU's overhead. One boundary machine, declared exactly by
+ * `guest_memory`, may be among them; no other machine has reduced backing.
+ */
 static void memory_resources(const struct rule *r, const struct json *res)
 {
     const struct json *machines = json_member(r->c, "machines");
@@ -635,7 +639,7 @@ static void memory_resources(const struct rule *r, const struct json *res)
         finding(r->file, res->line, "%s: memory_bytes does not reserve QEMU memory and overhead",
                 json_text(r->c, "case_id"));
     if (lazy != 0 &&
-        (lazy != 1 || n != 1 || guest == NULL || !same(json_text(guest, "backing"), "lazy") ||
+        (lazy != 1 || guest == NULL || !same(json_text(guest, "backing"), "lazy") ||
          (uint64_t)json_member(guest, "configured_bytes")->integer != special.configured_bytes ||
          (uint64_t)json_member(guest, "resident_bytes")->integer != special.resident_bytes))
         finding(r->file, res->line, "%s: boundary memory needs its exact guest_memory declaration",

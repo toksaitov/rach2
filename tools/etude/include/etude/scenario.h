@@ -95,7 +95,9 @@ const char *etude_private_copy(struct etude_case *c, const char *name);
  *
  * The accelerator is the plan's; a failure to start it returns ETUDE_FAILED
  * with the end ETUDE_END_ACCEL_FAILED in `end`, and is not retried with
- * another.
+ * another. A boot of a case whose `resources.memory_bytes` does not cover
+ * every machine the manifest declares returns ETUDE_REFUSED before QEMU
+ * starts.
  */
 enum etude_status etude_boot(struct etude_case *c, const char *machine, const char *const disks[],
                              struct etude_case_machine **m, struct etude_termination *end);

@@ -53,6 +53,9 @@ struct etude_qemu_memory {
     uint64_t backing_bytes;  /* disk backing; zero for anonymous RAM */
 };
 
+/* The overhead an ordinary machine reserves for QEMU and its controller. */
+#define ETUDE_QEMU_OVERHEAD (UINT64_C(128) << 20)
+
 #define ETUDE_BIGMEM_CONFIGURED (UINT64_C(72) << 30)
 #define ETUDE_BIGMEM_RESIDENT   (UINT64_C(2) << 30)
 #define ETUDE_BIGMEM_OVERHEAD   (UINT64_C(2) << 30)

@@ -1170,6 +1170,82 @@ static int strings(const struct eh_json *v, const char **out, size_t max)
     return 0;
 }
 
+/** Give the firmware a profile's `firmware` names: direct when it names
+ * neither SeaBIOS nor OVMF. */
+static enum etude_firmware firmware_of(const char *firmware)
+{
+    if (firmware != NULL && strcmp(firmware, "seabios") == 0)
+        return ETUDE_FIRMWARE_SEABIOS;
+    if (firmware != NULL && strcmp(firmware, "ovmf") == 0)
+        return ETUDE_FIRMWARE_OVMF;
+    return ETUDE_FIRMWARE_DIRECT;
+}
+
+/**
+ * Give the memory a boot of declaration `d` reserves on the case's
+ * architecture: its resident RAM and QEMU's overhead, as etude_qemu_memory
+ * resolves its profile. A profile the launcher refuses counts as an ordinary
+ * machine of its configured RAM; the launcher refuses its boot.
+ */
+static uint64_t decl_need(const struct etude_case *c, const struct machine_decl *d)
+{
+    const struct eh_json *qp = d->qemu;
+    const char *disks[DISKS_MAX + 1], *devices[DEVICES_MAX + 1], *options[OPTIONS_MAX + 1];
+    struct etude_qemu_profile p;
+    struct etude_qemu_memory mem;
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = c->arch;
+    p.initrd = jtext(qp, "initrd");
+    p.cpu = jtext(qp, "cpu");
+    p.processors = (unsigned)jnum(qp, "processors");
+    p.memory_bytes = jnum(qp, "memory_bytes");
+    p.memory_profile = jtext(qp, "memory_profile");
+    p.firmware = firmware_of(jtext(qp, "firmware"));
+    if (strings(eh_json_get(qp, "disks"), disks, DISKS_MAX) == 0 &&
+        strings(eh_json_get(qp, "devices"), devices, DEVICES_MAX) == 0 &&
+        strings(eh_json_get(qp, "boot_options"), options, OPTIONS_MAX) == 0) {
+        p.disks = disks;
+        p.devices = devices;
+        p.boot_options = options;
+        if (etude_qemu_memory(&p, &mem) == 0)
+            return mem.resident_bytes + mem.overhead_bytes;
+    }
+    return p.memory_bytes > UINT64_MAX - ETUDE_QEMU_OVERHEAD ? UINT64_MAX
+                                                             : p.memory_bytes + ETUDE_QEMU_OVERHEAD;
+}
+
+/**
+ * Check that the case's `resources.memory_bytes` covers every machine it
+ * declares, whether it runs now or not, and give in `*share` what that leaves
+ * for a boot of `d`: the reservation less what the other machines reserve.
+ * The launcher requires the share to cover a boundary machine's reservation.
+ *
+ * @return ETUDE_OK, or ETUDE_REFUSED when the machines together need more
+ *         than the case reserves.
+ */
+static enum etude_status memory_share(const struct etude_case *c, const struct machine_decl *d,
+                                      uint64_t *share)
+{
+    uint64_t reserved = jnum(eh_json_get(c->kase, "resources"), "memory_bytes");
+    uint64_t own = decl_need(c, d), others = 0, need;
+    size_t i;
+
+    for (i = 0; i < c->decl_count; i++) {
+        if (&c->decls[i] == d)
+            continue;
+        need = decl_need(c, &c->decls[i]);
+        others = others > UINT64_MAX - need ? UINT64_MAX : others + need;
+    }
+    if (own > reserved || others > reserved - own) {
+        diag("machine %s: the case reserves %llu bytes of memory, less than its %lu machines need",
+             d->id, (unsigned long long)reserved, (unsigned long)c->decl_count);
+        return ETUDE_REFUSED;
+    }
+    *share = reserved - others;
+    return ETUDE_OK;
+}
+
 /** Make the launcher's profile of boot `m` with the disks `disks`, names of
  * the profile's own disks, or all of them for NULL. */
 static enum etude_status make_profile(struct etude_case_machine *m, const char *const disks[])
@@ -1209,12 +1285,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->memory_profile = jtext(qp, "memory_profile");
     p->devices = m->devices;
     p->boot_options = m->options;
-    if (firmware != NULL && strcmp(firmware, "seabios") == 0)
-        p->firmware = ETUDE_FIRMWARE_SEABIOS;
-    else if (firmware != NULL && strcmp(firmware, "ovmf") == 0)
-        p->firmware = ETUDE_FIRMWARE_OVMF;
-    else
-        p->firmware = ETUDE_FIRMWARE_DIRECT;
+    p->firmware = firmware_of(firmware);
     if (p->kernel == NULL || (jtext(qp, "initrd") != NULL && p->initrd == NULL)) {
         diag("machine %s: its kernel or RAM image is not an artifact that checks", m->decl->id);
         return ETUDE_REFUSED;
@@ -1329,6 +1400,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     enum etude_status st;
     char name[200];
     const char *console;
+    uint64_t share;
 
     *mp = NULL;
     end->end = ETUDE_END_LOST;
@@ -1344,6 +1416,10 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     }
     if (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) {
         diag("machine %s runs already", machine);
+        c->faults++;
+        return ETUDE_REFUSED;
+    }
+    if (memory_share(c, d, &share) != ETUDE_OK) {
         c->faults++;
         return ETUDE_REFUSED;
     }
@@ -1369,7 +1445,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     m->spec.console_path = console;
     m->spec.console_max = (size_t)c->console_max;
     m->spec.grace_us = c->grace_us;
-    m->spec.memory_reserved_bytes = jnum(eh_json_get(c->kase, "resources"), "memory_bytes");
+    m->spec.memory_reserved_bytes = share;
     if (console == NULL || etude_qemu_start(c->q, &m->spec, &m->m) != 0) {
         diag("machine %s: QEMU did not start: %s", machine, strerror(errno));
         free(m);

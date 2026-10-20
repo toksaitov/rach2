@@ -30,15 +30,17 @@
  * scenario's wait, its machine and its report, and keeps its copies; a
  * scenario that asks for what its manifest does not declare is refused; a
  * failed accelerator, a damaged artifact and an unsafe memory profile are
- * reported. Under the stand-in the machine's etude-guest runs a guest
- * program whose report becomes the scenario's, and an etude-guest killed in
- * the middle of a run is a lost end. This program is also the peer that a
- * scenario runs as a service; two machines at once reach it, a service ended
- * unseen is a fault, and failing rows at each stage end their own processes
- * while a held row keeps its own. With the real QEMU, a disk root written at
- * the debug shell and powered off is read back by the next boot, etude-guest
- * runs the test image's /hello, and two machines run /tcptest against the
- * peer.
+ * reported. A case of a boundary machine and an ordinary one whose reservation
+ * covers the boundary machine alone has a boot of either refused before QEMU
+ * starts; with both covered, the boundary machine boots on the reservation left
+ * beside the other. Under the stand-in the machine's etude-guest runs a guest
+ * program whose report becomes the scenario's, and an etude-guest killed in the
+ * middle of a run is a lost end. This program is also the peer that a scenario
+ * runs as a service; two machines at once reach it, a service ended unseen is a
+ * fault, and failing rows at each stage end their own processes while a held
+ * row keeps its own. With the real QEMU, a disk root written at the debug shell
+ * and powered off is read back by the next boot, etude-guest runs the test
+ * image's /hello, and two machines run /tcptest against the peer.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -864,6 +866,34 @@ static int scenario_noboot(struct etude_case *c, const char *row)
     return 0;
 }
 
+/**
+ * Run the memory rows of two machines, a boundary machine and an ordinary
+ * one. In memory-pair the case reserves the boundary machine's memory alone,
+ * and a boot of either is refused before QEMU starts; in memory-share it
+ * reserves both, and the boundary machine boots.
+ */
+static int scenario_memory(struct etude_case *c, const char *row)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    enum etude_status st;
+
+    if (etude_step(c, "boot") != ETUDE_OK)
+        return 1;
+    st = etude_boot(c, "fixture", NULL, &m, &end);
+    if (strcmp(row, "memory-share") == 0) {
+        expect(c, "admitted", st, ETUDE_OK);
+        return 0;
+    }
+    expect(c, "refused", st, ETUDE_REFUSED);
+    etude_assert(c, "memory-pair", m == NULL && end.end == ETUDE_END_LOST,
+                 "a boundary machine started beside another");
+    if (etude_step(c, "other") != ETUDE_OK)
+        return 1;
+    expect(c, "other-refused", etude_boot(c, "other", NULL, &m, &end), ETUDE_REFUSED);
+    return 0;
+}
+
 /** Run the guest rows: a program whose report becomes the scenario's, and
  * one that kills etude-guest under it. */
 static int scenario_guest(struct etude_case *c, int real)
@@ -1163,6 +1193,8 @@ int etude_scenario(struct etude_case *c)
         return scenario_noboot(c, row);
     if (strcmp(row, "guest") == 0 || strcmp(row, "real-guest") == 0)
         return scenario_guest(c, row[0] == 'r');
+    if (strcmp(row, "memory-pair") == 0 || strcmp(row, "memory-share") == 0)
+        return scenario_memory(c, row);
     return scenario_services(c, row);
 }
 
@@ -1296,13 +1328,50 @@ static void json_list(char *out, size_t size, const char *words, int steps)
     strcat(out, "]");
 }
 
-/** Write row `r`'s case, as one family's manifest, to `path`. */
+/* The machines of the memory rows: a boundary machine, x86-64 alone, and an
+ * ordinary one. */
+static const char memory_machines[] =
+    "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": \"initrd\", "
+    "\"disks\": [], \"cpu\": \"max-nopdpe1gb\", \"processors\": 1, \"memory_bytes\": "
+    "77309411328, \"memory_profile\": \"bigmem-boundary-v1\", \"firmware\": \"direct\", "
+    "\"devices\": [], \"boot_options\": [\"rach2.rescue\"]}, \"console\": \"serial\", \"qmp\": "
+    "true, \"helper\": false}, {\"machine_id\": \"other\", \"qemu\": {\"kernel\": \"kernel\", "
+    "\"initrd\": null, \"disks\": [], \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": "
+    "134217728, \"firmware\": \"direct\", \"devices\": [], \"boot_options\": []}, \"console\": "
+    "\"serial\", \"qmp\": true, \"helper\": false}";
+
+/** Say whether row `r` is a memory row of two machines, whose case runs on
+ * x86-64 at a site that permits the boundary profile. */
+static int boundary_pair(const struct row *r)
+{
+    return strncmp(r->name, "memory-", 7) == 0;
+}
+
+/** Write row `r`'s case, as one family's manifest, to `path`. A memory row
+ * of two machines reserves the boundary machine's memory, and in
+ * memory-share the other's as well. */
 static int write_manifest(const char *path, const struct row *r)
 {
-    char steps[2048], asserts[4096], text[16384];
+    char steps[2048], asserts[4096], machine[1024], text[16384];
+    unsigned long long reserved = 268435456;
 
     json_list(steps, sizeof(steps), r->steps, 1);
     json_list(asserts, sizeof(asserts), r->asserts, 0);
+    if (boundary_pair(r)) {
+        fix_format(machine, sizeof(machine), "%s", memory_machines);
+        reserved = strcmp(r->name, "memory-share") == 0 ? 4563402752ull : 4294967296ull;
+    } else {
+        fix_format(
+            machine, sizeof(machine),
+            "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
+            "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
+            "%s\"firmware\": \"direct\", \"devices\": [], \"boot_options\": %s}, \"console\": "
+            "\"serial\", \"qmp\": %s, \"helper\": %s}",
+            r->helper ? "\"initrd\"" : "null", r->disk != NULL ? "[\"disk\"]" : "[]",
+            strcmp(r->name, "memory") == 0 ? "\"memory_profile\": \"bigmem-boundary-v1\", " : "",
+            r->mode == NULL && r->disk != NULL ? "[\"rach2.fsdisk\"]" : "[]",
+            strcmp(r->name, "misuse") == 0 ? "false" : "true", r->helper ? "true" : "false");
+    }
     fix_format(
         text, sizeof(text),
         "{\"schema_version\": 1, \"family_id\": \"test.scenario\", \"summary\": \"rows\", "
@@ -1313,18 +1382,15 @@ static int write_manifest(const char *path, const struct row *r)
         "\"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\", "
         "\"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}, "
         "{\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\", \"cleanup\": "
-        "\"the library\"}, \"steps\": %s, \"machines\": [{\"machine_id\": \"fixture\", "
-        "\"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, \"disks\": %s, \"cpu\": \"max\", "
-        "\"processors\": 1, \"memory_bytes\": 134217728, %s\"firmware\": \"direct\", \"devices\": "
-        "[], \"boot_options\": %s}, \"console\": \"serial\", \"qmp\": %s, \"helper\": %s}], "
-        "\"assertions\": %s, \"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": "
-        "0}, \"progress\": [{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step "
+        "\"the library\"}, \"steps\": %s, \"machines\": [%s], \"assertions\": %s, "
+        "\"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": 0}, \"progress\": "
+        "[{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step "
         "ended\", \"limit\": 8}, {\"witness_id\": \"waiting\", \"kind\": \"quiet\", \"means\": "
         "\"a wait\", \"limit\": null, \"bound\": {\"floor_us\": 1, \"initial_us\": 2, "
         "\"ceiling_us\": 3}}], \"bounds\": {\"case\": {\"floor_us\": 1, \"initial_us\": 2, "
         "\"ceiling_us\": 3}, \"gap\": {\"floor_us\": 1, \"initial_us\": 2, \"ceiling_us\": 3}, "
         "\"stages\": {}}, \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, "
-        "\"memory_bytes\": 268435456, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": 0, "
+        "\"memory_bytes\": %llu, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": 0, "
         "\"loop_devices\": 0}, \"prepare\": [{\"name\": \"kernel\", \"node\": \"k\", "
         "\"per_architecture\": true}, {\"name\": \"disk\", \"node\": \"d\", \"per_architecture\": "
         "true}, {\"name\": \"initrd\", \"node\": \"i\", \"per_architecture\": true}, {\"name\": "
@@ -1332,10 +1398,7 @@ static int write_manifest(const char *path, const struct row *r)
         "\"node\": \"v\", \"per_architecture\": false}, {\"name\": \"killer\", \"node\": \"x\", "
         "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
         "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
-        r->name, steps, r->helper ? "\"initrd\"" : "null", r->disk != NULL ? "[\"disk\"]" : "[]",
-        strcmp(r->name, "memory") == 0 ? "\"memory_profile\": \"bigmem-boundary-v1\", " : "",
-        r->mode == NULL && r->disk != NULL ? "[\"rach2.fsdisk\"]" : "[]",
-        strcmp(r->name, "misuse") == 0 ? "false" : "true", r->helper ? "true" : "false", asserts);
+        r->name, steps, machine, asserts, reserved);
     return write_file(path, text, strlen(text));
 }
 
@@ -1381,7 +1444,7 @@ static int write_pair_manifest(const char *path, const struct row *r)
         "\"ceiling_us\": 3}}], \"bounds\": {\"case\": {\"floor_us\": 1, \"initial_us\": 2, "
         "\"ceiling_us\": 3}, \"gap\": {\"floor_us\": 1, \"initial_us\": 2, \"ceiling_us\": 3}, "
         "\"stages\": {}}, \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, "
-        "\"memory_bytes\": 268435456, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": 1, "
+        "\"memory_bytes\": 536870912, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": 1, "
         "\"loop_devices\": 0}, \"prepare\": [{\"name\": \"kernel\", \"node\": \"k\", "
         "\"per_architecture\": true}, {\"name\": \"disk\", \"node\": \"d\", \"per_architecture\": "
         "true}, {\"name\": \"disk2\", \"node\": \"d\", \"per_architecture\": true}, {\"name\": "
@@ -1428,14 +1491,16 @@ static int write_scenario(const char *path, const struct row *r, const struct si
                "\"%s\", \"store\": \"%s\", \"artifacts\": {\"kernel\": \"%s\", \"disk\": \"%s\", "
                "\"initrd\": \"%s\", \"scanner\": \"%s\", \"invocation\": \"%s\", \"killer\": "
                "\"%s\", \"disk2\": \"%s\", \"broken\": \"%s\"}, \"tools\": {}, \"site\": "
-               "{\"accel\": \"tcg\", \"qemu_i686\": \"%s\", \"qemu_x86_64\": \"%s\", "
-               "\"ovmf_i686\": null, \"ovmf_x86_64\": null}, \"steps\": {%s}, \"ports\": [%s], "
-               "\"cleanup_us\": 30000000, \"scratch\": \"%s\", \"grace_us\": %u, "
+               "{\"accel\": \"tcg\", \"boundary_lazy\": %s, \"qemu_i686\": \"%s\", "
+               "\"qemu_x86_64\": \"%s\", \"ovmf_i686\": null, \"ovmf_x86_64\": null}, "
+               "\"steps\": {%s}, \"ports\": [%s], \"cleanup_us\": 30000000, \"scratch\": \"%s\", "
+               "\"grace_us\": %u, "
                "\"console_max_bytes\": 16777216, \"output_max_bytes\": 1048576, "
                "\"resend_us\": 200000}",
-               r->name, manifest, r->name, s->arch, s->store_dir, s->kernel, s->disk, s->initrd,
-               s->scanner, s->inv, s->killer, s->disk, s->broken, s->qemu_i686, s->qemu_x86_64,
-               steps, ports, scratch, r->mode != NULL ? 300000u : 5000000u);
+               r->name, manifest, r->name, boundary_pair(r) ? "x86_64" : s->arch, s->store_dir,
+               s->kernel, s->disk, s->initrd, s->scanner, s->inv, s->killer, s->disk, s->broken,
+               boundary_pair(r) ? "true" : "false", s->qemu_i686, s->qemu_x86_64, steps, ports,
+               scratch, r->mode != NULL ? 300000u : 5000000u);
     return write_file(path, text, strlen(text));
 }
 
@@ -2226,6 +2291,10 @@ static const struct row stand_in_rows[] = {
      NULL, 0},
     {"memory", "disk", "boot:fixture", "refused memory-profile", "disk", 0, STEP_US, 0, 1, 1, 0,
      NULL, 0, NULL, 0},
+    {"memory-pair", "disk", "boot:fixture other:other", "refused memory-pair other-refused", NULL,
+     0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
+    {"memory-share", "disk", "boot:fixture", "admitted", NULL, 0, STEP_US, 0, 1, 0, 0, NULL, 0,
+     NULL, 0},
     {"guest", "disk", "run:fixture", "guest-pass guest-exit guest-ran guest-lost guest-lost-end",
      NULL, 1, LOSS_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
 };
