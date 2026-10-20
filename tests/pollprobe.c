@@ -12,7 +12,8 @@
  *       the fd_set to pollfd translation and, on i386, _newselect;
  *   (e) block and wake: a parent polls with a 60-second timeout while a
  *       forked child writes once it sees the parent asleep, and the poll
- *       returns the pipe readable (the row does not time the wake);
+ *       returns the pipe readable with the child's byte in it (the row does
+ *       not time the wake);
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
  *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
  *       width is -EINVAL, not a truncation;
@@ -302,12 +303,14 @@ static void console_modes(void)
  * /proc shows the parent asleep, in the call or, for a parent whose timeout
  * was cut to zero and which returned at once, in its wait for the child. A
  * child that ends without writing leaves the pipe with no writer, and the
- * call returns POLLHUP without POLLIN.
+ * call returns POLLHUP without POLLIN; the read that follows must return the
+ * child's byte.
  */
 static void wide_ppoll(void)
 {
     long ts[2] = {4294967296L, 0};
     struct pollfd pfd[1];
+    char buf[1];
     int c[2], pid, status;
 
     check(do_pipe(c) == 0, "pipe for the ppoll row");
@@ -322,6 +325,7 @@ static void wide_ppoll(void)
     pfd[0].revents = 0;
     check(syscall5(SYS_PPOLL, (long)pfd, 1, (long)ts, 0, 8) == 1 && (pfd[0].revents & POLLIN),
           "ppoll with a timeout of 2^32 seconds waits for its pipe");
+    check(do_read(c[0], buf, 1) == 1, "the pipe ppoll waited for has the child's byte");
     syscall3(SYS_WAITPID, pid, (long)&status, 0);
     syscall1(SYS_CLOSE, c[0]);
 }
@@ -389,7 +393,7 @@ PROBE_START void _start(void)
         n = do_poll(pfd, 1, 60000);
         check(n == 1 && (pfd[0].revents & POLLIN) != 0,
               "poll blocks then wakes on the child's write");
-        do_read(a[0], buf, 1);
+        check(do_read(a[0], buf, 1) == 1, "the pipe poll waited for has the child's byte");
         syscall3(SYS_WAITPID, pid, (long)&status, 0);
     }
     syscall1(SYS_CLOSE, a[0]);
