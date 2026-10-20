@@ -34,6 +34,8 @@ These variables change a run:
 | `RACH2_MIN_FREE_GIB` | 40 | free space a run of any suite besides `style` and `host` needs before it builds; 0 skips the check; when set, `make` too refuses to build with less |
 | `RACH2_RESULTS` | unset | a directory that keeps the run's history, `history/` and `store/`, and each command's output, `output/`; unset, they are in the run's scratch and removed with it |
 
+On an enrolled host, the [installed launcher](../tools/etude/Readme.md#installed-launch-admission) preserves explicit worker and memory limits for ordinary selections and supplies defaults of 8 workers and 16384 MiB. It reserves the resources of the selected suites, permitting ordinary runs in different accounts to overlap. Large-memory and explicitly serial suites take the host alone.
+
 A run that boots machines claims a block of host ports, so several clones on one host can run the same network suite at once; [the system tests' Readme](system/Readme.md) describes the claim and the other rules the runner keeps.
 
 The fault proofs, which compile a deliberate fault into the kernel or a program and require a test to catch it, are run by hand. Most are catalogues of etude's proof driver in `proofs/`, run as `build/tools/etude/etude-proof -t . tests/proofs/NAME.json` or, for one whose build reads the tree's own sources, `sh tools/etude/proof.sh tests/proofs/NAME.json`, as [etude's Readme](../tools/etude/Readme.md) describes under Proofs; the rest are scripts, run as `sh tests/host/NAME.sh`, `sh tests/system/NAME.sh` or `sh tests/system/accept/NAME.sh`. [The host tests' Readme](host/Readme.md) and the system tests' Readme name the proof of each test.

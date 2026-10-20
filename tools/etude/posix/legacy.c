@@ -288,12 +288,12 @@ static int stopped(const struct prep *p)
 /** Take one line of the registry as a suite; 0, or -1 when memory ran out. */
 static int take_suite(struct prep *p, char *line)
 {
-    char *field[6] = {NULL, "", "", "", "", ""};
+    char *field[7] = {NULL, "", "", "", "", "", ""};
     struct suite *more, *s;
     int i;
 
     field[0] = line;
-    for (i = 1; i < 6 && (line = strchr(line, '|')) != NULL; i++) {
+    for (i = 1; i < 7 && (line = strchr(line, '|')) != NULL; i++) {
         *line++ = '\0';
         field[i] = line;
     }

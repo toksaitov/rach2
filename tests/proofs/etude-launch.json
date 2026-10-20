@@ -9,7 +9,8 @@
     "tools/etude/launch.sh",
     "tools/ci/run.sh",
     "tools/ci/bisect.sh",
-    "tools/dev/testing.sh"
+    "tools/dev/testing.sh",
+    "tools/etude/make.sh"
   ],
   "artifacts": [
     "${WORK}/tree/Makefile",
@@ -17,7 +18,8 @@
     "${WORK}/tree/tools/etude/launch.sh",
     "${WORK}/tree/tools/ci/run.sh",
     "${WORK}/tree/tools/ci/bisect.sh",
-    "${WORK}/tree/tools/dev/testing.sh"
+    "${WORK}/tree/tools/dev/testing.sh",
+    "${WORK}/tree/tools/etude/make.sh"
   ],
   "build": {
     "argv": [
@@ -76,40 +78,6 @@
       }
     },
     {
-      "name": "ci-unclaimed",
-      "summary": "ci unclaimed",
-      "edits": [
-        {
-          "file": "tools/ci/run.sh",
-          "find": "    exec \"$launcher\" legacy sh \"$0\" \"$@\"",
-          "replace": "    :"
-        }
-      ],
-      "fails": {
-        "status": 1,
-        "lines": [
-          "etude-launch-test: failed: ci:"
-        ]
-      }
-    },
-    {
-      "name": "owner-unclaimed",
-      "summary": "owner unclaimed",
-      "edits": [
-        {
-          "file": "tools/dev/testing.sh",
-          "find": "    exec \"$launcher\" build bash -c \\\n",
-          "replace": "    : \\\n"
-        }
-      ],
-      "fails": {
-        "status": 1,
-        "lines": [
-          "etude-launch-test: failed: owner:"
-        ]
-      }
-    },
-    {
       "name": "bisection-unclaimed",
       "summary": "bisection unclaimed",
       "edits": [
@@ -132,8 +100,8 @@
       "edits": [
         {
           "file": "tools/etude/launch.sh",
-          "find": "\nexec \"$bridge\" -i -p -d \"$locks\" -w \"$wait\" \"$ledger\" \\\n    \"launch:$nonce\" \"$(id -un)\" alone \"$capacity\" \"$capacity\" \"$seconds\" \"$environment\" \"$@\"",
-          "replace": "\nexec \"$bridge\" -i -p -d \"$locks\" -w \"$wait\" \"$ledger\" \\\n    \"launch:$nonce\" \"$(id -un)\" alone \"4000,134217728,1048576\" \"$capacity\" \"$seconds\" \"$environment\" \"$@\""
+          "find": "    resources=$processors,$memory,$disk",
+          "replace": "    resources=$cpu,$memory,$disk"
         }
       ],
       "fails": {
@@ -263,19 +231,121 @@
       }
     },
     {
-      "name": "owner-newlines",
-      "summary": "command substitution strips trailing newlines from an owner command",
+      "name": "serialized-launches",
+      "summary": "serialized launches",
       "edits": [
         {
-          "file": "tools/dev/testing.sh",
-          "find": "        printf \"'\"\n        printf '%s' \"$*\" | sed \"s/'/'\\\\\\\\''/g\"\n        printf \"'\\n\"\n",
-          "replace": "        printf \"'%s'\\n\" \"$(printf '%s' \"$*\" | sed \"s/'/'\\\\\\\\''/g\")\"\n"
+          "file": "tools/etude/launch.sh",
+          "find": "mode=shared",
+          "replace": "mode=alone"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: build:"
+        ]
+      }
+    },
+    {
+      "name": "ignored-serial",
+      "summary": "ignored serial",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "$1 > half || $2 == \"serial\"",
+          "replace": "$1 > half"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: concurrency:"
+        ]
+      }
+    },
+    {
+      "name": "ignored-large",
+      "summary": "ignored large",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "$1 > half || $2 == \"serial\"",
+          "replace": "$2 == \"serial\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: concurrency:"
+        ]
+      }
+    },
+    {
+      "name": "unbounded-build",
+      "summary": "an old preparation builds without its admitted job limit",
+      "edits": [
+        {
+          "file": "tools/etude/make.sh",
+          "find": "        set -- \"$@\" \"-j$requested\"",
+          "replace": "        :"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: job-limit:"
+        ]
+      }
+    },
+    {
+      "name": "opaque-shell-shared",
+      "summary": "an older owner transport shares an unsized shell command",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "        case ${1##*/} in sh|bash|dash) mode=alone; jobs=$((cpu / 1000)) ;; esac",
+          "replace": "        :"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           "etude-launch-test: failed: owner:"
+        ]
+      }
+    },
+    {
+      "name": "scrubbed-budget",
+      "summary": "a child with a cleared environment cannot run make",
+      "edits": [
+        {
+          "file": "tools/etude/make.sh",
+          "find": "    ETUDE_BUILD_JOBS=1",
+          "replace": "    exit 2"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: job-limit:"
+        ]
+      }
+    },
+    {
+      "name": "parallel-default",
+      "summary": "a serial make starts parallel jobs without a request",
+      "edits": [
+        {
+          "file": "tools/etude/make.sh",
+          "find": "BEGIN { jobs = 1 }",
+          "replace": "BEGIN { jobs = limit }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: job-limit:"
         ]
       }
     }

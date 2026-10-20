@@ -1,6 +1,6 @@
 # tests/registry: the suites tests/run reads. One per line:
 #
-#   name|runtime tools|tier|images|memory|architectures
+#   name|runtime tools|tier|images|memory|architectures|host isolation
 #
 # A suite is either the cases of a family in tests/cases whose identity ends in
 # the name, or the make target `run-` and the name, which is not written here.
@@ -33,6 +33,10 @@
 # architecture, qemu-system-i386 or qemu-system-x86_64, which `tests/run`
 # looks for in its place, and an x86-64 run writes under build/x86_64/images
 # what an i686 run writes under build/images.
+#
+# Host isolation is optional: `serial` makes the installed launcher reserve
+# the host alone. An empty field permits shared admission. The pool's serial
+# ordering of style and host does not require exclusive host admission.
 #
 # Order is the schedule order: the pool starts at the top, and a pool finishes
 # when its longest member does, so the long suites are listed first.

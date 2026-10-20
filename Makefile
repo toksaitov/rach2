@@ -31,12 +31,17 @@
 # including recursive builds, before any ordinary rule is read or executed.
 ETUDE_SITE_FILE := $(if $(ETUDE_SITE),$(ETUDE_SITE),/etc/rach2/etude-site)
 ETUDE_WRAP := $(if $(filter $(ETUDE_SITE_FILE),$(ETUDE_ADMITTED)),,$(or $(wildcard $(ETUDE_SITE_FILE)),$(if $(filter undefined,$(origin ETUDE_SITE)),,$(ETUDE_SITE_FILE))))
+ifeq ($(MAKECMDGOALS),test)
+ETUDE_WRAP :=
+endif
 ifneq ($(ETUDE_WRAP),)
 .DEFAULT_GOAL := etude-admitted
 .PHONY: etude-admitted $(MAKECMDGOALS)
 $(MAKECMDGOALS): etude-admitted ;
 etude-admitted:
-	+@sh tools/etude/launch.sh build $(MAKE) $(MAKECMDGOALS)
+	+@launcher=$$(sed -n 's/^launcher //p' "$(ETUDE_SITE_FILE)") && \
+	    test -n "$$launcher" && test -x "$$launcher" && \
+	    exec "$$launcher" build $(MAKE) $(MAKECMDGOALS)
 else
 
 # The architecture (mk/arch.mk): ARCH, and the paths of its build tree

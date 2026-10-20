@@ -34,7 +34,7 @@
       "edits": [
         {
           "file": "tools/dev/testing.sh",
-          "find": "    ssh -o BatchMode=yes \"$HOST\" \"MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && . <(base64 -d <<< \\$c)'\" \\\n",
+          "find": "    ssh -o BatchMode=yes \"$HOST\" \"MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && bash <(base64 -d <<< \\$c)'\" \\\n",
           "replace": "    ssh -o BatchMode=yes \"$HOST\" \"MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && $*'\" \\\n"
         }
       ],
@@ -57,7 +57,7 @@
       "edits": [
         {
           "file": "tools/dev/testing.sh",
-          "find": "    ssh -o BatchMode=yes \"$HOST\" \"MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && . <(base64 -d <<< \\$c)'\" \\\n",
+          "find": "    ssh -o BatchMode=yes \"$HOST\" \"MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && bash <(base64 -d <<< \\$c)'\" \\\n",
           "replace": "    ssh -o BatchMode=yes \"$HOST\" \"MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && eval \\\"\\$(printf %s \\\"\\$c\\\" | base64 -d)\\\"'\" \\\n"
         }
       ],

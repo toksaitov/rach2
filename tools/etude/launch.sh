@@ -16,9 +16,9 @@ if [ "${1:-}" = -r ]; then
     result=$2
     shift 2
 fi
-[ "$#" -ge 2 ] || { echo 'usage: etude-launch [-r FILE] build|legacy COMMAND [ARGS...]' >&2; exit 2; }
+[ "$#" -ge 2 ] || { echo 'usage: etude-launch [-r FILE] build|legacy|alone COMMAND [ARGS...]' >&2; exit 2; }
 kind=$1; shift
-case $kind in build|legacy) ;; *) refuse "unknown launch kind $kind" ;; esac
+case $kind in build|legacy|alone) ;; *) refuse "unknown launch kind $kind" ;; esac
 site=${ETUDE_SITE:-/etc/rach2/etude-site}
 if [ ! -e "$site" ] && [ ! -L "$site" ] && [ "${ETUDE_SITE+x}" != x ]; then
     exec "$@"
@@ -79,13 +79,148 @@ if [ -n "${ETUDE_ADMITTED:-}" ]; then
     exec "$@"
 fi
 [ -z "${RACH2_PORT_OFFSET+x}${SSH_TEST_PORT+x}" ] || refuse 'port overrides bypass admission'
+# Check a caller's pool limit before using it in arithmetic.
+positive()
+{
+    case $1 in ''|*[!0-9]*|0*) refuse "invalid $2" ;; esac
+    [ "${#1}" -le 15 ] || refuse "invalid $2"
+}
+
+# Size the old runner from the selected suites without starting its build.
+legacy_resources()
+{
+    case ${1##*/} in sh|bash|dash) shift ;; esac
+    case ${1:-} in tests/run|*/tests/run) shift ;; *) mode=alone; return ;; esac
+    if [ "${1:-}" = inventory ]; then build_resources true; return; fi
+    [ -r tests/registry ] || refuse 'cannot read the suite registry'
+    # serial is an optional host isolation field after the architectures.
+    selection=$(printf '%s\n' "$@" | awk -F'|' -v arch="${ARCH:-i686}" '
+        NR == FNR {
+            if ($0 ~ /^#/ || $1 == "") next
+            order[++n] = $1; tier[$1] = $3; mem[$1] = $5 ? $5 : 128
+            arches[$1] = $6; isolation[$1] = $7; next
+        }
+        { requested[$0] = 1 }
+        END {
+            for (i = 1; i <= n; i++) {
+                s = order[i]
+                if (arches[s] != "" && index("," arches[s] ",", "," arch ",") == 0) continue
+                if (requested[s] || requested["all"] || (requested["core"] && tier[s] == "core"))
+                    print mem[s], isolation[s]
+            }
+        }
+    ' tests/registry -) || refuse 'cannot select suites'
+    [ -n "$selection" ] || refuse 'no suites selected'
+    guest=$(printf '%s\n' "$selection" | awk -v w="$RACH2_WORKERS" -v budget="$RACH2_MEMORY_MIB" '
+        $1 !~ /^[1-9][0-9]*$/ { bad = 1 }
+        { a[++n] = $1; if ($1 > largest) largest = $1 }
+        END {
+            if (bad) exit 1
+            for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++)
+                if (a[j] > a[i]) { t = a[i]; a[i] = a[j]; a[j] = t }
+            for (i = 1; i <= n && i <= w; i++) sum += a[i]
+            if (sum > budget) sum = budget
+            if (sum < largest) sum = largest
+            printf "%.0f\n", sum
+        }
+    ') || refuse 'invalid suite memory'
+    half=$(sysctl -n hw.memsize 2>/dev/null || awk '/^MemTotal:/ {printf "%.0f\n", $2 * 1024}' /proc/meminfo)
+    positive "$half" 'host memory'
+    half=$((half / 2 / 1048576))
+    if printf '%s\n' "$selection" | awk -v half="$half" '$1 > half || $2 == "serial" { found = 1 } END { exit !found }'; then
+        mode=alone
+    fi
+    if printf '%s\n' "$selection" | awk '$2 == "serial" { found = 1 } END { exit !found }'; then
+        RACH2_WORKERS=1
+    fi
+    cpus=${RACH2_CPUS:-2}
+    positive "$cpus" RACH2_CPUS
+    [ "$cpus" -le 64 ] || refuse 'invalid RACH2_CPUS'
+    processors=$((RACH2_WORKERS * cpus * 500))
+    [ "$processors" -ge "$((RACH2_WORKERS * 1000))" ] || processors=$((RACH2_WORKERS * 1000))
+    # Native host checks use one GiB per worker beside the guest pool.
+    memory=$(((guest + RACH2_WORKERS * 1152 + 1024) * 1048576))
+    [ "$memory" -ge "$build_memory" ] || memory=$build_memory
+}
+
+# Count make's job limit, including the flags inherited by its recursive entry.
+build_resources()
+{
+    plan=$( { printf '%s\n' "${MAKEFLAGS:-}"; printf '%s\n' "$@"; } | awk -v max="$((cpu / 1000))" -v jobs="${JOBS:-4}" '
+        function take(t) {
+            if (pending) {
+                pending = 0
+                if (t ~ /^[1-9][0-9]*$/) { j = t; return }
+            }
+            if (t == "-j" || t == "--jobs") { j = max; pending = 1 }
+            else if (t ~ /^-j[0-9]+$/) j = substr(t, 3)
+            else if (t ~ /^--jobs=/) j = substr(t, 8)
+            else if (t ~ /^JOBS=/) jobs = substr(t, 6)
+        }
+        NR == 1 {
+            n = split($0, flags, /[[:space:]]+/)
+            for (i = 1; i <= n && flags[i] != "--"; i++) take(flags[i])
+            pending = 0; next
+        }
+        { take($0) }
+        END {
+            if (j == "") j = 1
+            if (jobs !~ /^[1-9][0-9]*$/ || j !~ /^[1-9][0-9]*$/) exit 1
+            if (j + 0 > jobs + 0) jobs = j
+            print jobs "," j
+        }
+    ') || refuse 'invalid build job count'
+    jobs=${plan%,*}
+    requested_jobs=${plan#*,}
+    positive "$jobs" 'build job count'
+    positive "$requested_jobs" 'make job count'
+    [ "$jobs" -le 1024 ] || refuse 'invalid build job count'
+    processors=$((jobs * 1000))
+    memory=$(((jobs + 1) * 1073741824))
+}
+
 cpu=${capacity%%,*}
-memory=${capacity#*,}; memory=${memory%%,*}
-RACH2_WORKERS=$((cpu / 1000 / 4))
-[ "$RACH2_WORKERS" -gt 0 ] || RACH2_WORKERS=1
-[ "$RACH2_WORKERS" -le 1024 ] || RACH2_WORKERS=1024
-RACH2_MEMORY_MIB=$((memory * 3 / 4 / 1048576))
-[ "$RACH2_MEMORY_MIB" -gt 0 ] || refuse 'capacity has no guest memory'
+site_memory=${capacity#*,}; site_memory=${site_memory%%,*}
+site_disk=${capacity##*,}
+RACH2_WORKERS=${RACH2_WORKERS:-8}
+RACH2_MEMORY_MIB=${RACH2_MEMORY_MIB:-16384}
+positive "$RACH2_WORKERS" RACH2_WORKERS
+[ "$RACH2_WORKERS" -le 1024 ] || refuse 'invalid RACH2_WORKERS'
+positive "$RACH2_MEMORY_MIB" RACH2_MEMORY_MIB
+mode=shared
+# Preparation may grow a root and its images, including the GNU root.
+disk=42949672960
+build_memory=5368709120
+case $kind in
+    build)
+        build_resources "$@"
+        for goal do [ "$goal" != test ] || mode=alone; done
+        case ${1##*/} in sh|bash|dash) mode=alone; jobs=$((cpu / 1000)) ;; esac
+        ;;
+    legacy) legacy_resources "$@" ;;
+    alone) mode=alone ;;
+esac
+make_real=$(command -v make) || refuse 'make is unavailable'
+case $make_real in */etude-bin/make) make_real=${ETUDE_MAKE_REAL:-} ;; esac
+ETUDE_MAKE_REAL=$make_real
+case $ETUDE_MAKE_REAL in /*) ;; *) refuse 'make is not an absolute path' ;; esac
+make_dir=${launcher%/*}/etude-bin
+[ -x "$make_dir/make" ] || refuse 'installed make wrapper is unavailable'
+PATH=$make_dir:$PATH
+export ETUDE_MAKE_REAL PATH
+ETUDE_BUILD_JOBS=${jobs:-$RACH2_WORKERS}
+JOBS=$ETUDE_BUILD_JOBS
+export ETUDE_BUILD_JOBS JOBS
+if [ "$mode" = alone ]; then
+    resources=$capacity
+else
+    [ "$processors" -le "$cpu" ] && [ "$memory" -le "$site_memory" ] && [ "$disk" -le "$site_disk" ] ||
+        refuse 'launch exceeds site capacity'
+    resources=$processors,$memory,$disk
+fi
+if [ "$kind" = build ]; then
+    case ${1##*/} in make|gmake) set -- "$@" "-j$requested_jobs" ;; esac
+fi
 ETUDE_ADMITTED=$site
 export ETUDE_ADMITTED RACH2_WORKERS RACH2_MEMORY_MIB
 nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
@@ -93,7 +228,7 @@ nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 environment=$(command -v env) || refuse 'env is unavailable'
 if [ -n "$result" ]; then
     exec "$bridge" -i -p -d "$locks" -w "$wait" -r "$result" "$ledger" \
-        "launch:$nonce" "$(id -un)" alone "$capacity" "$capacity" "$seconds" "$environment" "$@"
+        "launch:$nonce" "$(id -un)" "$mode" "$resources" "$capacity" "$seconds" "$environment" "$@"
 fi
 exec "$bridge" -i -p -d "$locks" -w "$wait" "$ledger" \
-    "launch:$nonce" "$(id -un)" alone "$capacity" "$capacity" "$seconds" "$environment" "$@"
+    "launch:$nonce" "$(id -un)" "$mode" "$resources" "$capacity" "$seconds" "$environment" "$@"

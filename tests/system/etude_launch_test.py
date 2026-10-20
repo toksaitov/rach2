@@ -6,6 +6,7 @@ import fcntl
 import os
 from pathlib import Path
 import shutil
+import shlex
 import signal
 import subprocess
 import sys
@@ -56,10 +57,11 @@ def rows(root, repo, sources):
     """Observe durable claims and actual compatibility locks at each entry."""
     global stage
     env = dict(os.environ)
+    real_make = env.get("ETUDE_MAKE_REAL") or shutil.which("make")
     for key in ("ETUDE_ADMITTED", "ETUDE_SITE", "RACH2_PORT_OFFSET", "SSH_TEST_PORT",
                 "RACH2_RUN_GROUP", "RACH2_RUN_WORK", "RACH2_RUN_UTIL",
                 "RACH2_RUN_TREE_LOCK", "RACH2_RUN_STATUS", "MAKEFLAGS", "MFLAGS",
-                "MAKELEVEL", "MAKEOVERRIDES"):
+                "MAKELEVEL", "MAKEOVERRIDES", "ETUDE_BUILD_JOBS", "JOBS"):
         env.pop(key, None)
     bridge = repo / "build/tools/etude/etude-bridge"
     ledger = root / "ledger"
@@ -75,14 +77,17 @@ def rows(root, repo, sources):
     write(ledger / "claims", "etude-ledger 1\n")
     shutil.copyfile(sources / "tools/etude/launch.sh", launcher)
     launcher.chmod(0o755)
+    write(root / "etude-bin/make", (sources / "tools/etude/make.sh").read_text(), executable=True)
     policy = (f"etude-site 1\nendpoint {'macos' if sys.platform == 'darwin' else 'linux'}\n"
               f"launcher {launcher}\nledger {ledger}\nlocks {locks}\nbridge {bridge}\n"
-              "capacity 8000,134217728,1048576\nwait 3\nseconds 30\n")
+              "capacity 24000,103079215104,171798691840\nwait 3\nseconds 30\n")
     write(site, policy)
     env.update(ETUDE_SITE=str(site), ETUDE_LAUNCH_LEDGER=str(ledger),
                ETUDE_LAUNCH_OBSERVED=str(observed), ETUDE_LAUNCH_LOCKS=str(locks),
                ETUDE_STATE=str(root / "private-state"),
-               PATH=str(bin) + os.pathsep + env["PATH"])
+               PATH=str(bin) + os.pathsep + env["PATH"],
+               RACH2_WORKERS="2", RACH2_MEMORY_MIB="96", RACH2_CPUS="2",
+               EXPECT_CPU="4000", EXPECT_MEMORY="5368709120", EXPECT_DISK="42949672960")
     # The command must already have a durable, registered reservation and
     # the matching port and host locks when its first instruction executes.
     write(observer, '''#!/usr/bin/env python3
@@ -92,9 +97,9 @@ ledger = Path(os.environ["ETUDE_LAUNCH_LEDGER"])
 text = (ledger / "claims").read_text()
 assert text.count("claim ") == 1, text
 assert "process case " in text and "state running" in text, text
-assert "resource cpu_millis 8000\\n" in text, text
-assert "resource memory_bytes 134217728\\n" in text, text
-assert "resource disk_bytes 1048576\\n" in text, text
+for resource, key in (("cpu_millis", "EXPECT_CPU"), ("memory_bytes", "EXPECT_MEMORY"),
+                      ("disk_bytes", "EXPECT_DISK")):
+    assert f"resource {resource} {os.environ[key]}\\n" in text, text
 assert os.environ["RACH2_WORKERS"] == "2"
 assert os.environ["RACH2_MEMORY_MIB"] == "96"
 offset = int(os.environ["RACH2_PORT_OFFSET"])
@@ -132,23 +137,61 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
     (tree / "tools/etude").mkdir(parents=True)
     shutil.copyfile(launcher, tree / "tools/etude/launch.sh")
     stage = "build"
-    run([shutil.which("make"), "ARG=two words"], env, tree)
+    run([real_make, "ARG=two words"], env, tree)
     saw()
     clear()
 
+    for flags, jobs in ((["-j", "7"], 7), (["-j16"], 16)):
+        env.update(EXPECT_CPU=str(jobs * 1000), EXPECT_MEMORY=str((jobs + 1) * 1073741824))
+        run([str(launcher), "build", real_make, *flags, "ARG=two words"], env, tree)
+        saw()
+        clear()
+    env.update(EXPECT_CPU="4000", EXPECT_MEMORY="5368709120")
+
+    # An older preparation's unbounded make is limited before it executes.
+    stage = "job-limit"
+    job_args = root / "job-args"
+    fake_make = root / "record-make"
+    write(fake_make, f"#!/bin/sh\nprintf '%s\\n' \"$@\" > '{job_args}'\n", executable=True)
+    job_env = dict(env, ETUDE_MAKE_REAL=str(fake_make), ETUDE_BUILD_JOBS="3", MAKELEVEL="0")
+    run([str(root / "etude-bin/make"), "-j", "components"], job_env, tree)
+    assert job_args.read_text().splitlines() == ["-j", "components", "-j3"]
+    for arguments, limit in (([], "1"), (["-j", "1"], "1"), (["--jobs=2"], "2"), (["-j9"], "3"), (["-j12"], "3")):
+        run([str(root / "etude-bin/make"), *arguments, "components"], job_env, tree)
+        assert job_args.read_text().splitlines() == arguments + ["components", "-j" + limit]
+    job_env["MAKEFLAGS"] = " ".join(("-j2", "--", "JOBS=9"))
+    run([str(root / "etude-bin/make"), "components"], job_env, tree)
+    assert job_args.read_text().splitlines() == ["components", "-j2"]
+    job_env.pop("MAKEFLAGS")
+    scrubbed = dict(job_env)
+    scrubbed.pop("ETUDE_BUILD_JOBS")
+    scrubbed.pop("ETUDE_MAKE_REAL")
+    write(root / "unwrapped-bin/make", fake_make.read_text(), executable=True)
+    scrubbed["PATH"] = str(root / "etude-bin") + os.pathsep + str(root / "unwrapped-bin") + os.pathsep + env["PATH"]
+    run([str(root / "etude-bin/make"), "-j", "components"], scrubbed, tree)
+    assert job_args.read_text().splitlines() == ["-j", "components", "-j1"]
+    job_env["MAKELEVEL"] = "1"
+    run([str(root / "etude-bin/make"), "all"], job_env, tree)
+    assert job_args.read_text().splitlines() == ["all"]
+
     # The real worker entry must claim before even its helper compilation.
     stage = "worker"
+    env["EXPECT_CPU"] = "2000"
     shutil.copyfile(sources / "tests/run", tree / "tests/run")
     write(bin / "cc", f"#!/bin/sh\n{observe}\nexit 19\n", executable=True)
     run(["sh", "tests/run", "style"], env, tree, status=1)
     saw()
     clear()
 
-    # Ordinary CI must claim before make and retain that claim across tests.
+    # CI admits its build and each test step separately.
     stage = "ci"
-    write(bin / "make", f"#!/bin/sh\nexec {observe}\n", executable=True)
+    env["EXPECT_CPU"] = "4000"
+    write(bin / "make", f"#!/bin/sh\nexec '{launcher}' build {observe}\n", executable=True)
     write(tree / "tests/run", f'''#!/bin/sh
-{observe} || exit 3
+if [ -z "${{ETUDE_ADMITTED:-}}" ]; then
+    exec '{launcher}' legacy sh "$0" "$@"
+fi
+EXPECT_CPU=2000 {observe} || exit 3
 for name do
     [ "$name" != core ] || name=default
     echo "run: $name: PASS in 0s"
@@ -156,12 +199,13 @@ done
 ''', executable=True)
     write(tree / "build/tests/failed/.keep", "")
     run(["sh", str(sources / "tools/ci/run.sh"), "core", str(root / "ci")], env, tree)
-    saw(4)
+    saw(4, same=False)
     clear()
 
-    # The owner transport must claim arbitrary commands before they build,
+    # Owner commands admit their build and test steps independently,
     # preserving quoting, standard input and the command's own status.
     stage = "owner"
+    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
     testing = root / "owner/tools/dev/testing.sh"
     testing.parent.mkdir(parents=True)
     shutil.copyfile(sources / "tools/dev/testing.sh", testing)
@@ -172,14 +216,11 @@ exec bash -c "$4"
     write(bin / "wsl.exe", '#!/bin/sh\nshift\nexec "$@"\n', executable=True)
     write(bin / "rsync", '#!/bin/sh\n[ "$1" != --version ] || echo "rsync  version 3.2.7"\n', executable=True)
     env["RACH2_TESTING_COPY"] = str(tree)
-    output = run(["sh", str(testing), "run", observe + "; printf '%s\\n' \"a'b\"; cat; exit 7"],
+    command_text = observe + " || exit 3; printf '%s\\n' \"a'b\"; cat; exit 7"
+    owner_command = f"RACH2_WORKERS=2 RACH2_MEMORY_MIB=96 '{launcher}' build bash -c {shlex.quote(command_text)}"
+    output = run(["sh", str(testing), "run", owner_command],
                  env, tree, status=7, input="owner input\n")
     assert "a'b\nowner input\n" in output, output
-    saw()
-    clear()
-
-    trailing = observe + "; [ \"${BASH_EXECUTION_STRING: -1}\" = $'\\n' ] || exit 9\n"
-    run(["sh", str(testing), "run", trailing], env, tree)
     saw()
     clear()
 
@@ -194,6 +235,7 @@ exec '{runutil}' ports '{locks}' 2 '{sys.executable}' '{observer}'
 ''',
           executable=True)
     result = root / "result"
+    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
     with (locks / "rach2-ports.0").open("r+") as occupied:
         fcntl.lockf(occupied, fcntl.LOCK_EX)
         run([str(launcher), "-r", str(result), "legacy", str(program)], env, tree)
@@ -202,9 +244,17 @@ exec '{runutil}' ports '{locks}' 2 '{sys.executable}' '{observer}'
     saw()
     clear()
 
-    # An external bisection must choose the installed site even when a
-    # private machine record would offer a different ledger and capacity.
+    # Bisection wraps an old checkout whose entries do not admit themselves,
+    # and uses the installed site before a private machine record.
     stage = "bisection"
+    env.update(EXPECT_CPU="4000", EXPECT_MEMORY="5368709120", EXPECT_DISK="42949672960")
+    write(bin / "make", f"#!/bin/sh\nexec {observe}\n", executable=True)
+    write(tree / "tests/run", f'''#!/bin/sh
+EXPECT_CPU=2000 {observe} || exit 3
+for name do
+    echo "run: $name: PASS in 0s"
+done
+''', executable=True)
     private = root / "private-ledger"
     write(private / "claims", "etude-ledger 1\n")
     write(root / "private-state/machine",
@@ -226,6 +276,7 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     # A command nested in an admitted owner command reuses its claim and
     # still supplies the separate result that bisection reads.
     stage = "nested"
+    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
     nested = f"{observe} && '{launcher}' -r '{result}' legacy '{sys.executable}' '{observer}'"
     run([str(launcher), "build", "/bin/sh", "-c", nested], env, tree)
     assert result.read_text() == "exited 0\n"
@@ -250,7 +301,7 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
         ("format", policy.replace("etude-site 1", "etude-site 2")),
         ("endpoint", policy.replace("endpoint linux", "endpoint windows").replace("endpoint macos", "endpoint windows")),
         ("bridge", policy.replace(str(bridge), str(root / "missing-bridge"))),
-        ("capacity", policy.replace("8000,134217728,1048576", "8000,0,1048576")),
+        ("capacity", policy.replace("24000,103079215104,171798691840", "24000,0,171798691840")),
         ("duplicate", policy + "capacity 1,1,1\n"),
     ):
         write(site, bad_policy)
@@ -270,9 +321,77 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     assert not observed.exists()
     write(tree / "tests/system/suites.mk", "# RACH2_PORT_OFFSET\n")
 
+    # Two ordinary host selections overlap; a large or serial one waits.
+    stage = "concurrency"
+    write(bin / "id", '#!/bin/sh\n[ "$1" != -un ] || { echo "$TEST_ACCOUNT"; exit; }\nexec /usr/bin/id "$@"\n', executable=True)
+    write(tree / "tests/run", '''#!/usr/bin/env python3
+import os, pathlib, time
+assert os.environ["RACH2_WORKERS"] == os.environ.get("TEST_WORKERS", "2")
+pathlib.Path(os.environ["TEST_READY"]).write_text(os.environ["RACH2_PORT_OFFSET"])
+while not pathlib.Path(os.environ["TEST_RELEASE"]).exists():
+    time.sleep(0.02)
+''', executable=True)
+    for exclusive in ("serial", "large"):
+        registry = "host|-|full||384\n"
+        if exclusive == "serial":
+            registry += "exclusive|-|full||128||serial\n"
+        else:
+            memory = os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE")
+            registry += f"exclusive|-|full||{memory // 1048576 // 2 + 1}\n"
+        write(tree / "tests/registry", registry)
+        children = []
+        release = root / f"release-{exclusive}"
+        exclusive_release = root / f"release-only-{exclusive}"
+        try:
+            ready = [root / f"ready-{exclusive}-{i}" for i in range(3)]
+            for i in range(2):
+                child_env = dict(env, TEST_ACCOUNT=f"account-{i}", TEST_READY=str(ready[i]),
+                                 TEST_RELEASE=str(release))
+                children.append(subprocess.Popen([str(launcher), "legacy", "tests/run", "host"],
+                                                 env=child_env, cwd=tree, stdout=subprocess.PIPE,
+                                                 stderr=subprocess.STDOUT))
+            until(lambda: all(p.exists() for p in ready[:2]))
+            text = (ledger / "claims").read_text()
+            assert text.count("state running") == 2, text
+            assert "account account-0\n" in text and "account account-1\n" in text, text
+            assert text.count("resource cpu_millis 2000\n") == 2, text
+            assert ready[0].read_text() != ready[1].read_text()
+            child_env = dict(env, TEST_ACCOUNT="account-exclusive", TEST_READY=str(ready[2]),
+                             TEST_RELEASE=str(exclusive_release),
+                             TEST_WORKERS="1" if exclusive == "serial" else "2")
+            children.append(subprocess.Popen([str(launcher), "legacy", "tests/run", "exclusive"],
+                                             env=child_env, cwd=tree, stdout=subprocess.PIPE,
+                                             stderr=subprocess.STDOUT))
+            until(lambda: "state blocked" in (ledger / "claims").read_text() or
+                  "state waiting" in (ledger / "claims").read_text())
+            assert not ready[2].exists()
+            release.touch()
+            for child in children[:2]:
+                output, _ = child.communicate(timeout=10)
+                assert child.returncode == 0, output
+            until(ready[2].exists)
+            text = (ledger / "claims").read_text()
+            assert text.count("state running") == 1, text
+            assert "resource cpu_millis 24000\n" in text, text
+            exclusive_release.touch()
+            output, _ = children[2].communicate(timeout=10)
+            assert children[2].returncode == 0, output
+            clear()
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.terminate()
+                    try:
+                        child.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        child.communicate()
+    env["TEST_ACCOUNT"] = "account-cancel"
+
     # A later launch waits behind the first claim and a cancellation must
     # stop its process before capacity is released.
     stage = "cancellation"
+    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
     ready = root / "ready"
     release = root / "release"
     waiting = root / "waiting.py"
@@ -284,11 +403,11 @@ while not pathlib.Path({str(release)!r}).exists():
 ''')
     children = []
     try:
-        first = subprocess.Popen([str(launcher), "build", sys.executable, str(waiting)],
+        first = subprocess.Popen([str(launcher), "alone", sys.executable, str(waiting)],
                                  env=env, cwd=tree, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         children.append(first)
         until(ready.exists)
-        second = subprocess.Popen([str(launcher), "build", sys.executable, str(observer)],
+        second = subprocess.Popen([str(launcher), "alone", sys.executable, str(observer)],
                                   env=env, cwd=tree, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         children.append(second)
         until(lambda: "state blocked" in (ledger / "claims").read_text() or

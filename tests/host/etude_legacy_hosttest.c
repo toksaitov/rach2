@@ -67,7 +67,7 @@ static char self[PATH_LEN];
 
 /* The suites of the fixture trees. */
 static const char registry[] = "# The suites of the fixture tree.\n"
-                               "alpha|-|core\n"
+                               "alpha|-|core||||serial\n"
                                "beta|-|full||256|x86_64\n"
                                "gamma|-|full\n"
                                "alpha-e1000|-|full\n"

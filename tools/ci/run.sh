@@ -43,19 +43,8 @@
 # set fails for a failed preparation, and `runner` for a history that is
 # missing, cut off or inconsistent, or a status that disagrees with it.
 #
-# An enrolled endpoint enters its installed site claim before the build,
-# and its tests reuse that claim and port reservation.
+# Each build and tests/run enters the installed site policy separately.
 set -u
-# The installed launcher accounts for this command before it builds or runs.
-site=${ETUDE_SITE:-/etc/rach2/etude-site}
-if [ "${ETUDE_ADMITTED:-}" != "$site" ] && { [ -e "$site" ] || [ -L "$site" ] || [ "${ETUDE_SITE+x}" = x ]; }; then
-    launcher=$(sed -n 's/^launcher //p' "$site") || exit 2
-    [ -n "$launcher" ] && [ -x "$launcher" ] || {
-        echo 'ci: result: refused: installed etude launcher is unavailable' >&2
-        exit 2
-    }
-    exec "$launcher" legacy sh "$0" "$@"
-fi
 
 
 kind=${1-}
