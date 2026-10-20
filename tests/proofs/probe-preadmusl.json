@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "preadmusl",
+  "proof": "probe-preadmusl",
   "summary": "musl/preadmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

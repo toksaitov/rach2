@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "mknodmusl",
+  "proof": "probe-mknodmusl",
   "summary": "musl/mknodmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

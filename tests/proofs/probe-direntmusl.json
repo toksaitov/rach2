@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "direntmusl",
+  "proof": "probe-direntmusl",
   "summary": "musl/direntmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

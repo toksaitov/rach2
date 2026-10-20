@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "permmusl",
+  "proof": "probe-permmusl",
   "summary": "musl/permmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

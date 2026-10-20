@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "statfsmusl",
+  "proof": "probe-statfsmusl",
   "summary": "musl/statfsmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

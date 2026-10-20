@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "lchownmusl",
+  "proof": "probe-lchownmusl",
   "summary": "musl/lchownmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

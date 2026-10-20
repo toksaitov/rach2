@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "chrootmusl",
+  "proof": "probe-chrootmusl",
   "summary": "musl/chrootmusl of the default suite, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [

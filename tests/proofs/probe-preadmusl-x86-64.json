@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "proof": "preadmusl-x86-64",
+  "proof": "probe-preadmusl-x86-64",
   "summary": "musl/preadmusl of the default suite on x86-64, the only kernel with preadv and pwritev, with faults in the kernel that its rows must catch",
   "tree": "shared",
   "sources": [
