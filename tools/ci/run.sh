@@ -7,10 +7,11 @@
 #   tools/ci/run.sh full DIR    the build from clean and every suite of ARCH
 #
 # DIR receives `log`, the whole output; `failed`, one line for each step
-# that failed: `build`, a suite's name, or the set's own name when the
-# runner failed without naming a suite of the registry; `kept/`, the serial
-# logs that tests/run kept for the failed suites; and `done`, written last,
-# without which a reader takes the run as unfinished. A full run first runs
+# that failed: `build`, a suite's name, the set's own name when the runner
+# failed without naming a suite of the registry, or `runner` when its
+# history cannot show what ran; `kept/`, the serial logs that tests/run kept
+# for the failed suites; and `done`, written last, without which a reader
+# takes the run as unfinished. A full run first runs
 # `make clean`, which removes ARCH's in-house objects and images but keeps
 # the vendored builds, then `make`; a failure of either is `build`. It then
 # runs every suite of the registry that runs on ARCH, `style` and `host`
@@ -26,6 +27,22 @@
 # interrupts has stopped, so that tests/run stops its machines before the
 # next run starts; the status is then 143.
 #
+# `results` below says how this tree's tests/run gives its results. With
+# `lines`, the runner's own `run: NAME: PASS|FAIL in` and `run: result:
+# failed:` lines name the suites that failed, and a pass is its status 0.
+# With `history`, the suites of a kind run as one run of tests/run, core's
+# as `tests/run style host core` and full's with `bigmem` among them, since
+# report.sh reads the history of one run. tests/run writes etude's history
+# of it under DIR, which RACH2_RESULTS names: its streams in `history/` and
+# the blobs they refer to, each named by its SHA-256, in `store/`, where
+# report.sh reads them. `casecheck verdict` judges that history against the
+# case manifests of tests/cases. The run passes only when the history shows
+# every suite asked for planned whole and every attempt of every item
+# passed, with its results in the store, and tests/run's status is 0. A
+# suite with an item that did not pass fails, a failed retry among them, the
+# set fails for a failed preparation, and `runner` for a history that is
+# missing, cut off or inconsistent, or a status that disagrees with it.
+#
 set -u
 
 kind=${1-}
@@ -38,6 +55,9 @@ esac
 ARCH=${ARCH:-i686}
 RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
 export ARCH RACH2_MIN_FREE_GIB
+# How this tree's tests/run gives its results, `lines` or `history`, as the
+# header says.
+results=lines
 mkdir -p "$out/kept"
 : > "$out/failed"
 : > "$out/log"
@@ -61,6 +81,45 @@ copy() { # copy [-a] FILE...
 step() {
     { "$@" 2>&1; echo "$?" > "$out/rc"; } | copy -a "$out/log"
     return "$(cat "$out/rc")"
+}
+
+# Run tests/run with ARGS as one run, its history going to DIR/history and
+# DIR/store, and append to DIR/failed the names of casecheck's verdict on
+# that history, with `runner` when the verdict gave no result or tests/run's
+# status disagrees with it, each name once; return 0 when both passed and 1
+# otherwise. The suites asked for are ARGS, with `core` standing for the core
+# tier's suites of ARCH, as tests/run takes it.
+run_history() { # run_history NAME ARGS...
+    name=$1; shift
+    rm -rf "$out/history" "$out/store"
+    mkdir -p "$out/history" "$out/store"
+    { RACH2_RESULTS=$out tests/run "$@" 2>&1; echo "$?" > "$out/rc"; } |
+        copy "$out/set.log" | copy -a "$out/log"
+    rc=$(cat "$out/rc")
+    suites=$(for s in "$@"; do
+        if [ "$s" = core ]; then
+            awk -F'|' -v a="$ARCH" '
+                /^[a-z]/ && $3 == "core" && ($6 == "" || index("," $6 ",", "," a ",")) { print $1 }
+            ' tests/registry
+        else
+            echo "$s"
+        fi
+    done | awk '!seen[$0]++' | tr '\n' , | sed 's/,$//')
+    { build/tools/etude/casecheck verdict -b "$out/store" -c "$(git rev-parse HEAD)" \
+        "$ARCH" "$name" "$suites" "$out/history" 2>&1; echo "$?" > "$out/rc"; } |
+        copy "$out/verdict" | copy -a "$out/log"
+    verdict=$(cat "$out/rc")
+    failed=$(sed -n 's/^casecheck: result: failed: //p' "$out/verdict")
+    if [ "$verdict" = 0 ] && grep -qx 'casecheck: result: passed' "$out/verdict"; then
+        [ "$rc" != 0 ] || return 0
+        failed=runner
+    elif [ "$verdict" != 1 ] || [ -z "$failed" ] || [ "$rc" = 0 ]; then
+        failed="runner $failed"
+    fi
+    for f in $failed; do
+        grep -qxF "$f" "$out/failed" || echo "$f" >> "$out/failed"
+    done
+    return 1
 }
 
 # Run tests/run with ARGS, and append to DIR/failed the suites it failed, or
@@ -139,15 +198,24 @@ elif ! step make; then
 else
     case "$kind" in
         core)
-            run_set style style
-            run_set host host
-            run_set core core ;;
+            if [ "$results" = history ]; then
+                run_history core style host core
+            else
+                run_set style style
+                run_set host host
+                run_set core core
+            fi ;;
         full)
             rest=$(echo "$names" | grep -vx bigmem)
-            # shellcheck disable=SC2086 # a suite name is one word by format
-            [ -z "$rest" ] || run_set all $rest
-            if echo "$names" | grep -qx bigmem; then
-                run_set bigmem bigmem
+            if [ "$results" = history ]; then
+                # shellcheck disable=SC2086 # a suite name is one word by format
+                run_history all $names
+            else
+                # shellcheck disable=SC2086 # a suite name is one word by format
+                [ -z "$rest" ] || run_set all $rest
+                if echo "$names" | grep -qx bigmem; then
+                    run_set bigmem bigmem
+                fi
             fi ;;
     esac
 fi
