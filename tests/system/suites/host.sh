@@ -330,6 +330,13 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: testing.sh run's quoted commands and a worktree's sync" >&2
         fail=1
     fi
+    if sh tests/system/space_test.sh >"$VDIR/space.rlog" 2>&1; then
+        echo "hosttest: result: pass: disk admission requires a Windows reading"
+    else
+        cat "$VDIR/space.rlog"
+        echo "hosttest: result: fail: disk admission requires a Windows reading" >&2
+        fail=1
+    fi
     if sh tests/system/prereq_test.sh >"$VDIR/prereq.rlog" 2>&1; then
         echo "hosttest: result: pass: prereq.sh's reports, installs and recipe"
     else
