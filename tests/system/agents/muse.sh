@@ -78,6 +78,7 @@ EOF
     "ca_bundle": "$CA"
   },
   "telemetry": {"enabled": false},
+  "tui": {"prompt_hint_enabled": false},
   "runtime_capabilities": {
     "plugin:tbh-reminders:reminder:goal-reminder": {"enabled": false},
     "plugin:tbh-reminders:reminder:memory": {"enabled": false},
