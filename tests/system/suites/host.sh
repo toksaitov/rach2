@@ -352,6 +352,14 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: etude's versions built once, reused and kept side by side" >&2
         fail=1
     fi
+    if sh tests/system/etude_deploy_test.sh >"$VDIR/etude_deploy.rlog" 2>&1; then
+        echo "hosttest: result: pass: etude deployed again and after a cut, changing no clone, key or running test"
+        grep '^etude-deploy-test: not run: ' "$VDIR/etude_deploy.rlog" | sed 's/^/    /'
+    else
+        cat "$VDIR/etude_deploy.rlog"
+        echo "hosttest: result: fail: etude deployed again and after a cut, changing no clone, key or running test" >&2
+        fail=1
+    fi
     if python3 -B tests/system/agents_credentials_test.py >"$VDIR/agents_credentials.rlog" 2>&1; then
         echo "hosttest: result: pass: the agents' credential files and log scan"
     else
