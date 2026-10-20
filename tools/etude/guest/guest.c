@@ -304,6 +304,23 @@ static long read_file(const char *path, char *buf, size_t cap)
     return (long)n;
 }
 
+#if defined(__APPLE__)
+/** The start of process `pid` in microseconds since the epoch,
+ * kp_proc.p_starttime of the sysctl KERN_PROC_PID, which exec leaves as it
+ * is and a zombie keeps until it is reaped; 0 when the process is gone. */
+static unsigned long long proc_start(pid_t pid)
+{
+    int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, 0};
+    struct kinfo_proc kp;
+    size_t len = sizeof(kp);
+
+    mib[3] = (int)pid;
+    if (sysctl(mib, 4, &kp, &len, NULL, 0) < 0 || len < sizeof(kp))
+        return 0;
+    return (unsigned long long)kp.kp_proc.p_starttime.tv_sec * 1000000u +
+           (unsigned long long)kp.kp_proc.p_starttime.tv_usec;
+}
+#else
 /** The start of process `pid` in the kernel's ticks since boot, field 22 of
  * /proc/PID/stat; 0 when the process is gone. */
 static unsigned long long proc_start(pid_t pid)
@@ -324,6 +341,7 @@ static unsigned long long proc_start(pid_t pid)
         p = strchr(p + 1, ' ');
     return p ? strtoull(p + 1, NULL, 10) : 0;
 }
+#endif
 
 /** Whether `pid` still is the process that started at `start`. */
 static int same_process(pid_t pid, unsigned long long start)
@@ -2276,8 +2294,8 @@ static void command_text(const struct wire_frame *f, char *out, size_t cap)
  * Take the lock of the session, STATE/s/SESSION/lock, over standard I/O. An
  * etude-guest of an earlier connection of the session holds it until it
  * ends, which it does once it sees its connection lost. The one that the
- * session's owner file names, when /proc shows it is still that process, is
- * sent SIGTERM, which ends its attempts as a lost connection does, and the
+ * session's owner file names, when its start shows it is still that process,
+ * is sent SIGTERM, which ends its attempts as a lost connection does, and the
  * lock is taken once it has recorded their ends and exited. The wait ends
  * early when this process is signalled or its input is closed.
  *
