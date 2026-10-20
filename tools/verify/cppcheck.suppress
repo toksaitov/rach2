@@ -218,3 +218,7 @@ unusedStructMember:*tools/etude/json.h
 # winfixture.c, which cppcheck reads without the Windows headers they need;
 # checked alone, the header has no reader of its members.
 unusedStructMember:*tools/etude/win/winexec.h
+
+# The frame codec's structure: cppcheck checks wire.h alone, and its members
+# are read in guest.c, wire.c, the etudeserial driver and the host test.
+unusedStructMember:*tools/etude/guest/wire.h

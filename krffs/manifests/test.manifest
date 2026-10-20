@@ -9,6 +9,11 @@
 
 exec-dir 0755 / build/tests
 
+# etude-guest, etude's helper inside Rach2 (tools/etude/guest/): the debug
+# shell starts it as the boot's designated init, and it runs the cases the
+# controller sends over the serial console.
+file 0755 /etude-guest build/tools/etude/guest/etude-guest
+
 # The ISH shell, which `ishmusl` runs with -c and in its input mode to read
 # the statuses it reports. It is the program os-simple stages as its login
 # shell.

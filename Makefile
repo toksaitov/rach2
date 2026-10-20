@@ -33,7 +33,7 @@
 include mk/arch.mk
 
 # --- components (each builds via its own sub-make) ---
-BASE_DIRS = krffs rach2 tests ish utils
+BASE_DIRS = krffs rach2 tests ish utils tools/etude/guest
 FULL_DIRS = ports/doom
 
 # --- The vendored projects. Each is built by its own build_*.sh script with
@@ -390,6 +390,8 @@ $(filter $(ARCH_BUILD)/utils/%,$(MANIFEST_INPUTS)): utils
 	+@:
 $(filter $(ARCH_BUILD)/ports/doom/%,$(MANIFEST_INPUTS)): ports/doom
 	+@:
+$(filter $(ARCH_BUILD)/tools/etude/guest/%,$(MANIFEST_INPUTS)): tools/etude/guest
+	+@:
 
 # The byte searcher (tools/inspect/binfind.c) the TinyCC policy check runs.
 $(BINFIND): tools/inspect/binfind.c
@@ -544,10 +546,11 @@ krffs: check-libc
 # prerequisites, so a deleted header, library or crypt source is rebuilt by the
 # rules above before a sub-make would fail on it.
 ifneq ($(MUSL_OUTPUTS),)
-krffs tests utils: $(MUSL_OUTPUTS)
+krffs tests utils tools/etude/guest: $(MUSL_OUTPUTS)
 endif
 tests: $(LIBC_STAMP)
 utils: $(LIBC_STAMP)
+tools/etude/guest: $(LIBC_STAMP)
 
 # --- The RAM-disk images. Each is a file target staged from its manifest
 #     with mkimage.sh (dd, mkfs.krffs and stageimage.krffs) into
@@ -722,7 +725,7 @@ musl-programs: $(LIBC_STAMP)
 # tier, which includes that suite. It is the RAM root of the suites that boot
 # it, and loopdevprobe copies a 4 MiB image onto it, so it keeps 5 MiB free:
 # 13 MiB, of which the programs take 7.0 on i686 and 6.3 on x86-64.
-$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish
+$(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish tools/etude/guest
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 13 5120
 
 # The os-simple image: a small Unix built out of this project's own code. init
