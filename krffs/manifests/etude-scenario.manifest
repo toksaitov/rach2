@@ -1,0 +1,7 @@
+# etude-scenario.manifest: the disk of tests/host/etude_scenario_hosttest.c,
+# whose real boots mount it as the root with rach2.fsdisk. It has no
+# /sbin/init, so that the kernel's debug shell runs on the console, writes a
+# file to the disk and powers the machine off, and the next boot reads the
+# file back.
+
+text 0644 /hello.txt hello, world\n

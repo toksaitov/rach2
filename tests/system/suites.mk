@@ -2118,9 +2118,13 @@ run-style:
 # The KRFFS stager is one because mkext2_overlay_test.sh makes its volumes
 # with tools/image/mkext2.sh, which stages each manifest with it. The kernel
 # and the test image of ARCH are because etude_qemu_hosttest boots them under
-# QEMU through etude's launcher. etude-host runs the checks.
+# QEMU through etude's launcher, and the KRFFS tools because
+# etude_scenario_hosttest also boots the kernel on a disk root that mkdisk.sh
+# makes. etude-host runs the checks.
+ETUDE_SCENARIO_DISK = $(IMAGES_DIR)/host-etude-scenario.disk
 run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) $(ETUDEHOST) build/krffs/stageimage.krffs \
-          rach2 test-image
+          rach2 test-image krffs
+	@$(MKDISK) krffs/manifests/etude-scenario.manifest $(ETUDE_SCENARIO_DISK) 8 6 >/dev/null
 	@sh tests/system/machine_measure_test.sh
 	@ARCH=$(ARCH) ./tests/system/suites/host.sh
 

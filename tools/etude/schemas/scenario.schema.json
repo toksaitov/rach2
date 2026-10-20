@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etude scenario invocation, version 1",
+  "description": "One attempt of a machine case as libetude-case receives it; see tools/etude/Readme.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "attempt_id", "manifest", "case_id", "architecture", "store",
+               "artifacts", "tools", "site", "steps", "cleanup_us", "scratch", "grace_us", "console_max_bytes",
+               "output_max_bytes", "resend_us"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"$ref": "#/$defs/identity"},
+    "attempt_id": {"$ref": "#/$defs/identity"},
+    "manifest": {"$ref": "#/$defs/path"},
+    "case_id": {"$ref": "#/$defs/id"},
+    "architecture": {"enum": ["i686", "x86_64"]},
+    "store": {"$ref": "#/$defs/path"},
+    "artifacts": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    },
+    "tools": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/name"},
+      "additionalProperties": {"$ref": "#/$defs/path"}
+    },
+    "site": {
+      "type": "object", "additionalProperties": false,
+      "required": ["accel", "qemu_i686", "qemu_x86_64", "ovmf_i686", "ovmf_x86_64"],
+      "properties": {
+        "accel": {"enum": ["tcg", "kvm", "hvf", "whpx"]},
+        "qemu_i686": {"$ref": "#/$defs/path"},
+        "qemu_x86_64": {"$ref": "#/$defs/path"},
+        "ovmf_i686": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]},
+        "ovmf_x86_64": {"oneOf": [{"$ref": "#/$defs/path"}, {"type": "null"}]}
+      }
+    },
+    "steps": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/id"},
+      "additionalProperties": {"$ref": "#/$defs/us"}
+    },
+    "cleanup_us": {"$ref": "#/$defs/us"},
+    "scratch": {"$ref": "#/$defs/path"},
+    "grace_us": {"$ref": "#/$defs/us"},
+    "console_max_bytes": {"$ref": "#/$defs/us"},
+    "output_max_bytes": {"$ref": "#/$defs/us"},
+    "resend_us": {"$ref": "#/$defs/us"}
+  },
+  "$defs": {
+    "identity": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+    "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*$", "maxLength": 128},
+    "name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$"},
+    "path": {"type": "string", "pattern": "^[!-~]([ -~]*[!-~])?$", "maxLength": 1024},
+    "us": {"type": "integer", "minimum": 1, "maximum": 9007199254740991}
+  }
+}

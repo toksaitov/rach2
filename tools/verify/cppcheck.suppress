@@ -198,8 +198,8 @@ constParameter:*tools/verify/prosecheck.c
 unusedStructMember:*tests/musl/seccompmusl.c
 
 # `struct etude_termination` is the interface that libetude-case fills and
-# machine scenarios read; no source of the tree includes the header yet, so
-# cppcheck finds no reader of its members.
+# machine scenarios read; cppcheck judges the header as a file of its own and
+# finds no reader of its members.
 unusedStructMember:*tools/etude/include/etude/scenario.h
 
 # cppcheck checks these headers alone as well as their C users. Every member

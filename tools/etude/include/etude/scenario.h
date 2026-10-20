@@ -15,7 +15,7 @@
 struct etude_case;
 
 /* One QEMU machine that the case booted and owns. */
-struct etude_machine;
+struct etude_case_machine;
 
 /* What the library returns. A scenario that receives ETUDE_STOPPED returns
  * from etude_scenario at once; the executor ends what is left. */
@@ -93,43 +93,66 @@ const char *etude_private_copy(struct etude_case *c, const char *name);
  * another.
  */
 enum etude_status etude_boot(struct etude_case *c, const char *machine, const char *const disks[],
-                             struct etude_machine **m, struct etude_termination *end);
+                             struct etude_case_machine **m, struct etude_termination *end);
 
 /**
  * Wait for `text` on the machine's console after byte `from`, and give in
  * `at` the offset just past it.
  */
-enum etude_status etude_console_wait(struct etude_machine *m, const char *text, uint64_t from,
+enum etude_status etude_console_wait(struct etude_case_machine *m, const char *text, uint64_t from,
                                      uint64_t *at);
 
 /** Write `text` to the machine's console input. */
-enum etude_status etude_type(struct etude_machine *m, const char *text);
+enum etude_status etude_type(struct etude_case_machine *m, const char *text);
 
 /**
- * Send QMP command `command`, a JSON object, and give its reply in `reply`,
- * which the caller frees.
+ * Send QMP command `execute` with `arguments`, the text of a JSON object on
+ * one line or NULL, and give QMP's whole reply line in `reply`, which the
+ * caller frees. A reply with `return` is ETUDE_OK and one with `error`
+ * ETUDE_FAILED.
  */
-enum etude_status etude_qmp(struct etude_machine *m, const char *command, char **reply);
+enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
+                            const char *arguments, char **reply);
 
 /**
  * Run invocation `name`, an artifact, under the machine's etude-guest, and
- * give its end. Its report records become the case's own.
+ * give its end. Its report records become the case's own. Its processes end
+ * with the machine, whose cleanup confirms them gone.
  */
-enum etude_status etude_guest(struct etude_machine *m, const char *name,
+enum etude_status etude_guest(struct etude_case_machine *m, const char *name,
                               struct etude_termination *end);
 
 /**
- * Wait for the machine to end and give how it ended: a shutdown or a reset
- * is reported only from QEMU's own event, and a closed transport without one
- * is ETUDE_END_LOST.
+ * Wait for the machine to end and give how it ended. A shutdown, a reset and
+ * a panic are reported only from QEMU's own event, and QEMU's exit without
+ * one is ETUDE_END_QEMU_EXITED, with its exit status or signal; a machine
+ * whose QEMU or QMP the launcher lost ends ETUDE_END_LOST, and the wait
+ * returns ETUDE_LOST.
  */
-enum etude_status etude_wait_end(struct etude_machine *m, struct etude_termination *end);
+enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_termination *end);
 
 /**
  * Run a host tool or an artifact of the manifest, `argv[0]` its name, in the
- * foreground, keeping its output as evidence `output`, and give its end.
+ * foreground, keeping its standard output as evidence `output` and its
+ * standard error as `output`.err, and give its end.
  */
 enum etude_status etude_host(struct etude_case *c, char *const argv[], const char *output,
                              struct etude_termination *end);
+
+/**
+ * Give the path of evidence `name` in the attempt's scratch directory, as
+ * etude_host writes it, whether or not it exists yet.
+ *
+ * @return the path, owned by the library, or NULL for a name that is not a
+ *         file name.
+ */
+const char *etude_evidence(struct etude_case *c, const char *name);
+
+/**
+ * Run the attempt that the scenario invocation `argv[1]` gives: the
+ * library's `main`, which a scenario does not call. tools/etude/Readme.md
+ * gives the invocation and the exit status.
+ */
+int etude_case_main(int argc, char **argv);
 
 #endif

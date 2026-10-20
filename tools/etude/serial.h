@@ -17,7 +17,10 @@
 
 /* How the controller reaches the console. */
 struct etude_serial_conf {
-    const char *run_id; /* the run, whose digest is the session */
+    /* A name of this controller's alone, such as the boot's attempt, whose
+     * digest is the session; etude-guest keeps its command records under the
+     * session, and numbers commands from 1 in each. */
+    const char *run_id;
     uint64_t resend_us; /* from a frame's sending to its sending again */
     size_t output_max;  /* bytes kept of each stream of an attempt */
     /* Write `n` bytes, one frame, to the console's input: 0, or -1 when it

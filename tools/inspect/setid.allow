@@ -199,6 +199,12 @@ manifest krffsvol-test
 sentinel /pattern.bin 0644:0:0
 init none
 
+# The disk root of etude_scenario_hosttest's real boots: one data file and no
+# init, so that the kernel's debug shell runs on the console.
+manifest etude-scenario
+sentinel /hello.txt 0644:0:0
+init none
+
 manifest persist-test
 sentinel /persistprobe 0755:0:0
 init none
