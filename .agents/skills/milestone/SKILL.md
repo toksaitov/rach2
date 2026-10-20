@@ -16,7 +16,7 @@ A milestone runs from its `plan.md` under `dev-log/`. Its phases are issues on t
 
 ## The close
 
-* Once a phase's work is done, the reviewer loop reviews the commits since the phase started, and then each round of fixes, and each finding becomes a `bug` issue of the phase. The phase's release runs the full set from clean on the reviewed commit and installs it on the Lenovo, as the Work section of `AGENTS.md` says, and closes the phase. The owner closes a milestone once its last phase is released.
+* Once a phase's work is done, the reviewer loop reviews the commits since the phase started, and then each round of fixes, and each finding becomes a `bug` issue of the phase. The phase's release runs the full set from clean on the reviewed commit, on the one machine that `tools/ci/site` names, and installs it on the Lenovo, as the Work section of `AGENTS.md` says, and closes the phase. The owner closes a milestone once its last phase is released.
 * The build from clean empties `build/` of everything but `build/vendor/`, and removes the vendor outputs as well only when a port or its toolchain changed.
 * The style suite runs `prosecheck`, the mechanical half of the register rule; the review covers its contextual half.
 * The reviewer's lead divides the diff by contract among its subagents and checks each finding they return against the code before it keeps it. A review that reaches its three hours is incomplete, not clean, and says so on the phase.
