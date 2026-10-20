@@ -159,6 +159,7 @@ RECIPE is the machine's recipe, [`tooling/`](tooling) by default; CACHE the dire
 | [`failures.h`](failures.h), [`failures.c`](failures.c), [`history_failures.c`](history_failures.c) | `history_failures`, the listing of a run's attempts that did not pass |
 | [`lines.h`](lines.h), [`lines.c`](lines.c), [`history_lines.c`](history_lines.c) | The compatible formatter, `history_lines`: a run's history as the lines of `tests/run` |
 | [`include/etude/status.h`](include/etude/status.h), [`posix/status.c`](posix/status.c) | The status record of a run, which `tools/flow/test_status.py` reads, and its writer on POSIX systems |
+| [`digest.h`](digest.h), [`digest.c`](digest.c) | The workload, inventory and profile digests of a case, by which a plan's item names it |
 | [`posix/etude_host.c`](posix/etude_host.c) | `etude-host`, which runs the host checks of `tests/run host` several at once |
 | [`watchdog.c`](watchdog.c), [`posix/supervise.c`](posix/supervise.c) | The watchdog in plain C, and the supervisor on POSIX systems |
 | [`include/etude/artifact.h`](include/etude/artifact.h) | The artifact store and the preparation graph: objects by digest, private copies, nodes and their products |
@@ -341,7 +342,7 @@ The plan's items refer to a case by three digests, each of a canonical JSON docu
 * The assertion inventory: `case_id`, `assertions`, `branches` and `termination`.
 * The profile: `case_id`, the placement, `requirements`, `machines`, `resources`, the privileges, and the `isolation` of a host or QEMU placement or the `native.fixtures` of a native one.
 
-Equal manifests therefore give equal digests, and a comparison of two runs finds a changed workload by its digest. The results document of each attempt is the history's `assertion_results` blob.
+[`digest.c`](digest.c) computes them. Equal manifests therefore give equal digests, and a comparison of two runs finds a changed workload by its digest. The results document of each attempt is the history's `assertion_results` blob.
 
 The plan's `reproduce` blob is a document of [`schemas/reproduce.schema.json`](schemas/reproduce.schema.json), as [the example](schemas/reproduce.example.json) shows: for each item, the directory and the environment it runs in, the commands that prepare it, the command of the case, and the command that runs the case under a profiler, or the reason the platform has none.
 

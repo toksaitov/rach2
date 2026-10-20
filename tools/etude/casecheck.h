@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 
+#include "digest.h"
 #include "json.h"
 
 /* A manifest read and checked, and the file it came from. */
@@ -39,7 +40,6 @@ int schema_findings(const struct json *schema, const struct json *doc, const cha
 int load_manifests(struct cases *set, char **paths, int n);
 void free_manifests(struct cases *set);
 const struct json *find_case(const struct cases *set, const char *case_id, const char **file);
-void inventory_digest(const struct json *c, char hex[65]);
 int has_member(const struct json *array, const char *field, const char *value);
 const struct json *group_of(const struct json *c, const char *assertion_id,
                             const struct json **alternative);

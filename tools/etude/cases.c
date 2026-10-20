@@ -16,7 +16,6 @@
 #include <string.h>
 
 #include "etude/processor.h"
-#include "sha256.h"
 
 /* The case a rule reads, and the file it came from. */
 struct rule {
@@ -906,38 +905,6 @@ const struct json *find_case(const struct cases *set, const char *case_id, const
         }
     }
     return NULL;
-}
-
-/**
- * Writes the digest of the case's assertion inventory into `hex`: the
- * SHA-256 of the canonical form of its `case_id`, `assertions`, `branches`
- * and `termination`, with `schema_version` 1, as the Readme's History says.
- */
-void inventory_digest(const struct json *c, char hex[65])
-{
-    static const char *const parts[] = {"assertions", "branches", "case_id", "termination"};
-    struct json *items[5];
-    struct json inventory = {0}, version = {0};
-    struct jbuf b = {0};
-    struct sha256 s;
-    unsigned char digest[32];
-    size_t i;
-
-    version.type = JSON_INTEGER;
-    version.integer = 1;
-    version.name = "schema_version";
-    inventory.type = JSON_OBJECT;
-    inventory.item = items;
-    for (i = 0; i < sizeof parts / sizeof parts[0]; i++) {
-        items[inventory.count++] = (struct json *)json_member(c, parts[i]);
-    }
-    items[inventory.count++] = &version;
-    json_canonical(&inventory, &b);
-    sha256_init(&s);
-    sha256_update(&s, (const unsigned char *)b.data, b.len);
-    sha256_final(&s, digest);
-    sha256_hex(digest, hex);
-    jbuf_free(&b);
 }
 
 /**

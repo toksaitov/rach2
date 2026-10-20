@@ -435,9 +435,9 @@ $(SIZECHECK): tools/verify/sizecheck.c
 # C99. sources.mk lists the sources of etude's programs, for this build and
 # for a cached version's.
 include tools/etude/sources.mk
-$(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/etude/schema.h \
-              tools/etude/include/etude/processor.h tools/etude/include/etude/history.h \
-              tools/etude/history_json.h utils/sha256.h
+$(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/digest.h tools/etude/json.h \
+              tools/etude/schema.h tools/etude/include/etude/processor.h \
+              tools/etude/include/etude/history.h tools/etude/history_json.h utils/sha256.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
 
