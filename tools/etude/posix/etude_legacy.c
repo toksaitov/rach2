@@ -29,6 +29,9 @@
 #define MEMBERS_MAX  1024
 #define LINE_MAX_SET 256
 
+/* The most goals of a preparation. */
+#define GOALS_MAX 4096
+
 /* The stop signal received, or 0. */
 static volatile sig_atomic_t stop_signal;
 
@@ -56,7 +59,7 @@ static void catch_stops(void)
 static int usage(void)
 {
     fprintf(stderr, "usage: etude-legacy prepare [-t TREE] [-a ARCH] [-n KERNEL] [-w WORK] "
-                    "[-o RECORD] [-s SECONDS] SUITE...\n"
+                    "[-o RECORD] [-s SECONDS] [-b GOAL]... SUITE...\n"
                     "       etude-legacy check [-d] RECORD\n"
                     "       etude-legacy run [-w WORK] [-i IDLE] [-s SECONDS] RECORD SUITE\n"
                     "       etude-legacy set -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE "
@@ -82,6 +85,7 @@ static unsigned number_of(const char *s, unsigned long max)
 /** Run `prepare` with the arguments after it. */
 static int prepare_main(int argc, char **argv)
 {
+    static char *goals[GOALS_MAX];
     struct etude_legacy_opts o;
     int opt;
 
@@ -90,8 +94,11 @@ static int prepare_main(int argc, char **argv)
     o.seconds = ETUDE_LEGACY_SECONDS;
     o.out = stdout;
     o.stop = &stop_signal;
-    while ((opt = getopt(argc, argv, "t:a:n:w:o:s:")) != -1) {
-        if (opt == 't')
+    o.goals = goals;
+    while ((opt = getopt(argc, argv, "t:a:n:w:o:s:b:")) != -1) {
+        if (opt == 'b' && o.ngoals < GOALS_MAX)
+            goals[o.ngoals++] = optarg;
+        else if (opt == 't')
             o.tree = optarg;
         else if (opt == 'a')
             o.arch = optarg;
@@ -106,7 +113,7 @@ static int prepare_main(int argc, char **argv)
         else
             return usage();
     }
-    if (optind == argc)
+    if (optind == argc && o.ngoals == 0)
         return usage();
     o.suites = argv + optind;
     o.nsuites = (size_t)(argc - optind);

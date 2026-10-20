@@ -492,16 +492,38 @@ static char *target_of(const char *name)
     return format("run-%s", name);
 }
 
-/** Take the suites named; 0, or 2 after a refusal. */
+/** Say whether `s` names a goal inside the tree: a relative path of
+ * letters, digits, `.`, `_`, `+` and `-`, whose parts are not `.` or `..`. */
+static int goal_name(const char *s)
+{
+    const char *part;
+    size_t n;
+
+    if (s[0] == '\0' || s[0] == '-' ||
+        s[strspn(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTU"
+                    "VWXYZ0123456789._+-/")] != '\0')
+        return 0;
+    for (part = s; *part != '\0'; part += n + (part[n] == '/')) {
+        n = strcspn(part, "/");
+        if (n == 0 || (n == 1 && part[0] == '.') || (n == 2 && strncmp(part, "..", 2) == 0))
+            return 0;
+    }
+    return 1;
+}
+
+/** Take the suites and the goals named; 0, or 2 after a refusal. */
 static int admit_suites(struct prep *p)
 {
     const struct etude_legacy_opts *o = p->o;
     const char *arch = p->arch_var + 5;
     size_t i, j;
 
-    if (o->nsuites == 0)
+    if (o->nsuites == 0 && o->ngoals == 0)
         return refuse(p, "no suite named");
-    p->chosen = calloc(o->nsuites, sizeof(*p->chosen));
+    for (i = 0; i < o->ngoals; i++)
+        if (!goal_name(o->goals[i]))
+            return refuse(p, "%s: a goal is a relative path inside the tree", o->goals[i]);
+    p->chosen = calloc(o->nsuites + 1, sizeof(*p->chosen));
     p->targets = calloc(o->nsuites + 1, sizeof(*p->targets));
     if (p->chosen == NULL || p->targets == NULL)
         return sys_error(p, "the request", ENOMEM);
@@ -1290,7 +1312,7 @@ static int take_artifacts(struct prep *p, size_t i, unsigned char *mark,
  * Find the artifacts every suite reads and those no step has built yet:
  * for one suite, all of its own, which its target would otherwise build as
  * it starts; for a set, those outside `prepare-all`'s, such as the GNU
- * system's images.
+ * system's images. The goals named are artifacts as well, and built.
  */
 static int find_artifacts(struct prep *p)
 {
@@ -1307,6 +1329,9 @@ static int find_artifacts(struct prep *p)
     }
     for (i = 0; status == 0 && i < p->o->nsuites; i++)
         status = take_artifacts(p, i, mark, prepared);
+    for (i = 0; status == 0 && i < p->o->ngoals; i++)
+        if (list_add(&p->required, p->o->goals[i]) != 0 || list_add(&p->goals, p->o->goals[i]) != 0)
+            status = failed(p, "artifacts: memory ran out");
     if (status == 0 && list_add(&p->required, p->kernel) != 0)
         status = failed(p, "artifacts: memory ran out");
     list_unique(&p->goals);
