@@ -1078,6 +1078,9 @@ void print_families(const struct cases *set)
     size_t i;
 
     for (i = 0; i < set->n; i++) {
-        say("%s %s\n", json_text(set->m[i].doc, "family_id"), set->m[i].path);
+        say_text(json_text(set->m[i].doc, "family_id"));
+        say_text(" ");
+        say_text(set->m[i].path);
+        say_text("\n");
     }
 }
