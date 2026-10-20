@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "probe-oomprobe",
+  "summary": "the row of oomprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/mm/paging.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "oomprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "oom-segv",
+      "summary": "the state of a sleep, which procprobe checks",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/paging.c",
+          "find": "    if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused) {\n",
+          "replace": "    if (user_mode && have_user_proc && in_user_range && current_proc->frame_refused && 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "OOMPROBE FAIL: the child died of signal",
+          "guest: fail: oomprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

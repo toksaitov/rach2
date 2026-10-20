@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "proof": "probe-limitprobe",
+  "summary": "the row of limitprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/io/poll.c",
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "limitprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "poll-refuses-past-descriptor-limit",
+      "summary": "openSSH's rlimit sandbox",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    if (nfds > POLL_MAX_FDS) {\n        return -EINVAL; /* more than a process can hold */\n    }\n",
+          "replace": "    if (nfds > POLL_MAX_FDS || nfds > (uint32_t)fd_limit(current_proc->fds)) {\n        return -EINVAL; /* more than a process can hold */\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LIMITPROBE FAIL: select and poll under the limits of 0 of OpenSSH's sandbox",
+          "guest: fail: limitprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "fsize-never-refused",
+      "summary": "the state of a sleep, which procprobe checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (limit == RLIM_INFINITY || end <= limit) {\n",
+          "replace": "    if (limit == RLIM_INFINITY || end <= limit || 1) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LIMITPROBE FAIL: a file limit of 4096",
+          "guest: fail: limitprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "prlimit-zombie-refused",
+      "summary": "the state of a sleep, which procprobe checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    p = pid != 0 ? get_process(pid) : NULL;\n    if (!p || p->state == PROC_UNUSED) {\n",
+          "replace": "    p = pid != 0 ? get_process(pid) : NULL;\n    if (!p || p->state == PROC_UNUSED || p->tg->live == 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LIMITPROBE FAIL: a zombie's limits",
+          "guest: fail: limitprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

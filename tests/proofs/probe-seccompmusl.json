@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "proof": "probe-seccompmusl",
+  "summary": "the row of seccompmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/proc/seccomp.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "seccompmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "seccomp-precedence-reversed",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/seccomp.c",
+          "find": "        if (precedence(cur) < precedence(ret)) {\n",
+          "replace": "        if (precedence(cur) > precedence(ret)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SECCOMPMUSL FAIL (the filter fails getppid with its errno and lets getpid run",
+          "guest: fail: seccompmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "seccomp-trap-eax-lost",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/seccomp.c",
+          "find": "        *ret = (int32_t)nr;\n",
+          "replace": "        *ret = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SECCOMPMUSL FAIL (a trap posts SIGSYS with the call's siginfo and its number in EAX",
+          "guest: fail: seccompmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "seccomp-tsync-ignored",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/seccomp.c",
+          "find": "    if (flags & SECCOMP_FILTER_FLAG_TSYNC) {\n        tsync_apply(self);\n",
+          "replace": "    if ((flags & SECCOMP_FILTER_FLAG_TSYNC) && 0) {\n        tsync_apply(self);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SECCOMPMUSL FAIL (the second thread has the filter TSYNC gave it",
+          "guest: fail: seccompmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

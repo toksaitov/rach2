@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "proof": "probe-mapmusl",
+  "summary": "the row of mapmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/proc/elf.c",
+    "rach2/sys/mm/shmem.c",
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/mm/filemap.c",
+    "rach2/sys/mm/paging.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "mapmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "exec-segments-copied",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/elf.c",
+          "find": "        if (file == NULL || filesz == 0 || ((off ^ vaddr) & (PAGE_SIZE - 1)) != 0) {\n",
+          "replace": "        if (1) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a dropped page of the program's data segment did not read its file again",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "shmem-truncate-keeps-mapped-page",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/shmem.c",
+          "find": "    keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);\n    if (sh->maps && keep < sh->npages) {\n        filemap_shmem_cut(sh, keep);\n    }\n",
+          "replace": "    keep = (uint32_t)((size + PAGE_SIZE - 1) / PAGE_SIZE);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a shared mapping kept a page its file's truncation freed",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mprotect-shared-readonly-writable",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {\n        src->prot |= VM_PROT_NOWRITE;\n    }\n",
+          "replace": "    if (shared && !sh && !disk) {\n        src->prot |= VM_PROT_NOWRITE;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (mprotect made a read-only file's shared mapping writable",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mprotect-private-readonly-refused",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {\n",
+          "replace": "    if (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (mprotect of a read-only file's private mapping",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mmap2-offset-past-32-bits",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (pgoff + len / PAGE_SIZE < pgoff ||\n        (((flags & MAP_TYPE) != MAP_PRIVATE || !(flags & MAP_ANONYMOUS)) &&\n         pgoff + len / PAGE_SIZE > 0xFFFFFFFFul)) {\n        return -EOVERFLOW;\n    }\n    mem_balance();\n",
+          "replace": "    mem_balance();\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (mmap2 of a file whose last page is past 32 bits",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "shmem-page-past-end-backed",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/filemap.c",
+          "find": "    if (m->sh != &m->own && (uint64_t)pgoff << 12 >= m->sh->size) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a touch of a file in memory past its end was not SIGSEGV",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mremap-wrap-removes-source",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    return remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len);\n}\n\n/**\n * Whether mremap's arguments name ranges it can work on: a page-aligned\n * address and two lengths that are not zero, flags it knows with\n * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside\n * user space and a new length that fits in it. The lengths are judged as\n * they are given, before they are rounded up to pages, so that neither\n * range can wrap past the end of the address space: with an old length\n * near 4 GiB the old range would seem to end below its start, and a fixed\n * move onto its own address would remove its source.\n */\nstatic int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len, uint32_t flags)\n{\n    return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&\n           (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&\n           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= USER_ADDR_MAX &&\n           old_len <= USER_ADDR_MAX - addr && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;\n",
+          "replace": "    return vm_find(vm, addr) ? remap_move(vm, vm_find(vm, addr), addr, old_len, to, new_len)\n                             : -EFAULT;\n}\n\n/**\n * Whether mremap's arguments name ranges it can work on: a page-aligned\n * address and two lengths that are not zero, flags it knows with\n * MREMAP_FIXED only beside MREMAP_MAYMOVE, an old range that ends inside\n * user space and a new length that fits in it. The lengths are judged as\n * they are given, before they are rounded up to pages, so that neither\n * range can wrap past the end of the address space: with an old length\n * near 4 GiB the old range would seem to end below its start, and a fixed\n * move onto its own address would remove its source.\n */\nstatic int remap_args_valid(uintptr_t addr, uintptr_t old_len, uintptr_t new_len, uint32_t flags)\n{\n    return (addr & (PAGE_SIZE - 1)) == 0 && old_len != 0 && new_len != 0 &&\n           (flags & ~(uint32_t)(MREMAP_MAYMOVE | MREMAP_FIXED)) == 0 &&\n           (!(flags & MREMAP_FIXED) || (flags & MREMAP_MAYMOVE)) && addr <= USER_ADDR_MAX &&\n           addr <= USER_ADDR_MAX - PAGE_UP(old_len) && new_len <= USER_ADDR_MAX - USER_ADDR_MIN;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (mremap took an old length that wraps past the end of memory",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "madvise-length-rounded-first",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||\n        SC_ARG(params, 1) > USER_ADDR_MAX - addr || !madvise_known(advice)) {\n",
+          "replace": "    if ((addr & (PAGE_SIZE - 1)) != 0 || addr > USER_ADDR_MAX ||\n        PAGE_UP(SC_ARG(params, 1)) > USER_ADDR_MAX - addr || !madvise_known(advice)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (madvise took a length that rounds up to 0 for an empty range",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "madvise-undefined-advice",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    return advice <= MADV_DONTNEED || advice == MADV_FREE ||\n",
+          "replace": "    return advice < MADV_REMOVE ||\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (madvise took an advice Linux does not define",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "madvise-dontneed-locked-kept",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (advice == MADV_DONTNEED || advice == MADV_DONTNEED_LOCKED || advice == MADV_FREE) {\n",
+          "replace": "    if (advice == MADV_DONTNEED || advice == MADV_FREE) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (MADV_DONTNEED_LOCKED",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "msync-length-rounded-first",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||\n        addr > USER_ADDR_MAX || SC_ARG(params, 1) > USER_ADDR_MAX - addr) {\n",
+          "replace": "    if ((addr & (PAGE_SIZE - 1)) != 0 || (flags & ~7u) != 0 || (flags & 5u) == 5u ||\n        addr > USER_ADDR_MAX || PAGE_UP(SC_ARG(params, 1)) > USER_ADDR_MAX - addr) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (msync took a length that rounds up to 0 for an empty range",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "forced-write-grants-write",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/paging.c",
+          "find": "                      : page_private(mm->dir, addr, (vma->prot & VM_PROT_WRITE) != 0) != 0)) {\n",
+          "replace": "                      : page_private(mm->dir, addr, 1) != 0)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a store reached a read-only page after a write through /proc/self/mem",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mremap-fixed-shrink-counts-old-size",
+      "summary": "memory mappings, protection and shared memory",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    rest = vm_total(vm) - vm_covered(vm, to, to + new_len) - old_len;\n    if (new_len > limit || rest > limit - new_len) {\n",
+          "replace": "    rest = vm_total(vm) - vm_covered(vm, to, to + new_len);\n    if (rest + (new_len > old_len ? new_len - old_len : 0) > limit) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a fixed mremap that shrinks was held to its old size",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mremap-shrink-keeps-tail",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (new_len <= old_len) {\n        if (vm_remove(vm, addr + new_len, addr + old_len) != 0) {\n            vma_exhausted(\"mremap\");\n            return -ENOMEM;\n        }\n        unmap_user_range(_curr_dir, addr + new_len, addr + old_len);\n        vm_file_reap();\n        return (long)addr;\n    }\n",
+          "replace": "    if (new_len <= old_len) {\n        return (long)addr;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (the pages a shrink cut were still mapped",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mremap-shrink-drops-kept-page",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        unmap_user_range(_curr_dir, addr + new_len, addr + old_len);\n        vm_file_reap();\n        return (long)addr;\n",
+          "replace": "        unmap_user_range(_curr_dir, addr, addr + old_len);\n        vm_file_reap();\n        return (long)addr;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (the page a shrink kept lost its bytes",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "disk-share-krffs-writable",
+      "summary": "shared mappings of a file on a disk file system: on the KRFFS root of the default boot, one that may be written is refused; tests/system/ext2_map_mutate.sh has the faults of the ext2 rows",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (shared && !sh && !disk && (src->prot & VM_PROT_WRITE)) {\n        return -ENODEV;\n    }\n",
+          "replace": "\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a writable shared mapping of a KRFFS file was not ENODEV",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "disk-share-krffs-fallback-writable",
+      "summary": "shared mappings of a file on a disk file system: on the KRFFS root of the default boot, one that may be written is refused; tests/system/ext2_map_mutate.sh has the faults of the ext2 rows",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (shared && (!(e->flags & FD_FLAG_WRITE) || (!sh && !disk))) {\n",
+          "replace": "    if (shared && !(e->flags & FD_FLAG_WRITE)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "MAPMUSL FAIL (a read-only shared mapping of a KRFFS file was made writable",
+          "guest: fail: mapmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

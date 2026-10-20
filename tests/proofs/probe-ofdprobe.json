@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "proof": "probe-ofdprobe",
+  "summary": "the row of ofdprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/fd.c",
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "ofdprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "ofd-close-leaked",
+      "summary": "leaks of open file descriptions and pipes, which ofdprobe and pipeprobe judge by the heap's HeapUsed",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "            if (*link) {\n                *link = rec->next;\n            }\n            kfree(rec);\n",
+          "replace": "            if (*link) {\n                *link = rec->next;\n            }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: 300 open/close cycles left the heap as it was",
+          "guest: fail: ofdprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ofd-fork-ref-leaked",
+      "summary": "leaks of open file descriptions and pipes, which ofdprobe and pipeprobe judge by the heap's HeapUsed",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        fd_ofd_ref(e->ofd);\n        if (e->type == FD_TYPE_SOCKET && e->sock) {\n",
+          "replace": "        fd_ofd_ref(e->ofd);\n        {\n            static const char probe[] = \"ofdprobe\";\n            uint32_t i = 0;\n\n            while (i < sizeof(probe) && current_proc->comm[i] == probe[i]) {\n                i++;\n            }\n            if (i == sizeof(probe)) {\n                fd_ofd_ref(e->ofd);\n            }\n        }\n        if (e->type == FD_TYPE_SOCKET && e->sock) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: 100 forks and the close left the heap as it was",
+          "guest: fail: ofdprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

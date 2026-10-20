@@ -238,7 +238,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `tests/limitprobe.c`: `RLIMIT_NPROC`, `RLIMIT_NOFILE` and `RLIMIT_AS`.
 * `tests/musl/schedmusl.c`, `tests/musl/prctlmusl.c`, `tests/musl/seccompmusl.c`, `tests/musl/coremusl.c` and `tests/musl/callsmusl.c`: thread ids, nice values and the scheduling calls, `prctl`, seccomp filters, core files, and among other calls `getcpu`, `personality` and a suspend to idle.
 
-`tests/system/probe_faults.sh` puts the faults of `tests/system/probe_faults.txt` into the tree one at a time, each of which a row of the default suite must catch; `sh tests/system/probe_faults.sh NAME` runs one.
+The catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver put faults into the tree one at a time, each of which the row of PROBE in the default suite must catch; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json NAME` runs one.
 
 Other suites ([the suites](../../../tests/system/suites.md)):
 

@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "proof": "probe-schedmusl",
+  "summary": "the row of schedmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/fs/synthfs.c",
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/fs/procfs.c",
+    "rach2/sys/proc/process.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "schedmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "setpgid-other-session-allowed",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (target->tg != current_proc->tg && target->sid != current_proc->sid) {\n        return -EPERM;\n    }\n",
+          "replace": "    if (target->tg != current_proc->tg && target->sid != current_proc->sid) {\n        (void)target;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (setpgid of a child in another session was not EPERM)",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "setpgid-exec-allowed",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (target->tg != current_proc->tg && target->tg->execed) {\n        return -EACCES;\n    }\n",
+          "replace": "    if (target->tg != current_proc->tg && target->tg->execed) {\n        (void)target;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (setpgid after a child's successful exec was not EACCES)",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-file-missing",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "                 {\"mem\", SYNTH_PROC_MEM},\n                 {\"oom_score_adj\", SYNTH_PROC_OOM_ADJ},\n",
+          "replace": "                 {\"mem\", SYNTH_PROC_MEM},\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (the OOM score adjustment does not read 0 at first",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-mode-read-only",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (vp->procfile == SYNTH_PROC_OOM_ADJ || vp->procfile == SYNTH_PROC_UID_MAP ||\n            vp->procfile == SYNTH_PROC_GID_MAP || vp->procfile == SYNTH_PROC_SETGROUPS) {\n            kst->st_mode = S_IFREG | 0644;\n        }\n",
+          "replace": "        if (vp->procfile == SYNTH_PROC_UID_MAP || vp->procfile == SYNTH_PROC_GID_MAP ||\n            vp->procfile == SYNTH_PROC_SETGROUPS) {\n            kst->st_mode = S_IFREG | 0644;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (oom_score_adj is not root's with mode 0644",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-creat-refused",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (acc == 3) {\n        return -EACCES;\n    }\n    if (procfs_oom_owner(pid, &uid, &gid) != 0) {\n",
+          "replace": "    if (acc == 3 || (flags & 0100)) {\n        return -EACCES;\n    }\n    if (procfs_oom_owner(pid, &uid, &gid) != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (a write of the OOM score adjustment through a redirection did not read back",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-fork-not-inherited",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    child->tg->oom_score_adj = parent->tg->oom_score_adj;\n    child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;\n",
+          "replace": "    child->tg->oom_score_adj = 0;\n    child->tg->oom_score_adj_min = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (a child did not inherit the OOM score adjustment",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-range-unchecked",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (v < OOM_SCORE_ADJ_MIN || v > OOM_SCORE_ADJ_MAX) {\n",
+          "replace": "    if (v < OOM_SCORE_ADJ_MIN - 1000 || v > OOM_SCORE_ADJ_MAX + 1000) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (an OOM score adjustment past -1000 to 1000 or no number was not refused with EINVAL",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-owner-privileged-only",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (acc != 0 && !proc_privileged(current_proc) && current_proc->euid != uid) {\n",
+          "replace": "    if (acc != 0 && !proc_privileged(current_proc)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (user 1000 could not raise its OOM score adjustment and lower it to the floor",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-floor-kept",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    p->tg->oom_score_adj = v;\n    if (proc_privileged(current_proc)) {\n        p->tg->oom_score_adj_min = v;\n    }\n",
+          "replace": "    p->tg->oom_score_adj = v;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (user 1000 lowered its OOM score adjustment below the floor root's write set",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-floor-unchecked",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (v < p->tg->oom_score_adj_min && !proc_privileged(current_proc)) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (user 1000 lowered its OOM score adjustment below the floor root's write set",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-owner-unchecked",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (acc != 0 && !proc_privileged(current_proc) && current_proc->euid != uid) {\n",
+          "replace": "    if (acc != 0 && !proc_privileged(current_proc) && current_proc->euid != uid && acc == 3) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (user 1000 opened root's process's oom_score_adj for writing",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "oom-floor-starts-low",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        tg->refs = 1;\n        tg->live = 1;\n",
+          "replace": "        tg->refs = 1;\n        tg->live = 1;\n        tg->oom_score_adj_min = -1000;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (user 1000 lowered its OOM score adjustment below 0",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ioprio-rt-unchecked",
+      "summary": "adjtimex, which reads the clock's NTP state",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    case IOPRIO_CLASS_RT:\n        if (!cred_privileged()) {\n",
+          "replace": "    case IOPRIO_CLASS_RT:\n        if (0 && !cred_privileged()) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SCHEDMUSL FAIL (another user's caller and the real-time class or root's process)",
+          "guest: fail: schedmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

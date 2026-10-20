@@ -113,4 +113,4 @@ An instance (`struct inotify`) has a queue of events and a wait queue. Every wat
 * `tests/musl/inotifymusl.c`: the events of a watched directory and a watched file through a file's life, reads, `FIONREAD`, `poll`, and the errors and flags of the watch calls.
 * `tests/musl/callsmusl.c`: a POSIX timer's signal and overrun, a deleted id, and timers on clocks of processor time.
 
-The faults in `tests/system/probe_faults.txt` for the files here are caught by those rows and by `limitprobe`; `sh tests/system/probe_faults.sh` runs them. The `packet`, `raw`, `netif` and `dhcp` suites poll sockets. `tests/musl/pollmusl.c` is staged as `/musl/pollmusl` for a person to run; no suite runs it.
+The faults for the files here in the catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver are caught by those rows and by `limitprobe`; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json` runs a probe's. The `packet`, `raw`, `netif` and `dhcp` suites poll sockets. `tests/musl/pollmusl.c` is staged as `/musl/pollmusl` for a person to run; no suite runs it.

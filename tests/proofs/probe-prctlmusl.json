@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "proof": "probe-prctlmusl",
+  "summary": "the row of prctlmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/proc/process.c",
+    "rach2/sys/fs/procfs.c",
+    "rach2/sys/fs/vfs.c",
+    "rach2/sys/proc/exit.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "prctlmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "dumpable-per-thread",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    case PR_GET_DUMPABLE:\n        return (int32_t)current_proc->mm->dumpable;\n",
+          "replace": "    case PR_GET_DUMPABLE:\n        return current_proc->pid == current_proc->tgid ? (int32_t)current_proc->mm->dumpable : 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (a running thread did not see the dumpable flag another thread cleared)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "comm-unpadded",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "    k_memset(p->comm, 0, sizeof(p->comm));\n    for (i = 0; i < (int)sizeof(p->comm) - 1 && base[i]; i++) {\n        p->comm[i] = base[i];\n    }\n}\n",
+          "replace": "    for (i = 0; i < (int)sizeof(p->comm) - 1 && base[i]; i++) {\n        p->comm[i] = base[i];\n    }\n    p->comm[i] = '\\0';\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (an exec left the end of a longer name after the program name)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "setresuid-keeps-pdeath",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (s != SC_ID_KEEP) {\n        p->suid = s;\n    }\n    cred_moved(p, old_euid, p->egid);\n    return 0;\n}\n",
+          "replace": "    if (s != SC_ID_KEEP) {\n        p->suid = s;\n    }\n    (void)old_euid;\n    return 0;\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (a move of the effective uid alone kept the signal or the dumpable flag)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "setresgid-keeps-pdeath",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (s != SC_ID_KEEP) {\n        p->sgid = s;\n    }\n    cred_moved(p, p->euid, old_egid);\n    return 0;\n}\n",
+          "replace": "    if (s != SC_ID_KEEP) {\n        p->sgid = s;\n    }\n    (void)old_egid;\n    return 0;\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (a move of the effective gid alone kept the signal or the dumpable flag)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "get-name-without-padding",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    case PR_GET_NAME:\n        k_memcpy(name, current_proc->comm, sizeof(name));\n        return copy_to_user((void __user *)arg2, name, sizeof(name)) != 0 ? -EFAULT : 0;\n",
+          "replace": "    case PR_GET_NAME:\n        k_memcpy(name, current_proc->comm, sizeof(name));\n        return copy_to_user((void __user *)arg2, name, k_strlen(name) + 1) != 0 ? -EFAULT : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (a short name set after a longer one was not read back padded with NULs)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exe-exec-old-path",
+      "summary": "paths that end in a slash, a dot or two, and seeks of directories and /proc files",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);\n    if (rc == 0) {\n        rc = exec_link_name(s);\n    }\n",
+          "replace": "    {\n        struct vpath vp;\n\n        if (synth_classify(s->path, &vp) == VNODE_PROC_EXE && current_proc->mm->exe) {\n            k_memcpy(s->path, current_proc->mm->exe, k_strlen(current_proc->mm->exe) + 1);\n        }\n    }\n    rc = exec_open(&s->prog, s->path, s->path_end, &s->id, s->mm);\n    if (rc == 0) {\n        rc = exec_link_name(s);\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (an exec of /proc/self/exe ran the file put at the program's old path)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exe-link-exec-path",
+      "summary": "an address space's two counts and the program's file it keeps",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (node && !deleted && cap > 0) {\n",
+          "replace": "    if (node && !deleted && cap < 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (/proc/self/exe did not read the program's path after a rename)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exe-walk-text",
+      "summary": "an address space's two counts and the program's file it keeps",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "                if (vp->kind == VNODE_PROC_EXE) {\n",
+          "replace": "                if (vp->kind == VNODE_PROC_EXE && locked < 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (an open of /proc/self/exe did not reach the program once its name was gone)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exit-keeps-address-space-exe",
+      "summary": "an address space's two counts and the program's file it keeps",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/exit.c",
+          "find": "    proc_thread_gone(self);\n    mm_drop(self);\n    switch_page_directory(_kernel_dir);\n    proc_files_put(self);\n",
+          "replace": "    proc_thread_gone(self);\n    proc_files_put(self);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (an ended child's program kept its file system busy until the reap)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "subreaper-ignored",
+      "summary": "child subreapers, and the children file of a thread's directory",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (subreaper != NULL) {\n            init = subreaper;\n",
+          "replace": "        if (subreaper != NULL && dead_pid == 0) {\n            init = subreaper;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (an orphan did not come to the child subreaper)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "children-file-empty",
+      "summary": "child subreapers, and the children file of a thread's directory",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (self->pid != self->tgid) {\n        return t->len;\n    }\n",
+          "replace": "    if (self->pid != 0) {\n        return t->len;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PRCTLMUSL FAIL (the children file did not list the one child)",
+          "guest: fail: prctlmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

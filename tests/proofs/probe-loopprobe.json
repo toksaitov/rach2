@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "proof": "probe-loopprobe",
+  "summary": "the row of loopprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_net.c",
+    "rach2/sys/network/socket/socket.c",
+    "rach2/sys/proc/sched.c",
+    "rach2/sys/network/tcp/tcp.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "loopprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "inet-recvfrom-no-length-efault",
+      "summary": "recvfrom's EFAULT for an address with no length",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "    want_addr = sa_ptr != 0;\n",
+          "replace": "    want_addr = sa_ptr != 0 && salen_ptr != 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a recvfrom with an address and no length was not EFAULT)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "inet-recvfrom-no-length-queued",
+      "summary": "recvfrom's EFAULT for an address with no length",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "        if (!salen_ptr || !user_buffer_ok(salen_ptr, sizeof(cap), 1) ||\n            copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0) {\n",
+          "replace": "        if (salen_ptr && (!user_buffer_ok(salen_ptr, sizeof(cap), 1) ||\n                          copy_from_user(&cap, (const void __user *)salen_ptr, sizeof(cap)) != 0)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a recvfrom refused with EFAULT took the datagram)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "inet-stream-peek-takes",
+      "summary": "recvfrom's EFAULT for an address with no length",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "        copy_len = (uint32_t)len;\n    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);\n    if (!peek) {\n",
+          "replace": "        copy_len = (uint32_t)len;\n    recv_ring_get(buf, tcb, tcb->recv_head, copy_len);\n    if (peek >= 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a tcp read after a peek did not start at the byte peeked)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "inet-dgram-peek-takes",
+      "summary": "recvfrom's EFAULT for an address with no length",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "    if (peek) {\n        socket_dgram_sender(sock, src_ip, src_port);\n",
+          "replace": "    if (peek < 0) {\n        socket_dgram_sender(sock, src_ip, src_port);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a second udp peek did not find the datagram and its sender)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "inet-dgram-peek-sender",
+      "summary": "recvfrom's EFAULT for an address with no length",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "                port = sock->recv_src_port[sock->recv_head];\n",
+          "replace": "                port = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a second udp peek did not find the datagram and its sender)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "loopback-idle-undrained",
+      "summary": "the loopback ring left for the timer by a processor that halts over it",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/sched.c",
+          "find": "    if (ip_loop_pending()) {\n        ip_loop_drain_from(IP_LOOP_FROM_IDLE);\n        return;\n    }\n    this_cpu()->idle_wait = 1;\n",
+          "replace": "    this_cpu()->idle_wait = 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a local round trip waited for the timer with nothing running)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "listen-no-autobind",
+      "summary": "A bind to port 0 and a listen with no port, each given an ephemeral port",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "    if (port == 0) {\n        port = ephemeral_port();\n    }\n    if (port == 0 || tcp_port_has_listener(sock->local_ip, port)) {\n",
+          "replace": "    if (port == 0 || tcp_port_has_listener(sock->local_ip, port)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (unbound listener refused)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "bind-zero-no-port",
+      "summary": "A bind to port 0 and a listen with no port, each given an ephemeral port",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "        port = tcp_bind_ephemeral();\n        if (port == 0) {\n            return -EADDRINUSE;\n        }\n",
+          "replace": "        (void)tcp_bind_ephemeral;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (bind to port 0 given no ephemeral port)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "listener-any-address",
+      "summary": "the state of a sleep, which procprobe checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/tcp/tcp.c",
+          "find": "        if (t->local_ip == 0)\n            any = t;\n",
+          "replace": "        any = t;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "LOOPPROBE FAIL (a listener bound to 127.0.0.1 took a connection to the interface address)",
+          "guest: fail: loopprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

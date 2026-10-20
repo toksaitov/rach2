@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "proof": "probe-pollprobe",
+  "summary": "the row of pollprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/ipc/pipe.c",
+    "rach2/sys/fs/fd.c",
+    "rach2/sys/io/poll.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "pollprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "pipe-hup-readable",
+      "summary": "A pipe's poll after its writers have gone",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/pipe.c",
+          "find": "        if (pipe_available(p) != 0) {\n            revents |= (short)(events & PIPE_POLLIN);\n",
+          "replace": "        if (pipe_available(p) != 0 || !p->write_open) {\n            revents |= (short)(events & PIPE_POLLIN);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: closed writer, pipe empty -> POLLHUP alone",
+          "guest: fail: pollprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "stdio-split-modes",
+      "summary": "the console's standard descriptors and its poll, which tmux's server draws through",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "        table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;\n",
+          "replace": "        table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: the kernel's fds 0, 1 and 2 are each open for reading and writing",
+          "guest: fail: pollprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "console-pollout-writable-only",
+      "summary": "the console's standard descriptors and its poll, which tmux's server draws through",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "        want = (short)(want | (events & POLLOUT));\n        return tty_poll(&console_tty, want, wq);\n",
+          "replace": "        if (e->flags & FD_FLAG_WRITE) {\n            want = (short)(want | (events & POLLOUT));\n        }\n        return tty_poll(&console_tty, want, wq);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: the console opened read-only answers POLLOUT",
+          "guest: fail: pollprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

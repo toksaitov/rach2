@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "probe-waitprobe",
+  "summary": "the row of waitprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/arch/i686/sigframe.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "waitprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "rt-frame-kills-with-sigsegv",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/sigframe.c",
+          "find": "    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {\n",
+          "replace": "    if (rt) {\n        return -1;\n    }\n    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: child recvfrom interrupted with -EINTR (no hang)",
+          "guest: fail: waitprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

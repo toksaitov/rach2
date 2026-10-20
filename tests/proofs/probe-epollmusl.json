@@ -1,0 +1,685 @@
+{
+  "schema_version": 1,
+  "proof": "probe-epollmusl",
+  "summary": "the row of epollmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/io/epoll.c",
+    "rach2/sys/io/poll.c",
+    "rach2/sys/io/eventfd.c",
+    "rach2/sys/ipc/unix.c",
+    "rach2/sys/network/socket/socket.c",
+    "rach2/sys/ipc/pipe.c",
+    "rach2/sys/tty/tty.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "epollmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "eventfd-zero-read",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {\n        return read_ops(e, (char __user *)SC_ARG(params, 1), 0);\n    }\n",
+          "replace": "    (void)e;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a read of zero bytes was not EINVAL: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-edge-polls-readable",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        if (item_ready(it, depth, q, &wq, &wakes, &gone)) {\n",
+          "replace": "        if (item_ready(it, depth, q, &wq, &wakes, &gone) || (it->seen && !gone)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a set with its edge reported polled readable: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nested-always-readable",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        ready = set_ready(inner, depth + 1, q) ? EPOLLIN | EPOLLRDNORM : 0u;\n",
+          "replace": "        ready = set_ready(inner, depth + 1, q) ? EPOLLIN | EPOLLRDNORM : EPOLLIN;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a chain of sets over an empty pipe: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-cycle-not-refused",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (inner == ep || depth > EP_MAX_NESTS) {\n",
+          "replace": "    if (depth > EP_MAX_NESTS) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a cycle of sets was not ELOOP: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nested-one-deep",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (depth > EP_MAX_NESTS) {\n        return 0;\n    }\n",
+          "replace": "    if (depth > 1) {\n        return 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a write to a pipe two sets deep did not wake the outer set: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-reported-stays-first",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    while (*link) {\n        link = &(*link)->next;\n    }\n    *link = reported;\n",
+          "replace": "    *tail = sc->ep->items;\n    sc->ep->items = reported;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (two waits for one event reported the same descriptor: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-failed-copy-returns-zero",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "            rc = i > 0 ? (int32_t)i : -EFAULT;\n",
+          "replace": "            rc = (int32_t)i;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a wait into a read-only buffer was not EFAULT: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-failed-copy-keeps-off",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (it) {\n        it->off = o->off;\n        it->seen = o->seen;\n",
+          "replace": "    if (it) {\n        it->seen = o->seen;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a one-shot event a failed copy took was not reported again: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-no-events-reported",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        if (!ready) {\n            link = &it->next;\n            continue;\n        }\n",
+          "replace": "        if (!ready && (it->events & EPOLL_EVENTS) != 0) {\n            link = &it->next;\n            continue;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a registration of no events was reported: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-no-events-no-hangup",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (it->off) {\n",
+          "replace": "    if (it->off || (it->events & EPOLL_EVENTS) == 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a registration of no events was not told of the hangup: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-pwait2-seconds-32-bit",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        sec = (int64_t)(((uint64_t)ts[1] << 32) | ts[0]);\n",
+          "replace": "        sec = (int32_t)ts[0];\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (epoll_pwait2 of 2^31 seconds with a descriptor ready: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-pwait2-negative-seconds",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        if (sec < 0 || ts[3] != 0 || ts[2] >= 1000000000u) {\n",
+          "replace": "        if (ts[3] != 0 || ts[2] >= 1000000000u) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (epoll_pwait2 of negative seconds was not EINVAL: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-add-no-restart",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (sc->n == 0 && q.n > sc->queues) {\n        sc->grow = q.n;\n        return 1;\n    }\n    return (int)sc->n;\n",
+          "replace": "    return (int)sc->n;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a pipe added during a wait did not wake it: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-poll-set-own-queue",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    if (epoll_is_set(e)) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a write to a pipe in a set did not wake a poll of the set: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nested-queues-left-off",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;\n    q_add(q, *wq);\n",
+          "replace": "    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;\n    if (depth == 0) {\n        q_add(q, *wq);\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a write to a pipe two sets deep did not wake the outer set: errno",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "eventfd-read-keeps-count",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/io/eventfd.c",
+          "find": "    ev->count -= value;\n",
+          "replace": "    ev->count -= ev->semaphore ? value : 0u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a read did not leave the counter empty",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-no-target-queue",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;\n    q_add(q, *wq);\n",
+          "replace": "    ready = (uint32_t)(uint16_t)poll_fd(e, (short)want, wq) & want;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (the child's write did not wake the wait",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "unix-edge-data-every-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/unix.c",
+          "find": "    s->rq_count++;\n    wq_wake(&s->wq, WQ_DATA);\n",
+          "replace": "    s->rq_count++;\n    wq_wake_all(&s->wq);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a byte sent to an AF_UNIX end watched for output alone was reported",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "unix-edge-data-no-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/unix.c",
+          "find": "    s->rq_count++;\n    wq_wake(&s->wq, WQ_DATA);\n",
+          "replace": "    s->rq_count++;\n    wq_wake(&s->wq, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a second byte sent to an AF_UNIX end watched for input was not reported",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-edge-counts-every-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    *wakes = *wq ? wq_wakes(*wq, kinds_of(want)) : 0u;\n",
+          "replace": "    *wakes = *wq ? wq_wakes(*wq, kinds_of(want) | WQ_ALL) : 0u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a byte sent to an AF_UNIX end watched for output alone was reported",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "unix-own-room-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/unix.c",
+          "find": "    wq_wake(&s->wq, 0);\n    for (o = socks; o; o = o->next) {\n",
+          "replace": "    wq_wake(&s->wq, WQ_ROOM);\n    for (o = socks; o; o = o->next) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (room made in an AF_UNIX end's own queue was reported as room to write",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "unix-accept-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/unix.c",
+          "find": "    s->acc_len--;\n    wq_wake(&s->wq, 0);\n",
+          "replace": "    s->acc_len--;\n    wq_wake_all(&s->wq);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (an accept that left a connection queued was reported as a new one",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "udp-arrival-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "    sock->recv_count++;\n\n    wq_wake(&sock->waiters, WQ_DATA);\n",
+          "replace": "    sock->recv_count++;\n\n    wq_wake_all(&sock->waiters);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a datagram that came to a socket watched for output alone was reported",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "tcp-arrival-kind",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "    if (copy_len > 0) {\n        wq_wake(&sock->waiters, WQ_DATA);\n    }\n",
+          "replace": "    if (copy_len > 0) {\n        wq_wake_all(&sock->waiters);\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (data that came to a TCP connection watched for output alone was reported",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-above-uncounted",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    return below + 1 + above > EP_MAX_NESTS;\n",
+          "replace": "    return below + 1 + above * 0 > EP_MAX_NESTS;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a sixth set added below five, the outermost first, was not ELOOP",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-five-refused",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    return below + 1 + above > EP_MAX_NESTS;\n",
+          "replace": "    return below + 1 + above >= EP_MAX_NESTS;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (an add that nests five sets, the outermost first, was refused",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-scan-four-sets",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (depth > EP_MAX_NESTS) {\n        return 0;\n    }\n",
+          "replace": "    if (depth >= EP_MAX_NESTS) {\n        return 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a write to a pipe in the fifth of five nested sets did not reach the first",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-below-cut-early",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (inner == ep || depth > EP_MAX_NESTS) {\n",
+          "replace": "    if (inner == ep || depth >= EP_MAX_NESTS) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (an add that nests five sets, the innermost first, was refused",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-below-uncounted",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "            int below = sets_below(it->set, ep, depth + 1) + 1;\n",
+          "replace": "            int below = sets_below(it->set, ep, 1) > EP_MAX_NESTS ? EP_MAX_NESTS + 1 : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a sixth set added above five, the innermost first, was not ELOOP",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-shorter-path",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    if (inner->mark == scan_marks) {\n        return inner->height;\n    }\n",
+          "replace": "    if (inner->mark == scan_marks) {\n        return 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a set nested five below another by the longer of two paths was not ELOOP",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "unix-shutdown-own-kinds",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/unix.c",
+          "find": "    wq_wake_all(&s->wq);\n    wake_writers(s);\n",
+          "replace": "    wake_writers(s);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a shutdown of an AF_UNIX end was not an edge of its registration",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "pipe-write-wakes-empty-only",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/pipe.c",
+          "find": "            pipe_ring_produce(p, chunk);\n            done += chunk;\n            pipe_wake(p, &p->read_wq, WQ_DATA);\n",
+          "replace": "            pipe_ring_produce(p, chunk);\n            done += chunk;\n            if (pipe_available(p) == chunk) {\n                pipe_wake(p, &p->read_wq, WQ_DATA);\n            }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a write to a pipe with data in it was not an edge",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-above-by-table",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "    for (h = ep->holders; h && most <= EP_MAX_NESTS; h = h->hold_next) {\n        int above = sets_above(h->owner, depth + 1) + 1;\n",
+          "replace": "    for (h = ep->holders; h && most <= EP_MAX_NESTS; h = h->hold_next) {\n        int above = item_names(h, fd_get(current_proc->fds, h->fd))\n                        ? sets_above(h->owner, depth + 1) + 1\n                        : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a child's add under five sets, one number closed, was not ELOOP",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-nest-below-by-table",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        if (it->set) {\n            int below = sets_below(it->set, ep, depth + 1) + 1;\n",
+          "replace": "        if (it->set && item_names(it, fd_get(current_proc->fds, it->fd))) {\n            int below = sets_below(it->set, ep, depth + 1) + 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a child's add of five sets under a sixth, one number closed, was not ELOOP",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "epoll-gone-by-table",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/io/epoll.c",
+          "find": "        *gone = !it->set && !fd_ofd_live(it->ofd, it->serial);\n",
+          "replace": "        *gone = 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (a child's close and wait took the parent's registration of a set",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "tty-input-room-unnamed",
+      "summary": "wakes that name their kinds of change, and epoll sets nested from above",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "    n_tty_receive(&t->ldisc, c, t->sink, t->sink_ctx, &signo);\n    if (n_tty_held(&t->ldisc) < held) {\n        wq_wake(t->space_wq, WQ_ROOM);\n    }\n",
+          "replace": "    n_tty_receive(&t->ldisc, c, t->sink, t->sink_ctx, &signo);\n    (void)held;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (room a VINTR made in a pseudoterminal was not an edge of its master",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "pipe-clobbers-ecx",
+      "summary": "the calls without flags that the kernel serves as their flagged forms",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/pipe.c",
+          "find": "    return pipe_open(SC_ARG(params, 0), 0);\n",
+          "replace": "#if defined(__x86_64__)\n    params->rsi = 0;\n#else\n    params->ecx = 0;\n#endif\n    return pipe_open(SC_ARG(params, 0), 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (pipe changed the caller's ECX",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "eventfd-clobbers-ecx",
+      "summary": "the calls without flags that the kernel serves as their flagged forms",
+      "edits": [
+        {
+          "file": "rach2/sys/io/eventfd.c",
+          "find": "    return eventfd_open((uint32_t)SC_ARG(params, 0), 0);\n",
+          "replace": "#if defined(__x86_64__)\n    params->rsi = 0;\n#else\n    params->ecx = 0;\n#endif\n    return eventfd_open((uint32_t)SC_ARG(params, 0), 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EPOLLMUSL FAIL (eventfd changed the caller's ECX",
+          "guest: fail: epollmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

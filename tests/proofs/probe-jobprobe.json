@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "probe-jobprobe",
+  "summary": "the row of jobprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "jobprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "job-setpgid-exit-killed",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "long sys_exit(isr_params_t *params)\n{\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n",
+          "replace": "long sys_exit(isr_params_t *params)\n{\n    static const char probe[] = \"jobprobe\";\n    process_t *parent = get_process(current_proc->parent_pid);\n    uint32_t i = 0;\n\n    while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {\n        i++;\n    }\n    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {\n        terminate_current_process(SIGSEGV);\n    }\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: child: inherit group, setpgid(0,0) -> own group",
+          "guest: fail: jobprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "job-setsid-exit-killed",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "long sys_exit(isr_params_t *params)\n{\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n",
+          "replace": "long sys_exit(isr_params_t *params)\n{\n    static const char probe[] = \"jobprobe\";\n    process_t *parent = get_process(current_proc->parent_pid);\n    uint32_t i = 0;\n\n    while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {\n        i++;\n    }\n    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {\n        terminate_current_process(SIGSEGV);\n    }\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: child: setsid -> new session (sid==pgid==pid)",
+          "guest: fail: jobprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

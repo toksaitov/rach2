@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "probe-vforkmusl",
+  "summary": "the row of vforkmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "vforkmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "exec-keeps-vfork-parent",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    mm_put(old);\n    proc_vfork_release(current_proc);\n",
+          "replace": "    mm_put(old);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "VFORKMUSL FAIL (the parent ran again at the child's exit, not its exec",
+          "guest: fail: vforkmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

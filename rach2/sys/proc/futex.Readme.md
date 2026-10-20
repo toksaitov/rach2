@@ -63,6 +63,6 @@ A word's page is made present and writable before the word is read. The read, th
 * `tests/musl/capmusl.c` checks that a thread without capabilities may not read the robust list of a process that has them.
 * `tests/musl/nsmusl.c` checks that the first process of a new PID namespace reads its own robust list as pid 1.
 
-`tests/system/probe_faults.txt` has the faults these probes must catch: `futex-timed-restart`, `futex-relative-nsec`, `futex-absolute-nsec`, `futex-wait-never-sleeps`, `exec-robust-tid`, `robust-list-ignores-privilege` and `ns-robust-list-kernel-id`; `sh tests/system/probe_faults.sh NAME` runs one.
+The catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver have the faults these probes must catch: `futex-timed-restart`, `futex-relative-nsec`, `futex-absolute-nsec` and `futex-wait-never-sleeps` for `clonemusl`, `exec-robust-tid` for `threadmusl`, `robust-list-ignores-privilege` for `capmusl` and `ns-robust-list-kernel-id` for `nsmusl`; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json NAME` runs one.
 
 In `tests/run smp`, two threads on two processors take turns through a futex word (`tests/musl/smpmusl.c`). `tests/run host` runs `tests/host/futex_hosttest.c` ([the host tests](../../../tests/host/Readme.md)), which checks what `futex.c` reads of a thread that may end while it works, the robust futexes a thread's end releases, a wait's deadline, and which interrupted calls are restarted.

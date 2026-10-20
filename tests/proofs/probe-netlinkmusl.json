@@ -1,0 +1,310 @@
+{
+  "schema_version": 1,
+  "proof": "probe-netlinkmusl",
+  "summary": "the row of netlinkmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/network/socket/netlink.c",
+    "rach2/sys/syscall.c",
+    "rach2/sys/network/netif.c",
+    "rach2/sys/syscall_net.c",
+    "rach2/sys/network/route.c",
+    "rach2/sys/network/netconf.c",
+    "rach2/sys/network/driver/netdev.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "netlinkmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "netlink-dump-not-multi",
+      "summary": "the netlink route socket and the interface ioctls",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "            link_msg(b, nd, NLM_F_MULTI);\n",
+          "replace": "            link_msg(b, nd, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a dump's message without its sequence, port id or NLM_F_MULTI",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "netlink-one-link-missed",
+      "summary": "the netlink route socket and the interface ioctls",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "        if (index != 0 ? (uint32_t)nd->index == index\n",
+          "replace": "        if (index != 0 ? (uint32_t)nd->index == index + 1u\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (RTM_GETLINK of the first link",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "unix-socket-no-interface-ioctls",
+      "summary": "the netlink route socket and the interface ioctls",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if ((entry->type == FD_TYPE_SOCKET && entry->sock) || entry->type == FD_TYPE_UNIX) {\n",
+          "replace": "    if (entry->type == FD_TYPE_SOCKET && entry->sock) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (ip route get of the machine's own address was not a local route on lo",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ifconf-length-not-set",
+      "summary": "the netlink route socket and the interface ioctls",
+      "edits": [
+        {
+          "file": "rach2/sys/network/netif.c",
+          "find": "    ifc.len = (int)used;\n",
+          "replace": "    ifc.len = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (SIOCGIFCONF with no buffer",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "uevent-socket-refused",
+      "summary": "the netlink route socket and the interface ioctls",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "        protocol != NETLINK_KOBJECT_UEVENT) {\n",
+          "replace": "        protocol != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a socket of NETLINK_KOBJECT_UEVENT",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "recvmsg-trunc-length",
+      "summary": "recvmsg's MSG_TRUNC, which iproute2's ip reads netlink's answers with",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "    return (flags & MSG_TRUNC) ? whole : taken;\n",
+          "replace": "    return taken;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (MSG_PEEK and MSG_TRUNC did not give the answer's length",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "recvmsg-trunc-flag",
+      "summary": "recvmsg's MSG_TRUNC, which iproute2's ip reads netlink's answers with",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "    hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;\n",
+          "replace": "    hdr.msg_flags = 0u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (an answer longer than the buffer was not cut with MSG_TRUNC",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "netlink-padding-refused",
+      "summary": "recvmsg's MSG_TRUNC, which iproute2's ip reads netlink's answers with",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "        if (mlen < NLMSG_HDRLEN || mlen > len - at) {\n            break;\n        }\n",
+          "replace": "        if (mlen < NLMSG_HDRLEN || mlen > len - at) {\n            kfree(b);\n            return -EINVAL;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a dump request with zeros after it was refused",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "netlink-route-get-missing",
+      "summary": "the route socket's answers to ip route get and ip rule",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "    if (type == RTM_GETROUTE && (flags & NLM_F_DUMP) != NLM_F_DUMP) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (ip route get of the machine's own address was not a local route",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "netlink-rule-missing",
+      "summary": "the route socket's answers to ip route get and ip rule",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "            rule_dump(b);\n",
+          "replace": "            (void)rule_dump;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (ip rule did not list Linux's three rules",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "netlink-deladdr-ignored",
+      "summary": "adjtimex, which reads the clock's NTP state",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "        return netconf_del_address(nd, ip);\n",
+          "replace": "        return 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (RTM_DELADDR did not take the address away",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "route-shortest-prefix",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/route.c",
+          "find": "        if (!out || r.mask > best.mask || (r.mask == best.mask && r.metric < best.metric)) {\n",
+          "replace": "        if (!out || r.mask < best.mask || (r.mask == best.mask && r.metric < best.metric)) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a route on the link to another network, which ip route get takes",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "addr-second-refused",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/netconf.c",
+          "find": "    } else if (nd->naddr2 == NETDEV_ADDRS) {\n",
+          "replace": "    } else if (1) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a second address added, a local route, and taken away",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "neigh-permanent-learned",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "    return arp_set(nd, ip, mac, (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);\n",
+          "replace": "    return arp_set(nd, ip, mac, 0 && (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a neighbour set by hand as permanent, in /proc/net/arp with 0x6",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "link-stats64-short",
+      "summary": "the state of a sleep, which procprobe checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "    msg_attr(msg, IFLA_STATS64, stats64, sizeof(stats64));\n",
+          "replace": "    msg_attr(msg, IFLA_STATS64, stats64, 96);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (a link without the 64-bit counters iproute2 reads",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "lo-unlisted",
+      "summary": "the state of a sleep, which procprobe checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/driver/netdev.c",
+          "find": "    lo_ready = 1;\n",
+          "replace": "    lo_ready = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NETLINKMUSL FAIL (ip route get of the machine's own address was not a local route on lo",
+          "guest: fail: netlinkmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "proof": "probe-sockflagmusl",
+  "summary": "the row of sockflagmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_net.c",
+    "rach2/sys/syscall.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "sockflagmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "ip-options-four-bytes",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "    } else if (level == SOL_IP && optname == IP_OPTIONS) {\n        width = 0;\n",
+          "replace": "    } else if (level == SOL_IP && optname == IP_OPTIONS) {\n        width = (uint32_t)sizeof(val);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SOCKFLAGMUSL FAIL (an accepted connection reported IP options",
+          "guest: fail: sockflagmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "fionbio-per-type",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (request == FIONBIO) {\n        return fd_ioctl_nbio(entry, arg);\n    }\n",
+          "replace": "    if (request == FIONBIO + 0x100) {\n        return fd_ioctl_nbio(entry, arg);\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SOCKFLAGMUSL FAIL (FIONBIO did not make a connection non-blocking)",
+          "guest: fail: sockflagmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "shutdown-closes-whole",
+      "summary": "shutdown(SHUT_WR), a half close",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "    if (how == SHUT_WR) {\n        tcp_shutdown_send(entry->sock);\n        wq_wake_all(&entry->sock->waiters);\n    } else if (how == SHUT_RDWR) {\n",
+          "replace": "    if (how == SHUT_WR) {\n        entry->sock->shut_down = 1;\n        tcp_close(entry->sock);\n        wq_wake_all(&entry->sock->waiters);\n    } else if (how == SHUT_RDWR) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SOCKFLAGMUSL FAIL (the answer after shutdown(SHUT_WR) did not arrive",
+          "guest: fail: sockflagmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "proof": "probe-miscprobe",
+  "summary": "the row of miscprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall.c",
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "miscprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "times-user-time-past-int-max",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        t.tms_utime = (int32_t)user;\n        t.tms_stime = (int32_t)sys;\n",
+          "replace": "        t.tms_utime = 0x7FFFFFFF;\n        t.tms_stime = 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: times() reports no more CPU time than the ticks since boot",
+          "guest: fail: miscprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "getppid-kills-caller",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "long sys_getppid(isr_params_t *params)\n{\n    (void)params;\n\n    if (!current_proc) {\n        return -ESRCH;\n    }\n    return (int32_t)pid_seen(current_proc->parent_pid);\n}\n",
+          "replace": "long sys_getppid(isr_params_t *params)\n{\n    static const char probe[] = \"miscprobe\";\n    uint32_t i = 0;\n\n    (void)params;\n\n    if (!current_proc) {\n        return -ESRCH;\n    }\n    while (i < sizeof(probe) && current_proc->comm[i] == probe[i]) {\n        i++;\n    }\n    if (i == sizeof(probe)) {\n        signal_post(current_proc, SIGSEGV);\n    }\n    return (int32_t)pid_seen(current_proc->parent_pid);\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: child getppid() == parent pid",
+          "guest: fail: miscprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

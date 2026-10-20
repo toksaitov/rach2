@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "proof": "probe-fdexecmusl",
+  "summary": "the row of fdexecmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/fs/vfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "fdexecmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "exec-fd-not-followed",
+      "summary": "execve",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        rc = exec_follow_fd(&ref, &link);\n",
+          "replace": "        rc = link != NULL ? exec_follow_fd(&ref, &link) : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FDEXECMUSL FAIL (a descriptor opened for reading: EACCES)",
+          "guest: fail: fdexecmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exec-fd-unnamed",
+      "summary": "execve",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        mm_set_exe(keep, link != NULL && link->dirpath != NULL ? link->dirpath : name);\n",
+          "replace": "        mm_set_exe(keep, link != NULL ? real : name);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FDEXECMUSL FAIL (/proc/self/exe of a tmpfs copy run by its descriptor)",
+          "guest: fail: fdexecmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exec-fd-script-named",
+      "summary": "execve",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (rc == 0 && keep->interp_file == NULL) {\n",
+          "replace": "    if (rc == 0 && keep->interp_file == NULL && keep->exe == NULL) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FDEXECMUSL FAIL (/proc/self/exe of a script run by its descriptor)",
+          "guest: fail: fdexecmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exec-name-link-kept",
+      "summary": "execve",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "                p = linkpath;\n                walk_name_add(&name, \"..\", 2);\n",
+          "replace": "                p = linkpath;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FDEXECMUSL FAIL (/proc/self/exe of a copy run through links)",
+          "guest: fail: fdexecmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

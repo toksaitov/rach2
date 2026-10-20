@@ -1,0 +1,363 @@
+{
+  "schema_version": 1,
+  "proof": "probe-nsmusl",
+  "summary": "the row of nsmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/proc/process.c",
+    "rach2/sys/proc/ns.c",
+    "rach2/sys/proc/futex.c",
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/fs/procfs.c",
+    "rach2/sys/network/socket/socket.c",
+    "rach2/sys/fs/vfs.c",
+    "rach2/sys/ipc/sysv.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "nsmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "proc-dir-global-pid",
+      "summary": "adjtimex, which reads the clock's NTP state",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : (int)pid_seen((uint32_t)pid),\n",
+          "replace": "            vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : pid,\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (a descriptor of its /proc/self/fd reaches its own descriptors",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-orphan-child-reaper",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "    process_t *dead = get_process(dead_pid);\n    process_t *namespace_init = NULL;\n    process_t *subreaper = proc_subreaper(dead_pid);\n    process_t *p;\n    uint32_t reaper = dead != NULL ? ns_reaper(dead) : 0;\n\n    if (init_pid != 0 && dead_pid != init_pid) {\n        namespace_init = get_process(init_pid);\n    }\n    if (reaper != 0 && reaper != dead_pid) {\n        namespace_init = get_process(reaper);\n    }\n    for (p = proc_list; p; p = p->next) {\n        process_t *init = namespace_init;\n\n        if (p->parent_pid != dead_pid) {\n            continue;\n        }\n        if (subreaper != NULL) {\n            init = subreaper;\n        }\n",
+          "replace": "    process_t *system_init = NULL;\n    process_t *subreaper = proc_subreaper(dead_pid);\n    process_t *p;\n\n    if (init_pid != 0 && dead_pid != init_pid) {\n        system_init = get_process(init_pid);\n    }\n    for (p = proc_list; p; p = p->next) {\n        process_t *init = system_init;\n\n        if (p->parent_pid != dead_pid) {\n            continue;\n        }\n        if (subreaper != NULL) {\n            init = subreaper;\n        } else if (ns_reaper(p) != 0 && ns_reaper(p) != dead_pid) {\n            init = get_process(ns_reaper(p));\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the outer init adopted the namespace init's sibling",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-map-own-lower",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ns.c",
+          "find": "    if (own == ns && ns->parent) {\n        own = ns->parent;\n    }\n",
+          "replace": "\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the map reads back",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-pid-kernel-numbers",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ns.c",
+          "find": "uint32_t pid_seen(uint32_t kid)\n{\n    return pid_seen_by(current_proc, kid);\n}\n",
+          "replace": "uint32_t pid_seen(uint32_t kid)\n{\n    return kid;\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the first process of a pid namespace is 1, its parent 0",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-robust-list-kernel-id",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/futex.c",
+          "find": "        t = proc_named((uint32_t)SC_ARG(params, 0));\n",
+          "replace": "        t = get_process((uint32_t)SC_ARG(params, 0));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (get_robust_list of pid 1 gives the first process's own list",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-unknown-pid-idle",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ns.c",
+          "find": "    return kid != 0 ? get_process(kid) : NULL;\n",
+          "replace": "    return get_process(kid);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (get_robust_list of a pid the namespace has not given is ESRCH",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-kill-unknown-pid-idle",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    target = proc_named((uint32_t)pid);\n",
+          "replace": "    target = get_process(pid_named((uint32_t)pid));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (kill of a pid the namespace has not given is ESRCH",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-proc-link-kernel-id",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "                ap_u32(t, pid_seen((uint32_t)pf->origin_task));\n",
+          "replace": "                ap_int(t, pf->origin_task);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the link of its /proc file names it 1",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-proc-entry-ino-seen",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            *ino = procfs_ino_pid(procfs_resolve_pid(p));\n",
+          "replace": "            *ino = procfs_ino_pid(p);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the entry 1 of /proc has the inode of /proc/1",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-uts-shared",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ns.c",
+          "find": "struct utsns *proc_utsns(const process_t *p)\n{\n    return proc_nsset(p)->uts;\n}\n",
+          "replace": "struct utsns *proc_utsns(const process_t *p)\n{\n    (void)p;\n    return &init_utsns;\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (setns returns to the first uts namespace",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-net-reaches",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "    return s->ns != NULL;\n",
+          "replace": "    return s->ns != NULL && 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (a new network namespace reaches nothing",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-mount-shared",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "    m->ns_hidden = ~ns_bit();\n",
+          "replace": "    m->ns_hidden = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the mount is not seen outside its namespace",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-ipc-shared",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/sysv.c",
+          "find": "    return p->ns == proc_ipcns(current_proc);\n",
+          "replace": "    return p != NULL;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (a new ipc namespace has none of the first's objects",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-setid-unmapped-owner",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (!ns_ids_mapped(proc_userns(current_proc), s->id.uid, s->id.gid)) {\n        mode = 0;\n    }\n",
+          "replace": "\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (an exec in a user namespace ignores a set-id bit of an owner it does not map",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-chroot-first-only",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (rc == 0 && !ns_privileged(current_proc, proc_userns(current_proc))) {\n",
+          "replace": "    if (rc == 0 && !cred_privileged()) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (the user namespace's root may chroot",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-wait-pid-after-reap",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    seen = pid_seen((uint32_t)rc);\n    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&\n         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);\n    wait_done(&r, ok);\n",
+          "replace": "    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&\n         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);\n    wait_done(&r, ok);\n    seen = pid_seen((uint32_t)rc);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (its child is 2",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ns-fdinfo-root-refused",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    return rc == 0 && vp && vp->kind != VNODE_PROC_FDINFO_DIR ? -EINVAL : rc;\n",
+          "replace": "    return rc == 0 && vp ? -EINVAL : rc;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (a helper sharing the directories chroots to /proc/self/fdinfo",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "fdinfo-cloexec-unreported",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (e->flags & FD_FLAG_CLOEXEC) {\n        flags |= 02000000u;\n    }\n",
+          "replace": "\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (a file of fdinfo has the offset and the flags",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "memfd-root-has-a-path",
+      "summary": "namespaces, which nsmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "    if ((!root_krffs && !mnt->type->ops->path) || mnt == vfs_memfd_mount()) {\n",
+          "replace": "    if (!root_krffs && !mnt->type->ops->path) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "NSMUSL FAIL (a descriptor of /proc opened before the chroot reaches self/fd",
+          "guest: fail: nsmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

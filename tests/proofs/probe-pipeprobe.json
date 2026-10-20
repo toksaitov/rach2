@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "proof": "probe-pipeprobe",
+  "summary": "the row of pipeprobe in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/ipc/pipe.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "pipeprobe"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "pipe-reader-exit-killed",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "long sys_exit(isr_params_t *params)\n{\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n",
+          "replace": "long sys_exit(isr_params_t *params)\n{\n    static const char probe[] = \"pipeprobe\";\n    process_t *parent = get_process(current_proc->parent_pid);\n    uint32_t i = 0;\n\n    while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {\n        i++;\n    }\n    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {\n        terminate_current_process(SIGSEGV);\n    }\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: child read every byte intact",
+          "guest: fail: pipeprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "pipe-refill-exit-killed",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "long sys_exit(isr_params_t *params)\n{\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n",
+          "replace": "long sys_exit(isr_params_t *params)\n{\n    static const char probe[] = \"pipeprobe\";\n    process_t *parent = get_process(current_proc->parent_pid);\n    uint32_t i = 0;\n\n    while (parent && i < sizeof(probe) && parent->comm[i] == probe[i]) {\n        i++;\n    }\n    if (i == sizeof(probe) && SC_ARG(params, 0) == 0) {\n        terminate_current_process(SIGSEGV);\n    }\n    return exit_current((int32_t)((SC_ARG(params, 0) & 0xFFu) << 8));\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: and said so",
+          "guest: fail: pipeprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "pipe-size-refused",
+      "summary": "A pipe's capacity through fcntl",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        return entry->type == FD_TYPE_PIPE ? PIPE_BUF_SIZE : -EBADF;\n",
+          "replace": "        return entry->type == FD_TYPE_PIPE ? -EINVAL : -EBADF;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: F_GETPIPE_SZ reports 64 KiB at both ends",
+          "guest: fail: pipeprobe did not pass"
+        ]
+      }
+    },
+    {
+      "name": "pipe-close-leaked",
+      "summary": "leaks of open file descriptions and pipes, which ofdprobe and pipeprobe judge by the heap's HeapUsed",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/pipe.c",
+          "find": "    kfree(p->buf);\n    kfree(p);\n",
+          "replace": "    kfree(p->buf);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: 100 pipe/close cycles left the heap as it was",
+          "guest: fail: pipeprobe did not pass"
+        ]
+      }
+    }
+  ]
+}

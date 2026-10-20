@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "proof": "probe-clockidmusl",
+  "summary": "the row of clockidmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall.c",
+    "rach2/sys/clock.c",
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "clockidmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "cpu-clock-sibling",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "            if (c.proc->tg != current_proc->tg || current_proc->tg->live > 1) {\n",
+          "replace": "            if (c.proc != current_proc) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (a sleep on the process CPU clock another thread advanced did not end)",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "cpu-clock-other-pid",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    out->proc = get_process(id);\n",
+          "replace": "    out->proc = get_process(id) ? current_proc : NULL;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (a child's CPU clock by id did not read the time the child reported)",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "monotonic-tick-only",
+      "summary": "time since boot read within the tick",
+      "edits": [
+        {
+          "file": "rach2/sys/clock.c",
+          "find": "    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;\n",
+          "replace": "    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (time since boot does not read within the tick)",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "getres-time64-tick",
+      "summary": "time since boot read within the tick",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    t.tv_nsec = clock_res_ns(&c);\n",
+          "replace": "    t.tv_nsec = 10000000;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (clock_getres_time64 does not answer as clock_getres)",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "coarse-monotonic-tick-behind",
+      "summary": "time since boot read within the tick",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        out->tv_nsec = ticks32 * 10000000u;\n",
+          "replace": "        out->tv_nsec = (int64_t)ticks32 * 10000000 - 10000000;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "coarse-realtime-tick-ahead",
+      "summary": "time since boot read within the tick",
+      "edits": [
+        {
+          "file": "rach2/sys/clock.c",
+          "find": "    tick_now(&uptime, &ticks, &total);\n    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,\n",
+          "replace": "    tick_now(&uptime, &ticks, &total);\n    rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks + 1u, seconds,\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (coarse real time is not real time at the last tick",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "synth-time-unstepped",
+      "summary": "the boot time a synthetic node reports, which a step of the clock moves",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    int64_t boot = rtc_boot_epoch();\n",
+          "replace": "    static int64_t first;\n    int64_t boot = first != 0 ? first : (first = rtc_boot_epoch());\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "CLOCKIDMUSL FAIL (/dev/null does not report the btime of /proc/stat)",
+          "guest: fail: clockidmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

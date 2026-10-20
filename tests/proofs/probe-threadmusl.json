@@ -1,0 +1,446 @@
+{
+  "schema_version": 1,
+  "proof": "probe-threadmusl",
+  "summary": "the row of threadmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/fs/procfs.c",
+    "rach2/sys/fs/synthfs.c",
+    "rach2/sys/proc/futex.c",
+    "rach2/kernel.c",
+    "rach2/sys/network/socket/socket.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "threadmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "exec-robust-tid",
+      "summary": "execve",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    proc_thread_gone(current_proc);\n    if (current_proc != current_proc->tg->leader) {\n        exec_take_leader();\n    }\n    ptimer_delete_all(current_proc->tg);\n",
+          "replace": "    if (current_proc != current_proc->tg->leader) {\n        exec_take_leader();\n    }\n    proc_thread_gone(current_proc);\n    ptimer_delete_all(current_proc->tg);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a robust mutex a thread held into its execve",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "handler-mask-no-retarget",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        signal_set_blocked(newblock);\n",
+          "replace": "        current_proc->sig_blocked = newblock & ~KSIG_UNCATCHABLE;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a signal a handler's mask blocked did not wake the other thread: errno",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "wait-copy-unchecked",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&\n         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);\n    wait_done(&r, ok);\n",
+          "replace": "    ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&\n         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);\n    ok = 1;\n    wait_done(&r, ok);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a wait whose status page went while it slept did not fail with EFAULT: errno",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "wait-failed-copy-reaps",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (p == NULL || ok) {\n",
+          "replace": "    if (p == NULL || ok || r->take == WAIT_REAP) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (the zombie a failed wait left was not reaped with its status: errno",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "thread-dir-lists-task",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (n == last && sd->tid != 0) {\n",
+          "replace": "        if (n == last && sd->tid != 0 && 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a thread's directory lists a task directory",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "thread-dir-link-drops-tid",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "            synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));\n",
+          "replace": "            synth_dir_path(sd->kind, sd->pid, 0, path, (int)sizeof(path));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (the link of a thread's directory",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "proc-path-cut-at-five",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "    n = synth_split(path, c, SYNTH_MAXC + 1);\n",
+          "replace": "    n = synth_split(path, c, SYNTH_MAXC - 1);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a thread's descriptor link",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "task-path-by-tid-alone",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (pid < 0 || vp->tid == 0) {\n        return pid;\n    }\n",
+          "replace": "    if (vp->tid != 0 && get_process((uint32_t)vp->tid)) {\n        return vp->tid;\n    }\n    if (pid < 0 || vp->tid == 0) {\n        return pid;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a thread under another process's task directory",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "thread-stat-children-time",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "        user = p->utime;\n        sys = p->stime;\n",
+          "replace": "        user = p->tg->cutime;\n        sys = p->tg->cstime;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a busy thread's own time",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "thread-stat-whole-process",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "        return procfs_gen_stat(t, pid, vp->tid == 0);\n",
+          "replace": "        return procfs_gen_stat(t, pid, 1);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a sleeping thread's time in its task stat",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "thread-dir-relative-drops-tid",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);\n",
+          "replace": "        synth_dir_path(sd->kind, sd->pid, 0, out, (int)cap);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a name relative to a thread's directory",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "task-path-under-no-process",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (pid < 0 || vp->tid == 0) {\n        return pid;\n    }\n",
+          "replace": "    if (pid < 0 && vp->tid != 0) {\n        return vp->tid;\n    }\n    if (pid < 0 || vp->tid == 0) {\n        return pid;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a task path under no process",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "process-stat-first-thread-only",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "        return procfs_gen_stat(t, pid, vp->tid == 0);\n",
+          "replace": "        return procfs_gen_stat(t, pid, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (the process's time in its stat",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "futex-wait-never-sleeps",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/futex.c",
+          "find": "    if (cur != val) {\n        kirq_restore(flags);\n        return -EAGAIN;\n    }\n",
+          "replace": "    if (cur != val) {\n        kirq_restore(flags);\n        return -EAGAIN;\n    }\n    if (!q.timed) {\n        kirq_restore(flags);\n        return 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (the receiver was never seen asleep in pthread_cond_wait",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "blocked-process-signal-dropped",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    tg = target->tg;\n    if (tg->live == 0) {\n        return;\n    }\n    f = sig_irq_save();\n",
+          "replace": "    tg = target->tg;\n    if (tg->live == 0) {\n        return;\n    }\n    if (tg->live > 1 && (target->sig_blocked & KSIG_BIT(signo)) &&\n        sig_taker(target, signo) == target) {\n        return;\n    }\n    f = sig_irq_save();\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a process signal all threads block was not pending with no handler run",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "init-exit-by-thread-signal",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "        init_end_line(pid, current_proc->tg->exit_code);\n",
+          "replace": "        init_end_line(pid, signo);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "killed by signal 9, returning to kernel shell",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "task-dir-one-link",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    return 2u + (p ? p->tg->live : 0u);\n",
+          "replace": "    return 1u + (p != 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (/proc/self/task of two threads did not have four links",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exec-failed-unshares",
+      "summary": "paths that end in a slash, a dot or two, and seeks of directories and /proc files",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (!user_path) {\n        return -EFAULT;\n    }\n    rc = copy_path_cwd(s->path, sizeof(s->path), user_path, &s->path_end);\n",
+          "replace": "    if (!user_path) {\n        return -EFAULT;\n    }\n    rc = proc_files_unshare();\n    if (rc < 0) {\n        return rc;\n    }\n    rc = copy_path_cwd(s->path, sizeof(s->path), user_path, &s->path_end);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a descriptor a thread opened after its execve failed",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "fb-open-thread-id",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    fb_enter();\n    fb_owner_pid = current_proc->tgid;\n",
+          "replace": "    fb_enter();\n    fb_owner_pid = current_proc->pid;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a thread's palette on the framebuffer it opened",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "fb-read-thread-id",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (fb_owner_pid == current_proc->tgid) {\n",
+          "replace": "        if (fb_owner_pid == current_proc->pid) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (a thread that owns the framebuffer reads raw scancodes",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "fb-close-thread-id",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (e->type == FD_TYPE_FRAMEBUFFER && current_proc && fb_owner_pid == current_proc->tgid &&\n",
+          "replace": "    if (e->type == FD_TYPE_FRAMEBUFFER && current_proc && fb_owner_pid == current_proc->pid &&\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "THREADMUSL FAIL (the display a thread's close gave back",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "tcp-recv-buffer-after-wait",
+      "summary": "socket calls whose buffer another thread unmaps while they sleep",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "        rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);\n        if (rc < 0) {\n            return rc;\n        }\n        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {\n            return -EFAULT;\n        }\n",
+          "replace": "        rc = wq_wait_event(&sock->waiters, tcp_recv_ready, sock);\n        if (rc < 0) {\n            return rc;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "page fault while in kernel mode",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "tcp-send-buffer-after-wait",
+      "summary": "socket calls whose buffer another thread unmaps while they sleep",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 0)) {\n            return -EFAULT;\n        }\n",
+          "replace": "\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "page fault while in kernel mode",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "dgram-recv-buffer-after-wait",
+      "summary": "socket calls whose buffer another thread unmaps while they sleep",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/socket.c",
+          "find": "        rc = socket_dgram_wait(sock);\n        if (rc < 0) {\n            return rc;\n        }\n        if (!vm_prefault_range((uintptr_t)buf, (uintptr_t)len, 1)) {\n            return -EFAULT;\n        }\n",
+          "replace": "        rc = socket_dgram_wait(sock);\n        if (rc < 0) {\n            return rc;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "page fault while in kernel mode",
+          "guest: fail: threadmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

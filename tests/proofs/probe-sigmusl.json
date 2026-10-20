@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "probe-sigmusl",
+  "summary": "the row of sigmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/arch/i686/sigframe.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "sigmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "rt-context-unfilled",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/sigframe.c",
+          "find": "        fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);\n        frame.rt.uc.sigmask[0] = (uint32_t)oldmask;\n",
+          "replace": "        frame.rt.uc.sigmask[0] = (uint32_t)oldmask;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SIGMUSL FAIL: ucontext cs=0x0 esp=0x0 fpregs=0x0",
+          "guest: fail: sigmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

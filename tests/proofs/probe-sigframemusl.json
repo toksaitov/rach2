@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "proof": "probe-sigframemusl",
+  "summary": "the row of sigframemusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/arch/i686/sigframe.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "sigframemusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "sigsuspend-enosys",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    current_proc->saved_sigmask = current_proc->sig_blocked;\n    current_proc->sigmask_saved = 1;\n    signal_set_blocked(newmask);\n    sig_wait();\n    return -EINTR;\n}\n",
+          "replace": "    return -ENOSYS;\n}\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SIGFRAMEMUSL FAIL (sigsuspend did not return -1 with EINTR)",
+          "guest: fail: sigframemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "sa-restart-handler-skipped",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        handler_flags = (uint32_t)sa->flags;\n        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {\n            restart_syscall(tf, restart_nr);\n        }\n",
+          "replace": "        handler_flags = (uint32_t)sa->flags;\n        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {\n            continue;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SIGFRAMEMUSL FAIL (the handler with SA_RESTART did not run once)",
+          "guest: fail: sigframemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "eintr-without-handler",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        handler_flags = (uint32_t)sa->flags;\n        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {\n            restart_syscall(tf, restart_nr);\n        }\n",
+          "replace": "        handler_flags = (uint32_t)sa->flags;\n        if (restart_nr != 0 && !(handler_flags & SA_RESTART) && signo == SIGUSR1) {\n            restart_nr = 0;\n            continue;\n        }\n        if (restart_nr != 0 && (handler_flags & SA_RESTART)) {\n            restart_syscall(tf, restart_nr);\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SIGFRAMEMUSL FAIL (the handler without SA_RESTART did not run once)",
+          "guest: fail: sigframemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "altstack-frame-below",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/sigframe.c",
+          "find": "    int on_alt = sigframe_on_altstack(tf->user_esp), was_on = on_alt;\n    uint32_t sp = tf->user_esp;\n    uint32_t fp_addr, frame_addr, size, restorer;\n\n    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {\n        sp = current_proc->altstack_sp + current_proc->altstack_size;\n        on_alt = 1;\n    }\n    fp_addr = (uint32_t)fpu_frame_place(sp);\n    sp = fp_addr;\n    size = rt ? sizeof(frame.rt) : sizeof(frame.plain);\n    sp -= size;\n    sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;\n    frame_addr = sp;\n    if (on_alt && !sigframe_on_altstack(frame_addr)) {\n        return -1;\n    }\n",
+          "replace": "    int on_alt = current_proc->altstack_on && tf->user_esp + 4096u - current_proc->altstack_sp <\n                                                  current_proc->altstack_size + 4096u,\n        was_on = on_alt;\n    uint32_t sp = tf->user_esp;\n    uint32_t fp_addr, frame_addr, size, restorer;\n\n    if ((sa->flags & SA_ONSTACK) && current_proc->altstack_on && !on_alt) {\n        sp = current_proc->altstack_sp + current_proc->altstack_size;\n        on_alt = 1;\n    }\n    fp_addr = (uint32_t)fpu_frame_place(sp);\n    sp = fp_addr;\n    size = rt ? sizeof(frame.rt) : sizeof(frame.plain);\n    sp -= size;\n    sp = ((sp + 4u) & ~(FRAME_ALIGN - 1u)) - 4u;\n    frame_addr = sp;\n    if (on_alt && frame_addr + 4096u < current_proc->altstack_sp) {\n        return -1;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "SIGFRAMEMUSL FAIL (a frame written below the alternate stack)",
+          "guest: fail: sigframemusl did not pass"
+        ]
+      }
+    }
+  ]
+}

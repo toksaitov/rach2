@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "proof": "probe-timerfdmusl",
+  "summary": "the row of timerfdmusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/io/timerfd.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "timerfdmusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "timerfd-zero-read",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    if (SC_ARG(params, 2) == 0 && e && e->type == FD_TYPE_ANON && e->ops && e->ops->read) {\n        return read_ops(e, (char __user *)SC_ARG(params, 1), 0);\n    }\n",
+          "replace": "    (void)e;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "TIMERFDMUSL FAIL (a read of zero bytes was not EINVAL: errno",
+          "guest: fail: timerfdmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "timerfd-long-cut-to-span",
+      "summary": "AF_UNIX sockets, epoll, eventfd, timerfd and FIFOs",
+      "edits": [
+        {
+          "file": "rach2/sys/io/timerfd.c",
+          "find": "    if (sec >= (int64_t)TIME_MAX) {\n        *s = TIME_MAX;\n        return;\n    }\n",
+          "replace": "    if (sec >= (int64_t)SPAN_SEC) {\n        *s = SPAN_SEC;\n        return;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "TIMERFDMUSL FAIL (a timer of 200 days did not report 200 days: errno",
+          "guest: fail: timerfdmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "timerfd-poll-no-queue",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/io/timerfd.c",
+          "find": "    if (wq) {\n        *wq = &t->wq;\n    }\n    return (short)(t->count ? (events & POLLIN) : 0);\n",
+          "replace": "    (void)wq;\n    return (short)(t->count ? (events & POLLIN) : 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "TIMERFDMUSL FAIL (the timer did not wake the epoll wait",
+          "guest: fail: timerfdmusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "timerfd-past-absolute-never-expires",
+      "summary": "probe rows the review found weak",
+      "edits": [
+        {
+          "file": "rach2/sys/io/timerfd.c",
+          "find": "    *s = 0;\n    *sub = 0;\n    if (sec < 0) {\n        return;\n    }\n",
+          "replace": "    *s = 0;\n    *sub = 0;\n    if (sec < 0) {\n        *s = TIME_MAX;\n        return;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "TIMERFDMUSL FAIL (an absolute time already past did not expire",
+          "guest: fail: timerfdmusl did not pass"
+        ]
+      }
+    }
+  ]
+}

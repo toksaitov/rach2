@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "probe-coremusl",
+  "summary": "the row of coremusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "coremusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "core-small-limit-no-file",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    (void)do_unlink(path);\n    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);\n",
+          "replace": "    if (limit < 3u * 4096u) {\n        fd = -EFBIG;\n        goto out;\n    }\n    (void)do_unlink(path);\n    fd = do_open(path_name(path), 1 /* O_WRONLY */ | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "COREMUSL FAIL (reading the short core file",
+          "guest: fail: coremusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "core-zero-past-limit",
+      "summary": "core files, the framebuffer from a second thread, children's statuses and oom_score_adj",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            rc = cf.written < most ? core_file_put(&cf, &zero, 1) : -EFBIG;\n",
+          "replace": "            rc = core_file_put(&cf, &zero, 1);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "COREMUSL FAIL (a limit of the bytes before the zero at the end took the zero",
+          "guest: fail: coremusl did not pass"
+        ]
+      }
+    }
+  ]
+}

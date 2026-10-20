@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "proof": "probe-ptracemusl",
+  "summary": "the row of ptracemusl in the default suite, with faults in the kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/sys/arch/x86/debugreg.c",
+    "rach2/sys/syscall.c",
+    "rach2/sys/proc/ptrace.c",
+    "rach2/sys/fs/procfs.c",
+    "rach2/sys/proc/exit.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "default",
+      "ptracemusl"
+    ],
+    "bound_s": 900,
+    "fail_prefix": "guest: fail: "
+  },
+  "faults": [
+    {
+      "name": "sig-taker-stopped",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED && t->state != PROC_STOPPED &&\n           (bits & ~t->sig_blocked) != 0;\n",
+          "replace": "    return t->state != PROC_ZOMBIE && t->state != PROC_UNUSED &&\n           (bits & ~t->sig_blocked) != 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a process signal did not wake the thread beside the stopped one: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "usage-children-leader-only",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);\n",
+          "replace": "    rusage_from_ticks(ru, user + (p->pid == p->tgid ? p->tg->cutime : 0u),\n                      sys + (p->pid == p->tgid ? p->tg->cstime : 0u));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a traced thread's end lacks the reaped children's time: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "parent-reaps-traced",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    int traced = (p->ptrace & PT_TRACED) && p->tracer != current_proc->tgid;\n",
+          "replace": "    int traced = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the parent reaped a child before its tracer saw its end: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "tracer-report-keeps-tracee",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    } else if (r->take == WAIT_SEEN && get_process(r->pid) == p) {\n        ptrace_exit_release(p);\n    }\n",
+          "replace": "    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the parent did not reap the child once its tracer saw the end: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "waitid-trap-status-byte",
+      "summary": "signals and waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED, (int32_t)(p->ptrace_status >> 8));\n",
+          "replace": "        wait_fill(out, p, (int32_t)p->ptrace_status, CLD_TRAPPED,\n                  (int32_t)((p->ptrace_status >> 8) & 0xFF));\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (waitid's si_status of the exec event: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "dr7-kernel-address",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "            t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] > USER_ADDR_MAX - bytes) {\n",
+          "replace": "            t->debugreg[i] > USER_ADDR_MAX - bytes) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (an execute breakpoint on a kernel address was not refused: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "dr7-last-user-address",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "            t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] > USER_ADDR_MAX - bytes) {\n",
+          "replace": "            t->debugreg[i] < USER_ADDR_MIN || t->debugreg[i] >= USER_ADDR_MAX - bytes) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a breakpoint ending at the last user address was refused: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "syscall-number-reload",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "            syscall_num = (uint32_t)current_proc->orig_nr;\n            skip = current_proc->orig_nr == -1;\n",
+          "replace": "            skip = current_proc->orig_nr == -1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the entry stop of write: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "syscall-skip-runs-call",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "            syscall_num = (uint32_t)current_proc->orig_nr;\n            skip = current_proc->orig_nr == -1;\n",
+          "replace": "            if (current_proc->orig_nr != -1) {\n                syscall_num = (uint32_t)current_proc->orig_nr;\n            }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "syscall-entry-eax",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);\n    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {\n",
+          "replace": "    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);\n    if (!leaving) {\n        SC_RET(tf) = nr;\n    }\n    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a write changed to -1 did not return 42: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "restart-after-exit-stop",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        ret = (long)SC_RET(params);\n        if (ret != -EINTR) {\n            current_proc->restart_nr = 0;\n        }\n",
+          "replace": "        ret = (long)SC_RET(params);\n        current_proc->restart_nr = 0;\n        if (!skip && ret == -EINTR && syscall_num < SYSCALL_TABLE_SIZE &&\n            _syscall_table[syscall_num] &&\n            syscall_restartable(_syscall_table[syscall_num], params)) {\n            current_proc->restart_nr = syscall_num + 1u;\n        }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a read whose restart the tracer cancelled was restarted: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "tracee-end-cld-exited",
+      "summary": "futexes, ptrace, core files and the system call dispatcher",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    if (!(p->ptrace & PT_TRACED) || tracer == NULL) {\n        return;\n    }\n    proc_child_info(p, tracer, &info);\n",
+          "replace": "    if (!(p->ptrace & PT_TRACED) || tracer == NULL) {\n        return;\n    }\n    k_memset(&info, 0, sizeof(info));\n    info.code = CLD_EXITED;\n    info.pid = p->pid;\n    info.uid = p->ruid;\n    info.status = (p->exit_code >> 8) & 0xFF;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the SIGCHLD of a killed tracee was not CLD_KILLED with SIGKILL: errno",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mem-transfer-past-page",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "        if (n > PAGE_SIZE - (addr & (PAGE_SIZE - 1u))) {\n            n = (uint32_t)(PAGE_SIZE - (addr & (PAGE_SIZE - 1u)));\n        }\n        if (write) {\n",
+          "replace": "        if (write) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a transfer through /proc/PID/mem that runs into a hole",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mem-follows-exec",
+      "summary": "descriptors, open, mknod, FIFOs and /proc",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    return f->mm && mm_get_live(f->mm) ? f->mm : NULL;\n",
+          "replace": "    process_t *p = get_process((uint32_t)f->origin_pid);\n\n    if (!f->mm || !p || p->state == PROC_UNUSED || !p->mm) {\n        return NULL;\n    }\n    mm_get(p->mm);\n    return p->mm;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a /proc/PID/mem descriptor opened before the exec",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "entry-kill-runs-call",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);\n    if (!leaving && ((self->sig_pending | self->tg->pending) & KSIG_BIT(SIGKILL))) {\n        self->orig_nr = -1;\n    }\n",
+          "replace": "    sig = ptrace_stop((signo << 8) | 0x7F, stepping ? &info : NULL);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a write the tracee was killed at the entry of ran",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "detach-keeps-stop-seen",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    t->ptrace_opts = 0;\n    t->stop_seen = 0;\n",
+          "replace": "    t->ptrace_opts = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the detached process ran while its stop was in effect",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "seize-stopped-stays-parked",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    ptrace_unpark(t);\n    return 0;\n",
+          "replace": "    (void)ptrace_unpark;\n    return 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (seizing a stopped process did not stop it for the tracer",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "interrupt-no-wake",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (current_proc->ptrace & PT_INTERRUPT) {\n        return 1;\n    }\n",
+          "replace": "\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (PTRACE_INTERRUPT did not stop a tracee blocked in a read",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "stat-stopped-reads-running",
+      "summary": "rows the close added or strengthened: probe rows the review found weak, the alternate stack, a tracer's view of an image an exec made not dumpable, the ptrace waits bounded for their proofs, and the faults the close's first boots found",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    if (p->state == PROC_STOPPED) {\n        return 'T';\n    }\n",
+          "replace": "    if (p->state == PROC_STOPPED) {\n        return 'R';\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the detached process ran while its stop was in effect",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "mem-descriptor-keeps-pages",
+      "summary": "an address space's two counts and the program's file it keeps",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "    mm_hold(p->mm);\n    f->mm = p->mm;\n",
+          "replace": "    mm_get(p->mm);\n    mm_hold(p->mm);\n    f->mm = p->mm;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a /proc/PID/mem descriptor kept the memory of a child that ended",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "exit-keeps-address-space-mem",
+      "summary": "an address space's two counts and the program's file it keeps",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/exit.c",
+          "find": "    proc_thread_gone(self);\n    mm_drop(self);\n    switch_page_directory(_kernel_dir);\n    proc_files_put(self);\n",
+          "replace": "    proc_thread_gone(self);\n    proc_files_put(self);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (a /proc/PID/mem read reached a child that had ended",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    },
+    {
+      "name": "ptrace-seized-child-sigstop",
+      "summary": "the network's tables, which netlinkmusl checks",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    signo = self->tg->stop ? self->tg->stop : SIGTRAP;\n",
+          "replace": "    signo = (self->ptrace & PT_START) ? SIGSTOP : SIGTRAP;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTRACEMUSL FAIL (the child of a seized fork did not first stop with SIGTRAP",
+          "guest: fail: ptracemusl did not pass"
+        ]
+      }
+    }
+  ]
+}
