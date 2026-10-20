@@ -745,10 +745,11 @@ static void damaged_rows(void)
     check(mount_image(VFS_MS_RDONLY, "nosuch=1") == -EINVAL, "an unknown option is EINVAL");
 }
 
-/** A volume the host's own tools made and filled (mkexfat_external.sh)
- *  mounts and has every file of its manifest, with its size, its
- *  modification time within two seconds, and its bytes. On a host without
- *  those tools the rows report themselves as not run. */
+/** A volume another implementation made and filled (mkexfat_external.sh:
+ *  macOS's, or Linux's in etude's tooling machine) mounts and has every
+ *  file of its manifest, with its size, its modification time within two
+ *  seconds, and its bytes. On a host with neither the rows report
+ *  themselves as not run. */
 static void external_rows(void)
 {
     char cmd[2048], line[600];
@@ -759,17 +760,17 @@ static void external_rows(void)
     rc = system(cmd);
     rc = rc == -1 ? -1 : (rc >> 8) & 0xff;
     if (rc == 3) {
-        printf("exfat_hosttest: not run: the rows of the volume the host's tools made: this host "
-               "has no newfs_exfat and hdiutil\n");
+        printf("exfat_hosttest: not run: the rows of the volume another implementation made: this "
+               "host has neither hdiutil and newfs_exfat nor a made tooling machine\n");
         return;
     }
-    check(rc == 0, "the external volume is made by the host's tools");
+    check(rc == 0, "the external volume is made by another implementation");
     if (rc != 0) {
         return;
     }
     check(load_file(fix_path("exfat_external.img")) == 0, "the external volume loads");
     check(mount_image(VFS_MS_RDONLY, "") == 0,
-          "the volume newfs_exfat made and the host filled mounts");
+          "the volume another implementation made and filled mounts");
     m = fopen(fix_path("exfat_external.manifest"), "r");
     check(m != 0, "the manifest exists");
     while (m && fgets(line, sizeof(line), m)) {

@@ -21,6 +21,8 @@
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; MKMBR=$4; DIR=$5
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/tooling.sh
+. "$REPO/tests/system/tooling.sh"
 fail() { echo "large-test: FAIL: $1" >&2; exit 1; }
 mkdir -p "$DIR"
 DISK="$DIR/large.disk"
@@ -34,13 +36,16 @@ END=$((P3 + P3N + 2048))
 . "$REPO/tools/setup/e2fsprogs_path.sh"
 # The exFAT volume is made and checked with what the host has: macOS attaches
 # the raw image and works on its second slice, Linux works on a copy of the
-# slice with exfatprogs and writes it back.
+# slice with exfatprogs and writes it back, and a host with neither has
+# exfatprogs work on the second partition in etude's tooling machine.
 if command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1; then
     EXFAT_HOST=mac
 elif command -v mkfs.exfat >/dev/null 2>&1 && command -v fsck.exfat >/dev/null 2>&1; then
     EXFAT_HOST=linux
+elif tooling_made; then
+    EXFAT_HOST=tooling
 else
-    fail "the exFAT volume needs hdiutil and newfs_exfat, or mkfs.exfat and fsck.exfat"
+    fail "the exFAT volume needs hdiutil and newfs_exfat, mkfs.exfat and fsck.exfat, or a made tooling machine"
 fi
 
 rm -f "$DISK"
@@ -55,6 +60,12 @@ if [ "$EXFAT_HOST" = mac ]; then
     [ -n "$DEV" ] || fail "attaching the disk for newfs_exfat"
     newfs_exfat -v LARGEX "${DEV}s2" > /dev/null 2>&1 || { hdiutil detach "$DEV" > /dev/null 2>&1; fail "newfs_exfat"; }
     hdiutil detach "$DEV" > /dev/null 2>&1 || fail "detaching the disk"
+elif [ "$EXFAT_HOST" = tooling ]; then
+    # shellcheck disable=SC2016 # the job's line expands in the machine
+    echo 'mkfs.exfat -L LARGEX "$ETUDE_DISK1-part2"' > "$DIR/mkfs.job"
+    tooling run -d "$DISK" "$DIR/mkfs.job" > "$DIR/mkfs.log" 2>&1 \
+        || { cat "$DIR/mkfs.log" >&2; fail "mkfs.exfat in the tooling machine"; }
+    rm -f "$DIR/mkfs.job"
 else
     rm -f "$DISK.slice"
     truncate -s $((P2N * 512)) "$DISK.slice" || fail "the exFAT slice"
@@ -100,6 +111,11 @@ if [ "$EXFAT_HOST" = mac ]; then
     [ -n "$DEV" ] || fail "attaching the disk for fsck_exfat"
     fsck_exfat -n "${DEV}s2" > "$DIR/exfat.fsck" 2>&1; rc=$?
     hdiutil detach "$DEV" > /dev/null 2>&1
+elif [ "$EXFAT_HOST" = tooling ]; then
+    # shellcheck disable=SC2016 # the job's line expands in the machine
+    echo 'fsck.exfat -n "$ETUDE_DISK1-part2"' > "$DIR/fsck.job"
+    tooling run -d "$DISK" "$DIR/fsck.job" > "$DIR/exfat.fsck" 2>&1; rc=$?
+    rm -f "$DIR/fsck.job"
 else
     dd if="$DISK" of="$DISK.slice" bs=1048576 skip=$((P2 / 2048)) count=$((P2N / 2048)) 2>/dev/null \
         || fail "reading the exFAT slice"

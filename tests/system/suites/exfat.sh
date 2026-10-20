@@ -8,6 +8,8 @@
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; DISK=$4; OSREAL=$5; PASSWORD=$6; MKFIX=$7
 REPO=$(cd "$(dirname "$0")/../../.." && pwd)
+# shellcheck source=tests/system/tooling.sh
+. "$REPO/tests/system/tooling.sh"
 PART=100352
 SECTORS=32768
 
@@ -66,7 +68,8 @@ walk_repaired() {
 }
 
 # external_check WHAT LOST: the external checker, where the host has one,
-# over a copy of the volume: macOS's fsck_exfat or exfatprogs' fsck.exfat. It
+# over a copy of the volume: macOS's fsck_exfat, exfatprogs' fsck.exfat, or
+# fsck.exfat in etude's tooling machine on a host that has neither. It
 # reports without modifying, and must call the copy clean or the suite fails
 # with WHAT. LOST not empty says the volume holds the lost clusters the
 # mount's check counts and leaves; the checker then repairs the copy and must
@@ -94,11 +97,21 @@ external_check() {
             fsck.exfat -n "$DISK.vol" >> "$DISK.fsck" 2>&1; rc=$?
         fi
         [ "$rc" -eq 0 ] || { cat "$DISK.fsck" >&2; fail "$1"; }
+    elif tooling_made; then
+        # shellcheck disable=SC2016 # the job's lines expand in the machine
+        {
+            echo 'rc=0; fsck.exfat -n "$ETUDE_DISK1" || rc=$?'
+            [ -z "$2" ] || echo 'fsck.exfat -y "$ETUDE_DISK1"; rc=0; fsck.exfat -n "$ETUDE_DISK1" || rc=$?'
+            echo 'exit $rc'
+        } > "$DISK.fsck.job"
+        tooling run -d "$DISK.vol" "$DISK.fsck.job" > "$DISK.fsck" 2>&1; rc=$?
+        rm -f "$DISK.fsck.job"
+        [ "$rc" -eq 0 ] || { cat "$DISK.fsck" >&2; fail "$1"; }
     elif [ -n "$2" ]; then
-        echo "exfat-test: not run: the external checker over its repaired copy of the crashed volume: this host has neither fsck_exfat nor fsck.exfat"
+        echo "exfat-test: not run: the external checker over its repaired copy of the crashed volume: this host has neither fsck_exfat nor fsck.exfat, nor a made tooling machine"
         return 0
     else
-        echo "exfat-test: not run: the external checker over the volume: this host has neither fsck_exfat nor fsck.exfat"
+        echo "exfat-test: not run: the external checker over the volume: this host has neither fsck_exfat nor fsck.exfat, nor a made tooling machine"
         return 0
     fi
     if [ -n "$2" ]; then
@@ -226,7 +239,7 @@ else
 fi
 rm -f "$DISK.late"
 
-if command -v fsck_exfat >/dev/null 2>&1 || command -v fsck.exfat >/dev/null 2>&1; then
+if command -v fsck_exfat >/dev/null 2>&1 || command -v fsck.exfat >/dev/null 2>&1 || tooling_made; then
     echo "exfat-test: PASS (with the external checker)"
 else
     echo "exfat-test: PASS, with the external checker's checks not run; the host's reader judged the volume"
