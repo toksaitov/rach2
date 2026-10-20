@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Report test admission waits from a tree on the Linux testing host."""
+"""Report test runs, their admission waits and stalled work, and the claims
+of etude's ledger, from a tree on the Linux testing host."""
 
 import datetime
+import hashlib
 import os
 from pathlib import Path
+import pwd
 import sys
 import time
+
+ETUDE_STATUS = "etude-status 1"
+ETUDE_LEDGER = "etude-ledger 1"
 
 
 def fields(path):
@@ -110,6 +116,247 @@ def pool(rows):
             print(f"    holder {words[0]} pid {pid} {state}: {words[1]} MiB{fault}")
 
 
+def utc(us):
+    """Format microseconds since the epoch as UTC, or unknown."""
+    try:
+        return datetime.datetime.fromtimestamp(int(us) / 1e6,
+                                               datetime.timezone.utc).strftime("%F %T UTC")
+    except (ValueError, OverflowError, OSError):
+        return "unknown"
+
+
+def secs(us):
+    """Give microseconds as whole seconds, rounded up."""
+    return (max(0, int(us)) + 999999) // 1000000
+
+
+def owner(words):
+    """Check a process recorded by etude as its PID, start and known flag."""
+    if len(words) != 3 or not words[0].isdigit():
+        return "?", "unknown"
+    if words[2] == "1":
+        return words[0], process(words[0], None, words[1])
+    state = process(words[0])
+    return words[0], "unknown" if state == "alive" else state
+
+
+def etude_record(path):
+    """Read an etude status record, or give None for a file that is not one."""
+    try:
+        lines = path.read_text().splitlines()
+    except FileNotFoundError:
+        return None
+    if not lines or lines[0] != ETUDE_STATUS:
+        return None
+    record = {"wait": [], "attempt": []}
+    for line in lines[1:]:
+        key, _, rest = line.partition(" ")
+        if key in ("wait", "attempt"):
+            record[key].append(rest.split())
+        else:
+            record[key] = rest
+    return record
+
+
+def ledger(directory):
+    """Read a ledger's claims and requests by identity, changing nothing."""
+    try:
+        text = (Path(directory) / "claims").read_text()
+    except FileNotFoundError:
+        return {}
+    lines = text.split("\n")
+    if lines[0] != ETUDE_LEDGER or lines[-1] != "":
+        raise ValueError(f"{directory}/claims is not a whole ledger of {ETUDE_LEDGER}")
+    table, claim = {}, None
+    for line in lines[1:-1]:
+        words = line.split(" ")
+        if claim is None and len(words) == 2 and words[0] == "claim":
+            claim = {"id": words[1], "resource": [], "process": []}
+        elif claim is not None and words == ["end"]:
+            table[claim["id"]] = claim
+            claim = None
+        elif claim is not None and words[0] in ("resource", "process"):
+            claim[words[0]].append(words[1:])
+        elif claim is not None and len(words) >= 2:
+            claim[words[0]] = words[1:] if words[0] == "owner" else words[1]
+        else:
+            raise ValueError(f"{directory}/claims: a line that does not belong: {line}")
+    if claim is not None:
+        raise ValueError(f"{directory}/claims: claim {claim['id']} has no end")
+    return table
+
+
+def boot_id():
+    """Give this boot's identity, as the ledger records it."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip() or "-"
+    except OSError:
+        return "-"
+
+
+def group_runs(pgid):
+    """Say whether a process group may have a member."""
+    try:
+        os.killpg(int(pgid), 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return True
+
+
+def confirmed(directory, ident):
+    """Say whether a claim's keeper wrote that its cleanup was confirmed."""
+    name = hashlib.sha256(ident.encode()).hexdigest()[:32]
+    try:
+        return (Path(directory) / "verdicts" / name).read_bytes() == b"confirmed\n"
+    except OSError:
+        return False
+
+
+def judge(claim, directory, boot):
+    """Judge a claim as etude's recovery lists it: give owned, live or
+    uncertain with the reason, or None for a claim the next admission frees."""
+    if claim.get("system") != "linux":
+        return "uncertain", "another operating system recorded it"
+    if "-" not in (claim.get("boot", "-"), boot) and claim.get("boot") != boot:
+        return None
+    state = owner(claim.get("owner", []))[1]
+    if state == "alive":
+        return "owned", ""
+    if state == "unknown":
+        return "uncertain", "its owner cannot be identified"
+    if claim.get("state") in ("reserved", "waiting", "blocked"):
+        return None
+    states = [("alive" if words[0] == "case" and group_runs(words[1]) else owner(words[1:])[1])
+              for words in claim["process"]]
+    if "alive" in states:
+        return "live", "its owner has ended and a process of it runs"
+    if "unknown" in states:
+        return "uncertain", "a process of it cannot be identified"
+    if claim.get("state") == "uncertain":
+        return "uncertain", "its owner found the cleanup unconfirmed"
+    if not confirmed(directory, claim["id"]):
+        return "uncertain", "its keeper did not confirm the cleanup"
+    return None
+
+
+def asks(claim):
+    """Describe the resources a claim or a request asks for."""
+    return ", ".join(" ".join(words) for words in claim.get("resource", [])) or "nothing"
+
+
+def place(case, arch):
+    """Name a case on its architecture."""
+    return case if arch == "none" else f"{case} on {arch}"
+
+
+def waiting(words, table, now):
+    """Print an attempt that waits for admission, and its place in the ledger."""
+    if len(words) != 4 or not words[3].isdigit():
+        print(f"    unreadable wait: {' '.join(words)}")
+        return
+    ident, case, arch, since = words
+    claim = table.get(ident)
+    protected = next((c["id"] for c in table.values() if c.get("state") == "blocked"), None)
+    if claim is None:
+        how = "no request of it is in the ledger"
+    elif claim.get("state") == "blocked":
+        how = f"it is the protected request, for {asks(claim)}"
+    elif claim.get("state") == "waiting":
+        how = f"behind the protected request {protected}" if protected else "no request is protected"
+        how += f", for {asks(claim)}"
+    else:
+        how = "it was admitted after the record was written"
+    print(f"    waits for admission: {place(case, arch)} for {secs(now - int(since))}s, "
+          f"since {utc(since)}; {how}")
+
+
+def attempt(words, now):
+    """Print a running attempt as working within its bounds, or stalled."""
+    if len(words) != 9 or not words[6].isdigit() or not words[8].isdigit():
+        print(f"    unreadable attempt: {' '.join(words)}")
+        return
+    ident, case, arch, stage, state, kind, progress, deadline, bound = words
+    where = f"{place(case, arch)} in {stage}"
+    quiet = (f"last progress {secs(now - int(progress))}s ago" if stage == "execute"
+             else f"in {stage} for {secs(now - int(progress))}s")
+    if state == "expired":
+        print(f"    stalled: {where}: {quiet}; its {kind} bound of {secs(bound)}s ran out, "
+              f"and attempt {ident} is being ended")
+    elif not deadline.isdigit():
+        print(f"    unreadable attempt: {' '.join(words)}")
+    elif now <= int(deadline):
+        print(f"    working: {where}: {quiet}; its {kind} bound of {secs(bound)}s "
+              f"runs out in {secs(int(deadline) - now)}s")
+    else:
+        print(f"    stalled: {where}: {quiet}; its {kind} bound of {secs(bound)}s ran out "
+              f"{secs(now - int(deadline))}s ago; fault: the run has not ended attempt {ident}")
+
+
+def etude(record, ledgers, now):
+    """Print an etude run: its owner, and what each attempt waits for or does."""
+    pid, state = owner(record.get("owner", "").split())
+    written = record.get("written", "")
+    age = f"{secs(now - int(written))}s ago" if written.isdigit() else "at an unknown time"
+    fault = "; fault: stale run record, inspect its ledger" if state.startswith("dead") else ""
+    print(f"  etude run {pid} {state}: {record.get('args', '?')} "
+          f"(run {record.get('run', '?')}, status written {age}){fault}")
+    directory = record.get("ledger")
+    try:
+        table = ledger(directory) if directory else {}
+    except (OSError, ValueError):
+        table = {}
+    if directory and directory not in ledgers:
+        ledgers.append(directory)
+    for words in record["wait"]:
+        waiting(words, table, now)
+    for words in record["attempt"]:
+        attempt(words, now)
+    if not record["wait"] and not record["attempt"]:
+        print("    no attempt waits or runs")
+
+
+def machine_ledger(repo):
+    """Give the ledger that the machine record of the tree's owner names."""
+    try:
+        account = pwd.getpwuid(Path(repo).stat().st_uid)
+    except (KeyError, OSError):
+        return None
+    state = os.environ.get("XDG_STATE_HOME", "") if account.pw_uid == os.getuid() else ""
+    base = Path(state) if state.startswith("/") else Path(account.pw_dir) / ".local" / "state"
+    return value(fields(base / "etude" / "machine"), "ledger", "") or None
+
+
+def claims(directory):
+    """Print a ledger's requests, and its claims that no running owner keeps."""
+    try:
+        table = ledger(directory)
+    except (OSError, ValueError) as error:
+        print(f"  ledger {directory}: unreadable: {error}; fault: no admission can be judged")
+        return
+    boot, owned, rows = boot_id(), 0, []
+    for claim in table.values():
+        verdict = judge(claim, directory, boot)
+        request = claim.get("state") in ("waiting", "blocked")
+        if verdict is None:
+            continue
+        if verdict[0] == "owned" and not request:
+            owned += 1
+        elif verdict[0] == "owned":
+            role = "protected" if claim.get("state") == "blocked" else "waiting"
+            rows.append(f"    request {claim['id']} of {claim.get('account', '?')}: {role}, "
+                        f"for {asks(claim)}")
+        else:
+            fault = ("end its processes" if verdict[0] == "live"
+                     else "a person must establish that nothing of it runs and drop it")
+            rows.append(f"    claim {claim['id']}: {verdict[0]}: {verdict[1]}; "
+                        f"holds {asks(claim)}; fault: {fault}")
+    print(f"  ledger {directory}: {owned} claims owned by running workers")
+    for row in rows:
+        print(row)
+
+
 def report(repo):
     """Report each recorded run and any tree lock whose owner has ended."""
     if not Path("/proc/locks").exists():
@@ -117,8 +364,15 @@ def report(repo):
         return
     build = Path(repo) / "build"
     found = False
+    ledgers = []
+    now = int(time.time() * 1e6)
     for path in sorted(build.glob(".run.status.*")):
         if path.name.endswith(".new"):
+            continue
+        record = etude_record(path)
+        if record is not None:
+            found = True
+            etude(record, ledgers, now)
             continue
         rows = fields(path)
         if not rows:
@@ -149,6 +403,11 @@ def report(repo):
         print(f"  tree lock: holder unknown (owner record absent, age {age}s){fault}")
     if not found:
         print("  no recorded test run")
+    machine = machine_ledger(repo)
+    if machine and machine not in ledgers:
+        ledgers.append(machine)
+    for directory in ledgers:
+        claims(directory)
 
 
 if __name__ == "__main__":
