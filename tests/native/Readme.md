@@ -30,7 +30,7 @@ Each case has a workspace: a directory of its own, its working directory, remove
 
 `maps` has the maps and the images. `idmap OLD:NEW...` and `portmap OLD:NEW...` lines give each id and port a case may name, and the native value given in its place; a NEW is used by one OLD alone. `image NAME TYPE MIB` names an empty volume image of TYPE and MIB mebibytes, and `image NAME TYPE MIB from PATH` the image of the build that PATH names, such as one a suite's preparation makes. A `vfat` image is FAT32, and an `ext2` image has blocks of 4096 bytes.
 
-`tccbuild.sh` is a TinyCC build that `etude-native` of [`tools/etude/`](../../tools/etude/Readme.md) runs on the machine with `etude-guest`, as its host test does with the host's cc: `tccbuild.sh pass` compiles a small program, linked `-static` as every program for Rach2 is, runs it and checks its output; `fail` compiles a file that stops at `#error`; and `loop` builds again until it is stopped. The compiler is `$TCC`, `tcc` unless set.
+`tccbuild.sh` is a TinyCC build that `etude-native` of [`tools/etude/`](../../tools/etude/Readme.md) runs on the machine with `etude-guest`, as its host test does with the host's cc: `tccbuild.sh pass` compiles a small program, linked `-static` as every program for Rach2 is, or without it on macOS, whose linker makes no static program, runs it and checks its output; `fail` compiles a file that stops at `#error`; and `loop` builds again until it is stopped. The compiler is `$TCC`, `tcc` unless set.
 
 `machine` has a line `NAME REASON` for each guest program that has no native case and is staged by none: the reason its checks need a machine of QEMU's, in a few words.
 

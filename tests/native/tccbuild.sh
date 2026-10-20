@@ -1,13 +1,16 @@
 #!/bin/sh
 # tccbuild.sh: a TinyCC build, run as one case by etude-native on a Rach2
 # machine that is already up. Its argument chooses the build: `pass`
-# compiles a program, linked -static as every program for Rach2 is, runs it
-# and checks what it prints; `fail` compiles a source with an #error, so
-# that the build fails on purpose and the case exits with the compiler's
-# status; and `loop` builds the program again and again until it is
-# stopped. TCC names the compiler, tcc unless it is set.
+# compiles a program, runs it and checks what it prints; `fail` compiles a
+# source with an #error, so that the build fails on purpose and the case
+# exits with the compiler's status; and `loop` builds the program again and
+# again until it is stopped. TCC names the compiler, tcc unless it is set.
+# The program is linked -static, as every program for Rach2 is and as
+# Rach2's tcc requires, except on macOS, whose linker makes no static
+# program; etude_native_hosttest runs the build there with the host's cc.
 set -u
 tcc=${TCC:-tcc}
+system=$(uname -s)
 
 # build: write the program's source and compile it; the compiler's status.
 build()
@@ -25,7 +28,11 @@ int main(void)
     return 0;
 }
 EOF
-    "$tcc" -static -o sum sum.c
+    if [ "$system" = Darwin ]; then
+        "$tcc" -o sum sum.c
+    else
+        "$tcc" -static -o sum sum.c
+    fi
 }
 
 case ${1:-} in
