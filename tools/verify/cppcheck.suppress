@@ -208,8 +208,8 @@ unusedStructMember:*tools/etude/history_json.h
 unusedStructMember:*tools/etude/include/etude/history.h
 
 # The headers of the executor, the QEMU launcher, the watchdog, the ledger,
-# the schedule and the artifact store declare the structures that their
-# sources and their callers fill and read. cppcheck judges each header as a
+# the schedule, the artifact store and the serial controller declare the
+# structures that their sources and their callers fill and read. cppcheck judges each header as a
 # file of its own, apart from the sources that include it, and finds no
 # reader of a member.
 unusedStructMember:*tools/etude/include/etude/exec.h
@@ -221,6 +221,7 @@ unusedStructMember:*tools/etude/include/etude/watchdog.h
 unusedStructMember:*tools/etude/include/etude/sched.h
 unusedStructMember:*tools/etude/cost.h
 unusedStructMember:*tools/etude/include/etude/artifact.h
+unusedStructMember:*tools/etude/serial.h
 
 # The repetitions' structures: cppcheck checks repeat.h alone, and its members
 # are read in repeat.c, posix/repeat.c, posix/load.c and their host test.

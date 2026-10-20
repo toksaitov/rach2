@@ -700,6 +700,8 @@ tools/etude/ledger.c:etude_ledger_admit params 8 the resources and the limits ar
 
 tools/etude/sched.c:etude_sched_admit params 7 the jobs and the limits are each an array with its count, as etude_ledger_admit takes them
 
+tools/etude/serial.c:etude_serial_put params 7 the parameters are the file's name, size, digest, mode and bytes, and the time that each of the controller's calls takes
+
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 
 tools/image/mkgpt.c:main complexity 54 an inspector's check, one walk over the format it reads
