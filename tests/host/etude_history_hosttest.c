@@ -152,7 +152,7 @@ static void store_records(void)
     struct etude_history *h = etude_history_open(paths[0], schema, "writer", "run", 1000000);
     uint64_t bad;
     unsigned count = 0;
-    size_t i;
+    size_t i, n;
     char *changed;
     CHECK(h != NULL, "create stream");
     if (!h)
@@ -188,10 +188,11 @@ static void store_records(void)
     free(changed);
     for (i = 0; i < 5; i++)
         CHECK(append(h, (unsigned)i, examples[i]) == 0, "append each history kind");
-    changed = malloc(strlen(examples[1]) + 3);
+    n = strlen(examples[1]) + 3;
+    changed = malloc(n);
     if (!changed)
         exit(1);
-    sprintf(changed, "\n%s\n", examples[1]);
+    snprintf(changed, n, "\n%s\n", examples[1]);
     CHECK(append(h, 1, changed) == 0, "pretty JSON is compacted to one line");
     free(changed);
     CHECK(etude_history_close(h) == 0, "close stream");
@@ -320,7 +321,7 @@ static void concurrent(void)
             close(gate[0]);
             if (append(parent, 0, examples[0]) != -1)
                 _exit(2);
-            sprintf(id, "child%u", i);
+            snprintf(id, sizeof id, "child%u", i);
             h = etude_history_open(paths[3 + i], schema, id, "run", 100000);
             if (!h || append(h, 0, examples[0]) || append(h, 1, examples[1]) ||
                 etude_history_close(h))
