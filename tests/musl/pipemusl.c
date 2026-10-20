@@ -3,9 +3,9 @@
  *
  * The parent writes the eleven bytes "hello, pipe" into the pipe and closes
  * the write end; the child reads once and exits 0 only if the bytes match.
- * The child's exit status decides the token: `PIPEMUSL OK`, or a
- * `PIPEMUSL FAIL` line naming the step that failed. Staged into the test
- * image as /musl/pipemusl.
+ * The child's exit status decides the token: `PIPEMUSL OK` and exit 0, or a
+ * `PIPEMUSL FAIL` line naming the step that failed and exit 1. Staged into
+ * the test image as /musl/pipemusl.
  */
 #include <unistd.h>
 #include <stdio.h>
@@ -44,6 +44,7 @@ int main(void)
             printf("PIPEMUSL OK\n");
         } else {
             printf("PIPEMUSL FAIL: child did not receive the data\n");
+            return 1;
         }
     }
     return 0;
