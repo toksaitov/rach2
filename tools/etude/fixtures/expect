@@ -51,6 +51,10 @@
 1 manifest ./rules.json | where-outside: ../delay.c:1 is not a path inside the tree
 1 manifest ./rules.json | assertion-twice: the assertion enosys-unimplemented is declared twice
 1 manifest ./rules.json | ports: the native ports fixtures take more ports than reserved
+1 manifest ./rules.json | processor-unknown: bogus is no processor profile
+1 manifest ./rules.json | feature-unknown: sse9 is no processor feature a profile can declare
+1 manifest ./rules.json | feature-profile: the case requires rdrand present, and its processor profile qemu64 declares it absent
+1 manifest ./rules.json | feature-either: the case requires pdpe1gb either, which its processor profile max does not declare
 1 -r ./tree manifest ./rules.json | timing-nofile: tests/absent.c:1: no such file in the tree
 1 -r ./tree manifest ./rules.json | timing-pastend: tests/delay.txt:9: the file ends at line 4
 1 manifest ./prefix.json | fixture.other.vectors: a case of the family fixture.prefix has an identity
@@ -82,11 +86,16 @@
 1 report ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-version.out | does not parse
 1 report ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./report-executor.out | shell-returned is not the program's to report
 1 report ../schemas/case.guest.example.json guest.default.survivorprobe i686 native ./report-executor.out | cannot be placed native
-0 report -f rdrand=present -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | branch source trusted decided by feature
-1 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | the program took trusted where the processor gives fail-closed
-1 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | assert closed-urandom missing
-1 report -f rdrand=present -f rdseed=present ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng-nobranch.out | no branch record for the group source
-2 report -f rdrand=present ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | give the processor's rdseed
+0 report ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | branch source trusted decided by feature
+1 report ../schemas/case.guest.example.json guest.default.rngprobe i686 qemu ./report-rng-closed.out | the program took fail-closed where the processor gives trusted
+1 report ../schemas/case.guest.example.json guest.default.rngprobe i686 qemu ./report-rng-closed.out | outcome failure
+2 report -f rdrand=present -f rdseed=present ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out | its processor is the profile max's
+0 report -f rdrand=present -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 native ./report-rng.out | branch source trusted decided by feature
+0 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 native ./report-rng-closed.out | branch source fail-closed decided by feature
+1 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 native ./report-rng.out | the program took trusted where the processor gives fail-closed
+1 report -f rdrand=absent -f rdseed=absent ../schemas/case.guest.example.json guest.default.rngprobe x86_64 native ./report-rng.out | assert closed-urandom missing
+1 report ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng-nobranch.out | no branch record for the group source
+2 report -f rdrand=present ../schemas/case.guest.example.json guest.default.rngprobe x86_64 native ./report-rng.out | give the processor's rdseed
 0 report ./judge.json fixture.judge.tlsprobe i686 qemu ./report-tls.out | outcome pass
 1 report ./judge.json fixture.judge.tlsprobe x86_64 qemu ./report-tls.out | does not apply to x86_64: no plan has an item of it there, and it is neither run nor passed
 0 report ./judge.json fixture.judge.counter i686 qemu ./report-counter.out | outcome pass
@@ -111,3 +120,8 @@
 1 results ./results-branch.jsonl ../schemas/case.guest.example.json | the group source appears 0 times, not once
 1 results ./results-twice.jsonl ../schemas/case.guest.example.json | enosys-unimplemented appears 2 times
 1 results ./results-missing.jsonl ./rules.json | guest.default.errnoprobe is no case of the manifests given
+
+# A processor profile gives QEMU its model and its declared features.
+0 processor qemu64 | qemu64,rdrand=off,rdseed=off,xsave=off,avx=off
+0 processor max | max,rdrand=on,rdseed=on,xsave=on,avx=on,enforce=on
+1 processor max,avx=on | is no processor profile

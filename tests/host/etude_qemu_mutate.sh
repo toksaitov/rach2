@@ -76,7 +76,8 @@ run_phase()
         -fno-sanitize-recover=all -I tests/host -I tools/etude/include \
         -I tools/etude/posix tests/host/etude_qemu_hosttest.c "$work/qemu.c" \
         tools/etude/capture.c tools/etude/history_json.c tools/etude/qemu_profile.c \
-        tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c \
+        tools/etude/processor.c tools/etude/posix/exec.c tools/etude/posix/keeper.c \
+        tools/etude/posix/process.c \
         -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
             cat "$work/$phase.compile.log" >&2; exit 1;
         }

@@ -94,7 +94,7 @@ run_phase()
         -I tools/etude/posix tests/host/etude_watchdog_hosttest.c "$work/watchdog.c" \
         "$work/supervise.c" tools/etude/capture.c tools/etude/history_json.c \
         tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c \
-        tools/etude/posix/process.c tools/etude/posix/qemu.c \
+        tools/etude/posix/process.c tools/etude/posix/qemu.c tools/etude/processor.c \
         -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
             cat "$work/$phase.compile.log" >&2; exit 1;
         }

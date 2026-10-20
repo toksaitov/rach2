@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "etude/processor.h"
 #include "schema.h"
 
 /* The pattern of an identity of a manifest. */
@@ -285,11 +286,12 @@ static int group_index(const struct json *c, const char *id)
 }
 
 /**
- * Decides the groups decided by features from `features`, a list of
- * `NAME=present` and `NAME=absent`; returns 0, or -1 when a feature a group
- * names is not given.
+ * Decides the groups decided by features from the processor profile `p`, or
+ * without one from `features`, a list of `NAME=present` and `NAME=absent`;
+ * returns 0, or -1 when a feature a group names is not given.
  */
-static int decide_features(struct judging *j, char **features, int n)
+static int decide_features(struct judging *j, const struct etude_processor *p, char **features,
+                           int n)
 {
     const struct json *groups = json_member(j->c, "branches");
     size_t g, f;
@@ -304,7 +306,17 @@ static int decide_features(struct judging *j, char **features, int n)
             size_t len = strlen(names->item[f]->string);
             const char *state = NULL;
 
-            for (i = 0; i < n; i++) {
+            if (p != NULL) {
+                enum etude_feature_state has = etude_processor_feature(p, names->item[f]->string);
+
+                if (has == ETUDE_FEATURE_UNDECLARED) {
+                    finding(NULL, 0, "%s: the processor profile %s does not declare %s",
+                            json_text(j->c, "case_id"), p->name, names->item[f]->string);
+                    return -1;
+                }
+                state = has == ETUDE_FEATURE_PRESENT ? "present" : "absent";
+            }
+            for (i = 0; p == NULL && i < n; i++) {
                 if (strncmp(features[i], names->item[f]->string, len) == 0 &&
                     features[i][len] == '=') {
                     state = features[i] + len + 1;
@@ -632,16 +644,30 @@ static int applies(const struct json *c, const char *arch, const char *placement
 }
 
 /**
+ * Returns the processor profile of a guest case placed `qemu`, whose boot
+ * has it, or NULL for another placement, where the processor is the
+ * machine's.
+ */
+static const struct etude_processor *placed_processor(const struct json *c, const char *placement)
+{
+    const struct json *qemu = json_member(json_member(c, "requirements"), "qemu");
+
+    return same(placement, "qemu") ? etude_processor_find(json_text(qemu, "cpu")) : NULL;
+}
+
+/**
  * Judges a program's output as the report of a case. `args` are, after any
  * `-f NAME=present|absent` options for the processor's features, the
  * manifest, the case, the architecture, the placement and the output's
- * file, `-` or none for standard input. Prints the report's state, each
- * group's branch, each assertion the program must report and the outcome
- * they give; returns 0 when they give a pass, 1 when not, and 2 for a usage
- * fault or a file that cannot be read.
+ * file, `-` or none for standard input. A guest case placed `qemu` has the
+ * features its processor profile declares, and takes no `-f`. Prints the
+ * report's state, each group's branch, each assertion the program must
+ * report and the outcome they give; returns 0 when they give a pass, 1 when
+ * not, and 2 for a usage fault or a file that cannot be read.
  */
 int judge_report(struct cases *set, char **args, int n)
 {
+    const struct etude_processor *processor;
     char *features[64];
     int nfeatures = 0, i = 0, status, prior;
     struct judging j;
@@ -667,7 +693,15 @@ int judge_report(struct cases *set, char **args, int n)
     if (!applies(j.c, args[i + 2], args[i + 3])) {
         return 1;
     }
-    if (decide_features(&j, features, nfeatures) != 0) {
+    processor = placed_processor(j.c, args[i + 3]);
+    if (processor != NULL && nfeatures > 0) {
+        finding(NULL, 0,
+                "%s: placed qemu, its processor is the profile %s's, and -f gives a "
+                "native or host machine's",
+                args[i + 1], processor->name);
+        return 2;
+    }
+    if (decide_features(&j, processor, features, nfeatures) != 0) {
         return 2;
     }
     j.input = n - i == 5 && strcmp(args[i + 4], "-") != 0 ? args[i + 4] : "-";

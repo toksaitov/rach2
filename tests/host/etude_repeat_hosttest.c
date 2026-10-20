@@ -10,6 +10,7 @@
  * host-deps: tools/etude/capture.c tools/etude/qemu_profile.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/posix/qemu.c
+ * host-deps: tools/etude/processor.c
  * host-deps: tools/etude/compare.c tools/etude/baseline.c
  * host-deps: tools/etude/compare_report.c tools/etude/compare_run.c
  * host-deps: tools/etude/history.c tools/etude/history_json.c

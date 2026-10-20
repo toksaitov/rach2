@@ -4661,6 +4661,592 @@
           }
         ]
       }
+    },
+    {
+      "case_id": "fixture.rules.processor-unknown",
+      "behavior": "A failing system call returns the negated errno that Linux returns",
+      "units": [
+        "errnoprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "missing_path": "/no_such_file_errnoprobe",
+          "closed_fd": 999
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "bogus",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "errnoprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {
+          "assertion_id": "enosys-unimplemented",
+          "checks": "an unregistered number in the table's range returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enosys-out-of-range",
+          "checks": "number 909 returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enoent-open",
+          "checks": "open of a missing path returns -ENOENT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-close",
+          "checks": "close(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-read",
+          "checks": "read(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "efault-writev",
+          "checks": "writev with an iovec at -4096 returns -EFAULT",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "errnoprobe",
+          "node": "tests/errnoprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "fixture.rules.feature-unknown",
+      "behavior": "A failing system call returns the negated errno that Linux returns",
+      "units": [
+        "errnoprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "missing_path": "/no_such_file_errnoprobe",
+          "closed_fd": 999
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {
+          "sse9": "present"
+        },
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "errnoprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {
+          "assertion_id": "enosys-unimplemented",
+          "checks": "an unregistered number in the table's range returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enosys-out-of-range",
+          "checks": "number 909 returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enoent-open",
+          "checks": "open of a missing path returns -ENOENT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-close",
+          "checks": "close(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-read",
+          "checks": "read(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "efault-writev",
+          "checks": "writev with an iovec at -4096 returns -EFAULT",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "errnoprobe",
+          "node": "tests/errnoprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "fixture.rules.feature-profile",
+      "behavior": "A failing system call returns the negated errno that Linux returns",
+      "units": [
+        "errnoprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "missing_path": "/no_such_file_errnoprobe",
+          "closed_fd": 999
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {
+          "rdrand": "present"
+        },
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "qemu64",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "errnoprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {
+          "assertion_id": "enosys-unimplemented",
+          "checks": "an unregistered number in the table's range returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enosys-out-of-range",
+          "checks": "number 909 returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enoent-open",
+          "checks": "open of a missing path returns -ENOENT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-close",
+          "checks": "close(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-read",
+          "checks": "read(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "efault-writev",
+          "checks": "writev with an iovec at -4096 returns -EFAULT",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "errnoprobe",
+          "node": "tests/errnoprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "fixture.rules.feature-either",
+      "behavior": "A failing system call returns the negated errno that Linux returns",
+      "units": [
+        "errnoprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "missing_path": "/no_such_file_errnoprobe",
+          "closed_fd": 999
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {
+          "pdpe1gb": "either"
+        },
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "errnoprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "nothing to remove; /no_such_file_errnoprobe must be absent"
+      },
+      "assertions": [
+        {
+          "assertion_id": "enosys-unimplemented",
+          "checks": "an unregistered number in the table's range returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enosys-out-of-range",
+          "checks": "number 909 returns -ENOSYS",
+          "source": "program"
+        },
+        {
+          "assertion_id": "enoent-open",
+          "checks": "open of a missing path returns -ENOENT",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-close",
+          "checks": "close(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "ebadf-read",
+          "checks": "read(999) returns -EBADF",
+          "source": "program"
+        },
+        {
+          "assertion_id": "efault-writev",
+          "checks": "writev with an iovec at -4096 returns -EFAULT",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 60000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "errnoprobe",
+          "node": "tests/errnoprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
     }
   ]
 }

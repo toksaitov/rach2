@@ -7,7 +7,7 @@
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
  * host-deps: tools/etude/qemu_profile.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
- * host-deps: tools/etude/posix/qemu.c
+ * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-seconds: 240
  *
@@ -780,7 +780,8 @@ static void test_argv(void)
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
     static const char *const five[] = {"a", "b", "c", "d", "e", NULL};
     static const char *const want =
-        "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S -cpu max,-rdrand -smp 2 "
+        "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S "
+        "-cpu qemu64,rdrand=off,rdseed=off,xsave=off,avx=off -smp 2 "
         "-m 268435456B -kernel /k/kernel -initrd /k/test.krffs "
         "-drive file=/d/one,,two.img,format=raw,if=ide,index=0,media=disk "
         "-drive file=/d/b.img,format=raw,if=ide,index=1,media=disk "
@@ -802,7 +803,7 @@ static void test_argv(void)
     p.kernel = "/k/kernel";
     p.initrd = "/k/test.krffs";
     p.disks = disks;
-    p.cpu = "max,-rdrand";
+    p.cpu = "qemu64";
     p.processors = 2;
     p.memory_bytes = 256u << 20;
     p.firmware = ETUDE_FIRMWARE_DIRECT;
@@ -825,6 +826,12 @@ static void test_argv(void)
     CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-bios") == 0 &&
               strcmp(argv[15], "/f/ovmf") == 0,
           "ovmf");
+    b.cpu = "max-nopdpe1gb";
+    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[8], "-cpu") == 0 &&
+              strcmp(argv[9], "max,rdrand=on,rdseed=on,xsave=on,avx=on,"
+                              "pdpe1gb=off,enforce=on") == 0,
+          "a profile with present and absent features");
+    b.cpu = p.cpu;
     b.architecture = "i686";
     CHECK(make(&b, &site, argv, buf, sizeof(buf)) == ENOENT, "no i686 ovmf");
     b.firmware = ETUDE_FIRMWARE_SEABIOS;
@@ -846,7 +853,8 @@ static void test_argv(void)
     REFUSED(processors, 0, "no processor");
     REFUSED(processors, 65, "65 processors");
     REFUSED(memory_bytes, (128u << 20) + 4096, "memory not in mebibytes");
-    REFUSED(cpu, "max -rdrand", "a processor model with a space");
+    REFUSED(cpu, "qemu64,rdrand=on", "a processor model that is no profile");
+    REFUSED(cpu, NULL, "no processor profile");
     REFUSED(disks, five, "five disks");
     REFUSED(kernel, NULL, "direct without a kernel");
     REFUSED(firmware, (enum etude_firmware)7, "an unknown firmware");

@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "etude/processor.h"
 #include "sha256.h"
 
 /* The case a rule reads, and the file it came from. */
@@ -363,6 +364,64 @@ static void rule_artifacts(const struct rule *r)
     prepared_fixtures(r, native_fixtures(r->c));
 }
 
+/** Reports the QEMU profile `qemu` unless it names a processor profile. */
+static void known_processor(const struct rule *r, const struct json *qemu)
+{
+    const struct json *cpu = json_member(qemu, "cpu");
+
+    if (cpu != NULL && cpu->type == JSON_STRING && etude_processor_find(cpu->string) == NULL) {
+        finding(r->file, cpu->line, "%s: %s is no processor profile", json_text(r->c, "case_id"),
+                cpu->string);
+    }
+}
+
+/**
+ * Every QEMU profile names a processor profile, and every feature the case
+ * requires is one a profile can declare. The profile of a guest case's boot
+ * declares each such feature as the case requires it, and either way for
+ * `either`, so that a group decided by the feature is decided under QEMU.
+ */
+static void rule_processor(const struct rule *r)
+{
+    static const char *const states[] = {"", "present", "absent"};
+    const struct json *req = json_member(r->c, "requirements");
+    const struct json *qemu = json_member(req, "qemu");
+    const struct json *features = json_member(req, "features");
+    const struct json *machines = json_member(r->c, "machines");
+    const struct etude_processor *p;
+    size_t i;
+
+    known_processor(r, qemu);
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        known_processor(r, json_member(machines->item[i], "qemu"));
+    }
+    p = etude_processor_find(json_text(qemu, "cpu"));
+    for (i = 0; features != NULL && i < features->count; i++) {
+        const struct json *f = features->item[i];
+        enum etude_feature_state has;
+
+        if (!etude_feature_known(f->name)) {
+            finding(r->file, f->line, "%s: %s is no processor feature a profile can declare",
+                    json_text(r->c, "case_id"), f->name);
+            continue;
+        }
+        if (p == NULL || f->type != JSON_STRING) {
+            continue;
+        }
+        has = etude_processor_feature(p, f->name);
+        if (has == ETUDE_FEATURE_UNDECLARED) {
+            finding(r->file, f->line,
+                    "%s: the case requires %s %s, which its processor profile %s does not "
+                    "declare",
+                    json_text(r->c, "case_id"), f->name, f->string, p->name);
+        } else if (!same(f->string, "either") && !same(f->string, states[has])) {
+            finding(r->file, f->line,
+                    "%s: the case requires %s %s, and its processor profile %s declares it %s",
+                    json_text(r->c, "case_id"), f->name, f->string, p->name, states[has]);
+        }
+    }
+}
+
 /** A machine case's steps run on its machines, under identities of its own. */
 static void rule_steps(const struct rule *r)
 {
@@ -674,6 +733,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_branches(&r);
     rule_role(&r);
     rule_artifacts(&r);
+    rule_processor(&r);
     rule_steps(&r);
     rule_bounds(&r);
     rule_progress(&r);

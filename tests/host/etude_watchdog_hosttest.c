@@ -9,7 +9,7 @@
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
  * host-deps: tools/etude/qemu_profile.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
- * host-deps: tools/etude/posix/qemu.c
+ * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-seconds: 240
  *

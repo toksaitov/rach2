@@ -11,7 +11,7 @@ include tools/etude/sources.mk
 all: $(OUT)/casecheck$(EXE) $(OUT)/history_check$(EXE)
 
 $(OUT)/casecheck$(EXE): $(ETUDE_CASECHECK_SRC)
-	$(CC) $(CFLAGS) -Itools/etude -Iutils -o $@ $(ETUDE_CASECHECK_SRC)
+	$(CC) $(CFLAGS) -Itools/etude -Itools/etude/include -Iutils -o $@ $(ETUDE_CASECHECK_SRC)
 
 $(OUT)/history_check$(EXE): $(ETUDE_HISTORY_CHECK_SRC)
 	$(CC) $(CFLAGS) -o $@ $(ETUDE_HISTORY_CHECK_SRC)

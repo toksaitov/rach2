@@ -435,9 +435,9 @@ $(SIZECHECK): tools/verify/sizecheck.c
 # sources of etude's programs, for this build and for a cached version's.
 include tools/etude/sources.mk
 $(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/etude/schema.h \
-              utils/sha256.h
+              tools/etude/include/etude/processor.h utils/sha256.h
 	@mkdir -p $(dir $@)
-	$(HOST_LINK) -std=c99 -Itools/etude -Iutils
+	$(HOST_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
 
 # The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
 # check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a

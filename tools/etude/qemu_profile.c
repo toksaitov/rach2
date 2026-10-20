@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "etude/processor.h"
 #include "etude/qemu.h"
 
 static const char *const accel_names[ETUDE_ACCEL_COUNT] = {"tcg", "kvm", "hvf", "whpx"};
@@ -172,7 +173,7 @@ static int profile_check(const struct etude_qemu_profile *p)
     if (p->architecture == NULL ||
         (strcmp(p->architecture, "i686") != 0 && strcmp(p->architecture, "x86_64") != 0))
         return EINVAL;
-    if (!word(p->cpu) || p->processors < 1 || p->processors > 64)
+    if (etude_processor_find(p->cpu) == NULL || p->processors < 1 || p->processors > 64)
         return EINVAL;
     if (p->memory_bytes == 0 || p->memory_bytes % (1u << 20) != 0)
         return EINVAL;
@@ -198,7 +199,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     const char *program = x86_64 ? s->qemu_x86_64 : s->qemu_i686;
     const char *ovmf = x86_64 ? s->ovmf_x86_64 : s->ovmf_i686;
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
-    char number[32];
+    char number[32], cpu[256];
     unsigned nics = 0;
     size_t i;
     int e;
@@ -209,7 +210,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         return EINVAL;
     if (p->firmware == ETUDE_FIRMWARE_OVMF && ovmf == NULL)
         return ENOENT;
-    if (out->max < 1 || out->size < 1)
+    if (out->max < 1 || out->size < 1 ||
+        etude_processor_cpu(etude_processor_find(p->cpu), cpu, sizeof cpu) != 0)
         return E2BIG;
     out->argv[0] = NULL;
     add(&l, 0, "%s", program);
@@ -221,7 +223,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "-no-reboot");
     add(&l, 0, "-S");
     add(&l, 0, "-cpu");
-    add(&l, 0, "%s", p->cpu);
+    add(&l, 0, "%s", cpu);
     snprintf(number, sizeof(number), "%u", p->processors);
     add(&l, 0, "-smp");
     add(&l, 0, "%s", number);

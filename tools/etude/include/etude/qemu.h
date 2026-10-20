@@ -35,7 +35,7 @@ struct etude_qemu_profile {
     const char *kernel;       /* loaded by direct firmware alone */
     const char *initrd;       /* NULL for none */
     const char *const *disks; /* private copies, ended by NULL */
-    const char *cpu;          /* QEMU's processor model */
+    const char *cpu;          /* the processor profile (processor.h) */
     unsigned processors;      /* 1 to 64 */
     uint64_t memory_bytes;    /* a whole number of mebibytes */
     enum etude_firmware firmware;

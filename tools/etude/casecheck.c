@@ -23,6 +23,9 @@
  * casecheck [-s SCHEMAS] schema NAME FILE...
  *     checks each document of FILE, or each line of a FILE whose name ends
  *     in .jsonl, against schemas/NAME.schema.json.
+ * casecheck processor NAME
+ *     prints the QEMU `-cpu` value of the processor profile NAME, which a
+ *     script that boots QEMU itself passes, as the QEMU launcher does.
  * casecheck --selftest DIR
  *     runs the commands DIR/expect lists over the fixtures of DIR, with the
  *     schemas of DIR/../schemas, and compares each one's exit status and
@@ -40,6 +43,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "etude/processor.h"
 #include "schema.h"
 
 /* Where messages go: stdout and stderr, or one buffer in a self-test. */
@@ -310,6 +314,23 @@ static int command_results(struct cases *set, char **args, int n)
     return judged > status ? judged : status;
 }
 
+/** Runs the `processor` command: `NAME`. */
+static int command_processor(char **args, int n)
+{
+    const struct etude_processor *p = n == 1 ? etude_processor_find(args[0]) : NULL;
+    char cpu[256];
+
+    if (n != 1) {
+        return 2;
+    }
+    if (p == NULL || etude_processor_cpu(p, cpu, sizeof cpu) != 0) {
+        finding(NULL, 0, "%s is no processor profile", args[0]);
+        return 1;
+    }
+    say("%s\n", cpu);
+    return 0;
+}
+
 /**
  * Runs one command line of casecheck, as main does; returns its exit status.
  */
@@ -344,6 +365,8 @@ static int run(int argc, char **argv)
         status = command_results(&set, args, n);
     } else if (strcmp(command, "schema") == 0) {
         status = command_schema(&o, args, n);
+    } else if (strcmp(command, "processor") == 0) {
+        status = command_processor(args, n);
     } else {
         status = 2;
     }
@@ -361,6 +384,7 @@ static void usage(void)
                     "MANIFEST CASE ARCH PLACEMENT [OUTPUT]\n"
                     "       casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...\n"
                     "       casecheck [-s SCHEMAS] schema NAME FILE...\n"
+                    "       casecheck processor NAME\n"
                     "       casecheck --selftest DIR\n");
 }
 
