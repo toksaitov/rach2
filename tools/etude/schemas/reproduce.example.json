@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "items": [
+    {
+      "item_id": "example-item",
+      "directory": "/home/rach2/etude/runs/example-run/source",
+      "environment": [
+        {"name": "TMPDIR", "value": "/home/rach2/etude/runs/example-run/scratch"}
+      ],
+      "preparation": [
+        ["make", "build/tests/host/counter"]
+      ],
+      "case": ["build/tests/host/counter"],
+      "profile": ["perf", "record", "-g", "-o", "/home/rach2/etude/runs/example-run/perf.data", "--", "build/tests/host/counter"]
+    }
+  ]
+}

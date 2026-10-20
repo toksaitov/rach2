@@ -214,6 +214,10 @@ unusedStructMember:*tools/etude/posix/posix.h
 unusedStructMember:*tools/etude/casecheck.h
 unusedStructMember:*tools/etude/json.h
 
+# The comparison's structures: cppcheck checks compare.h alone, and its
+# members are read in compare.c, baseline.c, compare_report.c and compare_run.c.
+unusedStructMember:*tools/etude/compare.h
+
 # The Windows adapter's structures are filled by winexec.c and read by
 # winfixture.c, which cppcheck reads without the Windows headers they need;
 # checked alone, the header has no reader of its members.

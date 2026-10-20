@@ -451,6 +451,14 @@ $(ETUDEHISTORY): $(ETUDE_HISTORY_CHECK_SRC) tools/etude/history_json.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99
 
+# The comparison of a run's cases with their timing history
+# (tools/etude/compare.c).
+ETUDECOMPARE = build/tools/etude/history_compare
+$(ETUDECOMPARE): $(ETUDE_HISTORY_COMPARE_SRC) tools/etude/compare.h tools/etude/history_json.h \
+                 tools/etude/include/etude/history.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1160,7 +1168,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(PECHECK) $(ETUDESERIAL)
+             $(ETUDEHISTORY) $(ETUDECOMPARE) $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

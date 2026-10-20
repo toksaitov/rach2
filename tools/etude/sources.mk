@@ -12,3 +12,10 @@ ETUDE_CASECHECK_SRC = tools/etude/casecheck.c tools/etude/cases.c \
 ETUDE_HISTORY_CHECK_SRC = tools/etude/history_check.c tools/etude/history.c \
                           tools/etude/history_json.c \
                           tools/etude/history_collect.c utils/sha256.c
+
+# history_compare, the comparison of a run's cases with their timing history.
+ETUDE_HISTORY_COMPARE_SRC = tools/etude/history_compare.c tools/etude/compare.c \
+                            tools/etude/baseline.c tools/etude/compare_report.c \
+                            tools/etude/compare_run.c tools/etude/history.c \
+                            tools/etude/history_json.c \
+                            tools/etude/history_collect.c utils/sha256.c

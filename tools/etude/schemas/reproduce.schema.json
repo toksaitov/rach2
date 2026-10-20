@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Etude reproduction commands, version 1",
+  "description": "The commands that run each item of a plan again, and under a profiler; the plan's reproduce blob. See tools/etude/Readme.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "items"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "items": {"type": "array", "items": {"$ref": "#/$defs/item"}, "minItems": 1}
+  },
+  "$defs": {
+    "text": {"type": "string", "minLength": 1},
+    "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+    "item": {
+      "type": "object", "additionalProperties": false,
+      "required": ["item_id", "directory", "environment", "preparation", "case", "profile"],
+      "properties": {
+        "item_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$"},
+        "directory": {"$ref": "#/$defs/text"},
+        "environment": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {"name": {"$ref": "#/$defs/text"}, "value": {"type": "string"}}
+          }
+        },
+        "preparation": {"type": "array", "items": {"$ref": "#/$defs/command"}},
+        "case": {"$ref": "#/$defs/command"},
+        "profile": {
+          "oneOf": [
+            {"$ref": "#/$defs/command"},
+            {
+              "type": "object", "additionalProperties": false,
+              "required": ["reason"],
+              "properties": {"reason": {"$ref": "#/$defs/text"}}
+            }
+          ]
+        }
+      }
+    }
+  }
+}
