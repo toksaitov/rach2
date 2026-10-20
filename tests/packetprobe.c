@@ -87,21 +87,6 @@ struct timeval_probe {
     long tv_usec;
 };
 
-struct timespec_probe {
-    long tv_sec;
-    long tv_nsec;
-};
-
-/** Sleep for `ms` milliseconds. */
-static void nap(long ms)
-{
-    struct timespec_probe ts;
-
-    ts.tv_sec = ms / 1000;
-    ts.tv_nsec = (ms % 1000) * 1000000L;
-    (void)syscall2(SYS_NANOSLEEP, (long)(&ts), (long)0);
-}
-
 /** The fork call: the child's pid, 0 in the child, or a negated errno. */
 static int sys_fork(void)
 {
@@ -145,11 +130,11 @@ struct pollfd_probe {
     short revents;
 };
 
-/** The poll call: the count of ready descriptors, 0 at the timeout, or a
- * negated errno. */
-static int sys_poll(struct pollfd_probe *fds, unsigned int n, int timeout)
+/** The poll call with no timeout: blocks until a descriptor of `fds` is
+ * ready, and returns the count of ready descriptors or a negated errno. */
+static int sys_poll_wait(struct pollfd_probe *fds, unsigned int n)
 {
-    return syscall3(SYS_POLL, (long)fds, (long)n, (long)timeout);
+    return syscall3(SYS_POLL, (long)fds, (long)n, (long)-1);
 }
 
 /** The select call: the count of ready descriptors, 0 at the timeout, or a
@@ -415,6 +400,10 @@ static void check_close_releases(void)
  * `arp_rx` would pass a socket-only test and leave the machine unable to
  * resolve anything, so the gateway must be in /proc/net/arp.
  *
+ * Every frame the probe waits for, an offer, an ARP reply or an echo reply,
+ * it waits for in poll with no timeout, and judges what came; the suite's
+ * limit ends a run in which one never comes.
+ *
  * Four sockets are then opened, bound and closed in a row, and each close
  * must free its binding, as `check_close_releases` says. Last, a child
  * that drops to an ordinary user is refused a packet socket, since the
@@ -429,7 +418,7 @@ PROBE_START void _start(void)
     struct sockaddr_ll_probe from_ll;
     struct iovec_probe iov;
     struct msghdr_probe msg;
-    int fd, r, tries, seen_offer, polled, pid, status;
+    int fd, r, seen_offer, polled, pid, status;
     struct pollfd_probe pfd;
     struct timeval_probe tv;
     /* volatile: the kernel writes it through a pointer. */
@@ -562,7 +551,7 @@ PROBE_START void _start(void)
     /* What it receives: the offer to 255.255.255.255, which `ip_rx` drops. */
     seen_offer = 0;
     polled = 0;
-    for (tries = 0; tries < 200 && !seen_offer; tries++) {
+    while (!seen_offer) {
         iov.iov_base = frame;
         iov.iov_len = sizeof(frame);
         for (i = 0; i < sizeof(msg); i++) {
@@ -579,8 +568,9 @@ PROBE_START void _start(void)
         pfd.fd = fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (sys_poll(&pfd, 1, 50) <= 0 || !(pfd.revents & POLLIN)) {
-            continue;
+        r = sys_poll_wait(&pfd, 1);
+        if (r != 1 || !(pfd.revents & POLLIN)) {
+            fail_n("a poll for the offer ended with nothing to read", r);
         }
         polled = 1;
 
@@ -651,9 +641,6 @@ PROBE_START void _start(void)
         }
         seen_offer = 1;
     }
-    if (!seen_offer) {
-        fail("the offer never arrived on the packet socket");
-    }
     if (!polled) {
         fail("the offer was read without poll ever reporting it readable");
     }
@@ -688,12 +675,13 @@ PROBE_START void _start(void)
         fail("the second discover did not send");
     }
     seen_offer = 0;
-    for (tries = 0; tries < 200 && !seen_offer; tries++) {
+    while (!seen_offer) {
         pfd.fd = fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (sys_poll(&pfd, 1, 50) <= 0 || !(pfd.revents & POLLIN)) {
-            continue;
+        r = sys_poll_wait(&pfd, 1);
+        if (r != 1 || !(pfd.revents & POLLIN)) {
+            fail_n("a poll for the second offer ended with nothing to read", r);
         }
         senderlen = 16;
         args[0] = (uint32_t)fd;
@@ -717,9 +705,6 @@ PROBE_START void _start(void)
             fail("a packet socket wrote past the capacity the caller declared");
         }
         seen_offer = 1;
-    }
-    if (!seen_offer) {
-        fail("the second offer never arrived");
     }
 
     /* A bind that fails leaves the socket's protocol as it was. */
@@ -768,17 +753,12 @@ PROBE_START void _start(void)
         if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
             fail("the third discover did not send");
         }
+        pfd.fd = fd;
+        pfd.events = POLLIN;
         pfd.revents = 0;
-        for (tries = 0; tries < 200; tries++) {
-            pfd.fd = fd;
-            pfd.events = POLLIN;
-            pfd.revents = 0;
-            if (sys_poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
-                break;
-            }
-        }
-        if (!(pfd.revents & POLLIN)) {
-            fail("the third offer never arrived");
+        r = sys_poll_wait(&pfd, 1);
+        if (r != 1 || !(pfd.revents & POLLIN)) {
+            fail_n("a poll for the third offer ended with nothing to read", r);
         }
         sll.sll_protocol = ETH_P_ARP_BE;
         args[0] = (uint32_t)fd;
@@ -803,7 +783,8 @@ PROBE_START void _start(void)
 
     /* An ARP and an IPv4 socket each see their own frames only. */
     {
-        int arp_fd, ip_fd, arp_frames = 0, arp_replies = 0, ip_frames = 0, n;
+        int arp_fd, ip_fd, arp_replies = 0, ip_frames = 0, n;
+        struct pollfd_probe pair[2];
         unsigned char ifr[40];
         unsigned char mac[6];
 
@@ -927,13 +908,23 @@ PROBE_START void _start(void)
 
         /* The gateway's echo reply is IPv4 traffic for the other socket. */
         args[0] = 0x0A000202u;
-        socketcall(SC_PING, args);
+        r = socketcall(SC_PING, args);
+        if (r < 0) {
+            fail_n("the gateway did not answer the ping whose reply the IPv4 socket waits for", r);
+        }
 
-        for (tries = 0; tries < 100; tries++) {
-            pfd.fd = arp_fd;
-            pfd.events = POLLIN;
-            pfd.revents = 0;
-            if (sys_poll(&pfd, 1, 20) > 0 && (pfd.revents & POLLIN)) {
+        while (arp_replies == 0 || ip_frames == 0) {
+            pair[0].fd = arp_fd;
+            pair[0].events = POLLIN;
+            pair[0].revents = 0;
+            pair[1].fd = ip_fd;
+            pair[1].events = POLLIN;
+            pair[1].revents = 0;
+            n = sys_poll_wait(pair, 2);
+            if (n <= 0 || !((pair[0].revents | pair[1].revents) & POLLIN)) {
+                fail_n("a poll for the ARP and IPv4 frames ended with nothing to read", n);
+            }
+            if (pair[0].revents & POLLIN) {
                 senderlen = 0;
                 args[0] = (uint32_t)arp_fd;
                 args[1] = (unsigned long)frame;
@@ -950,17 +941,13 @@ PROBE_START void _start(void)
                     frame[4] != 6 || frame[5] != 4) {
                     fail("the ARP socket was given a frame that is not ARP");
                 }
-                arp_frames++;
                 /* A reply whose sender is 10.0.2.3 answers the request. */
                 if (frame[6] == 0 && frame[7] == 2 && frame[14] == 10 && frame[15] == 0 &&
                     frame[16] == 2 && frame[17] == 3) {
                     arp_replies++;
                 }
             }
-            pfd.fd = ip_fd;
-            pfd.events = POLLIN;
-            pfd.revents = 0;
-            if (sys_poll(&pfd, 1, 20) > 0 && (pfd.revents & POLLIN)) {
+            if (pair[1].revents & POLLIN) {
                 args[0] = (uint32_t)ip_fd;
                 args[1] = (unsigned long)frame;
                 args[2] = sizeof(frame);
@@ -976,19 +963,6 @@ PROBE_START void _start(void)
                 }
                 ip_frames++;
             }
-            if (arp_replies > 0 && ip_frames > 0) {
-                break;
-            }
-        }
-        if (arp_frames == 0) {
-            fail("the socket bound to ARP saw no ARP frame while one was resolved");
-        }
-        if (arp_replies == 0) {
-            fail("nothing answered the ARP request the socket sent, so it did "
-                 "not leave under the protocol the socket is bound to");
-        }
-        if (ip_frames == 0) {
-            fail("the socket bound to IPv4 saw no IPv4 frame while one arrived");
         }
 
         /* The kernel's ARP cache has the gateway it resolved. */

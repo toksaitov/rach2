@@ -55,7 +55,6 @@ tests/musl/timemusl.c: 1 bound
 tests/musl/timemusl.c: 1 sleep
 tests/musl/timerfdmusl.c: 1 sleep
 tests/musl/unixmusl.c: 2 sleep
-tests/packetprobe.c: 1 sleep
 tests/pingtest.c: 1 sleep
 tests/pollprobe.c: 1 sleep
 tests/poolprobe.c: 1 sleep
