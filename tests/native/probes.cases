@@ -1,1 +1,97 @@
 # The native cases of the freestanding probes (Readme.md).
+case auxvprobe -- auxvprobe
+case bigfileprobe.exfat volume:exfat:big-exfat:attached mountns log -- \
+    bigfileprobe write-verify - exfat 256 dir=big
+case bigfileprobe.exfat-limit volume:exfat:big-exfat:attached mountns log -- \
+    bigfileprobe limit - exfat 9223372036854775807 dir=big
+case bigfileprobe.ext2 volume:ext2:big-ext2:attached mountns log -- \
+    bigfileprobe write-verify - ext2 256 dir=big
+case bigfileprobe.ext2-limit volume:ext2:big-ext2:attached mountns log -- \
+    bigfileprobe limit - ext2 2196875759616 dir=big
+case bigfileprobe.ext2-sparse volume:ext2:big-ext2:attached mountns -- \
+    bigfileprobe sparse - ext2 0 dir=big
+case bigfileprobe.vfat-limit volume:vfat:big-vfat:attached mountns log -- \
+    bigfileprobe limit - vfat 4294967295 dir=big
+# bootprobe leaves out the boot line's rach2.fsdisk and the modes of
+# rach2.bootprobe=, each of which needs a boot of its own.
+case bootprobe -- bootprobe machine=native
+case cowprobe -- cowprobe
+case cowregrant -- cowregrant
+case credprobe ids:1000,1001,1002,2000,3000 -- credprobe
+case devprobe console -- devprobe console=open
+# eth0 is the Lenovo's one card; the probe reads its address and broadcast.
+case dgramprobe ids:1000 \
+    ports:7500,7501,7502,7503,7511,7600,7601,7602,7603,7604,7605,7606,7607 \
+    peer:dgram-outside -- dgramprobe ifname=eth0
+case dirgrow volume:krffs:dirgrow-krffs mountns -- dirgrow dir=vol0
+case dirprobe.ext2 root:ext2-dir -- dirprobe
+case dirprobe.krffs root:krffs -- dirprobe
+case dirtest root:ext2-dir stage:native/hello.txt -- dirtest
+case dirtyprobe root:krffs -- dirtyprobe
+# Less free space than the 32 MiB the probe writes at most.
+case diskfull root:krffs:16 -- diskfull
+case dnstest root:ext2-dir stage:native/hosts -- dnstest
+case dup2test -- dup2test
+case errnoprobe -- errnoprobe
+case exitprobe -- exitprobe
+case ext2probe.cost root:krffs volume:ext2:ext2-fixture:attached -- ext2probe cost
+case ext2probe.links root:krffs volume:ext2:ext2-fixture:attached -- ext2probe links
+case fatwriteprobe.exfat volume:exfat:fatwrite-exfat:attached mountns log -- \
+    fatwriteprobe write-readback exfat
+case fatwriteprobe.vfat volume:vfat:fatwrite-vfat:attached mountns log -- \
+    fatwriteprobe write-readback vfat
+case fdfull root:ext2-dir stage:hello -- fdfull
+# A volume of 10 MiB, which the leak loops' 16 MB cannot fit twice.
+case fdstale root:krffs:10 -- fdstale
+case filetest stage:native/hello.txt -- filetest
+# forkleak leaves out the bound on the fall of free memory, which the
+# machine's other processes move.
+case forkleak -- forkleak machine=native
+case forkro -- forkro
+case forktest -- forktest
+case fpuprobe stage:fpuprobe -- fpuprobe
+case fsbaseprobe -- fsbaseprobe
+case hello -- hello
+# intrprobe leaves out the wait for typed keys and mouse reports, the
+# controller's interrupts for them, and the profiles of rach2.nomsi,
+# rach2.msidrop and a machine with no USB device.
+case intrprobe -- intrprobe machine=native
+case jobprobe pty -- jobprobe
+case krffsprobe.read volume:krffs:krffsvol:attached mountns log -- krffsprobe read
+case krffsprobe.refuse-chain volume:krffs:krffsvol-badchain:attached mountns log -- \
+    krffsprobe refuse
+case krffsprobe.refuse-magic volume:krffs:krffsvol-badmagic:attached mountns log -- \
+    krffsprobe refuse
+case krffsprobe.three volume:krffs:krffsvol:attached volume:krffs:krffsvol-2:attached \
+    volume:krffs:krffsvol-3:attached mountns log -- krffsprobe three
+case krffsprobe.write volume:krffs:krffsvol:attached mountns log -- krffsprobe write
+case krffsprobe.writers volume:krffs:krffsvol:attached mountns log -- krffsprobe writers
+case limitprobe stage:hello ids:1000,1001 -- \
+    limitprobe hello=hello scratch=limitprobe.f
+# loadprobe leaves out the check that no request was quarantined, since
+# /proc/disk counts the requests of every disk of the machine. The pinger
+# pings the gateway the peer gives.
+case loadprobe volume:vfat:load-vfat:attached mountns pty:loadprobe.in alone \
+    peer:network -- loadprobe dir=lo machine=native
+# The images are staged on the tmpfs, which stands in for the volume of
+# images, and the copy goes on a tmpfs the probe mounts; ext2back stages its
+# image in the workspace, on the machine's ext2 root.
+case loopdevprobe.durable image:loopdev-fat,loopdev-ext2,loopdev-krffs \
+    tmpfs:20M mountns alone -- loopdevprobe durable images=tmpfs mount=l
+case loopdevprobe.ext2 image:loopdev-fat,loopdev-ext2,loopdev-krffs \
+    tmpfs:20M mountns alone -- \
+    loopdevprobe ext2 images=tmpfs mount=l ro=r copy=copy
+case loopdevprobe.ext2back image:loopdev-fat,loopdev-ext2,loopdev-krffs \
+    mountns alone -- loopdevprobe ext2back images=. mount=l
+case loopdevprobe.krffs image:loopdev-fat,loopdev-ext2,loopdev-krffs \
+    tmpfs:20M mountns alone -- \
+    loopdevprobe krffs images=tmpfs mount=l ro=r copy=copy
+case loopdevprobe.vfat image:loopdev-fat,loopdev-ext2,loopdev-krffs \
+    tmpfs:20M mountns alone -- \
+    loopdevprobe vfat images=tmpfs mount=l ro=r copy=copy
+# loopprobe leaves out the checks that no datagram was dropped in the bulk
+# transfer and that no round trip waited for the timer, which count every
+# loopback datagram of the machine.
+case loopprobe \
+    ports:7100,7101,7102,7200,7203,7205,7206,7207,7300,7301,7310,7311,7312,7313,7314,7315,7316,7317,7318,7319,7320,7321,7322,7323,7324,7325 -- \
+    loopprobe machine=native

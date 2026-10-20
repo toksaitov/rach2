@@ -5,3 +5,26 @@ idmap 5:60005 1000:61000 1001:61001 1002:61002 2000:62000 3000:63000
 idmap 4242:64242 4243:64243 65534:60534
 portmap 47:40047 4433:44433 5353:45353 5999:45999 7000:47000 7461:47461
 portmap 7470:47470 7480:47480 7481:47481
+portmap 7100:47100 7101:47101 7102:47102 7200:47200 7203:47203 7205:47205
+portmap 7206:47206 7207:47207 7300:47300 7301:47301 7310:47310 7311:47311
+portmap 7312:47312 7313:47313 7314:47314 7315:47315 7316:47316 7317:47317
+portmap 7318:47318 7319:47319 7320:47320 7321:47321 7322:47322 7323:47323
+portmap 7324:47324 7325:47325 7500:47500 7501:47501 7502:47502 7503:47503
+portmap 7511:47511 7600:47600 7601:47601 7602:47602 7603:47603 7604:47604
+portmap 7605:47605 7606:47606 7607:47607
+image big-exfat exfat 512
+image big-ext2 ext2 1024
+image big-vfat vfat 64
+image dirgrow-krffs krffs 16
+image ext2-fixture ext2 16 from build/tests/system/ext2-fixture.vol
+image fatwrite-exfat exfat 64
+image fatwrite-vfat vfat 64
+image krffsvol krffs 4 from build/tests/system/krffsvol/volume.krffs
+image krffsvol-2 krffs 4 from build/tests/system/krffsvol/volume.krffs
+image krffsvol-3 krffs 4 from build/tests/system/krffsvol/volume.krffs
+image krffsvol-badchain krffs 4 from build/tests/system/krffsvol/badchain.krffs
+image krffsvol-badmagic krffs 4 from build/tests/system/krffsvol/badmagic.krffs
+image load-vfat vfat 64
+image loopdev-ext2 ext2 4 from build/tests/system/loopdev/ext2.img
+image loopdev-fat vfat 4 from build/tests/system/loopdev/fat.img
+image loopdev-krffs krffs 4 from build/tests/system/loopdev/krffs.img
