@@ -48,6 +48,7 @@ int unshare(int flags);
 #endif
 #elif defined(__APPLE__)
 #define FIX_KERNEL 0
+#include <sys/sysctl.h>
 #else
 #error "fixture.c: no fixtures for this system; a build for Rach2 defines __rach2__"
 #endif
@@ -61,14 +62,17 @@ int unshare(int flags);
  * finds where the records written meanwhile begin. */
 #define LOG_ANCHOR 256
 
+#if !defined(__APPLE__)
 /** Format a path into `out` of FIX_PATH bytes; 0, or -1 when it does not
- * fit. */
+ * fit. Its callers read /proc or make the fixtures that need the kernel, and
+ * macOS compiles none of them. */
 static int fpath(char *out, const char *fmt, const char *a, const char *b)
 {
     int n = snprintf(out, FIX_PATH, fmt, a, b);
 
     return n < 0 || n >= FIX_PATH ? -1 : 0;
 }
+#endif
 
 /** Whether `kind` is one of the types a volume may have. */
 static int volume_type(const char *t)
@@ -382,6 +386,41 @@ static int listed(const char *path, long id)
     return found;
 }
 
+#if defined(__APPLE__)
+/** Whether a process of the machine has `id` among its real, effective or
+ * saved user or group ids, by the sysctl KERN_PROC_ALL, which lists every
+ * process. */
+static int in_use(long id)
+{
+    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
+    struct kinfo_proc *kp = NULL;
+    size_t len = 0;
+    size_t i;
+    int found = 0;
+    int tries;
+
+    for (tries = 0; tries < 3 && !kp; tries++) {
+        if (sysctl(mib, 3, NULL, &len, NULL, 0) < 0)
+            return 0;
+        len += len / 4;
+        kp = malloc(len);
+        if (kp && sysctl(mib, 3, kp, &len, NULL, 0) < 0) {
+            free(kp);
+            kp = NULL;
+            if (errno != ENOMEM)
+                return 0;
+        }
+    }
+    for (i = 0; kp && !found && i < len / sizeof(*kp); i++) {
+        const struct eproc *e = &kp[i].kp_eproc;
+        found = e->e_pcred.p_ruid == id || e->e_ucred.cr_uid == id || e->e_pcred.p_svuid == id ||
+                e->e_pcred.p_rgid == id || e->e_ucred.cr_groups[0] == id ||
+                e->e_pcred.p_svgid == id;
+    }
+    free(kp);
+    return found;
+}
+#else
 /** Whether a process of the machine has `id` among its user or group ids,
  * by the Uid: and Gid: lines of each /proc/PID/status. */
 static int in_use(long id)
@@ -418,6 +457,7 @@ static int in_use(long id)
     closedir(d);
     return found;
 }
+#endif
 
 /** Whether the TCP and the UDP port `port` of 127.0.0.1 are free now. */
 static int port_free(long port)
