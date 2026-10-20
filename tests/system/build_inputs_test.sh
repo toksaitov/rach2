@@ -10,11 +10,14 @@
 # while kernel.debug keeps them. The fixture is i686's, its compiler, linker
 # script and musl, whatever ARCH the run that starts it is for, in the
 # environment or in the flags of the make that runs a suite, which tests/run
-# gives ARCH.
+# gives ARCH. BUILD_INPUTS_ROOT, when set, is a directory whose
+# utils/Makefile, tests/Makefile and rach2/Makefile are read in place of this
+# tree's, each run in this tree's directory of the same name.
 set -eu
 unset ARCH MAKEFLAGS MFLAGS
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$REPO"
+ROOT=${BUILD_INPUTS_ROOT:-$REPO}
 mkdir -p build
 WORK=
 trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
@@ -62,10 +65,10 @@ done
 marker_flags=-Wl,-u,build_libc_a,-u,build_libgcc_a
 # Make the two utilities and dnstest against the private inputs.
 link_programs() {
-    make --no-print-directory -C utils "BUILD=$WORK/utils" \
+    make --no-print-directory -C utils -f "$ROOT/utils/Makefile" "BUILD=$WORK/utils" \
         "PREFIX=$WORK/musl" "LIBGCC=$WORK/libgcc.a" "EXTRA=$marker_flags" \
         "$WORK/utils/echo" "$WORK/utils/sbin/init-login"
-    make --no-print-directory -C tests "BUILD=$WORK/tests" \
+    make --no-print-directory -C tests -f "$ROOT/tests/Makefile" "BUILD=$WORK/tests" \
         "MUSL_PREFIX=$WORK/musl" "MUSL_LIBGCC=$WORK/libgcc.a" \
         "MUSL_POST=$WORK/musl/lib/libc.a $WORK/libgcc.a $WORK/musl/lib/crtn.o -Wl,-z,noexecstack $marker_flags" \
         "$WORK/tests/dnstest"
@@ -101,11 +104,11 @@ if [ "${1:-all}" != kernel ]; then
 fi
 if [ "${1:-all}" != libraries ]; then
     cp rach2/sys/arch/i686/link.ld "$WORK/link.ld"
-    make --no-print-directory -C rach2 "BUILD=$WORK/kernel" "LINKER_SCRIPT=$WORK/link"
+    make --no-print-directory -C rach2 -f "$ROOT/rach2/Makefile" "BUILD=$WORK/kernel" "LINKER_SCRIPT=$WORK/link"
     printf '\nreview_link_marker = 0x1234;\n' >> "$WORK/link.ld"
     touch -t "${future}01010000" "$WORK/kernel/kernel"
     touch -t "${future}01010001" "$WORK/link.ld"
-    make --no-print-directory -C rach2 "BUILD=$WORK/kernel" "LINKER_SCRIPT=$WORK/link"
+    make --no-print-directory -C rach2 -f "$ROOT/rach2/Makefile" "BUILD=$WORK/kernel" "LINKER_SCRIPT=$WORK/link"
     i686-elf-nm "$WORK/kernel/kernel" | grep -q '00001234 A review_link_marker' ||
         fail "linker script edit did not reach the kernel"
     echo "build-inputs-test: passed: linker script edit reaches the validated kernel"

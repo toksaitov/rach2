@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "proof": "host-tools-links",
+  "summary": "build_inputs_test.sh on private copies of the Makefiles of utils/, tests/ and rach2/, with four faults in their link rules",
+  "tree": "private",
+  "sources": ["utils/Makefile", "tests/Makefile", "rach2/Makefile"],
+  "artifacts": ["${WORK}/root/utils/Makefile", "${WORK}/root/tests/Makefile", "${WORK}/root/rach2/Makefile"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/root && mkdir ${WORK}/root && cp -R ${SRC}/. ${WORK}/root/"],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "BUILD_INPUTS_ROOT=${WORK}/root exec sh tests/system/build_inputs_test.sh"],
+    "bound_s": 1800
+  },
+  "faults": [
+    {
+      "name": "utility-links",
+      "summary": "the utilities' link left without musl's libc.a, start files and libgcc.a as prerequisites",
+      "edits": [
+        {"file": "utils/Makefile", "find": "$(TARGETS) $(SBIN_TARGETS): $(CONFIG) $(CRT1) $(CRTI) \\\n    $(PREFIX)/lib/libc.a $(LIBGCC) $(CRTN)", "replace": "$(TARGETS) $(SBIN_TARGETS): $(CONFIG)"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["libc.a did not relink"]
+      }
+    },
+    {
+      "name": "dns-links",
+      "summary": "dnstest's link left without musl's libc.a, start files and libgcc.a as prerequisites",
+      "edits": [
+        {"file": "tests/Makefile", "find": "$(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h \\\n    $(MUSL_PRE) $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) \\\n    $(MUSL_PREFIX)/lib/crtn.o", "replace": "$(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["libc.a did not relink"]
+      }
+    },
+    {
+      "name": "kernel-link",
+      "summary": "the kernel's link left without its linker script as a prerequisite",
+      "edits": [
+        {"file": "rach2/Makefile", "find": "$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS) $(LINKER_SCRIPT).ld", "replace": "$(KERNEL_BIN) : $(ASM_OBJECTS) $(C_OBJECTS)"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["linker script edit did not reach"]
+      }
+    },
+    {
+      "name": "kernel-strip",
+      "summary": "the kernel a loader reads left with its debug sections",
+      "edits": [
+        {"file": "rach2/Makefile", "find": "$(CROSS_OBJCOPY) --strip-debug \"$$tmp.debug\" \"$$tmp\"", "replace": "cp \"$$tmp.debug\" \"$$tmp\""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["the kernel a loader reads carries debug sections"]
+      }
+    }
+  ]
+}

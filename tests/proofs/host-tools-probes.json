@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "proof": "host-tools-probes",
+  "summary": "probecheck.sh on a private copy of tests/ and mk/, with a program of tests/ and one of tests/musl/ left without a suite",
+  "tree": "private",
+  "sources": ["tests/Makefile", "tests/probe-suites"],
+  "artifacts": ["${WORK}/root/tests/Makefile", "${WORK}/root/tests/probe-suites"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/root && mkdir ${WORK}/root && cp -R tests mk ${WORK}/root/ && cp -R ${SRC}/. ${WORK}/root/"],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "PROBECHECK_ROOT=${WORK}/root exec sh tools/verify/probecheck.sh"],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "probe-root",
+      "summary": "a program added to tests/ with no suite or helper use",
+      "edits": [
+        {"file": "tests/Makefile", "find": "\nclean:\n\trm -rf $(BUILD)\n", "replace": "\nclean:\n\trm -rf $(BUILD)\n\nPROGS += review_unassigned\n$(BUILD)/review_unassigned: hello.c\n\t$(CC) $(CFLAGS) -o $@ $<\n"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["unassigned program: review_unassigned"]
+      }
+    },
+    {
+      "name": "probe-musl",
+      "summary": "a program of tests/musl/ with its suite taken away",
+      "edits": [
+        {"file": "tests/probe-suites", "find": "musl/textbusymusl textbusy\n", "replace": ""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["unassigned program: musl/textbusymusl"]
+      }
+    }
+  ]
+}
