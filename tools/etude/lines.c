@@ -22,7 +22,10 @@ enum rank { R_PASS, R_CANCELLED, R_INCOMPLETE, R_FAILURE };
 static const char *const rank_names[] = {"pass", "cancelled", "incomplete", "failure"};
 static const char *const suite_words[] = {"PASS", "CANCELLED", "INCOMPLETE", "FAIL"};
 
-static const char usage_text[] = "usage: history_lines [-s SCHEMAS] MAP STREAM...\n";
+static const char usage_text[] = "usage: history_lines [-s SCHEMAS] [-f NAME]... MAP STREAM...\n";
+
+/* The most failures outside the suites that a run may name with -f. */
+#define EXTRA_MAX 8
 
 /* A suite of the map: its name, and the cases and families it holds. */
 struct suite {
@@ -76,6 +79,8 @@ struct lines {
     struct item *items;
     size_t nitems;
     const struct record *plan, *run;
+    const char *extra[EXTRA_MAX]; /* failures outside the suites, as -f names them */
+    size_t nextra;
     int nomem;
 };
 
@@ -634,7 +639,7 @@ static void print_runner(const struct lines *l)
 /** Print the suites that failed or did not finish by their own cases. */
 static void print_failed(const struct lines *l)
 {
-    size_t i, used = 0, size = l->nsuites * 66 + 8;
+    size_t i, used = 0, size = (l->nsuites + l->nextra) * 66 + 8;
     char *names = malloc(size);
     if (!names) {
         say(stderr, "run: result: failed: runner");
@@ -645,6 +650,8 @@ static void print_failed(const struct lines *l)
         if (l->suites[i].own)
             used += (size_t)snprintf(names + used, size - used, "%s%s", used ? " " : "",
                                      l->suites[i].name);
+    for (i = 0; i < l->nextra; i++)
+        used += (size_t)snprintf(names + used, size - used, "%s%s", used ? " " : "", l->extra[i]);
     if (l->nfaults)
         snprintf(names + used, size - used, "%srunner", used ? " " : "");
     if (names[0])
@@ -661,7 +668,7 @@ static int print(struct lines *l, enum rank worst)
     if (l->nfaults)
         print_runner(l);
     print_failed(l);
-    if (worst == R_FAILURE)
+    if (worst == R_FAILURE || l->nextra)
         say(stdout, "run: result: failed");
     else if (worst == R_INCOMPLETE || l->nfaults)
         say(stdout, "run: result: incomplete");
@@ -669,7 +676,7 @@ static int print(struct lines *l, enum rank worst)
         say(stdout, "run: result: interrupted");
     else
         say(stdout, "run: result: all %lu suites passed", (unsigned long)l->nsuites);
-    return worst == R_PASS && !l->nfaults ? 0 : 1;
+    return worst == R_PASS && !l->nfaults && !l->nextra ? 0 : 1;
 }
 
 /** Free what a reading holds. */
@@ -701,9 +708,14 @@ int etude_lines_main(int argc, char **argv)
     enum rank worst = R_INCOMPLETE;
     int i = 1, status = 2;
     memset(&l, 0, sizeof(l));
-    if (argc > 2 && !strcmp(argv[1], "-s")) {
-        schemas = argv[2];
-        i = 3;
+    while (i + 1 < argc && (!strcmp(argv[i], "-s") || !strcmp(argv[i], "-f"))) {
+        if (argv[i][1] == 's')
+            schemas = argv[i + 1];
+        else if (l.nextra < EXTRA_MAX && suite_name(argv[i + 1]))
+            l.extra[l.nextra++] = argv[i + 1];
+        else
+            break;
+        i += 2;
     }
     if (argc - i < 2 || argv[i][0] == '-') {
         fputs(usage_text, stderr);

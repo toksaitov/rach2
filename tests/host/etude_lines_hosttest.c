@@ -393,16 +393,22 @@ static void write_stream(const struct run_spec *r)
         exit(1);
 }
 
-/** Run this program as the formatter; give its status and its two outputs. */
-static int format(const char *map, const char *stream, char *out, char *err, size_t size)
+/** Run this program as the formatter, with the failures `named` outside the
+ * suites, at most two, given by `-f`; give its status and its two outputs. */
+static int format(const char *const *named, const char *map, const char *stream, char *out,
+                  char *err, size_t size)
 {
     char schemas[PATH_ROOM + 32];
-    char *argv[7];
-    int status, o, e;
+    char *argv[11];
+    int status, o, e, n = 4;
     pid_t pid;
     snprintf(schemas, sizeof(schemas), "%s/tools/etude/schemas", repo);
     argv[0] = self, argv[1] = "--lines", argv[2] = "-s", argv[3] = schemas;
-    argv[4] = (char *)map, argv[5] = (char *)stream, argv[6] = NULL;
+    for (; named && *named && n < 8; named++) {
+        argv[n++] = "-f";
+        argv[n++] = (char *)*named;
+    }
+    argv[n++] = (char *)map, argv[n++] = (char *)stream, argv[n] = NULL;
     fflush(stdout);
     fflush(stderr);
     if ((pid = fork()) == 0) {
@@ -530,7 +536,7 @@ static void check_row(const struct row *w)
     snprintf(map, sizeof(map), "%s", path(map));
     write_stream(&w->run);
     snprintf(stream, sizeof(stream), "%s/%s.jsonl", directory, w->run.name);
-    status = format(map, stream, out, err, sizeof(out));
+    status = format(NULL, map, stream, out, err, sizeof(out));
     if (status != w->status || wanted(w, out, err)) {
         fprintf(stderr, "etude_lines_hosttest: %s: status %d\n--- stdout\n%s--- stderr\n%s",
                 w->run.name, status, out, err);
@@ -700,11 +706,29 @@ static void check_maps(void)
     size_t i;
     for (i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
         put("bad.map", maps[i], 0644);
-        if (format(path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
+        if (format(NULL, path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
             !strstr(err, "history_lines: ")) {
             fprintf(stderr, "etude_lines_hosttest: map \"%s\": %s%s", maps[i], out, err);
             CHECK(0, "a map that names runner, an identity twice or no case is refused");
         }
+    }
+}
+
+/** Check that a failure the caller names outside the suites fails a run
+ * whose suites passed, after the suites' names in the failed line. */
+static void check_named(void)
+{
+    static const char *const named[] = {"voided", "images", NULL};
+    static char out[4096], err[4096];
+    int status;
+    put("named.map", TWO, 0644);
+    status = format(named, path("named.map"), path("pass.jsonl"), out, err, sizeof(out));
+    if (status != 1 || !strstr(out, "run: fpu: PASS in 2s") ||
+        !strstr(err, "run: result: failed: voided images\n") ||
+        !strstr(out, "run: result: failed\n") || strstr(out, "suites passed")) {
+        fprintf(stderr, "etude_lines_hosttest: named: status %d\n--- stdout\n%s--- stderr\n%s",
+                status, out, err);
+        CHECK(0, "a failure named outside the suites fails a run whose suites passed");
     }
 }
 
@@ -967,6 +991,7 @@ int main(int argc, char **argv)
     for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
         check_row(&rows[i]);
     check_maps();
+    check_named();
     check_status();
     if (failures)
         fprintf(stderr, "etude_lines_hosttest: %d checks failed\n", failures);
