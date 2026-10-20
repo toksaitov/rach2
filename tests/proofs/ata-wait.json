@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "proof": "ata-wait",
+  "summary": "ata_hosttest.c's row on the thirty-second bound of the ATA driver's sleeping wait, with a fault in ata.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/block/ata.c"
+  ],
+  "artifacts": [
+    "${WORK}/ata_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\" \"$t/tests/host\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp tests/host/ata_hosttest.c \"$t/tests/host/\"\ncp -R ${SRC}/. \"$t/\"\ncd \"$t\"\ndeps=$(grep -oE 'host-deps:[^*]*' tests/host/ata_hosttest.c | sed 's/host-deps://' | tr '\\n' ' ')\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I ${TREE}/utils -I ${TREE}/krffs -I ${TREE}/tests/host/compat -o ${WORK}/ata_hosttest tests/host/ata_hosttest.c $deps"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/ata_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "ata-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "five",
+      "summary": "a sleeping wait that gives up after five seconds",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ata.c",
+          "find": "#define ATA_WAIT_TICKS 3000\n",
+          "replace": "#define ATA_WAIT_TICKS 500\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ata-test: fail: a DMA read the drive ends after ten seconds returns its sectors"
+        ]
+      }
+    }
+  ]
+}

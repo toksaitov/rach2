@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "proof": "ata-durable",
+  "summary": "ata_hosttest.c's row that a write the ATA driver returns is durable, with faults in the cache flush of ata_write_on",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/block/ata.c"
+  ],
+  "artifacts": [
+    "${WORK}/ata_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\" \"$t/tests/host\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp tests/host/ata_hosttest.c \"$t/tests/host/\"\ncp -R ${SRC}/. \"$t/\"\ncd \"$t\"\ndeps=$(grep -oE 'host-deps:[^*]*' tests/host/ata_hosttest.c | sed 's/host-deps://' | tr '\\n' ' ')\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I ${TREE}/utils -I ${TREE}/krffs -I ${TREE}/tests/host/compat -o ${WORK}/ata_hosttest tests/host/ata_hosttest.c $deps"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/ata_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "ata-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "command",
+      "summary": "a write that returns without sending the cache flush",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ata.c",
+          "find": "        if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {\n",
+          "replace": "        if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ata-test: fail: a returned write is durable before power loss"
+        ]
+      }
+    },
+    {
+      "name": "wait",
+      "summary": "a write that sends the cache flush and returns before it ends",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ata.c",
+          "find": "        ata_settle(ch);\n        if (ata_wait_ready(ch) != 0) {\n",
+          "replace": "        ata_settle(ch);\n        if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ata-test: fail: a returned write is durable before power loss"
+        ]
+      }
+    }
+  ]
+}

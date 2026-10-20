@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "proof": "ata-rate",
+  "summary": "ata_hosttest.c's two write-count rows, which the diskrate suite runs, with faults in ata.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/block/ata.c"
+  ],
+  "artifacts": [
+    "${WORK}/ata_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\" \"$t/tests/host\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp tests/host/ata_hosttest.c \"$t/tests/host/\"\ncp -R ${SRC}/. \"$t/\"\ncd \"$t\"\ndeps=$(grep -oE 'host-deps:[^*]*' tests/host/ata_hosttest.c | sed 's/host-deps://' | tr '\\n' ' ')\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I ${TREE}/utils -I ${TREE}/krffs -I ${TREE}/tests/host/compat -o ${WORK}/ata_hosttest tests/host/ata_hosttest.c $deps"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/ata_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "ata-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "pio",
+      "summary": "every write sent through the data port, the DMA path off",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ata.c",
+          "find": "    uint32_t flags;\n\n    while (count > 0) {\n        uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;\n        uint32_t i;\n\n        if (d->dma && owned) {\n            int rc;\n\n            if (chunk > ATA_REQ_SECTORS) {\n                chunk = ATA_REQ_SECTORS;\n            }\n            rc = ata_dma_transfer(d, lba, chunk, in, NULL);\n",
+          "replace": "    uint32_t flags;\n\n    while (count > 0) {\n        uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;\n        uint32_t i;\n\n        if (0 && d->dma && owned) {\n            int rc;\n\n            if (chunk > ATA_REQ_SECTORS) {\n                chunk = ATA_REQ_SECTORS;\n            }\n            rc = ata_dma_transfer(d, lba, chunk, in, NULL);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ata-test: fail: a DMA write uses one data command per 32 KiB and no data-port sectors"
+        ]
+      }
+    },
+    {
+      "name": "spin",
+      "summary": "a wait that reads the status 512 times before it sleeps",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ata.c",
+          "find": "#define ATA_SPIN_BEFORE_SLEEP 8\n",
+          "replace": "#define ATA_SPIN_BEFORE_SLEEP 512\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ata-test: fail: a delayed write and flush use at most 32 status reads per 32 KiB"
+        ]
+      }
+    }
+  ]
+}
