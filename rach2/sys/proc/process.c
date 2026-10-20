@@ -314,18 +314,50 @@ isr_params_t *proc_user_frame(const process_t *t)
     return (isr_params_t *)(t->kernel_stack - sizeof(isr_params_t));
 }
 
+/** Whether `p` is an init: the system's, or the first process of a PID
+ * namespace below the first, whose number there is 1. */
+static int proc_is_init(const process_t *p)
+{
+    const struct pidns *ns = proc_pidns(p);
+
+    return p->pid == init_pid || (ns != &init_pidns && p->nspid[ns->level] == 1);
+}
+
+/**
+ * The nearest ancestor of the ending process `dead_pid`, going up by
+ * parent, that is a child subreaper and has a thread that has not ended;
+ * NULL for none. The walk stops at the first init it meets, the ending
+ * process included, so that it does not leave the ending process's PID
+ * namespace, as Linux's stops at that namespace's init.
+ */
+static process_t *proc_subreaper(uint32_t dead_pid)
+{
+    process_t *a = get_process(dead_pid);
+
+    while (a != NULL && a->parent_pid != 0 && !proc_is_init(a)) {
+        a = get_process(a->parent_pid);
+        if (a != NULL && !proc_is_init(a) && a->tg->child_subreaper && a->tg->live != 0) {
+            return a;
+        }
+    }
+    return NULL;
+}
+
 /**
  * A child left with a dead parent's pid would never be matched in `do_wait`,
- * and its frames, page directory and record would leak. A child whose
- * threads have all ended has no exit to come that would tell init, so init
- * is sent SIGCHLD now and its wait woken. When the system's init itself is
- * ending, no other init is left to adopt the children. The parent-death
- * signals are posted after the adoption, so that a handler that asks for
- * its parent finds init, as on Linux.
+ * and its frames, page directory and record would leak. Each child goes to
+ * the nearest child subreaper above the dead parent (`proc_subreaper`), and
+ * with none to init, or to the init of the child's PID namespace. A child
+ * whose threads have all ended has no exit to come that would tell its new
+ * parent, so that parent is sent SIGCHLD now and its wait woken. When the
+ * system's init itself is ending, no other init is left to adopt the
+ * children. The parent-death signals are posted after the adoption, so that
+ * a handler that asks for its parent finds the new one, as on Linux.
  */
 void reparent_children(uint32_t dead_pid)
 {
     process_t *system_init = NULL;
+    process_t *subreaper = proc_subreaper(dead_pid);
     process_t *p;
 
     if (init_pid != 0 && dead_pid != init_pid) {
@@ -337,7 +369,9 @@ void reparent_children(uint32_t dead_pid)
         if (p->parent_pid != dead_pid) {
             continue;
         }
-        if (ns_reaper(p) != 0 && ns_reaper(p) != dead_pid) {
+        if (subreaper != NULL) {
+            init = subreaper;
+        } else if (ns_reaper(p) != 0 && ns_reaper(p) != dead_pid) {
             init = get_process(ns_reaper(p));
         }
         if (init != NULL) {

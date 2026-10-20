@@ -7197,6 +7197,10 @@ long sys_sched_setaffinity(isr_params_t *params)
 
 #define PR_GET_NAME 16
 
+#define PR_SET_CHILD_SUBREAPER 36
+
+#define PR_GET_CHILD_SUBREAPER 37
+
 #define PR_SET_NO_NEW_PRIVS 38
 
 #define PR_GET_NO_NEW_PRIVS 39
@@ -7219,6 +7223,13 @@ long sys_sched_setaffinity(isr_params_t *params)
  * PR_SET_NAME sets the program name `/proc/<pid>/stat` and ps show from the
  * string at the second argument, cut to 15 bytes, and PR_GET_NAME stores the
  * name's 16 bytes, NUL-padded, at the second argument.
+ *
+ * PR_SET_CHILD_SUBREAPER marks the process a child subreaper when the
+ * second argument is not 0 and clears the mark when it is, and
+ * PR_GET_CHILD_SUBREAPER stores the mark, 0 or 1, as an int at the second
+ * argument. The mark is the process's, for all its threads: when a
+ * descendant's parent ends, the orphan goes to the nearest ancestor so
+ * marked rather than to init (`reparent_children`).
  *
  * PR_SET_NO_NEW_PRIVS, with the second argument 1 and the rest 0, sets
  * no_new_privs for good: fork passes it on and exec then ignores set-id bits.
@@ -7268,6 +7279,12 @@ long sys_prctl(isr_params_t *params)
     case PR_GET_NAME:
         k_memcpy(name, current_proc->comm, sizeof(name));
         return copy_to_user((void __user *)arg2, name, sizeof(name)) != 0 ? -EFAULT : 0;
+    case PR_SET_CHILD_SUBREAPER:
+        current_proc->tg->child_subreaper = arg2 != 0;
+        return 0;
+    case PR_GET_CHILD_SUBREAPER:
+        value = current_proc->tg->child_subreaper ? 1 : 0;
+        return copy_to_user((void __user *)arg2, &value, sizeof(value)) != 0 ? -EFAULT : 0;
     case PR_SET_NO_NEW_PRIVS:
         if (arg2 != 1 || rest != 0) {
             return -EINVAL;

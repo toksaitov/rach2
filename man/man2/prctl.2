@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd October 20, 2026
 .Dt PRCTL 2
 .Os
 .Sh NAME
@@ -18,12 +18,13 @@ reads or changes an attribute of the calling process, named by
 .Fa option .
 The arguments after it are unsigned longs, the second through the fifth.
 The options are:
-.Bl -tag -width "PR_SET_NO_NEW_PRIVS"
+.Bl -tag -width "PR_SET_CHILD_SUBREAPER"
 .It Dv PR_SET_PDEATHSIG No (1)
 Set the signal the caller receives when its parent exits, from 1 to 64,
 or 0 for none.
 The signal is posted when the parent exits, after the caller has been
-given to init, so a handler that asks for its parent finds init.
+given to its new parent, so a handler that asks for its parent finds
+that one.
 .It Dv PR_GET_PDEATHSIG No (2)
 Store that signal as an int at the second argument.
 .It Dv PR_GET_DUMPABLE No (3)
@@ -52,6 +53,26 @@ Set the strict mode for a second argument of 1, or add the filter at the
 third argument for 2, as
 .Xr seccomp 2
 does.
+.It Dv PR_SET_CHILD_SUBREAPER No (36)
+Make the caller's process a child subreaper when the second argument is
+not 0, and clear the mark when it is 0.
+When a process ends, each of its children goes to the nearest of its
+ancestors, going up by parent, that is a child subreaper and has a thread
+that has not ended.
+The search stops at the first init it meets, the system's or that of a
+PID namespace, the ending process included, and with no subreaper the
+child goes to init, or to the init of its PID namespace, as it does
+otherwise.
+A child that has already ended is announced to its new parent with
+.Dv SIGCHLD ,
+and the new parent reaps it with
+.Xr wait 2
+and counts its CPU time as that of any child it reaps.
+.Pa /proc/PID/task/PID/children
+lists a process's children; see
+.Xr proc 5 .
+.It Dv PR_GET_CHILD_SUBREAPER No (37)
+Store the mark, 0 or 1, as an int at the second argument.
 .It Dv PR_SET_NO_NEW_PRIVS No (38)
 With the second argument 1 and the rest 0, set the caller's no_new_privs
 bit.
@@ -63,7 +84,11 @@ With every other argument 0, return the no_new_privs bit.
 The attributes follow the process as on Linux.
 .Xr fork 2
 passes the dumpable flag and the no_new_privs bit to the child and not the
-parent-death signal.
+parent-death signal or the child subreaper mark.
+The mark belongs to the process, so every thread of it reads and sets the
+one mark, and
+.Xr execve 2
+keeps it.
 .Xr execve 2
 makes the process dumpable again, or not dumpable when the new program
 runs with an effective ID that differs from its real one or when the
@@ -130,10 +155,16 @@ parent-death signal when its parent exits, that a fork passes on what it
 should, that a change of the effective user ID clears the dumpable flag
 and the signal, and that a program with the set-user-ID bit runs without
 its owner's ID under no_new_privs.
+It also makes a child subreaper and checks that the orphans of its
+grandchild come to it, the one that had ended and the one that had not,
+that its wait reaps them and counts the CPU time of the second, and that
+its children file lists each child while it is one; and that with the
+mark cleared they go to init instead.
 .Sh ERRORS
 .Bl -tag -width "[EFAULT]"
 .It Bq Er EFAULT
-The name or the signal cannot be read or written at the second argument.
+The name, the signal or the child subreaper mark cannot be read or
+written at the second argument.
 .It Bq Er EINVAL
 .Fa option
 is none of those above, the signal is past 64, the dumpable value is
@@ -148,5 +179,6 @@ Linux refuses an option it does not know.
 .Xr seccomp 2 ,
 .Xr setuid 2 ,
 .Xr sigaction 2 ,
+.Xr wait 2 ,
 .Xr core 5 ,
 .Xr proc 5

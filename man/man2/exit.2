@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd October 20, 2026
 .Dt EXIT 2
 .Os
 .Sh NAME
@@ -80,7 +80,9 @@ last thread ends.
 Each thread's end gives up its address space, its descriptor table and
 its working directory, and the one that held the last reference to any
 of them releases it then, before the end is published.
-With the last thread the kernel reparents the process's children to init,
+With the last thread the kernel gives the process's children to the
+nearest child subreaper above it, or to init when there is none
+.Pq see Xr prctl 2 ,
 marks it as a zombie, and wakes its parent.
 The scheduler then selects another process.
 If none is ready, the kernel waits for interrupts and checks again.
@@ -127,4 +129,5 @@ It prints the console message:
 .Sh SEE ALSO
 .Xr execve 2 ,
 .Xr fork 2 ,
+.Xr prctl 2 ,
 .Xr wait 2

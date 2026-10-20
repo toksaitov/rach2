@@ -36,7 +36,7 @@ Privilege follows Linux's `cap_capable` for a process that keeps every capabilit
 
 A process has a number in each PID namespace from its own up to the first (`nspid`, by level), each given at the fork (`ns_number`), and its kernel id is its number in the first. A namespace other than the first gives out numbers from 1 to `NS_PID_MAX`, 32768, then from 2 again, past the numbers its processes have. `pid_seen` and `pid_named` translate at the boundary as the id functions do: a process outside the caller's namespace and those below it is seen as 0 and cannot be named.
 
-The first process made in a namespace is its init, the namespace's `reaper`. Children whose parent ends are given to it (`ns_reaper`, which `reparent_children` asks), and its end sends every other process of the namespace SIGKILL (`ns_reaper_gone`) and leaves the namespace without one, in which a fork fails with `ENOMEM`. `CLONE_NEWPID` given to `unshare`, and `setns` to a PID namespace, do not move the caller: they change the namespace its next children are made in.
+The first process made in a namespace is its init, the namespace's `reaper`. Children whose parent ends are given to it (`ns_reaper`, which `reparent_children` asks) unless a child subreaper in the namespace is an ancestor of the parent, and its end sends every other process of the namespace SIGKILL (`ns_reaper_gone`) and leaves the namespace without one, in which a fork fails with `ENOMEM`. `CLONE_NEWPID` given to `unshare`, and `setns` to a PID namespace, do not move the caller: they change the namespace its next children are made in.
 
 ### Mount namespaces
 

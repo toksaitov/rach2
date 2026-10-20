@@ -74,6 +74,11 @@ struct tgroup {
      * OOM killer to weigh a process by them. */
     int32_t oom_score_adj;
     int32_t oom_score_adj_min;
+    /* Whether the process is a child subreaper, which prctl's
+     * PR_SET_CHILD_SUBREAPER sets: the orphans of its descendants come to it
+     * rather than to init (`reparent_children`). A fork starts at 0 and an
+     * exec keeps it, as on Linux. */
+    uint32_t child_subreaper;
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no
