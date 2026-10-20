@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "proof": "usb-lifecycle",
+  "summary": "hub_hosttest.c, usb_interrupt_hosttest.c and msc_hosttest.c with eleven faults in private copies of rach2/sys/usb/core.c, hub.c, usb.c and msc.c; the test runs all three",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/usb/core.c",
+    "rach2/sys/usb/hub.c",
+    "rach2/sys/usb/usb.c",
+    "rach2/sys/usb/msc.c"
+  ],
+  "artifacts": [
+    "${WORK}/hub_hosttest",
+    "${WORK}/usb_interrupt_hosttest",
+    "${WORK}/msc_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/t && mkdir -p ${WORK}/t/tests/host && cp -R rach2 ${WORK}/t/ && cp -R ${SRC}/. ${WORK}/t/ && cp tests/host/hub_hosttest.c tests/host/msc_hosttest.c tests/host/usb_interrupt_hosttest.c ${WORK}/t/tests/host/ && for t in hub usb_interrupt msc; do ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/lib -I ${WORK}/t/rach2/sys/proc ${WORK}/t/tests/host/${t}_hosttest.c -o ${WORK}/${t}_hosttest || exit; done"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "s=0; for t in hub_hosttest usb_interrupt_hosttest msc_hosttest; do ${WORK}/$t || { r=$?; [ $s -ne 0 ] || s=$r; }; done; exit $s"
+    ],
+    "bound_s": 30
+  },
+  "faults": [
+    {
+      "name": "core-halted-gone",
+      "summary": "a device pulled while halted is not reported to its class driver",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/core.c",
+          "find": "if (d->state == ST_RUNNING || d->state == ST_HALTED) {",
+          "replace": "if (d->state == ST_RUNNING) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "pulled while halted, its class driver is told"
+        ]
+      }
+    },
+    {
+      "name": "core-describe-unlocked",
+      "summary": "the device table is read with interrupts on",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/core.c",
+          "find": "    flags = kirq_save();\n    d = dev_at(index);\n    if (d->state != ST_RUNNING) {\n        kirq_restore(flags);\n        return 0;",
+          "replace": "    flags = 0;\n    d = dev_at(index);\n    if (d->state != ST_RUNNING) {\n        return 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and reads the device table with interrupts off"
+        ]
+      }
+    },
+    {
+      "name": "hub-reuse",
+      "summary": "a detached hub record is reused while its slot is still held",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/hub.c",
+          "find": "if (!hubs[i]) {",
+          "replace": "if (!hub_at(i)->used) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a detached hub record is not reused"
+        ]
+      }
+    },
+    {
+      "name": "hub-changes",
+      "summary": "a cleared over-current change suppresses the other changes",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/hub.c",
+          "find": "    p->recheck = 0;\n    p->to_clear = change & change_mask(h);",
+          "replace": "    p->recheck = 0;\n    p->to_clear = change & change_mask(h);\n    if ((change & C_PORT_OVER_CURRENT_BIT) && !(status & PORT_STAT_OVER_CURRENT)) {\n        return;\n    }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "cleared over-current does not suppress another change"
+        ]
+      }
+    },
+    {
+      "name": "hub-warm-order",
+      "summary": "a warm reset is requested at once, before the connection is handled",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/hub.c",
+          "find": "        p->warm_pending = 1;",
+          "replace": "        if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, BH_PORT_RESET, port, 0,\n                    REQ_WARM_RESET, port) != 0) {\n            p->warm = 0;\n        }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a simultaneous connection and link fault starts a warm reset"
+        ]
+      }
+    },
+    {
+      "name": "hub-power-dropped",
+      "summary": "a power-on that cannot be queued is not asked for again",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/hub.c",
+          "find": "                } else if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, PORT_POWER, i + 1, 0,\n                                   REQ_POWER_ON, i + 1) == 0) {\n                    p->power_on_ms = 0;\n                    return;\n                }",
+          "replace": "                } else {\n                    p->power_on_ms = 0;\n                    if (request(h, TYPE_CLASS_PORT_OUT, REQ_SET_FEATURE, PORT_POWER, i + 1,\n                                0, REQ_POWER_ON, i + 1) == 0) {\n                        return;\n                    }\n                }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a power-on that cannot be queued is asked for again until it is"
+        ]
+      }
+    },
+    {
+      "name": "usb-last-source",
+      "summary": "only the last interrupt source is checked",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/usb.c",
+          "find": "for (n = 0; n < interrupt_source_count; n++) {\n        int irq",
+          "replace": "for (n = interrupt_source_count - 1; n < interrupt_source_count; n++) {\n        int irq"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a configured pending source prevents fallback"
+        ]
+      }
+    },
+    {
+      "name": "usb-line-only",
+      "summary": "a source with a line interrupt hides the others",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/usb.c",
+          "find": "    for (n = 0; n < interrupt_source_count; n++) {\n        int irq",
+          "replace": "    for (n = 0; n < interrupt_source_count; n++) {\n        if (interrupt_sources[n].line_irq >= 0) {\n            return isr_line_pending(interrupt_sources[n].line_irq);\n        }\n    }\n    for (n = 0; n < interrupt_source_count; n++) {\n        int irq"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a configured pending source prevents fallback"
+        ]
+      }
+    },
+    {
+      "name": "usb-keep-vector",
+      "summary": "a failed MSI enable keeps its vector",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/usb.c",
+          "find": "            isr_free_vector(vector);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a failed MSI enable gives its vector back"
+        ]
+      }
+    },
+    {
+      "name": "msc-elapsed",
+      "summary": "initialization time elapses only in the idle test stage",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/msc.c",
+          "find": "    m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;",
+          "replace": "    if (m->state == MSC_STATE_TEST && m->stage == STAGE_IDLE) {\n        m->ready_left = (m->ready_left > elapsed_ms) ? m->ready_left - elapsed_ms : 0;\n    }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "initialization expires after ten elapsed seconds"
+        ]
+      }
+    },
+    {
+      "name": "msc-unit",
+      "summary": "each unit does not get a deadline of its own",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/msc.c",
+          "find": "    m->lun++;\n    m->ready_left = MSC_READY_MS;",
+          "replace": "    m->lun++;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "each unit gets a separate elapsed deadline"
+        ]
+      }
+    }
+  ]
+}
