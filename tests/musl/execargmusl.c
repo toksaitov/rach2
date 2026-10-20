@@ -16,11 +16,12 @@
  *
  * The program execs itself. With no arguments, or only the NAME=VALUE ones a
  * native run appends, such as `root=PATH` (tests/native/Readme.md), it is the
- * parent and runs the checks; otherwise it is the child, in the mode its first argument names or,
- * with `EXECARG_EMPTY` set, the empty-argv mode, and it exits 0 only when it
- * was handed what the parent sent, so a vector delivered short fails the
- * check. The parent prints "EXECARGMUSL OK" and exits 0 on success, or
- * prints "EXECARGMUSL FAIL (detail)" and exits 1 at the first failure.
+ * parent and runs the checks; otherwise it is the child, in the mode its
+ * first argument names or, with `EXECARG_EMPTY` set, the empty-argv mode, and
+ * it exits 0 only when it was handed what the parent sent, so a vector
+ * delivered short fails the check. The parent prints "EXECARGMUSL OK" and
+ * exits 0 on success, or prints "EXECARGMUSL FAIL (detail)" and exits 1 at
+ * the first failure.
  */
 
 #define _GNU_SOURCE

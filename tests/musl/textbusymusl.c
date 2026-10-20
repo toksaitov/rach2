@@ -19,7 +19,7 @@
 
 #include "../probe_args.h"
 
-/* The helper's path that `helper=PATH` gives, or null for /musl/statushelper. */
+/* The path `helper=PATH` gives, or null for /musl/statushelper. */
 static const char *helper;
 static char work[256];
 static pid_t children[8];
