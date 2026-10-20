@@ -1,11 +1,13 @@
 /*
- * legacy.c: the preparation adapter on POSIX systems. It runs the
- * preparation of tests/run one step at a time through the executor, finds
- * each suite's artifacts in make's database, checks that they exist, and
- * records them.
+ * legacy.c: the preparation and suite adapters on POSIX systems. The first
+ * runs the preparation of tests/run one step at a time through the
+ * executor, finds each suite's artifacts in make's database, checks that
+ * they exist, and records them; the second runs one prepared suite under
+ * runutil's supervision and judges how it ended.
  */
 #include <errno.h>
 #include <fcntl.h>
+#include <fnmatch.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,6 +16,9 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
+#if defined(__APPLE__) && defined(__x86_64__)
+#include <sys/sysctl.h>
+#endif
 
 #include "etude/exec.h"
 #include "etude/legacy.h"
@@ -48,7 +53,8 @@ static const char script_log[] = "exec >\"$1\" 2>&1; shift; exec \"$@\"";
 /* make's database goes to the file $2, and its errors to the log. */
 static const char script_file[] = "exec >\"$2\" 2>\"$1\"; shift 2; exec \"$@\"";
 
-/* A short answer goes to the executor, which keeps it; errors to the log. */
+/* Standard output goes to the executor, which keeps it: a short answer, or
+ * a suite's `child` records; standard error goes to the log $1. */
 static const char script_answer[] = "exec 2>\"$1\"; shift; exec \"$@\"";
 
 /* The path the steps search: the caller's, with e2fsprogs's directories
@@ -71,6 +77,7 @@ struct list {
 struct suite {
     char *name;
     char *tools;  /* the commands it needs, `-` for none, empty when unknown */
+    char *images; /* the globs of what it writes under the images, or empty */
     char *arches; /* the architectures it runs on, empty for both */
 };
 
@@ -120,6 +127,7 @@ struct prep {
     char *work;
     char **env; /* the steps' environment */
     struct etude_exec *ex;
+    int posix_only; /* the executor uses POSIX interfaces alone */
     unsigned steps; /* the steps begun, which number their logs */
     struct suite *reg;
     size_t nreg;
@@ -298,8 +306,9 @@ static int take_suite(struct prep *p, char *line)
     s = &p->reg[p->nreg++];
     s->name = strdup(field[0]);
     s->tools = strdup(field[1]);
+    s->images = strdup(field[3]);
     s->arches = strdup(field[5]);
-    return s->name == NULL || s->tools == NULL || s->arches == NULL ? -1 : 0;
+    return s->name == NULL || s->tools == NULL || s->images == NULL || s->arches == NULL ? -1 : 0;
 }
 
 /** Read the tree's registry, tests/registry; 0, or 2 after a refusal. */
@@ -340,25 +349,33 @@ static const struct suite *find_suite(const struct prep *p, const char *name)
     return NULL;
 }
 
-/** Say whether `tool` is an executable file in a directory of `path`. */
-static int on_path(const char *tool, const char *path)
+/** Give the first executable file `tool` in a directory of `path`, from
+ * malloc, or NULL when there is none. */
+static char *path_of(const char *tool, const char *path)
 {
     struct stat st;
     char *file;
     size_t len;
-    int found = 0;
 
-    while (!found) {
+    for (;;) {
         len = strcspn(path, ":");
         file = len == 0 ? format("./%s", tool) : format("%.*s/%s", (int)len, path, tool);
-        found =
-            file != NULL && stat(file, &st) == 0 && S_ISREG(st.st_mode) && access(file, X_OK) == 0;
+        if (file != NULL && stat(file, &st) == 0 && S_ISREG(st.st_mode) && access(file, X_OK) == 0)
+            return file;
         free(file);
         if (path[len] == '\0')
-            break;
+            return NULL;
         path += len + 1;
     }
-    return found;
+}
+
+/** Say whether `tool` is an executable file in a directory of `path`. */
+static int on_path(const char *tool, const char *path)
+{
+    char *file = path_of(tool, path);
+
+    free(file);
+    return file != NULL;
 }
 
 /** Say whether every command of `choice`, `len` bytes of names joined by
@@ -682,29 +699,52 @@ static char **step_argv(const struct step *s, const char *log)
 /* How a step ended besides by itself. */
 enum ended { ENDED_ITSELF, ENDED_BOUND, ENDED_STOP };
 
+/* A log that is copied to the output as it grows. */
+struct follow {
+    const char *path;
+    int fd; /* -1 until the log exists */
+};
+
+/** Copy what the log `f` has gained to the output. */
+static void follow_log(struct prep *p, struct follow *f)
+{
+    char buf[8192];
+    ssize_t n;
+
+    if (f->fd < 0 && (f->fd = open(f->path, O_RDONLY)) < 0)
+        return;
+    while ((n = read(f->fd, buf, sizeof(buf))) > 0)
+        fwrite(buf, 1, (size_t)n, p->out);
+    fflush(p->out);
+}
+
 /** Wait until the step `proc` finishes, cancelling it at its bound or at a
- * stop signal, and say which ended it. */
-static enum ended await_step(struct prep *p, struct etude_proc *proc)
+ * stop signal, and say which ended it; with `f`, copy that log to the
+ * output meanwhile and once more at the end. */
+static enum ended await_step(struct prep *p, struct etude_proc *proc, struct follow *f)
 {
     uint64_t began = posix_now_us(), bound = (uint64_t)p->o->seconds * 1000000u, now;
     enum ended ended = ENDED_ITSELF;
-    int wait_ms;
+    int wait_ms, done;
 
     if (bound == 0)
         bound = (uint64_t)ETUDE_LEGACY_SECONDS * 1000000u;
     for (;;) {
         now = posix_now_us();
-        wait_ms = 1000;
+        wait_ms = f != NULL ? 200 : 1000;
         if (ended == ENDED_ITSELF && stopped(p)) {
             ended = ENDED_STOP;
             etude_exec_cancel(proc);
         } else if (ended == ENDED_ITSELF && now - began >= bound) {
             ended = ENDED_BOUND;
             etude_exec_cancel(proc);
-        } else if (ended == ENDED_ITSELF && began + bound - now < 1000000u) {
+        } else if (ended == ENDED_ITSELF && began + bound - now < (uint64_t)wait_ms * 1000u) {
             wait_ms = (int)((began + bound - now) / 1000u) + 1;
         }
-        if (etude_exec_wait(p->ex, wait_ms) == proc)
+        done = etude_exec_wait(p->ex, wait_ms) == proc;
+        if (f != NULL)
+            follow_log(p, f);
+        if (done)
             return ended;
     }
 }
@@ -791,10 +831,11 @@ static int run_step(struct prep *p, struct step *s)
     spec.cwd = p->tree;
     spec.output_max = OUTPUT_MAX;
     spec.grace_us = GRACE_US;
+    spec.posix_only = p->posix_only;
     if (etude_exec_start(p->ex, &spec, &proc) != 0) {
         status = failed(p, "%s: it did not start: %s", s->name, strerror(errno));
     } else {
-        ended = await_step(p, proc);
+        ended = await_step(p, proc, NULL);
         status = judge(p, s, etude_proc_result(proc), ended, log);
         etude_proc_free(proc);
     }
@@ -1500,22 +1541,15 @@ static int prepare(struct prep *p)
     return status;
 }
 
-/** Print the result line, remove or keep the work, and free the rest. */
-static void conclude(struct prep *p, int status)
+/** End the executor, keep the work and name it, or remove it, and free the
+ * rest. */
+static void release(struct prep *p, int keep)
 {
     size_t i;
 
-    if (status == 0)
-        fprintf(p->out, "etude-legacy: result: prepared: %lu suites, %lu files\n",
-                (unsigned long)p->o->nsuites, (unsigned long)p->files);
-    else if (status == 1)
-        fprintf(p->out, "etude-legacy: result: failed: %s\n",
-                p->why != NULL ? p->why : "memory ran out");
-    else if (status > 128)
-        fprintf(p->out, "etude-legacy: result: stopped by signal %d\n", status - 128);
     if (p->ex != NULL)
         etude_exec_free(p->ex);
-    if (p->work != NULL && status == 1)
+    if (p->work != NULL && keep)
         fprintf(p->out, "etude-legacy: evidence: %s\n", p->work);
     else if (p->work != NULL && remove_tree(p->work) != 0)
         fprintf(p->out, "etude-legacy: %s: not removed\n", p->work);
@@ -1525,6 +1559,7 @@ static void conclude(struct prep *p, int status)
     for (i = 0; i < p->nreg; i++) {
         free(p->reg[i].name);
         free(p->reg[i].tools);
+        free(p->reg[i].images);
         free(p->reg[i].arches);
     }
     for (i = 0; p->targets != NULL && p->targets[i] != NULL; i++)
@@ -1533,6 +1568,20 @@ static void conclude(struct prep *p, int status)
     free(p->reg);
     free(p->targets);
     free((void *)p->chosen);
+}
+
+/** Print the result line, remove or keep the work, and free the rest. */
+static void conclude(struct prep *p, int status)
+{
+    if (status == 0)
+        fprintf(p->out, "etude-legacy: result: prepared: %lu suites, %lu files\n",
+                (unsigned long)p->o->nsuites, (unsigned long)p->files);
+    else if (status == 1)
+        fprintf(p->out, "etude-legacy: result: failed: %s\n",
+                p->why != NULL ? p->why : "memory ran out");
+    else if (status > 128)
+        fprintf(p->out, "etude-legacy: result: stopped by signal %d\n", status - 128);
+    release(p, status == 1);
 }
 
 int etude_legacy_prepare(const struct etude_legacy_opts *o)
@@ -1618,9 +1667,13 @@ static int compare(const char *tree, const struct entry *e, int digests, FILE *o
 
 /* A reading of a record. */
 struct reading {
-    char *tree;     /* the tree's root, from the `tree` line */
-    size_t files;   /* the artifacts compared */
-    size_t changed; /* those changed or missing */
+    char *tree;        /* the tree's root, from the `tree` line */
+    char *arch;        /* the `arch` line's architecture */
+    char *kernel;      /* the `kernel` line's path */
+    const char *suite; /* a suite to look for, or NULL */
+    int listed;        /* a `suite` line names it */
+    size_t files;      /* the artifacts compared */
+    size_t changed;    /* those changed or missing */
     int digests;
     FILE *out;
 };
@@ -1641,6 +1694,13 @@ static const char *check_line(struct reading *rd, char *line, size_t lineno)
         rd->files++;
         return NULL;
     }
+    if (strncmp(line, "arch ", 5) == 0 && rd->arch == NULL)
+        return (rd->arch = strdup(line + 5)) == NULL ? "memory ran out" : NULL;
+    if (strncmp(line, "kernel ", 7) == 0 && rd->kernel == NULL)
+        return (rd->kernel = strdup(line + 7)) == NULL ? "memory ran out" : NULL;
+    if (strncmp(line, "suite ", 6) == 0 && rd->suite != NULL &&
+        strncmp(line + 6, rd->suite, strlen(rd->suite)) == 0 && line[6 + strlen(rd->suite)] == ' ')
+        rd->listed = 1;
     if (strncmp(line, "arch ", 5) == 0 || strncmp(line, "kernel ", 7) == 0 ||
         strncmp(line, "suite ", 6) == 0)
         return NULL;
@@ -1687,10 +1747,800 @@ int etude_legacy_check(const char *record, int digests, FILE *out)
     status = check_lines(f, record, &rd);
     fclose(f);
     free(rd.tree);
+    free(rd.arch);
+    free(rd.kernel);
     if (status == 0)
         fprintf(rd.out, "etude-legacy: result: unchanged: %lu files\n", (unsigned long)rd.files);
     else if (status == 1)
         fprintf(rd.out, "etude-legacy: result: changed: %lu of %lu files\n",
                 (unsigned long)rd.changed, (unsigned long)rd.files);
+    return status;
+}
+
+/* ---- The run of a suite. ---- */
+
+/* The time from the suite's termination signal to its kill. runutil then
+ * stops what the suite started, which takes up to twenty seconds when a
+ * machine outlives SIGKILL, and writes its record of the suite's end. */
+#define SUITE_GRACE_US 30000000u
+
+/* The first line of runutil's record of a suite's end. */
+#define END_HEAD "runutil-record 1"
+
+/* The emulators that get a shim, as tests/run gives them one. */
+static const char *const emulators[] = {"qemu-system-i386", "qemu-system-x86_64"};
+
+/* The variables a suite takes from the adapter alone. */
+static const char *const suite_vars[] = {"PATH=",
+                                         "RACH2_QEMU=",
+                                         "RACH2_QEMU_ACCEL=",
+                                         "RACH2_CPUS=",
+                                         "RACH2_RUN_UTIL=",
+                                         "RACH2_QEMU_LEDGER=",
+                                         "RACH2_QEMU_SHIMS=",
+                                         "RACH2_PROGRESS_FD=",
+                                         "RACH2_ETUDE_CHILDREN="};
+
+/* What a run of a suite came to. */
+enum verdict { VERDICT_INCOMPLETE, VERDICT_FAILED, VERDICT_PASSED };
+
+/* runutil's record of a suite's end. */
+struct suite_end {
+    int whole;        /* the record was read whole */
+    int status;       /* the target's exit status, or 128 plus its signal */
+    int idle;         /* it was stopped as hung */
+    int stopped;      /* the signal runutil received, or 0 */
+    int leaked;       /* a process outlived the suite */
+    int survivor;     /* a machine outlived its SIGTERM */
+    struct list left; /* `PID GROUP COMMAND` of each machine or relay left */
+    struct list cut;  /* `MACHINE RELAY` of each console cut */
+};
+
+/* One run of a suite under way, beside the state it shares with a
+ * preparation. */
+struct run {
+    const struct etude_legacy_run_opts *ro;
+    char *tree, *arch, *kernel; /* the record's */
+    const char *accel;          /* QEMU's accelerator */
+    const char *cpus;           /* the processors of each machine */
+    char idle[16];              /* the idle limit in seconds */
+    char *target;               /* run-NAME */
+    char *bin;                  /* WORK/bin, the shims */
+    char *runutil;              /* WORK/runutil */
+    char *ledger;               /* WORK/machines, the machines' ledger */
+    char *end;                  /* WORK/end, runutil's record */
+    char *log;                  /* WORK/suite.log, the suite's output */
+    long long stamp;            /* the time of WORK/start, made as the suite
+                                   starts, or 0 before */
+    enum verdict verdict;
+    struct suite_end e;
+};
+
+/**
+ * Read the run's record, which must list the suite and whose artifacts must
+ * be as it recorded them, and take its tree, architecture and kernel; 0, or
+ * 2 after a refusal.
+ */
+static int run_record(struct prep *p, struct run *r)
+{
+    const char *record = r->ro->record;
+    FILE *f = fopen(record, "r");
+    struct reading rd;
+    int status;
+
+    if (f == NULL)
+        return refuse(p, "%s: %s", record, strerror(errno));
+    memset(&rd, 0, sizeof(rd));
+    rd.suite = r->ro->suite;
+    rd.out = p->out;
+    status = check_lines(f, record, &rd);
+    fclose(f);
+    r->tree = rd.tree;
+    r->arch = rd.arch;
+    r->kernel = rd.kernel;
+    if (status == 2)
+        return refuse(p, "%s cannot be read as a record of a preparation", record);
+    if (r->arch == NULL || r->kernel == NULL)
+        return refuse(p, "%s names no architecture or no kernel", record);
+    if (!rd.listed)
+        return refuse(p, "%s is no suite of the preparation %s records", r->ro->suite, record);
+    if (status != 0)
+        return refuse(p,
+                      "the preparation changed: %lu of %lu files differ from the record; "
+                      "prepare the suite again",
+                      (unsigned long)rd.changed, (unsigned long)rd.files);
+    return 0;
+}
+
+/** The accelerator where there is no KVM: HVF on an x86 Mac whose kernel
+ * offers the hypervisor, and the emulator otherwise. */
+static const char *accel_without_kvm(void)
+{
+#if defined(__APPLE__) && defined(__x86_64__)
+    int on = 0;
+    size_t len = sizeof(on);
+
+    if (sysctlbyname("kern.hv_support", &on, &len, NULL, 0) == 0 && on == 1)
+        return "hvf";
+#endif
+    return "tcg";
+}
+
+/**
+ * Take QEMU's accelerator and the machines' processors as tests/run takes
+ * them: RACH2_QEMU_ACCEL when it is set; else KVM when its device,
+ * RACH2_KVM_DEVICE or /dev/kvm, can be read and written, HVF on an x86 Mac
+ * that offers it, and the emulator otherwise; and RACH2_CPUS, 2 when it is
+ * unset. A KVM device this user cannot open is refused, since the suites'
+ * bounds were set under KVM. 0, or 2 after a refusal.
+ */
+static int run_machine(struct prep *p, struct run *r)
+{
+    const char *accel = getenv("RACH2_QEMU_ACCEL"), *kvm = getenv("RACH2_KVM_DEVICE");
+    const char *cpus = getenv("RACH2_CPUS");
+
+    if (kvm == NULL || *kvm == '\0')
+        kvm = "/dev/kvm";
+    if (accel != NULL && *accel != '\0') {
+        if (strcmp(accel, "kvm") != 0 && strcmp(accel, "hvf") != 0 && strcmp(accel, "tcg") != 0)
+            return refuse(p, "RACH2_QEMU_ACCEL must be kvm, hvf or tcg");
+        r->accel = accel;
+    } else if (access(kvm, R_OK | W_OK) == 0) {
+        r->accel = "kvm";
+    } else if (access(kvm, F_OK) == 0) {
+        return refuse(p,
+                      "%s exists but this user cannot read and write it; add the user to its "
+                      "group, or set RACH2_QEMU_ACCEL=tcg to run under the emulator",
+                      kvm);
+    } else {
+        r->accel = accel_without_kvm();
+    }
+    if (cpus == NULL || *cpus == '\0')
+        cpus = "2";
+    if (cpus[0] < '1' || cpus[0] > '9' || strlen(cpus) > 2 ||
+        cpus[strspn(cpus, "0123456789")] != '\0' || atoi(cpus) > 64)
+        return refuse(p, "RACH2_CPUS must be a whole number from 1 to 64");
+    r->cpus = cpus;
+    return 0;
+}
+
+/**
+ * Check the run's request before anything runs: the record, the suite in the
+ * tree's registry, the held tree, the port block and the machines; 0, or 2
+ * after a refusal.
+ */
+static int run_admit(struct prep *p, struct run *r, struct etude_legacy_opts *o)
+{
+    const char *offset = getenv("RACH2_PORT_OFFSET");
+    int status = run_record(p, r);
+
+    if (status != 0)
+        return status;
+    o->tree = r->tree;
+    o->arch = r->arch;
+    o->suites = (char *const *)&r->ro->suite;
+    o->nsuites = 1;
+    if ((status = admit(p)) != 0)
+        return status;
+    if (strcmp(r->kernel, p->kernel) != 0) {
+        free(p->kernel);
+        p->kernel = strdup(r->kernel);
+        p->kernel_var = p->kernel != NULL ? format("BOOT_KERNEL=%s", p->kernel) : NULL;
+        if (p->kernel_var == NULL)
+            return sys_error(p, "the request", ENOMEM);
+    }
+    if (offset == NULL || *offset == '\0' || offset[strspn(offset, "0123456789")] != '\0')
+        return refuse(p, "RACH2_PORT_OFFSET must name the port block the caller holds, as "
+                         "etude-bridge -p gives it");
+    if ((status = run_machine(p, r)) != 0)
+        return status;
+    snprintf(r->idle, sizeof(r->idle), "%u", r->ro->idle != 0 ? r->ro->idle : ETUDE_LEGACY_IDLE);
+    r->target = format("run-%s", r->ro->suite);
+    return r->target == NULL ? sys_error(p, "the request", ENOMEM) : 0;
+}
+
+/** Name the files of the work directory; 0, or 2 when memory ran out. */
+static int run_files(struct prep *p, struct run *r)
+{
+    r->bin = format("%s/bin", p->work);
+    r->runutil = format("%s/runutil", p->work);
+    r->ledger = format("%s/machines", p->work);
+    r->end = format("%s/end", p->work);
+    r->log = format("%s/suite.log", p->work);
+    if (r->bin == NULL || r->runutil == NULL || r->ledger == NULL || r->end == NULL ||
+        r->log == NULL)
+        return sys_error(p, "the work directory", ENOMEM);
+    return 0;
+}
+
+/** Refuse a suite whose commands are not on the steps' path; 0, or 2. */
+static int run_tools(struct prep *p)
+{
+    const char *qemu =
+        strcmp(p->arch_build, "build") == 0 ? "qemu-system-i386" : "qemu-system-x86_64";
+    char *missing = tools_missing(p->chosen[0]->tools, qemu, env_path(p));
+    int status;
+
+    if (missing == NULL)
+        return 0;
+    status = refuse(p, "%s needs %s, which this host does not have", p->chosen[0]->name, missing);
+    free(missing);
+    return status;
+}
+
+/** Compile runutil into the work directory from the tree's source, as
+ * tests/run does, so that no build of the tree changes it while it runs. */
+static int run_runutil(struct prep *p, struct run *r)
+{
+    char *src = format("%s/tests/system/runner/runutil.c", p->tree);
+    char *cmd[] = {"cc", "-O2", "-Wall", "-Wextra", "-o", r->runutil, src, NULL};
+    struct step s;
+    int status;
+
+    if (src == NULL)
+        return failed(p, "runutil: memory ran out");
+    memset(&s, 0, sizeof(s));
+    s.name = "runutil";
+    s.script = script_log;
+    s.cmd = cmd;
+    status = run_step(p, &s);
+    free(src);
+    return status;
+}
+
+/**
+ * Write a shim into WORK/bin for each emulator on the steps' path, as
+ * tests/run writes them: it adds the accelerator, and the processors when
+ * RACH2_CPUS is not 1, and execs the emulator through `runutil machine`,
+ * which records the machine in the suite's ledger and relays its console.
+ * An emulator whose path a shim cannot quote is refused, since the suite
+ * would reach it unrecorded. 0, 1 after an error, or 2 after a refusal.
+ */
+static int run_shims(struct prep *p, struct run *r)
+{
+    char *real, *shim;
+    FILE *f;
+    size_t i;
+    int bad;
+
+    if (mkdir(r->bin, 0700) != 0)
+        return failed(p, "%s: %s", r->bin, strerror(errno));
+    for (i = 0; i < sizeof(emulators) / sizeof(emulators[0]); i++) {
+        if ((real = path_of(emulators[i], env_path(p))) == NULL)
+            continue;
+        if (real[0] != '/' || real[strcspn(real, "\"\\$`")] != '\0') {
+            bad = refuse(p, "%s: a shim cannot name this emulator", real);
+            free(real);
+            return bad;
+        }
+        shim = format("%s/%s", r->bin, emulators[i]);
+        f = shim != NULL ? fopen(shim, "w") : NULL;
+        bad = f == NULL;
+        if (f != NULL) {
+            fprintf(f,
+                    "#!/bin/sh\nsmp=\n[ \"${RACH2_CPUS:-1}\" = 1 ] || smp=\"-smp $RACH2_CPUS\"\n"
+                    "exec \"$RACH2_RUN_UTIL\" machine \"${RACH2_QEMU_LEDGER:?}\" \"%s\" "
+                    "-accel \"${RACH2_QEMU_ACCEL:?}\" $smp \"$@\"\n",
+                    real);
+            bad = fclose(f) != 0 || chmod(shim, 0755) != 0;
+        }
+        free(real);
+        free(shim);
+        if (bad)
+            return failed(p, "%s: its shim cannot be written: %s", emulators[i],
+                          strerror(errno != 0 ? errno : ENOMEM));
+    }
+    return 0;
+}
+
+/** Say whether `var` is a variable the suite takes from the adapter. */
+static int suite_var(const char *var)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(suite_vars) / sizeof(suite_vars[0]); i++) {
+        if (strncmp(var, suite_vars[i], strlen(suite_vars[i])) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * Make the suite's environment from the steps': the shims before the steps'
+ * path, the emulator, the accelerator, the processors, runutil and the
+ * machines' ledger, as tests/run gives them; 0, or 2 when memory ran out.
+ */
+static int run_env(struct prep *p, struct run *r)
+{
+    const char *qemu =
+        strcmp(p->arch_build, "build") == 0 ? "qemu-system-i386" : "qemu-system-x86_64";
+    char *add[7];
+    size_t n = 0, k = 0, i;
+    char **env;
+    int bad = 0;
+
+    add[0] = format("PATH=%s:%s", r->bin, env_path(p));
+    add[1] = format("RACH2_QEMU=%s", qemu);
+    add[2] = format("RACH2_QEMU_ACCEL=%s", r->accel);
+    add[3] = format("RACH2_CPUS=%s", r->cpus);
+    add[4] = format("RACH2_RUN_UTIL=%s", r->runutil);
+    add[5] = format("RACH2_QEMU_LEDGER=%s", r->ledger);
+    add[6] = format("RACH2_QEMU_SHIMS=%s", r->bin);
+    while (p->env[n] != NULL)
+        n++;
+    env = calloc(n + 8, sizeof(*env));
+    for (i = 0; i < 7; i++)
+        bad = bad || add[i] == NULL;
+    if (env == NULL || bad) {
+        for (i = 0; i < 7; i++)
+            free(add[i]);
+        free(env);
+        return sys_error(p, "the suite's environment", ENOMEM);
+    }
+    for (i = 0; i < n; i++) {
+        if (suite_var(p->env[i]))
+            free(p->env[i]);
+        else
+            env[k++] = p->env[i];
+    }
+    for (i = 0; i < 7; i++)
+        env[k++] = add[i];
+    free(p->env);
+    p->env = env;
+    return 0;
+}
+
+/** Take the decimal number after `name` in `line` into `*v`; 1, or 0 when
+ * the line is not that field. */
+static int end_field(const char *line, const char *name, int *v)
+{
+    size_t n = strlen(name);
+    char *rest;
+    long x;
+
+    if (strncmp(line, name, n) != 0 || line[n] != ' ' || line[n + 1] < '0' || line[n + 1] > '9')
+        return 0;
+    x = strtol(line + n + 1, &rest, 10);
+    if (*rest != '\0' || x > 255)
+        return 0;
+    *v = (int)x;
+    return 1;
+}
+
+/**
+ * Read runutil's record of the suite's end, as `finish_record` in runutil.c
+ * writes it, into `e`: whole only when it has its first line and a status,
+ * every line is known and ends with a newline, and `end` is last.
+ */
+static void read_end(const char *path, struct suite_end *e)
+{
+    FILE *f = fopen(path, "r");
+    char *line = NULL;
+    size_t cap = 0, lineno = 0;
+    ssize_t len;
+    int bad = 0, done = 0;
+
+    e->status = -1;
+    if (f == NULL)
+        return;
+    while (!bad && (len = getline(&line, &cap, f)) >= 0) {
+        if (done || len == 0 || line[len - 1] != '\n') {
+            bad = 1;
+            break;
+        }
+        line[len - 1] = '\0';
+        if (++lineno == 1)
+            bad = strcmp(line, END_HEAD) != 0;
+        else if (strncmp(line, "left ", 5) == 0)
+            bad = list_add(&e->left, line + 5) != 0;
+        else if (strncmp(line, "cut ", 4) == 0)
+            bad = list_add(&e->cut, line + 4) != 0;
+        else if (strcmp(line, "end") == 0)
+            done = 1;
+        else
+            bad = !end_field(line, "status", &e->status) && !end_field(line, "idle", &e->idle) &&
+                  !end_field(line, "stopped", &e->stopped) &&
+                  !end_field(line, "leaked", &e->leaked) &&
+                  !end_field(line, "survivor", &e->survivor);
+    }
+    e->whole = done && !bad && !ferror(f) && e->status >= 0;
+    free(line);
+    fclose(f);
+}
+
+/** Write a `left` entry of runutil's record, `PID GROUP COMMAND`, as
+ * prose into `buf`. */
+static void left_text(const char *entry, char *buf, size_t n)
+{
+    long pid = 0, group = 0;
+    int at = -1;
+
+    sscanf(entry, "%ld %ld %n", &pid, &group, &at);
+    snprintf(buf, n, "pid %ld, group %ld, %s", pid, group, at > 0 ? entry + at : "?");
+}
+
+/**
+ * Judge the suite from how its case ended, `ended` and `x`, and runutil's
+ * record `r->e`, and give the reason in `why`. A run that did not finish is
+ * incomplete whatever else it shows; one that finished fails for a machine
+ * left running, a process that outlived it, or a target that did not exit 0.
+ */
+static enum verdict judge_suite(const struct prep *p, const struct run *r, enum ended ended,
+                                const struct etude_exec_result *x, char *why, size_t n)
+{
+    const struct suite_end *e = &r->e;
+    unsigned bound = p->o->seconds != 0 ? p->o->seconds : ETUDE_LEGACY_SECONDS;
+    int seen = x->end == ETUDE_END_EXITED || x->end == ETUDE_END_SIGNALED;
+    char left[160];
+
+    if (ended == ENDED_BOUND)
+        snprintf(why, n, "it ran past its bound of %u s", bound);
+    else if (!seen)
+        snprintf(why, n, "its end was not seen");
+    else if (!e->whole && x->end == ETUDE_END_SIGNALED)
+        snprintf(why, n, "runutil left no record of its end: it was killed by signal %d", x->value);
+    else if (!e->whole)
+        snprintf(why, n, "runutil left no record of its end: it exited %d", x->value);
+    else if (e->idle)
+        snprintf(why, n, "no output, console or processor time for %s s", r->idle);
+    else if (e->stopped)
+        snprintf(why, n, "runutil was stopped by signal %d", e->stopped);
+    else if (e->cut.n > 0)
+        snprintf(why, n, "the console of machine %.*s was cut", (int)strcspn(e->cut.v[0], " "),
+                 e->cut.v[0]);
+    else if (x->cleanup != ETUDE_CLEANUP_CONFIRMED)
+        snprintf(why, n, "its processes were not all seen to end");
+    else
+        why[0] = '\0';
+    if (why[0] != '\0')
+        return VERDICT_INCOMPLETE;
+    if (e->left.n > 0) {
+        left_text(e->left.v[0], left, sizeof(left));
+        snprintf(why, n, "a machine was left running: %s", left);
+    } else if (e->survivor) {
+        snprintf(why, n, "a machine outlived its SIGTERM");
+    } else if (e->leaked) {
+        snprintf(why, n, "a process outlived the suite");
+    } else if (e->status > 128) {
+        snprintf(why, n, "it was killed by signal %d", e->status - 128);
+    } else if (e->status != 0) {
+        snprintf(why, n, "it exited %d", e->status);
+    } else {
+        return VERDICT_PASSED;
+    }
+    return VERDICT_FAILED;
+}
+
+/** Print a line for each machine left running and each console cut. */
+static void print_findings(const struct prep *p, const struct run *r)
+{
+    char text[160];
+    size_t i;
+
+    for (i = 0; i < r->e.left.n; i++) {
+        left_text(r->e.left.v[i], text, sizeof(text));
+        fprintf(p->out, "etude-legacy: %s: left running: %s\n", r->ro->suite, text);
+    }
+    for (i = 0; i < r->e.cut.n; i++) {
+        long machine = 0, relay = 0;
+
+        sscanf(r->e.cut.v[i], "%ld %ld", &machine, &relay);
+        fprintf(p->out, "etude-legacy: %s: console cut: machine %ld, relay %ld\n", r->ro->suite,
+                machine, relay);
+    }
+}
+
+/** Make WORK/start, whose time the logs the suite writes are newer than;
+ * 0, or 1 after an error. */
+static int run_stamp(struct prep *p, struct run *r)
+{
+    char *path = format("%s/start", p->work);
+    int fd = path != NULL ? open(path, O_WRONLY | O_CREAT | O_EXCL, 0600) : -1;
+    struct stat st;
+    int ok = fd >= 0 && fstat(fd, &st) == 0;
+
+    if (fd >= 0)
+        close(fd);
+    free(path);
+    if (!ok)
+        return failed(p, "%s/start cannot be made: %s", p->work, strerror(errno));
+    r->stamp = mtime_ns(&st);
+    return 0;
+}
+
+/**
+ * Run the suite's target through the executor under `runutil record`, with
+ * the suite's output in WORK/suite.log copied to the output as it grows, and
+ * judge it; 0 when it passed, 1 when it did not, or 128 plus the signal
+ * after a stop.
+ */
+static int run_suite(struct prep *p, struct run *r)
+{
+    char *argv[20], why[256];
+    static const char *const word[] = {"INCOMPLETE", "FAIL", "PASS"};
+    const struct etude_exec_result *x;
+    struct etude_exec_spec spec;
+    struct etude_proc *proc;
+    struct follow f;
+    enum ended ended;
+    uint64_t began;
+    size_t k = 0;
+    int status;
+
+    argv[k++] = "/bin/sh";
+    argv[k++] = "-c";
+    argv[k++] = (char *)script_answer;
+    argv[k++] = "etude-legacy";
+    argv[k++] = r->log;
+    argv[k++] = r->runutil;
+    argv[k++] = "record";
+    argv[k++] = (char *)r->ro->suite;
+    argv[k++] = r->idle;
+    argv[k++] = r->ledger;
+    argv[k++] = r->end;
+    argv[k++] = "make";
+    argv[k++] = "-C";
+    argv[k++] = p->tree;
+    argv[k++] = "--no-print-directory";
+    argv[k++] = p->arch_var;
+    if (p->kernel_var != NULL)
+        argv[k++] = p->kernel_var;
+    argv[k++] = r->target;
+    argv[k] = NULL;
+    if (stopped(p))
+        return 128 + (int)*p->o->stop;
+    if ((status = run_stamp(p, r)) != 0)
+        return status;
+    fprintf(p->out, "run: %s: starting (idle limit %s s)\n", r->ro->suite, r->idle);
+    fflush(p->out);
+    memset(&spec, 0, sizeof(spec));
+    spec.attempt_id = r->ro->suite;
+    spec.argv = argv;
+    spec.envp = p->env;
+    spec.cwd = p->tree;
+    spec.output_max = OUTPUT_MAX;
+    spec.grace_us = SUITE_GRACE_US;
+    spec.posix_only = p->posix_only;
+    began = posix_now_us();
+    if (etude_exec_start(p->ex, &spec, &proc) != 0)
+        return failed(p, "it did not start: %s", strerror(errno));
+    f.path = r->log;
+    f.fd = -1;
+    ended = await_step(p, proc, &f);
+    if (f.fd >= 0)
+        close(f.fd);
+    x = etude_proc_result(proc);
+    if (ended == ENDED_STOP) {
+        fprintf(p->out, "etude-legacy: %s: stopped by signal %d\n", r->ro->suite, (int)*p->o->stop);
+        etude_proc_free(proc);
+        return 128 + (int)*p->o->stop;
+    }
+    read_end(r->end, &r->e);
+    r->verdict = judge_suite(p, r, ended, x, why, sizeof(why));
+    fprintf(p->out, "run: %s: %s in %llus\n", r->ro->suite, word[r->verdict],
+            (unsigned long long)((posix_now_us() - began) / 1000000u));
+    print_findings(p, r);
+    if (r->verdict != VERDICT_PASSED && x->err.kept > 0)
+        fprintf(p->out, "    | %s%s", x->err.data,
+                x->err.data[x->err.kept - 1] == '\n' ? "" : "\n");
+    etude_proc_free(proc);
+    return r->verdict == VERDICT_PASSED ? 0 : failed(p, "%s", why);
+}
+
+/** Make the directories of `path` above its last name, from the length
+ * `from` on, which exists already; 0, or -1. */
+static int make_parents(char *path, size_t from)
+{
+    char *slash;
+
+    for (slash = strchr(path + from, '/'); slash != NULL; slash = strchr(slash + 1, '/')) {
+        *slash = '\0';
+        if (mkdir(path, 0700) != 0 && errno != EEXIST) {
+            *slash = '/';
+            return -1;
+        }
+        *slash = '/';
+    }
+    return 0;
+}
+
+/** Copy the file `from` to `to`; 0, or -1. */
+static int copy_file(const char *from, const char *to)
+{
+    char buf[65536];
+    ssize_t n = 0;
+    int in = open(from, O_RDONLY);
+    int out = in >= 0 ? open(to, O_WRONLY | O_CREAT | O_TRUNC, 0600) : -1, bad = out < 0;
+
+    while (!bad && (n = read(in, buf, sizeof(buf))) > 0)
+        bad = write(out, buf, (size_t)n) != n;
+    if (in >= 0)
+        close(in);
+    if (out >= 0 && close(out) != 0)
+        bad = 1;
+    return bad || n < 0 ? -1 : 0;
+}
+
+/** Give the globs of the files suite `s` writes under the images, as
+ * tests/run reads them, into `g`; 0, or -1 when memory ran out. */
+static int image_globs(const struct suite *s, struct list *g)
+{
+    static const char *const twin[] = {"%.*s*-e1000.*", "%.*s*-e1000-*", "%.*s*-e1000/*"};
+    static const char *const own[] = {"%.*s-test*", "%.*s.*", "%.*s-*", "%.*s/*"};
+    const char *images = s->images;
+    size_t n = strlen(s->name), len, i;
+    char *glob;
+    int e1000 = n > 6 && strcmp(s->name + n - 6, "-e1000") == 0;
+
+    while (*images != '\0') {
+        len = strcspn(images, ",");
+        if ((glob = format("%.*s", (int)len, images)) == NULL || list_add(g, glob) != 0) {
+            free(glob);
+            return -1;
+        }
+        free(glob);
+        images += len + (images[len] == ',');
+    }
+    if (g->n != 0)
+        return 0;
+    for (i = 0; i < (e1000 ? 3u : 4u); i++) {
+        glob = format(e1000 ? twin[i] : own[i], (int)(e1000 ? n - 6 : n), s->name);
+        if (glob == NULL || list_add(g, glob) != 0) {
+            free(glob);
+            return -1;
+        }
+        free(glob);
+    }
+    return 0;
+}
+
+/** Say whether the file `rel` of the images is the suite's, by the globs
+ * `g`; a plain suite owns no file of its e1000 twin's. */
+static int owns(const char *rel, const struct list *g, int e1000)
+{
+    static const char *const twin[] = {"*-e1000.*", "*-e1000-*", "*-e1000/*"};
+    size_t i;
+
+    for (i = 0; !e1000 && i < sizeof(twin) / sizeof(twin[0]); i++) {
+        if (fnmatch(twin[i], rel, 0) == 0)
+            return 0;
+    }
+    for (i = 0; i < g->n; i++) {
+        if (fnmatch(g->v[i], rel, 0) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * Copy each log under `dir`, `rel` below the images, that the suite owns by
+ * the globs `g` and that changed since it started, into WORK/images.
+ */
+static void keep_dir(struct prep *p, struct run *r, const char *dir, const char *rel,
+                     const struct list *g, int e1000)
+{
+    DIR *d = opendir(dir);
+    struct dirent *ent;
+    struct stat st;
+    char *path, *sub, *to;
+    size_t n;
+
+    while (d != NULL && (ent = readdir(d)) != NULL) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        path = format("%s/%s", dir, ent->d_name);
+        sub = rel[0] != '\0' ? format("%s/%s", rel, ent->d_name) : strdup(ent->d_name);
+        n = sub != NULL ? strlen(sub) : 0;
+        if (path != NULL && sub != NULL && lstat(path, &st) == 0 && S_ISDIR(st.st_mode))
+            keep_dir(p, r, path, sub, g, e1000);
+        else if (path != NULL && sub != NULL && lstat(path, &st) == 0 && S_ISREG(st.st_mode) &&
+                 n > 4 && strcmp(sub + n - 4, ".log") == 0 && mtime_ns(&st) >= r->stamp &&
+                 owns(sub, g, e1000)) {
+            to = format("%s/images/%s", p->work, sub);
+            if (to == NULL || make_parents(to, strlen(p->work) + 1) != 0 ||
+                copy_file(path, to) != 0)
+                fprintf(p->out, "etude-legacy: %s: not kept: %s\n", sub, strerror(errno));
+            free(to);
+        }
+        free(path);
+        free(sub);
+    }
+    if (d != NULL)
+        closedir(d);
+}
+
+/** Keep the logs the suite wrote under the architecture's images, as
+ * tests/run's keep_logs keeps them, in WORK/images. */
+static void keep_images(struct prep *p, struct run *r)
+{
+    const struct suite *s = p->chosen[0];
+    char *dir = format("%s/%s/images", p->tree, p->arch_build);
+    size_t n = strlen(s->name);
+    struct list g;
+
+    memset(&g, 0, sizeof(g));
+    if (dir != NULL && image_globs(s, &g) == 0)
+        keep_dir(p, r, dir, "", &g, n > 6 && strcmp(s->name + n - 6, "-e1000") == 0);
+    list_free(&g);
+    free(dir);
+}
+
+/** Print the run's result line, keep its evidence or remove its work, and
+ * free the rest. */
+static void run_conclude(struct prep *p, struct run *r, int status)
+{
+    if (status == 0)
+        fprintf(p->out, "etude-legacy: result: passed: %s\n", r->ro->suite);
+    else if (status == 1)
+        fprintf(p->out, "etude-legacy: result: %s: %s: %s\n",
+                r->verdict == VERDICT_FAILED ? "failed" : "incomplete", r->ro->suite,
+                p->why != NULL ? p->why : "memory ran out");
+    else if (status > 128)
+        fprintf(p->out, "etude-legacy: result: stopped by signal %d\n", status - 128);
+    if (status == 1 && r->stamp != 0)
+        keep_images(p, r);
+    release(p, status == 1);
+    list_free(&r->e.left);
+    list_free(&r->e.cut);
+    free(r->tree);
+    free(r->arch);
+    free(r->kernel);
+    free(r->target);
+    free(r->bin);
+    free(r->runutil);
+    free(r->ledger);
+    free(r->end);
+    free(r->log);
+}
+
+int etude_legacy_run(const struct etude_legacy_run_opts *ro)
+{
+    struct etude_legacy_opts o;
+    struct prep p;
+    struct run r;
+    int status;
+
+    memset(&o, 0, sizeof(o));
+    memset(&p, 0, sizeof(p));
+    memset(&r, 0, sizeof(r));
+    o.work = ro->work;
+    o.seconds = ro->seconds;
+    o.out = ro->out;
+    o.stop = ro->stop;
+    p.o = &o;
+    p.out = ro->out != NULL ? ro->out : stdout;
+    p.posix_only = ro->posix_only;
+    r.ro = ro;
+    status = ro->record != NULL && ro->suite != NULL ? run_admit(&p, &r, &o)
+                                                     : refuse(&p, "no record or no suite named");
+    if (status == 0) {
+        fprintf(p.out, "etude-legacy: running %s for %s in %s\n", ro->suite, p.arch_var + 5,
+                p.tree);
+        status = open_work(&p);
+    }
+    if (status == 0)
+        status = run_files(&p, &r);
+    if (status == 0)
+        status = find_path(&p);
+    if (status == 0)
+        status = run_tools(&p);
+    if (status == 0)
+        status = run_runutil(&p, &r);
+    if (status == 0)
+        status = run_shims(&p, &r);
+    if (status == 0)
+        status = run_env(&p, &r);
+    if (status == 0)
+        status = run_suite(&p, &r);
+    run_conclude(&p, &r, status);
+    db_free(&p.db);
+    list_free(&p.goals);
+    list_free(&p.required);
+    free(p.tree);
+    free(p.arch_var);
+    free(p.kernel);
+    free(p.kernel_var);
+    free(p.work);
+    free(p.why);
     return status;
 }
