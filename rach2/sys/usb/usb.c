@@ -116,7 +116,8 @@ void usb_report_controllers(void)
 /* How long the boot waits for what is already plugged in to be enumerated.
  * The timer steps each device once a tick, every 10 ms, and a device takes a
  * dozen steps, so this is enough for a few devices and short enough not to be
- * noticed; the timer finishes a device still being enumerated after it. */
+ * noticed; the timer finishes a device still being enumerated after it, and a
+ * hub's scan or a stick's units still coming up. */
 #define USB_ENUMERATE_MS 400u
 
 /*
@@ -437,7 +438,7 @@ int usb_init(void)
     {
         uint32_t turn;
 
-        for (turn = 0; turn < USB_ENUMERATE_MS && !usb_core_idle(); turn++) {
+        for (turn = 0; turn < USB_ENUMERATE_MS && usb_core_busy() != 0; turn++) {
             k_udelay(1000);
         }
     }

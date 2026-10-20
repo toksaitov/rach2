@@ -1765,18 +1765,6 @@ static int in_progress(const struct usb_device_state *d)
            d->state != ST_SLOTWAIT;
 }
 
-int usb_core_idle(void)
-{
-    int i;
-
-    for (i = 0; i < USB_MAX_DEVICES; i++) {
-        if (in_progress(dev_at(i))) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 int usb_core_busy(void)
 {
     int i;

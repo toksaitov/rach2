@@ -222,26 +222,20 @@ int usb_core_endpoint_quiesce(struct xhci_ctrl *hc, int device, int endpoint);
  */
 void usb_core_device_drop(struct xhci_ctrl *hc, int device, const char *why);
 
-/**
- * Whether no device is being enumerated, recovered or closed. A device
- * waiting for a free slot counts as idle, since it may wait for ever. Read at
- * boot by `usb_init`, while the timer runs the pump.
- */
-int usb_core_idle(void);
-
 /** How many devices are configured and running; read at boot by `usb_init`. */
 int usb_core_count(void);
 
 /**
  * How many devices the stack has not finished with: those being enumerated,
- * recovered or closed, as `usb_core_idle` counts them, the hubs whose class
- * driver has not ended its first scan (`hub_starting`), and the sticks whose
- * units are being brought up (`msc_starting`). Zero once every device
- * present at a port is running, refused or waiting for a slot or an entry,
- * which is the end of enumeration that `/proc/usb` reports. A change a hub
- * has not yet reported is not counted.
+ * recovered or closed, the hubs whose class driver has not ended its first
+ * scan (`hub_starting`), and the sticks whose units are being brought up
+ * (`msc_starting`). Zero once every device present at a port is running,
+ * refused or waiting for a slot or an entry, which is the end of enumeration
+ * that `/proc/usb` reports. A change a hub has not yet reported is not
+ * counted.
  *
- * Called in process context; the records are read with interrupts off, so a
+ * Called in process context, by `usb_init` at boot while the timer runs the
+ * pump and by `/proc/usb`; the records are read with interrupts off, so a
  * pass of the pump that moves a device from one count to another is seen
  * whole or not at all.
  */

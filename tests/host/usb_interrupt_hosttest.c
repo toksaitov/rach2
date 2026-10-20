@@ -274,10 +274,10 @@ void usb_core_step(uint32_t elapsed_ms)
 void usb_core_reset(void)
 {}
 
-/** Return 1: there are no devices to wait for. */
-int usb_core_idle(void)
+/** Return 0: there are no devices to wait for. */
+int usb_core_busy(void)
 {
-    return 1;
+    return 0;
 }
 
 /** Return 0 devices. */

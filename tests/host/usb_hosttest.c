@@ -1190,7 +1190,7 @@ int main(void)
     /* The device table. */
     usb_core_reset();
     CHECK("nothing is configured to begin with", usb_core_count() == 0);
-    CHECK("and nothing is part way through", usb_core_idle() == 1);
+    CHECK("and nothing is part way through", usb_core_busy() == 0);
 
     if (fails == 0) {
         printf("usb_hosttest: OK\n");
