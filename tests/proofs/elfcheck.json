@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "proof": "elfcheck",
+  "summary": "elf_hosttest.c's bound on the program header table, with one fault in a private copy of rach2/sys/proc/elf.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/proc/elf.c"
+  ],
+  "artifacts": [
+    "${WORK}/elf_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -g -O1 -ffreestanding -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -I ${SRC}/rach2/sys -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc tests/host/elf_hosttest.c -o ${WORK}/elf_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/elf_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "elf-hosttest: failed: "
+  },
+  "faults": [
+    {
+      "name": "wrapping-sum",
+      "summary": "the bound as a 32-bit sum that can wrap, with no check of e_phentsize",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/elf.c",
+          "find": "    if (ehdr->e_phentsize != sizeof(Elf_Phdr)) {\n        return false;\n    }\n    if (ehdr->e_phoff > size ||\n        (uint32_t)ehdr->e_phnum > (size - (uint32_t)ehdr->e_phoff) / sizeof(Elf_Phdr)) {\n        return false;\n    }\n",
+          "replace": "    if ((uint32_t)ehdr->e_phoff + (uint32_t)ehdr->e_phnum * (uint32_t)ehdr->e_phentsize > size) {\n        return false;\n    }\n"
+        }
+      ],
+      "fails": {
+        "status": 2,
+        "lines": [
+          "elf-hosttest: failed: elf_check: offset near 2^32",
+          "elf-hosttest: failed: elf_check: zero e_phentsize"
+        ]
+      }
+    }
+  ]
+}

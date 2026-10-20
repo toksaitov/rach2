@@ -18,7 +18,7 @@
  * with the reservations the boot makes on it. The reservations are replayed
  * against each and the four numbers checked, and the frame table is placed
  * with `frame_map_place`. Exits with the count of failed checks, at most 50.
- * tests/host/frame_mutate.sh counts the NVS and ACPI types as memory and
+ * tests/proofs/frame.json counts the NVS and ACPI types as memory and
  * requires the Lenovo's two rows, and no other, to fail.
  */
 

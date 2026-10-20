@@ -5,8 +5,8 @@
 # tree; its exit status 0 is a pass.
 krffs_open|600|krffs publication open|sh tests/host/krffs_open_mutate.sh --check
 krffs_root_lock|600|krffs root data operations under the mount's lock|sh tests/host/krffs_root_lock_mutate.sh --check
-kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_mutate.sh --check
-endothers|600|an init's end waits for the processes still ending|sh tests/host/endothers_mutate.sh --check
+kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_check.sh
+endothers|600|an init's end waits for the processes still ending|sh tests/host/endothers_check.sh
 chown|600|the set-id rules of a mounted chown|sh tests/host/chown_mutate.sh --check
 pagecache|600|the page cache with sys_sync's bounded wait|sh tests/host/pagecache_mutate.sh --check
 doom_libc|600|Doom C library on both architectures|sh tests/host/doom_libc_mutate.sh --check

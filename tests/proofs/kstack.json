@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "proof": "kstack",
+  "summary": "fork's kernel stack comes back clear with a guard page below it, and the boot stack is never given back: tests/host/kstack_check.sh extracts kstack_alloc, kstack_free and kstack_overrun_pid unchanged from a private copy of rach2/sys/syscall_proc.c into tests/host/fixtures/kstack.c, with six faults in those functions",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/kstack"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/host/kstack_check.sh",
+      "${SRC}",
+      "${WORK}"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/kstack"
+    ],
+    "bound_s": 20,
+    "fail_prefix": "kstack-proof: fail: "
+  },
+  "faults": [
+    {
+      "name": "none",
+      "summary": "the clearing of a new stack removed",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        k_memset(base, 0, KERNEL_STACK_SIZE);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kstack-proof: fail: every byte of a new kernel stack is zero"
+        ]
+      }
+    },
+    {
+      "name": "top",
+      "summary": "the clearing of the top page alone, the part fork writes anyway",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        k_memset(base, 0, KERNEL_STACK_SIZE);\n",
+          "replace": "        k_memset((char *)base + KERNEL_STACK_SIZE - PAGE_SIZE, 0, PAGE_SIZE);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kstack-proof: fail: every byte of a new kernel stack is zero"
+        ]
+      }
+    },
+    {
+      "name": "unguarded",
+      "summary": "the stack taken from the heap without a guard",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    void *base = kalloc_guarded(KERNEL_STACK_SIZE / PAGE_SIZE);\n",
+          "replace": "    void *base = kalloc_pages(KERNEL_STACK_SIZE / PAGE_SIZE, NULL);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kstack-proof: fail: a kernel stack is four pages from the heap with a guard page below them"
+        ]
+      }
+    },
+    {
+      "name": "guard-in-stack",
+      "summary": "the guard looked for in the stack's own lowest page",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE - PAGE_SIZE;\n",
+          "replace": "    guard = current_proc->kernel_stack - KERNEL_STACK_SIZE;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kstack-proof: fail: an address in the guard page below the running thread's stack gives its pid"
+        ]
+      }
+    },
+    {
+      "name": "empty",
+      "summary": "a thread with no stack looked at like any other, its guard wrapped below zero",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (!current_proc || current_proc->kernel_stack < KERNEL_STACK_SIZE + PAGE_SIZE) {\n",
+          "replace": "    if (!current_proc) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kstack-proof: fail: a thread with no stack gives none"
+        ]
+      }
+    },
+    {
+      "name": "boot-freed",
+      "summary": "the boot stack given back like any other",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    if (top != 0 && top != (uintptr_t)stack + KERNEL_STACK_SIZE) {\n",
+          "replace": "    if (top != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kstack-proof: fail: the boot stack's top gives nothing back"
+        ]
+      }
+    }
+  ]
+}

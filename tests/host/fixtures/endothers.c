@@ -2,7 +2,7 @@
  * The end of every other user process before an init that ran under the
  * debug shell hands the machine back to it (`proc_end_others`).
  *
- * tests/host/endothers_mutate.sh extracts `proc_end_others` unchanged from a
+ * tests/host/endothers_check.sh extracts `proc_end_others` unchanged from a
  * copy of rach2/sys/syscall_proc.c into endothers.inc. The records here have
  * the fields it reads, and the signal, the scheduler and the reap are
  * models. A switch lets the others run: a process sent SIGKILL ends, and so

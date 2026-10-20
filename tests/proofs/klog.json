@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "klog",
+  "summary": "the rows of klog_hosttest.c that require a record raised inside a line of the debug shell to follow the line, with two faults in a private copy of rach2/sys/klog.c, each of which must fail the checks named for it and no other; the test includes klog.c by a path relative to itself, so the build copies the test and rach2/sys under the work directory",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/klog.c"
+  ],
+  "artifacts": [
+    "${WORK}/klog_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e; rm -rf ${WORK}/b; mkdir -p ${WORK}/b/rach2 ${WORK}/b/tests/host; cp -R rach2/sys ${WORK}/b/rach2/; cp ${SRC}/rach2/sys/klog.c ${WORK}/b/rach2/sys/klog.c; cp tests/host/klog_hosttest.c ${WORK}/b/tests/host/; deps=$(grep -oE 'host-deps:[^*]*' tests/host/klog_hosttest.c | sed 's/host-deps://' | tr '\\n' ' '); cd ${WORK}/b; ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -o ${WORK}/klog_hosttest tests/host/klog_hosttest.c $deps"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/klog_hosttest"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "  FAIL: "
+  },
+  "faults": [
+    {
+      "name": "puts-open",
+      "summary": "a console_puts line written outside console_write_begin and console_write_end, holding only the screen's cursor",
+      "edits": [
+        {
+          "file": "rach2/sys/klog.c",
+          "find": "    console_write_begin();\n    while (*str != '\\0') {\n        console_putc(*str++);\n    }\n    console_putc('\\n');\n    console_write_end();",
+          "replace": "    textcon_hold();\n    while (*str != '\\0') {\n        console_putc(*str++);\n    }\n    console_putc('\\n');\n    textcon_release();"
+        }
+      ],
+      "fails": {
+        "status": 2,
+        "lines": [
+          "  FAIL: a record raised inside a line of the shell follows the line on the port",
+          "  FAIL: and on the screen"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "printf-open",
+      "summary": "a console_printf call written outside console_write_begin and console_write_end",
+      "edits": [
+        {
+          "file": "rach2/sys/klog.c",
+          "find": "    console_write_begin();\n    k_vprintf(console_putc, format, ap);\n    console_write_end();",
+          "replace": "    textcon_hold();\n    k_vprintf(console_putc, format, ap);\n    textcon_release();"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: a record raised inside a formatted line of the shell follows it"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

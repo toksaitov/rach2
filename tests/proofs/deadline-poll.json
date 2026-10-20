@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "proof": "deadline-poll",
+  "summary": "poll_deadline_hosttest.c, which requires the poll, ppoll and select timeouts to end at the first tick at or after their end, measured from where in the tick in progress they began, and a deadline to be reached at its tick and not before, across the wrap and after a lost tick, with 20 faults in a private copy of rach2/sys/io/poll.c; one of three proofs of the host rows on wait deadlines, the timer's tick and the kinds of change a wake counts, split by test; the build copies rach2/sys under the work directory",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/io/poll.c"
+  ],
+  "artifacts": [
+    "${WORK}/poll_deadline_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e; rm -rf ${WORK}/b; mkdir -p ${WORK}/b/rach2; cp -R rach2/sys ${WORK}/b/rach2/; cp ${SRC}/rach2/sys/io/poll.c ${WORK}/b/rach2/sys/io/poll.c; deps=; for dep in $(grep -oE 'host-deps:[^*]*' tests/host/poll_deadline_hosttest.c | sed 's/host-deps://'); do case $dep in rach2/sys/*) deps=\"$deps ${WORK}/b/$dep\" ;; *) deps=\"$deps $dep\" ;; esac; done; ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -I ${WORK}/b/rach2/sys -I ${WORK}/b/rach2/sys/arch/x86 -I ${WORK}/b/rach2/sys/arch/i686 -I ${WORK}/b/rach2/sys/lib -I ${WORK}/b/rach2/sys/proc tests/host/poll_deadline_hosttest.c $deps -o ${WORK}/poll_deadline_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/poll_deadline_hosttest"
+    ],
+    "bound_s": 10
+  },
+  "faults": [
+    {
+      "name": "poll-early",
+      "summary": "a poll, ppoll or select timeout rounded down to the tick",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;\n",
+          "replace": "    ticks += (phase_ns / 1000u + us) / 10000u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a poll of 1 ms from tick 1000 ends at 1001",
+          "a ppoll of 1 ns from tick 1000 ends at 1001",
+          "a select of 1 us from tick 1000 ends at 1001"
+        ]
+      }
+    },
+    {
+      "name": "poll-phase",
+      "summary": "a timeout measured from the tick, not from where in the tick it began",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;\n",
+          "replace": "    ticks += (us + 9999u) / 10000u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "and one of 7 ms at the tick after"
+        ]
+      }
+    },
+    {
+      "name": "poll-clamp",
+      "summary": "the longest ppoll timeout not clamped to 0x7FFFFFFF ticks",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return now + (ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks);\n",
+          "replace": "    return now + ticks;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap",
+          "and its deadline is not reached at the tick it began"
+        ]
+      }
+    },
+    {
+      "name": "ppoll-nsec",
+      "summary": "a ppoll's nanoseconds rounded down to microseconds",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);\n",
+          "replace": "    d->tick = tick_deadline(ticks, (uint32_t)ts->tv_nsec % 10000000u / 1000u);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a ppoll of 1 ns from tick 1000 ends at 1001"
+        ]
+      }
+    },
+    {
+      "name": "ppoll-sec",
+      "summary": "a ppoll second counted as ten ticks",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;\n",
+          "replace": "    ticks = sec * 10u + (uint32_t)ts->tv_nsec / 10000000u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a ppoll of 1 s and 11 ms from tick 1000 ends at 1102"
+        ]
+      }
+    },
+    {
+      "name": "select-usec",
+      "summary": "a select's microseconds rounded down to milliseconds",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);\n",
+          "replace": "    return (int)(tv->tv_sec * 1000 + tv->tv_usec / 1000);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a select of 1 us from tick 1000 ends at 1001"
+        ]
+      }
+    },
+    {
+      "name": "poll-reached",
+      "summary": "a deadline taken as reached a tick early",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return (int32_t)(deadline - kernel_ticks) <= 0;\n",
+          "replace": "    return (int32_t)(deadline - kernel_ticks) <= 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a deadline one tick ahead is not reached"
+        ]
+      }
+    },
+    {
+      "name": "poll-late",
+      "summary": "a deadline taken as reached a tick late",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return (int32_t)(deadline - kernel_ticks) <= 0;\n",
+          "replace": "    return (int32_t)(deadline - kernel_ticks) < 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a deadline at the tick or behind it is"
+        ]
+      }
+    },
+    {
+      "name": "poll-wrap",
+      "summary": "a deadline compared without the wrap",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return (int32_t)(deadline - kernel_ticks) <= 0;\n",
+          "replace": "    return deadline <= kernel_ticks;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "and its deadline is not reached at the tick it began"
+        ]
+      }
+    },
+    {
+      "name": "tick-nearest",
+      "summary": "a timeout rounded to the nearest tick, not up",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;\n",
+          "replace": "    ticks += (phase_ns / 1000u + us + 5000u) / 10000u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a poll of 21 ms rounds up to three ticks",
+          "a ppoll of 1 s and 11 ms from tick 1000 ends at 1102"
+        ]
+      }
+    },
+    {
+      "name": "ppoll-sec-clamp",
+      "summary": "a ppoll's seconds clamped where the ticks overflow",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    sec = (unsigned long)ts->tv_sec > 21474836ul ? 21474836u : (uint32_t)ts->tv_sec;\n",
+          "replace": "    sec = (unsigned long)ts->tv_sec > 42949672ul ? 42949672u : (uint32_t)ts->tv_sec;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "the longest ppoll timeout ends 0x7FFFFFFF ticks ahead across the wrap"
+        ]
+      }
+    },
+    {
+      "name": "tick-round-one",
+      "summary": "a timeout rounded up from one unit less than a tick",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;\n",
+          "replace": "    ticks += (phase_ns / 1000u + us + 9998u) / 10000u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a ppoll of 1 ns from tick 1000 ends at 1001"
+        ]
+      }
+    },
+    {
+      "name": "ppoll-nsec-one",
+      "summary": "a ppoll's nanoseconds rounded up from one less than a microsecond",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);\n",
+          "replace": "    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 998u) / 1000u);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a ppoll of 1 ns from tick 1000 ends at 1001"
+        ]
+      }
+    },
+    {
+      "name": "select-zero",
+      "summary": "a zero select timeout rounded up to a millisecond",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);\n",
+          "replace": "    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 1000) / 1000);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a zero select timeout ends at once"
+        ]
+      }
+    },
+    {
+      "name": "select-sec",
+      "summary": "a select second counted as 100 milliseconds",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    return (int)(tv->tv_sec * 1000 + (tv->tv_usec + 999) / 1000);\n",
+          "replace": "    return (int)(tv->tv_sec * 100 + (tv->tv_usec + 999) / 1000);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a select of 1 s and 11 ms from tick 1000 ends at 1102"
+        ]
+      }
+    },
+    {
+      "name": "poll-held",
+      "summary": "a poll after a lost tick taken as ended once the clock reaches the second of its end",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    if (sec > d->sec || (sec == d->sec && nsec >= d->nsec)) {\n",
+          "replace": "    if (sec >= d->sec) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "where the clock is short of its end, and the deadline moves to 1003",
+          "a ppoll of 15 ms from there moves to 1003 as well"
+        ]
+      }
+    },
+    {
+      "name": "poll-held-due",
+      "summary": "the due tick of a poll after a lost tick rounded down",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    due = (uint64_t)d->sec * 100u + ((uint32_t)d->nsec + 9999999u) / 10000000u;\n",
+          "replace": "    due = (uint64_t)d->sec * 100u + (uint32_t)d->nsec / 10000000u;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "where the clock is short of its end, and the deadline moves to 1003"
+        ]
+      }
+    },
+    {
+      "name": "poll-end",
+      "summary": "a poll's end set without its milliseconds",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    deadline_end(d, timeout_ms / 1000, timeout_ms % 1000 * 1000000L);\n",
+          "replace": "    deadline_end(d, timeout_ms / 1000, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "where the clock is short of its end, and the deadline moves to 1003"
+        ]
+      }
+    },
+    {
+      "name": "ppoll-end",
+      "summary": "a ppoll's end set without its nanoseconds",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "        deadline_end(d, ts->tv_sec, ts->tv_nsec);\n",
+          "replace": "        deadline_end(d, ts->tv_sec, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a ppoll of 15 ms from there moves to 1003 as well"
+        ]
+      }
+    },
+    {
+      "name": "ppoll-end-clamp",
+      "summary": "a ppoll of exactly the clamped length given an end by the clock",
+      "edits": [
+        {
+          "file": "rach2/sys/io/poll.c",
+          "find": "    if ((unsigned long)ts->tv_sec < 21474836ul) {\n",
+          "replace": "    if ((unsigned long)ts->tv_sec <= 21474836ul) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a ppoll of 21474836 s, the clamp, ends at its tick alone"
+        ]
+      }
+    }
+  ]
+}

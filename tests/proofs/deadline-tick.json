@@ -1,0 +1,300 @@
+{
+  "schema_version": 1,
+  "proof": "deadline-tick",
+  "summary": "process_timer_hosttest.c, which requires a due timer to post SIGALRM to its process and be armed again for its interval, and a sleeper to wake at its deadline and not before, across the wrap, with 17 faults in a private copy of rach2/sys/proc/process.c; one of three proofs of the host rows on wait deadlines, the timer's tick and the kinds of change a wake counts, split by test; the build copies rach2/sys under the work directory",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/proc/process.c"
+  ],
+  "artifacts": [
+    "${WORK}/process_timer_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e; rm -rf ${WORK}/b; mkdir -p ${WORK}/b/rach2; cp -R rach2/sys ${WORK}/b/rach2/; cp ${SRC}/rach2/sys/proc/process.c ${WORK}/b/rach2/sys/proc/process.c; deps=; for dep in $(grep -oE 'host-deps:[^*]*' tests/host/process_timer_hosttest.c | sed 's/host-deps://'); do case $dep in rach2/sys/*) deps=\"$deps ${WORK}/b/$dep\" ;; *) deps=\"$deps $dep\" ;; esac; done; ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -I ${WORK}/b/rach2/sys -I ${WORK}/b/rach2/sys/arch/x86 -I ${WORK}/b/rach2/sys/arch/i686 -I ${WORK}/b/rach2/sys/lib -I ${WORK}/b/rach2/sys/proc tests/host/process_timer_hosttest.c $deps -o ${WORK}/process_timer_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/process_timer_hosttest"
+    ],
+    "bound_s": 10
+  },
+  "faults": [
+    {
+      "name": "tick-running",
+      "summary": "a due timer posted only to a process that is asleep",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n",
+          "replace": "        if (p->state == PROC_BLOCKED && p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a due timer posts SIGALRM to a process that is running"
+        ]
+      }
+    },
+    {
+      "name": "tick-blocked",
+      "summary": "a due timer not posted to a process that is asleep",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n",
+          "replace": "        if (p->state != PROC_BLOCKED && p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "and to one that is asleep"
+        ]
+      }
+    },
+    {
+      "name": "tick-alarm-early",
+      "summary": "a timer posted a tick before it is due",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n",
+          "replace": "        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= -1) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a timer not yet due posts nothing"
+        ]
+      }
+    },
+    {
+      "name": "tick-first-only",
+      "summary": "the tick served for the first process alone",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "    for (p = proc_list; p; p = p->next) {\n        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&\n",
+          "replace": "    for (p = proc_list; p; p = NULL) {\n        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a due timer posts SIGALRM to a process that is running"
+        ]
+      }
+    },
+    {
+      "name": "tick-rearm",
+      "summary": "a timer armed again for one tick, not its interval",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;\n",
+          "replace": "            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, 1u) : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "and each is armed again for its interval from that tick"
+        ]
+      }
+    },
+    {
+      "name": "tick-single",
+      "summary": "a single alarm armed again",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;\n",
+          "replace": "            p->alarm_tick = proc_alarm_at(now, p->alarm_interval);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a single alarm posts once and leaves the timer disarmed"
+        ]
+      }
+    },
+    {
+      "name": "tick-early",
+      "summary": "a sleeper woken a tick before its deadline",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            (int32_t)(now - p->wakeup_tick) >= 0) {\n",
+          "replace": "            (int32_t)(now - p->wakeup_tick) >= -1) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a sleeper is not woken before its deadline"
+        ]
+      }
+    },
+    {
+      "name": "tick-late",
+      "summary": "a sleeper woken a tick after its deadline",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            (int32_t)(now - p->wakeup_tick) >= 0) {\n",
+          "replace": "            (int32_t)(now - p->wakeup_tick) > 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "and is made runnable at its deadline tick"
+        ]
+      }
+    },
+    {
+      "name": "tick-zero",
+      "summary": "a blocked process with no deadline made runnable",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&\n",
+          "replace": "        if (p->state == PROC_BLOCKED &&\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a blocked process with no deadline is not made runnable"
+        ]
+      }
+    },
+    {
+      "name": "tick-state",
+      "summary": "a running process made runnable by its wakeup tick",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&\n",
+          "replace": "        if (p->wakeup_tick != 0 &&\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a running process is left as it is whatever its wakeup tick says"
+        ]
+      }
+    },
+    {
+      "name": "tick-sentinel",
+      "summary": "an alarm that wraps to 0 left at 0, which disarms it",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "    return at != 0 ? at : 1u;\n",
+          "replace": "    return at;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "an alarm that wraps to 0 is due at 1"
+        ]
+      }
+    },
+    {
+      "name": "tick-stop",
+      "summary": "the tick's walk stopped at the first sleeper it wakes",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            sched_make_ready(p);\n        }\n        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n",
+          "replace": "            sched_make_ready(p);\n            break;\n        }\n        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a tick that wakes a sleeper still posts its alarm and a later process"
+        ]
+      }
+    },
+    {
+      "name": "tick-else",
+      "summary": "a sleeper's alarm not posted on the tick that wakes it",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            sched_make_ready(p);\n        }\n        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n",
+          "replace": "            sched_make_ready(p);\n        } else if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a tick that wakes a sleeper still posts its alarm and a later process"
+        ]
+      }
+    },
+    {
+      "name": "tick-one",
+      "summary": "an interval of one tick not armed again",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;\n",
+          "replace": "            p->alarm_tick = p->alarm_interval > 1 ? proc_alarm_at(now, p->alarm_interval) : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "an interval of one tick is armed again"
+        ]
+      }
+    },
+    {
+      "name": "tick-rearm-wrap",
+      "summary": "a timer armed again onto tick 0 across the wrap",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;\n",
+          "replace": "            p->alarm_tick = p->alarm_interval != 0 ? now + p->alarm_interval : 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a timer armed again onto tick 0 across the wrap is due at 1"
+        ]
+      }
+    },
+    {
+      "name": "tick-wake-wrap",
+      "summary": "a sleeper's deadline compared without the wrap",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "            (int32_t)(now - p->wakeup_tick) >= 0) {\n",
+          "replace": "            now >= p->wakeup_tick) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a timer and a sleeper due past the wrap wait for it"
+        ]
+      }
+    },
+    {
+      "name": "tick-alarm-wrap",
+      "summary": "a timer's due tick compared without the wrap",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {\n",
+          "replace": "        if (p->alarm_tick != 0 && now >= p->alarm_tick) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a timer and a sleeper due past the wrap wait for it"
+        ]
+      }
+    }
+  ]
+}

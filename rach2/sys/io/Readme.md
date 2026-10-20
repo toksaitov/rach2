@@ -102,7 +102,7 @@ An instance (`struct inotify`) has a queue of events and a wait queue. Every wat
 
 ## Tests
 
-`tests/run host` compiles `poll_select_hosttest.c`, `poll_deadline_hosttest.c`, `epoll_hosttest.c`, `eventfd_hosttest.c`, `timerfd_hosttest.c` and `wait_queue_hosttest.c` from `tests/host/` natively under AddressSanitizer and UndefinedBehaviorSanitizer. [The host tests' Readme](../../../tests/host/Readme.md) gives their rows. `sh tests/host/deadline_mutate.sh` proves the deadline and wake-count rows with faults.
+`tests/run host` compiles `poll_select_hosttest.c`, `poll_deadline_hosttest.c`, `epoll_hosttest.c`, `eventfd_hosttest.c`, `timerfd_hosttest.c` and `wait_queue_hosttest.c` from `tests/host/` natively under AddressSanitizer and UndefinedBehaviorSanitizer. [The host tests' Readme](../../../tests/host/Readme.md) gives their rows. `tests/proofs/deadline-wait.json`, `deadline-poll.json` and `deadline-tick.json` prove the deadline and wake-count rows with faults.
 
 `tests/run default`, in the core tier, runs these on both architectures:
 

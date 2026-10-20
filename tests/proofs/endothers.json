@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "proof": "endothers",
+  "summary": "an init which ran under the debug shell waits for a process asleep in the call that ends it and for no kernel thread or record another reaper has: tests/host/endothers_check.sh extracts proc_end_others unchanged from a private copy of rach2/sys/syscall_proc.c into tests/host/fixtures/endothers.c, with four faults in that function",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/syscall_proc.c"
+  ],
+  "artifacts": [
+    "${WORK}/endothers"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "tests/host/endothers_check.sh",
+      "${SRC}",
+      "${WORK}"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/endothers"
+    ],
+    "bound_s": 20,
+    "fail_prefix": "endothers-proof: fail: "
+  },
+  "faults": [
+    {
+      "name": "ending-passed",
+      "summary": "every record without an address space passed by, as a kernel thread is",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "                alive += p->in_syscall != 0 && p->state != PROC_UNUSED;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "endothers-proof: fail: a process in the call that ends it is waited for until it is a zombie and reaped"
+        ]
+      }
+    },
+    {
+      "name": "unused-waited",
+      "summary": "the record another reaper has waited for",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "                alive += p->in_syscall != 0 && p->state != PROC_UNUSED;\n",
+          "replace": "                alive += p->in_syscall != 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "endothers-proof: fail: the walk waits for a record that never ends"
+        ]
+      }
+    },
+    {
+      "name": "kthread-waited",
+      "summary": "the kernel thread waited for",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "                alive += p->in_syscall != 0 && p->state != PROC_UNUSED;\n",
+          "replace": "                alive += p->state != PROC_UNUSED;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "endothers-proof: fail: the walk waits for a record that never ends"
+        ]
+      }
+    },
+    {
+      "name": "held",
+      "summary": "the wait for an interrupt with the big lock let go taken out, which leaves a process running on another processor running",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "        idle_wait_irq_on();\n",
+          "replace": "        if (0) {\n            idle_wait_irq_on();\n        }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "endothers-proof: fail: the walk waits for a record that never ends"
+        ]
+      }
+    }
+  ]
+}

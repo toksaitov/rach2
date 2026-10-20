@@ -1,0 +1,295 @@
+{
+  "schema_version": 1,
+  "proof": "fd-stdio",
+  "summary": "fd_hosttest.c with 15 faults in private copies of rach2/sys/fs/fd.c and rach2/sys/proc/process.c, each a standard descriptor, a table growth or a description's lock or life handled against its rule",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/fs/fd.c",
+    "rach2/sys/proc/process.c"
+  ],
+  "artifacts": [
+    "${WORK}/fd_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -fsanitize=address,undefined -fno-sanitize-recover=all -I ${SRC}/rach2/sys -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I rach2/sys/fs tests/host/fd_hosttest.c ${SRC}/rach2/sys/fs/fd.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c -o ${WORK}/fd_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/fd_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "fd_hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "unchecked",
+      "summary": "ignores a failed allocation of a standard descriptor's description",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "        if (!ofd) {\n            while (i > FD_STDIN)",
+          "replace": "        if (0) {\n            while (i > FD_STDIN)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "stdio reports allocation failure"
+        ]
+      }
+    },
+    {
+      "name": "rollback",
+      "summary": "leaves the standard descriptors allocated before a failed one in the table",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "                fd_free(table, --i);",
+          "replace": "                --i;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "stdio releases partial allocations"
+        ]
+      }
+    },
+    {
+      "name": "process",
+      "summary": "publishes a process whose standard descriptors could not be made",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/process.c",
+          "find": "if (fd_init_stdio(p->fds) != 0) {",
+          "replace": "if (fd_init_stdio(p->fds) != 0 && 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "failed process is not published"
+        ]
+      }
+    },
+    {
+      "name": "repoint",
+      "summary": "moves the handle of a description on any mounted type when a node moves, not KRFFS's alone",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "mnt->type == &vfs_krffs_type && rec->ofd.fhandle == from",
+          "replace": "rec->ofd.fhandle == from"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "mounted open handle remains stable during node relocation"
+        ]
+      }
+    },
+    {
+      "name": "namespace",
+      "summary": "fd_ofd_lock and fd_ofd_unlock take the mount's namespace for KRFFS alone",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "{\n    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+          "replace": "{\n    if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {"
+        },
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    wq_wake_all(&ofd_rec_of(ofd)->wq);\n    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+          "replace": "    wq_wake_all(&ofd_rec_of(ofd)->wq);\n    if (ofd->vmnt && ofd->vmnt->type == &vfs_krffs_type) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "other mounted types take the namespace before the description"
+        ]
+      }
+    },
+    {
+      "name": "unserialised",
+      "summary": "fd_ofd_lock and fd_ofd_unlock take the mount's namespace for every mounted file system, whether or not its type asks to be serialised",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "{\n    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+          "replace": "{\n    if (ofd->vmnt) {"
+        },
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    wq_wake_all(&ofd_rec_of(ofd)->wq);\n    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {",
+          "replace": "    wq_wake_all(&ofd_rec_of(ofd)->wq);\n    if (ofd->vmnt) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a file system that needs no serialising takes no namespace lock"
+        ]
+      }
+    },
+    {
+      "name": "alloc-description",
+      "summary": "answers -1 where a description the heap has no room for answers ENOMEM",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "        if (!ofd) {\n            return -ENOMEM;",
+          "replace": "        if (!ofd) {\n            return -1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a description the heap has no room for is ENOMEM"
+        ]
+      }
+    },
+    {
+      "name": "alloc-growth",
+      "summary": "answers -1 where a table the heap has no room to grow answers ENOMEM",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "        if (rc != 0) {\n            return rc;",
+          "replace": "        if (rc != 0) {\n            return -1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a table the heap has no room to grow is ENOMEM"
+        ]
+      }
+    },
+    {
+      "name": "alloc-minimum",
+      "summary": "answers -1 where a minimum at the limit answers EMFILE",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    if (!table || minfd < 0 || minfd >= limit) {\n        return -EMFILE;",
+          "replace": "    if (!table || minfd < 0 || minfd >= limit) {\n        return -1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a minimum at the limit is EMFILE"
+        ]
+      }
+    },
+    {
+      "name": "alloc-limit",
+      "summary": "answers -1 where a table full to its limit answers EMFILE",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    if (i >= limit) {\n        return -EMFILE;",
+          "replace": "    if (i >= limit) {\n        return -1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the process with a limit of 4 is held to it in the shared table"
+        ]
+      }
+    },
+    {
+      "name": "reach-growth",
+      "summary": "answers -1 where a dup2 past the end of a table the heap cannot grow answers ENOMEM",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    return fd_table_grow(table, fd + 1);",
+          "replace": "    return fd_table_grow(table, fd + 1) ? -1 : 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a dup2 past the end of a table the heap cannot grow is ENOMEM"
+        ]
+      }
+    },
+    {
+      "name": "reach-range",
+      "summary": "answers -1 where a dup2 destination outside the limit answers EBADF",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -EBADF;",
+          "replace": "    if (!table || fd < 0 || fd >= fd_limit(table)) {\n        return -1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a dup2 destination outside the limit is EBADF"
+        ]
+      }
+    },
+    {
+      "name": "live-serial",
+      "summary": "fd_ofd_live calls a description open for a later serial than its own",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
+          "replace": "return rec->ofd.refcount > 0 && rec->ofd.serial <= serial;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a description is not one with another serial"
+        ]
+      }
+    },
+    {
+      "name": "live-closing",
+      "summary": "fd_ofd_live calls a description open while its last reference is closed",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "return rec->ofd.refcount > 0 && rec->ofd.serial == serial;",
+          "replace": "return rec->ofd.serial == serial;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a description its file system closes after its last reference is not open"
+        ]
+      }
+    },
+    {
+      "name": "split-modes",
+      "summary": "opens fd 0 read-only and fds 1 and 2 write-only, where each is open for reading and writing",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "table->entries[i].flags = FD_FLAG_READ | FD_FLAG_WRITE;",
+          "replace": "table->entries[i].flags = (i == FD_STDIN) ? FD_FLAG_READ : FD_FLAG_WRITE;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "each stdio descriptor is open for reading and writing"
+        ]
+      }
+    }
+  ]
+}
