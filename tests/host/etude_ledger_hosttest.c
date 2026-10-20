@@ -843,10 +843,26 @@ static void test_unreported(void)
 }
 
 /**
- * Kill a worker, its keeper and its case, as a sweep of a stuck session
- * might, while a reported descendant in a session of its own runs: the
- * claim stays live, and once the descendant has ended, uncertain, since no
- * keeper confirmed the cleanup.
+ * Wait until process `pid`, the child of another process, has ended; a
+ * zombie has ended, as etude_process_state judges it.
+ */
+static void await_end(long pid)
+{
+    while (ident(pid).pid != 0) {
+    }
+}
+
+/**
+ * Kill a worker's keeper, then the worker and its case, as a sweep of a
+ * stuck session might, while a reported descendant in a session of its own
+ * runs: the claim stays live, and once the descendant has ended, uncertain,
+ * since no keeper confirmed the cleanup.
+ *
+ * The keeper has ended before the worker is killed: a keeper that outlives
+ * its worker finds the controller's pipe closed, cancels the case and ends
+ * the reported descendant. The descendant is judged running by
+ * etude_process_state, as the ledger judges it, since kill(2) also finds a
+ * zombie.
  */
 static void test_reported(void)
 {
@@ -862,13 +878,14 @@ static void test_reported(void)
         etude_ledger_close(l);
         return;
     }
-    kill(w, SIGKILL);
     kill((pid_t)rep.keeper, SIGKILL);
+    await_end(rep.keeper);
+    kill(w, SIGKILL);
     kill((pid_t)-rep.process, SIGKILL);
     reap(w);
     reap(rep.keeper);
     reap(rep.process);
-    CHECK(rep.descendant > 0 && kill((pid_t)rep.descendant, 0) == 0, "reported");
+    CHECK(rep.descendant > 0 && ident(rep.descendant).pid != 0, "reported");
     CHECK(etude_ledger_recover(l, &freed) == 0 && freed == 0, "reported");
     CHECK(status_is(l, "swept", ETUDE_CLAIM_LIVE, "runs"), "reported");
     end_child((pid_t)rep.descendant);
