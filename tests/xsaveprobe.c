@@ -1110,13 +1110,13 @@ void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
-    const char *mode;
+    const char *word;
     int noxsave;
 
     probe_args(argc, argv);
-    mode = probe_word(1);
-    noxsave = mode != 0 && mode[0] == 'n';
-    if (mode != 0 && mode[0] == 'r') {
+    word = probe_word(1);
+    noxsave = word != 0 && word[0] == 'n';
+    if (word != 0 && word[0] == 'r') {
         run_reset();
     }
     report_begin(report_case(argv + argc + 1, "guest.default.xsaveprobe"));

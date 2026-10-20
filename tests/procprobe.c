@@ -862,7 +862,7 @@ static const char *host_bridge(void)
 {
     static char slot[16] = "0000:00:00.0";
     static char names[1024];
-    char path[64];
+    char uevent[64];
     int i, k, n;
 
     if (!probe_native() || listing("/sys/bus/pci/devices", names, (int)sizeof(names)) != 0) {
@@ -872,7 +872,7 @@ static const char *host_bridge(void)
         for (k = i; names[k] != ' '; k++) {
         }
         names[k] = '\0';
-        n = slurp(join3(path, (int)sizeof(path), "/sys/bus/pci/devices/", names + i, "/uevent"),
+        n = slurp(join3(uevent, (int)sizeof(uevent), "/sys/bus/pci/devices/", names + i, "/uevent"),
                   buf, (int)sizeof(buf));
         if (k - i < (int)sizeof(slot) && contains(buf, n, "PCI_CLASS=60000\n")) {
             join3(slot, (int)sizeof(slot), names + i, "", "");
@@ -891,10 +891,10 @@ static void sys_rows(void)
     static unsigned char st[144];
     const char *slot = host_bridge();
     char link[64] = {0};
-    char path[64];
+    char dev[64];
     char want[64];
     int n = syscall3(SYS_READLINK,
-                     (long)join3(path, (int)sizeof(path), "/sys/bus/pci/devices/", slot, ""),
+                     (long)join3(dev, (int)sizeof(dev), "/sys/bus/pci/devices/", slot, ""),
                      (long)link, (int)sizeof(link) - 1);
 
     if (n > 0) {
@@ -903,7 +903,7 @@ static void sys_rows(void)
     check(n > 0 && same_str(link, join3(want, (int)sizeof(want), "../../../devices/pci0000:00/",
                                         slot, "")),
           "/sys/bus/pci/devices has the host bridge's link, to its directory");
-    n = slurp(join3(path, (int)sizeof(path), "/sys/bus/pci/devices/", slot, "/uevent"), buf,
+    n = slurp(join3(dev, (int)sizeof(dev), "/sys/bus/pci/devices/", slot, "/uevent"), buf,
               (int)sizeof(buf));
     check(contains(buf, n, "PCI_CLASS=60000\n") && contains(buf, n, "\nPCI_ID=") &&
               contains(buf, n, join3(want, (int)sizeof(want), "\nPCI_SLOT_NAME=", slot, "\n")),
@@ -1167,7 +1167,7 @@ static const char *class_path(const char *leaf)
     for (i = 0; head[i] != '\0'; i++) {
         out[k++] = head[i];
     }
-    for (i = 0; name[i] != '\0' && i < 16; i++) {
+    for (i = 0; i < 16 && name[i] != '\0'; i++) {
         out[k++] = name[i];
     }
     out[k++] = '/';

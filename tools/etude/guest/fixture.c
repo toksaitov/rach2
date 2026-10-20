@@ -968,8 +968,9 @@ int fixture_settle(const char *dir)
     if (len < 0)
         return -1;
     text[len] = '\0';
-    for (line[n] = strtok(text, "\n"); line[n] && n < 63; line[n] = strtok(NULL, "\n"))
-        n++;
+    line[0] = strtok(text, "\n");
+    while (n < 63 && line[n])
+        line[++n] = strtok(NULL, "\n");
     while (n-- > 0) {
         if (strncmp(line[n], "mount ", 6) == 0) {
             if (umount2(line[n] + 6, 0) < 0 && errno != EINVAL)

@@ -328,7 +328,7 @@ static const char *loop_device(int n, char *out, int cap)
 static void native_paths(void)
 {
     static char vfat_dev[48], other_dev[48];
-    char cwd[64];
+    char cwd[64] = {0};
     int n = syscall2(SYS_GETCWD, (long)cwd, (int)sizeof(cwd));
 
     if (n <= 0 || (int)strlen(cwd) + 5 > (int)sizeof(mnt_abs)) {

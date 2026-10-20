@@ -90,9 +90,9 @@ static int mount_point_is(const char *p, int end, const char *point)
 {
     int i;
 
-    for (i = 0; point[i] != '\0' && i < end && p[i] == point[i]; i++) {
+    for (i = 0; i < end && point[i] != '\0' && p[i] == point[i]; i++) {
     }
-    return point[i] == '\0' && i < end && p[i] == ' ' ? i + 1 : 0;
+    return i < end && point[i] == '\0' && p[i] == ' ' ? i + 1 : 0;
 }
 
 /**
