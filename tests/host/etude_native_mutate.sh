@@ -36,7 +36,7 @@ faults = {
             '    int counted = !ack && !alive;'),
     'lock': ('        if (lock_session() < 0) {', '        if (0 && lock_session() < 0) {'),
     'supersede': ('            kill((pid_t)pid, SIGTERM);\n', ''),
-    'settle': ('            cmd_append(cmd, p + 1);\n', ''),
+    'settle': ('            cmd_append(cmd, line + 1);\n', ''),
     'immediate': ('    gone = child <= 0 || group_ended((pid_t)child, killed ? SETTLE_US : 0);\n',
                   '    gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);\n'
                   '    (void)killed;\n    (void)group_ended;\n'),

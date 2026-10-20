@@ -2421,10 +2421,57 @@ static int lock_session(void)
 }
 
 /**
+ * Append to the record of run `cmd` each final event of its attempt's
+ * record, the text `record`, that the run's record lacks. An attempt's end is
+ * written whole to its own record and then appended to its run's one event
+ * at a time, so an etude-guest killed between the two leaves the run's
+ * record with none or some of the events, the last perhaps cut short. A
+ * last line cut short, which has no newline, is removed first.
+ */
+static void complete_run(const char *cmd, const char *record)
+{
+    static char have[64 * 1024];
+    char path[PATH_CAP];
+    char line[LINE_CAP + 2];
+    const char *p;
+    const char *end;
+    char *last;
+    long n;
+    int fd;
+
+    p = strstr(record, "\nstate ");
+    p = p ? strchr(p + 1, '\n') : NULL;
+    if (!p || !p[1] || cmd_path(path, cmd) < 0 || (n = read_file(path, have, sizeof(have))) <= 0 ||
+        (size_t)n == sizeof(have) - 1 || !(last = strrchr(have, '\n')))
+        return;
+    if (last[1] != '\0') {
+        last[1] = '\0';
+        fd = open(path, O_WRONLY | O_CLOEXEC);
+        if (fd < 0 || ftruncate(fd, (off_t)(last + 1 - have)) < 0 || fsync(fd) < 0) {
+            note("record: %s: %s", path, strerror(errno));
+            if (fd >= 0)
+                close(fd);
+            return;
+        }
+        close(fd);
+    }
+    for (; p[1]; p = end) {
+        end = strchr(p + 1, '\n');
+        if (!end || end - p > LINE_CAP)
+            break;
+        snprintf(line, sizeof(line), "%.*s", (int)(end - p + 1), p);
+        if (!strstr(have, line)) {
+            line[end - p] = '\0';
+            cmd_append(cmd, line + 1);
+        }
+    }
+}
+
+/**
  * Settle the attempts of this session whose etude-guest is gone without
- * having recorded their ends, as settle_orphan does, and add their final
- * events to the records of their runs, so that a run sent again is answered
- * with a whole end.
+ * having recorded their ends, as settle_orphan does, and give the record of
+ * each attempt's run the final events it lacks, as complete_run does, so
+ * that a run sent again is answered with a whole end.
  */
 static void settle_session(void)
 {
@@ -2433,8 +2480,6 @@ static void settle_session(void)
     char sess[ETUDE_FRAME_TOKEN_LEN + 1];
     char cmd[24];
     struct dirent *e;
-    char *p;
-    char *end;
     DIR *d;
 
     if (path_of(path, "%s/a", opt.state) < 0 || !(d = opendir(path)))
@@ -2443,18 +2488,10 @@ static void settle_session(void)
         if (!wire_hex(e->d_name, ETUDE_FRAME_TOKEN_LEN) ||
             path_of(path, "%s/a/%s/record", opt.state, e->d_name) < 0 ||
             read_file(path, buf, sizeof(buf)) < 0 ||
-            sscanf(buf, "cmd %23s\nsession %16s", cmd, sess) != 2 || strcmp(sess, session) != 0 ||
-            !settle_orphan(e->d_name, buf))
+            sscanf(buf, "cmd %23s\nsession %16s", cmd, sess) != 2 || strcmp(sess, session) != 0)
             continue;
-        p = strstr(buf, "\nstate ");
-        for (p = p ? strchr(p + 1, '\n') : NULL; p && p[1]; p = end) {
-            end = strchr(p + 1, '\n');
-            if (!end)
-                break;
-            *end = '\0';
-            cmd_append(cmd, p + 1);
-            *end = '\n';
-        }
+        settle_orphan(e->d_name, buf);
+        complete_run(cmd, buf);
     }
     closedir(d);
 }

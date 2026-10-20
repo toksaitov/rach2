@@ -962,6 +962,71 @@ static void check_orphan(void)
     bye(0);
 }
 
+/** Read the file `path`, at most `cap - 1` bytes, into `buf` with a NUL;
+ * its length, or -1. */
+static long read_text(const char *path, char *buf, size_t cap)
+{
+    FILE *f = fopen(path, "r");
+    size_t n;
+
+    if (!f)
+        return -1;
+    n = fread(buf, 1, cap - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    return (long)n;
+}
+
+/** The run's record that an etude-guest killed while it appended an
+ * attempt's end leaves, with some of the final events and the next one cut
+ * short, made here by hand: the next etude-guest makes the run's record
+ * whole, and the run sent again is answered with the whole end. */
+static void check_unfinished_end(void)
+{
+    static const char quick[] = "#!/bin/sh\necho out\necho err >&2\n";
+    static char whole[8192];
+    static char now[8192];
+    struct ending e;
+    struct ending again;
+    char path[700];
+    char inv[65];
+    char c[24];
+    const char *p;
+    size_t cut;
+    long n;
+    FILE *f;
+    int ok = 0;
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("quick", quick, "00000000000000d5", "ordinary", 30000, inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d5", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000d5", 10000) == 0 && strcmp(e.kind, "exited") == 0 &&
+              strcmp(e.cleaned, "confirmed") == 0,
+          "an attempt whose end is to be cut from its run's record ends");
+    bye(0);
+    snprintf(path, sizeof(path), "%s/state/s/%s/%s", work, session, c);
+    n = read_text(path, whole, sizeof(whole));
+    p = n > 0 ? strstr(whole, "\nstream ") : NULL;
+    if (p && (f = fopen(path, "w")) != NULL) {
+        cut = (size_t)(p + 12 - whole);
+        ok = fwrite(whole, 1, cut, f) == cut;
+        ok = fclose(f) == 0 && ok;
+    }
+    CHECK(ok, "the run's record is cut inside its first stream");
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    send_cmd(ETUDE_CMD_RUN, c, "00000000000000d5", inv, (char *)NULL);
+    CHECK(collect(&again, c, "00000000000000d5", 5000) == 0 && again.pid == e.pid &&
+              strcmp(again.kind, "exited") == 0 && strcmp(again.value, "0") == 0 &&
+              strcmp(again.out, "out\n") == 0 && again.sizes_ok &&
+              strcmp(again.cleaned, "confirmed") == 0,
+          "a run whose record lost part of its end is answered with the whole end");
+    CHECK(read_text(path, now, sizeof(now)) == n && strcmp(now, whole) == 0,
+          "the next etude-guest makes the run's record whole");
+    bye(0);
+}
+
 /** A frame with a bad CRC ends a standard-I/O connection. */
 static void check_stdio_damage(void)
 {
@@ -1329,6 +1394,7 @@ int main(int argc, char **argv)
     check_sizes();
     check_interruptions();
     check_orphan();
+    check_unfinished_end();
     check_stdio_damage();
     check_fixtures();
     check_serial();
