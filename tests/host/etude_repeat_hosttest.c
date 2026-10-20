@@ -6,7 +6,7 @@
  *
  * host-deps: tools/etude/repeat.c tools/etude/posix/repeat.c
  * host-deps: tools/etude/posix/load.c tools/etude/ledger.c
- * host-deps: tools/etude/watchdog.c tools/etude/posix/supervise.c
+ * host-deps: tools/etude/watchdog.c tools/etude/supervise.c
  * host-deps: tools/etude/capture.c tools/etude/qemu_profile.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/posix/qemu.c

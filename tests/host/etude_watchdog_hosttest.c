@@ -1,11 +1,11 @@
 /**
  * Check etude's per-case watchdog (tools/etude/watchdog.c) and its
- * supervisor (tools/etude/posix/supervise.c), with this program as the
+ * supervisor (tools/etude/supervise.c), with this program as the
  * cases' program, as a stand-in for QEMU when ETUDE_FAKE_QEMU is set, and
  * with the real QEMU on the kernel and test image of the architecture ARCH
  * names.
  *
- * host-deps: tools/etude/watchdog.c tools/etude/posix/supervise.c
+ * host-deps: tools/etude/watchdog.c tools/etude/supervise.c
  * host-deps: tools/etude/capture.c tools/etude/history_json.c
  * host-deps: tools/etude/qemu_profile.c tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c

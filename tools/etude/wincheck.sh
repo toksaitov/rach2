@@ -1,7 +1,7 @@
 #!/bin/sh
-# wincheck.sh: build etude's Windows adapter and executor, etude-tooling and
-# their fixtures with MinGW-w64, check that the programs import no MSYS or
-# Cygwin runtime, and run the fixtures on Windows.
+# wincheck.sh: build etude's Windows adapter, executor and supervisor,
+# etude-tooling and their fixtures with MinGW-w64, check that the programs
+# import no MSYS or Cygwin runtime, and run the fixtures on Windows.
 #
 # Usage: sh tools/etude/wincheck.sh [FIXTURE...]
 #        sh tools/etude/wincheck.sh --mutate | --texts
@@ -149,13 +149,14 @@ copy() {
     mkdir -p "$e/win" "$e/include/etude" "$e/schemas" "$1/utils"
     cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
     cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$src"/tooling.c "$src"/etude_tooling.c \
-        "$src"/history.c "$src"/history_json.h "$src"/history_json.c "$src"/history_collect.c "$e/"
+        "$src"/history.c "$src"/history_json.h "$src"/history_json.c "$src"/history_collect.c \
+        "$src"/watchdog.c "$src"/supervise.c "$e/"
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
     cp "$src"/win/winexec.h "$src"/win/winexec.c "$src"/win/winsys.c "$src"/win/winfmt.h \
-        "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/wintarget.c "$src"/win/winfixture.h \
-        "$src"/win/winfixture.c "$src"/win/winexecfix.c "$src"/win/winledgerfix.c \
-        "$src"/win/wintoolfix.c "$src"/win/winstand.c "$e/win/"
+        "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/noqemu.c "$src"/win/wintarget.c \
+        "$src"/win/winfixture.h "$src"/win/winfixture.c "$src"/win/winexecfix.c \
+        "$src"/win/winledgerfix.c "$src"/win/wintoolfix.c "$src"/win/winstand.c "$e/win/"
 }
 
 # compile DIR FLAGS: build the programs in DIR/tools/etude/win. A Windows
@@ -167,7 +168,8 @@ compile() {
         history='../history.c ../history_json.c ../history_collect.c ../../../utils/sha256.c'
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I ../../../utils -o winfixture.exe winfixture.c winexecfix.c \
-            winledgerfix.c wintoolfix.c ../ledger.c $executor ../../../utils/sha256.c -lws2_32
+            winledgerfix.c wintoolfix.c ../ledger.c ../watchdog.c ../supervise.c \
+            noqemu.c $executor ../../../utils/sha256.c -lws2_32
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
         # shellcheck disable=SC2086

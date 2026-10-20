@@ -1,9 +1,9 @@
 /*
  * watchdog.h: the per-case watchdog. It fixes a case's bounds from its
  * history, tells the case's progress apart from the rest of its output, and
- * says when a bound has run out; on POSIX systems the supervisor runs host
- * attempts and QEMU machines under their watchdogs and ends them when one
- * runs out. tools/etude/Readme.md gives the rules.
+ * says when a bound has run out; the supervisor runs host attempts and QEMU
+ * machines under their watchdogs and ends them when one runs out, machines on
+ * POSIX systems alone. tools/etude/Readme.md gives the rules.
  */
 #ifndef ETUDE_WATCHDOG_H
 #define ETUDE_WATCHDOG_H
@@ -168,7 +168,7 @@ uint64_t etude_watchdog_max_gap(const struct etude_watchdog *w, uint64_t now_us)
 /** Give the name of an expiry: "none", "case", "gap", "quiet" or "stage". */
 const char *etude_expiry_name(enum etude_expiry e);
 
-/* ---- The supervisor, on POSIX systems. ---- */
+/* ---- The supervisor, on POSIX systems and Windows. ---- */
 
 /* The attempts a supervisor runs at once, on a host executor and a QEMU
  * launcher of its own. */
@@ -246,7 +246,8 @@ void etude_supervisor_free(struct etude_supervisor *s);
 /**
  * Start a host attempt under watchdog `wd`, in execution. Its standard
  * output is read for progress, as far as the executor keeps it. When `wd`
- * runs out, the case is cancelled: SIGTERM, and SIGKILL after the grace.
+ * runs out, the case is cancelled: SIGTERM, and SIGKILL after the grace; on
+ * Windows its job is ended at once.
  *
  * @return 0 with the attempt in `*a`, or -1 with errno set as
  *         etude_exec_start sets it, or ENOMEM.
@@ -264,7 +265,8 @@ int etude_supervise_host(struct etude_supervisor *s, const struct etude_exec_spe
  * grace.
  *
  * @return 0 with the attempt in `*a`, or -1 with errno set as
- *         etude_qemu_start sets it, or ENOMEM.
+ *         etude_qemu_start sets it, ENOSYS on Windows, which has no
+ *         launcher yet, or ENOMEM.
  */
 int etude_supervise_machine(struct etude_supervisor *s, const struct etude_machine_spec *spec,
                             const struct etude_watchdog_spec *wd, int console_progress,
@@ -316,9 +318,10 @@ void etude_supervised_lost(struct etude_supervised *a);
 /**
  * Cancel a host attempt that the caller no longer needs, such as a load
  * beside a case that has ended: SIGTERM and SIGCONT, and SIGKILL after the
- * grace. Its watchdog is not consulted again, so the attempt is not made
- * incomplete; its end is stopped unless it had ended. An attempt of another
- * kind, or one whose end has begun, is left as it is.
+ * grace, or on Windows the end of its job. Its watchdog is not consulted
+ * again, so the attempt is not made incomplete; its end is stopped unless it
+ * had ended. An attempt of another kind, or one whose end has begun, is left
+ * as it is.
  */
 void etude_supervised_cancel(struct etude_supervised *a);
 

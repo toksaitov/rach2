@@ -44,7 +44,7 @@ if [ "${1:-}" = --texts ]; then
         apply_fault tools/etude/watchdog.c "$fault"
     done
     for fault in busy hung lost; do
-        apply_fault tools/etude/posix/supervise.c "$fault"
+        apply_fault tools/etude/supervise.c "$fault"
     done
     echo 'etude-watchdog-mutation: texts: all five faults found once'
     exit 0
@@ -78,7 +78,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-watchdog-proof.XXXXXX")
 restore()
 {
     cp tools/etude/watchdog.c "$work/watchdog.c"
-    cp tools/etude/posix/supervise.c "$work/supervise.c"
+    cp tools/etude/supervise.c "$work/supervise.c"
 }
 
 # Build and run the real host test against the private sources under the
@@ -91,7 +91,7 @@ run_phase()
     "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
         -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined \
         -fno-sanitize-recover=all -I tests/host -I tools/etude/include \
-        -I tools/etude/posix tests/host/etude_watchdog_hosttest.c "$work/watchdog.c" \
+        -I tools/etude tests/host/etude_watchdog_hosttest.c "$work/watchdog.c" \
         "$work/supervise.c" tools/etude/capture.c tools/etude/history_json.c \
         tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c \
         tools/etude/posix/process.c tools/etude/posix/qemu.c tools/etude/processor.c \

@@ -25,9 +25,9 @@ output-unwatched|posix/keeper.c|        write_verdict(kp->args, confirmed && out
 refusal-waits|posix/repeat.c|    if (errno == EAGAIN)|    if (errno == EAGAIN \|\| errno == ENOSPC)|lost-worker
 not-abandoned|posix/repeat.c|            etude_supervised_cancel(s->cas);|            ;|full-disk
 in-place|compare_report.c|    file = fopen(part, "wb");|    file = fopen(path, "wb");|full-disk
-unwatched|posix/supervise.c|    if (a->phase == PHASE_RUN && etude_watchdog_check(a->wd, now) != ETUDE_EXPIRY_NONE)|    if (0)|stuck
-lost-released|posix/supervise.c|    a->r.claim_kept = a->r.cleanup != ETUDE_CLEANUP_CONFIRMED;|    a->r.claim_kept = 0;|transport
-report-unheard|posix/supervise.c|        a->r.cleanup = a->reported_cleanup;|        a->r.cleanup = ETUDE_CLEANUP_UNCONFIRMED;|transport-again
+unwatched|supervise.c|    if (a->phase == PHASE_RUN && etude_watchdog_check(a->wd, now) != ETUDE_EXPIRY_NONE)|    if (0)|stuck
+lost-released|supervise.c|    a->r.claim_kept = a->r.cleanup != ETUDE_CLEANUP_CONFIRMED;|    a->r.claim_kept = 0;|transport
+report-unheard|supervise.c|        a->r.cleanup = a->reported_cleanup;|        a->r.cleanup = ETUDE_CLEANUP_UNCONFIRMED;|transport-again
 END
 }
 

@@ -1,18 +1,25 @@
 /*
- * supervise.c: the supervisor of etude's attempts on POSIX systems. It runs
- * host attempts on an executor of its own and machines on a launcher of its
- * own, each under its watchdog, and follows remote attempts whose transport
- * the caller keeps. When a watchdog runs out it saves the evidence, asks the
- * case to stop and ends what it owns, each step within a bound.
+ * supervise.c: the supervisor of etude's attempts on POSIX systems and on
+ * Windows. It runs host attempts on an executor of its own and machines on a
+ * launcher of its own, each under its watchdog, and follows remote attempts
+ * whose transport the caller keeps. When a watchdog runs out it saves the
+ * evidence, asks the case to stop and ends what it owns, each step within a
+ * bound.
  */
 #include <errno.h>
-#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#include "win/winexec.h"
+#else
+#include <poll.h>
+
+#include "posix/posix.h"
+#endif
+
 #include "etude/watchdog.h"
-#include "posix.h"
 
 /* The console lines kept as evidence when a machine's watchdog runs out. */
 #define TAIL_LINES 20
@@ -72,6 +79,26 @@ struct etude_supervisor {
     struct etude_supervised *list;
 };
 
+/** Give the monotonic clock in microseconds. */
+static uint64_t now_us(void)
+{
+#ifdef _WIN32
+    return etude_win_mono_us();
+#else
+    return posix_now_us();
+#endif
+}
+
+/** Wait `ms` milliseconds with nothing to serve. */
+static void pause_ms(int ms)
+{
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    poll(NULL, 0, ms);
+#endif
+}
+
 struct etude_supervisor *etude_supervisor_new(void)
 {
     struct etude_supervisor *s = calloc(1, sizeof(*s));
@@ -98,7 +125,7 @@ static struct etude_supervised *attempt_new(struct etude_supervisor *s, const ch
                                             enum etude_stage stage)
 {
     struct etude_supervised *a = calloc(1, sizeof(*a));
-    uint64_t now = posix_now_us();
+    uint64_t now = now_us();
 
     if (a == NULL)
         return NULL;
@@ -249,21 +276,38 @@ static void keep_console_tail(struct etude_supervised *a)
         capture_failed(a, "the console passed its bound, so its last lines are of what was kept");
 }
 
-/** Sample the case's process, or QEMU's, as the watchdog runs out. */
+/**
+ * Sample the case's process, or QEMU's, as the watchdog runs out. On POSIX
+ * systems the sample is of the process and the children it has reaped, read
+ * from /proc on Linux. On Windows it is of a host attempt's job, whose
+ * processor time counts every process the job has held, and of the working
+ * set of the case's process.
+ */
 static void sample(struct etude_supervised *a, const struct etude_exec_result *p)
 {
     uint64_t cpu, rss;
     int rc;
+#ifdef _WIN32
+    const enum etude_quality cpu_quality = ETUDE_QUALITY_EXACT;
+    const char *cpu_method = "win32-job-accounting-v1", *rss_method = "win32-working-set-v1";
 
+    rc = a->proc != NULL ? etude_proc_sample(a->proc, &cpu, &rss) : -1;
+#else
+    const enum etude_quality cpu_quality = ETUDE_QUALITY_LOWER_BOUND;
+    const char *cpu_method = "linux-proc-stat-v1", *rss_method = "linux-proc-stat-v1";
+
+    rc = posix_usage(&p->process, &cpu, &rss);
+#endif
     a->r.owned[0] = p->keeper;
     a->r.owned[1] = p->process;
     a->r.owned_count = 2;
-    rc = posix_usage(&p->process, &cpu, &rss);
     if (rc == 1) {
-        a->r.sample_cpu_us.quality = a->r.sample_rss_bytes.quality = ETUDE_QUALITY_LOWER_BOUND;
+        a->r.sample_cpu_us.quality = cpu_quality;
+        a->r.sample_rss_bytes.quality = ETUDE_QUALITY_LOWER_BOUND;
         a->r.sample_cpu_us.value = cpu;
         a->r.sample_rss_bytes.value = rss;
-        a->r.sample_cpu_us.method = a->r.sample_rss_bytes.method = "linux-proc-stat-v1";
+        a->r.sample_cpu_us.method = cpu_method;
+        a->r.sample_rss_bytes.method = rss_method;
     } else {
         a->r.sample_cpu_us.quality = a->r.sample_rss_bytes.quality = ETUDE_QUALITY_UNAVAILABLE;
         a->r.sample_cpu_us.method = a->r.sample_rss_bytes.method =
@@ -563,20 +607,19 @@ static void wait_both(struct etude_supervisor *s, size_t procs, size_t machines,
     } else if (machines > 0) {
         machine_returned(s, etude_qemu_wait(s->q, ms));
     } else if (ms != 0) {
-        poll(NULL, 0, ms < 0 ? SLICE_MS : ms);
+        pause_ms(ms < 0 ? SLICE_MS : ms);
     }
 }
 
 struct etude_supervised *etude_supervise_wait(struct etude_supervisor *s, int timeout_ms)
 {
-    uint64_t now = posix_now_us(), next,
-             until = timeout_ms < 0 ? 0 : now + (uint64_t)timeout_ms * 1000u;
+    uint64_t now = now_us(), next, until = timeout_ms < 0 ? 0 : now + (uint64_t)timeout_ms * 1000u;
     struct etude_supervised *a, *done;
     size_t procs, machines;
     int polled = 0, changed, any;
 
     for (;;) {
-        now = posix_now_us();
+        now = now_us();
         changed = 0;
         for (a = s->list; a != NULL; a = a->next) {
             serve(a, now);
@@ -598,13 +641,13 @@ struct etude_supervised *etude_supervise_wait(struct etude_supervisor *s, int ti
 
 void etude_supervised_feed(struct etude_supervised *a, const char *buf, size_t n)
 {
-    etude_watchdog_feed(a->wd, buf, n, posix_now_us());
+    etude_watchdog_feed(a->wd, buf, n, now_us());
 }
 
 void etude_supervised_stage(struct etude_supervised *a, enum etude_stage stage)
 {
     if (a->phase == PHASE_RUN)
-        etude_watchdog_stage(a->wd, stage, posix_now_us());
+        etude_watchdog_stage(a->wd, stage, now_us());
 }
 
 void etude_supervised_end(struct etude_supervised *a, enum etude_end end, int value,

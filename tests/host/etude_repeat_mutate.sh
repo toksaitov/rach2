@@ -98,7 +98,7 @@ run() {
         -fno-sanitize-recover=all -I "$e/include" -I "$e" -I utils -I tests/host \
         -I tests/host/compat tests/host/etude_repeat_hosttest.c "$e/repeat.c" \
         "$e/posix/repeat.c" "$e/posix/load.c" "$e/ledger.c" "$e/watchdog.c" \
-        "$e/posix/supervise.c" "$e/capture.c" "$e/qemu_profile.c" "$e/posix/exec.c" \
+        "$e/supervise.c" "$e/capture.c" "$e/qemu_profile.c" "$e/posix/exec.c" \
         "$e/posix/keeper.c" "$e/posix/process.c" "$e/posix/qemu.c" "$e/processor.c" \
         "$e/compare.c" "$e/baseline.c" "$e/compare_report.c" "$e/compare_run.c" \
         "$e/history.c" "$e/history_json.c" "$e/history_collect.c" "$e/budget.c" \
