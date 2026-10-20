@@ -389,6 +389,27 @@ static void accounting(void)
     cpu->current = saved;
 }
 
+/**
+ * The machine is idle when every processor online is halted in an idle
+ * wait: one that runs makes it busy, and one that is not online does not
+ * count, whatever its marker says.
+ */
+static void all_idle(void)
+{
+    cpu_table[0].idle_wait = 1;
+    cpu_table[2].idle_wait = 0;
+    CHECK(sched_all_idle(), "one processor online and halted is an idle machine");
+    cpu_table[1].online = 1;
+    cpu_table[1].idle_wait = 0;
+    CHECK(!sched_all_idle(), "a second processor that runs makes it busy");
+    cpu_table[1].idle_wait = 1;
+    CHECK(sched_all_idle(), "and with both halted it is idle again");
+    cpu_table[0].idle_wait = 0;
+    CHECK(!sched_all_idle(), "as the boot processor running makes it busy");
+    cpu_table[1].online = 0;
+    cpu_table[1].idle_wait = 0;
+}
+
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -397,10 +418,12 @@ int main(void)
     states();
     lifecycle();
     accounting();
+    all_idle();
     if (failures) {
         return 1;
     }
-    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting\n");
+    dprintf(1, "sched-hosttest: result: pass: priority, fairness, states, lifecycle, accounting, "
+               "idle machine\n");
     return 0;
 }
 

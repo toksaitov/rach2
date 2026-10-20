@@ -24,6 +24,8 @@ changes = {
     "cursor": ("_wake_turn[me] = 0;", "_last_sched[me] = next;\n        _wake_turn[me] = 0;"),
     "catchup": ("    while (ticks-- > 0) {\n        sched_account_one(cpu, user);\n    }",
                 "    (void)ticks;\n    sched_account_one(cpu, user);"),
+    "bootonly": ("if (cpu_table[c].online && !cpu_table[c].idle_wait) {",
+                 "if (c == 0 && !cpu_table[c].idle_wait) {"),
 }
 old, new = changes[sys.argv[2]]
 if source.count(old) != 1:
@@ -32,7 +34,7 @@ path.write_text(source.replace(old, new))
 PY
 }
 
-faults='preference bound cursor catchup'
+faults='preference bound cursor catchup bootonly'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/proc/sched.c "$fault" >/dev/null || exit 1
@@ -109,6 +111,7 @@ for fault in $faults; do
         bound) message='spinner missed fourteen dispatches' ;;
         cursor) message='ordinary turn follows preferred wake' ;;
         catchup) message='three global ticks since the processor' ;;
+        bootonly) message='a second processor that runs makes it busy' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

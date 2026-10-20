@@ -474,6 +474,18 @@ uint64_t sched_busy_ticks(void)
     return sum;
 }
 
+int sched_all_idle(void)
+{
+    int c;
+
+    for (c = 0; c < NR_CPUS; c++) {
+        if (cpu_table[c].online && !cpu_table[c].idle_wait) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /** Count a tick of `p`'s processor time against its process's timer `k`
  * when `counts`, and post `signo` when the timer runs out, arming it again
  * for its interval. */

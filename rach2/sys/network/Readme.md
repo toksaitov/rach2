@@ -72,7 +72,7 @@ The ARP cache (`arp/arp.c`) has `ARP_CACHE_SIZE` (16) entries, each with the int
 
 ### Loopback
 
-A datagram to this machine never reaches a card. `ip_tx_from` copies it onto a ring of `LOOP_RING_SLOTS` (64), and `ip_loop_drain_from` delivers the ring through `ip_rx` from the tick, the idle wait, and a system call's exit once 3 or more wait (`LOOP_DRAIN_AT`). Delivery waits so that a send never runs the receive path, and TCP, inside the sender's own call; the threshold leaves a pair to the timer, since a simultaneous open's two SYNs cross only while neither has been delivered. A full ring refuses with `ENOBUFS` and counts the refusal in `/proc/stat`.
+A datagram to this machine never reaches a card. `ip_tx_from` copies it onto a ring of `LOOP_RING_SLOTS` (64), and `ip_loop_drain_from` delivers the ring through `ip_rx` from the tick, the idle wait, and a system call's exit once 3 or more wait (`LOOP_DRAIN_AT`). Delivery waits so that a send never runs the receive path, and TCP, inside the sender's own call; the threshold leaves a pair to the timer, since a simultaneous open's two SYNs cross only while neither has been delivered. A full ring refuses with `ENOBUFS` and counts the refusal in `/proc/stat`. The tick also counts there, as `loopback_left_idle`, the datagrams it finds on the ring while every processor is halted in an idle wait: the idle wait of a blocked process (`idle_wait_irq_off`) delivers the ring before it halts, so each of them waited for the timer with nothing running.
 
 ### ICMP and UDP
 

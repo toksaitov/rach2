@@ -3,9 +3,10 @@
 # private copy of ip.c: a log line for every datagram the full loopback ring
 # refuses, a refusal reported as sent, a refusal left uncounted, a refused
 # datagram copied over the oldest one queued, a subnet broadcast sent by the
-# first card whatever its subnet, and the limited broadcast given to a card
-# whose subnet's broadcast it equals. Each fault must fail its row with exit
-# status 1, and the restored source must pass again.
+# first card whatever its subnet, the limited broadcast given to a card
+# whose subnet's broadcast it equals, and a tick on an idle machine counted
+# as one datagram left for the timer whatever the ring holds. Each fault must
+# fail its row with exit status 1, and the restored source must pass again.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -36,6 +37,7 @@ changes = {
     "first-card": ("out = ip_broadcast_iface(dst_ip);", "out = netdev_first();"),
     "limited-scan": ("    if (dst == 0xFFFFFFFFu) {\n        return netdev_first();",
                      "    if (0) {\n        return netdev_first();"),
+    "idle-ticks": ("    loop_left_idle += loop_head - loop_tail;\n", "    loop_left_idle++;\n"),
 }
 old, new = changes[sys.argv[2]]
 path = pathlib.Path(sys.argv[1])
@@ -46,7 +48,7 @@ path.write_text(source.replace(old, new))
 PY
 }
 
-faults='log-per-drop silent-drop uncounted overwrite first-card limited-scan'
+faults='log-per-drop silent-drop uncounted overwrite first-card limited-scan idle-ticks'
 if [ "${1:-}" = --texts ]; then
     for fault in $faults; do
         RACH2_FAULT_TEXTS=1 apply_fault rach2/sys/network/ip/ip.c "$fault" >/dev/null || exit 1
@@ -135,6 +137,7 @@ for fault in $faults; do
             message='the drain delivers the datagrams the ring took, in the order sent, and none it refused' ;;
         first-card) message="the second card's subnet broadcast leaves by that card" ;;
         limited-scan) message='the limited broadcast leaves by the first card beside a card masked /1' ;;
+        idle-ticks) message='an empty ring leaves nothing for the timer' ;;
     esac
     run_phase "$fault-mutated" 1 "$message"
     cleanup

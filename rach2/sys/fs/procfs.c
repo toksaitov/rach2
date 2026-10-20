@@ -2412,7 +2412,9 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
  * the ring logs once and counts thereafter, and `loopback_peak` is the most it
  * has held at once, which says how much room it has over what one system
  * call can put in it; the `loopback_delivered_` counts are its datagrams
- * delivered by the tick, by the idle wait and at the exit of a system call.
+ * delivered by the tick, by the idle wait and at the exit of a system call,
+ * and `loopback_left_idle` is those a tick found on it while every processor
+ * was halted in an idle wait, which waited for the timer.
  *
  * The `cpu` line, and the `cpuN` line of each processor online, have user,
  * nice, system and idle in that order, then six columns this kernel does not
@@ -2480,6 +2482,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, ip_loop_delivered(IP_LOOP_FROM_IDLE));
     ap_str(t, "\nloopback_delivered_call ");
     ap_u32(t, ip_loop_delivered(IP_LOOP_FROM_CALL));
+    ap_str(t, "\nloopback_left_idle ");
+    ap_u32(t, ip_loop_left_idle());
     ap_ch(t, '\n');
     for (p = proc_list; p; p = p->next) {
         if (p->state == PROC_RUNNING || p->state == PROC_READY) {

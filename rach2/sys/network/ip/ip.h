@@ -145,6 +145,16 @@ uint32_t ip_loop_delivered(int from);
 /** Nonzero while the loopback ring holds anything at all. */
 int ip_loop_pending(void);
 
+/** Count the datagrams on the loopback ring as left for the timer by an idle
+ * machine. The boot processor's tick calls it, before its own work can send
+ * onto the ring, when every processor online is halted in an idle wait. The
+ * idle wait of a blocked process (`idle_wait_irq_off`) delivers the ring
+ * before it halts, so what the ring holds then is left for the timer. */
+void ip_loop_count_idle(void);
+
+/** The datagrams `ip_loop_count_idle` has counted since boot. */
+uint32_t ip_loop_left_idle(void);
+
 /** Datagrams the loopback ring had no room for since boot. */
 uint32_t ip_loop_dropped(void);
 

@@ -695,6 +695,34 @@ static void test_loop_full(void)
 }
 
 /**
+ * Count what a tick finds on the loopback ring while the machine is idle.
+ *
+ * `ip_loop_count_idle` adds the datagrams the ring holds, those a delivery
+ * has taken not among them, and an empty ring adds nothing, so the count is
+ * the datagrams that waited for the timer and not the ticks that looked.
+ */
+static void test_loop_left_idle(void)
+{
+    uint8_t payload[16] = {0};
+    unsigned i;
+
+    reset();
+    loop_head = loop_tail = loop_left_idle = 0;
+    ip_loop_count_idle();
+    CHECK("an empty ring leaves nothing for the timer", ip_loop_left_idle() == 0);
+    for (i = 0; i < 2; i++) {
+        (void)ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT);
+    }
+    ip_loop_count_idle();
+    CHECK("a tick that finds two datagrams on the ring counts two", ip_loop_left_idle() == 2);
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    ip_loop_count_idle();
+    CHECK("and a tick after the ring was delivered counts none more",
+          ip_loop_left_idle() == 2 && !ip_loop_pending());
+    loop_head = loop_tail = 0;
+}
+
+/**
  * Send broadcasts on a machine with two cards.
  *
  * A subnet's broadcast leaves by the card on that subnet, with that card's
@@ -778,6 +806,7 @@ int main(void)
     test_tx_errors();
     test_tx_hold();
     test_loop_full();
+    test_loop_left_idle();
     test_broadcast_iface();
 
     reset();

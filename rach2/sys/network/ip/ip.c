@@ -481,6 +481,19 @@ uint32_t ip_loop_peak(void)
     return loop_peak;
 }
 
+/* Datagrams a tick found on the ring with every processor idle. */
+static uint32_t loop_left_idle;
+
+void ip_loop_count_idle(void)
+{
+    loop_left_idle += loop_head - loop_tail;
+}
+
+uint32_t ip_loop_left_idle(void)
+{
+    return loop_left_idle;
+}
+
 /* More than a pair queued: a simultaneous open is a pair of crossing SYNs and
  * is only a pair while neither has been delivered, so a pair is left to the
  * timer; past that the queue is a transfer and is delivered at once. */

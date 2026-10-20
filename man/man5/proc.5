@@ -722,6 +722,11 @@ Datagrams delivered by the timer tick's loopback drain.
 Datagrams delivered by the idle wait's loopback drain.
 .It Li loopback_delivered_call
 Datagrams delivered by the loopback drain at system call exit.
+.It Li loopback_left_idle
+Datagrams a timer tick found on the loopback ring while every processor was
+halted in an idle wait.
+The idle wait of a blocked process delivers the ring before it halts, so
+these are datagrams that waited for the timer with nothing running.
 .It Li procs_running , procs_blocked
 The processes runnable now, and those asleep in a wait no signal ends, in
 the state

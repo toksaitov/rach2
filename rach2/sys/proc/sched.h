@@ -120,6 +120,11 @@ void idle_wait_irq_off(void);
  * that comes between its test and the halt ends no wait. */
 void idle_wait_irq_on(void);
 
+/** Nonzero when every processor online is halted in an idle wait, as each
+ * marks itself for the tick (`idle_wait_irq_off`, `idle_wait_irq_on`). Read
+ * by the boot processor's tick, with interrupts off. */
+int sched_all_idle(void);
+
 /** Ticks that found a processor parked in an idle wait, and those that did
  * not, summed over the processors in 64 bits; each processor's own are in
  * its record (percpu.h). Counted rather than timed: each processor counts

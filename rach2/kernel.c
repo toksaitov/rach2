@@ -247,14 +247,16 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * wake a process: the accounting records what the processor was doing when
  * this tick arrived, not what it is about to do, and a busy tick is charged
  * to the process it interrupted, as user time when the interrupted code
- * segment is ring 3's and as system time otherwise. The sleepers are woken
- * whether or not the current process is in a system call, so one parked
- * inside its call becomes runnable on time. A polled network device has its
- * turn before the layers above, so a frame that arrived since the last tick
- * is delivered in the tick that acts on it; a device that raises interrupts
- * has no poll, and the call costs it a null check. The handler runs with
- * interrupts off, which the network stack's shared buffers require, and
- * nothing it calls waits on hardware.
+ * segment is ring 3's and as system time otherwise. The datagrams on the
+ * loopback ring when every processor is halted in an idle wait are counted
+ * then too, before the TCP timers can send onto it (`ip_loop_count_idle`).
+ * The sleepers are woken whether or not the current process is in a system
+ * call, so one parked inside its call becomes runnable on time. A polled
+ * network device has its turn before the layers above, so a frame that
+ * arrived since the last tick is delivered in the tick that acts on it; a
+ * device that raises interrupts has no poll, and the call costs it a null
+ * check. The handler runs with interrupts off, which the network stack's
+ * shared buffers require, and nothing it calls waits on hardware.
  *
  * Then the handler reschedules through `sched_preempt`: at once when the
  * current process is not inside a system call, and at the call's exit when
@@ -285,6 +287,9 @@ static void timer_handler(isr_params_t *params)
 
     sched_account_tick(FRAME_USER(params) != 0);
     sched_load_tick();
+    if (sched_all_idle()) {
+        ip_loop_count_idle();
+    }
 
     proc_wake_sleepers(kernel_ticks);
     timerfd_tick(kernel_ticks);
