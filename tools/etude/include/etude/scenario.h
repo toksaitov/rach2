@@ -155,6 +155,18 @@ enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_term
 const char *etude_audio(const struct etude_case_machine *m);
 
 /**
+ * Give the file in which boot `m` records card network `card`, such as
+ * `net0`, as its profile's `captures` asks: the evidence
+ * `MACHINE.N.netK.pcap`, in pcap format, to which QEMU writes each frame the
+ * card sends or receives as it passes, and which is whole once the machine
+ * has ended. A scenario gives the path to a host tool or artifact to read.
+ *
+ * @return the path, owned by the library, or NULL, a fault of the attempt,
+ *         for a card the profile does not record.
+ */
+const char *etude_capture(struct etude_case_machine *m, const char *card);
+
+/**
  * Run a host tool or an artifact of the manifest, `argv[0]` its name, in the
  * foreground, keeping its standard output as evidence `output` and its
  * standard error as `output`.err, and give its end.

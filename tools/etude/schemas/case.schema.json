@@ -105,7 +105,8 @@
           {"$ref": "#/$defs/name"}, {"$ref": "#/$defs/device"}
         ]}},
         "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}},
-        "i8042": {"type": "boolean"}
+        "i8042": {"type": "boolean"},
+        "captures": {"type": "array", "items": {"type": "string", "pattern": "^net[1-9]?[0-9]$"}, "uniqueItems": true}
       }
     },
     "qemu_id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$"},

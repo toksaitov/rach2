@@ -125,6 +125,14 @@ struct etude_qemu_disk {
 /* The longest serial number, the size of NVMe's and ATA's serial fields. */
 #define ETUDE_QEMU_SERIAL_MAX 20
 
+/* A network card whose frames the machine records, and the file they go to. */
+struct etude_qemu_capture {
+    unsigned card;    /* the card's network, netN: the cards of `devices`
+                         counted in order from 0 */
+    const char *path; /* the file QEMU writes the frames to in pcap format;
+                         NULL ends a list */
+};
+
 /* A case's QEMU profile with its artifacts resolved to paths. */
 struct etude_qemu_profile {
     const char *architecture;            /* "i686" or "x86_64" */
@@ -145,7 +153,9 @@ struct etude_qemu_profile {
     const unsigned *ports;                   /* the case's local ports, each
                                                 above 1023, `port_count` of them */
     size_t port_count;
-    int no_i8042; /* the machine has no 8042 */
+    int no_i8042;                              /* the machine has no 8042 */
+    const struct etude_qemu_capture *captures; /* NULL for none; each card
+                                                  at most once */
 };
 
 /* Admission amounts for one QEMU, separate from its configured RAM. */
@@ -224,19 +234,28 @@ struct etude_qemu_line {
  * which QEMU connects to as a client. The machine starts stopped, with `-S`,
  * and the launcher starts it once QMP has confirmed the accelerator. argv[0]
  * is the site's program for the architecture. `audio` is the launcher-made
- * WAV path, required when the profile selects an audio card.
+ * WAV path, required when the profile selects an audio card. Each capture of
+ * the profile is a `filter-dump` on its card's network, which QEMU creates or
+ * truncates before the machine starts and to which it writes each frame the
+ * card sends or receives as it passes.
  *
  * @return 0, or an error number: EINVAL for a profile the launcher cannot
  *         make, among them a forward of a port that is not one of the
  *         profile's `ports`, a local port forwarded twice by one protocol or
- *         both to the guest and from it, and a guest forward that QEMU could
- *         not make; ENOENT for a firmware the site lacks, E2BIG when `out` is
- *         too small; ENOTSUP for a lazy boundary profile the site has not
- *         enabled.
+ *         both to the guest and from it, a guest forward that QEMU could not
+ *         make and a capture of a card the profile lacks; ENOENT for a
+ *         firmware the site lacks, E2BIG when `out` is too small; ENOTSUP for
+ *         a lazy boundary profile the site has not enabled.
  */
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out);
+
+/**
+ * Say whether device `model` of a profile is a network card, which the
+ * launcher numbers among the cards, from net0, and may record.
+ */
+int etude_qemu_nic(const char *model);
 
 /**
  * Say whether QEMU's standard error `err` reports that it could not start

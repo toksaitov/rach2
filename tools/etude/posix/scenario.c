@@ -133,6 +133,8 @@ struct etude_case_machine {
     struct etude_qemu_forward forwards[FORWARDS_MAX];
     struct etude_qemu_guest_forward guest_forwards[FORWARDS_MAX];
     const char *relays[FORWARDS_MAX][RELAY_MAX + 1];
+    const char *dump_cards[DEVICES_MAX + 1];          /* the profile's captures */
+    struct etude_qemu_capture dumps[DEVICES_MAX + 1]; /* and their files */
     struct etude_qemu_profile profile;
     struct etude_machine_spec spec;
     unsigned boot;               /* the machine's boot, counted from 1 */
@@ -1607,6 +1609,49 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     return ETUDE_OK;
 }
 
+/**
+ * Give boot `m` the captures of its profile, each the evidence
+ * `MACHINE.N.netK.pcap`, which is removed after a pass. The launcher refuses
+ * a card the profile lacks.
+ */
+static enum etude_status make_dumps(struct etude_case_machine *m)
+{
+    const char **cards = m->dump_cards, *path;
+    char name[200], *end;
+    unsigned long card;
+    size_t i;
+
+    if (strings(eh_json_get(m->decl->qemu, "captures"), cards, DEVICES_MAX) != 0) {
+        diag("machine %s: a profile of more captures than the launcher takes", m->decl->id);
+        return ETUDE_REFUSED;
+    }
+    for (i = 0; cards[i] != NULL; i++) {
+        if (strncmp(cards[i], "net", 3) != 0 || cards[i][3] < '0' || cards[i][3] > '9' ||
+            (card = strtoul(cards[i] + 3, &end, 10)) > DEVICES_MAX || *end != '\0') {
+            diag("machine %s: capture %s names no card's network", m->decl->id, cards[i]);
+            return ETUDE_REFUSED;
+        }
+        snprintf(name, sizeof(name), "%s.%u.%s.pcap", m->decl->id, m->boot, cards[i]);
+        path = etude_evidence(m->c, name);
+        if (path == NULL || (m->dumps[i].path = dup_text(path)) == NULL)
+            return ETUDE_FAILED;
+        m->dumps[i].card = (unsigned)card;
+        made(m->c, path, 0);
+    }
+    m->dumps[i].path = NULL;
+    m->profile.captures = m->dumps;
+    return ETUDE_OK;
+}
+
+/** Free the paths of boot `m`'s captures. */
+static void free_dumps(struct etude_case_machine *m)
+{
+    size_t i;
+
+    for (i = 0; m->dumps[i].path != NULL; i++)
+        free((char *)m->dumps[i].path);
+}
+
 /** Say whether the session of machine `arg` has finished its operation. */
 static int session_done(void *arg)
 {
@@ -1749,10 +1794,18 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
         return st;
     }
     m->boot = ++d->boots;
+    st = make_dumps(m);
+    if (st != ETUDE_OK) {
+        free_dumps(m);
+        free(m);
+        c->faults++;
+        return st;
+    }
     snprintf(m->attempt_id, sizeof(m->attempt_id), "%s.%s.%u", c->attempt_id, d->id, d->boots);
     if (m->profile.audio != NULL) {
         snprintf(name, sizeof(name), "%s.%u.wav", d->id, d->boots);
         if (scratch_path(c, "evidence", name, audio, sizeof(audio)) != 0) {
+            free_dumps(m);
             free(m);
             c->faults++;
             return ETUDE_FAILED;
@@ -1771,6 +1824,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     m->spec.memory_reserved_bytes = share;
     if (console == NULL || etude_qemu_start(c->q, &m->spec, &m->m) != 0) {
         diag("machine %s: QEMU did not start: %s", machine, strerror(errno));
+        free_dumps(m);
         free(m);
         c->faults++;
         end->end = ETUDE_END_QEMU_EXITED;
@@ -1914,6 +1968,18 @@ enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
 const char *etude_audio(const struct etude_case_machine *m)
 {
     return mres(m)->audio_path;
+}
+
+const char *etude_capture(struct etude_case_machine *m, const char *card)
+{
+    size_t i;
+
+    for (i = 0; card != NULL && m->dumps[i].path != NULL; i++)
+        if (strcmp(m->dump_cards[i], card) == 0)
+            return m->dumps[i].path;
+    diag("machine %s: no capture of %s", m->decl->id, card != NULL ? card : "a card");
+    m->c->faults++;
+    return NULL;
 }
 
 enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_termination *end)
@@ -2607,6 +2673,7 @@ static void case_free(struct etude_case *c)
         c->machines = m->next;
         if (m->serial != NULL)
             etude_serial_free(m->serial);
+        free_dumps(m);
         free(m);
     }
     while ((s = c->services) != NULL) {

@@ -662,6 +662,49 @@ static void rule_processor(const struct rule *r)
     }
 }
 
+/** Reports each capture of the QEMU profile `qemu` that names no card of its
+ * devices. */
+static void known_cards(const struct rule *r, const struct json *qemu)
+{
+    const struct json *devices = json_member(qemu, "devices");
+    const struct json *captures = json_member(qemu, "captures");
+    const struct json *d;
+    const char *model;
+    size_t i, cards = 0;
+
+    for (i = 0; devices != NULL && i < devices->count; i++) {
+        d = devices->item[i];
+        model = d->type == JSON_STRING ? d->string : json_text(d, "model");
+        if (model != NULL && etude_qemu_nic(model)) {
+            cards++;
+        }
+    }
+    for (i = 0; captures != NULL && i < captures->count; i++) {
+        const struct json *card = captures->item[i];
+
+        if (card->type == JSON_STRING && strncmp(card->string, "net", 3) == 0 &&
+            strtoul(card->string + 3, NULL, 10) >= cards) {
+            finding(r->file, card->line, "%s: the capture %s names no network card of %lu",
+                    json_text(r->c, "case_id"), card->string, (unsigned long)cards);
+        }
+    }
+}
+
+/**
+ * Each capture of a QEMU profile names one of its network cards, `net0` the
+ * first of its `devices` that is a card, as the launcher numbers them.
+ */
+static void rule_captures(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    known_cards(r, json_member(json_member(r->c, "requirements"), "qemu"));
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        known_cards(r, json_member(machines->item[i], "qemu"));
+    }
+}
+
 /** Returns 1 when `list`, an array, has the string `value`. */
 static int listed(const struct json *list, const char *value)
 {
@@ -1261,6 +1304,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_processor(&r);
     rule_network(&r);
     rule_attached(&r);
+    rule_captures(&r);
     rule_steps(&r);
     rule_networks(&r);
     rule_bounds(&r);

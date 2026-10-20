@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "proof": "etude-capture",
+  "summary": "a card's capture reaches QEMU as filter-dump after the card, and captures of no card, twice or without a file are refused",
+  "tree": "private",
+  "sources": [
+    "tools/etude/qemu_profile.c"
+  ],
+  "artifacts": [
+    "${WORK}/test"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude -I tools/etude/posix -I tools/etude/guest -I utils tests/host/etude_qemu_hosttest.c tools/etude/capture.c tools/etude/history_json.c ${SRC}/tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/posix/qemu.c tools/etude/processor.c -o ${WORK}/test"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/test",
+      "--capture"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "capture-omitted",
+      "summary": "capture omitted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (c->card == *nics) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the second card's capture follows it"
+        ]
+      }
+    },
+    {
+      "name": "comma-unquoted",
+      "summary": "comma in the file unquoted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "add(l, 1, \"filter-dump",
+          "replace": "add(l, 0, \"filter-dump"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the second card's capture follows it"
+        ]
+      }
+    },
+    {
+      "name": "card-unchecked",
+      "summary": "capture of a missing card accepted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (*c->path == '\\0' || c->card >= nics)",
+          "replace": "if (*c->path == '\\0')"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a capture of a third card of two"
+        ]
+      }
+    },
+    {
+      "name": "twice-accepted",
+      "summary": "card captured twice accepted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (d->card == c->card)",
+          "replace": "if (0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a card captured twice"
+        ]
+      }
+    }
+  ]
+}

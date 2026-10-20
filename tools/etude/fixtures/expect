@@ -68,6 +68,7 @@
 1 manifest ./rules.json | usb-drive-id-twice: the drive stick is declared twice
 1 manifest ./rules.json | usb-disk-twice: the disk stick is given twice in a profile
 1 manifest ./rules.json | usb-vga: the device vga has no member but its model
+1 manifest ./rules.json | capture-card: the capture net1 names no network card of 1
 1 -r ./tree manifest ./rules.json | timing-nofile: tests/absent.c:1: no such file in the tree
 1 -r ./tree manifest ./rules.json | timing-pastend: tests/delay.txt:9: the file ends at line 4
 1 manifest ./prefix.json | fixture.other.vectors: a case of the family fixture.prefix has an identity

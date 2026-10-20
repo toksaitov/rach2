@@ -246,8 +246,7 @@ int etude_qemu_disks_check(const struct etude_qemu_disk *disks)
     return 0;
 }
 
-/** Say whether a device model has a user network. */
-static int nic_model(const char *model)
+int etude_qemu_nic(const char *model)
 {
     size_t i;
 
@@ -377,7 +376,7 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
         d = &devices[i];
         if (!word(d->model))
             return EINVAL;
-        if (!nic_model(d->model)) {
+        if (!etude_qemu_nic(d->model)) {
             if (card_options(d))
                 return EINVAL;
             continue;
@@ -401,7 +400,7 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
             continue;
         }
         for (j = 0; j < i; j++) {
-            if (nic_model(devices[j].model) && devices[j].mac != NULL) {
+            if (etude_qemu_nic(devices[j].model) && devices[j].mac != NULL) {
                 if (station(devices[j].mac, &other) != 0 || mac == other)
                     return EINVAL;
             }
@@ -727,14 +726,14 @@ static void add_network(struct line *l, const struct etude_qemu_profile *p,
 
 /**
  * Attach device `d` of profile `p`; `*nics` counts the cards already on user
- * networks.
+ * networks, and a card's network is recorded when `p` has a capture of it.
  */
 static void add_device(struct line *l, const struct etude_qemu_profile *p,
                        const struct etude_qemu_device *d, unsigned *nics)
 {
-    char id[16];
-
     const char *const members[] = {"id", d->id, "bus", d->bus, "port", d->port, "drive", d->drive};
+    const struct etude_qemu_capture *c;
+    char id[16];
     size_t i;
 
     if (strcmp(d->model, "vga") == 0) {
@@ -742,8 +741,8 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
         add(l, 0, "std");
         return;
     }
-    if (nic_model(d->model)) {
-        snprintf(id, sizeof(id), "net%u", (*nics)++);
+    if (etude_qemu_nic(d->model)) {
+        snprintf(id, sizeof(id), "net%u", *nics);
         add_network(l, p, d, id);
         add(l, 0, "-device");
         add(l, 0, "%s,netdev=%s", d->model, id);
@@ -758,6 +757,15 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
             append(l, 0, ",%s=%s", members[i], members[i + 1]);
     for (i = 0; i < count(d->properties); i += 2)
         append(l, 0, ",%s=%s", d->properties[i], d->properties[i + 1]);
+    if (etude_qemu_nic(d->model)) {
+        for (c = p->captures; c != NULL && c->path != NULL; c++) {
+            if (c->card == *nics) {
+                add(l, 0, "-object");
+                add(l, 1, "filter-dump,id=%s-dump,netdev=%s,file=%s", id, id, c->path);
+            }
+        }
+        (*nics)++;
+    }
 }
 
 /** Add the selected audio card and its WAV backend at the launcher's path. */
@@ -860,6 +868,25 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
     return 0;
 }
 
+/** Check that each capture of `p` has a file and is of a card of its own. */
+static int captures_check(const struct etude_qemu_profile *p)
+{
+    const struct etude_qemu_capture *c, *d;
+    size_t i;
+    unsigned nics = 0;
+
+    for (i = 0; i < device_count(p->devices); i++)
+        nics += (unsigned)etude_qemu_nic(p->devices[i].model);
+    for (c = p->captures; c != NULL && c->path != NULL; c++) {
+        if (*c->path == '\0' || c->card >= nics)
+            return EINVAL;
+        for (d = p->captures; d != c; d++)
+            if (d->card == c->card)
+                return EINVAL;
+    }
+    return 0;
+}
+
 /** Check what QEMU's command line cannot express or would ignore. */
 static int profile_check(const struct etude_qemu_profile *p)
 {
@@ -882,7 +909,7 @@ static int profile_check(const struct etude_qemu_profile *p)
     for (i = 0; i < count(p->boot_options); i++)
         if (!word(p->boot_options[i]))
             return EINVAL;
-    if (forward_check(p) != 0)
+    if (forward_check(p) != 0 || captures_check(p) != 0)
         return EINVAL;
     if (p->firmware == ETUDE_FIRMWARE_DIRECT)
         return p->kernel != NULL && *p->kernel != '\0' ? 0 : EINVAL;

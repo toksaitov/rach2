@@ -14,11 +14,13 @@
  *
  * The command lines of profiles, and the profiles the launcher refuses, are
  * checked as text, disks on IDE and NVMe, a CD and the firmware's flash among
- * them; `--argv` runs these rows alone. Thirteen stand-in machines then run at
- * once, each with an end of its own, and each must keep its own console and
- * end: a QEMU that fails before it connects is an unexpected exit, and one that
- * reports that it could not start the accelerator is a failed accelerator; so
- * is one whose QMP reports another accelerator in use, through
+ * them; `--argv` runs these rows alone. A capture of a card's frames is a
+ * filter-dump after the card, and a capture of a card the profile lacks is
+ * refused; `--capture` runs these rows alone. Thirteen stand-in machines then
+ * run at once, each with an end of its own, and each must keep its own console
+ * and end: a QEMU that fails before it connects is an unexpected exit, and one
+ * that reports that it could not start the accelerator is a failed accelerator;
+ * so is one whose QMP reports another accelerator in use, through
  * query-accelerators or, for a QEMU without that command, query-kvm. QMP's
  * SHUTDOWN events of the guest give a shutdown, a reset and a panic; one of the
  * host, or an exit without an event, is an unexpected exit; a cancellation of a
@@ -1897,6 +1899,53 @@ static void test_usb(void)
     CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "the profile is whole again");
 }
 
+/**
+ * Check that a capture of a card is a `filter-dump` on its network after the
+ * card, with its file's commas doubled, and that a capture of a card the
+ * profile lacks, of a card twice and without a file are refused.
+ */
+static void test_captures(void)
+{
+    static const struct etude_qemu_device devices[] = {
+        {.model = "rtl8139"}, {.model = "vga"}, {.model = "e1000"}, {0}};
+    static const struct etude_qemu_device none[] = {{.model = "vga"}, {0}};
+    static const struct etude_qemu_capture second[] = {{1, "/w/e1000,1.pcap"}, {0, NULL}};
+    static const struct etude_qemu_capture third[] = {{2, "/w/c.pcap"}, {0, NULL}};
+    static const struct etude_qemu_capture twice[] = {
+        {0, "/w/a.pcap"}, {1, "/w/b.pcap"}, {0, "/w/c.pcap"}, {0, NULL}};
+    static const struct etude_qemu_capture nameless[] = {{0, ""}, {0, NULL}};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_profile p, b;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+    int i, at = -1, dumps = 0;
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "i686";
+    p.kernel = "/k/kernel";
+    p.cpu = "qemu64";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = devices;
+    p.captures = second;
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "a capture's argv");
+    for (i = 0; argv[i] != NULL; i++) {
+        if (strcmp(argv[i], "e1000,netdev=net1") == 0)
+            at = i;
+        dumps += strncmp(argv[i], "filter-dump", 11) == 0;
+    }
+    CHECK(at > 0 && argv[at + 1] != NULL && strcmp(argv[at + 1], "-object") == 0 &&
+              argv[at + 2] != NULL &&
+              strcmp(argv[at + 2], "filter-dump,id=net1-dump,netdev=net1,file=/w/e1000,,1.pcap") ==
+                  0,
+          "the second card's capture follows it");
+    CHECK(dumps == 1, "one capture");
+    REFUSED(captures, third, "a capture of a third card of two");
+    REFUSED(captures, twice, "a card captured twice");
+    REFUSED(captures, nameless, "a capture without a file");
+    REFUSED(devices, none, "a capture of a profile without cards");
+}
+
 /** Reject a reduced reservation and any change to the boundary workload. */
 static void test_memory(void)
 {
@@ -2010,6 +2059,8 @@ int main(int argc, char **argv)
     } else if (argc == 2 && strcmp(argv[1], "--network") == 0) {
         test_network_argv();
         test_network_refused();
+    } else if (argc == 2 && strcmp(argv[1], "--capture") == 0) {
+        test_captures();
     } else if (argc == 2 && strcmp(argv[1], "--audio") == 0) {
         test_audio_argv();
         test_audio();
@@ -2034,6 +2085,7 @@ int main(int argc, char **argv)
         test_guest_addresses();
         test_guest_forwards();
         test_card();
+        test_captures();
         test_audio_argv();
         test_audio();
         test_usb();

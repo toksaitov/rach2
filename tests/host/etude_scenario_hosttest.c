@@ -42,21 +42,24 @@
  * run is a lost end. A media row boots a machine twice with the same empty
  * sparse disk of 4 TiB on NVMe and a CD whose medium is the artifact's object,
  * and the stand-in says the drives it was given; the disk is removed after the
- * pass. A machine's first card has a restricted network that forwards two of
- * the case's ports to the guest, one by TCP and one by UDP, and the guest's
- * connections to 10.0.2.100:7777 to a third through this program as the relay,
- * and its second card has a user network without forwards; a machine that
- * forwards a port the case does not hold is refused before QEMU starts. This
- * program is also the peer that a scenario runs as a service; two machines at
- * once reach it, a service ended unseen is a fault, and failing rows at each
- * stage end their own processes while a held row keeps its own. With the real
- * QEMU, a disk root written at the debug shell and powered off is read back by
- * the next boot, etude-guest runs the test image's /hello, two machines run
- * /tcptest against the peer, QEMU accepts a connection at the forwarded TCP
- * port and has bound the forwarded UDP port, /tcptest reaches the peer through
- * the guest forward and is refused it at the gateway, and the kernel finds the
- * size of the media row's empty disk. With ETUDE_TEST_FORWARD set the program
- * runs the two forward rows alone.
+ * pass. A boot whose profile records its second card's frames gives the
+ * scenario the file the stand-in wrote for that card, removed after a pass and
+ * kept after a failure. A machine's first card has a restricted network that
+ * forwards two of the case's ports to the guest, one by TCP and one by UDP, and
+ * the guest's connections to 10.0.2.100:7777 to a third through this program as
+ * the relay, and its second card has a user network without forwards; a
+ * machine that forwards a port the case does not hold is refused before QEMU
+ * starts. This program is also the peer that a scenario runs as a service; two
+ * machines at once reach it, a service ended unseen is a fault, and failing
+ * rows at each stage end their own processes while a held row keeps its own.
+ * With the real QEMU, a disk root written at the debug shell and powered off is
+ * read back by the next boot, etude-guest runs the test image's /hello, two
+ * machines run /tcptest against the peer, the frames of one machine's card
+ * recorded in its capture, QEMU accepts a connection at the forwarded TCP port
+ * and has bound the forwarded UDP port, /tcptest reaches the peer through the
+ * guest forward and is refused it at the gateway, and the kernel finds the size
+ * of the media row's empty disk. With ETUDE_TEST_FORWARD set the program runs
+ * the two forward rows alone.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -150,6 +153,22 @@ static int file_has(const char *path, const char *text)
     free(buf);
     fclose(f);
     return found;
+}
+
+/** Say whether the file at `path` is a little-endian pcap capture whose
+ * frames have the bytes of `text`. */
+static int pcap_has(const char *path, const char *text)
+{
+    static const unsigned char magic[4] = {0xd4, 0xc3, 0xb2, 0xa1};
+    unsigned char head[4];
+    FILE *f = fopen(path, "rb");
+    int ok;
+
+    if (f == NULL)
+        return 0;
+    ok = fread(head, 1, sizeof(head), f) == sizeof(head) && memcmp(head, magic, 4) == 0;
+    fclose(f);
+    return ok && file_has(path, text);
 }
 
 /** Say `text` on standard output at once, as a line. */
@@ -771,6 +790,25 @@ static void fake_drives(int fd, int argc, char **argv)
     }
 }
 
+/** Write the `n` bytes of `head` and then `text` to the file at `path`, as
+ * QEMU writes a recording; a NULL path asks for none. Return 0, or -1 when
+ * the file cannot be made. */
+static int fake_record(const char *path, const unsigned char *head, size_t n, const char *text)
+{
+    FILE *f;
+
+    if (path == NULL)
+        return 0;
+    f = fopen(path, "wb");
+    if (f == NULL)
+        return -1;
+    if (n != 0)
+        fwrite(head, 1, n, f);
+    fputs(text, f);
+    fclose(f);
+    return 0;
+}
+
 /**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: answer QMP's start, say that
  * the machine runs, in the mode `media` say each of its `-drive` and `-device`
@@ -783,7 +821,9 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     const char *accel = fake_arg(argc, argv, "-accel", "");
     const char *disk = fake_arg(argc, argv, "-drive", "file=");
     const char *audio = fake_arg(argc, argv, "-audiodev", "wav,id=etude-audio,path=");
-    FILE *wav;
+    const char *dump =
+        fake_arg(argc, argv, "-object", "filter-dump,id=net1-dump,netdev=net1,file=");
+    static const unsigned char pcap[4] = {0xd4, 0xc3, 0xb2, 0xa1};
     char path[PATH_MAX];
     struct fake_in con, qmp;
     struct pollfd p[2];
@@ -810,13 +850,9 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         fake_qmp(qmp.fd, qmp.line, accel, mode);
         ok = strstr(qmp.line, "\"cont\"") == NULL;
     }
-    if (audio != NULL) {
-        wav = fopen(audio, "wb");
-        if (wav == NULL)
-            return 127;
-        fputs("recorded samples", wav);
-        fclose(wav);
-    }
+    if (fake_record(audio, NULL, 0, "recorded samples") != 0 ||
+        fake_record(dump, pcap, sizeof(pcap), "captured frames") != 0)
+        return 127;
     if (strcmp(mode, "media") == 0)
         fake_drives(con.fd, argc, argv);
     fake_netdevs(con.fd, argc, argv);
@@ -963,6 +999,33 @@ static int scenario_audio(struct etude_case *c, int keep)
     return keep;
 }
 
+/** Read a boot's capture of its second card with a host tool and keep failed
+ * evidence. */
+static int scenario_capture(struct etude_case *c, int keep)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    const char *path;
+    char *scan[] = {"scanner", "tool", "scan", NULL, "captured frames", NULL};
+
+    if (etude_step(c, "boot") != ETUDE_OK || etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+        return 1;
+    wait_for(c, m, "capture-host", "> ", 0);
+    etude_type(m, "poweroff\n");
+    if (etude_wait_end(m, &end) != ETUDE_OK)
+        return 1;
+    path = etude_capture(m, "net1");
+    etude_assert(c, "capture-file", path != NULL && pcap_has(path, "captured frames"),
+                 "no capture of the second card");
+    if (path == NULL)
+        return 1;
+    scan[3] = (char *)path;
+    if (etude_host(c, scan, "scan", &end) != ETUDE_OK || end.value != 0)
+        return 1;
+    etude_assert(c, "capture-host", 1, NULL);
+    return keep;
+}
+
 /** Run the rows of a lost machine: each wait ends with the loss. */
 static int scenario_lost(struct etude_case *c, const char *how)
 {
@@ -1050,6 +1113,7 @@ static int scenario_misuse(struct etude_case *c)
         return 1;
     expect(c, "running", etude_boot(c, "fixture", NULL, &m2, &end), ETUDE_REFUSED);
     expect(c, "no-qmp", etude_qmp(m, "query-status", NULL, &reply), ETUDE_REFUSED);
+    etude_assert(c, "no-capture", etude_capture(m, "net0") == NULL, "given");
     return 0;
 }
 
@@ -1377,6 +1441,7 @@ static int scenario_real_peer(struct etude_case *c)
     struct etude_case_service *s;
     struct etude_termination end;
     struct peer_args pa;
+    const char *capture;
     char line[64];
     uint64_t at, aa, ba;
 
@@ -1395,6 +1460,9 @@ static int scenario_real_peer(struct etude_case *c)
     etude_type(b, line);
     expect(c, "alpha-tcp", etude_console_wait(a, "All TCP tests passed!", aa, &at), ETUDE_OK);
     expect(c, "beta-tcp", etude_console_wait(b, "All TCP tests passed!", ba, &at), ETUDE_OK);
+    capture = etude_capture(a, "net0");
+    etude_assert(c, "alpha-captured", capture != NULL && pcap_has(capture, "hello-tcp-echo"),
+                 "no frame of tcptest's in its capture");
     if (etude_service_wait(s, "peer: closed", 0, &at) == ETUDE_OK)
         expect(c, "both-closed", etude_service_wait(s, "peer: closed", at, &at), ETUDE_OK);
     else
@@ -1554,9 +1622,12 @@ static int scenario_forward(struct etude_case *c, int real)
     return 0;
 }
 
-/** Run row `row` of a case with services, or give 1 for an unknown row. */
+/** Run row `row` of a case with services or a capture row, or give 1 for an
+ * unknown row. */
 static int scenario_services(struct etude_case *c, const char *row)
 {
+    if (strncmp(row, "capture-", 8) == 0)
+        return scenario_capture(c, strcmp(row, "capture-keep") == 0);
     if (strcmp(row, "pair") == 0)
         return scenario_pair(c);
     if (strcmp(row, "unready") == 0)
@@ -1858,7 +1929,7 @@ static int write_manifest(const char *path, const struct row *r)
             machine, sizeof(machine),
             "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
             "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
-            "%s\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": %s}, \"console\": "
+            "%s\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": %s%s}, \"console\": "
             "\"serial\", \"qmp\": %s, \"helper\": %s}",
             r->helper || media(r) ? "\"initrd\"" : "null", row_disks(r),
             strcmp(r->name, "memory") == 0       ? "\"memory_profile\": \"bigmem-boundary-v1\", "
@@ -1868,8 +1939,10 @@ static int write_manifest(const char *path, const struct row *r)
                 ? "[{\"model\":\"e1000\",\"net\":\"10.90.0.0/16\",\"host\":\"10.90.0.2\","
                   "\"dhcpstart\":\"10.90.0.20\",\"dns\":\"10.90.0.3\","
                   "\"mac\":\"52:54:00:12:34:58\"},\"rtl8139\"]"
-                : "[]",
+            : strncmp(r->name, "capture-", 8) == 0 ? "[\"rtl8139\", \"vga\", \"e1000\"]"
+                                                   : "[]",
             r->mode == NULL && r->disk != NULL ? "[\"rach2.fsdisk\"]" : "[]",
+            strncmp(r->name, "capture-", 8) == 0 ? ", \"captures\": [\"net1\"]" : "",
             strcmp(r->name, "misuse") == 0 ? "false" : "true", r->helper ? "true" : "false");
     }
     fix_format(
@@ -1905,7 +1978,7 @@ static int write_manifest(const char *path, const struct row *r)
 
 /** Write row `r`'s case of two machines and a service to `path`: under the
  * stand-in each machine has a disk of its own, and under the real QEMU each
- * boots the test image with a network card. */
+ * boots the test image with a network card, alpha's recorded. */
 static int write_pair_manifest(const char *path, const struct row *r)
 {
     char steps[2048], asserts[4096], machines[2048], text[16384];
@@ -1917,14 +1990,15 @@ static int write_pair_manifest(const char *path, const struct row *r)
         machines, sizeof(machines),
         "[{\"machine_id\": \"alpha\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
         "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
-        "\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": []}, \"console\": "
+        "\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": []%s}, \"console\": "
         "\"serial\", \"qmp\": true, \"helper\": false}, {\"machine_id\": \"beta\", \"qemu\": "
         "{\"kernel\": \"kernel\", \"initrd\": %s, \"disks\": %s, \"cpu\": \"max\", "
         "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", "
         "\"devices\": %s, \"boot_options\": []}, \"console\": \"serial\", \"qmp\": true, "
         "\"helper\": false}]",
         real ? "\"initrd\"" : "null", real ? "[]" : "[\"disk\"]", real ? "[\"rtl8139\"]" : "[]",
-        real ? "\"initrd\"" : "null", real ? "[]" : "[\"disk2\"]", real ? "[\"rtl8139\"]" : "[]");
+        real ? ", \"captures\": [\"net0\"]" : "", real ? "\"initrd\"" : "null",
+        real ? "[]" : "[\"disk2\"]", real ? "[\"rtl8139\"]" : "[]");
     fix_format(
         text, sizeof(text),
         "{\"schema_version\": 1, \"family_id\": \"test.scenario\", \"summary\": \"rows\", "
@@ -2258,6 +2332,10 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
     if (strcmp(r->name, "audio-pass") == 0) {
         snprintf(copies, sizeof(copies), "%s/evidence", scratch);
         CHECK(stat(copies, &st) != 0 && errno == ENOENT, "audio passing evidence removed");
+    }
+    if (strcmp(r->name, "capture-pass") == 0) {
+        snprintf(copies, sizeof(copies), "%s/evidence", scratch);
+        CHECK(stat(copies, &st) != 0 && errno == ENOENT, "capture passing evidence removed");
     }
     if (r->want_kept)
         judge_evidence(r, scratch);
@@ -2793,6 +2871,13 @@ static const struct row audio_rows[] = {
      "fixture.1.wav=recorded samples;fixture.2.wav=recorded samples", 0},
 };
 
+static const struct row capture_rows[] = {
+    {"capture-pass", "disk", "boot:fixture", "capture-file capture-host", NULL, 0, STEP_US, 0, 1, 0,
+     0, NULL, 0, NULL, 0},
+    {"capture-keep", "disk", "boot:fixture", "capture-file capture-host", NULL, 0, STEP_US, 1, 0, 1,
+     0, NULL, 0, "fixture.1.net1.pcap=captured frames", 0},
+};
+
 static const struct row stand_in_rows[] = {
     {"reboot", "disk", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
@@ -2818,7 +2903,7 @@ static const struct row stand_in_rows[] = {
      0, NULL, 0},
     {"misuse", "disk", "host boot:fixture",
      "no-step no-artifact no-copy host-step other-machine no-tool step-back machine-step "
-     "other-disk running no-qmp",
+     "other-disk running no-qmp no-capture",
      "disk", 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"wrong", "wrong", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0,
      NULL, 0},
@@ -2859,8 +2944,8 @@ static const struct row real_rows[] = {
     {"real-guest", NULL, "run:fixture", "guest-pass guest-exit", NULL, 1, REAL_US, 0, 1, 0, 0, NULL,
      0, NULL, 0},
     {"real-peer", NULL, "serve alpha:alpha beta:beta",
-     "service-ready alpha-tcp beta-tcp both-closed service-stopped", NULL, 0, REAL_US, 0, 1, 0, 1,
-     NULL, 0, NULL, 0},
+     "service-ready alpha-tcp beta-tcp alpha-captured both-closed service-stopped", NULL, 0,
+     REAL_US, 0, 1, 0, 1, NULL, 0, NULL, 0},
     {"real-media", NULL, "boot:fixture", "sparse drives stopped", NULL, 0, REAL_US, 0, 1, 0, 0,
      NULL, 0, NULL, 0},
 };
@@ -2876,9 +2961,10 @@ static const struct row forward_rows[] = {
      NULL, 0, REAL_US, 0, 1, 0, 0, "closed", CLOSED_US, NULL, 0},
 };
 
-/** Run the audio rows and, unless ETUDE_TEST_AUDIO_ONLY is set, the stand-in
- * rows, the stop row, the forward row and the damaged row; or the forward row
- * alone when `forward_only` is set. */
+/** Run the audio rows and the capture rows, unless ETUDE_TEST_CAPTURE_ONLY or
+ * ETUDE_TEST_AUDIO_ONLY asks for one kind alone, and then the stand-in rows,
+ * the stop row, the forward row and the damaged row; or the forward row alone
+ * when `forward_only` is set. */
 static void test_stand_in(int forward_only)
 {
     struct site s;
@@ -2892,8 +2978,12 @@ static void test_stand_in(int forward_only)
     }
     if (!forward_only) {
         for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
-            run_row(&audio_rows[i], &s, NULL);
-        if (getenv("ETUDE_TEST_AUDIO_ONLY") != NULL) {
+            if (getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL)
+                run_row(&audio_rows[i], &s, NULL);
+        for (i = 0; i < sizeof(capture_rows) / sizeof(capture_rows[0]); i++)
+            if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL)
+                run_row(&capture_rows[i], &s, NULL);
+        if (getenv("ETUDE_TEST_AUDIO_ONLY") != NULL || getenv("ETUDE_TEST_CAPTURE_ONLY") != NULL) {
             etude_store_close(s.store);
             return;
         }
@@ -2957,7 +3047,7 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
         exit(1);
     forward_only = getenv("ETUDE_TEST_FORWARD") != NULL && *getenv("ETUDE_TEST_FORWARD") != '\0';
     test_stand_in(forward_only);
-    if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL &&
+    if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL && getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL &&
         (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
         test_real(forward_only);
     if (fails != 0)
