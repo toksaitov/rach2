@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "proof": "bindhold",
+  "summary": "the textbusy suite's bind-holder probe on x86-64 with the boot root's bind holders compared without their base mount",
+  "tree": "shared",
+  "sources": ["rach2/sys/syscall_fs.c", "rach2/sys/mm/mm.c", "rach2/sys/syscall_proc.c"],
+  "artifacts": ["${WORK}/kernel"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "make -s rach2 tests krffs musl-programs test-image build/tests/system/harness ARCH=x86_64 </dev/null && cp build/x86_64/rach2/kernel ${WORK}/kernel"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "log=build/x86_64/images/textbusy-test.log; rm -f $log; status=0; make -s run-textbusy ARCH=x86_64 </dev/null || status=$?; [ ! -f $log ] || cat $log; exit $status"],
+    "bound_s": 900
+  },
+  "faults": [
+    {
+      "name": "descriptor",
+      "summary": "a descriptor on a bind of the boot root not counted as a holder of the root",
+      "edits": [
+        {"file": "rach2/sys/syscall_fs.c", "find": "vfs_mount_base(ofd->vmnt) == vfs_root_mount()", "replace": "ofd->vmnt == vfs_root_mount()"}
+      ],
+      "fails": {
+        "lines": ["BINDHOLDMUSL FAIL ("]
+      }
+    },
+    {
+      "name": "image",
+      "summary": "a running image from a bind of the boot root not counted as a holder of the root, with the root's segments copied so that the image is the only holder",
+      "edits": [
+        {"file": "rach2/sys/syscall_proc.c", "find": "if (type != 0100000u || !mmap_fault_readable(ref->mnt)) {", "replace": "if (type != 0100000u || !mmap_fault_readable(ref->mnt) ||\n        vfs_mount_base(ref->mnt) == vfs_root_mount()) {"},
+        {"file": "rach2/sys/mm/mm.c", "find": "vfs_mount_base(m->exe_file->vmnt) == vfs_mount_base(mnt)", "replace": "m->exe_file->vmnt == mnt"}
+      ],
+      "fails": {
+        "lines": ["BINDHOLDMUSL FAIL ("]
+      }
+    }
+  ]
+}

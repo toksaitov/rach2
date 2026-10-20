@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "proof": "textbusy",
+  "summary": "the textbusy suite on x86-64 with the exclusion of an executable's writers taken out of rach2/sys/fs/fd.c",
+  "tree": "shared",
+  "sources": ["rach2/sys/fs/fd.c"],
+  "artifacts": ["${WORK}/kernel"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "make -s rach2 tests krffs musl-programs test-image build/tests/system/harness ARCH=x86_64 </dev/null && cp build/x86_64/rach2/kernel ${WORK}/kernel"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "log=build/x86_64/images/textbusy-test.log; rm -f $log; status=0; make -s run-textbusy ARCH=x86_64 </dev/null || status=$?; [ ! -f $log ] || cat $log; exit $status"],
+    "bound_s": 900
+  },
+  "faults": [
+    {
+      "name": "exclusion",
+      "summary": "a write open of a running executable allowed",
+      "edits": [
+        {"file": "rach2/sys/fs/fd.c", "find": "            return -ETXTBSY;", "replace": "            continue;"}
+      ],
+      "fails": {
+        "lines": ["TEXTBUSYMUSL FAIL (exec writer)"]
+      }
+    }
+  ]
+}
