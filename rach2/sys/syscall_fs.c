@@ -5489,33 +5489,58 @@ long sys_getcwd(isr_params_t *params)
     return rc;
 }
 
+/*
+ * The attributes of a file as the stat calls gather them, before
+ * `stat64_put` lays them out in the user's stat64 or `statx_from_kstat` in a
+ * struct statx. The times are 64-bit seconds on every architecture: i386's
+ * stat64 keeps the low 32 bits of each, and statx reports them whole.
+ */
+struct kstat {
+    uint64_t st_dev;
+    uint64_t st_ino;
+    uint32_t st_mode;
+    uint32_t st_nlink;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    uint64_t st_rdev;
+    int64_t st_size;
+    uint32_t st_blksize;
+    uint64_t st_blocks;
+    int64_t st_atime;
+    uint32_t st_atime_nsec;
+    int64_t st_mtime;
+    uint32_t st_mtime_nsec;
+    int64_t st_ctime;
+    uint32_t st_ctime_nsec;
+};
+
 /**
- * Report the three times a KRFFS node stores into a stat64. No read
+ * Report the three times a KRFFS node stores into a kstat. No read
  * advances the access time (`krffs_stamp_at` in fs/krffs.c): the file
  * system is behind a write-back page cache, and stamping an access time at
  * every read would dirty a page at every read. One set by utimensat is
  * reported as it was set.
  */
-static void stat64_node_times(struct user_stat *kst, const krffs_node_t *node)
+static void stat64_node_times(struct kstat *kst, const krffs_node_t *node)
 {
-    kst->st_atime = (unsigned long)node->access_time.seconds;
-    kst->st_atime_nsec = (unsigned long)node->access_time.nanoseconds;
-    kst->st_mtime = (unsigned long)node->modification_time.seconds;
-    kst->st_mtime_nsec = (unsigned long)node->modification_time.nanoseconds;
-    kst->st_ctime = (unsigned long)node->attribute_change_time.seconds;
-    kst->st_ctime_nsec = (unsigned long)node->attribute_change_time.nanoseconds;
+    kst->st_atime = node->access_time.seconds;
+    kst->st_atime_nsec = (uint32_t)node->access_time.nanoseconds;
+    kst->st_mtime = node->modification_time.seconds;
+    kst->st_mtime_nsec = (uint32_t)node->modification_time.nanoseconds;
+    kst->st_ctime = node->attribute_change_time.seconds;
+    kst->st_ctime_nsec = (uint32_t)node->attribute_change_time.nanoseconds;
 }
 
 /**
- * Report the boot time into a stat64, for a node with no history of its own: a
+ * Report the boot time into a kstat, for a node with no history of its own: a
  * device, a /proc file, a pipe, a socket. It is `btime` of /proc/stat, and not
  * the time now, since a synthetic file whose modification time moved at every
  * stat would look freshly written to a program comparing times, as make does;
  * it moves only when the clock is set.
  */
-static void stat64_boot_times(struct user_stat *kst)
+static void stat64_boot_times(struct kstat *kst)
 {
-    unsigned long boot = (unsigned long)rtc_boot_epoch();
+    int64_t boot = rtc_boot_epoch();
 
     kst->st_atime = boot;
     kst->st_mtime = boot;
@@ -5528,7 +5553,7 @@ static void stat64_boot_times(struct user_stat *kst)
 /** Give `kst` the identity of a read-only /proc file that is not a
  * process's: proc's device, a regular file of mode 0444, and the inode
  * `inode`. Returns 0, for `synth_stat` to return. */
-static int32_t synth_proc_stat(struct user_stat *kst, uint32_t inode)
+static int32_t synth_proc_stat(struct kstat *kst, uint32_t inode)
 {
     kst->st_dev = PROCFS_FSID;
     kst->st_mode = S_IFREG | 0444;
@@ -5542,7 +5567,7 @@ static int32_t synth_proc_stat(struct user_stat *kst, uint32_t inode)
  * descriptor open on the node reports after the device has gone. A uevent's
  * size is 4096, as Linux gives every attribute file.
  */
-static void synth_sys_identity(const struct vpath *vp, struct user_stat *kst, int follow)
+static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int follow)
 {
     kst->st_dev = SYSFS_FSID;
     if (vp->kind == VNODE_SYS_FILE) {
@@ -5560,7 +5585,7 @@ static void synth_sys_identity(const struct vpath *vp, struct user_stat *kst, in
 
 /** The identity of a node of /sys, as `synth_sys_identity` gives it, or
  * -ENOENT for a device that is not there. */
-static int32_t synth_sys_stat(const struct vpath *vp, struct user_stat *kst, int follow)
+static int32_t synth_sys_stat(const struct vpath *vp, struct kstat *kst, int follow)
 {
     if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
         return -ENOENT;
@@ -5594,22 +5619,44 @@ static int synth_sys_link(const struct vpath *vp, char *out, int cap)
     return n;
 }
 
-/** The owner and group of the stat `kst` as the caller's user namespace
- * maps them (`uid_seen`), which every stat gives the caller. */
-static void stat64_seen(struct user_stat *kst)
+/**
+ * Copy `kst` out to the user's stat64 `st`: with the owner and group the
+ * caller's user namespace maps them to (`uid_seen`), which every stat gives
+ * the caller, and the times cut to the structure's longs. Returns 0 or
+ * -EFAULT.
+ */
+static int32_t stat64_put(struct user_stat __user *st, const struct kstat *kst)
 {
-    kst->st_uid = uid_seen((uint32_t)kst->st_uid);
-    kst->st_gid = gid_seen((uint32_t)kst->st_gid);
+    struct user_stat u;
+
+    k_memset(&u, 0, sizeof(u));
+    u.st_dev = kst->st_dev;
+    STAT_SET_INO(&u, kst->st_ino);
+    u.st_mode = kst->st_mode;
+    u.st_nlink = kst->st_nlink;
+    u.st_uid = uid_seen(kst->st_uid);
+    u.st_gid = gid_seen(kst->st_gid);
+    u.st_rdev = kst->st_rdev;
+    u.st_size = kst->st_size;
+    u.st_blksize = kst->st_blksize;
+    u.st_blocks = kst->st_blocks;
+    u.st_atime = (unsigned long)kst->st_atime;
+    u.st_atime_nsec = kst->st_atime_nsec;
+    u.st_mtime = (unsigned long)kst->st_mtime;
+    u.st_mtime_nsec = kst->st_mtime_nsec;
+    u.st_ctime = (unsigned long)kst->st_ctime;
+    u.st_ctime_nsec = kst->st_ctime_nsec;
+    return copy_to_user(st, &u, sizeof(u)) != 0 ? -EFAULT : 0;
 }
 
 /**
- * The root directory's own three times, into a stat64.
+ * The root directory's own three times, into a kstat.
  *
  * The root is a node like any other, and creating an entry in it stamps its
  * times, so it reports them as any directory does; a machine with no file
  * system mounted has nothing to report but the boot time.
  */
-static void stat64_root_times(struct user_stat *kst)
+static void stat64_root_times(struct kstat *kst)
 {
     if (krffs_fs && krffs_fs->node) {
         stat64_node_times(kst, krffs_fs->node);
@@ -5628,7 +5675,7 @@ static void stat64_root_times(struct user_stat *kst)
  * that does not count blocks reports the size in 512-byte blocks, rounded
  * up.
  */
-static int32_t vfs_fill_stat64(struct user_stat *kst, const struct vfs_ref *r)
+static int32_t vfs_fill_stat64(struct kstat *kst, const struct vfs_ref *r)
 {
     struct vfs_stat st;
     int rc;
@@ -5653,13 +5700,13 @@ static int32_t vfs_fill_stat64(struct user_stat *kst, const struct vfs_ref *r)
     kst->st_size = (long long)st.size;
     kst->st_blksize = 4096;
     kst->st_blocks = (long long)(st.blocks_known ? st.blocks : (st.size + 511) / 512);
-    STAT_SET_INO(kst, st.ino);
-    kst->st_atime = (long)st.atime_sec;
-    kst->st_atime_nsec = (unsigned long)st.atime_nsec;
-    kst->st_mtime = (long)st.mtime_sec;
-    kst->st_mtime_nsec = (unsigned long)st.mtime_nsec;
-    kst->st_ctime = (long)st.ctime_sec;
-    kst->st_ctime_nsec = (unsigned long)st.ctime_nsec;
+    kst->st_ino = st.ino;
+    kst->st_atime = st.atime_sec;
+    kst->st_atime_nsec = (uint32_t)st.atime_nsec;
+    kst->st_mtime = st.mtime_sec;
+    kst->st_mtime_nsec = (uint32_t)st.mtime_nsec;
+    kst->st_ctime = st.ctime_sec;
+    kst->st_ctime_nsec = (uint32_t)st.ctime_nsec;
     return 0;
 }
 
@@ -5670,7 +5717,7 @@ static int32_t vfs_fill_stat64(struct user_stat *kst, const struct vfs_ref *r)
  * directory of mode 0755 whatever its stored mode says: no mkdir made it,
  * and a path can reach it through "..".
  */
-static void krffs_fill_stat64(struct user_stat *kst, krffs_node_t *node)
+static void krffs_fill_stat64(struct kstat *kst, krffs_node_t *node)
 {
     k_memset(kst, 0, sizeof(*kst));
     if (node == krffs_fs->node) {
@@ -5684,12 +5731,12 @@ static void krffs_fill_stat64(struct user_stat *kst, krffs_node_t *node)
     kst->st_size = (long long)node->data_size;
     kst->st_blksize = 4096;
     kst->st_blocks = (node->data_size + 511) / 512;
-    STAT_SET_INO(kst, krffs_node_ino(node));
+    kst->st_ino = krffs_node_ino(node);
     stat64_node_times(kst, node);
 }
 
 /* The stat of a descriptor, for `synth_fd_stat`; defined with sys_fstat64. */
-static int32_t fstat_fill(fd_entry_t *e, struct user_stat *kst);
+static int32_t fstat_fill(fd_entry_t *e, struct kstat *kst);
 
 /**
  * What a followed /proc/PID/fd/N link reports: the stat of descriptor `fd`
@@ -5700,7 +5747,7 @@ static int32_t fstat_fill(fd_entry_t *e, struct user_stat *kst);
  * process closes the descriptor and its release puts the node. The other
  * kinds are read without a sleep.
  */
-static int32_t synth_fd_stat(int pid, int fd, struct user_stat *kst)
+static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
 {
     process_t *p = get_process((uint32_t)pid);
     fd_entry_t e;
@@ -5736,7 +5783,7 @@ static int32_t synth_fd_stat(int pid, int fd, struct user_stat *kst)
  * `task_dump_owner` does: the process's effective user and group IDs while
  * it is dumpable, and root otherwise (`procfs_oom_owner`). BusyBox's `ps`
  * and `top` read a process's user from its directory's owner. */
-static void synth_pid_owner(int pid, struct user_stat *kst)
+static void synth_pid_owner(int pid, struct kstat *kst)
 {
     uint32_t uid, gid;
 
@@ -5793,7 +5840,7 @@ static int32_t synth_fd_visible(int rpid, int fd)
  * group are kept on the pty, where the login server's chown and chmod put
  * them.
  */
-static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int follow)
+static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
 {
     uint32_t mode = 0, rdev = 0, ino = 0;
 
@@ -6085,7 +6132,7 @@ static int32_t synth_stat(const struct vpath *vp, struct user_stat *kst, int fol
 static int32_t ref_dir_check(const struct vfs_ref *r, int follow)
 {
     const struct vpath *vp = vfs_synth_vpath(r->mnt, r->node);
-    struct user_stat kst;
+    struct kstat kst;
     struct vfs_stat vst;
     int32_t rc;
 
@@ -6218,7 +6265,7 @@ static int32_t open_named(const char *name, int flags, uint32_t mode, int end)
 static int32_t synth_open_path(const struct vpath *vp, const char *name, int flags)
 {
     int follow = !(flags & O_NOFOLLOW);
-    struct user_stat kst;
+    struct kstat kst;
     struct vpath *copy;
     fd_entry_t *e;
     int fd;
@@ -6543,7 +6590,7 @@ long sys_readlinkat(isr_params_t *params)
  * `synth_stat` gives it: a /proc link, a /sys device link or /dev/log. */
 static int synth_is_link(const struct vpath *vp)
 {
-    struct user_stat lst;
+    struct kstat lst;
 
     return synth_stat(vp, &lst, 0) == 0 && (lst.st_mode & 0170000u) == 0120000u;
 }
@@ -6569,7 +6616,7 @@ static int synth_is_link(const struct vpath *vp)
  */
 static int32_t do_stat64(const char __user *path, struct user_stat __user *st, int follow)
 {
-    struct user_stat kst;
+    struct kstat kst;
     char *pathbuf;
     int dir = 0;
 
@@ -6606,7 +6653,7 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
         } else if ((krffs_node_t *)ref.node == krffs_fs->node) {
             kst.st_mode = S_IFDIR | 0755;
             kst.st_nlink = 1;
-            STAT_SET_INO(&kst, 1);
+            kst.st_ino = 1;
             kst.st_blksize = 4096;
             stat64_root_times(&kst);
         } else {
@@ -6622,12 +6669,7 @@ static int32_t do_stat64(const char __user *path, struct user_stat __user *st, i
     if (dir && (kst.st_mode & S_IFMT) != S_IFDIR) {
         return -ENOTDIR;
     }
-    stat64_seen(&kst);
-    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-        return -EFAULT;
-    }
-
-    return 0;
+    return stat64_put(st, &kst);
 }
 
 /**
@@ -6927,7 +6969,7 @@ long sys_fstatfs64(isr_params_t *params)
  * namespace's nsfs's file of the namespace, and any other's Linux's
  * anonymous inode. Returns 0, or the error of the queue's getattr.
  */
-static int32_t fstat_anon(fd_entry_t *entry, struct user_stat *kst)
+static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
 {
     struct vfs_ref mq;
 
@@ -6939,7 +6981,7 @@ static int32_t fstat_anon(fd_entry_t *entry, struct user_stat *kst)
     if (nsfs_ns(entry)) {
         kst->st_dev = NSFS_DEV;
         kst->st_mode = S_IFREG | 0444;
-        STAT_SET_INO(kst, nsfs_ns(entry)->inum);
+        kst->st_ino = nsfs_ns(entry)->inum;
     } else {
         kst->st_mode = 0600;
     }
@@ -6990,7 +7032,7 @@ static int32_t fstat_anon(fd_entry_t *entry, struct user_stat *kst)
  * 0620 once its pty is gone. Anything else, a pty master, the framebuffer
  * or the mouse, is a character device of mode 0666 and size 0.
  */
-static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
+static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
 {
     k_memset(kst, 0, sizeof(*kst));
     stat64_boot_times(kst);
@@ -7004,7 +7046,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct user_stat *kst)
     }
     if (entry->type == FD_TYPE_DIR && entry->node == NULL) {
         kst->st_mode = S_IFDIR | 0755;
-        STAT_SET_INO(kst, 1);
+        kst->st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         stat64_root_times(kst);
@@ -7124,7 +7166,7 @@ long sys_fstat64(isr_params_t *params)
     int32_t rc;
     int fd = (int)SC_ARG(params, 0);
     struct user_stat __user *st = (struct user_stat __user *)SC_ARG(params, 1);
-    struct user_stat kst;
+    struct kstat kst;
     fd_entry_t *entry;
 
     if (!current_proc || !st) {
@@ -7138,11 +7180,7 @@ long sys_fstat64(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    stat64_seen(&kst);
-    if (copy_to_user(st, &kst, sizeof(kst)) != 0) {
-        return -EFAULT;
-    }
-    return 0;
+    return stat64_put(st, &kst);
 }
 
 /**
@@ -7171,7 +7209,7 @@ static int user_path_empty(const char __user *upath)
  * on until the attributes are read, as `do_stat64`'s does, and for the same
  * reason.
  */
-static int32_t fstatat_path(const char *path, int follow, struct user_stat *kst)
+static int32_t fstatat_path(const char *path, int follow, struct kstat *kst)
 {
     struct vfs_ref ref;
     const struct vpath *svp;
@@ -7180,7 +7218,7 @@ static int32_t fstatat_path(const char *path, int follow, struct user_stat *kst)
     k_memset(kst, 0, sizeof(*kst));
     if (names_tree_root(path) && vfs_root_mount()->type == &vfs_krffs_type) {
         kst->st_mode = S_IFDIR | 0755;
-        STAT_SET_INO(kst, 1);
+        kst->st_ino = 1;
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         stat64_root_times(kst);
@@ -7217,7 +7255,7 @@ static int32_t fstatat_path(const char *path, int follow, struct user_stat *kst)
  * to, whatever it is, as fstat64 does, or the working directory for
  * AT_FDCWD. Returns 0 or a negative errno.
  */
-static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct user_stat *kst)
+static int32_t stat_at(int dirfd, const char __user *upath, int flags, struct kstat *kst)
 {
     int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     char *pathbuf;
@@ -7273,7 +7311,7 @@ long sys_fstatat64(isr_params_t *params)
 {
     struct user_stat __user *st = (struct user_stat __user *)SC_ARG(params, 2);
     int flags = (int)SC_ARG(params, 3);
-    struct user_stat kst;
+    struct kstat kst;
     int32_t rc;
 
     if (!current_proc || !st) {
@@ -7283,11 +7321,7 @@ long sys_fstatat64(isr_params_t *params)
         return -EINVAL;
     }
     rc = stat_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1), flags, &kst);
-    stat64_seen(&kst);
-    if (rc == 0 && copy_to_user(st, &kst, sizeof(kst)) != 0) {
-        rc = -EFAULT;
-    }
-    return rc;
+    return rc != 0 ? rc : stat64_put(st, &kst);
 }
 
 /* The statx flags that ask how fresh an answer must be; this kernel has one
@@ -7350,28 +7384,27 @@ static uint32_t dev_minor(uint64_t dev)
 /**
  * Put the attributes of `st` into `sx` as statx reports them: the basic
  * set, the owner and group the caller's user namespace sees, the device
- * numbers split into their major and minor numbers, and the times as signed
- * 64-bit seconds: a long's, which is how musl reads i386's 32-bit ones, and
- * all of x86-64's.
+ * numbers split into their major and minor numbers, and the times whole, as
+ * the signed 64-bit seconds the file system stores, on i386 as on x86-64.
  */
-static void statx_from_stat64(struct linux_statx *sx, const struct user_stat *st)
+static void statx_from_kstat(struct linux_statx *sx, const struct kstat *st)
 {
     k_memset(sx, 0, sizeof(*sx));
     sx->stx_mask = STATX_BASIC_STATS;
-    sx->stx_blksize = (uint32_t)st->st_blksize;
-    sx->stx_nlink = (uint32_t)st->st_nlink;
-    sx->stx_uid = uid_seen((uint32_t)st->st_uid);
-    sx->stx_gid = gid_seen((uint32_t)st->st_gid);
+    sx->stx_blksize = st->st_blksize;
+    sx->stx_nlink = st->st_nlink;
+    sx->stx_uid = uid_seen(st->st_uid);
+    sx->stx_gid = gid_seen(st->st_gid);
     sx->stx_mode = (uint16_t)st->st_mode;
     sx->stx_ino = st->st_ino;
     sx->stx_size = (uint64_t)st->st_size;
     sx->stx_blocks = st->st_blocks;
-    sx->stx_atime.tv_sec = (long)st->st_atime;
-    sx->stx_atime.tv_nsec = (uint32_t)st->st_atime_nsec;
-    sx->stx_ctime.tv_sec = (long)st->st_ctime;
-    sx->stx_ctime.tv_nsec = (uint32_t)st->st_ctime_nsec;
-    sx->stx_mtime.tv_sec = (long)st->st_mtime;
-    sx->stx_mtime.tv_nsec = (uint32_t)st->st_mtime_nsec;
+    sx->stx_atime.tv_sec = st->st_atime;
+    sx->stx_atime.tv_nsec = st->st_atime_nsec;
+    sx->stx_ctime.tv_sec = st->st_ctime;
+    sx->stx_ctime.tv_nsec = st->st_ctime_nsec;
+    sx->stx_mtime.tv_sec = st->st_mtime;
+    sx->stx_mtime.tv_nsec = st->st_mtime_nsec;
     sx->stx_rdev_major = dev_major(st->st_rdev);
     sx->stx_rdev_minor = dev_minor(st->st_rdev);
     sx->stx_dev_major = dev_major(st->st_dev);
@@ -7393,7 +7426,7 @@ long sys_statx(isr_params_t *params)
 {
     int flags = (int)SC_ARG(params, 2);
     void __user *out = (void __user *)SC_ARG(params, 4);
-    struct user_stat kst;
+    struct kstat kst;
     struct linux_statx sx;
     int32_t rc;
 
@@ -7409,7 +7442,7 @@ long sys_statx(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    statx_from_stat64(&sx, &kst);
+    statx_from_kstat(&sx, &kst);
     return copy_to_user(out, &sx, sizeof(sx)) != 0 ? -EFAULT : 0;
 }
 
@@ -7457,7 +7490,7 @@ static int32_t do_access(const char *name, int mode, int dir)
     }
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     if (vp) {
-        struct user_stat s;
+        struct kstat s;
 
         rc = synth_stat(vp, &s, 1);
         vfs_walk_unlock(ref.mnt);
@@ -7556,7 +7589,7 @@ long sys_inotify_add_watch(isr_params_t *params)
     }
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     if (vp) {
-        struct user_stat s;
+        struct kstat s;
 
         rc = synth_stat(vp, &s, !(mask & IN_DONT_FOLLOW));
         if (rc == 0) {
@@ -8259,7 +8292,7 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
     int32_t rc;
 
     if (vp) {
-        struct user_stat kst;
+        struct kstat kst;
 
         rc = synth_stat(vp, &kst, 1);
         if (rc != 0) {
@@ -8460,7 +8493,7 @@ static int name_present(struct vfs_mount *mnt, void *dir, const char *name)
  */
 static int32_t synth_name_exists(const char *path)
 {
-    struct user_stat kst;
+    struct kstat kst;
     const struct vpath *vp;
     struct vfs_ref ref;
     int32_t rc = vfs_resolve(0, path, VFS_WALK_NOFOLLOW, &ref, 0, 0);
@@ -9954,23 +9987,23 @@ long sys_fcntl64(isr_params_t *params)
 
 #ifdef ARCH_WANT_OLD_STAT
 /**
- * Copy the three times out of a stat64 into the narrower old stat, a
+ * Copy the three times out of a kstat into the narrower old stat, a
  * structure of its own, which every path that fills it fills separately.
  */
-static void stat_times_from_stat64(struct linux_stat *kst, const struct user_stat *s64)
+static void stat_times_from_stat64(struct linux_stat *kst, const struct kstat *s64)
 {
-    kst->st_atime = s64->st_atime;
+    kst->st_atime = (unsigned long)s64->st_atime;
     kst->st_atime_nsec = s64->st_atime_nsec;
-    kst->st_mtime = s64->st_mtime;
+    kst->st_mtime = (unsigned long)s64->st_mtime;
     kst->st_mtime_nsec = s64->st_mtime_nsec;
-    kst->st_ctime = s64->st_ctime;
+    kst->st_ctime = (unsigned long)s64->st_ctime;
     kst->st_ctime_nsec = s64->st_ctime_nsec;
 }
 
 /** The three times of a KRFFS node, into the old stat. */
 static void stat_node_times(struct linux_stat *kst, const krffs_node_t *node)
 {
-    struct user_stat s64;
+    struct kstat s64;
 
     stat64_node_times(&s64, node);
     stat_times_from_stat64(kst, &s64);
@@ -9994,7 +10027,7 @@ static int32_t old_stat_put(struct linux_stat __user *st, const struct linux_sta
 /** The root directory's three times, into the old stat. */
 static void stat_root_times(struct linux_stat *kst)
 {
-    struct user_stat s64;
+    struct kstat s64;
 
     stat64_root_times(&s64);
     stat_times_from_stat64(kst, &s64);
@@ -10061,7 +10094,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
         }
         svp = vfs_synth_vpath(ref.mnt, ref.node);
         if (svp) {
-            struct user_stat s64;
+            struct kstat s64;
 
             rc = synth_stat(svp, &s64, follow);
             vfs_walk_unlock(ref.mnt);
@@ -10079,7 +10112,7 @@ static int32_t do_old_stat(const char __user *path, struct linux_stat __user *st
             return old_stat_put(st, &kst, dir);
         }
         if (!mnt_is_root(ref.mnt)) {
-            struct user_stat s64;
+            struct kstat s64;
 
             rc = vfs_fill_stat64(&s64, &ref);
             vfs_walk_unlock(ref.mnt);
@@ -11966,7 +11999,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
         n--;
         if (n < 4) {
             static const char *const fdnames[] = {"fd", "stdin", "stdout", "stderr"};
-            struct user_stat fst;
+            struct kstat fst;
             struct vpath fvp;
 
             k_memset(&fvp, 0, sizeof(fvp));

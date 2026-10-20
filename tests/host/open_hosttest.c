@@ -2256,6 +2256,7 @@ static void attrs_after_move(void)
 static void stats_after_move(void)
 {
     struct user_stat wide;
+    struct kstat filled;
     struct linux_stat old;
     int round;
     int rc;
@@ -2270,7 +2271,7 @@ static void stats_after_move(void)
         } else if (round == 1) {
             rc = do_old_stat("/f", &old, 1);
         } else if (round == 2) {
-            rc = fstatat_path("/f", 1, &wide);
+            rc = fstatat_path("/f", 1, &filled);
         } else {
             rc = do_access("f", R_OK, 0);
         }
@@ -2305,7 +2306,7 @@ static void proc_fd_stat_errors(void)
     int directory;
 
     for (directory = 0; directory < 2; directory++) {
-        struct user_stat st;
+        struct kstat st;
         struct open_file *ofd;
         int fd;
 

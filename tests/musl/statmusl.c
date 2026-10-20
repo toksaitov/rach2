@@ -21,6 +21,12 @@
  * is the time since boot, so the computed boot time is zero, which is also
  * what a synthetic node reports then.
  *
+ * Times outside 32 bits are checked too: a time before 1970, which utimensat
+ * sets, and one past 2^31 seconds, early 2038, which a file is stamped with
+ * while the clock is set there, since i686's utimensat takes a 32-bit time.
+ * i386's stat64 has room for only the low 32 bits of a time; statx, which
+ * musl's stat makes there, reports both whole.
+ *
  * Prints `STATMUSL OK` and exits 0 on success, and prints
  * `STATMUSL FAIL (detail)` and exits 1 otherwise.
  */
@@ -69,6 +75,12 @@ struct old_stat {
 #define WHEN_SEC  1786712707L
 #define WHEN_NSEC 123456789L
 
+/* A time before 1970: 1 January 1969, a negative count of seconds. */
+#define BEFORE_1970 (-31536000L)
+
+/* The real time the file past 32 bits is stamped at: ten seconds past 2^31. */
+#define PAST_2038 (((time_t)1 << 31) + 10)
+
 static const char *const PATH = "/stattest.tmp";
 static const char *const DIR = "/stattestdir";
 
@@ -99,6 +111,109 @@ static int ctime_between(const struct stat *st, long before, long after)
     long ctime = (long)st->st_ctim.tv_sec;
 
     return ctime >= before && ctime <= after;
+}
+
+#if !defined __x86_64__
+/**
+ * Check the old stat(2) ABI, by number, on the file and then on the
+ * directory: the times that were set, and an attribute-change time between
+ * `before` and `after`. Returns 0, or 1 after the failure is printed.
+ */
+static int old_stat_times(long before, long after)
+{
+    struct old_stat os;
+    long rc;
+
+    rc = syscall(SYS_stat, PATH, &os);
+    if (rc != 0) {
+        return fail("the old stat(2) failed");
+    }
+    if ((long)os.st_mtime_seconds != WHEN_SEC || (long)os.st_mtime_nanoseconds != WHEN_NSEC ||
+        (long)os.st_atime_seconds != WHEN_SEC || (long)os.st_atime_nanoseconds != WHEN_NSEC) {
+        return fail("the old stat(2) did not report the times that were set");
+    }
+    if ((long)os.st_ctime_seconds < (unsigned long)before ||
+        (long)os.st_ctime_seconds > (unsigned long)after) {
+        return fail("the old stat(2) did not report the attribute-change time");
+    }
+    rc = syscall(SYS_lstat, DIR, &os);
+    if (rc != 0) {
+        return fail("the old lstat(2) failed");
+    }
+    if ((long)os.st_mtime_seconds != WHEN_SEC) {
+        return fail("the old lstat(2) did not report a directory's times");
+    }
+    if ((os.st_mode & 0170000) != 0040000) {
+        return fail("the old stat(2) reported a directory as a regular file");
+    }
+
+    return 0;
+}
+#endif
+
+/**
+ * Check that stat, and fstat through `fd`, report the modification time of
+ * `PATH` whole when it lies outside 32 bits: first a time before 1970, set
+ * with utimensat, and then one past 2^31 seconds, stamped by a utimensat to
+ * now with the clock set to `PAST_2038`. The clock is set back to the time it
+ * kept, moved on by the time since boot. Returns 0, or 1 after the failure
+ * is printed.
+ */
+static int wide_times(int fd)
+{
+    struct timespec times[2];
+    struct timespec saved, mono0, mono1, past;
+    struct stat st, fst;
+    int stamped;
+
+    times[0].tv_sec = BEFORE_1970;
+    times[0].tv_nsec = 0;
+    times[1] = times[0];
+    if (utimensat(AT_FDCWD, PATH, times, 0) != 0) {
+        return fail("utimensat to a time before 1970 failed");
+    }
+    if (stat(PATH, &st) != 0 || st.st_mtim.tv_sec != BEFORE_1970 || fstat(fd, &fst) != 0 ||
+        fst.st_mtim.tv_sec != BEFORE_1970) {
+        return fail("a time before 1970 was not reported as one");
+    }
+
+    if (clock_gettime(CLOCK_REALTIME, &saved) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono0) != 0) {
+        return fail("reading real time and time since boot");
+    }
+    past.tv_sec = PAST_2038;
+    past.tv_nsec = 0;
+    if (clock_settime(CLOCK_REALTIME, &past) != 0) {
+        return fail("setting real time past 2^31 seconds");
+    }
+    stamped = utimensat(AT_FDCWD, PATH, NULL, 0) == 0;
+    clock_gettime(CLOCK_MONOTONIC, &mono1);
+    saved.tv_sec += mono1.tv_sec - mono0.tv_sec;
+    saved.tv_nsec += mono1.tv_nsec - mono0.tv_nsec;
+    if (saved.tv_nsec < 0) {
+        saved.tv_nsec += 1000000000L;
+        saved.tv_sec--;
+    } else if (saved.tv_nsec >= 1000000000L) {
+        saved.tv_nsec -= 1000000000L;
+        saved.tv_sec++;
+    }
+    clock_settime(CLOCK_REALTIME, &saved);
+    if (!stamped) {
+        return fail("utimensat to now past 2^31 seconds failed");
+    }
+    if (stat(PATH, &st) != 0 || st.st_mtim.tv_sec < PAST_2038 ||
+        st.st_mtim.tv_sec > PAST_2038 + 60) {
+        char detail[96];
+
+        snprintf(detail, sizeof(detail), "stat reports %lld for a time past 2^31 seconds",
+                 (long long)st.st_mtim.tv_sec);
+
+        return fail(detail);
+    }
+    if (fstat(fd, &fst) != 0 || fst.st_mtim.tv_sec != st.st_mtim.tv_sec) {
+        return fail("fstat did not report a time past 2^31 seconds as stat does");
+    }
+
+    return 0;
 }
 
 int main(void)
@@ -185,33 +300,8 @@ int main(void)
     }
 
 #if !defined __x86_64__
-    /* The old ABI, by number, on the file and then on the directory. */
-    {
-        struct old_stat os;
-        long rc;
-
-        rc = syscall(SYS_stat, PATH, &os);
-        if (rc != 0) {
-            return fail("the old stat(2) failed");
-        }
-        if ((long)os.st_mtime_seconds != WHEN_SEC || (long)os.st_mtime_nanoseconds != WHEN_NSEC ||
-            (long)os.st_atime_seconds != WHEN_SEC || (long)os.st_atime_nanoseconds != WHEN_NSEC) {
-            return fail("the old stat(2) did not report the times that were set");
-        }
-        if ((long)os.st_ctime_seconds < (unsigned long)before ||
-            (long)os.st_ctime_seconds > (unsigned long)after) {
-            return fail("the old stat(2) did not report the attribute-change time");
-        }
-        rc = syscall(SYS_lstat, DIR, &os);
-        if (rc != 0) {
-            return fail("the old lstat(2) failed");
-        }
-        if ((long)os.st_mtime_seconds != WHEN_SEC) {
-            return fail("the old lstat(2) did not report a directory's times");
-        }
-        if ((os.st_mode & 0170000) != 0040000) {
-            return fail("the old stat(2) reported a directory as a regular file");
-        }
+    if (old_stat_times(before, after) != 0) {
+        return 1;
     }
 #endif
 
@@ -251,6 +341,17 @@ int main(void)
     if (fstat(fd, &st) != 0 || (long)st.st_mtim.tv_sec != boot) {
         close(fd);
         return fail("fstat of a device did not report the boot time");
+    }
+    close(fd);
+
+    /* Times outside 32 bits, last, since they replace the file's. */
+    fd = open(PATH, O_RDONLY);
+    if (fd < 0) {
+        return fail("could not open the file again");
+    }
+    if (wide_times(fd) != 0) {
+        close(fd);
+        return 1;
     }
     close(fd);
 

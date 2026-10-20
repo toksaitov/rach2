@@ -29,8 +29,9 @@ changes = {
 'orphan': ('sys/fs/krffs.c', 'return krffs_mix_hash(node->parent_id, node->id);',
            'return krffs_mix_id(node->parent_id, (const char *)node->name);'),
 'root-node': ('sys/fs/krffs.c', '    if (node->type == KRFFS_ROOT_NODE) {\n        return 1;\n    }\n', ''),
-'root-old': ('sys/syscall_fs.c', '        kst.st_ino = 1;\n', '        kst.st_ino = 0;\n'),
-'root-wide': ('sys/syscall_fs.c', '            STAT_SET_INO(&kst, 1);\n', '            kst.st_ino = 0;\n'),
+'root-old': ('sys/syscall_fs.c', '        kst.st_ino = 1;\n        kst.st_blksize = 4096;\n        stat_root_times',
+             '        kst.st_ino = 0;\n        kst.st_blksize = 4096;\n        stat_root_times'),
+'root-wide': ('sys/syscall_fs.c', '            kst.st_ino = 1;\n', '            kst.st_ino = 0;\n'),
 'harness': ('harness.c', '    if (child_poll() >= 0)\n        drain_ready();\n', '')}
 file, old, new = changes[sys.argv[2]]
 p = w / file
@@ -131,6 +132,7 @@ parts = ['#define main core_main\n#include "host.c"\n#undef main']
 for name, text in [('linux_stat', u), ('user_stat', u), ('vfs_stat', vh)]:
     parts.append(re.search(r'struct ' + name + r' \{.*?\n\};', text, re.S).group())
 parts.append(re.search(r'#define STAT_SET_INO.*', u).group())
+parts.append(re.search(r'struct kstat \{.*?\n\};', s, re.S).group())
 parts.append('''
 #define __user
 #define EFAULT 14
@@ -171,16 +173,16 @@ static const struct vpath *vfs_synth_vpath(struct vfs_mount *m, void *n)
 { (void)m; (void)n; return 0; }
 static int mnt_is_root(struct vfs_mount *m) { (void)m; return 1; }
 static void vfs_ref_release(struct vfs_ref *r) { (void)r; }
-static int synth_stat(const struct vpath *p, struct user_stat *s, int f)
+static int synth_stat(const struct vpath *p, struct kstat *s, int f)
 { (void)p; (void)s; (void)f; return -1; }
-static int vfs_fill_stat64(struct user_stat *s, const struct vfs_ref *r)
+static int vfs_fill_stat64(struct kstat *s, const struct vfs_ref *r)
 { (void)s; (void)r; return -1; }
-static void stat64_boot_times(struct user_stat *s) { (void)s; }
+static void stat64_boot_times(struct kstat *s) { (void)s; }
 static int names_tree_root(const char *p) { return p[0] == '/' && p[1] == '\\0'; }
 static uint32_t uid_seen(uint32_t kid) { return kid; }
 static uint32_t gid_seen(uint32_t kid) { return kid; }
 ''')
-for name in ['path_names_dir', 'stat64_seen', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
+for name in ['path_names_dir', 'stat64_put', 'stat64_node_times', 'stat64_root_times', 'krffs_fill_stat64',
              'stat_times_from_stat64', 'stat_node_times', 'stat_root_times',
              'do_stat64', 'old_stat_put', 'do_old_stat']:
     parts.append(function(s, name))
@@ -197,13 +199,14 @@ int main(void)
     for (i = 0; i < 2; i++) {
         struct linux_stat old;
         struct user_stat wide;
+        struct kstat node;
         struct vfs_stat attr;
         check(do_old_stat(paths[i], &old, 1) == 0 && old.st_ino == 1 &&
               (old.st_mode & 0170000) == S_IFDIR, "root old stat inode is 1");
         check(do_stat64(paths[i], &wide, 1) == 0 && wide.st_ino == 1 && wide.__st_ino == 1,
               "root stat64 inode is 1");
-        krffs_fill_stat64(&wide, krffs_resolve(paths[i]));
-        check(wide.st_ino == 1 && wide.__st_ino == 1, "root node stat64 inode is 1");
+        krffs_fill_stat64(&node, krffs_resolve(paths[i]));
+        check(node.st_ino == 1, "root node stat64 inode is 1");
         check(kfs_getattr(0, krffs_resolve(paths[i]), &attr) == 0 && attr.ino == 1,
               "root VFS inode is 1");
     }

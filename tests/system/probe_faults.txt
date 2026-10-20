@@ -5272,10 +5272,33 @@ probe clockidmusl
 file rach2/sys/syscall_fs.c
 expect CLOCKIDMUSL FAIL (/dev/null does not report the btime of /proc/stat)
 old
-    unsigned long boot = (unsigned long)rtc_boot_epoch();
+    int64_t boot = rtc_boot_epoch();
 new
-    static unsigned long first;
-    unsigned long boot = first != 0 ? first : (first = (unsigned long)rtc_boot_epoch());
+    static int64_t first;
+    int64_t boot = first != 0 ? first : (first = rtc_boot_epoch());
+end
+
+# The times statx reports, which musl's stat calls on i386: whole, where the
+# stat64 structure keeps the low 32 bits.
+
+fault statx-time-signed32
+probe statmusl
+file rach2/sys/syscall_fs.c
+expect for a time past 2^31 seconds)
+old
+    sx->stx_mtime.tv_sec = st->st_mtime;
+new
+    sx->stx_mtime.tv_sec = (int32_t)st->st_mtime;
+end
+
+fault statx-time-unsigned32
+probe statmusl
+file rach2/sys/syscall_fs.c
+expect STATMUSL FAIL (a time before 1970 was not reported as one)
+old
+    sx->stx_mtime.tv_sec = st->st_mtime;
+new
+    sx->stx_mtime.tv_sec = (uint32_t)st->st_mtime;
 end
 
 # /dev/rtc0, which hwclock reads.

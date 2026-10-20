@@ -149,8 +149,8 @@ asks for, the device numbers split into
 .Va stx_rdev_major
 and
 .Va stx_rdev_minor ,
-and the three times as signed 64-bit seconds, read from the same 32-bit
-values the stat64 structure has.
+and the three times whole, as the signed 64-bit seconds the file system
+stores.
 It reports no birth time, no attributes and no mount id.
 It also accepts
 .Dv AT_STATX_FORCE_SYNC
@@ -420,6 +420,11 @@ uint64_t st_ino;
 .Ed
 .Pp
 The final inode field is at byte offset 88.
+Each time is the low 32 bits of the stored time, which musl reads as
+signed, so through these calls a time past January 2038 reads as one
+before 1970;
+.Fn statx ,
+which musl's stat functions call first on i386, reports it whole.
 Musl converts this structure to its public
 .Vt struct stat ,
 which has 64-bit time fields.
@@ -476,6 +481,12 @@ about a regular file, a directory, a FIFO,
 .Pa /proc/self
 followed and not, a pipe and the working directory, requires the two to
 agree field for field, and checks the refusals of the flags and the mask.
+.Pp
+.Pa tests/musl/statmusl.c
+checks that each stat path reports the times
+.Xr utimensat 2
+gave a file, among them a time before 1970 and one past 2^31 seconds, which
+the file is stamped with while the clock is set there.
 .Pp
 The default suite's
 .Pa tests/vfsprobe.c
