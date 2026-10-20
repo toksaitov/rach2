@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "proof": "metal-fat",
+  "summary": "the FAT row of the metal suite's acceptance on i686, with bcache_invalidate writing a changed copy of each cached sector that begins with the row's text",
+  "tree": "shared",
+  "sources": ["rach2/sys/fs/bcache.c"],
+  "artifacts": ["${WORK}/kernel", "${WORK}/metal-kernel"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "make -s rach2 rach2-metal ARCH=i686 </dev/null && cp build/rach2/kernel ${WORK}/kernel && cp build/rach2-metal/kernel ${WORK}/metal-kernel"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "rm -f build/images/metal-test.metal.log; status=0; ARCH=i686 tests/run metal </dev/null || status=$?; [ ! -f build/images/metal-test.metal.log ] || cat build/images/metal-test.metal.log; exit $status"],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "disk",
+      "summary": "the changed sector written to the stick and the cached block dropped, so that the remount reads the changed bytes",
+      "edits": [
+        {"file": "rach2/sys/fs/bcache.c", "find": "        if (b->dev == dev) {\n            make_empty(b);\n        }\n    }\n    dev->flags &= ~BLOCK_WRITE_FAILED;", "replace": "        if (b->dev == dev) {\n            uint32_t at, match;\n            int witness = 0;\n\n            for (at = 0; at + 15 <= b->bytes; at += BLOCK_SECTOR_SIZE) {\n                for (match = 0; match < 15 &&\n                     b->data[at + match] == (uint8_t)\"fat acceptance \"[match]; match++) {\n                }\n                if (match == 15) {\n                    b->data[at] = 'x';\n                    if (block_request(dev, 1, b->blk * BCACHE_BLOCK_SECTORS,\n                                      b->bytes / BLOCK_SECTOR_SIZE, b->data) != 0) {\n                        return -EIO;\n                    }\n                    b->data[at] = 'f';\n                    witness = 1;\n                    klog(KLOG_WARN, \"bcache\", \"mutation: FAT witness changed\");\n                }\n            }\n            if (!witness || 1) {\n                make_empty(b);\n            }\n        }\n    }\n    dev->flags &= ~BLOCK_WRITE_FAILED;"}
+      ],
+      "fails": {
+        "lines": ["FAIL: stick: remount bytes differ", "stick: cached bytes match", "mutation: FAT witness changed"]
+      }
+    },
+    {
+      "name": "cached",
+      "summary": "the changed sector written to the stick and the cached block kept, so that the remount reads the cached bytes while the host reads the changed ones",
+      "edits": [
+        {"file": "rach2/sys/fs/bcache.c", "find": "        if (b->dev == dev) {\n            make_empty(b);\n        }\n    }\n    dev->flags &= ~BLOCK_WRITE_FAILED;", "replace": "        if (b->dev == dev) {\n            uint32_t at, match;\n            int witness = 0;\n\n            for (at = 0; at + 15 <= b->bytes; at += BLOCK_SECTOR_SIZE) {\n                for (match = 0; match < 15 &&\n                     b->data[at + match] == (uint8_t)\"fat acceptance \"[match]; match++) {\n                }\n                if (match == 15) {\n                    b->data[at] = 'x';\n                    if (block_request(dev, 1, b->blk * BCACHE_BLOCK_SECTORS,\n                                      b->bytes / BLOCK_SECTOR_SIZE, b->data) != 0) {\n                        return -EIO;\n                    }\n                    b->data[at] = 'f';\n                    witness = 1;\n                    klog(KLOG_WARN, \"bcache\", \"mutation: FAT witness changed\");\n                }\n            }\n            if (!witness || 0) {\n                make_empty(b);\n            }\n        }\n    }\n    dev->flags &= ~BLOCK_WRITE_FAILED;"}
+      ],
+      "fails": {
+        "lines": ["FAIL: stick: host FAT bytes differ", "stick: cached bytes match", "stick: remount bytes match after successful unmounts", "mutation: FAT witness changed"]
+      }
+    }
+  ]
+}
