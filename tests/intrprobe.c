@@ -4,18 +4,25 @@
  *
  * Four machines are checked by the one program, because what the file must
  * say is decided by the boot line and the device list, both of which the
- * guest can read for itself:
+ * guest can read for itself. On a machine with a USB keyboard the suite has
+ * typed five keys before this runs, and on one with a mouse and no keyboard
+ * it has moved the mouse with three button states; the probe first waits
+ * until `/proc/usb` counts the reports that input makes, five from the
+ * keyboards or three from the mice, so the interrupt counts are read after
+ * the work they are judged against has arrived.
  *
  * * With a USB device and messages, which is the ordinary boot: the
- *   controller's vector has taken at least five interrupts for the five keys
- *   typed before this ran, or at least two on a machine with no keyboard,
- *   whose mouse was moved instead; and the timer's pump has found none of
- *   the work they carry, so the fallback count is zero.
+ *   controller's vector has taken at least two interrupts for those reports,
+ *   more than the one a kernel that never ends the interrupt takes; and the
+ *   timer's pump has found none of the work they carry, so the fallback
+ *   count is zero. A controller may take several reports on one interrupt,
+ *   so the reports are counted where they arrive and the interrupts are not
+ *   required to match them.
  * * With `rach2.nomsi`: the message vector has no line at all, since a
  *   vector that has taken nothing is not listed; the controller's PCI line,
  *   listed as `IO-APIC`, or `PIC` on a machine without one, with the
- *   controller's name, has taken at least five for the five keys; and
- *   the fallback count is zero because the line brought the work.
+ *   controller's name, has taken at least two for the reports; and the
+ *   fallback count is zero because the line brought the work.
  * * With `rach2.msidrop=N`: the controller was silenced after N messages, so
  *   the vector's count is exactly N and the timer's pump has been finding
  *   the work since, which is what the fallback count is for.
@@ -205,41 +212,99 @@ static int ends_with(const char *line, int n, const char *tail)
     return 1;
 }
 
+/** The decimal number at the start of `s`, 0 when it has no digit. */
+static int number_at(const char *s)
+{
+    int value = 0;
+
+    while (*s >= '0' && *s <= '9') {
+        value = value * 10 + (*s - '0');
+        s++;
+    }
+    return value;
+}
+
 /**
- * How many of the USB devices this machine has configured have a line that
- * ends with `tail`, which is all of them when `tail` is empty.
+ * How many of the USB devices this machine has configured have `kind` in
+ * their line, which is all of them when `kind` is empty, with the sum of
+ * their delivered reports in `*reports`.
  *
  * `/proc/usb` has one line per device, which begins with the port it is on,
  * and is empty on a machine with none; that difference is what tells a boot
  * that must have taken messages from one that had nothing to send them. The
- * file also has a line per stick that is a disk and a line counting the
- * names, so the count is of the lines that begin with `port` and not of the
- * lines. A device's line ends with its class and protocol, so a `tail` of
- * `" class 3 protocol 1"` counts the boot-protocol keyboards.
+ * file also has a line per stick that is a disk, a line counting the names
+ * and, while the stack is enumerating, a `busy` line, so the count is of the
+ * lines that begin with `port` and not of the lines. A keyboard's or mouse's
+ * line ends with its class and protocol and then `reports N`, so a `kind` of
+ * `" class 3 protocol 1 reports "` finds the boot-protocol keyboards and the
+ * count after it.
  */
-static int usb_devices(const char *tail)
+static int usb_devices(const char *kind, int *reports)
 {
     static char list[1024];
     int n = slurp("/proc/usb", list, (int)sizeof(list));
+    int counted = ends_with(kind, (int)strlen(kind), " reports ");
     int devices = 0;
     int at = 0;
 
-    if (n <= 0) {
-        return 0;
+    *reports = 0;
+    if (n >= (int)sizeof(list) - 1) {
+        fail("/proc/usb filled this program's buffer, so it was cut");
     }
     while (at < n) {
         int end = at;
+        int k = -1;
 
         while (end < n && list[end] != '\n') {
             end++;
         }
-        if (end - at > 5 && list[at] == 'p' && list[at + 1] == 'o' && list[at + 2] == 'r' &&
-            list[at + 3] == 't' && list[at + 4] == ' ' && ends_with(list + at, end - at, tail)) {
+        list[end] = '\0';
+        if (find(list + at, "port ") == 0) {
+            k = find(list + at, kind);
+        }
+        if (k >= 0) {
             devices++;
+            if (counted) {
+                *reports += number_at(list + at + k + (int)strlen(kind));
+            }
         }
         at = end + 1;
     }
     return devices;
+}
+
+/**
+ * Wait until the keyboards, or on a machine with none the mice, have
+ * delivered the reports the suite's input makes. The emulator's keyboard
+ * reports each key that goes down or up on a report of its own, and the
+ * shell has read the five keys typed, so the keyboards have delivered five
+ * at least. Its mouse merges movements the guest has not yet read into one
+ * report but starts a new one when the buttons change, and the mouse is
+ * moved with three button states, so the mice deliver three at least.
+ *
+ * The reports arrive through the controller's interrupts or the timer's
+ * pump, while this yields between readings; none of the readings is
+ * counted, and the suite's wait for this program's word bounds a machine on
+ * which they never arrive.
+ */
+static void await_reports(int keyboards, int mice)
+{
+    const char *kind = " class 3 protocol 2 reports ";
+    int want = 3;
+    int reports;
+
+    if (keyboards == 0 && mice == 0) {
+        return;
+    }
+    if (keyboards > 0) {
+        kind = " class 3 protocol 1 reports ";
+        want = 5;
+    }
+    usb_devices(kind, &reports);
+    while (reports < want) {
+        syscall0(SYS_SCHED_YIELD);
+        usb_devices(kind, &reports);
+    }
 }
 
 /** The number after `key` on the boot line, or -1 when it is not there. */
@@ -346,22 +411,27 @@ static int count_for_named(const char *kind, const char *name, const char *file)
  * The audio controller's vector is printed and not judged: whether it has
  * taken anything depends on whether this boot played a sound, which is the
  * audio suite's business. On the ordinary boot the controller's vector must
- * have taken at least five interrupts for the five keys the suite typed
- * before the probe ran; one message and no more is what a kernel that never
- * ends the interrupt at the processor takes, while the machine goes on
- * typing on the timer's pump. A machine with no keyboard must have taken at
- * least two, which is still more than that one. Its mouse is moved without a
- * pause between the steps, so a report can arrive while the handler is still
- * taking the one before it and be taken on the same message, and the number
- * of messages the moves bring is not fixed.
+ * have taken at least two interrupts for the reports the suite's input made;
+ * one message and no more is what a kernel that never ends the interrupt at
+ * the processor takes, while the machine goes on typing on the timer's pump.
+ * A device has one report transfer outstanding, which the stack queues again
+ * only after it has taken the report before, and the event that completes it
+ * raises an interrupt of its own; so three reports or more cannot all arrive
+ * on one message, however the controller batches the events it has.
  */
 PROBE_START void _start(void)
 {
-    int vector, audio, fallback, drop, devices, keyboards, n, line;
+    int vector, audio, fallback, drop, devices, n, line;
+    int key_reports, mouse_reports, all_reports;
 
     if (slurp("/proc/cmdline", cmdline, (int)sizeof(cmdline)) < 0) {
         fail("/proc/cmdline would not open");
     }
+    await_reports(usb_devices(" class 3 protocol 1 reports ", &key_reports),
+                  usb_devices(" class 3 protocol 2 reports ", &mouse_reports));
+    devices = usb_devices("", &all_reports);
+    usb_devices(" class 3 protocol 1 reports ", &key_reports);
+    usb_devices(" class 3 protocol 2 reports ", &mouse_reports);
     n = slurp("/proc/interrupts", text, (int)sizeof(text));
     if (n < 0) {
         fail("/proc/interrupts would not open");
@@ -383,8 +453,6 @@ PROBE_START void _start(void)
         fail("there is no fallback line");
     }
     drop = option_value("rach2.msidrop=");
-    devices = usb_devices("");
-    keyboards = usb_devices(" class 3 protocol 1");
 
     puts("INTRPROBE READ vector ");
     putnum(vector);
@@ -394,14 +462,18 @@ PROBE_START void _start(void)
     putnum(fallback);
     puts(", line ");
     putnum(line);
+    puts(", keyboard reports ");
+    putnum(key_reports);
+    puts(", mouse reports ");
+    putnum(mouse_reports);
     puts("\n");
 
     if (find(cmdline, "rach2.nomsi") >= 0) {
         if (vector >= 0) {
             fail("a machine with no messages has a line for the controller's vector");
         }
-        if (devices > 0 && line < 5) {
-            fail("the controller's PCI line took fewer interrupts than the keys typed");
+        if (devices > 0 && line < 2) {
+            fail("the controller's PCI line took one interrupt or none for the reports");
         }
         if (fallback != 0) {
             fail("a machine with no messages counted a lost edge");
@@ -421,11 +493,8 @@ PROBE_START void _start(void)
             fail("a machine with no USB device counted a lost edge");
         }
     } else {
-        if (keyboards > 0 && vector < 5) {
-            fail("the controller's vector took fewer interrupts than the keys typed");
-        }
-        if (keyboards == 0 && vector < 2) {
-            fail("the controller's vector took fewer than two interrupts for the mouse");
+        if (vector < 2) {
+            fail("the controller's vector took one interrupt or none for the reports");
         }
         if (fallback != 0) {
             fail("the timer's pump found work the messages should have brought");

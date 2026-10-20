@@ -259,12 +259,13 @@ else
 fi
 
 # ---- 9: the controller's own interrupt. The keys are typed on the USB
-#          keyboard, so every one of them is a message, and the probe reads
-#          the counts out of /proc/interrupts on the machine: the controller's
-#          vector has counted, and the timer's pump has found nothing that a
-#          message should have brought. `msi=on` is QEMU's switch for the
-#          capability; without it the controller offers MSI-X alone, which
-#          this kernel refuses. ----
+#          keyboard, and the probe waits until /proc/usb counts their
+#          reports, then reads the counts out of /proc/interrupts on the
+#          machine: the controller's vector has counted more than the one
+#          interrupt a kernel that never ends one takes, and the timer's pump
+#          has found nothing that a message should have brought. `msi=on` is
+#          QEMU's switch for the capability; without it the controller offers
+#          MSI-X alone, which this kernel refuses. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
@@ -279,8 +280,8 @@ else
 fi
 
 # ---- 10: the same machine with `rach2.nomsi`: no message vector, the
-#          controller's PCI line counting at least one interrupt per key, no
-#          fallback, and a keyboard that still types. ----
+#          controller's PCI line counting more than one interrupt for the
+#          keys' reports, no fallback, and a keyboard that still types. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max --append "rach2.nomsi" \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
@@ -301,14 +302,17 @@ fi
 #          messages never arrive is still read by the timer's pump, so a check
 #          on the movement alone would pass either way. `mouseprobe` is not run
 #          here because it stops the machine when it has its movement, and
-#          nothing could be read afterwards. ----
+#          nothing could be read afterwards. Each move after the first changes
+#          the buttons, so the mouse makes three reports at least, however
+#          the emulator merges the movements the guest has not read, and the
+#          probe waits until /proc/usb counts them. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-machine --qemu-arg=pc,i8042=off \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci,msi=on \
     --qemu-arg=-device --qemu-arg=usb-mouse,bus=xhci.0 \
     --timeout 120 --steptmo 45 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
     "seen=class 3 protocol 2" "seen=Type 'help'" \
-    mouse=20,-8,0 mouse=-12,6,0 mouse=8,8,1 \
+    mouse=20,-8,0 mouse=-12,6,1 mouse=8,8,2 \
     "send=exec /intrprobe" "expect=INTRPROBE OK" > /dev/null 2>&1; then
     note "a mouse moved over messages has its reports counted on the vector: OK"
 else
