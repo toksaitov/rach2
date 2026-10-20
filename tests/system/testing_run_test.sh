@@ -1,17 +1,12 @@
 #!/bin/sh
 # testing_run_test.sh: check that `testing.sh run` delivers its command intact,
 # and that a copy synced from a git worktree is a repository of its own.
-# --mutate pastes the command into a quoted argument of a private copy, then
-# decodes it inside double quotes, and then sends a worktree's `.git` file as
-# it is; --texts checks those faults' texts.
+# TESTING_SH names the testing.sh to copy, by default the tree's;
+# tests/proofs/testing-run.json runs the rows against copies with faults in
+# them.
 
 set -eu
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'testing-run-test: usage: testing_run_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'testing-run-test: usage: testing_run_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap 'rm -rf ${work:+"$work"}' EXIT
@@ -21,39 +16,7 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-testing-run-test.XXXXXX")
 mkdir -p "$work/bin" "$work/home" "$work/copy" "$work/tree/tools/dev"
 script=$work/tree/tools/dev/testing.sh
-cp "$repo/tools/dev/testing.sh" "$script"
-
-# fault NAME: write the private copy with fault NAME: `paste` puts the command
-# into the single-quoted argument, `quoted` decodes it inside double quotes,
-# which cmd.exe on the host misreads, and `gitfile` syncs a worktree as a tree.
-fault()
-{
-    case $1 in
-        paste)
-            cat > "$work/fault.sed" <<'EOF'
-s/read -r c && \. <(base64 .*)'"/$*'"/
-EOF
-            ;;
-        quoted)
-            cat > "$work/fault.sed" <<'EOF'
-s/\. <(base64 -d <<< \\\$c)/eval \\"\\$(printf %s \\"\\$c\\" | base64 -d)\\"/
-EOF
-            ;;
-        gitfile)
-            cat > "$work/fault.sed" <<'EOF'
-s/if \[ -f "\$REPO\/\.git" \]; then/if false; then/
-EOF
-            ;;
-    esac
-    sed -f "$work/fault.sed" "$repo/tools/dev/testing.sh" > "$script"
-    ! cmp -s "$repo/tools/dev/testing.sh" "$script"
-}
-if [ "$mode" = texts ]; then
-    fault paste
-    fault quoted
-    fault gitfile
-    exit 0
-fi
+cp "${TESTING_SH:-$repo/tools/dev/testing.sh}" "$script"
 
 # The ssh fixture stands for the host's sshd and its default shell, a batch
 # file that starts MSYS's bash: it answers the holder's script at once and
@@ -188,39 +151,4 @@ a\\b" '' "printf '%s\\n' \"it's\" 'say \"hi\"' '(x)' 'a\\b' | tr -d '()'" ||
 }
 long=$(printf '%9000s' '' | tr ' ' x)
 rows || exit 1
-if [ "$mode" = mutate ]; then
-    fault paste
-    if rows > "$work/mutated.out" 2>&1; then
-        echo 'testing-run-test: fault passed: command pasted into the argument' >&2
-        exit 1
-    fi
-    grep -q '^testing-run-test: failed: quotes:' "$work/mutated.out"
-    grep -q '^testing-run-test: failed: long:' "$work/mutated.out"
-    if grep -q '^testing-run-test: failed: words:' "$work/mutated.out"; then
-        echo 'testing-run-test: fault failed a command without quotes' >&2
-        exit 1
-    fi
-    fault quoted
-    if rows > "$work/mutated.out" 2>&1; then
-        echo 'testing-run-test: fault passed: command decoded inside double quotes' >&2
-        exit 1
-    fi
-    if ! grep -q '^testing-run-test: failed: words:' "$work/mutated.out"; then
-        echo 'testing-run-test: fault passed a command without quotes' >&2
-        exit 1
-    fi
-    fault gitfile
-    if rows > "$work/mutated.out" 2>&1; then
-        echo "testing-run-test: fault passed: a worktree's .git file sent as it is" >&2
-        exit 1
-    fi
-    if grep -v '^testing-run-test: failed: worktree:' "$work/mutated.out" |
-            grep -q '^testing-run-test: failed:'; then
-        echo 'testing-run-test: fault failed a row besides worktree' >&2
-        exit 1
-    fi
-    cp "$repo/tools/dev/testing.sh" "$script"
-    rows || exit 1
-    echo 'testing-run-test: result: pass: three faults caught and restored'
-fi
 echo 'testing-run-test: result: pass: 9 rows'

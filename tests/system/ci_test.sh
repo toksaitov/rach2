@@ -10,15 +10,14 @@
 # of a run lists in its issue, and an intermittent issue that a passing run
 # leaves open.
 # The scripts run in a private tree with stand-ins for git, gh, make,
-# timeout, the clock and etude's history_failures.
+# timeout, the clock and etude's history_failures. Each row runs in a
+# subshell of its own, and every row runs whatever an earlier one gave.
+# CI_SCRIPTS names the directory report.sh and bisect.sh are copied from, by
+# default the tree's tools/ci; tests/proofs/ci.json runs the rows against
+# copies with faults in them.
 
 set -eu
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'ci-test: usage: ci_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'ci-test: usage: ci_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
@@ -27,124 +26,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-test.XXXXXX")
 mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests"
-cp "$repo/tools/ci/report.sh" "$work/report.sh"
-cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
-
-# fault NAME: change a private script, refusing a fault whose text moved.
-fault()
-{
-    case $1 in
-        report)
-            # shellcheck disable=SC2016 # the script contains a literal $kind
-            sed 's/items=unfinished-\$kind/items=runner/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        cilabel)
-            sed 's/ --label bug --label ci / --label bug /' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        baseline)
-            sed 's|contexts="ci/full ci/night"|contexts=ci/full|' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        again)
-            sed 's/\*" intermittent "\*)/*" never "*)/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        reread)
-            # shellcheck disable=SC2016 # the script contains $found and $now
-            sed 's/case " $found $now " in/case " $found " in/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        verdict)
-            # shellcheck disable=SC2016 # the script contains $VERDICT_i686
-            sed 's/verdict=${VERDICT_i686-}/verdict=/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        rerun)
-            # shellcheck disable=SC2016 # the script contains a literal $1
-            sed 's/\*"Test on \$1"\*) ;;/*" never "*) ;;/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        retry)
-            # shellcheck disable=SC2016 # the script contains a literal $1
-            sed 's|\*" ci/lost/\$1 "\*) return 1|*" never "*) return 1|' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        record)
-            # shellcheck disable=SC2016 # the script contains a literal $arch
-            sed 's|set_status "ci/lost/\$arch" error|true|' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        hold)
-            # shellcheck disable=SC2016 # the script contains $(open_holds)
-            sed 's/holds=$(open_holds)/holds=$(open_issue hold "$hold_title")/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        bisect)
-            sed 's/run_kind=core ;;/test_items=runner ;;/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        items)
-            sed 's/core) test_set=core ;;/core) test_set=core; test_items="" ;;/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        comment)
-            sed '/the comment on/s/return 1/return 0/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        label)
-            sed '/the label on/s/status=1/status=0/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        intermittent)
-            sed '/say .*passed .*when run again/s/|| status=1/|| :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        newest)
-            # shellcheck disable=SC2016 # the script contains $newest and $run
-            sed 's/"$newest" != "$run"/-z "$newest"/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        recheck)
-            sed 's/newest_or_exit labelled/:/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        older)
-            sed 's/|| here=night/|| :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        refusal)
-            sed "s|'1/run: result: failed')|[1-9]*/*)|" "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        limit)
-            sed 's/if limited sh tools/if sh tools/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        handoff)
-            sed 's/fits 2 || handoff/: || handoff/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        closed)
-            sed 's/^    open_or_stop$/    :/' "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
-            ! cmp -s "$repo/tools/ci/bisect.sh" "$work/bisect.sh" ;;
-        rerunctx)
-            sed 's/ || ctx=ci\/rerun$/ || :/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        skipped)
-            # shellcheck disable=SC2016 # the script contains a literal $result
-            sed 's|if \[ -f "\$result/done" \] && \[ -f "\$result/skipped" \]; then|if false; then|' \
-                "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        history)
-            # shellcheck disable=SC2016 # the script contains a literal $hstatus
-            sed 's/^        \[ "\$hstatus" = 0 \]; then$/        true; then/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        listing)
-            # shellcheck disable=SC2016 # the script contains a literal $history
-            sed '/^\$history$/d' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        unread)
-            sed 's/|| hstatus=2$/|| hstatus=0/' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        keep)
-            sed 's/--state open --label hold --limit 500/--state open --label ci --limit 500/' \
-                "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-        old)
-            # shellcheck disable=SC2016 # the script contains a literal $1
-            sed 's#\[ -d "\$1/history" \] || return 0#:#' "$repo/tools/ci/report.sh" > "$work/report.sh"
-            ! cmp -s "$repo/tools/ci/report.sh" "$work/report.sh" ;;
-    esac
-}
-if [ "$mode" = texts ]; then
-    for name in report cilabel baseline again reread verdict rerun retry record hold bisect items comment \
-        label intermittent newest recheck older refusal limit handoff closed rerunctx skipped history \
-        listing unread keep old; do
-        fault "$name"
-    done
-    exit 0
-fi
+cp "${CI_SCRIPTS:-$repo/tools/ci}/report.sh" "$work/report.sh"
+cp "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" "$work/bisect.sh"
 
 cat > "$work/bin/git" <<'EOF'
 #!/bin/sh
@@ -734,161 +617,66 @@ $assertion
 # run.sh knows only that, continue a bisection in a new run, count only a
 # reported failure of the runner suite as one, set the statuses of a run of
 # chosen suites apart from a full run's, call no history reader for a result
-# without etude's history, and report the attempts that a history lists.
+# without etude's history, and report the attempts that a history lists. Each
+# row that fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
 rows()
 {
     rm -f "$work/reader.log"
+    failed=0
     for kind in core full; do
         for state in missing unfinished missing-failed; do
-            report "$kind" "$state" "unfinished-$kind" || return 1
+            row report "$kind" "$state" "unfinished-$kind"
         done
-        report "$kind" runner runner || return 1
-        bisect "unfinished-$kind" "$kind" 0 || return 1
-        bisect "unfinished-$kind" "$kind" 1 || return 1
+        row report "$kind" runner runner
+        row bisect "unfinished-$kind" "$kind" 0
+        row bisect "unfinished-$kind" "$kind" 1
     done
-    bisect unfinished-night full 0 || return 1
-    older || return 1
-    lost || return 1
-    unrun || return 1
-    base || return 1
-    again 'bug ci intermittent' || return 1
-    again 'bug ci' || return 1
-    again 'bug ci' 'bug ci intermittent' || return 1
-    hold fail || return 1
-    hold pass || return 1
-    bisect 'style core' 'tests style bad\ntests core bad' 0 || return 1
-    bisect unfinished-core core 1 comment || return 1
-    bisect unfinished-core core 0 comment || return 1
-    bisect unfinished-core core 0 edit || return 1
-    latest 1 || return 1
-    latest '1 2' || return 1
-    latest 1 '1 2' || return 1
-    handoff || return 1
-    closed || return 1
-    chosen || return 1
+    row bisect unfinished-night full 0
+    row older
+    row lost
+    row unrun
+    row base
+    row again 'bug ci intermittent'
+    row again 'bug ci'
+    row again 'bug ci' 'bug ci intermittent'
+    row hold fail
+    row hold pass
+    row bisect 'style core' 'tests style bad\ntests core bad' 0
+    row bisect unfinished-core core 1 comment
+    row bisect unfinished-core core 0 comment
+    row bisect unfinished-core core 0 edit
+    row latest 1
+    row latest '1 2'
+    row latest 1 '1 2'
+    row handoff
+    row closed
+    row chosen
     for result in pass fail refuse; do
-        suite "$result" || return 1
+        row suite "$result"
     done
-    [ ! -e "$work/reader.log" ] || return 1
+    if [ -e "$work/reader.log" ]; then
+        echo 'ci-test: failed: suite: a history reader ran for a result without history' >&2
+        failed=1
+    fi
     for case in flaky repeated hidden unread unbuilt kept; do
-        attempts "$case" || return 1
+        row attempts "$case"
     done
+    return "$failed"
+}
+
+# row ROW ARGS...: run ROW with ARGS in a subshell, and report it when it
+# fails.
+row()
+{
+    if ! ("$@"); then
+        printf 'ci-test: failed: %s: the row fails\n' "$*" >&2
+        failed=1
+    fi
 }
 
 if ! rows; then
     cat "$work/report.log" "$work/bisect.log" 2>/dev/null || :
     echo 'ci-test: result: fail: ci report, hold or bisection' >&2
     exit 1
-fi
-if [ "$mode" = mutate ]; then
-    fault report
-    if report core unfinished unfinished-core; then
-        echo 'ci-test: result: fail: report fault passed' >&2; exit 1
-    fi
-    fault cilabel
-    if report core unfinished unfinished-core; then
-        echo 'ci-test: result: fail: cilabel fault passed' >&2; exit 1
-    fi
-    fault baseline
-    if base; then
-        echo 'ci-test: result: fail: baseline fault passed' >&2; exit 1
-    fi
-    fault again
-    if again 'bug ci intermittent'; then
-        echo 'ci-test: result: fail: again fault passed' >&2; exit 1
-    fi
-    fault reread
-    if again 'bug ci' 'bug ci intermittent'; then
-        echo 'ci-test: result: fail: reread fault passed' >&2; exit 1
-    fi
-    fault verdict
-    if lost; then
-        echo 'ci-test: result: fail: verdict fault passed' >&2; exit 1
-    fi
-    for name in rerun retry record; do
-        fault "$name"
-        if unrun; then
-            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
-        fi
-    done
-    fault hold
-    if hold fail || hold pass; then
-        echo 'ci-test: result: fail: hold fault passed' >&2; exit 1
-    fi
-    cp "$repo/tools/ci/report.sh" "$work/report.sh"
-    fault bisect
-    if bisect unfinished-core core 0; then
-        echo 'ci-test: result: fail: bisection fault passed' >&2; exit 1
-    fi
-    fault items
-    if bisect 'style core' 'tests style bad\ntests core bad' 0; then
-        echo 'ci-test: result: fail: core items fault passed' >&2; exit 1
-    fi
-    cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
-    for name in comment label intermittent; do
-        fault "$name"
-        case $name in
-            comment) fail=1; gh_fail=comment ;;
-            label) fail=0; gh_fail=edit ;;
-            intermittent) fail=0; gh_fail=comment ;;
-        esac
-        if bisect unfinished-core core "$fail" "$gh_fail"; then
-            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
-        fi
-        cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
-    done
-    fault newest
-    if latest '1 2'; then
-        echo 'ci-test: result: fail: newest fault passed' >&2; exit 1
-    fi
-    fault recheck
-    if latest 1 '1 2'; then
-        echo 'ci-test: result: fail: recheck fault passed' >&2; exit 1
-    fi
-    fault older
-    if older; then
-        echo 'ci-test: result: fail: older fault passed' >&2; exit 1
-    fi
-    fault refusal
-    if suite refuse; then
-        echo 'ci-test: result: fail: refusal fault passed' >&2; exit 1
-    fi
-    fault limit
-    if bisect unfinished-core core 1; then
-        echo 'ci-test: result: fail: limit fault passed' >&2; exit 1
-    fi
-    fault handoff
-    if handoff; then
-        echo 'ci-test: result: fail: handoff fault passed' >&2; exit 1
-    fi
-    fault closed
-    if closed; then
-        echo 'ci-test: result: fail: closed fault passed' >&2; exit 1
-    fi
-    for name in rerunctx skipped; do
-        fault "$name"
-        if chosen; then
-            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
-        fi
-    done
-    for name in history listing unread keep; do
-        fault "$name"
-        case $name in
-            history) case=hidden ;;
-            listing) case=flaky ;;
-            unread) case=unread ;;
-            keep) case=kept ;;
-        esac
-        if attempts "$case"; then
-            echo "ci-test: result: fail: $name fault passed" >&2; exit 1
-        fi
-    done
-    fault old
-    if lost; then
-        echo 'ci-test: result: fail: old fault passed' >&2; exit 1
-    fi
-    cp "$repo/tools/ci/report.sh" "$work/report.sh"
-    cp "$repo/tools/ci/bisect.sh" "$work/bisect.sh"
-    rows
 fi
 echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history and an intermittent issue kept open'

@@ -32,22 +32,16 @@
 # issue as it is; that a new candidate's run tests every suite, and its build
 # for the Lenovo starts with `make clean`; and that metal_accept.sh passing on
 # the trial boot leads to `bootctl commit` and a report that names the machine
-# of the tests, while its failure ends the release with no commit. With
-# --mutate each fault below is put into the copy and must fail its own row; the
-# copy is restored before the rows run again at the end. --texts puts each
-# fault into the copy and requires only that it changes the file, and runs no
-# row.
+# of the tests, while its failure ends the release with no commit. RELEASE_SH
+# names the release.sh to copy, by default the tree's;
+# tests/proofs/release-resume.json runs the rows against copies with faults in
+# them.
 #
-# Usage: sh tests/system/release_resume_test.sh [--mutate | --texts]
+# Usage: sh tests/system/release_resume_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'release-test: usage: release_resume_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'release-test: usage: release_resume_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap 'rm -rf ${work:+"$work"}' EXIT
@@ -60,70 +54,7 @@ mkdir -p "$work/bin" "$tree/tools/flow" "$tree/tools/ci" "$tree/krffs"
 : > "$tree/krffs/rach2_demo_ed25519"
 cp "$repo/tools/ci/site.sh" "$tree/tools/ci/site.sh" || exit 1
 
-# fault NAME: put fault NAME into the private copy of release.sh, or the
-# original for `none`, and fail when a fault leaves the copy unchanged. The
-# faults: no step counts as done; a done full run is applied again; an ended
-# record is copied aside before the board is read; the new record drops the
-# `touched` line; an ended record with `install started` is replaced; a
-# machine running its system after the installer started is sent to
-# recovery; the record step is skipped once the acceptance is done; the
-# status of the machine's write and flush is ignored; the record is not read
-# back; the phase of a record with `closing` is ignored; an open phase is
-# closed without its readiness checked again; a rerun is never chosen; a
-# commit that closes nothing, or that closes another issue, is taken for a
-# fix; an architecture that failed with no issue is ignored; a rerun is
-# started for every suite; an issue still open is taken for a fix; a change
-# of the site of the tests is ignored; the new record keeps the failed run of
-# the old one; a full run is given the suites of a rerun; the build for the
-# Lenovo keeps the last build's objects; the status of metal_accept.sh is
-# ignored; and the candidate is not committed after the acceptance.
-fault()
-{
-    # shellcheck disable=SC2016 # the dollars are in the texts sed matches
-    case $1 in
-        none) cat ;;
-        undone) sed 's/^    grep -q "^\$1 done " "\$state\/record"$/    false/' ;;
-        full) sed 's/^    done_ full || full$/    full/' ;;
-        aside) awk '
-            $0 == "    if [ -n \"$old\" ] || [ ! -f \"$state/record\" ]; then" {
-                print "    [ -z \"$old\" ] || cp \"$state/record\" \"$state/$old-early\""
-            }
-            { print }' ;;
-        touched) sed 's/^                grep .^touched . "\$state\/record" | tail -n 1$/                :/' ;;
-        started) sed 's/^        if grep -q .^install started . "\$state\/record" &&$/        if false \&\&/' ;;
-        reboot) sed 's/^                ! grep -q .^install started . "\$state\/record" ||$/                true ||/' ;;
-        unrecorded) sed 's/^    if ! done_ record; then$/    if ! done_ accept; then/' ;;
-        unsynced) sed "s/^            'status 0') ;;\$/            status*) ;;/" ;;
-        unread) sed 's/^        \[ .* = "\$want" \] ||$/        true ||/' ;;
-        closing) sed 's/^        phase=\$(sed -n .s\/^phase \/\/p. "\$state\/record")$/        :/' ;;
-        ready) awk '
-            /^    issue_state=/ { r = 1 }
-            r && $0 == "        why=$(still_ready)" { $0 = "        why=; true"; r = 0 }
-            { print }' ;;
-        chosen) sed 's/^        \[ -z "\$old" \] || rerun=\$(again)$/        :/' ;;
-        unclosed) sed 's/^        \[ -n "\$closes" \] || return 0$/        :/' ;;
-        closes) sed 's/^            case " \$issues " in \*" \$n "\*) ;; \*) return 0 ;; esac$/            :/' ;;
-        arches) sed 's/^        case " \$arches " in \*" \$a "\*) ;; \*) return 0 ;; esac$/        :/' ;;
-        suites) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        :/' ;;
-        open) sed 's/\^CLOSED Release tests fail on/^[A-Z]* Release tests fail on/' ;;
-        moved) sed 's/^        here=\$(site "\$sha") && \[ "\$(site "\$o")" = "\$here" \] || return 0$/        true || return 0/' ;;
-        stale) sed 's/^                grep .^touched . "\$state\/record" | tail -n 1$/                grep -e "^touched " -e "^run " "$state\/record"/' ;;
-        partial) sed 's/^        \[ -z "\$only" \] || set -- "\$@" -f suites="\$only"$/        set -- "$@" -f suites="$only"/' ;;
-        unclean) sed 's/"ARCH=x86_64 make clean && /"/' ;;
-        unaccepted) sed 's/^\(        sh tests\/system\/accept\/metal_accept\.sh .*\) ||$/\1 || true ||/' ;;
-        uncommitted) sed 's/^        lenovo .bootctl commit. >/        echo "bootctl: committed: candidate" >/' ;;
-    esac < "$repo/tools/flow/release.sh" > "$tree/tools/flow/release.sh"
-    [ "$1" = none ] || ! cmp -s "$repo/tools/flow/release.sh" "$tree/tools/flow/release.sh"
-}
-
-faults='undone full aside touched started reboot unrecorded unsynced unread closing ready
-    chosen unclosed closes arches suites open moved stale partial unclean unaccepted uncommitted'
-if [ "$mode" = texts ]; then
-    for f in $faults; do
-        fault "$f" || { echo "release-test: fault $f changes nothing" >&2; exit 1; }
-    done
-    exit 0
-fi
+cp "${RELEASE_SH:-$repo/tools/flow/release.sh}" "$tree/tools/flow/release.sh" || exit 1
 
 # board.sh prints RELEASE_TEST_BOARD for `phase` and succeeds otherwise.
 cat > "$tree/tools/flow/board.sh" <<'EOF'
@@ -579,48 +510,5 @@ rows()
     [ -z "$failed" ]
 }
 
-# caught NAME ROW: put fault NAME into the copy and require row ROW to fail.
-caught()
-{
-    fault "$1" || exit 1
-    if rows > "$work/mutated.out" 2>&1; then
-        echo "release-test: fault passed: $1" >&2
-        exit 1
-    fi
-    grep -q "^release-test: failed: $2\$" "$work/mutated.out" || {
-        echo "release-test: fault $1 did not fail $2" >&2
-        exit 1
-    }
-}
-
-fault none || exit 1
 rows || exit 1
-if [ "$mode" = mutate ]; then
-    caught undone all-done
-    caught full full-done
-    caught aside void-waits
-    caught touched void-aside
-    caught started install-stops
-    caught reboot install-reboot
-    caught unrecorded record-write
-    caught unsynced record-unsynced
-    caught unread record-refused
-    caught closing closing-other
-    caught ready closing-unready
-    caught chosen rerun-chosen
-    caught unclosed rerun-other
-    caught closes rerun-unfixed
-    caught arches rerun-unfiled
-    caught suites rerun-dispatch
-    caught open rerun-open
-    caught moved rerun-moved
-    caught stale intermittent
-    caught partial full-every
-    caught unclean build-clean
-    caught unaccepted accept-fail
-    caught uncommitted accept-pass
-    fault none || exit 1
-    rows || exit 1
-    echo 'release-test: result: pass: 23 faults caught and restored'
-fi
 echo 'release-test: result: pass: 25 rows'

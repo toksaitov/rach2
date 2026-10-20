@@ -1,0 +1,224 @@
+{
+  "schema_version": 1,
+  "proof": "worker-park",
+  "summary": "worker_park_test.sh against private copies of tools/flow/worker.sh, each fault failing a row of its own",
+  "tree": "private",
+  "sources": [
+    "tools/flow/worker.sh"
+  ],
+  "artifacts": [
+    "${WORK}/worker.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/tools/flow/worker.sh",
+      "${WORK}/worker.sh"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "WORKER_SH=${WORK}/worker.sh",
+      "sh",
+      "tests/system/worker_park_test.sh"
+    ],
+    "bound_s": 600,
+    "fail_prefix": "worker-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "stay",
+      "summary": "park leaves the clone on the issue's branch",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "    if git switch -q master 2> /dev/null && git merge -q --ff-only origin/master; then\n",
+          "replace": "    if :; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: park"
+        ]
+      }
+    },
+    {
+      "name": "back",
+      "summary": "park claims nothing and leaves the clone on master",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "    git checkout -q \"$was\" -- 2> /dev/null\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: none"
+        ]
+      }
+    },
+    {
+      "name": "keep",
+      "summary": "the loop never takes a parked issue back",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "        if [ -z \"$issue\" ] && [ -s \"$state/parked\" ]; then\n",
+          "replace": "        if false; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: park"
+        ]
+      }
+    },
+    {
+      "name": "any",
+      "summary": "repair takes any issue",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "    done\n    return 1\n",
+          "replace": "    done\n    return 0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: park"
+        ]
+      }
+    },
+    {
+      "name": "group",
+      "summary": "repair takes a group whatever it lists",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "    [ \"$members\" != core ] || return 0\n",
+          "replace": "    [ -z \"$members\" ] || return 0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: group"
+        ]
+      }
+    },
+    {
+      "name": "count",
+      "summary": "claim counts an issue that repair refuses against its five tries",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "        if [ \"${1-}\" = repair ] && ! repair \"$n\"; then\n            continue\n        fi\n",
+          "replace": ""
+        },
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "        [ \"$tries\" -le 5 ] || break\n",
+          "replace": "        [ \"$tries\" -le 5 ] || break\n        if [ \"${1-}\" = repair ] && ! repair \"$n\"; then\n            continue\n        fi\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: sixth"
+        ]
+      }
+    },
+    {
+      "name": "dirty",
+      "summary": "park ignores a file that is not committed",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "    [ -z \"$(git status --porcelain)\" ] || return 1\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: dirty"
+        ]
+      }
+    },
+    {
+      "name": "never",
+      "summary": "claim never passes an issue by",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "        if rests \"$n\"; then\n",
+          "replace": "        if false; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: rest"
+        ]
+      }
+    },
+    {
+      "name": "evidence",
+      "summary": "rests ignores ci's reports",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "        $1 == \"ci\" && $2 > ci { ci = $2 }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: fresh"
+        ]
+      }
+    },
+    {
+      "name": "delay",
+      "summary": "rests ignores the age of the hand-back",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "        END { exit !(back > ci && now - back < rest) }'\n",
+          "replace": "        END { exit !(back > ci) }'\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: stale"
+        ]
+      }
+    },
+    {
+      "name": "label",
+      "summary": "rests ignores the label `intermittent`",
+      "edits": [
+        {
+          "file": "tools/flow/worker.sh",
+          "find": "    [ \"$flaky\" = true ] || return 1\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "worker-test: failed: plain"
+        ]
+      }
+    }
+  ]
+}

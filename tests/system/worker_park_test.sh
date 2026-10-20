@@ -22,22 +22,16 @@
 # hands back: the loop runs one session on 80 and then passes it by, whether
 # ci last reported on 80 before any hand-back, after an earlier one, or not at
 # all since a hand-back two days old. The row plain hands back a `ci` issue
-# that is not intermittent a minute before, and the loop takes it. With
-# --mutate each fault below is put into the copy and must fail its own row;
-# the copy is restored before the rows run again at the end. --texts puts
-# each fault into the copy and requires only that it changes the file, and
-# runs no row.
+# that is not intermittent a minute before, and the loop takes it.
+# WORKER_SH names the worker.sh to copy, by default the tree's;
+# tests/proofs/worker-park.json runs the rows against copies with faults in
+# them.
 #
-# Usage: sh tests/system/worker_park_test.sh [--mutate | --texts]
+# Usage: sh tests/system/worker_park_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'worker-test: usage: worker_park_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'worker-test: usage: worker_park_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap 'rm -rf ${work:+"$work"}' EXIT
@@ -47,44 +41,7 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-worker-test.XXXXXX") || exit 1
 mkdir -p "$work/bin" "$work/flow" "$work/home"
 
-# fault NAME: put fault NAME into the private copy of worker.sh, or the
-# original for `none`, and fail when a fault leaves the copy unchanged. The
-# faults: park leaves the clone on the issue's branch; park claims nothing and
-# leaves the clone on master; the loop never takes a parked issue back; repair
-# takes any issue, or a group whatever it lists; claim counts an issue that
-# repair refuses against its five tries; park ignores a file that is not
-# committed; claim never passes an issue by; rests ignores ci's reports, or
-# the age of the hand-back, or the label `intermittent`.
-fault()
-{
-    # shellcheck disable=SC2016 # the dollars are in the texts sed matches
-    case $1 in
-        none) cat ;;
-        stay) sed 's/^    if git switch -q master 2> \/dev\/null && git merge -q --ff-only origin\/master; then$/    if :; then/' ;;
-        back) sed 's/^    git checkout -q "\$was" -- 2> \/dev\/null$/    :/' ;;
-        keep) sed 's/^        if \[ -z "\$issue" \] && \[ -s "\$state\/parked" \]; then$/        if false; then/' ;;
-        any) awk '/^repair\(\)$/ { r = 1 } r && /^    return 1$/ { sub(/1/, "0"); r = 0 } { print }' ;;
-        group) sed 's/^    \[ "\$members" != core \] || return 0$/    [ -z "$members" ] || return 0/' ;;
-        count) awk '
-            $0 == "        if [ \"${1-}\" = repair ] && ! repair \"$n\"; then" { held = 3 }
-            held > 0 { kept = kept $0 "\n"; held--; next }
-            { print }
-            $0 == "        [ \"$tries\" -le 5 ] || break" { printf "%s", kept }' ;;
-        dirty) sed 's/^    \[ -z "\$(git status --porcelain)" \] || return 1$/    :/' ;;
-        never) sed 's/^        if rests "\$n"; then$/        if false; then/' ;;
-        evidence) sed '/^        \$1 == "ci" && \$2 > ci { ci = \$2 }$/d' ;;
-        delay) sed 's/back > ci && now - back < rest/back > ci/' ;;
-        label) sed 's/^    \[ "\$flaky" = true \] || return 1$/    :/' ;;
-    esac < "$repo/tools/flow/worker.sh" > "$work/flow/worker.sh"
-    [ "$1" = none ] || ! cmp -s "$repo/tools/flow/worker.sh" "$work/flow/worker.sh"
-}
-
-if [ "$mode" = texts ]; then
-    for f in stay back keep any group count dirty never evidence delay label; do
-        fault "$f" || { echo "worker-test: fault $f changes nothing" >&2; exit 1; }
-    done
-    exit 0
-fi
+cp "${WORKER_SH:-$repo/tools/flow/worker.sh}" "$work/flow/worker.sh" || exit 1
 
 # The stand-ins read the issues from WORKER_TEST_DATA, one a line, as
 # `N|STATE|ASSIGNED|LABELS|TITLE|BODY`, with `-` for an empty field and `\n`
@@ -292,36 +249,6 @@ ROWS
     [ -z "$failed" ]
 }
 
-# caught NAME ROW: put fault NAME into the copy and require row ROW to fail.
-caught()
-{
-    fault "$1" && origin || exit 1
-    if rows > "$work/mutated.out" 2>&1; then
-        echo "worker-test: fault passed: $1" >&2
-        exit 1
-    fi
-    grep -q "^worker-test: failed: $2\$" "$work/mutated.out" || {
-        echo "worker-test: fault $1 did not fail $2" >&2
-        exit 1
-    }
-}
-
-fault none && origin || exit 1
+origin || exit 1
 rows || exit 1
-if [ "$mode" = mutate ]; then
-    caught stay park
-    caught back none
-    caught keep park
-    caught any park
-    caught group group
-    caught count sixth
-    caught dirty dirty
-    caught never rest
-    caught evidence fresh
-    caught delay stale
-    caught label plain
-    fault none && origin || exit 1
-    rows || exit 1
-    echo 'worker-test: result: pass: 11 faults caught and restored'
-fi
 echo 'worker-test: result: pass: 9 rows'

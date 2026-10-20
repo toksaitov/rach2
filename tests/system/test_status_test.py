@@ -157,15 +157,13 @@ def stop(signum, frame):
 
 
 def main():
-    """Run the rows and optionally require a faulty reader to fail them."""
-    source = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"
-    text = source.read_text()
-    needle = 'words[19] != str(start)'
-    assert text.count(needle) == 1, "start-time fault text changed"
-    fault = text.replace(needle, 'False')
-    if sys.argv[1:] == ["--texts"]:
-        print("test-status-test: result: fault text found")
-        return
+    """Run the rows against a private copy of the reader that
+    TEST_STATUS_READER names, by default the tree's; usage:
+    test_status_test.py HELPER, HELPER being the built runutil."""
+    if len(sys.argv) != 2:
+        sys.exit("test-status-test: usage: test_status_test.py HELPER")
+    default = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"
+    source = Path(os.environ.get("TEST_STATUS_READER", default))
     if not Path("/proc/locks").exists():
         print("test-status-test: result: skipped: Linux testing host required")
         return
@@ -177,16 +175,6 @@ def main():
         copy = root / "reader.py"
         shutil.copyfile(source, copy)
         rows(load(copy), helper, root)
-        if "--mutate" in sys.argv[2:]:
-            copy.write_text(fault)
-            try:
-                rows(load(copy), helper, root)
-            except AssertionError:
-                print("test-status-test: result: mutation caught")
-            else:
-                raise AssertionError("pid reuse mutation passed")
-            copy.write_text(text)
-            rows(load(copy), helper, root)
 
 
 if __name__ == "__main__":

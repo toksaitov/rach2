@@ -1,0 +1,304 @@
+{
+  "schema_version": 1,
+  "proof": "board",
+  "summary": "board_test.sh against private copies of tools/flow/board.sh, each fault failing a row of its own",
+  "tree": "private",
+  "sources": [
+    "tools/flow/board.sh"
+  ],
+  "artifacts": [
+    "${WORK}/board.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/tools/flow/board.sh",
+      "${WORK}/board.sh"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "BOARD_SH=${WORK}/board.sh",
+      "sh",
+      "tests/system/board_test.sh"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "rollback",
+      "summary": "group creation omits its rollback",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    trap 'group_status=$?; trap - EXIT; group_rollback; exit \"$group_status\"' EXIT\n",
+          "replace": "    trap 'group_status=$?; trap - EXIT; :; exit \"$group_status\"' EXIT\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: label2"
+        ]
+      }
+    },
+    {
+      "name": "take-latest",
+      "summary": "take lets the latest assignment keep an issue",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "                if (who == \"\" || last[l] < last[who])\n",
+          "replace": "                if (who == \"\" || last[l] > last[who])\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: yield-later"
+        ]
+      }
+    },
+    {
+      "name": "closed",
+      "summary": "take and release treat a closed issue as open",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    [ \"$state\" = CLOSED ] || return 1\n",
+          "replace": "    return 1\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: take-closed",
+          "board-test: failed: release-closed"
+        ]
+      }
+    },
+    {
+      "name": "members",
+      "summary": "membership ignores `Part of`",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        return p != \"\" && n != p && (parent == p || has(partof, p)) }'\n",
+          "replace": "        return p != \"\" && n != p && (parent == p) }'\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: members-all"
+        ]
+      }
+    },
+    {
+      "name": "current",
+      "summary": "`current` keeps one of two phases In progress",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "            s = s (s == \"\" ? \"\" : \" #\") $3 }\n",
+          "replace": "            s = $3 }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: current-two"
+        ]
+      }
+    },
+    {
+      "name": "start",
+      "summary": "`start` looks for a comment it never wrote, and so comments again",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    if ! printf '%s\\n' \"$said\" | grep -Eqx 'phase: started at [0-9a-f]{40}'; then\n",
+          "replace": "    if ! printf '%s\\n' \"$said\" | grep -Eqx 'phase: begun at [0-9a-f]{40}'; then\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: start-again"
+        ]
+      }
+    },
+    {
+      "name": "start-order",
+      "summary": "`start` sets the phase In progress before it comments",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    said=$(comments \"$p\") || {\n",
+          "replace": "    [ -n \"$started\" ] || set_status \"$p\" \"In progress\" || exit 1;     said=$(comments \"$p\") || {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: start-retry"
+        ]
+      }
+    },
+    {
+      "name": "start-report",
+      "summary": "`start` makes a day report a member",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        !has($5, \"day-report\") && !has($5, \"incident\") && !has($5, \"hold\") {\n",
+          "replace": "        !has($5, \"incident\") && !has($5, \"hold\") {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: start-first"
+        ]
+      }
+    },
+    {
+      "name": "next",
+      "summary": "`next` lists Ready issues of no phase",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        member && $2 == \"Ready\" { ready = ready $3 \"\\t\" $10 \"\\n\" }\n",
+          "replace": "        $2 == \"Ready\" { ready = ready $3 \"\\t\" $10 \"\\n\" }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: next-tiers"
+        ]
+      }
+    },
+    {
+      "name": "take-phase",
+      "summary": "`take` skips the phase check",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        g != \"\" || has($5, \"ci\") { exit }\n",
+          "replace": "        { exit }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: take-stranger"
+        ]
+      }
+    },
+    {
+      "name": "take-status",
+      "summary": "`take` takes a member that is not Ready",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        $2 != \"Ready\" && $2 != \"In progress\" {\n",
+          "replace": "        0 {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: take-backlog"
+        ]
+      }
+    },
+    {
+      "name": "group",
+      "summary": "`group` accepts an issue of no phase",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "            member) ;;\n",
+          "replace": "            *) ;;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: group-stranger"
+        ]
+      }
+    },
+    {
+      "name": "archive",
+      "summary": "`archive` ignores the other open phase",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "                if (f[4] != \"CLOSED\" || f[8] in open)\n",
+          "replace": "                if (f[4] != \"CLOSED\")\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: archive-other"
+        ]
+      }
+    },
+    {
+      "name": "phase",
+      "summary": "`phase` ignores the review",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    elif [ -z \"$review\" ] || [ \"${review#*..}\" != \"$head\" ]; then\n",
+          "replace": "    elif [ -z \"$review\" ] || false; then\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: phase-review"
+        ]
+      }
+    },
+    {
+      "name": "stale",
+      "summary": "`unassign` writes back the whole list of assignees it read, as `gh issue edit` does",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    gh api -X DELETE \"repos/$REPO/issues/$1/assignees\" -f \"assignees[]=$2\" > /dev/null\n",
+          "replace": "    gh issue edit \"$1\" --repo \"$REPO\" --remove-assignee \"$2\" > /dev/null\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: yield-stale"
+        ]
+      }
+    },
+    {
+      "name": "next-owner",
+      "summary": "`next` offers an issue labelled owner-only to any account",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        has($5, \"owner-only\") && me != owner { next }\n",
+          "replace": "        0 { next }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: next-only"
+        ]
+      }
+    },
+    {
+      "name": "take-owner",
+      "summary": "`take` gives an issue labelled owner-only to any account",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "        has($5, \"owner-only\") && me != owner {\n",
+          "replace": "        0 {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: take-only"
+        ]
+      }
+    }
+  ]
+}

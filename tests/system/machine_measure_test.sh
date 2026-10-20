@@ -1,22 +1,22 @@
 #!/bin/sh
-# machine_measure_test.sh [--mutate | --texts]: run the measurement drivers
-# of tools/dev, machine_identity.sh, machine_net_in.sh, machine_load.sh and
+# machine_measure_test.sh: run the measurement drivers of tools/dev,
+# machine_identity.sh, machine_net_in.sh, machine_load.sh and
 # machine_load_session.sh, on the host against fake ssh, bootctl and other
 # commands.
 #
 # The rows check the identity check of the booted slot and kernel before any
 # timing, the load window and its late completions, the second between the
 # starts of the load sessions, and the removal of the inbound driver's
-# known-hosts file. --mutate puts each of eight faults into a private copy of
-# the drivers and requires its row to fail; --texts checks that each fault is
-# once in its driver.
+# known-hosts file. MEASURE_DRIVERS names the directory the drivers are
+# copied from, by default the tree's tools/dev;
+# tests/proofs/machine-measure.json runs the rows against copies with faults
+# in them.
 set -eu
+[ "$#" -eq 0 ] || { echo 'machine-measure-test: usage: machine_measure_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" machine-measure-test "$repo/tests/system/machine_measure_test.sh" "$@"
-fi
-exec python3 - "$repo" "$@" <<'PY'
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" machine-measure-test "$repo/tests/system/machine_measure_test.sh" "$@"
+exec python3 - "$repo" <<'PY'
 import atexit
 import os
 import pathlib
@@ -28,8 +28,7 @@ import tempfile
 import time
 
 repo = pathlib.Path(sys.argv[1])
-if sys.argv[2:] not in ([], ['--mutate'], ['--texts']):
-    sys.exit('usage: machine_measure_test.sh [--mutate | --texts]')
+drivers = pathlib.Path(os.environ.get('MEASURE_DRIVERS') or repo / 'tools/dev')
 # Each scratch directory's path is printed when it is made, and a failure
 # keeps them all as evidence; a pass or a signal removes them.
 scratch = []
@@ -67,8 +66,7 @@ source = work / 'source'
 source.mkdir()
 for name in ('machine_net_in.sh', 'machine_load.sh', 'machine_load_session.sh',
              'machine_identity.sh'):
-    shutil.copyfile(repo / 'tools/dev' / name, source / name)
-saved = {p: p.read_bytes() for p in source.iterdir()}
+    shutil.copyfile(drivers / name, source / name)
 
 # The machine the identity check reads: a kernel in each slot of a boot
 # partition, at the extents the fixture bootctl reports, and a second
@@ -412,56 +410,6 @@ def cases(label):
     print(f'machine-measure-test: {label}: {checks} checks passed', flush=True)
 
 
-# Each fault: its name, the driver, the text, its replacement, and the words
-# of the row it must fail.
-mutations = [
-    ('cleanup', 'machine_net_in.sh', '        rm -f "$known"', '        :',
-     'default known-hosts file remains'),
-    ('deadline', 'machine_load_session.sh', '[ "$finished" -lt "$end" ]',
-     '[ "$began" -lt "$end" ]', 'late completion counted inside the window'),
-    ('stagger', 'machine_load.sh', '    sleep 1\n', '    :\n',
-     'sessions started without a second between them'),
-    ('slot', 'machine_identity.sh', '[ "$booted" = "$want" ]', '[ -n "$want" ]',
-     'a machine booted from another slot was measured'),
-    ('trial', 'machine_identity.sh', '[ "$trial" = none ]', '[ -n "$trial" ]',
-     'a machine with an armed trial was measured'),
-    ('kernel', 'machine_identity.sh', '[ "$have" = "$sum" ]', '[ -n "$sum" ]',
-     'a machine running another kernel was measured'),
-    ('inbound-unchecked', 'machine_net_in.sh', '"$measure_user@$address" || exit\n',
-     '"$measure_user@$address" || :\n',
-     'the inbound driver timed a machine the identity check refused'),
-    ('load-unchecked', 'machine_load.sh', '"$MEASURE_USER@$ADDR" || exit\n',
-     '"$MEASURE_USER@$ADDR" || :\n',
-     'the load driver started sessions on a machine the identity check refused')]
-if '--texts' in sys.argv:
-    for label, name, before, after, diagnostic in mutations:
-        assert (source / name).read_text().count(before) == 1, label
-    passed = True
-    print('machine-measure-test: texts: every fault is once in its source', flush=True)
-    sys.exit(0)
-try:
-    cases('fixed')
-    if '--mutate' in sys.argv:
-        for label, name, before, after, diagnostic in mutations:
-            path = source / name
-            text = path.read_text()
-            assert text.count(before) == 1, label
-            path.write_text(text.replace(before, after))
-            try:
-                cases(label)
-            except AssertionError as error:
-                if diagnostic not in str(error):
-                    raise
-                print('machine-measure-test:', label, 'mutation detected', flush=True)
-            else:
-                raise AssertionError(label + ' mutation passed')
-            finally:
-                path.write_bytes(saved[path])
-            cases('restored-' + label)
-        print('machine-measure-test: result: pass: each mutation was detected and each '
-              'restoration passed', flush=True)
-finally:
-    for path, content in saved.items():
-        path.write_bytes(content)
+cases('fixed')
 passed = True
 PY

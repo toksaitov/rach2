@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "proof": "limited",
+  "summary": "limited_test.sh against private copies of tools/flow/lib.sh with faults in `limited`, each failing exactly its rows",
+  "tree": "private",
+  "sources": [
+    "tools/flow/lib.sh"
+  ],
+  "artifacts": [
+    "${WORK}/lib.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/tools/flow/lib.sh",
+      "${WORK}/lib.sh"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "LIB_SH=${WORK}/lib.sh",
+      "sh",
+      "tests/system/limited_test.sh"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "limited-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "any-line",
+      "summary": "the limit taken from any line of the output, not only the one that reports it",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "        grep -E '\"type\":\"result\".*\"is_error\":true|\"is_error\":true.*\"type\":\"result\"|\"type\":\"(error|turn\\.failed)\"'\n",
+          "replace": "        cat\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "limited-test: failed: claude-quote:",
+          "limited-test: failed: claude-quote-keys:",
+          "limited-test: failed: claude-tool:",
+          "limited-test: failed: codex-quote:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-err",
+      "summary": "the session's errors not read",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "        tail -n 2 \"$2\"; } 2> /dev/null | grep -o 'hit your [a-z]* limit[^\"\\\\]*' | head -n 1 | grep .\n",
+          "replace": "        :; } 2> /dev/null | grep -o 'hit your [a-z]* limit[^\"\\\\]*' | head -n 1 | grep .\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "limited-test: failed: codex-err:"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

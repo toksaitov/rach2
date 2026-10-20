@@ -1,0 +1,352 @@
+{
+  "schema_version": 1,
+  "proof": "tidy",
+  "summary": "tidy_test.sh against private copies of tools/flow/lib.sh and tools/flow/scratch.pl, each fault failing exactly its rows; no-busy and no-program need /proc",
+  "tree": "private",
+  "sources": [
+    "tools/flow/lib.sh",
+    "tools/flow/scratch.pl"
+  ],
+  "artifacts": [
+    "${WORK}/lib.sh",
+    "${WORK}/scratch.pl"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "cp ${SRC}/tools/flow/lib.sh ${WORK}/lib.sh && exec cp ${SRC}/tools/flow/scratch.pl ${WORK}/scratch.pl"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "LIB_SH=${WORK}/lib.sh",
+      "SCRATCH_PL=${WORK}/scratch.pl",
+      "sh",
+      "tests/system/tidy_test.sh"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "tidy-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "any-tree",
+      "summary": "`tidy` takes any branch for merged, whatever the tree of its merge with master",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "    [ \"$(printf '%s\\n' \"$merge\" | sed -n 1p)\" = \"$master\" ]\n",
+          "replace": "    true\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: branch-unpushed:",
+          "tidy-test: failed: branch-merge:",
+          "tidy-test: failed: branch-place:",
+          "tidy-test: failed: wt-unique:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "any-conflict",
+      "summary": "`tidy` ignores a merge with master that conflicts",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "    merge=$(git merge-tree --write-tree --no-messages origin/master \"$1\" 2> /dev/null) || return 1\n",
+          "replace": "    merge=$(git merge-tree --write-tree --no-messages origin/master \"$1\" 2> /dev/null)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: branch-delete:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-keep",
+      "summary": "`tidy` deletes the branches of the issue held and of the issue parked",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "            case $b in \"$n\"-*) continue 2 ;; esac\n",
+          "replace": "            :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: branch-held:",
+          "tidy-test: failed: branch-parked:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "force",
+      "summary": "`tidy` forces the removal of a helper's worktree",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "            git worktree remove \"$w\" 2> /dev/null && log \"tidy: removed the worktree $w\"\n",
+          "replace": "            git worktree remove --force --force \"$w\" 2> /dev/null && log \"tidy: removed the worktree $w\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: wt-dirty:",
+          "tidy-test: failed: wt-locked:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "any-worktree",
+      "summary": "`tidy` removes a worktree outside .claude/worktrees",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "        case $w in \"$top\"/.claude/worktrees/*) ;; *) continue ;; esac\n",
+          "replace": "        :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: wt-outside:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "any-ignored",
+      "summary": "`tidy` removes a worktree with an ignored file that is not build output",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "        head=$(git -C \"$w\" rev-parse -q --verify HEAD) && merged \"$head\" && disposable \"$w\" &&\n",
+          "replace": "        head=$(git -C \"$w\" rev-parse -q --verify HEAD) && merged \"$head\" &&\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: wt-ignored:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-age",
+      "summary": "`prune_logs` keeps a session's output past fourteen days",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "            next unless $age > 14 * 86400 || $total > 1 << 30;\n",
+          "replace": "            next unless $total > 1 << 30;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: prune-age:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-young",
+      "summary": "`prune_logs` removes a file written in the last day",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "            last if $age < 86400;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: prune-young:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-size",
+      "summary": "`prune_logs` keeps files past 1 GiB",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "            next unless $age > 14 * 86400 || $total > 1 << 30;\n",
+          "replace": "            next unless $age > 14 * 86400;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: prune-size:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-fresh",
+      "summary": "`scratch.pl` removes a directory with a file changed now",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    next if fresh($p);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-young:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "any-name",
+      "summary": "`scratch.pl` removes entries whose names have no stem it was given",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    next unless @stems and $e =~ /^(?:$stems)\\.[A-Za-z0-9_]{6,8}$/;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-name:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "any-stem",
+      "summary": "`scratch.pl` takes any stem",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    next unless @stems and $e =~ /^(?:$stems)\\.[A-Za-z0-9_]{6,8}$/;\n",
+          "replace": "    next unless @stems and $e =~ /^[A-Za-z0-9_.-]+\\.[A-Za-z0-9_]{6,8}$/;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-name:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "any-prefix",
+      "summary": "`scratch.pl` takes a stem that does not begin with rach2",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "my @stems = grep { /^rach2/ } @ARGV;\n",
+          "replace": "my @stems = @ARGV;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-name:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-python",
+      "summary": "`stems` leaves out the Python prefixes",
+      "edits": [
+        {
+          "file": "tools/flow/lib.sh",
+          "find": "    git grep -hoE \"[/\\\"']rach2[A-Za-z0-9_-]*\\.XXXXXX|[\\\"']rach2[A-Za-z0-9_-]*\\.[\\\"']\" \"$1\" -- tests tools |\n        sed -E \"s/^[/\\\"']//; s/\\.(XXXXXX|[\\\"'])\\$//\" | sort -u\n",
+          "replace": "    git grep -hoE \"[/\\\"']rach2[A-Za-z0-9_-]*\\.XXXXXX|nothing[\\\"']rach2[A-Za-z0-9_-]*\\.[\\\"']\" \"$1\" -- tests tools |\n        sed -E \"s/^[/\\\"']//; s/\\.(XXXXXX|nothing[\\\"'])\\$//\" | sort -u\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-stems:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "links",
+      "summary": "`scratch.pl` removes a symbolic link",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    next if $st[4] == 0 or !(-d _ or -f _);\n",
+          "replace": "    next if $st[4] == 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-link:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-busy",
+      "summary": "`scratch.pl` removes a directory a process works in; Linux only",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    next if grep { $_ eq $p or index($_, \"$p/\") == 0 } @busy;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-busy:",
+          "tidy-test: failed: scratch-program:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "no-program",
+      "summary": "`scratch.pl` removes a directory that holds a running program; Linux only",
+      "edits": [
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    for my $l (\"$p/cwd\", \"$p/exe\", glob \"$p/fd/*\") {\n",
+          "replace": "    for my $l (\"$p/cwd\", glob \"$p/fd/*\") {\n"
+        },
+        {
+          "file": "tools/flow/scratch.pl",
+          "find": "    }\n    if (open my $m, '<', \"$p/maps\") {\n        push @busy, map { m{^\\S+ \\S+ \\S+ \\S+ \\S+ +(/.*?)(?: \\(deleted\\))?$} ? $1 : () } <$m>;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "tidy-test: failed: scratch-program:"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

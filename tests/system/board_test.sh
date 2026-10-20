@@ -5,18 +5,11 @@
 # closed issue, and the phase subcommands, which are current, members, next,
 # start, the checks take and group make of the phase and of an issue labelled
 # owner-only, archive and phase.
-# --mutate plants each fault below in a private copy, requires a row of its
-# own to fail, and then requires every row to pass with the copy restored;
-# --texts requires only that each fault changes the copy, so that a fault
-# whose text moved is refused.
+# BOARD_SH names the board.sh to test, by default the tree's;
+# tests/proofs/board.json runs the rows against copies with faults in them.
 
 set -eu
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'board-test: usage: board_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'board-test: usage: board_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
@@ -25,81 +18,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-board-test.XXXXXX")
 mkdir -p "$work/bin" "$work/state"
-cp "$repo/tools/flow/board.sh" "$work/board.sh"
-
-# fault: omit rollback from the private copy, refusing missing fault text.
-fault()
-{
-    sed 's/; group_rollback;/; :;/' "$repo/tools/flow/board.sh" > "$work/board.sh"
-    ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
-}
-
-# take_fault: let the latest assignment keep an issue in the private copy,
-# refusing missing fault text.
-take_fault()
-{
-    sed 's/last\[l\] < last\[who\]/last[l] > last[who]/' \
-        "$repo/tools/flow/board.sh" > "$work/board.sh"
-    ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
-}
-
-# closed_fault: let take and release treat a closed issue as open in the
-# private copy, refusing missing fault text.
-closed_fault()
-{
-    # shellcheck disable=SC2016 # the dollar is in the text the fault removes
-    sed 's/\[ "\$state" = CLOSED \] || return 1/return 1/' \
-        "$repo/tools/flow/board.sh" > "$work/board.sh"
-    ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
-}
-
-# The faults of the phase rows, each a sed script for the private copy:
-# membership ignores `Part of`; `current` keeps one of two phases; `start`
-# looks for a comment it never wrote, and so comments again, or sets the phase
-# In progress before it comments, or makes a day report a member; `next` lists
-# Ready issues of no phase; `take` skips the phase check, or takes a member
-# that is not Ready; `group` accepts an issue of no phase; `archive` ignores
-# the other open phase; `phase` ignores the review; and `unassign` writes back
-# the whole list of assignees it read, as `gh issue edit` does; `next` or
-# `take` offers an issue labelled owner-only to any account.
-# shellcheck disable=SC2016 # the dollars are in the texts the faults change
-{
-    members_fault='s/(parent == p || has(partof, p))/(parent == p)/'
-    current_fault='s/s = s (s == "" ? "" : " #") \$3 }/s = $3 }/'
-    start_fault="s/grep -Eqx 'phase: started at/grep -Eqx 'phase: begun at/"
-    start_order_fault='s/^    said=\$(comments/    [ -n "$started" ] || set_status "$p" "In progress" || exit 1; &/'
-    start_report_fault='s/!has(\$5, "day-report") \&\& //'
-    next_fault='s/member && \$2 == "Ready" {/$2 == "Ready" {/'
-    take_phase_fault='s/g != "" || has(\$5, "ci") { exit }/{ exit }/'
-    take_status_fault='s/\$2 != "Ready" \&\& \$2 != "In progress" {/0 {/'
-    group_fault='s/^            member) ;;$/            *) ;;/'
-    archive_fault='s/ || f\[8\] in open)/)/'
-    phase_fault='s/\[ "\${review#\*..}" != "\$head" \]/false/'
-    stale_fault='s|gh api -X DELETE "repos/\$REPO/issues/\$1/assignees" -f "assignees\[\]=\$2"|gh issue edit "$1" --repo "$REPO" --remove-assignee "$2"|'
-    next_owner_fault='s/has(\$5, "owner-only") \&\& me != owner { next }/0 { next }/'
-    take_owner_fault='s/has(\$5, "owner-only") \&\& me != owner {$/0 {/'
-}
-
-# plant SCRIPT: write the private copy with the sed SCRIPT applied, refusing
-# a script that changes nothing.
-plant()
-{
-    sed "$1" "$repo/tools/flow/board.sh" > "$work/board.sh"
-    ! cmp -s "$repo/tools/flow/board.sh" "$work/board.sh"
-}
-if [ "$mode" = texts ]; then
-    fault
-    take_fault
-    closed_fault
-    for f in "$members_fault" "$current_fault" "$start_fault" \
-        "$start_order_fault" "$start_report_fault" "$next_fault" \
-        "$take_phase_fault" "$take_status_fault" "$group_fault" \
-        "$archive_fault" "$phase_fault" "$stale_fault" "$next_owner_fault" \
-        "$take_owner_fault"; do
-        plant "$f"
-    done
-    exit 0
-fi
+cp "${BOARD_SH:-$repo/tools/flow/board.sh}" "$work/board.sh"
 
 # The stand-in keeps its issues in BOARD_TEST_DATA, one a line, as
 # `N|STATE|STATUS|LABELS|ASSIGNEES|PARENT|BLOCKED|BODY|TITLE|COMMENTS|ARCHIVED`,
@@ -886,55 +805,5 @@ ROWS
     [ -z "$failed" ]
 }
 
-# caught SCRIPT ROW WHAT: plant the fault SCRIPT and require the rows to fail,
-# ROW among them; WHAT says what the fault does.
-caught()
-{
-    plant "$1"
-    if rows > "$work/mutated.out" 2>&1; then
-        echo "board-test: fault passed: $3" >&2
-        exit 1
-    fi
-    grep -q "^board-test: failed: $2\$" "$work/mutated.out"
-}
-
 rows || exit 1
-if [ "$mode" = mutate ]; then
-    fault
-    if rows > "$work/mutated.out" 2>&1; then
-        echo 'board-test: fault passed: rollback omitted' >&2
-        exit 1
-    fi
-    grep -q '^board-test: failed: label2$' "$work/mutated.out"
-    take_fault
-    if rows > "$work/mutated.out" 2>&1; then
-        echo 'board-test: fault passed: latest assignment kept the issue' >&2
-        exit 1
-    fi
-    grep -q '^board-test: failed: yield-later$' "$work/mutated.out"
-    closed_fault
-    if rows > "$work/mutated.out" 2>&1; then
-        echo 'board-test: fault passed: a closed issue was taken as open' >&2
-        exit 1
-    fi
-    grep -q '^board-test: failed: take-closed$' "$work/mutated.out"
-    grep -q '^board-test: failed: release-closed$' "$work/mutated.out"
-    caught "$members_fault" members-all 'membership ignored Part of'
-    caught "$current_fault" current-two 'two phases In progress passed'
-    caught "$start_fault" start-again 'a second start commented again'
-    caught "$start_order_fault" start-retry 'start set In progress before it commented'
-    caught "$start_report_fault" start-first 'start made a day report a member'
-    caught "$next_fault" next-tiers 'next listed issues of no phase'
-    caught "$take_phase_fault" take-stranger 'take skipped the phase check'
-    caught "$take_status_fault" take-backlog 'take took a Backlog member'
-    caught "$group_fault" group-stranger 'group took an issue of no phase'
-    caught "$archive_fault" archive-other 'archive ignored the other phase'
-    caught "$phase_fault" phase-review 'phase ignored the review'
-    caught "$stale_fault" yield-stale 'unassign put back a stale list'
-    caught "$next_owner_fault" next-only 'next offered an owner-only issue to a team account'
-    caught "$take_owner_fault" take-only 'take gave an owner-only issue to a team account'
-    cp "$repo/tools/flow/board.sh" "$work/board.sh"
-    rows || exit 1
-    echo 'board-test: result: pass: 17 faults caught and restored'
-fi
 echo 'board-test: result: pass: 65 rows'

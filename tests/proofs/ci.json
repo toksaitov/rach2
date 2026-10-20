@@ -1,0 +1,528 @@
+{
+  "schema_version": 1,
+  "proof": "ci",
+  "summary": "ci_test.sh against private copies of tools/ci/report.sh and bisect.sh, each fault failing its rows",
+  "tree": "private",
+  "sources": [
+    "tools/ci/report.sh",
+    "tools/ci/bisect.sh"
+  ],
+  "artifacts": [
+    "${WORK}/ci/report.sh",
+    "${WORK}/ci/bisect.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "mkdir -p ${WORK}/ci && exec cp ${SRC}/tools/ci/report.sh ${SRC}/tools/ci/bisect.sh ${WORK}/ci/"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "CI_SCRIPTS=${WORK}/ci",
+      "sh",
+      "tests/system/ci_test.sh"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "ci-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "report",
+      "summary": "an unfinished run bisected as a failure of the runner",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "        items=unfinished-$kind\n",
+          "replace": "        items=runner\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: report core unfinished unfinished-core: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "cilabel",
+      "summary": "a filed issue without the label ci",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    if ! url=$(gh issue create --repo \"$repo\" --title \"$title\" --label bug --label ci --body \"$body\"); then\n",
+          "replace": "    if ! url=$(gh issue create --repo \"$repo\" --title \"$title\" --label bug --body \"$body\"); then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: report core unfinished unfinished-core: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "baseline",
+      "summary": "a nightly pass not taken for a full run's last pass",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    full) depth=500 contexts=\"ci/full ci/night\" what=\"Release tests\" ;;\n",
+          "replace": "    full) depth=500 contexts=ci/full what=\"Release tests\" ;;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: base: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "again",
+      "summary": "a failure repeated on an intermittent issue not bisected again",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "            *\" intermittent \"*)\n",
+          "replace": "            *\" never \"*)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: again bug ci intermittent: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "reread",
+      "summary": "an issue's labels not read again after the report on it",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "        case \" $found $now \" in\n",
+          "replace": "        case \" $found \" in\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: again bug ci bug ci intermittent: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "verdict",
+      "summary": "the verdict in a job's outputs ignored when its upload was lost",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "        i686) verdict=${VERDICT_i686-} ;;\n",
+          "replace": "        i686) verdict= ;;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: lost: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "rerun",
+      "summary": "a core job that no runner took not started again",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    case \"$unrun\" in *\"Test on $1\"*) ;; *) return 1 ;; esac\n",
+          "replace": "    case \"$unrun\" in *\" never \"*) ;; *) return 1 ;; esac\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: unrun: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "retry",
+      "summary": "a job lost again on the same commit not reported as unfinished",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    case \" $errors \" in *\" ci/lost/$1 \"*) return 1 ;; esac\n",
+          "replace": "    case \" $errors \" in *\" never \"*) return 1 ;; esac\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: unrun: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "record",
+      "summary": "a lost job not recorded as ci/lost",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "        set_status \"ci/lost/$arch\" error; then\n",
+          "replace": "        true; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: unrun: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "hold",
+      "summary": "the hold issue looked for by its title alone",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    if ! holds=$(open_holds); then\n",
+          "replace": "    if ! holds=$(open_issue hold \"$hold_title\"); then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: hold fail: the row fails",
+          "ci-test: failed: hold pass: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "bisect",
+      "summary": "an unfinished core run bisected as a failure of the runner",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    *\" unfinished-core \"*) run_kind=core ;;\n",
+          "replace": "    *\" unfinished-core \"*) test_items=runner ;;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: bisect unfinished-core core 0: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "items",
+      "summary": "the core set run without the other items of a core run that failed",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "               core) test_set=core ;;\n",
+          "replace": "               core) test_set=core; test_items=\"\" ;;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: bisect style core tests style bad\\ntests core bad 0: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "comment",
+      "summary": "a failed comment on the issue not reported",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        { echo \"ci: bisect: the comment on #$issue failed\" >&2; return 1; }\n",
+          "replace": "        { echo \"ci: bisect: the comment on #$issue failed\" >&2; return 0; }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: bisect unfinished-core core 1 comment: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "label",
+      "summary": "a failed label on the issue not reported",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "           { echo \"ci: bisect: the label on #$issue failed\" >&2; status=1; }\n",
+          "replace": "           { echo \"ci: bisect: the label on #$issue failed\" >&2; status=0; }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: bisect unfinished-core core 0 edit: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "intermittent",
+      "summary": "a failed comment on a failure that passed when run again not reported",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "       say \"$on: $(short \"$bad\") passed $failed when run again, so the failure did not repeat. The issue is labelled intermittent and stays open; it loses the label when the failure comes back.\" || status=1\n",
+          "replace": "       say \"$on: $(short \"$bad\") passed $failed when run again, so the failure did not repeat. The issue is labelled intermittent and stays open; it loses the label when the failure comes back.\" || :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: bisect unfinished-core core 0 comment: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "newest",
+      "summary": "the issue's newest run not taken before labelling it intermittent",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        [ \"$newest\" != \"$run\" ] || return 0\n",
+          "replace": "        [ -z \"$newest\" ] || return 0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: latest 1 2: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "recheck",
+      "summary": "the issue's newest run not taken again after labelling it intermittent",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "       newest_or_exit labelled\n",
+          "replace": "       :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: latest 1 1 2: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "older",
+      "summary": "an unfinished full run not repeated as night where run.sh knows only that",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        [ \"$here\" != full ] || grep -q '^ *core|full)' tools/ci/run.sh || here=night\n",
+          "replace": "        [ \"$here\" != full ] || grep -q '^ *core|full)' tools/ci/run.sh || :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: older: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "refusal",
+      "summary": "a refused run in bisection counted as a failure",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        '1/run: result: failed') return 1 ;;\n",
+          "replace": "        [1-9]*/*) return 1 ;;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: suite refuse: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "limit",
+      "summary": "a bisection command run without its time limit",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        if limited sh tools/ci/run.sh \"$here\" \"$log.run\" >> \"$log.log\" 2>&1; then\n",
+          "replace": "        if sh tools/ci/run.sh \"$here\" \"$log.run\" >> \"$log.log\" 2>&1; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: bisect unfinished-core core 1: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "handoff",
+      "summary": "a bisection that does not continue in a new run",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "fits 2 || handoff \"$parent\" \"$culprit\"\n",
+          "replace": ": || handoff \"$parent\" \"$culprit\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: handoff: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "closed",
+      "summary": "a bisection whose issue has been closed goes on",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    open_or_stop\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: closed: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "rerunctx",
+      "summary": "a full run of chosen suites sets the statuses of a full run",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "[ \"$kind\" != full ] || [ -z \"${SUITES:-}\" ] || ctx=ci/rerun\n",
+          "replace": "[ \"$kind\" != full ] || [ -z \"${SUITES:-}\" ] || :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: chosen: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "skipped",
+      "summary": "an architecture with nothing to test given a status",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    if [ -f \"$result/done\" ] && [ -f \"$result/skipped\" ]; then\n",
+          "replace": "    if false; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: chosen: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "history",
+      "summary": "a run that listed no failure passes though its history has an attempt that did not pass",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "        [ \"$hstatus\" = 0 ]; then\n",
+          "replace": "        true; then\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: attempts hidden: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "listing",
+      "summary": "the attempts a history lists are left out of the issue",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "\\`\\`\\`\n$history\n\\`\\`\\`\"\n",
+          "replace": "\\`\\`\\`\n\\`\\`\\`\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: attempts flaky: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "unread",
+      "summary": "a history the reader cannot read is taken for one with no failure",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    [ \"$hstatus\" -le 1 ] || hstatus=2\n",
+          "replace": "    [ \"$hstatus\" -le 1 ] || hstatus=0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: attempts unread: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "keep",
+      "summary": "the hold's issues are listed by the label ci, so that a passing run takes an open intermittent issue for the hold",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "--state open --label hold --limit 500",
+          "replace": "--state open --label ci --limit 500"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: attempts kept: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "old",
+      "summary": "a result without history/ is read as if it had one",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "    [ -d \"$1/history\" ] || return 0\n",
+          "replace": "    :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: lost: the row fails"
+        ]
+      }
+    }
+  ]
+}

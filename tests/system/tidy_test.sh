@@ -27,21 +27,15 @@
 # gives, a symbolic link, and, where /proc exists, a directory a process works
 # in and one that holds a running program.
 #
-# With --mutate each fault below is put into private copies of lib.sh and
-# scratch.pl and must fail exactly its expected rows; the copies are
-# restored before the rows run again at the end. --texts puts each fault
-# into the copies and requires only that it changes them, and runs no row.
+# LIB_SH and SCRATCH_PL name the lib.sh and scratch.pl to copy, by default
+# the tree's; tests/proofs/tidy.json runs the rows against copies with faults
+# in them.
 #
-# Usage: sh tests/system/tidy_test.sh [--mutate | --texts]
+# Usage: sh tests/system/tidy_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'tidy-test: usage: tidy_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'tidy-test: usage: tidy_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 busy=
@@ -56,37 +50,8 @@ case $real in /?*) work=$real ;; *) exit 1 ;; esac
 lib=$work/lib.sh
 sweep=$work/scratch.pl
 
-# fault NAME: put fault NAME into the private copies, or the originals for
-# `none`, and fail when a fault leaves both copies unchanged.
-fault()
-{
-    l=cat s=cat
-    # shellcheck disable=SC2016 # the dollars are in the texts sed matches
-    case $1 in
-        none) ;;
-        any-ignored) l='s/ && disposable "\$w" &&/ \&\&/' ;;
-        no-python) l='s/XXXXXX|\[/XXXXXX|nothing[/' ;;
-        any-tree) l='s/^    \[ "\$(printf .%s\\n. "\$merge" | sed -n 1p)" = "\$master" \]$/    true/' ;;
-        any-conflict) l='s/^\(    merge=.*\) || return 1$/\1/' ;;
-        no-keep) l='s/^            case \$b in "\$n"-\*) continue 2 ;; esac$/            :/' ;;
-        force) l='s/git worktree remove "\$w"/git worktree remove --force --force "\$w"/' ;;
-        any-worktree) l='s|^        case \$w in "\$top"/.claude/worktrees/\*) ;; \*) continue ;; esac$|        :|' ;;
-        no-age) l='s/next unless \$age > 14 \* 86400 || \$total > 1 << 30;/next unless $total > 1 << 30;/' ;;
-        no-young) l='/^            last if \$age < 86400;$/d' ;;
-        no-size) l='s/next unless \$age > 14 \* 86400 || \$total > 1 << 30;/next unless $age > 14 * 86400;/' ;;
-        no-fresh) s='/^    next if fresh(\$p);$/d' ;;
-        any-name) s='/^    next unless @stems and \$e =~ /d' ;;
-        any-prefix) s='s/^my @stems = grep { \/^rach2\/ } @ARGV;$/my @stems = @ARGV;/' ;;
-        any-stem) s='s/(?:\$stems)/[A-Za-z0-9_.-]+/' ;;
-        links) s='s/^    next if \$st\[4\] == 0 or !(-d _ or -f _);$/    next if $st[4] == 0;/' ;;
-        no-busy) s='/^    next if grep { \$_ eq \$p or index(\$_, "\$p\/") == 0 } @busy;$/d' ;;
-        no-program) s='s/"\$p\/cwd", "\$p\/exe", /"$p\/cwd", /; /^    if (open my \$m, .<., "\$p\/maps") {$/,/^    }$/d' ;;
-    esac
-    if [ "$l" = cat ]; then cat; else sed "$l"; fi < "$repo/tools/flow/lib.sh" > "$lib"
-    if [ "$s" = cat ]; then cat; else sed "$s"; fi < "$repo/tools/flow/scratch.pl" > "$sweep"
-    [ "$1" = none ] || ! cmp -s "$repo/tools/flow/lib.sh" "$lib" ||
-        ! cmp -s "$repo/tools/flow/scratch.pl" "$sweep"
-}
+cp "${LIB_SH:-$repo/tools/flow/lib.sh}" "$lib" || exit 1
+cp "${SCRATCH_PL:-$repo/tools/flow/scratch.pl}" "$sweep" || exit 1
 
 # age DAYS PATH...: set the times of each PATH to DAYS days ago.
 age()
@@ -217,7 +182,8 @@ started()
 }
 
 # rows: set up, run tidy, prune_logs and scratch.pl from the copies, print
-# `tidy-test: failed: NAME` for each row that fails, and fail when any did.
+# `tidy-test: failed: NAME: ...` for each row that fails, and fail when any
+# did.
 rows()
 {
     failed=0
@@ -292,56 +258,11 @@ rows()
             scratch-stems) grep -qx rach2_verify "$work/stems" && grep -qx rach2-measure "$work/stems" &&
                 grep -qx rach2-grow-measure "$work/stems" && ! grep -q '[^A-Za-z0-9_-]' "$work/stems" &&
                 ! grep -qv '^rach2' "$work/stems" ;;
-        esac || { echo "tidy-test: failed: $row"; failed=1; }
+        esac || { echo "tidy-test: failed: $row: the row's condition does not hold"; failed=1; }
     done
     [ "$failed" -eq 0 ] || sed 's/^/tidy-test: output: /' "$work/tidy.out"
     return "$failed"
 }
 
-# expect FAULT ROWS: with FAULT in the copies, require exactly ROWS to fail.
-expect()
-{
-    fault "$1" || { echo "tidy-test: fault $1 changes nothing" >&2; return 1; }
-    rows > "$work/mutated.out" && { echo "tidy-test: fault passed: $1" >&2; return 1; }
-    got=$(sed -n 's/^tidy-test: failed: //p' "$work/mutated.out" | tr '\n' ' ')
-    if [ "$got" != "$2 " ]; then
-        echo "tidy-test: fault $1 failed rows: $got; expected: $2" >&2
-        return 1
-    fi
-}
-
-faults='any-tree any-conflict no-keep force any-worktree any-ignored no-age no-young no-size no-fresh
-    any-name any-stem any-prefix no-python links no-busy no-program'
-if [ "$mode" = texts ]; then
-    for f in $faults; do
-        fault "$f" || { echo "tidy-test: fault $f changes nothing in lib.sh or scratch.pl" >&2; exit 1; }
-    done
-    exit 0
-fi
-fault none
 rows >&2 || exit 1
-if [ "$mode" = mutate ]; then
-    expect any-tree 'branch-unpushed branch-merge branch-place wt-unique' || exit 1
-    expect any-conflict branch-delete || exit 1
-    expect no-keep 'branch-held branch-parked' || exit 1
-    expect force 'wt-dirty wt-locked' || exit 1
-    expect any-worktree wt-outside || exit 1
-    expect any-ignored wt-ignored || exit 1
-    expect no-age prune-age || exit 1
-    expect no-young prune-young || exit 1
-    expect no-size prune-size || exit 1
-    expect no-fresh scratch-young || exit 1
-    expect any-name scratch-name || exit 1
-    expect any-stem scratch-name || exit 1
-    expect any-prefix scratch-name || exit 1
-    expect no-python scratch-stems || exit 1
-    expect links scratch-link || exit 1
-    if [ -d /proc/self/fd ]; then
-        expect no-busy 'scratch-busy scratch-program' || exit 1
-        expect no-program scratch-program || exit 1
-    fi
-    fault none
-    rows >&2 || exit 1
-    echo 'tidy-test: result: pass: every fault caught and restored'
-fi
 echo 'tidy-test: result: pass: 30 rows'
