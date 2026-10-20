@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "proof": "usb-latency",
+  "summary": "usb_latency_test.sh with builds of usbstamp_hosttest.c whose faults in private copies of the recorder and the scheduler make the checker refuse every record",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/usb/stamp.c",
+    "rach2/sys/proc/sched.c"
+  ],
+  "artifacts": [
+    "${WORK}/usbstamp_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I ${SRC}/rach2/sys -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I rach2/sys/usb tests/host/usbstamp_hosttest.c -o ${WORK}/usbstamp_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "USBSTAMP_TEST=${WORK}/usbstamp_hosttest",
+      "TMPDIR=${WORK}",
+      "sh",
+      "tests/system/usb_latency_test.sh"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "usb-latency-test: fail: verdict: "
+  },
+  "faults": [
+    {
+      "name": "cutoff",
+      "summary": "the recorder gives no record when it is read more than 20 ms after the wake",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/stamp.c",
+          "find": "    result = stamp;",
+          "replace": "    if (read_us - stamp.wake > 20000u) {\n        kirq_restore(flags);\n        return;\n    }\n    result = stamp;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "usb-latency-test: fail: the host test exits 1",
+          "usb-latency-test: fail: verdict: spin: the checker refuses",
+          "usb-latency-test: fail: verdict: timer: the checker refuses",
+          "usb-latency-test: fail: verdict: random: the checker refuses"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "dispatch",
+      "summary": "the dispatch stamp taken out of the scheduler",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/sched.c",
+          "find": "    usb_stamp_dispatch(next->pid);",
+          "replace": "    (void)next->pid;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "usb-latency-test: fail: the host test exits 1",
+          "usb-latency-test: fail: verdict: spin: the checker refuses",
+          "usb-latency-test: fail: verdict: timer: the checker refuses",
+          "usb-latency-test: fail: verdict: random: the checker refuses"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

@@ -1,45 +1,26 @@
 #!/bin/sh
-# ssh_flood_test.sh [--mutate | --texts]: check that the SSH suite's flood
-# functions leave none of the children they start, with fake sleep and nc
-# programs and no sockets.
+# ssh_flood_test.sh: check that the SSH suite's flood functions leave none of
+# the children they start, with fake sleep and nc programs and no sockets.
 #
 # The functions and the cleanup traps are copied out of
 # tests/system/suites/ssh.sh and run by a driver that starts the flood and
 # then either stops it or is sent SIGTERM. Either way none of the 80
-# children may be left, nor the flood's directory. --mutate also runs a copy
-# in which flood_start does not record the process ID of a holder's sleep,
-# which must leave children, and then the restored copy; --texts checks that
-# the fault changes the suite.
+# children may be left, nor the flood's directory. SSH_SUITE names the suite
+# to copy them from, by default the tree's; tests/proofs/ssh-flood.json runs
+# the test against a copy whose flood_start does not record the process ID of
+# a holder's sleep.
 set -eu
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'ssh-flood: usage: ssh_flood_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'ssh-flood: usage: ssh_flood_test.sh' >&2; exit 2; }
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" ssh-flood "$repo/tests/system/ssh_flood_test.sh" "$@"
-fi
-if [ "$mutate" -eq 2 ]; then
-    suite=$repo/tests/system/suites/ssh.sh
-    if [ ! -r "$suite" ] ||
-        sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$suite" | cmp -s - "$suite"; then
-        echo 'ssh-flood: texts: ssh.sh has no FLOOD_PIDS line after the flood sleep for the fault to edit' >&2
-        exit 1
-    fi
-    echo 'ssh-flood: texts: every fault is once in its source'
-    exit 0
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" ssh-flood "$repo/tests/system/ssh_flood_test.sh" "$@"
 work=
 driver=0
 keep=
 
-# Stop the driver, kill every child whose process ID is recorded, and put the
-# saved suite back into the copy. Then remove the work directory, unless the
-# test failed after printing its path, which sets `keep`; a signal clears
-# `keep`.
+# Stop the driver and kill every child whose process ID is recorded. Then
+# remove the work directory, unless the test failed after printing its path,
+# which sets `keep`; a signal clears `keep`.
 # shellcheck disable=SC2329
 cleanup()
 {
@@ -54,7 +35,6 @@ cleanup()
         read -r pid < "$file"
         kill -KILL "$pid" 2>/dev/null || :
     done
-    [ ! -f "$work/saved.sh" ] || cp "$work/saved.sh" "$work/source.sh"
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
         rm -rf "$work"
     fi
@@ -64,8 +44,7 @@ trap 'keep=; exit 130' INT
 trap 'keep=; exit 143' TERM
 trap 'keep=; exit 129' HUP
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ssh-flood.XXXXXX")
-cp "$repo/tests/system/suites/ssh.sh" "$work/saved.sh"
-cp "$work/saved.sh" "$work/source.sh"
+cp "${SSH_SUITE:-$repo/tests/system/suites/ssh.sh}" "$work/source.sh"
 mkdir "$work/bin"
 cat > "$work/bin/sleep" <<'PEER'
 #!/bin/sh
@@ -158,15 +137,3 @@ DRIVER
 
 check_case fixed success
 check_case fixed signal
-if [ "$mutate" -eq 1 ]; then
-    sed '/exec sleep 300/,/FLOOD_PIDS=/s/FLOOD_PIDS=.*$/ :/' "$work/saved.sh" > "$work/source.sh"
-    cmp -s "$work/saved.sh" "$work/source.sh" && exit 1
-    rc=0
-    check_case missing-sleep success || rc=$?
-    [ "$rc" -eq 1 ] || { echo 'ssh-flood: missing sleep ownership was not detected' >&2; exit 1; }
-    echo 'ssh-flood: result: missing sleep ownership detected'
-    cp "$work/saved.sh" "$work/source.sh"
-    touch "$work/source.sh"
-    check_case restored success
-    check_case restored signal
-fi

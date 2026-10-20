@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "proof": "install-accounts",
+  "summary": "install_accounts_test.sh against add_lines and keep_image_accounts from private copies of utils/rach2-install, each fault failing its row",
+  "tree": "private",
+  "sources": [
+    "utils/rach2-install"
+  ],
+  "artifacts": [
+    "${WORK}/rach2-install"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/utils/rach2-install",
+      "${WORK}/rach2-install"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "RACH2_INSTALL=${WORK}/rach2-install",
+      "sh",
+      "tests/system/install_accounts_test.sh"
+    ],
+    "bound_s": 120,
+    "fail_prefix": "install-accounts-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "uid-bound",
+      "summary": "image accounts of any id are kept, not only system ones",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "$3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {",
+          "replace": "!($1 in name) && !(($3 + 0) in id) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: the image's sshd is appended with its group and shadow line, and nothing else is"
+        ]
+      }
+    },
+    {
+      "name": "uid-inclusive",
+      "summary": "id 1000 counts as a system account",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "$3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {",
+          "replace": "$3 + 0 <= 1000 && !($1 in name) && !(($3 + 0) in id) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: the image's sshd is appended with its group and shadow line, and nothing else is"
+        ]
+      }
+    },
+    {
+      "name": "id-taken",
+      "summary": "an image account whose id the machine has is added",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "!($1 in name) && !(($3 + 0) in id) {",
+          "replace": "!($1 in name) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an image account whose id the machine has is not added"
+        ]
+      }
+    },
+    {
+      "name": "id-as-text",
+      "summary": "the machine's ids compared as text, so 074 is not 74",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "name[$1] = 1; id[$3 + 0] = 1; next }\n        $3 + 0 < 1000",
+          "replace": "name[$1] = 1; id[$3] = 1; next }\n        $3 + 0 < 1000"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an image account whose id the machine has is not added"
+        ]
+      }
+    },
+    {
+      "name": "twice",
+      "summary": "an account the image has twice is added twice",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "\n            print; name[$1] = 1; id[$3 + 0] = 1",
+          "replace": "\n            print"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an account the image has twice, or with another's id, is added once"
+        ]
+      }
+    },
+    {
+      "name": "no-newline",
+      "summary": "a machine file's last line without a newline is joined to the first line added",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "if [ -s \"$1\" ] && [ -n \"$(tail -c 1 \"$1\")\" ]; then",
+          "replace": "if false; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: a machine file whose last line has no newline keeps that line whole"
+        ]
+      }
+    },
+    {
+      "name": "empty-file",
+      "summary": "an empty machine file is taken for the image file",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }\n            FILENAME == ARGV[2] { uid",
+          "replace": "NR == FNR { name[$1] = 1; id[$3 + 0] = 1; next }\n            FILENAME == ARGV[2] { uid"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an empty machine group file gets the image's system groups"
+        ]
+      }
+    },
+    {
+      "name": "group-left",
+      "summary": "the image's groups are not added",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "add_lines \"$2/etc/group\" \"$groups\" || return 1",
+          "replace": ":"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: the image's sshd is appended with its group and shadow line, and nothing else is"
+        ]
+      }
+    },
+    {
+      "name": "shadow-left",
+      "summary": "the image's shadow lines are not added",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "add_lines \"$2/etc/shadow\" \"$lines\"",
+          "replace": ":"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: the image's sshd is appended with its group and shadow line, and nothing else is"
+        ]
+      }
+    },
+    {
+      "name": "group-needs-account",
+      "summary": "an image's system group is added only with an account",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "!(($3 + 0) in refused) {",
+          "replace": "!(($3 + 0) in refused) && ($1 in uid) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an image's system group that no new account comes with is added alone"
+        ]
+      }
+    },
+    {
+      "name": "group-of-refused",
+      "summary": "the group of a refused account is added",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "!(($3 + 0) in refused) {",
+          "replace": "1 {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an image account whose id the machine has is not added"
+        ]
+      }
+    },
+    {
+      "name": "shadow-only-added",
+      "summary": "shadow lines only for the accounts added",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "FILENAME == ARGV[1] { if ($3 + 0 < 1000 || $3 + 0 == 65534) uid[$1] = $3 + 0; next }",
+          "replace": "FILENAME == ARGV[1] { next }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: a system account the machine has without a shadow line gets the image's"
+        ]
+      }
+    },
+    {
+      "name": "shadow-any-name",
+      "summary": "a shadow line for an account the machine has by name alone",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "if (($1 in uid) && uid[$1] == $3 + 0) same[$1] = 1",
+          "replace": "same[$1] = 1"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: an image account whose name the machine has is not added"
+        ]
+      }
+    },
+    {
+      "name": "shadow-no-nobody",
+      "summary": "no shadow line for nobody's id 65534",
+      "edits": [
+        {
+          "file": "utils/rach2-install",
+          "find": "if ($3 + 0 < 1000 || $3 + 0 == 65534) uid",
+          "replace": "if ($3 + 0 < 1000) uid"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "install-accounts-test: failed: a system account the machine has without a shadow line gets the image's"
+        ]
+      }
+    }
+  ]
+}

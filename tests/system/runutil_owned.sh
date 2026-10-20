@@ -12,8 +12,9 @@
 # an interrupted run must report its signal. fixtures/runutil_machine.c must
 # tell a live survivor from a zombie or a reused pid. With --mutate each of
 # six rules is reversed in a compiled copy of the helper and must be caught,
-# and the SSH flood's cleanup test and the rehearsal's group-size test run in
-# their mutating forms. --texts checks that each fault is in the helper.
+# and the rehearsal's group-size test runs in its mutating form;
+# tests/proofs/ssh-flood.json proves the SSH flood's cleanup test, which runs
+# in either mode. --texts checks that each fault is in the helper.
 set -eu
 case ${1:-} in
     '') mutate=0 ;;
@@ -321,8 +322,6 @@ if [ "$mutate" -eq 1 ]; then
 fi
 
 if [ "$mutate" -eq 1 ]; then
-    sh "$repo/tests/system/ssh_flood_test.sh" --mutate
     sh "$repo/tests/system/rehearse_group_mutate.sh"
-else
-    sh "$repo/tests/system/ssh_flood_test.sh"
 fi
+sh "$repo/tests/system/ssh_flood_test.sh"

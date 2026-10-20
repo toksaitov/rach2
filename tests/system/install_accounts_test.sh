@@ -21,28 +21,20 @@
 # image's system group that no new account comes with, as the GNU root's
 # `crontab` comes, must be added alone; and a system account the machine has
 # by the image's name and id, with no shadow line, `nobody`'s of id 65534
-# among them, must get the image's. With --mutate each fault below is put
-# into the copy of the functions and must fail its row; the rows run again
-# on the functions as they are at the end.
+# among them, must get the image's. RACH2_INSTALL names the installer the
+# functions are taken from, by default the tree's;
+# tests/proofs/install-accounts.json runs the rows against copies with faults
+# in them.
 #
-# --texts puts each fault into the copy and runs no row.
-#
-# Usage: sh tests/system/install_accounts_test.sh [--mutate | --texts]
+# Usage: sh tests/system/install_accounts_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'install-accounts-test: usage: install_accounts_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'install-accounts-test: usage: install_accounts_test.sh' >&2; exit 2; }
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" install-accounts-test "$repo/tests/system/install_accounts_test.sh" "$@"
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" install-accounts-test "$repo/tests/system/install_accounts_test.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
@@ -50,16 +42,16 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-install-accounts.XXXXXX") || exit 1
 
+installer=${RACH2_INSTALL:-$repo/utils/rach2-install}
 for function in add_lines keep_image_accounts; do
     awk -v f="$function" '$0 == f "() {" { copy = 1 } copy { print } copy && /^\}$/ { exit }' \
-        "$repo/utils/rach2-install" > "$work/$function.sh"
+        "$installer" > "$work/$function.sh"
     grep -q '^}$' "$work/$function.sh" || {
-        echo "install-accounts-test: $function is not in utils/rach2-install" >&2
+        echo "install-accounts-test: $function is not in $installer" >&2
         exit 1
     }
 done
-cat "$work/add_lines.sh" "$work/keep_image_accounts.sh" > "$work/function.saved"
-cp "$work/function.saved" "$work/function.sh"
+cat "$work/add_lines.sh" "$work/keep_image_accounts.sh" > "$work/function.sh"
 
 failures=0
 # fail ROW: report that ROW failed and count it.
@@ -177,69 +169,6 @@ rows() {
         fail "a system account the machine has without a shadow line gets the image's"
     fi
 }
-
-# fault NAME OLD NEW EXPECT: the functions with the unique OLD replaced by NEW
-# must fail the row named EXPECT.
-fault() {
-    cp "$work/function.saved" "$work/function.sh"
-    python3 - "$work/function.sh" "$2" "$3" << 'PY' || exit 1
-import sys
-path, old, new = sys.argv[1:4]
-text = open(path).read()
-assert text.count(old) == 1, old
-open(path, 'w').write(text.replace(old, new, 1))
-PY
-    [ "$mutate" -ne 2 ] || return 0
-    before=$failures
-    out=$(rows)
-    failures=$before
-    case $out in
-        *"failed: $4"*) echo "install-accounts-test: result: $1 fails its row" ;;
-        *) echo "install-accounts-test: fault passed: $1" >&2; failures=$((failures + 1)) ;;
-    esac
-}
-
-if [ "$mutate" -ge 1 ]; then
-    sshd_row="the image's sshd is appended with its group and shadow line, and nothing else is"
-    fault uid-bound '$3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {' \
-        '!($1 in name) && !(($3 + 0) in id) {' "$sshd_row"
-    fault uid-inclusive '$3 + 0 < 1000 && !($1 in name) && !(($3 + 0) in id) {' \
-        '$3 + 0 <= 1000 && !($1 in name) && !(($3 + 0) in id) {' "$sshd_row"
-    fault id-taken '!($1 in name) && !(($3 + 0) in id) {' '!($1 in name) {' \
-        'an image account whose id the machine has is not added'
-    fault id-as-text 'name[$1] = 1; id[$3 + 0] = 1; next }
-        $3 + 0 < 1000' 'name[$1] = 1; id[$3] = 1; next }
-        $3 + 0 < 1000' \
-        'an image account whose id the machine has is not added'
-    fault twice '
-            print; name[$1] = 1; id[$3 + 0] = 1' '
-            print' \
-        "an account the image has twice, or with another's id, is added once"
-    fault no-newline 'if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then' 'if false; then' \
-        'a machine file whose last line has no newline keeps that line whole'
-    fault empty-file 'FILENAME == ARGV[1] { name[$1] = 1; id[$3 + 0] = 1; next }
-            FILENAME == ARGV[2] { uid' 'NR == FNR { name[$1] = 1; id[$3 + 0] = 1; next }
-            FILENAME == ARGV[2] { uid' "an empty machine group file gets the image's system groups"
-    fault group-left 'add_lines "$2/etc/group" "$groups" || return 1' ':' "$sshd_row"
-    fault shadow-left 'add_lines "$2/etc/shadow" "$lines"' ':' "$sshd_row"
-    fault group-needs-account '!(($3 + 0) in refused) {' '!(($3 + 0) in refused) && ($1 in uid) {' \
-        "an image's system group that no new account comes with is added alone"
-    fault group-of-refused '!(($3 + 0) in refused) {' '1 {' \
-        'an image account whose id the machine has is not added'
-    fault shadow-only-added \
-        'FILENAME == ARGV[1] { if ($3 + 0 < 1000 || $3 + 0 == 65534) uid[$1] = $3 + 0; next }' \
-        'FILENAME == ARGV[1] { next }' \
-        'a system account the machine has without a shadow line gets the image'"'"'s'
-    fault shadow-any-name 'if (($1 in uid) && uid[$1] == $3 + 0) same[$1] = 1' 'same[$1] = 1' \
-        'an image account whose name the machine has is not added'
-    fault shadow-no-nobody 'if ($3 + 0 < 1000 || $3 + 0 == 65534) uid' 'if ($3 + 0 < 1000) uid' \
-        'a system account the machine has without a shadow line gets the image'"'"'s'
-    cp "$work/function.saved" "$work/function.sh"
-fi
-if [ "$mutate" -eq 2 ]; then
-    echo 'install-accounts-test: texts: every fault is once in its source'
-    exit 0
-fi
 
 rows
 if [ "$failures" -ne 0 ]; then

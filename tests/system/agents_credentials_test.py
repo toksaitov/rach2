@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Check the acceptance's credential enumeration and log scan in a fresh home."""
+"""Check the acceptance's credential enumeration and log scan in a fresh home.
+
+AGENTS_GUEST names the guest script to run, by default the tree's
+accept/agents_guest.sh; tests/proofs/agents-credentials.json runs the tests
+against copies with faults in them.
+"""
 
 import hashlib
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
 
 
-GUEST = Path(__file__).with_name("accept") / "agents_guest.sh"
+GUEST = Path(os.environ.get("AGENTS_GUEST") or
+             Path(__file__).with_name("accept") / "agents_guest.sh")
 TOKEN = ".gemini/antigravity-cli/antigravity-oauth-token"
 DUMMY = "rach2-dummy-antigravity-token-00000000"
 FILES = {"claude": ".claude/.credentials.json", "codex": ".codex/auth.json",
@@ -143,45 +148,5 @@ def descendants(root):
     return found
 
 
-def proof(mode):
-    """Require private scripts that omit a token or ignore selection to fail."""
-    source = GUEST.read_text()
-    faults = [
-        ("omitted", 'agy) printf \'%s\\n\' "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ;;',
-         "agy) : ;;", "test_antigravity_scan"),
-        ("selection", 'for agent in "$@"; do', 'for agent in claude codex agy muse; do',
-         "test_selected_credentials"),
-        ("arguments", "    awk '\n        function cut(",
-         "    awk -v list=\"$(credential_strings all)\" '\n        function cut(",
-         "test_redact_arguments")]
-    for name, old, new, test in faults:
-        if source.count(old) != 1:
-            raise SystemExit(f"agents-credentials: the {name} fault's text is not once in its source")
-    if mode == "--texts":
-        print("agents-credentials: texts: every fault is once in its source")
-        return
-    with tempfile.TemporaryDirectory(prefix="rach2-agents-credentials-proof.") as work:
-        copy = Path(work)
-        test = copy / Path(__file__).name
-        test.write_text(Path(__file__).read_text())
-        guest = copy / "accept" / GUEST.name
-        guest.parent.mkdir()
-        phases = [("fixed", source, "")]
-        phases += [(name, source.replace(old, new), test) for name, old, new, test in faults]
-        phases += [("restored", source, "")]
-        for phase, text, failed_test in phases:
-            guest.write_text(text)
-            result = subprocess.run([sys.executable, "-B", str(test)],
-                                    text=True, capture_output=True)
-            if (result.returncode == 0) != (not failed_test):
-                raise SystemExit(result.stdout + result.stderr)
-            if failed_test and f"FAIL: {failed_test}" not in result.stderr:
-                raise SystemExit(result.stderr)
-            print(f"agents-credentials: result: {phase}: expected status {result.returncode}")
-
-
 if __name__ == "__main__":
-    if len(sys.argv) == 2 and sys.argv[1] in ("--texts", "--mutate"):
-        proof(sys.argv[1])
-    else:
-        unittest.main()
+    unittest.main()

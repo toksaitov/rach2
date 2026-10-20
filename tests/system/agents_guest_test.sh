@@ -10,21 +10,15 @@
 # that a TERM sent to the group while `secrets` waits for its log, or while
 # `work` runs its check, ends the command with status 143 and leaves TMPDIR
 # empty; and that `secrets` whose reader has gone ends with status 141 and
-# leaves TMPDIR empty. With --mutate the copy without its traps must fail
-# exactly the last three rows; the copy is restored before the rows run again
-# at the end. --texts puts the fault into the copy and requires only that it
-# changes the file, and runs no row.
+# leaves TMPDIR empty. AGENTS_GUEST names the script to copy, by default the
+# tree's; tests/proofs/agents-guest.json runs the rows against a copy without
+# its traps.
 #
-# Usage: sh tests/system/agents_guest_test.sh [--mutate | --texts]
+# Usage: sh tests/system/agents_guest_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'agents-guest-test: usage: agents_guest_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'agents-guest-test: usage: agents_guest_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 pid=
@@ -34,21 +28,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-agents-guest-test.XXXXXX") || exit 1
-source=$repo/tests/system/accept/agents_guest.sh
+source=${AGENTS_GUEST:-$repo/tests/system/accept/agents_guest.sh}
 guest=$work/guest.sh
 home=$work/home
 scratch=$work/tmp
-
-# fault NAME: put fault NAME into the private copy of agents_guest.sh, or the
-# original for `none`, and fail when a fault leaves the copy unchanged.
-fault()
-{
-    case $1 in
-        none) cat ;;
-        no-traps) sed 's/^            scratch$/            :/' ;;
-    esac < "$source" > "$guest"
-    [ "$1" = none ] || ! cmp -s "$source" "$guest"
-}
 
 # guest IN OUT COMMAND...: run the copy with the test's home and TMPDIR, its
 # standard input IN, its output OUT and its errors work/err, in a process
@@ -147,37 +130,22 @@ row()
 }
 
 # rows: run every row against the copy, print `agents-guest-test: failed:
-# NAME` for each that fails, and fail when any did.
+# NAME: status S` for each that fails, S being the guest's exit status, and
+# fail when any did.
 rows()
 {
     failed=0
     for name in secrets filtered work secrets-term work-term secrets-pipe; do
+        status=
         if ! row "$name"; then
-            echo "agents-guest-test: failed: $name"
+            echo "agents-guest-test: failed: $name: status ${status:-none}"
             failed=1
         fi
     done
     return "$failed"
 }
 
-# expect FAULT ROWS: with FAULT in the copy, require exactly ROWS to fail.
-expect()
-{
-    fault "$1" || { echo "agents-guest-test: fault $1 changes nothing" >&2; return 1; }
-    rows > "$work/mutated.out" && { echo "agents-guest-test: fault passed: $1" >&2; return 1; }
-    got=$(sed 's/^agents-guest-test: failed: //' "$work/mutated.out" | tr '\n' ' ')
-    if [ "$got" != "$2 " ]; then
-        echo "agents-guest-test: fault $1 failed rows: $got; expected: $2" >&2
-        return 1
-    fi
-}
-
-if [ "$mode" = texts ]; then
-    fault no-traps && exit 0
-    echo 'agents-guest-test: the fault changes nothing in agents_guest.sh' >&2
-    exit 1
-fi
-fault none
+cp "$source" "$guest" || exit 1
 mkdir -p "$home/rach2-accept/fixture" || exit 1
 printf 'hello\n' > "$home/rach2-accept/fixture/greeting.txt"
 cat > "$home/rach2-accept/fixture/check.sh" <<'EOF'
@@ -193,10 +161,4 @@ for command in setup 'prepare claude'; do
     fi
 done
 rows >&2 || exit 1
-if [ "$mode" = mutate ]; then
-    expect no-traps 'secrets-term work-term secrets-pipe' || exit 1
-    fault none
-    rows >&2 || exit 1
-    echo 'agents-guest-test: result: pass: the fault caught and restored'
-fi
 echo 'agents-guest-test: result: pass: 6 rows'

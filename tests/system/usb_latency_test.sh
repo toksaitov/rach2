@@ -1,93 +1,35 @@
 #!/bin/sh
-# usb_latency_test.sh [--mutate | --texts]: check checkers/usblatency.awk on
-# the records of tests/host/usbstamp_hosttest.c, a host test built with the
-# kernel's USB stamp recorder and scheduler.
+# usb_latency_test.sh: check checkers/usblatency.awk on the records of
+# tests/host/usbstamp_hosttest.c, a host test built with the kernel's USB
+# stamp recorder and scheduler.
 #
 # The host test runs in six modes. The checker must accept the spin, timer
 # and random records and refuse the pump, work and undispatched ones, and it
 # must refuse a record with a malformed field, one with a field twice, one
-# with a field missing, and an empty one. --mutate also builds the host test
-# with each of two faults: `cutoff` makes the recorder give no record when it
-# is read more than 20 ms after the wake, and `dispatch` takes the dispatch
-# stamp out of the scheduler. The checker must then refuse every record, and
-# the restored sources must pass. --texts checks that each fault is once in
-# its source, and builds nothing.
+# with a field missing, and an empty one. USBSTAMP_TEST names a host test
+# built elsewhere to run in place of the private build;
+# tests/proofs/usb-latency.json runs the rows with builds whose faults make
+# the checker refuse every record.
 set -eu
+[ "$#" -eq 0 ] || { echo 'usb-latency-test: usage: usb_latency_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" usb-latency-test "$repo/tests/system/usb_latency_test.sh" "$@"
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" usb-latency-test "$repo/tests/system/usb_latency_test.sh" "$@"
 cd "$repo"
 
-# apply_fault SYS FAULT: put FAULT into the sources under SYS; with
-# RACH2_FAULT_TEXTS set, only check its text and write nothing.
-apply_fault()
-{
-    python3 - "$1" "$2" <<'PY'
-from pathlib import Path
-import sys
-import os
-import pathlib
-if os.environ.get('RACH2_FAULT_TEXTS'):
-    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
-
-root = Path(sys.argv[1])
-if sys.argv[2] == 'cutoff':
-    path = root / 'usb/stamp.c'
-    old = '    result = stamp;'
-    new = '''    if (read_us - stamp.wake > 20000u) {
-        kirq_restore(flags);
-        return;
-    }
-''' + old
-else:
-    path = root / 'proc/sched.c'
-    old = '    usb_stamp_dispatch(next->pid);'
-    new = '    (void)next->pid;'
-source = path.read_text()
-assert source.count(old) == 1
-path.write_text(source.replace(old, new))
-PY
-}
-
-if [ "${1:-}" = --texts ]; then
-    RACH2_FAULT_TEXTS=1
-    export RACH2_FAULT_TEXTS
-    apply_fault rach2/sys cutoff >/dev/null
-    apply_fault rach2/sys dispatch >/dev/null
-    echo 'usb-latency-test: texts: every fault is once in its source'
-    exit 0
-fi
-
-
-mkdir -p build/tests
 work=
 child=
 keep=
 
-# Stop the running test, and put back the saved stamp.c and sched.c and touch
-# them.
-restore()
+# Stop the running test, then remove the work directory, unless the test
+# failed after printing its path, which sets `keep`; a signal clears `keep`.
+cleanup()
 {
+    exit_status=$?
     if [ -n "$child" ]; then
         kill -TERM "$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
         child=
-    fi
-    cp "$work/stamp.saved" "$work/sys/usb/stamp.c"
-    cp "$work/sched.saved" "$work/sys/proc/sched.c"
-    touch "$work/sys/usb/stamp.c" "$work/sys/proc/sched.c"
-}
-
-# Restore once the sources are saved, then remove the work directory, unless
-# the test failed after printing its path, which sets `keep`; a signal clears
-# `keep`.
-cleanup()
-{
-    exit_status=$?
-    if [ -n "$work" ] && [ -f "$work/sched.saved" ]; then
-        restore
     fi
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
         rm -rf ${work:+"$work"}
@@ -97,79 +39,65 @@ trap cleanup EXIT
 trap 'keep=; exit 129' HUP
 trap 'keep=; exit 130' INT
 trap 'keep=; exit 143' TERM
-work=$(mktemp -d "$repo/build/tests/usb-latency-proof.XXXXXX")
-cp -R rach2/sys "$work/sys"
-cp "$work/sys/usb/stamp.c" "$work/stamp.saved"
-cp "$work/sys/proc/sched.c" "$work/sched.saved"
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-usb-latency-test.XXXXXX")
 
-# run_phase PHASE EXPECTED: build the host test from the private sources and
-# run it, which must exit with EXPECTED, then run it in each mode and judge
-# each record with the checker.
-run_phase()
+fails=0
+# bad TEXT: report a failed row and count it in `fails`.
+bad()
 {
-    phase=$1
-    expected=$2
+    echo "usb-latency-test: fail: $1" >&2
+    fails=$((fails + 1))
+}
+
+if [ -n "${USBSTAMP_TEST:-}" ]; then
+    cp "$USBSTAMP_TEST" "$work/test"
+else
     "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
         -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$work/sys" -I "$work/sys/lib" -I "$work/sys/proc" \
-        tests/host/usbstamp_hosttest.c -o "$work/test" >"$work/$phase.build.log" 2>&1 || {
-            cat "$work/$phase.build.log" >&2; exit 1;
+        -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
+        tests/host/usbstamp_hosttest.c -o "$work/test" >"$work/build.log" 2>&1 || {
+            cat "$work/build.log" >&2; exit 1;
         }
-    cp "$work/test" "$work/$phase.binary"
-    cksum "$work/sys/usb/stamp.c" "$work/sys/proc/sched.c" "$work/test" \
-        >"$work/$phase.cksum"
-    "$work/test" >"$work/$phase.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    child=
-    cat "$work/$phase.log"
-    [ "$status" -eq "$expected" ] || exit 1
-    for mode in spin timer random pump work undispatched; do
-        status=0
-        "$work/test" "$mode" >"$work/$phase.$mode.log" 2>&1 &
-        child=$!
-        wait "$child" || status=$?
-        child=
-        if [ "$expected" -eq 0 ]; then
-            [ "$status" -eq 0 ] || exit 1
-        fi
-        want=$expected
-        case $mode in pump|work|undispatched) want=1 ;; esac
-        random=0
-        case $mode in random|work) random=1 ;; esac
-        status=0
-        awk -v random="$random" -f tests/system/checkers/usblatency.awk \
-            "$work/$phase.$mode.log" || status=$?
-        [ "$status" -eq "$want" ] || {
-            echo "usb-latency-test: wrong checker verdict: $phase $mode" >&2
-            cat "$work/$phase.$mode.log" >&2
-            exit 1
-        }
-    done
-    echo "usb-latency-test: result: $phase matched expected status $expected"
-}
+fi
 
 echo "usb-latency-test: logs: $work"
 keep=1
-run_phase fixed 0
-if [ "${1:-}" = --mutate ]; then
-    for fault in cutoff dispatch; do
-        apply_fault "$work/sys" "$fault"
-        run_phase "$fault-mutated" 1
-        if cmp -s "$work/fixed.binary" "$work/$fault-mutated.binary"; then
-            echo "usb-latency-test: mutation did not change the binary" >&2; exit 1
-        fi
-        restore
-        run_phase "$fault-restored" 0
-        cmp "$work/stamp.saved" "$work/sys/usb/stamp.c"
-        cmp "$work/sched.saved" "$work/sys/proc/sched.c"
-    done
-fi
 
-sed 's/ tracked 1,/ tracked x,/' "$work/fixed.spin.log" >"$work/malformed.log"
-sed 's/ dispatch 1,/ dispatch 1, dispatch 1,/' "$work/fixed.spin.log" >"$work/duplicate.log"
-sed 's/ pumps 0,//' "$work/fixed.spin.log" >"$work/missing.log"
+# Run the host test, which must exit 0, then run it in each mode and judge
+# each record with the checker.
+status=0
+"$work/test" >"$work/test.log" 2>&1 &
+child=$!
+wait "$child" || status=$?
+child=
+cat "$work/test.log"
+[ "$status" -eq 0 ] || bad "the host test exits $status"
+for mode in spin timer random pump work undispatched; do
+    status=0
+    "$work/test" "$mode" >"$work/$mode.log" 2>&1 &
+    child=$!
+    wait "$child" || status=$?
+    child=
+    [ "$status" -eq 0 ] || bad "$mode: the host test exits $status"
+    want=0
+    case $mode in pump|work|undispatched) want=1 ;; esac
+    random=0
+    case $mode in random|work) random=1 ;; esac
+    status=0
+    awk -v random="$random" -f tests/system/checkers/usblatency.awk \
+        "$work/$mode.log" || status=$?
+    [ "$status" -eq "$want" ] || {
+        verdict=accepts
+        [ "$status" -eq 0 ] || verdict=refuses
+        bad "verdict: $mode: the checker $verdict the record"
+        cat "$work/$mode.log" >&2
+    }
+done
+[ "$fails" -eq 0 ] || exit 1
+
+sed 's/ tracked 1,/ tracked x,/' "$work/spin.log" >"$work/malformed.log"
+sed 's/ dispatch 1,/ dispatch 1, dispatch 1,/' "$work/spin.log" >"$work/duplicate.log"
+sed 's/ pumps 0,//' "$work/spin.log" >"$work/missing.log"
 : >"$work/empty.log"
 for kind in malformed duplicate missing empty; do
     if awk -f tests/system/checkers/usblatency.awk "$work/$kind.log"; then

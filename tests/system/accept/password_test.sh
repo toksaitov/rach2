@@ -1,20 +1,18 @@
 #!/bin/sh
 # password_test.sh: check that su_command.sh answers the password prompt
 # without the password reaching any transcript, against fixtures/pty_secret.c
-# in place of ssh, with a dummy password, real pseudo-terminals and private
-# builds of runner/ptydrive.c, in seven cases of prompt and echo.
+# in place of ssh, with a dummy password, real pseudo-terminals and a private
+# build of runner/ptydrive.c, in seven cases of prompt and echo.
 #
-# With --mutate, three faults compiled into the driver must each be caught:
-# a second prompt answered, the password written raw, and a wrong count of
-# prompts. --texts checks that the text each fault replaces is once in
-# ptydrive.c.
+# PTYDRIVE names a driver built elsewhere to use in place of the private
+# build; tests/proofs/password.json runs the cases with drivers that have
+# faults compiled into them.
 set -eu
 
+[ "$#" -eq 0 ] || { echo 'accept-password: usage: password_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" accept-password "$repo/tests/system/accept/password_test.sh" "$@"
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" accept-password "$repo/tests/system/accept/password_test.sh" "$@"
 work=
 child=
 
@@ -35,48 +33,6 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-password-test.XXXXXX")
 mkdir -p "$work/tests/system/accept" "$work/build/tests/system" "$work/bin" "$work/tmp"
 cp "$repo/tests/system/accept/su_command.sh" "$work/tests/system/accept/"
-cp "$repo/tests/system/runner/ptydrive.c" "$work/original.c"
-cp "$work/original.c" "$work/ptydrive.c"
-
-# password_edit MUTATION: $work/ptydrive.c is the saved driver with MUTATION in
-# it, and `diagnostic` the words its failing case prints; fail when the edit
-# changes nothing, since its text has left the driver.
-password_edit()
-{
-    case "$1" in
-        repeat)
-            sed 's/if (asked > 1)/if (asked > 100)/' "$work/original.c" > "$work/ptydrive.c"
-            diagnostic='the second prompt was answered'
-            ;;
-        redact)
-            awk '
-                /static void secret_byte/ { function_seen = 1 }
-                { print }
-                function_seen && /^\{/ {
-                    print "    putchar(byte); return;"
-                    function_seen = 0
-                }
-            ' "$work/original.c" > "$work/ptydrive.c"
-            diagnostic='credential bytes reached raw'
-            ;;
-        count)
-            sed 's/asked, answered);/(asked != 0), answered);/' "$work/original.c" > "$work/ptydrive.c"
-            diagnostic='prompt or answer count is wrong'
-            ;;
-    esac
-    if cmp -s "$work/original.c" "$work/ptydrive.c"; then
-        echo "accept-password: the $1 fault is not in ptydrive.c" >&2
-        exit 1
-    fi
-}
-
-if [ "${1:-}" = --texts ]; then
-    for mutation in repeat redact count; do
-        password_edit "$mutation"
-    done
-    echo 'accept-password: texts: every fault is once in its source'
-    exit 0
-fi
 
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/bin/ssh" \
     "$repo/tests/system/fixtures/pty_secret.c"
@@ -120,13 +76,12 @@ RACH2_ACCEPT_PASSWORD=Q7pL9xZ2mK4vT8sN
 export PATH TMPDIR RACH2_ACCEPT_PASSWORD
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 
-
-# Build the private driver for $phase.
-compile()
-{
-    "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/ptydrive" "$work/ptydrive.c"
-    cp "$work/build/tests/system/ptydrive" "$work/$phase.ptydrive"
-}
+if [ -n "${PTYDRIVE:-}" ]; then
+    cp "$PTYDRIVE" "$work/build/tests/system/ptydrive"
+else
+    "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/ptydrive" \
+        "$repo/tests/system/runner/ptydrive.c"
+fi
 
 # check CASE STATUS COMMAND [OUTPUT]: run su_command.sh over the fixture's
 # CASE with COMMAND, and require STATUS, no byte of the password in any
@@ -204,31 +159,5 @@ cases()
 }
 
 phase=fixed
-compile
 cases
-case "${1:-}" in
-    '') ;;
-    --mutate)
-        for mutation in repeat redact count; do
-            password_edit "$mutation"
-            phase=$mutation
-            compile
-            if cases > "$work/$mutation.log" 2>&1; then
-                echo "accept-password: the $mutation mutation was not detected" >&2
-                exit 1
-            fi
-            grep -Fq "$diagnostic" "$work/$mutation.log" || {
-                echo "accept-password: the $mutation mutation failed for another reason" >&2
-                exit 1
-            }
-            echo "accept-password: mutation: $mutation detected"
-            cp "$work/original.c" "$work/ptydrive.c"
-            phase=restored-$mutation
-            compile
-            cmp -s "$work/fixed.ptydrive" "$work/$phase.ptydrive"
-            cases
-        done
-        ;;
-    *) echo 'accept-password: usage: [--mutate | --texts]' >&2; exit 2 ;;
-esac
 echo "accept-password: logs: $work"
