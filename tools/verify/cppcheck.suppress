@@ -245,6 +245,10 @@ unusedStructMember:*tools/etude/include/etude/processor.h
 # members are read in compare.c, baseline.c, compare_report.c and compare_run.c.
 unusedStructMember:*tools/etude/compare.h
 
+# The budget's structures: cppcheck checks budget.h alone, and its members
+# are read in budget.c, budget_run.c and their host test.
+unusedStructMember:*tools/etude/budget.h
+
 # The Windows adapter's structures are filled by winexec.c and read by
 # winfixture.c, which cppcheck reads without the Windows headers they need;
 # checked alone, the header has no reader of its members.

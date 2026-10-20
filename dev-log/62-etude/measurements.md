@@ -142,7 +142,7 @@ The following examples require semantic checks after schema validation:
 | ci plan with a first-run exemption | Schema rejects the plan |
 | `pass` with unconfirmed cleanup, or a null metric without a reason | Schema rejects the record |
 
-Schema validation must enable date-time format checking. It cannot prove hash contents, references, unique assertion coverage, arithmetic, statistical eligibility or exemption membership. T05 defines execution records and manifest details against this contract; [The history store](../../tools/etude/Readme.md#the-history-store) implements writing and collection, including schema and local interval checks. Consumers validate references, inventories and aggregate outcomes after reading all streams. [The comparison](../../tools/etude/Readme.md#the-comparison) implements the comparisons of the same site, and T58 implements budget checking. Their tests must exercise both the shape errors and these semantic refusals.
+Schema validation must enable date-time format checking. It cannot prove hash contents, references, unique assertion coverage, arithmetic, statistical eligibility or exemption membership. T05 defines execution records and manifest details against this contract; [The history store](../../tools/etude/Readme.md#the-history-store) implements writing and collection, including schema and local interval checks. Consumers validate references, inventories and aggregate outcomes after reading all streams. [The comparison](../../tools/etude/Readme.md#the-comparison) implements the comparisons of the same site, and [Budget checks](../../tools/etude/Readme.md#budget-checks) implements budget checking. Their tests must exercise both the shape errors and these semantic refusals.
 
 ## Retention
 

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "policy": "budget-v1",
+  "site": {
+    "machine_id": "example-linux",
+    "os": "linux",
+    "accelerator": "kvm",
+    "capacity": {
+      "cpu_millis": 16000,
+      "memory_bytes": 68719476736,
+      "disk_bytes": 536870912000
+    }
+  },
+  "classes": {
+    "push": {"goal_us": 300000000, "growth_us": 0, "ceiling_us": 300000000, "cleanup_reserve_us": 30000000},
+    "ci": {"goal_us": 600000000, "growth_us": 0, "ceiling_us": 600000000, "cleanup_reserve_us": 60000000},
+    "release": {"goal_us": 3600000000, "growth_us": 3600000000, "ceiling_us": 14400000000, "cleanup_reserve_us": 600000000},
+    "focused": {"goal_us": 3600000000, "growth_us": 3600000000, "ceiling_us": 14400000000, "cleanup_reserve_us": 600000000},
+    "phase_first_run": {"goal_us": 3600000000, "growth_us": 3600000000, "ceiling_us": 14400000000, "cleanup_reserve_us": 600000000}
+  },
+  "one_time_setup": ["setup.prerequisites", "setup.cross-toolchain"]
+}

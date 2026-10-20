@@ -34,6 +34,17 @@ ETUDE_HISTORY_LINES_SRC = tools/etude/history_lines.c tools/etude/lines.c \
                           tools/etude/history.c tools/etude/history_json.c \
                           tools/etude/history_collect.c utils/sha256.c
 
+# history_budget, the forecast and the check of a run's budget. The cost of a
+# case takes its processor reservation from the schedule, which links the
+# ledger.
+ETUDE_HISTORY_BUDGET_SRC = tools/etude/history_budget.c tools/etude/budget.c \
+                           tools/etude/budget_run.c tools/etude/digest.c \
+                           tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c \
+                           tools/etude/posix/process.c tools/etude/compare.c \
+                           tools/etude/compare_report.c tools/etude/history.c \
+                           tools/etude/history_json.c tools/etude/history_collect.c \
+                           tools/etude/json.c tools/etude/schema.c utils/sha256.c
+
 # etude-remote, the responder of remote execution on Linux and macOS.
 ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
                    tools/etude/posix/exec.c tools/etude/posix/keeper.c \

@@ -273,6 +273,7 @@ validate() {
             "$CASECHECK" -s "$SCHEMAS" schema reproduce "$ex/reproduce.example.json" || status=$?
             "$CASECHECK" -s "$SCHEMAS" schema repeat "$ex/repeat.example.json" || status=$?
             "$CASECHECK" -s "$SCHEMAS" schema proof "$ex/proof.example.json" || status=$?
+            "$CASECHECK" -s "$SCHEMAS" schema budget "$ex/budget.example.json" || status=$?
             "$CASECHECK" -s "$SCHEMAS" schema history "$ex/history.example.jsonl" \
                 "$ex/history.incomplete.example.jsonl" || status=$?
         fi

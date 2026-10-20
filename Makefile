@@ -477,6 +477,16 @@ $(ETUDELINES): $(ETUDE_HISTORY_LINES_SRC) tools/etude/lines.h tools/etude/histor
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99
 
+# The forecast and the check of a run's budget (tools/etude/budget.c).
+ETUDEBUDGET = build/tools/etude/history_budget
+$(ETUDEBUDGET): $(ETUDE_HISTORY_BUDGET_SRC) tools/etude/budget.h tools/etude/compare.h \
+                tools/etude/cost.h tools/etude/digest.h tools/etude/history_json.h \
+                tools/etude/json.h tools/etude/schema.h tools/etude/include/etude/sched.h \
+                tools/etude/include/etude/ledger.h tools/etude/include/etude/history.h \
+                utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude -Itools/etude/include -Iutils
+
 # etude's responder of remote execution (tools/etude/posix/etude_remote.c),
 # built here so that `make` compiles it under the host flags.
 ETUDEREMOTE = build/tools/etude/etude-remote
@@ -1261,9 +1271,9 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEREMOTE) \
-             $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) $(ETUDELEDGER) \
-             $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY)
+             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
+             $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
+             $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
