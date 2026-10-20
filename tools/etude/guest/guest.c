@@ -51,6 +51,12 @@
  * when its grace period is shorter. */
 #define DRAIN_US 2000000
 
+/* The methods of usage's measurements: the processor time and the largest
+ * resident size that wait4 gives for the child and the descendants it
+ * reaped, each a lower bound of the attempt's. */
+#define METHOD_CPU  "wait-reaped-descendants-v1"
+#define METHOD_PEAK "posix-maxrss-v1"
+
 enum state { ST_PREPARING, ST_RUNNING, ST_ENDED, ST_CLEANED };
 static const char *const state_name[] = {"preparing", "running", "ended", "cleaned"};
 
@@ -72,9 +78,11 @@ struct attempt {
     char dir[PATH_CAP]; /* STATE/a/TOKEN */
     pid_t pid;          /* the child, the leader of its own session and group */
     unsigned long long start;
-    int fd[3];                 /* the read ends of the child's 1 and 2, or -1 */
-    unsigned long long off[3]; /* the bytes of each kept so far */
-    unsigned long long kept;   /* of both */
+    int fd[3];                   /* the read ends of the child's 1 and 2, or -1 */
+    unsigned long long off[3];   /* the bytes of each kept and sent so far */
+    unsigned long long total[3]; /* the bytes of each read, kept or not */
+    struct sha256 sent[3];       /* of the bytes of each sent */
+    unsigned long long kept;     /* of both */
     unsigned long long keep_max;
     char line[256]; /* the child's standard output since its last newline */
     size_t line_len;
@@ -1359,6 +1367,7 @@ static void read_output(struct attempt *a, int fdn)
         a->fd[fdn] = -1;
         return;
     }
+    a->total[fdn] += (unsigned long long)r;
     if (fdn == 1)
         scan_output(a, (char *)buf, (size_t)r);
     if (a->kept >= a->keep_max)
@@ -1380,6 +1389,7 @@ static void read_output(struct attempt *a, int fdn)
         wire_base64(buf + i, m, line + k);
         send_line(line);
     }
+    sha256_update(&a->sent[fdn], buf, (size_t)r);
     a->off[fdn] += (unsigned long long)r;
     a->kept += (unsigned long long)r;
 }
@@ -1540,30 +1550,58 @@ static void drop_attempt(struct attempt *a)
     free(a);
 }
 
+/** Write in `out` the fields of stream `fdn` (1 or 2) for `exit`: the bytes
+ * sent, the bytes read and the SHA-256 of those sent. */
+static void stream_fields(char *out, size_t cap, struct attempt *a, int fdn)
+{
+    unsigned char d[32];
+    char hex[65];
+
+    sha256_final(&a->sent[fdn], d);
+    sha256_hex(d, hex);
+    snprintf(out, cap, "%llu %llu %s", a->off[fdn], a->total[fdn], hex);
+}
+
 /**
  * Send and record an attempt's final events once its child has ended and
- * its pipes are closed, or its time to close them has passed: how it ended,
- * the processor time of the child and the descendants it reaped, and
- * whether every process of the attempt is gone.
+ * its pipes are closed, or its time to close them has passed: how it ended
+ * with the sizes and digests of its output, the processor time and peak
+ * memory of the child and the descendants it reaped, and whether every
+ * process of the attempt is gone.
  */
 static void finish(struct attempt *a)
 {
     char line[3][LINE_CAP];
     char finals[3 * LINE_CAP + 4];
+    char end[24];
+    char out[2][128];
+    char peak[64];
+    long long cpu;
+    long long rss = (long long)a->ru.ru_maxrss;
     int clean = attempt_gone(a);
     int i;
 
     if (a->stopped)
-        snprintf(line[0], LINE_CAP, "%s %s %s stopped -", ETUDE_EV_EXIT, a->cmd, a->token);
+        snprintf(end, sizeof(end), "stopped -");
     else if (WIFSIGNALED(a->status))
-        snprintf(line[0], LINE_CAP, "%s %s %s signaled %d", ETUDE_EV_EXIT, a->cmd, a->token,
-                 WTERMSIG(a->status));
+        snprintf(end, sizeof(end), "signaled %d", WTERMSIG(a->status));
     else
-        snprintf(line[0], LINE_CAP, "%s %s %s exited %d", ETUDE_EV_EXIT, a->cmd, a->token,
-                 WEXITSTATUS(a->status));
-    snprintf(line[1], LINE_CAP, "%s %s %s %lld -", ETUDE_EV_USAGE, a->cmd, a->token,
-             (long long)a->ru.ru_utime.tv_sec * 1000000 + a->ru.ru_utime.tv_usec +
-                 (long long)a->ru.ru_stime.tv_sec * 1000000 + a->ru.ru_stime.tv_usec);
+        snprintf(end, sizeof(end), "exited %d", WEXITSTATUS(a->status));
+    stream_fields(out[0], sizeof(out[0]), a, 1);
+    stream_fields(out[1], sizeof(out[1]), a, 2);
+    snprintf(line[0], LINE_CAP, "%s %s %s %s %s %s", ETUDE_EV_EXIT, a->cmd, a->token, end, out[0],
+             out[1]);
+    cpu = (long long)a->ru.ru_utime.tv_sec * 1000000 + a->ru.ru_utime.tv_usec +
+          (long long)a->ru.ru_stime.tv_sec * 1000000 + a->ru.ru_stime.tv_usec;
+#if !defined(__APPLE__)
+    rss *= 1024; /* ru_maxrss is in kilobytes, and in bytes on macOS */
+#endif
+    if (rss > 0)
+        snprintf(peak, sizeof(peak), "%lld+ %s", rss, METHOD_PEAK);
+    else
+        snprintf(peak, sizeof(peak), "- -");
+    snprintf(line[1], LINE_CAP, "%s %s %s %lld+ %s %s", ETUDE_EV_USAGE, a->cmd, a->token, cpu,
+             METHOD_CPU, peak);
     snprintf(line[2], LINE_CAP, "%s %s %s %s", ETUDE_EV_CLEANED, a->cmd, a->token,
              clean ? "confirmed" : "unconfirmed");
     snprintf(finals, sizeof(finals), "%s\n%s\n%s\n", line[0], line[1], line[2]);
@@ -1649,6 +1687,8 @@ static void do_run(const struct wire_frame *f, const char *text)
         snprintf(a->token, sizeof(a->token), "%s", f->field[1]);
         snprintf(a->cmd, sizeof(a->cmd), "%s", cmd);
         a->fd[1] = a->fd[2] = -1;
+        sha256_init(&a->sent[1]);
+        sha256_init(&a->sent[2]);
         a->keep_max = (unsigned long long)inv.output_max;
         a->grace_us = inv.grace_us;
         if (path_of(a->dir, "%s/a/%s", opt.state, a->token) < 0)
@@ -1819,7 +1859,7 @@ static void do_cancel(const struct wire_frame *f, const char *text)
  * Settle the record of an attempt whose owner is gone without writing its
  * end, as when an etude-guest was killed: its child, when it is still the
  * process the record names, is killed with its group, and the attempt is
- * recorded as stopped.
+ * recorded as lost, since neither its end nor its output's sizes were seen.
  */
 static void settle_orphan(const char *token, char *record)
 {
@@ -1845,7 +1885,7 @@ static void settle_orphan(const char *token, char *record)
     if (child > 0 && same_process((pid_t)child, child_start))
         kill(-(pid_t)child, SIGKILL);
     gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);
-    snprintf(finals, sizeof(finals), "%s %s %s stopped -\n%s %s %s - -\n%s %s %s %s\n",
+    snprintf(finals, sizeof(finals), "%s %s %s lost - - - - - - -\n%s %s %s - - - -\n%s %s %s %s\n",
              ETUDE_EV_EXIT, cmd, token, ETUDE_EV_USAGE, cmd, token, ETUDE_EV_CLEANED, cmd, token,
              gone ? "confirmed" : "unconfirmed");
     snprintf(text, sizeof(text), "cmd %s\nsession %s\nowner %ld %llu\nchild %ld %llu\nstate %s\n%s",
@@ -1854,7 +1894,7 @@ static void settle_orphan(const char *token, char *record)
     if (path_of(path, "%s/a/%s/record", opt.state, token) == 0)
         write_file(path, text, strlen(text));
     snprintf(record, 4096, "%s", text);
-    note("attempt %s: its etude-guest was gone; recorded as stopped", token);
+    note("attempt %s: its etude-guest was gone; recorded as lost", token);
 }
 
 /** status CMD ATTEMPT: the attempt's state, and its final events again. */

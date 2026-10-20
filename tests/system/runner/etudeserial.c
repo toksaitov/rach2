@@ -16,7 +16,8 @@
  *   1. hello and ready, with the serial frame bound of 255 bytes;
  *   2. /hello and /ish stored from the image without a transfer, and `yes`
  *      transferred in data frames and checked by its digest on Rach2;
- *   3. a pass: hello's output and its exit status 0;
+ *   3. a pass: hello's output and its exit status 0, with the size and
+ *      digest of that output, and its usage, each value with its method;
  *   4. the same run command again, answered by the same events, and its
  *      number with other fields refused;
  *   5. an intended failure: `ish -c 'exit 3'` exits 3;
@@ -377,6 +378,18 @@ static int file_digest(const char *path, long *size, char hex[65])
     return 0;
 }
 
+/** The SHA-256 of `n` bytes at `p`, in hexadecimal. */
+static void digest(const void *p, size_t n, char hex[65])
+{
+    unsigned char d[32];
+    struct sha256 s;
+
+    sha256_init(&s);
+    sha256_update(&s, p, n);
+    sha256_final(&s, d);
+    sha256_hex(d, hex);
+}
+
 /** The next command number, as text in `out`. */
 static const char *new_cmd(char out[24])
 {
@@ -500,7 +513,20 @@ struct ending {
     char kind[16];
     char value[16];
     char cleaned[16];
+    int sizes_ok; /* exit gives the size and digest of the output that came */
+    int usage_ok; /* usage gives each value, or -, with a method */
 };
+
+/** Whether `value` and `method` are a measurement of `usage`: a number, a
+ * number and `+`, or `-`, and a method or `-`. */
+static int measure_ok(const char *value, const char *method)
+{
+    size_t n = strspn(value, "0123456789");
+
+    return (strcmp(value, "-") == 0 ||
+            (n > 0 && (value[n] == '\0' || strcmp(value + n, "+") == 0))) &&
+           method[0] != '\0';
+}
 
 /** Read an attempt's events after started until cleaned; 0 or -1. The
  * output of descriptor 1 is kept. */
@@ -531,8 +557,15 @@ static int collect(const char *what, const char *cmd, struct ending *r)
                 r->out[off + (size_t)n] = '\0';
             }
         } else if (strcmp(e->type, ETUDE_EV_EXIT) == 0) {
+            char hex[65];
             snprintf(r->kind, sizeof(r->kind), "%.15s", e->field[2]);
             snprintf(r->value, sizeof(r->value), "%.15s", e->field[3]);
+            digest(r->out, strlen(r->out), hex);
+            r->sizes_ok = e->nfields == 10 && strtoul(e->field[4], NULL, 10) == strlen(r->out) &&
+                          strcmp(e->field[6], hex) == 0;
+        } else if (strcmp(e->type, ETUDE_EV_USAGE) == 0) {
+            r->usage_ok = e->nfields == 6 && measure_ok(e->field[2], e->field[3]) &&
+                          measure_ok(e->field[4], e->field[5]);
         } else if (strcmp(e->type, ETUDE_EV_CLEANED) == 0) {
             snprintf(r->cleaned, sizeof(r->cleaned), "%.15s", e->field[2]);
             free(e);
@@ -664,6 +697,8 @@ static void step_pass(void)
                strcmp(r.value, "0") == 0 && strcmp(r.cleaned, "confirmed") == 0,
            "a pass reports its output and exit status 0", "%s %s %s, output %s", r.kind, r.value,
            r.cleaned, r.out);
+    report(r.sizes_ok, "a pass's exit gives the size and digest of its output", "output %s", r.out);
+    report(r.usage_ok, "a pass's usage gives each value with its method", "");
     memset(&again, 0, sizeof(again));
     if (send_frame(30, ETUDE_CMD_RUN, c, "00000000000000a1", inv, (char *)NULL) == 0 &&
         collect("a repeated run", c, &again) == 0)

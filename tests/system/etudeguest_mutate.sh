@@ -31,8 +31,8 @@ source = path.read_text()
 faults = {
     'repeat': ('    if (read_file(path, buf, sizeof(buf)) < 0) {\n        char line0',
                '    if (1) {\n        char line0'),
-    'stopped': ('    if (a->stopped)\n        snprintf(line[0]',
-                '    if (0)\n        snprintf(line[0]'),
+    'stopped': ('    if (a->stopped)\n        snprintf(end,',
+                '    if (0)\n        snprintf(end,'),
     'exec': ('    execve(exec_next.prog, exec_next.argv, exec_next.envp);\n    _exit(127);',
              '    if (fork() == 0)\n        execve(exec_next.prog, exec_next.argv, exec_next.envp);\n'
              '    _exit(0);'),

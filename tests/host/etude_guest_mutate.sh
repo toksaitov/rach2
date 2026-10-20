@@ -1,8 +1,10 @@
 #!/bin/sh
 # Prove etude_guest_hosttest.c with faults in private copies of etude-guest:
 # a repeated command run again, a cancellation reported as a signal, an
-# acknowledgement that releases nothing, and an exec that runs the program as
-# a child. Each must fail the test, and the restored copy must pass it.
+# acknowledgement that releases nothing, an exec that runs the program as a
+# child, an output digest that misses the bytes sent, a stream's total that
+# misses the bytes not kept, and an orphaned attempt settled as stopped. Each
+# must fail the test, and the restored copy must pass it.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -19,13 +21,16 @@ source = path.read_text()
 faults = {
     'repeat': ('    if (read_file(path, buf, sizeof(buf)) < 0) {\n        char line0',
                '    if (1) {\n        char line0'),
-    'stopped': ('    if (a->stopped)\n        snprintf(line[0]',
-                '    if (0)\n        snprintf(line[0]'),
+    'stopped': ('    if (a->stopped)\n        snprintf(end,',
+                '    if (0)\n        snprintf(end,'),
     'ack': ('    while (queue_head && queue_head->sequenced && queue_head->seq <= ack &&',
             '    while (0 && queue_head && queue_head->sequenced && queue_head->seq <= ack &&'),
     'exec': ('    execve(exec_next.prog, exec_next.argv, exec_next.envp);\n    _exit(127);',
              '    if (fork() == 0)\n        execve(exec_next.prog, exec_next.argv, exec_next.envp);\n'
              '    _exit(0);'),
+    'digest': ('    sha256_update(&a->sent[fdn], buf, (size_t)r);\n', ''),
+    'total': ('    a->total[fdn] += (unsigned long long)r;\n', ''),
+    'orphan': ('"%s %s %s lost - - - - - - -\\n', '"%s %s %s stopped - - - - - - -\\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -38,7 +43,7 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in repeat stopped ack exec; do
+    for fault in repeat stopped ack exec digest total orphan; do
         apply_fault tools/etude/guest/guest.c "$fault"
     done
     echo 'etude-guest-mutation: texts: every fault found once'
@@ -109,5 +114,8 @@ fault repeat 'a repeated run is answered by the same events'
 fault stopped 'a cancelled attempt is stopped and cleaned'
 fault ack 'an acknowledged frame is not sent again'
 fault exec "the program's exit is the process's"
+fault digest 'the exit gives the sizes and digests of the output sent'
+fault total 'the exit gives the bytes each stream carried beyond those sent'
+fault orphan "an orphaned attempt's end is lost"
 cp tools/etude/guest/guest.c "$work/guest.c"
 run_phase restored 0

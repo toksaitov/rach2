@@ -335,6 +335,9 @@ static void put_file(const char *name, const char *text, size_t n, const char *m
           "a sealed put is stored with its digest");
 }
 
+/* The most output the invocations of put_case keep. */
+static long case_keep = 65536;
+
 /** Store a shell script as `name` and an invocation of it for the attempt
  * `token`; the invocation's digest goes to `inv`. */
 static void put_case(const char *name, const char *script, const char *token, const char *role,
@@ -355,8 +358,8 @@ static void put_case(const char *name, const char *script, const char *token, co
         "\"MARKS\": \"%s/marks\"}, \"stdin\": null, \"role\": \"%s\", "
         "\"files\": [{\"name\": \"%s\", \"sha256\": \"%s\", \"size_bytes\": %zu, "
         "\"mode\": \"0755\"}], \"fixtures\": [{\"fixture\": \"workspace\", \"given\": []}], "
-        "\"deadline_us\": %ld, \"grace_us\": 500000, \"output_max_bytes\": 65536}",
-        token, token, name, work, role, name, hex, strlen(script), deadline_ms * 1000);
+        "\"deadline_us\": %ld, \"grace_us\": 500000, \"output_max_bytes\": %ld}",
+        token, token, name, work, role, name, hex, strlen(script), deadline_ms * 1000, case_keep);
     put_file("invocation.json", text, (size_t)n, "0644", inv, c);
 }
 
@@ -367,9 +370,37 @@ struct ending {
     char kind[16];
     char value[16];
     char cleaned[16];
+    char total[2][24]; /* the bytes each stream carried, as exit gives them */
+    char cpu[24];
+    char cpu_method[64];
+    char peak[24];
+    int sizes_ok; /* exit's sizes and digests are those of the output that came */
     long pid;
     int events;
 };
+
+/** Whether the fields of one stream in `exit`, from `field`, give the size
+ * and digest of `text`, and a total no smaller than the size. */
+static int stream_agrees(char field[][8192], const char *text)
+{
+    char hex[65];
+
+    digest(text, strlen(text), hex);
+    return strtoull(field[0], NULL, 10) == strlen(text) && strcmp(field[2], hex) == 0 &&
+           strspn(field[1], "0123456789") == strlen(field[1]) &&
+           strtoull(field[1], NULL, 10) >= strlen(text);
+}
+
+/** Whether the `n` fields from `field` are each "-". */
+static int unknown(char field[][8192], int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++)
+        if (strcmp(field[i], "-") != 0)
+            return 0;
+    return 1;
+}
 
 /** Read an attempt's frames, from started to cleaned, into `e`; 0 or -1. */
 static int collect(struct ending *e, const char *c, const char *token, int ms)
@@ -400,6 +431,14 @@ static int collect(struct ending *e, const char *c, const char *token, int ms)
         } else if (strcmp(g.type, ETUDE_EV_EXIT) == 0) {
             snprintf(e->kind, sizeof(e->kind), "%.15s", g.field[2]);
             snprintf(e->value, sizeof(e->value), "%.15s", g.field[3]);
+            e->sizes_ok = g.nfields == 10 && stream_agrees(g.field + 4, e->out) &&
+                          stream_agrees(g.field + 7, e->err);
+            snprintf(e->total[0], sizeof(e->total[0]), "%.23s", g.field[5]);
+            snprintf(e->total[1], sizeof(e->total[1]), "%.23s", g.field[8]);
+        } else if (strcmp(g.type, ETUDE_EV_USAGE) == 0 && g.nfields == 6) {
+            snprintf(e->cpu, sizeof(e->cpu), "%.23s", g.field[2]);
+            snprintf(e->cpu_method, sizeof(e->cpu_method), "%.63s", g.field[3]);
+            snprintf(e->peak, sizeof(e->peak), "%.23s", g.field[4]);
         } else if (strcmp(g.type, ETUDE_EV_CLEANED) == 0) {
             snprintf(e->cleaned, sizeof(e->cleaned), "%.15s", g.field[2]);
             return 0;
@@ -656,6 +695,49 @@ static void check_pass_fail_repeat(void)
     bye(0);
 }
 
+/** The sizes and digests of an attempt's output in its exit, first and
+ * repeated, with output past the invocation's bound, and its usage. */
+static void check_sizes(void)
+{
+    static const char both[] = "#!/bin/sh\necho out\necho err >&2\n";
+    static const char flood[] = "#!/bin/sh\nhead -c 1200 /dev/zero | tr '\\0' 0\n";
+    struct ending e;
+    struct ending again;
+    char inv[65];
+    char c[24];
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("both", both, "00000000000000f1", "ordinary", 30000, inv);
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000f1", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000f1", 10000) == 0 && strcmp(e.out, "out\n") == 0 &&
+              strcmp(e.err, "err\n") == 0 && e.sizes_ok,
+          "the exit gives the sizes and digests of the output sent");
+    CHECK(strlen(e.cpu) > 1 && e.cpu[strlen(e.cpu) - 1] == '+' &&
+              strcmp(e.cpu_method, "wait-reaped-descendants-v1") == 0 && strlen(e.peak) > 1 &&
+              e.peak[strlen(e.peak) - 1] == '+',
+          "usage gives lower bounds of the processor time and the peak, with their methods");
+    send_cmd(ETUDE_CMD_RUN, c, "00000000000000f1", inv, (char *)NULL);
+    CHECK(collect(&again, c, "00000000000000f1", 10000) == 0 && again.sizes_ok,
+          "a repeated run's exit agrees with the output it sends again");
+
+    /* Output past the bound is not sent, and the exit counts it. */
+    case_keep = 1000;
+    put_case("flooding", flood, "00000000000000f2", "ordinary", 30000, inv);
+    case_keep = 65536;
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000f2", inv, (char *)NULL);
+    CHECK(collect(&e, c, "00000000000000f2", 10000) == 0 && strlen(e.out) == 1000 &&
+              strspn(e.out, "0") == 1000 && e.err[0] == '\0' && e.sizes_ok &&
+              strcmp(e.total[0], "1200") == 0 && strcmp(e.total[1], "0") == 0,
+          "the exit gives the bytes each stream carried beyond those sent");
+    bye(0);
+}
+
+/* A program that ignores SIGTERM and says when it is ready. */
+static const char ignore[] = "#!/bin/sh\ntrap '' TERM\nexec 9> \"$MARKS.open\"\n"
+                             "echo $$ > \"$MARKS.leader\"\n"
+                             "echo ready\nwhile :; do sleep 1; done\n";
+
 /** A cancellation, a deadline, a child that left its group and a lost
  * connection: each ends the attempt as stopped and leaves no process. */
 static void check_interruptions(void)
@@ -665,9 +747,6 @@ static void check_interruptions(void)
                                "sleep 60 &\necho $! > \"$MARKS.member\"\n"
                                "setsid sleep 60 &\necho \"@etude 1 child $!\"\n"
                                "echo $! > \"$MARKS.escaped\"\necho ready\nwait\n";
-    static const char ignore[] = "#!/bin/sh\ntrap '' TERM\nexec 9> \"$MARKS.open\"\n"
-                                 "echo $$ > \"$MARKS.leader\"\n"
-                                 "echo ready\nwhile :; do sleep 1; done\n";
     struct ending e;
     struct got g;
     char inv[65];
@@ -742,8 +821,40 @@ static void check_interruptions(void)
      * record and starts nothing. */
     send_cmd(ETUDE_CMD_RUN, c, "00000000000000d3", inv, (char *)NULL);
     CHECK(collect(&e, c, "00000000000000d3", 5000) == 0 && strcmp(e.kind, "stopped") == 0 &&
-              e.pid == leader,
+              e.pid == leader && e.sizes_ok,
           "a run repeated after the connection was lost replays its events");
+    bye(0);
+}
+
+/** A killed etude-guest records no end: the next one kills the attempt and
+ * settles it as lost, its sizes and usage unknown. */
+static void check_orphan(void)
+{
+    struct got g;
+    char inv[65];
+    char c[24];
+    char c2[24];
+    int open_end;
+
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    put_case("stubborn2", ignore, "00000000000000d4", "ordinary", 60000, inv);
+    open_end = watch("marks.open");
+    send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d4", inv, (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STARTED, 5000) == 0, "the attempt of a guest to be killed starts");
+    CHECK(wait_ready() == 0, "the attempt says it is ready");
+    end_guest();
+    start_guest("--stdio", (char *)NULL);
+    hello(ETUDE_FRAME_STDIO_MAX);
+    send_cmd(ETUDE_CMD_STATUS, new_cmd(c2), "00000000000000d4", (char *)NULL);
+    CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0, "status answers for an orphaned attempt");
+    CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && g.nfields == 10 &&
+              strcmp(g.field[2], "lost") == 0 && unknown(g.field + 3, 7),
+          "an orphaned attempt's end is lost, with its sizes unknown");
+    CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && g.nfields == 6 && unknown(g.field + 2, 4),
+          "an orphaned attempt's usage is unknown");
+    CHECK(expect(&g, ETUDE_EV_CLEANED, 5000) == 0, "and its cleanup follows");
+    CHECK(all_gone(open_end, 2000), "the next etude-guest ends an orphaned attempt's processes");
     bye(0);
 }
 
@@ -872,7 +983,9 @@ int main(void)
         return 2;
     }
     check_pass_fail_repeat();
+    check_sizes();
     check_interruptions();
+    check_orphan();
     check_stdio_damage();
     check_serial();
     if (failures) {
