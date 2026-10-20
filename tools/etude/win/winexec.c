@@ -353,6 +353,9 @@ static void begin(struct etude_win_sup *s, struct etude_win_child *c,
     read_next(&c->err);
 }
 
+/* The children this process has started, whose count names their pipes. */
+static LONG started;
+
 DWORD etude_win_start(struct etude_win_sup *s, const struct etude_win_spawn *sp,
                       struct etude_win_child **out)
 {
@@ -371,7 +374,7 @@ DWORD etude_win_start(struct etude_win_sup *s, const struct etude_win_spawn *sp,
     c->job = c->process = c->out.handle = c->err.handle = INVALID_HANDLE_VALUE;
     c->output = sp->output;
     c->ctx = sp->ctx;
-    s->serial++;
+    s->serial = (unsigned long)InterlockedIncrement(&started);
     if ((err = convert(sp, &l)) != 0 || (err = make_job(s, c)) != 0 ||
         (err = make_pipe(s, c, ETUDE_WIN_STDOUT, &l.outw)) != 0 ||
         (err = make_pipe(s, c, ETUDE_WIN_STDERR, &l.errw)) != 0 ||

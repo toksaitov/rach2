@@ -108,7 +108,7 @@ struct etude_win_child {
 struct etude_win_sup {
     HANDLE port;
     struct etude_win_child *children;
-    unsigned long serial; /* names the pipes of the next child */
+    unsigned long serial; /* names the pipes of a child, once in the process */
 };
 
 /**
