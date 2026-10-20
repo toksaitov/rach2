@@ -246,7 +246,7 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests tools/etude/guest utils
 
-prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(ETUDESERIAL) $(HARNESS) \
+prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDESERIAL) $(HARNESS) \
                 $(HOSTPEER) $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(RUNUTIL) $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image \
                 os-simple-image rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
@@ -2118,9 +2118,9 @@ run-style:
 # The KRFFS stager is one because mkext2_overlay_test.sh makes its volumes
 # with tools/image/mkext2.sh, which stages each manifest with it. The kernel
 # and the test image of ARCH are because etude_qemu_hosttest boots them under
-# QEMU through etude's launcher.
-run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) build/krffs/stageimage.krffs rach2 \
-          test-image
+# QEMU through etude's launcher. etude-host runs the checks.
+run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) $(ETUDEHOST) build/krffs/stageimage.krffs \
+          rach2 test-image
 	@sh tests/system/machine_measure_test.sh
 	@ARCH=$(ARCH) ./tests/system/suites/host.sh
 

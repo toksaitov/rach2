@@ -27,6 +27,12 @@ ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
                    tools/etude/posix/process.c tools/etude/capture.c \
                    tools/etude/guest/wire.c tools/etude/json.c utils/sha256.c
 
+# etude-host, which runs the host checks of `tests/run host` at once on Linux
+# and macOS.
+ETUDE_HOST_SRC = tools/etude/posix/etude_host.c tools/etude/posix/exec.c \
+                 tools/etude/posix/keeper.c tools/etude/posix/process.c \
+                 tools/etude/capture.c
+
 # etude-load, the load fixture of shuffled and loaded repetitions on Linux
 # and macOS.
 ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c

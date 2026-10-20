@@ -17,6 +17,7 @@
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  * host-seconds: 180
+ * host-alone: the width-2 row meets two cases within a gap of 300 ms
  *
  * The generator gives splitmix64's published outputs, and a number below a
  * bound without bias. A seed gives one plan, the same each time, and the

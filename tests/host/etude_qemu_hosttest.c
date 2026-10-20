@@ -10,6 +10,7 @@
  * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-seconds: 240
+ * host-alone: a stand-in QEMU must quit within a grace of 300 ms
  *
  * The command lines of profiles, and the profiles the launcher refuses, are
  * checked as text. Thirteen stand-in machines then run at once, each with an

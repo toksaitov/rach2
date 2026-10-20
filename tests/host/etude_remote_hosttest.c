@@ -10,6 +10,7 @@
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c utils/sha256.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
+ * host-alone: a run must start and write within a deadline of 300 ms
  *
  * Speaking frames itself, the test requires the responder to refuse a hello of
  * another version; to store a file only with the size and digest its put gave;

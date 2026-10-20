@@ -1,0 +1,446 @@
+#!/bin/sh
+#
+# host_suite_test.sh: the host suite runs its checks at once, and every check
+# it selects gives a result: tests/system/suites/host.sh and etude-host, run
+# in a private tree whose tests/host has fixture tests and whose host.list
+# has fixture scripts.
+#
+# Eight tests each make a file of one name in their TMPDIR, refusing one that
+# is there, and then wait until all eight have started, so they pass only
+# when the suite runs them at once, each in a scratch directory of its own.
+# A test with an AddressSanitizer fault and one with an undefined signed
+# overflow must fail while the caller's environment tells the sanitizers to
+# exit 0 and to go on after an error, and so must a leak where LeakSanitizer
+# runs, on Linux. A test that never ends fails as hung after its
+# `host-seconds:`; a test with a missing `host-deps:` source fails and names
+# it; a failing test that left a file keeps its scratch directory and names
+# it; a test repeats its `not run:` line under its PASS; and a test finds
+# SIGINT and SIGQUIT at their defaults. Two `host-alone:` tests find no other
+# check's scratch directory beside theirs, though a test before them waits
+# up to ten seconds for one to start. Every check of the selection has one
+# result line, the last line counts them, and no scratch is left but the kept
+# directory. A selection with a name given twice is refused and runs nothing.
+#
+# With --mutate each fault below is compiled into a private etude-host, and
+# the checks must fail; the unchanged driver must then pass them again.
+# --texts finds each fault's text in tools/etude/posix/etude_host.c and runs
+# nothing.
+#
+# Usage: sh tests/system/host_suite_test.sh [--mutate | --texts]
+#
+set -u
+
+case ${1:-} in
+    '') mode=check ;;
+    --mutate) mode=mutate ;;
+    --texts) mode=texts ;;
+    *) echo 'host-suite-test: usage: host_suite_test.sh [--mutate | --texts]' >&2; exit 2 ;;
+esac
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+source=$repo/tools/etude/posix/etude_host.c
+work=
+trap '[ -z "$work" ] || rm -rf "$work"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# fault NAME FILE: write etude_host.c with fault NAME to FILE, or only check
+# that the fault's text is in the source once when FILE is empty.
+fault()
+{
+    python3 -I - "$source" "$1" "$2" <<'PY'
+import sys
+source, name, out = sys.argv[1:]
+text = open(source).read()
+faults = {
+    # Pass the caller's sanitizer settings on to the checks in place of the
+    # driver's own.
+    'sanitizer': [('"TMPDIR=", "ASAN_OPTIONS=", "UBSAN_OPTIONS=", "LSAN_OPTIONS="};', '"TMPDIR="};'),
+                  ('        r->env[k++] = (char *)sanitizer_env[i];', '        (void)sanitizer_env[i];')],
+    # Give every check the scratch root as its TMPDIR.
+    'shared': ('join(tmpdir, c->name, "")', 'join(r->scratch, "", "")'),
+    # Run the checks one at a time.
+    'serial': ('alone || running >= jobs)', 'alone || running >= 1)'),
+    # Leave the last check of the selection out.
+    'drop': ('    if (why == NULL && r->n == 0)', '    if (why == NULL && r->n > 1)\n        r->n--;\n    if (why == NULL && r->n == 0)'),
+    # Take a check's run as passed whatever its status.
+    'status': ('    int ok = !c->hung && res->end == ETUDE_END_EXITED && res->value == 0 &&', '    int ok = !c->hung && res->end == ETUDE_END_EXITED &&'),
+    # Let a check run on past its bound.
+    'bound': ('        if (stop_signal || now >= end) {', '        if (stop_signal) {'),
+    # Run an alone check beside the others.
+    'alone': ('if (c->alone ? running > 0 : alone || running >= jobs)', 'if (running >= jobs)'),
+}
+edits = faults[name] if isinstance(faults[name], list) else [faults[name]]
+for old, new in edits:
+    if text.count(old) != 1:
+        sys.exit('host-suite-test: the text of fault %s is not in %s once' % (name, source))
+    text = text.replace(old, new)
+if out:
+    open(out, 'w').write(text)
+PY
+}
+
+FAULTS='sanitizer shared serial drop status bound alone'
+
+if [ "$mode" = texts ]; then
+    for f in $FAULTS; do
+        fault "$f" '' || exit 1
+    done
+    echo 'host-suite-test: texts: each fault found once'
+    exit 0
+fi
+
+deadline=$repo/build/tests/system/deadline
+[ -x "$deadline" ] || { echo "host-suite-test: $deadline is not built"; exit 1; }
+made=$(mktemp -d "${TMPDIR:-/tmp}/rach2-host-suite-test.XXXXXX") || exit 1
+work=$(cd "$made" && pwd -P) || exit 1
+tree=$work/tree
+mkdir -p "$tree/tests/host" "$tree/tests/system/suites" "$tree/build/.run.lock" \
+    "$tree/build/tools/etude" "$tree/tools/inspect" "$tree/tools/verify" \
+    "$tree/tools/etude/win" "$tree/tests/system/runner" "$work/meet" "$work/tmp" || exit 1
+cp "$repo/tests/system/suites/host.sh" "$tree/tests/system/suites/" || exit 1
+cp "$repo/tests/system/runlock.sh" "$tree/tests/system/" || exit 1
+# The tree is held for this script, as tests/run holds it for the suite.
+echo "pid $$" > "$tree/build/.run.lock/owner"
+
+# The checkers whose selftests the suite compiles: each passes its selftest.
+for c in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidcheck.c \
+    tools/verify/prosecheck.c tools/etude/win/pecheck.c tests/system/runner/runtests.c \
+    tests/system/runner/harness.c; do
+    printf '#include <string.h>\nint main(int c, char **v) { return !(c == 2 && strcmp(v[1], "--selftest") == 0); }\n' \
+        > "$tree/$c"
+done
+
+# meet_hosttest.c, compiled as eight tests: a file of one name in TMPDIR, and
+# a wait for all eight in the meeting directory, for at most 30 seconds.
+cat > "$work/meet.c" <<'EOF'
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <dirent.h>
+
+static int count(const char *dir)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    int n = 0;
+
+    while (d != NULL && (e = readdir(d)) != NULL)
+        n += e->d_name[0] != '.';
+    if (d != NULL)
+        closedir(d);
+    return n;
+}
+
+int main(void)
+{
+    const char *tmp = getenv("TMPDIR"), *meet = getenv("HOST_SUITE_MEET");
+    char path[4096];
+    struct timespec tick = {0, 100000000};
+    int fd, tries;
+
+    snprintf(path, sizeof(path), "%s/mine", tmp != NULL ? tmp : "/nonexistent");
+    fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+        printf("meet: %s: another check has it\n", path);
+        return 1;
+    }
+    close(fd);
+    snprintf(path, sizeof(path), "%s/%ld", meet, (long)getpid());
+    fd = open(path, O_WRONLY | O_CREAT, 0600);
+    close(fd);
+    for (tries = 0; count(meet) < 8; tries++) {
+        if (tries == 300) {
+            printf("meet: %d of 8 checks started\n", count(meet));
+            return 1;
+        }
+        nanosleep(&tick, NULL);
+    }
+    printf("meet: all 8 checks running\n");
+    return 0;
+}
+EOF
+for i in 1 2 3 4 5 6 7 8; do
+    cp "$work/meet.c" "$tree/tests/host/meet${i}_hosttest.c" || exit 1
+done
+
+cat > "$tree/tests/host/asan_hosttest.c" <<'EOF'
+#include <stdlib.h>
+int main(void)
+{
+    volatile char *p = malloc(4);
+    p[4] = 1;
+    return 0;
+}
+EOF
+cat > "$tree/tests/host/ubsan_hosttest.c" <<'EOF'
+#include <limits.h>
+int main(int argc, char **argv)
+{
+    int x = INT_MAX - 1 + (argv[0] != 0);
+    x += argc;
+    return x == 0;
+}
+EOF
+leak=
+if [ "$(uname -s)" = Linux ]; then
+    leak=leak_hosttest
+    cat > "$tree/tests/host/leak_hosttest.c" <<'EOF'
+#include <stdlib.h>
+void *volatile lost;
+int main(void)
+{
+    lost = malloc(64);
+    lost = 0;
+    return 0;
+}
+EOF
+fi
+cat > "$tree/tests/host/hang_hosttest.c" <<'EOF'
+/* host-seconds: 2 */
+#include <unistd.h>
+int main(void)
+{
+    for (;;)
+        pause();
+}
+EOF
+cat > "$tree/tests/host/gone_hosttest.c" <<'EOF'
+/* host-deps: tests/host/gone.c */
+int main(void)
+{
+    return 0;
+}
+EOF
+cat > "$tree/tests/host/keep_hosttest.c" <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+int main(void)
+{
+    char path[4096];
+    FILE *f;
+
+    snprintf(path, sizeof(path), "%s/evidence", getenv("TMPDIR"));
+    f = fopen(path, "w");
+    if (f != NULL)
+        fclose(f);
+    printf("keep: failing after writing %s\n", path);
+    return 1;
+}
+EOF
+cat > "$tree/tests/host/signals_hosttest.c" <<'EOF'
+#include <signal.h>
+#include <stdio.h>
+int main(void)
+{
+    struct sigaction a, b;
+    sigset_t mask;
+
+    sigaction(SIGINT, NULL, &a);
+    sigaction(SIGQUIT, NULL, &b);
+    sigprocmask(SIG_BLOCK, NULL, &mask);
+    printf("signals_hosttest: not run: nothing: this line is repeated under the pass\n");
+    return a.sa_handler != SIG_DFL || b.sa_handler != SIG_DFL || sigismember(&mask, SIGINT);
+}
+EOF
+# alone_hosttest.c, compiled as two tests that run alone: no scratch directory
+# but their own and keep_hosttest's kept one is beside theirs.
+cat > "$work/alone.c" <<'EOF'
+/* host-alone: it must find no other check running */
+#include <dirent.h>
+#include <fcntl.h>
+#include <libgen.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+int main(void)
+{
+    char tmp[4096], path[4096], own[4096];
+    struct dirent *e;
+    DIR *d;
+    int others = 0;
+
+    snprintf(path, sizeof(path), "%s/alone", getenv("HOST_SUITE_MEET"));
+    close(open(path, O_WRONLY | O_CREAT, 0600));
+    snprintf(tmp, sizeof(tmp), "%s", getenv("TMPDIR"));
+    snprintf(own, sizeof(own), "%s", strrchr(tmp, '/') + 1);
+    d = opendir(dirname(tmp));
+    while (d != NULL && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] != '.' && strcmp(e->d_name, own) != 0 &&
+            strcmp(e->d_name, "keep_hosttest") != 0) {
+            printf("alone: %s runs beside it\n", e->d_name);
+            others++;
+        }
+    }
+    if (d != NULL)
+        closedir(d);
+    return d == NULL || others != 0;
+}
+EOF
+cp "$work/alone.c" "$tree/tests/host/alone1_hosttest.c" || exit 1
+cp "$work/alone.c" "$tree/tests/host/alone2_hosttest.c" || exit 1
+# A test that waits for an alone test to start, for at most ten seconds, and
+# passes either way: an alone test started beside it finds it.
+cat > "$tree/tests/host/linger_hosttest.c" <<'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+int main(void)
+{
+    char path[4096];
+    struct timespec tick = {0, 100000000};
+    int tries;
+
+    snprintf(path, sizeof(path), "%s/alone", getenv("HOST_SUITE_MEET"));
+    for (tries = 0; tries < 100 && access(path, F_OK) != 0; tries++)
+        nanosleep(&tick, NULL);
+    return 0;
+}
+EOF
+cat > "$tree/tests/system/suites/host.list" <<'EOF'
+# The fixture's scripted checks.
+script_pass|30|a script that passes|test -d "$TMPDIR" && echo fine
+script_fail|30|a script that fails|echo 'script: it failed'; exit 4
+EOF
+
+# run_suite DRIVER: run the private tree's suite with DRIVER, keeping its
+# output in $work/out and its status in $status.
+run_suite()
+{
+    cp "$1" "$tree/build/tools/etude/etude-host" || exit 1
+    rm -rf "$work/meet" && mkdir "$work/meet" || exit 1
+    status=0
+    # The bound only ends a suite whose driver lets a check run on forever.
+    HOST_SUITE_MEET=$work/meet RACH2_TREE_HELD=$$ RACH2_WORKERS=16 TMPDIR=$work/tmp \
+        ASAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0:detect_leaks=0 \
+        UBSAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0 LSAN_OPTIONS=exitcode=0 \
+        "$deadline" 400 sh "$tree/tests/system/suites/host.sh" > "$work/out" 2>&1 < /dev/null ||
+        status=$?
+}
+
+# line PATTERN: succeed when one line of the output matches PATTERN, an
+# extended regular expression for the whole line.
+line()
+{
+    [ "$(grep -cE "^$1\$" "$work/out")" -eq 1 ]
+}
+
+# miss WHAT: report an expectation the last run missed.
+miss()
+{
+    echo "host-suite-test: failed: $1"
+    bad=1
+}
+
+# judge: print `host-suite-test: failed: WHAT` for each expectation the last
+# run missed, and fail when any did.
+judge()
+{
+    bad=0
+    n=$(wc -l < "$tree/build/tests/host-suite/selection" | tr -d ' ')
+    tests=$(find "$tree/tests/host" -name '*_hosttest.c' | wc -l | tr -d ' ')
+    [ "$status" -eq 1 ] || miss 'the suite fails'
+    [ "$n" -eq $((tests + 7 + 2)) ] || miss 'every test, checker and script is selected'
+    for i in 1 2 3 4 5 6 7 8; do
+        line "  PASS: meet${i}_hosttest" || miss "meet$i passes beside the others in its own scratch"
+    done
+    for i in 1 2; do
+        line "  PASS: alone${i}_hosttest" || miss "alone$i runs with no other check"
+    done
+    line '  PASS: linger_hosttest' || miss 'the test before the alone ones passes'
+    for t in asan_hosttest ubsan_hosttest $leak; do
+        line "  FAIL \\(run, [^)]*\\): $t" || miss "$t fails"
+    done
+    grep -q '^    ! .*AddressSanitizer' "$work/out" || miss 'a sanitizer report is shown'
+    line '  FAIL \(run hung; killed after 2s; see .*\): hang_hosttest' ||
+        miss 'the endless test fails as hung'
+    line '  FAIL \(run, status 1; see .*\): gone_hosttest' || miss 'a missing source fails its test'
+    line '    \| hosttest: gone_hosttest: missing host-deps: tests/host/gone.c' ||
+        miss 'a missing source is named'
+    line '  FAIL \(run, status 4; see .*\): a script that fails' || miss 'a failing script fails'
+    line '  PASS: a script that passes' || miss 'a passing script passes'
+    line '  PASS: signals_hosttest' || miss 'the signals are at their defaults'
+    line '    signals_hosttest: not run: nothing: this line is repeated under the pass' ||
+        miss 'the not-run line is repeated'
+    [ "$(grep -c '^  PASS: [a-z]* selftest under the sanitizers$' "$work/out")" -eq 7 ] ||
+        miss 'each selftest passes'
+    [ "$(grep -cE '^  (PASS|FAIL)' "$work/out")" -eq "$n" ] || miss 'every check has one result'
+    tail -n 1 "$work/out" | grep -qE "^etude-host: result: fail: [0-9]+ of $n checks:" ||
+        miss 'the last line counts every check'
+    kept=$(sed -n 's/^    scratch kept: //p' "$work/out")
+    case $kept in
+        */keep_hosttest) [ -f "$kept/evidence" ] || miss 'the failed test keeps its scratch' ;;
+        *) miss 'the failed test keeps its scratch' ;;
+    esac
+    left=$(find "$work/tmp" -mindepth 2 -maxdepth 2 ! -name keep_hosttest | wc -l | tr -d ' ')
+    [ "$left" -eq 0 ] || miss 'no other scratch is left'
+    [ -z "$kept" ] || rm -rf "$kept"
+    rm -rf "$work"/tmp/rach2-host.*
+    return $bad
+}
+
+# refused DRIVER: a selection with a name given twice is refused before any
+# check runs.
+refused()
+{
+    printf 'twice\t5\tshared\tthe first\t\ttouch %s/ran\ntwice\t5\tshared\tthe second\t\ttrue\n' \
+        "$work" > "$work/twice"
+    rc=0
+    "$1" -j 2 -l "$work" -s "$work/tmp" "$work/twice" > "$work/twice.out" 2>&1 || rc=$?
+    if [ "$rc" -ne 2 ] || [ -e "$work/ran" ]; then
+        echo 'host-suite-test: failed: a name given twice refuses the selection'
+        return 1
+    fi
+}
+
+# build OUT [FAULT]: compile etude-host, with FAULT when given, to OUT.
+build()
+{
+    src=$source
+    if [ -n "${2:-}" ]; then
+        src=$work/etude_host_$2.c
+        fault "$2" "$src" || exit 1
+    fi
+    "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -I "$repo/tools/etude/include" -I "$repo/tools/etude/posix" \
+        -o "$1" "$src" "$repo/tools/etude/posix/exec.c" "$repo/tools/etude/posix/keeper.c" \
+        "$repo/tools/etude/posix/process.c" "$repo/tools/etude/capture.c" > "$work/build.log" 2>&1 || {
+        cat "$work/build.log"
+        echo 'host-suite-test: etude-host did not compile'
+        exit 1
+    }
+}
+
+if [ "$mode" = check ]; then
+    driver=${ETUDE_HOST:-$repo/build/tools/etude/etude-host}
+    [ -x "$driver" ] || { echo "host-suite-test: $driver is not built"; exit 1; }
+    run_suite "$driver"
+    if ! judge || ! refused "$driver"; then
+        cat "$work/out"
+        exit 1
+    fi
+    echo "host-suite-test: result: pass: every check selected gave one result"
+    exit 0
+fi
+
+for f in $FAULTS; do
+    build "$work/driver" "$f"
+    run_suite "$work/driver"
+    if judge > "$work/judged" && refused "$work/driver" >> "$work/judged"; then
+        cat "$work/out"
+        echo "host-suite-test: fault passed: $f" >&2
+        exit 1
+    fi
+    echo "host-suite-test: fault $f: $(head -n 1 "$work/judged")"
+done
+build "$work/driver"
+run_suite "$work/driver"
+judge || { cat "$work/out"; exit 1; }
+refused "$work/driver" || exit 1
+echo 'host-suite-test: result: pass: every fault failed, and the restored driver passes'

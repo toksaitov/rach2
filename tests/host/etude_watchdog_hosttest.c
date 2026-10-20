@@ -12,6 +12,7 @@
  * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-seconds: 240
+ * host-alone: a stand-in QEMU must answer three queries within 500 ms
  *
  * Bounds are fixed from samples by their policy. The watchdog alone then
  * reads report records at times the test gives: only a witness that

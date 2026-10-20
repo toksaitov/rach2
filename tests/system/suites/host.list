@@ -1,0 +1,36 @@
+# host.list: the scripted checks of the host suite (host.sh), one a line, as
+# NAME|SECONDS|LABEL|COMMAND. NAME names the check's log and scratch directory,
+# SECONDS is the bound after which the check is ended as hung, LABEL is what
+# its result line says it checked, and COMMAND runs it from the root of the
+# tree; its exit status 0 is a pass.
+krffs_open|600|krffs publication open|sh tests/host/krffs_open_mutate.sh --check
+krffs_root_lock|600|krffs root data operations under the mount's lock|sh tests/host/krffs_root_lock_mutate.sh --check
+kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_mutate.sh --check
+endothers|600|an init's end waits for the processes still ending|sh tests/host/endothers_mutate.sh --check
+chown|600|the set-id rules of a mounted chown|sh tests/host/chown_mutate.sh --check
+pagecache|600|the page cache with sys_sync's bounded wait|sh tests/host/pagecache_mutate.sh --check
+doom_libc|600|Doom C library on both architectures|sh tests/host/doom_libc_mutate.sh --check
+krffs_tools|600|krffs host tools' refusals, replace and edits|sh tests/host/krffs_tools_mutate.sh --check
+run_scripts|600|run scripts' command lines|sh tests/system/run_scripts_test.sh
+commit_msg|600|commit-msg hook's refusals|sh tests/system/commit_msg_test.sh
+ci|600|ci reports and bisection|sh tests/system/ci_test.sh
+board|600|board groups, take and the phase in progress|sh tests/system/board_test.sh
+limited|600|the loops' reading of a usage limit|sh tests/system/limited_test.sh
+worker_park|600|the worker loop's parking during a hold and rest of a handed-back intermittent issue|sh tests/system/worker_park_test.sh
+release_resume|600|a release resumed from its record|sh tests/system/release_resume_test.sh
+tidy|600|the loops' cleanup of finished work|sh tests/system/tidy_test.sh
+agents_guest|600|the agents guest's scratch removed on every exit|sh tests/system/agents_guest_test.sh
+testing_run|600|testing.sh run's quoted commands and a worktree's sync|sh tests/system/testing_run_test.sh
+space|600|disk admission requires a Windows reading|sh tests/system/space_test.sh
+prereq|600|prereq.sh's reports, installs and recipe|sh tests/system/prereq_test.sh
+etude_version|600|etude's versions built once, reused and kept side by side|sh tests/system/etude_version_test.sh
+etude_deploy|600|etude deployed again and after a cut, changing no clone, key or running test|sh tests/system/etude_deploy_test.sh
+agents_credentials|600|the agents' credential files and log scan|python3 -B tests/system/agents_credentials_test.py
+anthropic|600|Messages tool results and streamed replies|python3 -B tests/system/fakeapi/anthropic_test.py
+gemini|600|Gemini function responses and unordered steps|python3 -B tests/system/fakeapi/gemini_test.py
+fakeapi|600|the fake API server's unordered and repeated steps|python3 -B tests/system/fakeapi/fakeapi_test.py
+install_accounts|600|the installer's kept image accounts|sh tests/system/install_accounts_test.sh
+mkext2_overlay|900|the modes an ext2 overlay adds under umask 002|sh tests/system/mkext2_overlay_test.sh
+check_asm|600|TinyCC's assemblers against GNU as|sh vendor/tcc/check_asm.sh
+check_ldscript|600|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_ldscript.sh
+host_suite|300|the host suite runs its checks at once, each in its own scratch, with one result each|sh tests/system/host_suite_test.sh

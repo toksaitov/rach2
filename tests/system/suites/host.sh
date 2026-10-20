@@ -10,8 +10,12 @@
 # names the sources it links on a "host-deps:" comment line, and passes when
 # it exits 0; the lines it prints as `NAME: not run: WHAT: WHY` are repeated
 # under its PASS, since a check it could not run is not a check that passed.
-# The suite then runs the checkers' selftests under the sanitizers, the
-# mutation and script tests, and the fuzz corpora.
+# The suite also runs the checkers' selftests under the sanitizers, the
+# scripted checks that host.list names, and the fuzz corpora.
+#
+# The script writes the selection, one line for each of those checks, and
+# etude-host runs them several at once, each with a scratch directory of its
+# own as its TMPDIR, and prints a result for every one.
 #
 # Usage:
 #     sh tests/system/suites/host.sh
@@ -24,7 +28,8 @@ cd "$REPO" || exit 1
 # The binaries and logs are the tree's own, under its build directory,
 # which `tests/run`'s lock covers: runs in two trees write no file in common.
 VDIR="$REPO/build/tests/host-suite"
-mkdir -p "$VDIR"
+SELECTION="$VDIR/selection"
+ETUDE_HOST="$REPO/build/tools/etude/etude-host"
 
 CC="${CC:-cc}"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
@@ -37,24 +42,18 @@ FREESTANDING="-ffreestanding"
 # does have them these declarations are the ones used; they are musl's, so the
 # interface is the same either way. See tests/host/compat/crypt.h.
 INC="-I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat"
-fail=0
-any=0
-
-# A test that hangs must fail the suite, not hang it: one of these tests
-# drives a device that reports an error on every transmit, and the first fault
-# it found was an unbounded loop. The test runs in the foreground under the
-# project's deadline tool, since a background job in a non-interactive shell
-# inherits SIGINT and SIGQUIT ignored, and pwauth_hosttest checks those
-# dispositions in a child it forks, so a test run in the background would
-# fail for a reason of the suite's own making. The tool is built by this
-# suite's make target, and by any make, before the tests compile.
+# A test's bound when it gives none on a `host-seconds:` line. It only ends a
+# hung test: one of these tests drives a device that reports an error on
+# every transmit, and the first fault it found was an unbounded loop.
 WATCHDOG_SECS=60
-WATCHDOG=""
-if [ -x "$REPO/build/tests/system/deadline" ]; then
-    WATCHDOG="$REPO/build/tests/system/deadline $WATCHDOG_SECS"
-else
-    echo "hosttest: build/tests/system/deadline is not built; a hung test will not be cut short" >&2
-fi
+TAB=$(printf '\t')
+tests=0
+scratch=""
+
+trap '[ -z "$scratch" ] || rmdir "$scratch" 2>/dev/null' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # wrapped_deps FILE TAG: return 1 when a TAG line of FILE is wrapped, its list
 # continued on the next comment line without the tag. The `[^*]*` grep below
@@ -72,9 +71,40 @@ wrapped_deps()
     ' "$1"
 }
 
+# check NAME SECONDS MODE LABEL COMPILE RUN: add a check to the selection.
+# MODE is `shared`, or `alone` for a check that runs with no other beside it.
+# COMPILE builds the check, and may be empty; RUN runs it, and its exit status
+# 0 is a pass. Both are commands of sh(1), run from the root of the tree.
+check()
+{
+    case "$1$2$3$4$5$6" in
+        *"$TAB"*)
+            echo "hosttest: $1: a check's fields may not hold a tab" >&2
+            exit 1 ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$5" "$6" >>"$SELECTION"
+}
+
+# With HOST_PRINT_COMMANDS set, the script prints the compile command of each
+# test, checker and fuzz harness and runs nothing: the compilation database
+# generator and the coverage report read them.
+mkdir -p "$VDIR" || exit 1
+if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
+    # Several scripted checks hold the tree, as a script that puts faults into
+    # sources must, and run at once they could not each take it.
+    # shellcheck source=tests/system/runlock.sh
+    . "$REPO/tests/system/runlock.sh"
+    runlock_hold "$REPO" hosttest "$REPO/tests/system/suites/host.sh" "$@"
+    if [ ! -x "$ETUDE_HOST" ]; then
+        echo "hosttest: $ETUDE_HOST is not built; make builds it" >&2
+        exit 1
+    fi
+    : >"$SELECTION" || exit 1
+fi
+
 for t in tests/host/*_hosttest.c; do
     [ -f "$t" ] || continue
-    any=1
+    tests=$((tests + 1))
     base="$(basename "$t" .c)"
     # Every host-deps: line, not only the first: clang-format wraps a comment
     # at 80 columns, so a test with more dependencies than fit has a second.
@@ -83,12 +113,15 @@ for t in tests/host/*_hosttest.c; do
     # to compile: their own include directories and the warnings their build
     # turns off. Empty for every kernel test, which the fixed flags cover.
     extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed 's/host-cflags://' | tr '\n' ' ')"
-    # A test whose rows take longer than the deadline says so in seconds
-    # on a `host-seconds:` line, as the file system interruption matrices do.
+    # A test whose rows take longer than the bound says so in seconds on a
+    # `host-seconds:` line, as the file system interruption matrices do.
     secs="$(grep -oE 'host-seconds: *[0-9]+' "$t" | grep -oE '[0-9]+' | head -1)"
     [ -n "$secs" ] || secs=$WATCHDOG_SECS
-    TESTWATCH=""
-    [ -z "$WATCHDOG" ] || TESTWATCH="$REPO/build/tests/system/deadline $secs"
+    # A test with a window of a fraction of a second, which a machine busy
+    # with the other checks could miss, runs alone, as a `host-alone:` line
+    # says.
+    mode=shared
+    ! grep -q 'host-alone:' "$t" || mode=alone
 
     if ! wrapped_deps "$t" "host-deps:"; then
         echo "hosttest: $t: a host-deps: line is wrapped; repeat the" >&2
@@ -97,36 +130,6 @@ for t in tests/host/*_hosttest.c; do
     fi
 
     out="$VDIR/$base"
-    # With HOST_PRINT_COMMANDS set, print the compile command of each test
-    # and compile nothing: the compilation database generator reads them.
-    if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
-        # shellcheck disable=SC2086
-        echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
-        continue
-    fi
-    # Name a missing dep here, since the compiler would report only "no such
-    # file". A dep under the musl tree is missing because the tree is not
-    # extracted, and the repair removes the stamp, since a copied worktree can
-    # have the stamp without the tree and make then takes the tree as current.
-    # An in-house dep is a typo or a rename, so the message says only that it
-    # is missing.
-    missing=""
-    missing_musl=""
-    for d in $deps; do
-        [ -f "$d" ] && continue
-        missing="$missing $d"
-        case "$d" in
-            vendor/musl/*) missing_musl=1 ;;
-        esac
-    done
-    if [ -n "$missing" ]; then
-        echo "  FAIL: $base: missing host-deps:$missing"
-        if [ -n "$missing_musl" ]; then
-            echo "        the vendored musl source is not extracted; rm vendor/musl/.stamp and rebuild (make)"
-        fi
-        fail=1
-        continue
-    fi
     # -Wno-empty-body tolerates the kernel's `for(...);` idiom in linked
     # sources.
     #
@@ -148,25 +151,39 @@ for t in tests/host/*_hosttest.c; do
     # calls off: Ubuntu's compiler adds level 3 unless the command line sets
     # the macro, and Darwin's headers make snprintf a macro at any level above
     # zero, which a test that supplies its own snprintf cannot compile against.
-    # shellcheck disable=SC2086
-    if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o "$out" "$t" $deps \
-         >"$VDIR/$base.clog" 2>&1; then
-        # shellcheck disable=SC2086
-        $TESTWATCH "$out" >"$VDIR/$base.rlog" 2>&1
-        rc=$?
-        if [ "$rc" -eq 0 ]; then
-            echo "  PASS: $base"
-            grep "^$base: not run: " "$VDIR/$base.rlog" | sed 's/^/    /'
-        elif [ -n "$TESTWATCH" ] && [ "$rc" -eq 124 ]; then
-            echo "  FAIL (hung; killed after ${secs}s; see $VDIR/$base.rlog): $base"
-            fail=1
-        else
-            echo "  FAIL (run; see $VDIR/$base.rlog): $base"; fail=1
-        fi
+    cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
+    if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
+        echo "$cmd"
+        continue
+    fi
+    # Name a missing dep here, since the compiler would report only "no such
+    # file". A dep under the musl tree is missing because the tree is not
+    # extracted, and the repair removes the stamp, since a copied worktree can
+    # have the stamp without the tree and make then takes the tree as current.
+    # An in-house dep is a typo or a rename, so the message says only that it
+    # is missing. Either way the test stays in the selection, and fails.
+    missing=""
+    hint=""
+    for d in $deps; do
+        [ -f "$d" ] && continue
+        missing="$missing $d"
+        case "$d" in
+            vendor/musl/*) hint="; echo 'hosttest: the vendored musl source is not extracted; rm vendor/musl/.stamp and rebuild (make)'" ;;
+        esac
+    done
+    if [ -n "$missing" ]; then
+        check "$base" "$WATCHDOG_SECS" "$mode" "$base" "" "echo 'hosttest: $base: missing host-deps:$missing'$hint; exit 1"
     else
-        echo "  FAIL (compile; see $VDIR/$base.clog): $base"; fail=1
+        check "$base" "$secs" "$mode" "$base" "$cmd" "$out"
     fi
 done
+
+# No tests found is a failure: a broken glob or a moved directory would
+# otherwise make the suite pass having run nothing.
+if [ "$tests" -eq 0 ]; then
+    echo "hosttest: no host tests discovered under tests/host/" >&2
+    exit 1
+fi
 
 # The programs that decide verdicts carry their own selftests, run by the
 # style suite on the binaries the build made. Here each is compiled again
@@ -177,246 +194,13 @@ for t in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidch
          tests/system/runner/harness.c; do
     base=$(basename "$t" .c)
     out="$VDIR/${base}_selftest"
+    cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o $out $t"
     if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
-        echo "$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o $out $t"
+        echo "$cmd"
         continue
     fi
-    any=1
-    # shellcheck disable=SC2086
-    if $CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o "$out" "$t" \
-         >"$VDIR/$base.clog" 2>&1; then
-        # shellcheck disable=SC2086
-        $WATCHDOG "$out" --selftest >"$VDIR/$base.rlog" 2>&1
-        rc=$?
-        if [ "$rc" -eq 0 ]; then
-            echo "  PASS: $base selftest under the sanitizers"
-        else
-            echo "  FAIL (selftest; see $VDIR/$base.rlog): $base"; fail=1
-        fi
-    else
-        echo "  FAIL (compile; see $VDIR/$base.clog): $base"; fail=1
-    fi
+    check "${base}_selftest" "$WATCHDOG_SECS" shared "$base selftest under the sanitizers" "$cmd" "$out --selftest"
 done
-
-if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
-    if sh tests/host/krffs_open_mutate.sh --check >"$VDIR/krffs_open.rlog" 2>&1; then
-        echo "hosttest: result: pass: krffs publication open"
-    else
-        cat "$VDIR/krffs_open.rlog"
-        echo "hosttest: result: fail: krffs publication open" >&2
-        fail=1
-    fi
-    if sh tests/host/krffs_root_lock_mutate.sh --check >"$VDIR/krffs_root_lock.rlog" 2>&1; then
-        echo "hosttest: result: pass: krffs root data operations under the mount's lock"
-    else
-        cat "$VDIR/krffs_root_lock.rlog"
-        echo "hosttest: result: fail: krffs root data operations under the mount's lock" >&2
-        fail=1
-    fi
-    # Four rows over functions extracted from sources no host test can
-    # compile whole: a new kernel stack cleared and guarded and the end of
-    # the other processes before an init under the debug shell hands the
-    # machine back (syscall_proc.c), the set-id rules of a mounted chown
-    # (syscall_fs.c), and the page cache's rows with sys_sync (syscall_fs.c).
-    if sh tests/host/kstack_mutate.sh --check >"$VDIR/kstack.rlog" 2>&1; then
-        echo "hosttest: result: pass: a new kernel stack is cleared and guarded"
-    else
-        cat "$VDIR/kstack.rlog"
-        echo "hosttest: result: fail: a new kernel stack is cleared and guarded" >&2
-        fail=1
-    fi
-    if sh tests/host/endothers_mutate.sh --check >"$VDIR/endothers.rlog" 2>&1; then
-        echo "hosttest: result: pass: an init's end waits for the processes still ending"
-    else
-        cat "$VDIR/endothers.rlog"
-        echo "hosttest: result: fail: an init's end waits for the processes still ending" >&2
-        fail=1
-    fi
-    if sh tests/host/chown_mutate.sh --check >"$VDIR/chown.rlog" 2>&1; then
-        echo "hosttest: result: pass: the set-id rules of a mounted chown"
-    else
-        cat "$VDIR/chown.rlog"
-        echo "hosttest: result: fail: the set-id rules of a mounted chown" >&2
-        fail=1
-    fi
-    if sh tests/host/pagecache_mutate.sh --check >"$VDIR/pagecache.rlog" 2>&1; then
-        echo "hosttest: result: pass: the page cache with sys_sync's bounded wait"
-    else
-        cat "$VDIR/pagecache.rlog"
-        echo "hosttest: result: fail: the page cache with sys_sync's bounded wait" >&2
-        fail=1
-    fi
-    if sh tests/host/doom_libc_mutate.sh --check >"$VDIR/doom_libc.rlog" 2>&1; then
-        echo "hosttest: result: pass: Doom C library on both architectures"
-    else
-        cat "$VDIR/doom_libc.rlog"
-        echo "hosttest: result: fail: Doom C library on both architectures" >&2
-        fail=1
-    fi
-    if sh tests/host/krffs_tools_mutate.sh --check >"$VDIR/krffs_tools.rlog" 2>&1; then
-        echo "hosttest: result: pass: krffs host tools' refusals, replace and edits"
-    else
-        cat "$VDIR/krffs_tools.rlog"
-        echo "hosttest: result: fail: krffs host tools' refusals, replace and edits" >&2
-        fail=1
-    fi
-    if sh tests/system/run_scripts_test.sh >"$VDIR/run_scripts.rlog" 2>&1; then
-        echo "hosttest: result: pass: run scripts' command lines"
-    else
-        cat "$VDIR/run_scripts.rlog"
-        echo "hosttest: result: fail: run scripts' command lines" >&2
-        fail=1
-    fi
-    if sh tests/system/commit_msg_test.sh >"$VDIR/commit_msg.rlog" 2>&1; then
-        echo "hosttest: result: pass: commit-msg hook's refusals"
-    else
-        cat "$VDIR/commit_msg.rlog"
-        echo "hosttest: result: fail: commit-msg hook's refusals" >&2
-        fail=1
-    fi
-    if sh tests/system/ci_test.sh >"$VDIR/ci.rlog" 2>&1; then
-        echo "hosttest: result: pass: ci reports and bisection"
-    else
-        cat "$VDIR/ci.rlog"
-        echo "hosttest: result: fail: ci reports and bisection" >&2
-        fail=1
-    fi
-    if sh tests/system/board_test.sh >"$VDIR/board.rlog" 2>&1; then
-        echo "hosttest: result: pass: board groups, take and the phase in progress"
-    else
-        cat "$VDIR/board.rlog"
-        echo "hosttest: result: fail: board groups, take and the phase in progress" >&2
-        fail=1
-    fi
-    if sh tests/system/limited_test.sh >"$VDIR/limited.rlog" 2>&1; then
-        echo "hosttest: result: pass: the loops' reading of a usage limit"
-    else
-        cat "$VDIR/limited.rlog"
-        echo "hosttest: result: fail: the loops' reading of a usage limit" >&2
-        fail=1
-    fi
-    if sh tests/system/worker_park_test.sh >"$VDIR/worker_park.rlog" 2>&1; then
-        echo "hosttest: result: pass: the worker loop's parking during a hold and rest of a handed-back intermittent issue"
-    else
-        cat "$VDIR/worker_park.rlog"
-        echo "hosttest: result: fail: the worker loop's parking during a hold and rest of a handed-back intermittent issue" >&2
-        fail=1
-    fi
-    if sh tests/system/release_resume_test.sh >"$VDIR/release_resume.rlog" 2>&1; then
-        echo "hosttest: result: pass: a release resumed from its record"
-    else
-        cat "$VDIR/release_resume.rlog"
-        echo "hosttest: result: fail: a release resumed from its record" >&2
-        fail=1
-    fi
-    if sh tests/system/tidy_test.sh >"$VDIR/tidy.rlog" 2>&1; then
-        echo "hosttest: result: pass: the loops' cleanup of finished work"
-    else
-        cat "$VDIR/tidy.rlog"
-        echo "hosttest: result: fail: the loops' cleanup of finished work" >&2
-        fail=1
-    fi
-    if sh tests/system/agents_guest_test.sh >"$VDIR/agents_guest.rlog" 2>&1; then
-        echo "hosttest: result: pass: the agents guest's scratch removed on every exit"
-    else
-        cat "$VDIR/agents_guest.rlog"
-        echo "hosttest: result: fail: the agents guest's scratch removed on every exit" >&2
-        fail=1
-    fi
-    if sh tests/system/testing_run_test.sh >"$VDIR/testing_run.rlog" 2>&1; then
-        echo "hosttest: result: pass: testing.sh run's quoted commands and a worktree's sync"
-    else
-        cat "$VDIR/testing_run.rlog"
-        echo "hosttest: result: fail: testing.sh run's quoted commands and a worktree's sync" >&2
-        fail=1
-    fi
-    if sh tests/system/space_test.sh >"$VDIR/space.rlog" 2>&1; then
-        echo "hosttest: result: pass: disk admission requires a Windows reading"
-    else
-        cat "$VDIR/space.rlog"
-        echo "hosttest: result: fail: disk admission requires a Windows reading" >&2
-        fail=1
-    fi
-    if sh tests/system/prereq_test.sh >"$VDIR/prereq.rlog" 2>&1; then
-        echo "hosttest: result: pass: prereq.sh's reports, installs and recipe"
-    else
-        cat "$VDIR/prereq.rlog"
-        echo "hosttest: result: fail: prereq.sh's reports, installs and recipe" >&2
-        fail=1
-    fi
-    if sh tests/system/etude_version_test.sh >"$VDIR/etude_version.rlog" 2>&1; then
-        echo "hosttest: result: pass: etude's versions built once, reused and kept side by side"
-        grep '^etude-version-test: not run: ' "$VDIR/etude_version.rlog" | sed 's/^/    /'
-    else
-        cat "$VDIR/etude_version.rlog"
-        echo "hosttest: result: fail: etude's versions built once, reused and kept side by side" >&2
-        fail=1
-    fi
-    if sh tests/system/etude_deploy_test.sh >"$VDIR/etude_deploy.rlog" 2>&1; then
-        echo "hosttest: result: pass: etude deployed again and after a cut, changing no clone, key or running test"
-        grep '^etude-deploy-test: not run: ' "$VDIR/etude_deploy.rlog" | sed 's/^/    /'
-    else
-        cat "$VDIR/etude_deploy.rlog"
-        echo "hosttest: result: fail: etude deployed again and after a cut, changing no clone, key or running test" >&2
-        fail=1
-    fi
-    if python3 -B tests/system/agents_credentials_test.py >"$VDIR/agents_credentials.rlog" 2>&1; then
-        echo "hosttest: result: pass: the agents' credential files and log scan"
-    else
-        cat "$VDIR/agents_credentials.rlog"
-        echo "hosttest: result: fail: the agents' credential files and log scan" >&2
-        fail=1
-    fi
-    if python3 -B tests/system/fakeapi/anthropic_test.py >"$VDIR/anthropic.rlog" 2>&1; then
-        echo "hosttest: result: pass: Messages tool results and streamed replies"
-    else
-        cat "$VDIR/anthropic.rlog"
-        echo "hosttest: result: fail: Messages tool results and streamed replies" >&2
-        fail=1
-    fi
-    if python3 -B tests/system/fakeapi/gemini_test.py >"$VDIR/gemini.rlog" 2>&1; then
-        echo "hosttest: result: pass: Gemini function responses and unordered steps"
-    else
-        cat "$VDIR/gemini.rlog"
-        echo "hosttest: result: fail: Gemini function responses and unordered steps" >&2
-        fail=1
-    fi
-    if python3 -B tests/system/fakeapi/fakeapi_test.py >"$VDIR/fakeapi.rlog" 2>&1; then
-        echo "hosttest: result: pass: the fake API server's unordered and repeated steps"
-    else
-        cat "$VDIR/fakeapi.rlog"
-        echo "hosttest: result: fail: the fake API server's unordered and repeated steps" >&2
-        fail=1
-    fi
-    if sh tests/system/install_accounts_test.sh >"$VDIR/install_accounts.rlog" 2>&1; then
-        echo "hosttest: result: pass: the installer's kept image accounts"
-    else
-        cat "$VDIR/install_accounts.rlog"
-        echo "hosttest: result: fail: the installer's kept image accounts" >&2
-        fail=1
-    fi
-    if sh tests/system/mkext2_overlay_test.sh >"$VDIR/mkext2_overlay.rlog" 2>&1; then
-        echo "hosttest: result: pass: the modes an ext2 overlay adds under umask 002"
-    else
-        cat "$VDIR/mkext2_overlay.rlog"
-        echo "hosttest: result: fail: the modes an ext2 overlay adds under umask 002" >&2
-        fail=1
-    fi
-    if TMPDIR="$VDIR" sh vendor/tcc/check_asm.sh >"$VDIR/check_asm.rlog" 2>&1; then
-        echo "hosttest: result: pass: TinyCC's assemblers against GNU as"
-    else
-        cat "$VDIR/check_asm.rlog"
-        echo "hosttest: result: fail: TinyCC's assemblers against GNU as" >&2
-        fail=1
-    fi
-    if TMPDIR="$VDIR" sh vendor/tcc/check_ldscript.sh >"$VDIR/check_ldscript.rlog" 2>&1; then
-        echo "hosttest: result: pass: TinyCC's linker script reader against GNU ld"
-    else
-        cat "$VDIR/check_ldscript.rlog"
-        echo "hosttest: result: fail: TinyCC's linker script reader against GNU ld" >&2
-        fail=1
-    fi
-fi
 
 # The fuzz harnesses under tests/fuzz, built as replay programs and run over
 # their committed corpora: every input a fuzzer found worth keeping, and
@@ -428,36 +212,29 @@ fi
 # whose corpus is gone fails the suite.
 if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
     sh tests/fuzz/build.sh replay
-else
-    any=1
-    if sh tests/fuzz/build.sh replay >"$VDIR/fuzz.clog" 2>&1; then
-        for src in tests/fuzz/*_fuzz.c; do
-            name=$(basename "$src" _fuzz.c)
-            d=tests/fuzz/corpus/$name/
-            if [ ! -x "build/tests/fuzz/$name" ]; then
-                echo "  FAIL (the harness did not build): $name"; fail=1
-                continue
-            fi
-            if [ -z "$(find "$d" -type f 2>/dev/null)" ]; then
-                echo "  FAIL (no corpus for the harness): $name"; fail=1
-                continue
-            fi
-            # shellcheck disable=SC2086
-            if $WATCHDOG "build/tests/fuzz/$name" "$d"* >"$VDIR/fuzz_$name.rlog" 2>&1; then
-                echo "  PASS: $name corpus replayed ($(find "$d" -type f | wc -l | tr -d ' ') inputs)"
-            else
-                echo "  FAIL (replay; see $VDIR/fuzz_$name.rlog): $name"; fail=1
-            fi
-        done
+    exit
+fi
+for src in tests/fuzz/*_fuzz.c; do
+    [ -f "$src" ] || continue
+    name=$(basename "$src" _fuzz.c)
+    d=tests/fuzz/corpus/$name/
+    inputs=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$inputs" -eq 0 ]; then
+        check "fuzz_$name" "$WATCHDOG_SECS" shared "$name corpus replayed" "" "echo 'hosttest: $name: no corpus for the harness in $d'; exit 1"
     else
-        echo "  FAIL (the fuzz harnesses did not build; see $VDIR/fuzz.clog)"; fail=1
+        check "fuzz_$name" "$WATCHDOG_SECS" shared "$name corpus replayed ($inputs inputs)" \
+            "sh tests/fuzz/build.sh replay $name" "build/tests/fuzz/$name $d*"
     fi
-fi
+done
 
-# No tests found is a failure: a broken glob or a moved directory would
-# otherwise make the suite pass having run nothing.
-if [ "$any" -eq 0 ]; then
-    echo "hosttest: no host tests discovered under tests/host/" >&2
-    exit 1
-fi
-exit "$fail"
+# The scripted checks: the proofs' --check modes, the tests of the loops,
+# ci and the tools, and TinyCC's comparisons with the GNU tools.
+while IFS='|' read -r name secs label cmd; do
+    case "$name" in
+        ''|'#'*) continue ;;
+    esac
+    check "$name" "$secs" shared "$label" "" "$cmd"
+done <tests/system/suites/host.list
+
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/rach2-host.XXXXXX") || exit 1
+"$ETUDE_HOST" ${RACH2_WORKERS:+-j "$RACH2_WORKERS"} -l "$VDIR" -s "$scratch" "$SELECTION"
