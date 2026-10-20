@@ -23,6 +23,10 @@
 # The copy's `.git` is a repository of its own, so that git works there: a
 # tree's `.git` directory is sent with the tree, and a git worktree's shared
 # repository with the worktree's HEAD and index, as send_git describes.
+# On an enrolled endpoint, `run` admits the whole command through the
+# installed etude site policy before it can build or start a test. Nested
+# test commands reuse that reservation; command input reaches the bridge.
+#
 # `run` syncs and then runs COMMAND in the copy; the words of COMMAND are
 # joined with spaces and evaluated by bash there as one string, so quote it as
 # that shell will see it, as run_held describes. `get` copies each PATH,
@@ -315,7 +319,20 @@ run_held()
 {
     exec 5<&0
     mkfifo "$hold/command"
-    { printf '%s' "$*" | base64 | tr -d '\n'; echo; exec cat; } \
+    { {
+        cat <<'EOF'
+site=${ETUDE_SITE:-/etc/rach2/etude-site}
+if [ "${ETUDE_ADMITTED:-}" != "$site" ] && { [ -e "$site" ] || [ -L "$site" ] || [ "${ETUDE_SITE+x}" = x ]; }; then
+    launcher=$(sed -n 's/^launcher //p' "$site") || exit 2
+    [ -n "$launcher" ] && [ -x "$launcher" ] || exit 2
+    exec "$launcher" build bash -c \
+EOF
+        printf "'"
+        printf '%s' "$*" | sed "s/'/'\\\\''/g"
+        printf "'\n"
+        printf 'fi\n'
+        printf '%s' "$*"
+    } | base64 | tr -d '\n'; echo; exec cat; } \
         <&5 5<&- > "$hold/command" 3>&- &
     feeder=$!
     ssh -o BatchMode=yes "$HOST" "MSYS_NO_PATHCONV=1 wsl.exe -e bash -lc 'cd $DEST && export RACH2_QEMU_ACCEL=tcg RACH2_MIN_FREE_GIB=40 && read -r c && . <(base64 -d <<< \$c)'" \

@@ -59,7 +59,7 @@ static void output(const struct etude_output *o, size_t *seen, FILE *f)
  * @return the command's exit status when it exited by itself, with its
  *         cleanup confirmed and its output whole, and -1 otherwise.
  */
-static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned seconds,
+static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned seconds, int input,
                    enum etude_cleanup *cleanup)
 {
     struct etude_exec *ex = etude_exec_new();
@@ -80,6 +80,7 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
         goto done;
     }
     memset(&spec, 0, sizeof(spec));
+    spec.stdin_path = input ? "-" : NULL;
     spec.attempt_id = id;
     spec.argv = argv;
     spec.envp = environ;
@@ -139,7 +140,7 @@ done:
 /** Print the command's arguments and return the usage status. */
 static int usage(void)
 {
-    fprintf(stderr, "etude-bridge: usage: etude-bridge [-p] [-d locks] [-w seconds] [-r file] "
+    fprintf(stderr, "etude-bridge: usage: etude-bridge [-i] [-p] [-d locks] [-w seconds] [-r file] "
                     "ledger id account shared|alone cpu,bytes,bytes capacity seconds "
                     "command [args...]\n");
     return 2;
@@ -216,7 +217,7 @@ static int admit(struct etude_ledger *l, const char *id, const char *account,
 struct request {
     const char *dir, *record, *ledger, *id, *account;
     unsigned wait, seconds; /* -w's bound and the command's, in seconds */
-    int legacy, alone;
+    int legacy, alone, input;
     struct etude_ledger_res res[3], cap[3];
     char **command;
 };
@@ -228,8 +229,11 @@ static int parse(int argc, char **argv, struct request *q)
 
     memset(q, 0, sizeof(*q));
     q->dir = "/tmp";
-    while ((opt = getopt(argc, argv, "+pd:w:r:")) != -1) {
+    while ((opt = getopt(argc, argv, "+ipd:w:r:")) != -1) {
         switch (opt) {
+        case 'i':
+            q->input = 1;
+            break;
         case 'p':
             q->legacy = 1;
             break;
@@ -335,7 +339,7 @@ int main(int argc, char **argv)
         etude_ledger_close(l);
         return refused(q.record);
     }
-    rc = execute(l, q.id, q.command, q.seconds, &cleanup);
+    rc = execute(l, q.id, q.command, q.seconds, q.input, &cleanup);
     if (etude_ledger_finish(l, q.id, cleanup) != 0)
         cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     if (cleanup == ETUDE_CLEANUP_CONFIRMED)

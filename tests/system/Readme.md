@@ -4,7 +4,7 @@ This directory contains everything that boots Rach2 to test it, and the tests of
 
 ## Running
 
-Every suite runs through `tests/run`, as [the tests' Readme](../Readme.md) describes. `make run-NAME` runs a suite without the runner, and so without its pool, locks, port block and checks.
+Every suite runs through `tests/run`, as [the tests' Readme](../Readme.md) describes. On an enrolled endpoint, tests/run first enters the [installed site admission](../../tools/etude/Readme.md#installed-launch-admission), which reserves its build and execution before the old runner starts. `make run-NAME` runs a suite without the runner, and so without its pool, locks, port block and checks.
 
 A script here runs by hand from the top of the tree as `sh tests/system/NAME.sh`; its header comment, or its usage message, gives its arguments. The fault proofs need a built tree, and most need the products of the suite they prove, which a run of that suite builds. `ARCH` chooses their architecture as it chooses the runner's, except where a script's header names one.
 

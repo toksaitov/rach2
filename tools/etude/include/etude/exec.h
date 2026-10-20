@@ -76,7 +76,7 @@ struct etude_exec_spec {
     char *const *argv;      /* argv[0] is the program's path */
     char *const *envp;      /* the whole environment */
     const char *cwd;        /* NULL keeps the controller's */
-    const char *stdin_path; /* NULL gives /dev/null */
+    const char *stdin_path; /* NULL gives /dev/null; POSIX "-" duplicates stdin */
     size_t output_max;      /* bytes kept of each of standard output and error */
     uint64_t grace_us;      /* from the termination signal to the kill */
     etude_register_fn reg;  /* NULL registers nothing */

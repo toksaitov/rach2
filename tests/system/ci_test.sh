@@ -33,7 +33,10 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-test.XXXXXX")
 mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests/system" "$work/state" "$work/locks"
 cp "${CI_SCRIPTS:-$repo/tools/ci}/report.sh" "$work/report.sh"
-cp "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" "$work/bisect.sh"
+# These command fixtures model a private endpoint, even inside an admitted
+# host suite. Shared admission of the real entries has its own fixture.
+sed "s|/etc/rach2/etude-site|$work/no-installed-site|g" \
+    "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" > "$work/bisect.sh"
 make -s -C "$repo" build/tools/etude/etude-bridge build/tools/etude/casecheck >&2 ||
     { echo 'ci-test: etude-bridge and casecheck could not be built' >&2; exit 1; }
 cc -O2 -o "$work/runutil" "$repo/tests/system/runner/runutil.c" ||
@@ -231,6 +234,7 @@ RACH2_PORT_DIR=$work/locks
 unset RACH2_PORT_OFFSET SSH_TEST_PORT RACH2_WORKERS RACH2_MEMORY_MIB RACH2_CPUS GITHUB_RUN_ATTEMPT \
     RACH2_RESULTS
 export ETUDE_STATE RACH2_PORT_DIR
+unset ETUDE_SITE ETUDE_ADMITTED
 GITHUB_REPOSITORY=test/rach2
 GITHUB_SERVER_URL=https://example.invalid
 GITHUB_RUN_ID=1

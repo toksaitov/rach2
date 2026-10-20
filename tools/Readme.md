@@ -4,6 +4,8 @@ The programs and scripts under `tools/` prepare a machine to build Rach2 and che
 
 ## Use
 
+On an enrolled testing endpoint, builds, worker checks, owner commands, CI and bisection use the [installed launch policy](etude/Readme.md#installed-launch-admission). The policy supplies one shared ledger and capacity before a command builds or tests; old checkouts use its installed external launcher.
+
 ### Setting up a machine
 
 A build needs GNU Make, a host C compiler, the cross toolchain of its architecture (`i686-elf` for `make`, `x86_64-elf` for `make ARCH=x86_64`), e2fsprogs 1.43 or later, mandoc, `ssh-keygen`, awk, sed, tar, gzip, bzip2 and patch. `tests/run style` adds cppcheck, ShellCheck, clang and clang-format. The suites add QEMU, OVMF (its UEFI firmware for x86-64), xorriso for the ISOs and sticks, and the commands `tests/registry` lists for each suite, which `tests/run` looks for before it builds: mtools, `qemu-img`, python3, `nc` and `shasum` among them. `tests/run` runs one architecture's suites, i686's unless `ARCH=x86_64` is set. The default `make` downloads nothing; only the GNU layer, which the `gnu` suite builds, fetches its tarballs, with curl or wget ([fetch.sh](../vendor/gnu/fetch.sh)). Install the packages below, then run `sh tools/setup/doctor.sh`.

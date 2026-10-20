@@ -119,7 +119,9 @@ static int proc_spawn(struct etude_proc *p, const struct etude_exec_spec *spec)
 
     for (i = 0; i < FD_N; i++)
         fds[i] = -1;
-    fds[FD_IN] = open(in, O_RDONLY | O_CLOEXEC);
+    fds[FD_IN] = strcmp(in, "-") == 0 ? dup(STDIN_FILENO) : open(in, O_RDONLY | O_CLOEXEC);
+    if (fds[FD_IN] >= 0)
+        fcntl(fds[FD_IN], F_SETFD, FD_CLOEXEC);
     if (fds[FD_IN] < 0 || cloexec_pipe(&fds[FD_CTL_R]) != 0 || cloexec_pipe(&fds[FD_EV_R]) != 0 ||
         cloexec_pipe(&fds[FD_OUT_R]) != 0 || cloexec_pipe(&fds[FD_ERR_R]) != 0 ||
         (p->keeper = fork()) < 0) {

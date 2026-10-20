@@ -27,6 +27,18 @@
 # rach2/run.sh <test|os-simple|os-real> boots a built image; the build runs no
 # QEMU.
 
+# An enrolled site's installed launcher reserves the whole temporary run,
+# including recursive builds, before any ordinary rule is read or executed.
+ETUDE_SITE_FILE := $(if $(ETUDE_SITE),$(ETUDE_SITE),/etc/rach2/etude-site)
+ETUDE_WRAP := $(if $(filter $(ETUDE_SITE_FILE),$(ETUDE_ADMITTED)),,$(or $(wildcard $(ETUDE_SITE_FILE)),$(if $(filter undefined,$(origin ETUDE_SITE)),,$(ETUDE_SITE_FILE))))
+ifneq ($(ETUDE_WRAP),)
+.DEFAULT_GOAL := etude-admitted
+.PHONY: etude-admitted $(MAKECMDGOALS)
+$(MAKECMDGOALS): etude-admitted ;
+etude-admitted:
+	+@sh tools/etude/launch.sh build $(MAKE) $(MAKECMDGOALS)
+else
+
 # The architecture (mk/arch.mk): ARCH, and the paths of its build tree
 # (ARCH_BUILD) and of its ported musl (ARCH_MUSL). The host programs under
 # build/tools and build/krffs serve both architectures and keep their paths.
@@ -1327,3 +1339,5 @@ distclean: clean
 	rm -rf build
 
 
+
+endif # ETUDE_WRAP

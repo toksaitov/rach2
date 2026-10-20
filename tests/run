@@ -14,6 +14,17 @@
 # failure is reported.
 #
 set -u
+# The installed launcher accounts for this command before it builds or runs.
+site=${ETUDE_SITE:-/etc/rach2/etude-site}
+if [ "${ETUDE_ADMITTED:-}" != "$site" ] && { [ -e "$site" ] || [ -L "$site" ] || [ "${ETUDE_SITE+x}" = x ]; }; then
+    launcher=$(sed -n 's/^launcher //p' "$site") || exit 2
+    [ -n "$launcher" ] && [ -x "$launcher" ] || {
+        echo 'run: result: refused: installed etude launcher is unavailable' >&2
+        exit 2
+    }
+    exec "$launcher" legacy sh "$0" "$@"
+fi
+
 # A run started again under its port claim owns the tree lock it took before
 # the claim, from this line on: a signal ends it through the exit trap, which
 # removes the lock and the run's scratch (see the claim below).

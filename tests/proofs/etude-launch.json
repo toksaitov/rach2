@@ -1,0 +1,283 @@
+{
+  "schema_version": 1,
+  "proof": "etude-launch",
+  "summary": "installed entry points observe durable claims before commands execute",
+  "tree": "private",
+  "sources": [
+    "Makefile",
+    "tests/run",
+    "tools/etude/launch.sh",
+    "tools/ci/run.sh",
+    "tools/ci/bisect.sh",
+    "tools/dev/testing.sh"
+  ],
+  "artifacts": [
+    "${WORK}/tree/Makefile",
+    "${WORK}/tree/tests/run",
+    "${WORK}/tree/tools/etude/launch.sh",
+    "${WORK}/tree/tools/ci/run.sh",
+    "${WORK}/tree/tools/ci/bisect.sh",
+    "${WORK}/tree/tools/dev/testing.sh"
+  ],
+  "build": {
+    "argv": [
+      "/usr/bin/env",
+      "python3",
+      "-c",
+      "import shutil,sys; shutil.copytree(sys.argv[1],sys.argv[2],dirs_exist_ok=True)",
+      "${SRC}",
+      "${WORK}/tree"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "ETUDE_LAUNCH_SOURCES=${WORK}/tree",
+      "python3",
+      "-B",
+      "tests/system/etude_launch_test.py"
+    ],
+    "bound_s": 180
+  },
+  "faults": [
+    {
+      "name": "build-unclaimed",
+      "summary": "build unclaimed",
+      "edits": [
+        {
+          "file": "Makefile",
+          "find": "ETUDE_WRAP := $(if $(filter $(ETUDE_SITE_FILE),$(ETUDE_ADMITTED)),,$(or $(wildcard $(ETUDE_SITE_FILE)),$(if $(filter undefined,$(origin ETUDE_SITE)),,$(ETUDE_SITE_FILE))))",
+          "replace": "ETUDE_WRAP :="
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: build:"
+        ]
+      }
+    },
+    {
+      "name": "worker-unclaimed",
+      "summary": "worker unclaimed",
+      "edits": [
+        {
+          "file": "tests/run",
+          "find": "    exec \"$launcher\" legacy sh \"$0\" \"$@\"",
+          "replace": "    :"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: worker:"
+        ]
+      }
+    },
+    {
+      "name": "ci-unclaimed",
+      "summary": "ci unclaimed",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    exec \"$launcher\" legacy sh \"$0\" \"$@\"",
+          "replace": "    :"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: ci:"
+        ]
+      }
+    },
+    {
+      "name": "owner-unclaimed",
+      "summary": "owner unclaimed",
+      "edits": [
+        {
+          "file": "tools/dev/testing.sh",
+          "find": "    exec \"$launcher\" build bash -c \\\n",
+          "replace": "    : \\\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: owner:"
+        ]
+      }
+    },
+    {
+      "name": "bisection-unclaimed",
+      "summary": "bisection unclaimed",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        limited \"$site_launcher\" -r \"$log.bridge\" \"$launch_kind\" \"$@\"",
+          "replace": "        limited \"$@\"; echo \"exited $?\" > \"$log.bridge\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: bisection:"
+        ]
+      }
+    },
+    {
+      "name": "wrong-capacity",
+      "summary": "wrong capacity",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "\nexec \"$bridge\" -i -p -d \"$locks\" -w \"$wait\" \"$ledger\" \\\n    \"launch:$nonce\" \"$(id -un)\" alone \"$capacity\" \"$capacity\" \"$seconds\" \"$environment\" \"$@\"",
+          "replace": "\nexec \"$bridge\" -i -p -d \"$locks\" -w \"$wait\" \"$ledger\" \\\n    \"launch:$nonce\" \"$(id -un)\" alone \"4000,134217728,1048576\" \"$capacity\" \"$seconds\" \"$environment\" \"$@\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: build:"
+        ]
+      }
+    },
+    {
+      "name": "missing-ports",
+      "summary": "missing ports",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "exec \"$bridge\" -i -p -d \"$locks\" -w \"$wait\" \"$ledger\"",
+          "replace": "exec \"$bridge\" -i -d \"$locks\" -w \"$wait\" \"$ledger\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: build:"
+        ]
+      }
+    },
+    {
+      "name": "lost-input",
+      "summary": "lost input",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "exec \"$bridge\" -i -p -d \"$locks\" -w \"$wait\" \"$ledger\"",
+          "replace": "exec \"$bridge\" -p -d \"$locks\" -w \"$wait\" \"$ledger\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: owner:"
+        ]
+      }
+    },
+    {
+      "name": "nested-claim",
+      "summary": "nested claim",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "export ETUDE_ADMITTED RACH2_WORKERS RACH2_MEMORY_MIB",
+          "replace": "export RACH2_WORKERS RACH2_MEMORY_MIB"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: build:"
+        ]
+      }
+    },
+    {
+      "name": "incompatible-endpoint",
+      "summary": "incompatible endpoint",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "*) refuse 'endpoint is disabled or incompatible'",
+          "replace": "*) :"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: refusals:"
+        ]
+      }
+    },
+    {
+      "name": "nested-signal",
+      "summary": "a signalled nested command recorded as an ordinary exit",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "        if [ \"$status\" -ge 128 ]; then",
+          "replace": "        if false; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: nested:"
+        ]
+      }
+    },
+    {
+      "name": "nested-old-ports",
+      "summary": "a nested old checkout run without offset support",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "if [ \"$kind\" = legacy ]; then",
+          "replace": "if [ \"$kind\" = legacy ] && [ -z \"${ETUDE_ADMITTED:-}\" ]; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: nested:"
+        ]
+      }
+    },
+    {
+      "name": "private-policy",
+      "summary": "bisection uses a private hardware record instead of shared site limits",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "if [ -e \"$site\" ] || [ -L \"$site\" ] || [ \"${ETUDE_SITE+x}\" = x ]; then",
+          "replace": "if false; then"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: bisection:"
+        ]
+      }
+    },
+    {
+      "name": "owner-newlines",
+      "summary": "command substitution strips trailing newlines from an owner command",
+      "edits": [
+        {
+          "file": "tools/dev/testing.sh",
+          "find": "        printf \"'\"\n        printf '%s' \"$*\" | sed \"s/'/'\\\\\\\\''/g\"\n        printf \"'\\n\"\n",
+          "replace": "        printf \"'%s'\\n\" \"$(printf '%s' \"$*\" | sed \"s/'/'\\\\\\\\''/g\")\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: owner:"
+        ]
+      }
+    }
+  ]
+}

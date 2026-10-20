@@ -61,6 +61,11 @@
 # closed, since a fix has landed, it stops with status 0 and no comment.
 # GH_TOKEN, GITHUB_REPOSITORY and GITHUB_RUN_ID come from the job.
 #
+# An installed /etc/rach2/etude-site, or ETUDE_SITE, takes precedence over
+# the private record below. Every build and run then uses its installed
+# launcher, ledger and admitted capacity, with a legacy port block. A
+# refused or incomplete launch leaves the commit untestable.
+#
 # A machine that etude admits tests on has the record `machine` that
 # tools/etude/deploy.sh keeps in ETUDE_STATE, by default
 # `${XDG_STATE_HOME:-$HOME/.local/state}/etude`. There each build and each run
@@ -271,6 +276,18 @@ largest() {
 # the claim or could not confirm the command's end.
 admitted() { # admitted build|run COMMAND...
     how=$1; shift
+    if [ -n "$site_launcher" ]; then
+        launch_kind=build
+        [ "$how" != run ] || launch_kind=legacy
+        rm -f "$log.bridge"
+        limited "$site_launcher" -r "$log.bridge" "$launch_kind" "$@"
+        rc=$?
+        case $rc in 124|137) return "$rc" ;; esac
+        case "$(cat "$log.bridge" 2>/dev/null)" in
+            "exited $rc") return "$rc" ;;
+            *) return 125 ;;
+        esac
+    fi
     [ -n "$ledger" ] || { limited "$@"; return; }
     step=$((step + 1))
     guest=$((share_memory * 3 / 4 / 1048576))
@@ -444,8 +461,17 @@ whole() { # whole TEXT
 # and the share of each that a test claims.
 record=${ETUDE_STATE:-${XDG_STATE_HOME:-${HOME:-}/.local/state}/etude}/machine
 ledger=""
+site_launcher=""
 step=0
-if [ -f "$record" ]; then
+site=${ETUDE_SITE:-/etc/rach2/etude-site}
+if [ -e "$site" ] || [ -L "$site" ] || [ "${ETUDE_SITE+x}" = x ]; then
+    site_launcher=$(sed -n 's/^launcher //p' "$site") || site_launcher=""
+    [ -n "$site_launcher" ] && [ -x "$site_launcher" ] || {
+        say "$on is unresolved: the installed etude site's launcher is unavailable."
+        exit 1
+    }
+    echo "ci: bisect: each test uses the installed site $site"
+elif [ -f "$record" ]; then
     ledger=$(sed -n 's/^ledger //p' "$record")
     cpus=$(sed -n 's/^cpus //p' "$record")
     memory=$(sed -n 's/^memory_bytes //p' "$record")

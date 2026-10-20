@@ -4,6 +4,8 @@ The files under `mk/` are the GNU Make fragments, and one shell fragment, that t
 
 ## Interfaces
 
+The root Makefile consults the [installed etude site policy](../tools/etude/Readme.md#installed-launch-admission) before reading its ordinary rules. On an enrolled endpoint, it starts the requested goals again inside the installed launcher's claim; recursive builds reuse that claim. With no site policy the ordinary build proceeds directly.
+
 The fragments a component Makefile includes:
 
 * `arch.mk` sets `ARCH`, `i686` unless `make ARCH=x86_64` names the other, and stops the build on any third value. From it come `ARCH_SUFFIX`, empty for i686 and `/x86_64` for x86-64; `ARCH_BUILD`, the build tree, `build` or `build/x86_64`; `ARCH_BUILDS`, both trees, for a rule that spans them, as the recovery key's does; `ARCH_VENDOR`, where a vendored port's extracted tree, its stamp and musl's install go, `vendor` or `build/x86_64/vendor-work`; `ARCH_MUSL`, musl's install directory under it; `CROSS_PREFIX`, `i686-elf-` or `x86_64-elf-`; `ARCH_CFLAGS`, `-m32` or `-m64`; `ARCH_LDFLAGS`, empty for i686 and `-Wl,-z,max-page-size=0x1000` for x86-64, so that a guest program's segments are aligned to 4 KiB pages rather than the linker's default of 2 MiB; `ARCH_USER_TEXT`, the address the freestanding programs link their text at, `0x08048000` or `0x400000`, which is where TinyCC links a program on that architecture; and `ARCH_QEMU`, `qemu-system-i386` or `qemu-system-x86_64`. The root Makefile and `toolchain.mk` include it.
