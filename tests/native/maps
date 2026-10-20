@@ -1,0 +1,7 @@
+# The native values of the ids and ports the guest programs use, and the
+# volume images their cases name (Readme.md). An id maps to 60000 more than
+# itself, and 65534 to 60534; a port to 40000 more than itself.
+idmap 5:60005 1000:61000 1001:61001 1002:61002 2000:62000 3000:63000
+idmap 4242:64242 4243:64243 65534:60534
+portmap 47:40047 4433:44433 5353:45353 5999:45999 7000:47000 7461:47461
+portmap 7470:47470 7480:47480 7481:47481
