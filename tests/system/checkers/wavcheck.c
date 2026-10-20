@@ -7,23 +7,27 @@
  * That is how the audio path is checked end to end: the driver's own report
  * says what it was asked to play, not what came out.
  *
- * `wavcheck scale FILE FREQ [FREQ ...]` sweeps the recording in short windows,
- * labels each with whichever of the named frequencies is loudest in it, and
- * requires those labels to visit every frequency, in the order they were
- * named. More than 16 frequencies are refused. The measurement is a Goertzel
- * filter, which computes a single term of the Fourier transform and needs no
- * library.
+ * `wavcheck scale FILE FREQ [FREQ ...]` sweeps the recording of a scale of
+ * square waves, such as the debug shell's `audio test scale` plays, in short
+ * windows, measures the frequency in each, and requires each measurement to
+ * be one of the named frequencies and the measurements to visit every one of
+ * them, in the order they were named. More than 16 frequencies are refused.
  *
- * Exit 0 when every note is the loudest in its turn, 1 when one is not or
- * the recording is too short, and 2 when the file cannot be read or the
- * arguments are invalid.
+ * Exit 0 when every note sounds in its turn, 1 when one does not, another
+ * tone sounds, or the recording is too short, and 2 when the file cannot be
+ * read or the arguments are invalid.
  */
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MAX_NOTES 16
+
+/* A sample within QUIET of zero is silence, and belongs to no run of the
+   wave. A measured frequency within TOLERANCE of a named one, as a fraction
+   of it, is that note; the closest notes of a scale differ by 6%. */
+#define QUIET     256
+#define TOLERANCE 0.03
 
 /* A RIFF/WAVE header, as QEMU writes it: 16-bit samples, one or two channels,
    and the data chunk last. Only what is needed to find the samples is read.
@@ -116,22 +120,142 @@ static int wav_open(const char *path, FILE **out, struct wav *w)
     return 0;
 }
 
-/** The energy at `freq` in the `n` samples at `s`, recorded at `rate`, by
- * Goertzel's algorithm. */
-static double energy_at(const short *s, long n, double freq, double rate)
+/** Order run lengths for qsort. */
+static int by_length(const void *a, const void *b)
 {
-    double w = 2.0 * 3.14159265358979323846 * freq / rate;
-    double coeff = 2.0 * cos(w);
-    double s1 = 0.0, s2 = 0.0;
-    long i;
+    long x = *(const long *)a, y = *(const long *)b;
+
+    return (x > y) - (x < y);
+}
+
+/**
+ * The frequency of the square wave in the `n` samples at `s`, recorded at
+ * `rate`, or -1 when fewer than half of them are sound.
+ *
+ * The half period of a square wave is the length of its runs of one sign, so
+ * the frequency is the rate over twice the median length of the runs that
+ * begin and end in the window; `runs` has room for `n` of them. A run begins
+ * at the first sample that is sound of the other sign, so a silent sample
+ * between two runs, which QEMU's resampling can leave, belongs to neither. A
+ * device that plays a period of its buffer again, or misses one, breaks the
+ * runs at the ends of that period and leaves the others whole, so the median
+ * does not move. A window of sound with fewer than two whole runs gives 0.
+ */
+static double frequency_of(const short *s, long n, double rate, long *runs)
+{
+    long i, loud = 0, start = -1, n_runs = 0;
+    int sign = 0;
 
     for (i = 0; i < n; i++) {
-        double t = (double)s[i] / 32768.0 + coeff * s1 - s2;
+        int now;
 
-        s2 = s1;
-        s1 = t;
+        if (s[i] > -QUIET && s[i] < QUIET) {
+            continue;
+        }
+        loud++;
+        now = s[i] > 0 ? 1 : -1;
+        if (now != sign) {
+            if (start >= 0) {
+                runs[n_runs++] = i - start;
+            }
+            if (sign != 0) {
+                start = i;
+            }
+            sign = now;
+        }
     }
-    return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+    if (2 * loud < n) {
+        return -1.0;
+    }
+    if (n_runs < 2) {
+        return 0.0;
+    }
+    qsort(runs, (size_t)n_runs, sizeof(runs[0]), by_length);
+    return rate / (2.0 * (double)runs[n_runs / 2]);
+}
+
+/** The index of the frequency in `freqs` that `hz` is, or -1 for none. */
+static int note_of(double hz, const double *freqs, int n_notes)
+{
+    int i;
+
+    for (i = 0; i < n_notes; i++) {
+        double off = (hz - freqs[i]) / freqs[i];
+
+        if (off < TOLERANCE && off > -TOLERANCE) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Sweep the `frames` samples at `s`, recorded at `rate`, for the `n_notes`
+ * frequencies of `freqs`, and say what is wrong.
+ *
+ * A device that reads its buffer again before a late refill plays some of it
+ * twice, so the notes' lengths are not checked, only their order: each 50 ms
+ * window that is mostly sound is labelled with the note its frequency is, and
+ * the labels must visit every note in the order named, with no note before
+ * its predecessor. A window of less sound, which the edges of a note give,
+ * belongs to no note; a window of sound at no named frequency is a wrong tone.
+ * Returns 0 when the notes are right, 1 when they are not, and 2 when memory
+ * runs out.
+ */
+static int sweep(const short *s, long frames, double rate, const double *freqs, int n_notes)
+{
+    long win = (long)rate / 20; /* 50 ms */
+    long at, *runs;
+    int i, want = 0, bad = 0;
+    int seen[MAX_NOTES];
+
+    runs = (long *)malloc((size_t)win * sizeof(long));
+    if (runs == NULL) {
+        return 2;
+    }
+    for (i = 0; i < n_notes; i++) {
+        seen[i] = 0;
+    }
+    for (at = 0; at + win <= frames; at += win) {
+        double hz = frequency_of(s + at, win, rate, runs);
+        int note;
+
+        if (hz < 0.0) {
+            continue;
+        }
+        note = note_of(hz, freqs, n_notes);
+        if (note < 0) {
+            printf("wavcheck: a tone of %.0f Hz sounds where %.0f Hz was asked for\n", hz,
+                   freqs[want]);
+            bad++;
+            break;
+        }
+        seen[note] = 1;
+        if (note == want + 1) {
+            want++;
+        } else if (note > want + 1 || note < want) {
+            printf("wavcheck: %.0f Hz sounds where %.0f Hz was asked for\n", freqs[note],
+                   freqs[want]);
+            bad++;
+            break;
+        }
+    }
+    free(runs);
+    if (bad != 0) {
+        printf("wavcheck: the notes are not what was asked for\n");
+        return 1;
+    }
+    for (i = 0; i < n_notes; i++) {
+        if (!seen[i]) {
+            printf("wavcheck: %.0f Hz never sounds\n", freqs[i]);
+            bad++;
+        }
+    }
+    if (bad != 0) {
+        printf("wavcheck: %d of %d notes are not what was asked for\n", bad, n_notes);
+        return 1;
+    }
+    return 0;
 }
 
 /**
@@ -142,23 +266,16 @@ static double energy_at(const short *s, long n, double freq, double rate)
  * of the file means that the samples run to the end. Only the first channel
  * is read: a tone is in every channel, and mixing them would cancel it in a
  * recording whose channels are out of phase. QEMU writes from when the
- * machine opens the device until it is stopped, so the silence, samples
- * within 256 of zero, is trimmed from both ends when at least a quarter of a
- * second is left. The notes are not equal parts of what is left, since the
- * device opens during the first and the machine is stopped during the last,
- * so only their order is checked: each 50 ms window is labelled with its
- * loudest frequency, and the labels must visit every note in the order
- * named, with no note before its predecessor. A window whose loudest energy
- * is under 1.0 has no sound in it and belongs to no note; without that, a
- * machine playing almost nothing would still have every window labelled in
- * order.
+ * machine opens the device until it is stopped, so the silence is trimmed
+ * from both ends when at least a quarter of a second is left, and what is
+ * left is swept.
  */
 int main(int argc, char **argv)
 {
     struct wav w;
     FILE *f;
     double freqs[MAX_NOTES];
-    int n_notes = 0, i, rc, bad = 0;
+    int n_notes = 0, i, rc;
     long frames, per_note, first = 0;
     short *samples;
 
@@ -216,10 +333,10 @@ int main(int argc, char **argv)
     {
         long lo = 0, hi = frames;
 
-        while (lo < frames && samples[lo] > -256 && samples[lo] < 256) {
+        while (lo < frames && samples[lo] > -QUIET && samples[lo] < QUIET) {
             lo++;
         }
-        while (hi > lo && samples[hi - 1] > -256 && samples[hi - 1] < 256) {
+        while (hi > lo && samples[hi - 1] > -QUIET && samples[hi - 1] < QUIET) {
             hi--;
         }
         if (hi - lo >= (long)w.rate / 4) {
@@ -234,56 +351,13 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    {
-        long win = (long)w.rate / 20; /* 50 ms */
-        long at;
-        int want = 0;
-        int seen[MAX_NOTES];
-        double quiet = 1.0;
-
-        for (i = 0; i < n_notes; i++) {
-            seen[i] = 0;
-        }
-        for (at = first; at + win <= first + frames; at += win) {
-            int loudest = 0;
-            double best = energy_at(samples + at, win, freqs[0], (double)w.rate);
-
-            for (i = 1; i < n_notes; i++) {
-                double e = energy_at(samples + at, win, freqs[i], (double)w.rate);
-
-                if (e > best) {
-                    best = e;
-                    loudest = i;
-                }
-            }
-            if (best < quiet) {
-                continue;
-            }
-            seen[loudest] = 1;
-            if (loudest == want + 1) {
-                want++;
-            } else if (loudest > want + 1 || loudest < want) {
-                printf("wavcheck: %.0f Hz sounds where %.0f Hz was asked for\n", freqs[loudest],
-                       freqs[want]);
-                bad++;
-                break;
-            }
-        }
-        for (i = 0; i < n_notes; i++) {
-            if (!seen[i]) {
-                printf("wavcheck: %.0f Hz is never the loudest\n", freqs[i]);
-                bad++;
-            }
-        }
-    }
-
+    rc = sweep(samples + first, frames, (double)w.rate, freqs, n_notes);
     free(samples);
-    if (bad != 0) {
-        printf("wavcheck: %d of %d notes are not what was asked for\n", bad, n_notes);
-        return 1;
+    if (rc != 0) {
+        return rc;
     }
-    printf("wavcheck: ok: %d notes over %ld frames, each the loudest in its "
-           "turn and in the order asked for\n",
+    printf("wavcheck: ok: %d notes over %ld frames, each sounding in its turn and in the "
+           "order asked for\n",
            n_notes, frames);
     return 0;
 }

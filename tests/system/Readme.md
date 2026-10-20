@@ -105,7 +105,7 @@ A suite that starts QEMU itself with `-serial stdio < FIFO > LOG` sources `drive
 ### Checkers and fixtures
 
 * `checkers/pcapcheck.c` reads a QEMU packet capture: `bcast` checks a broadcast datagram, a source address, an ARP reply or request, or the gateway a packet left through; `netconsole` checks the kernel's netconsole frames and the log in them; `rawwire` checks the hop limits and checksum of the raw-socket probe's sends.
-* `checkers/wavcheck.c` reads the recording of QEMU's `wav` audio backend and checks that the machine played the notes it was asked for, in order. It accepts at most 16 frequencies and refuses a longer list.
+* `checkers/wavcheck.c` reads the recording of QEMU's `wav` audio backend and checks that the machine played the square-wave notes it was asked for, in order, and no other tone, measuring each 50 ms by the median length of the wave's runs, which a period played twice or missed does not move. It accepts at most 16 frequencies and refuses a longer list.
 * `checkers/usblatency.awk` and `checkers/grow_measure.awk` read the USB latency records and the grow's counters off a console log.
 * `fixtures/mkfixture.c` makes the disk `bootprobe` reads, a FAT-typed partition filled with the probe's pattern, and a sparse 260 GiB disk with known sectors at 5 GiB and 258 GiB for the 64-bit disk offsets; `mkext2fixture.sh` makes the ext2 suite's fixture disk.
 * The other C files under `fixtures/` are programs the self-tests compile: the runner's helper with test hooks, a worker that leaves processes behind, a dummy SSH peer, and the VFS unmount path with substitutes. `fixtures/grow_tool.sh` is typed into the recovery machine by the grow suite to wrap its ext2 tools with counter reads.
@@ -159,7 +159,7 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `doom_mutate.sh`: the `doom` suite's missing-WAD row, and its wait for the game's second report.
 * `agents_mutate.sh`: the `agents` suite's `gh` and `muse` rows, against recipes that link each program to a file its package does not have, its `claude` row, against managed settings that leave `claude update` on, its `codex` row, against settings that leave Codex's background server on, its `agy` row, against a profile script that leaves Antigravity CLI's updater on in a login shell, its `claude-print` and `claude-screen` rows, against a kernel whose paths do not go on past `/proc/PID/fd/N`, its `worker-session` row, against a `tools/flow/worker.sh` that leaves `@ISSUE@` in its session's prompt, its `codex-screen` row, against the settings that leave Codex's background server on, and, in a run of their own, its `codex-exec` and `codex-screen` rows, against settings that turn on Codex's sandbox.
 * `hda_mutate.sh`: the `/proc/audio` rows of `musl/hdaprobe`, the audio diagnostic no suite runs.
-* `sb16_mutate.sh`: the `audio` suite's SB16 row.
+* `sb16_mutate.sh`: the `audio` suite's SB16 row, on the host's clock and on a slow instruction clock.
 * `usb_latency_mutate.sh`: the two USB wake-to-dispatch rows.
 * `usbdisk_mutate.sh`: the `usbdisk` suite's pull rows, against faults in the VFS's removal of a mount.
 * `stackoverrun_mutate.sh`: the `memory` suite's two stack-overrun rows.

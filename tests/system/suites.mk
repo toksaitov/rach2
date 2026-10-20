@@ -161,11 +161,10 @@ $(HOSTPEER): tests/system/runner/hostpeer.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 # What a machine played, measured off the recording QEMU's wav backend writes
-# (tests/system/checkers/wavcheck.c). The maths library is the only one any
-# test tool here links.
+# (tests/system/checkers/wavcheck.c).
 $(WAVCHECK): tests/system/checkers/wavcheck.c
 	@mkdir -p $(dir $@)
-	$(HOST_LINK) -lm
+	$(HOST_LINK)
 # The three runners (tests/system/runner/): the serial harness every suite
 # drives, the probe runner one boot scores, and the pty driver the SSH suites
 # answer their password prompts through.
@@ -447,7 +446,11 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 # the machine before the notes and again after them, and the count on the
 # audio controller's message vector must have grown between the two: the notes
 # come out either way, since the timer services the stream as well, and the
-# growth is what shows that the controller's own interrupt fed them.
+# growth is what shows that the controller's own interrupt fed them. A second
+# boot plays the scale on a Sound Blaster 16. Both boots run on any
+# accelerator: rach2/sys/audio/Readme.md says why late refills cannot change
+# the order of the notes, and a device that stops taking frames makes the
+# command report a stall.
 AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
 AUDIO_LOG = $(IMAGES_DIR)/audio-scale.log
 run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
@@ -458,7 +461,7 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	    --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 \
 	    --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=$(AUDIO_WAV) \
 	    --log $(AUDIO_LOG) \
-	    --timeout 120 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" \
+	    --timeout 120 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" --never "audio: stalled" \
 	    "expect=Type 'help'" "send=exec /intrprobe" "expect=INTRPROBE OK" \
 	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." \
 	    "send=exec /intrprobe" "expect=INTRPROBE OK"
@@ -473,16 +476,14 @@ run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
 	        if (after <= before) { print "audio-test: the audio controller sent no message while it played (" before " then " after ")" > "/dev/stderr"; exit 1; } \
 	        print "audio-test: the audio controller took " after - before " interrupts on its message vector while it played: OK"; \
 	    }' $(AUDIO_LOG)
-	RACH2_QEMU_ACCEL=tcg $(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.rescue rach2.nonet" \
+	$(HARNESS) --kernel $(BOOT_KERNEL) --append "rach2.rescue rach2.nonet" \
 	    --net hubport,id=net0,hubid=0 \
 	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-icount --qemu-arg=shift=3,sleep=off \
 	    --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
 	    --qemu-arg=-audiodev \
 	    --qemu-arg=wav,id=au0,timer-period=500,path=$(IMAGES_DIR)/audio-scale-sb16.wav \
 	    --log $(IMAGES_DIR)/audio-scale-sb16.log \
-	    --timeout 120 --ok "Done." --never "AUDIO_START failed." \
+	    --timeout 120 --ok "Done." --never "AUDIO_START failed." --never "audio: stalled" \
 	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done."
 	$(WAVCHECK) scale $(IMAGES_DIR)/audio-scale-sb16.wav 262 294 330 349 392
 # `tests/run diskfull`: a file system with no room left. The probe writes until
