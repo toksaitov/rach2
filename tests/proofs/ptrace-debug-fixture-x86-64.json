@@ -1,0 +1,131 @@
+{
+  "schema_version": 1,
+  "proof": "ptrace-debug-fixture-x86-64",
+  "summary": "ptracemusl's delayed and delayed-poll rows and its entry row on x86-64, each booted alone, on a kernel built from a private copy with the debug-entry fixture of tests/proofs/ptrace_fixture.py, with faults in the forced delivery of a deferred hit, in signal_pending's view of it, and in the fixture itself; the entry row and the faults of the debug interrupt stack and GS are this architecture's alone",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/arch/x86/debugreg.c",
+    "rach2/sys/syscall_proc.c",
+    "tests/proofs/ptrace_fixture.py",
+    "rach2/sys/arch/x86_64/idt.c",
+    "rach2/sys/arch/x86_64/isr_handler.s"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/ptracemusl"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 sh tests/proofs/ptrace.sh fixture ${SRC} ${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 exec sh tests/proofs/ptrace.sh rows ${WORK} delayed delayed-poll entry"
+    ],
+    "bound_s": 900
+  },
+  "faults": [
+    {
+      "name": "unforced",
+      "summary": "a deferred user hit posted to the thread in place of forced, so that the blocked SIGTRAP waits",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "            signal_force(current_proc, SIGTRAP, &info);",
+          "replace": "            signal_post_thread(current_proc, SIGTRAP, &info);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "delayed debug exception lost its frame or result"
+        ]
+      }
+    },
+    {
+      "name": "pending",
+      "summary": "signal_pending ignores the pending debug status, so that an infinite poll sleeps on",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    debug_pending = arch_debug_pending();",
+          "replace": "    debug_pending = 0;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "delayed infinite poll did not trap"
+        ]
+      }
+    },
+    {
+      "name": "missing-injection",
+      "summary": "the fixture without its int $1 at the system-call entry, so that no debug exception is taken there",
+      "edits": [
+        {
+          "file": "tests/proofs/ptrace_fixture.py",
+          "find": "    edit(tree, *entry)\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "delayed debug exception lost its status"
+        ]
+      }
+    },
+    {
+      "name": "wrong-entry-pc",
+      "summary": "the fixture without its entry PC, so that debugreg_defer_user does not take the PC after int $1 for the entry's",
+      "edits": [
+        {
+          "file": "tests/proofs/ptrace_fixture.py",
+          "find": "    edit(tree, \"rach2/sys/arch/x86/debugreg.c\",\n         \"    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {\",\n         \"    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY + 2) {\")\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "delayed debug exception lost its status"
+        ]
+      }
+    },
+    {
+      "name": "stack",
+      "summary": "the debug exception's gate given no interrupt stack, so that a hit on an invalid user stack double faults",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86_64/idt.c",
+          "find": "    set_gate(1, isr1, GATE_KERNEL, IST_DEBUG);",
+          "replace": "    set_gate(1, isr1, GATE_KERNEL, 0);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "kernel exception: double fault"
+        ]
+      }
+    },
+    {
+      "name": "gs",
+      "summary": "the debug entry chooses GS by the saved CS, which is still the user's at the system-call entry, so that the machine resets",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86_64/isr_handler.s",
+          "find": "    js .debug_kernel_gs",
+          "replace": "    testb $3, F_CS(%rsp)\n    jz .debug_kernel_gs"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "qemu had already exited"
+        ]
+      }
+    }
+  ]
+}

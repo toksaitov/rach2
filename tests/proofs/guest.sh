@@ -12,7 +12,9 @@
 #   guest.sh image WORK MIB ENTRY... make WORK/test.krffs, a KRFFS image of
 #                                    MIB MiB, with each ENTRY, a PATH of the
 #                                    build tree or PATH=/NAME, staged at
-#                                    /NAME and read back
+#                                    /NAME and read back; a PATH that begins
+#                                    with / is a file outside the build tree,
+#                                    such as a program built into WORK
 #   guest.sh boot WORK ARG...        boot WORK/kernel with WORK/test.krffs
 #                                    under the harness with ARGs, and print
 #                                    its output and the console's log
@@ -82,7 +84,11 @@ case $verb in
                 *=/*) path=${entry%%=*} name=${entry#*=} ;;
                 *) path=$entry name=/${entry##*/} ;;
             esac
-            printf 'file 0755 %s %s\n' "$name" "$tree/$path" >>"$work/test.manifest"
+            case $path in
+                /*) ;;
+                *) path=$tree/$path ;;
+            esac
+            printf 'file 0755 %s %s\n' "$name" "$path" >>"$work/test.manifest"
         done
         rm -f "$work/test.krffs"
         dd if=/dev/zero of="$work/test.krffs" bs=1048576 count="$mib" 2>/dev/null

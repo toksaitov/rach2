@@ -59,13 +59,14 @@
  * in PTRACE_LISTEN stops it before its next instruction.
  *
  * With no argument the program runs every ordinary row. With one argument it
- * runs the named_rows entry of that name, as ptrace_debug_mutate.sh does.
+ * runs the named_rows entry of that name, as tests/proofs/ptrace.sh does.
  * It prints "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
  * "PTRACEMUSL FAIL (detail: errno N)" and exits 1 at the first failure.
  * PTRACE_DEBUG_ENTRY builds also have delayed and delayed-poll rows, which
- * require the debug-entry fixture of ptrace_debug_mutate.sh. They require a
- * forced TRAP_HWBKPT at the system call's return with SIGTRAP blocked, and
- * EINTR from an infinite poll. They fail if the debug entry is not exercised.
+ * require the debug-entry fixture of tests/proofs/ptrace_fixture.py. They
+ * require a forced TRAP_HWBKPT at the system call's return with SIGTRAP
+ * blocked, and EINTR from an infinite poll. They fail if the debug entry is
+ * not exercised.
  *
  * NAME=VALUE arguments are not row names. Given `machine=native`
  * (tests/native/Readme.md), the row of a /proc/PID/mem descriptor leaves out

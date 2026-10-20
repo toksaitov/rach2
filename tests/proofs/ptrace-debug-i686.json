@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "proof": "ptrace-debug-i686",
+  "summary": "ptracemusl's step, copy, poll, sigwait and entry rows on i686, each booted alone from a probe built with PTRACE_DEBUG_ENTRY, with faults in system-call stepping and debug exception delivery; its faults differ on x86-64, which adds the sigwait row's",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/ptracemusl"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/ptrace.sh build ${WORK}"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec sh tests/proofs/ptrace.sh rows ${WORK} step copy poll sigwait entry"
+    ],
+    "bound_s": 900
+  },
+  "faults": [
+    {
+      "name": "step",
+      "summary": "PT_STEP taken out of the test at a system call's exit, so that a step over a system call runs on",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (current_proc && (current_proc->ptrace & (PT_SYSCALL | PT_STEP))) {",
+          "replace": "    if (current_proc && (current_proc->ptrace & PT_SYSCALL)) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "syscall step ran the next instruction or lost its result"
+        ]
+      }
+    }
+  ]
+}
