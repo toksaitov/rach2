@@ -168,8 +168,9 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
                      struct etude_machine **m);
 
 /**
- * Serve every machine until one ends, its console or state changes, or
- * `timeout_ms` passes; -1 sets no time.
+ * Serve every machine until one ends, its console or state changes, an
+ * attempt of the launcher's executor writes output, or `timeout_ms` passes;
+ * -1 sets no time.
  *
  * @return the machine that ended, each once, or NULL.
  */
@@ -179,8 +180,10 @@ struct etude_machine *etude_qemu_wait(struct etude_qemu *q, int timeout_ms);
  * Wait as etude_qemu_wait does, and also for one of the `n` descriptors of
  * `w` to be ready, which sets its `revents`, and, when `host` is not NULL,
  * for a host attempt of the caller's on the launcher's executor to finish,
- * which is put in `*host`. Each call serves the machines at least once; with
- * no machine running and no descriptor it returns at once.
+ * which is put in `*host`. Since the output of a host attempt ends the wait
+ * too, a caller that looks for a line in it reads it as it comes. Each call
+ * serves the machines at least once; with no machine running and no
+ * descriptor it returns at once.
  *
  * @return the machine that ended, each once, or NULL.
  */
