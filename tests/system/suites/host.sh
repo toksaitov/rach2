@@ -337,6 +337,14 @@ if [ -z "${HOST_PRINT_COMMANDS:-}" ]; then
         echo "hosttest: result: fail: prereq.sh's reports, installs and recipe" >&2
         fail=1
     fi
+    if sh tests/system/etude_version_test.sh >"$VDIR/etude_version.rlog" 2>&1; then
+        echo "hosttest: result: pass: etude's versions built once, reused and kept side by side"
+        grep '^etude-version-test: not run: ' "$VDIR/etude_version.rlog" | sed 's/^/    /'
+    else
+        cat "$VDIR/etude_version.rlog"
+        echo "hosttest: result: fail: etude's versions built once, reused and kept side by side" >&2
+        fail=1
+    fi
     if python3 -B tests/system/agents_credentials_test.py >"$VDIR/agents_credentials.rlog" 2>&1; then
         echo "hosttest: result: pass: the agents' credential files and log scan"
     else

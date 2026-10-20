@@ -130,7 +130,8 @@ last=${listed##* }
 C="$WORK/clean"
 for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Makefile \
     krffs/manifest_deps.sh krffs/programs.sh rach2/Makefile rach2/sources.mk ish/Makefile \
-    ish/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile rach2/sys/arch/*/sources.mk; do
+    ish/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile tools/etude/sources.mk \
+    rach2/sys/arch/*/sources.mk; do
     mkdir -p "$C/$(dirname "$f")"
     cp "$f" "$C/$f"
 done

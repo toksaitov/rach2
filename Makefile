@@ -429,10 +429,10 @@ $(SIZECHECK): tools/verify/sizecheck.c
 
 # etude's validator (tools/etude/casecheck.c): the case manifests, report
 # records and results against their contracts, which suitecheck.sh runs. Etude
-# is hosted C99, so the validator is compiled as C99.
-CASECHECK_SRC = tools/etude/casecheck.c tools/etude/cases.c tools/etude/judge.c \
-                tools/etude/json.c tools/etude/schema.c utils/sha256.c
-$(CASECHECK): $(CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/etude/schema.h \
+# is hosted C99, so the validator is compiled as C99. sources.mk lists the
+# sources of etude's programs, for this build and for a cached version's.
+include tools/etude/sources.mk
+$(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/etude/schema.h \
               utils/sha256.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -std=c99 -Itools/etude -Iutils
@@ -444,10 +444,8 @@ $(CASECHECK): $(CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/
 # compilation database lists them.
 ASCIISCAN  = build/tools/verify/asciiscan
 ETUDEHISTORY = build/tools/etude/history_check
-ETUDE_HISTORY_SRC = tools/etude/history.c tools/etude/history_json.c \
-                    tools/etude/history_collect.c utils/sha256.c
-$(ETUDEHISTORY): tools/etude/history_check.c $(ETUDE_HISTORY_SRC) \
-                 tools/etude/history_json.h tools/etude/include/etude/history.h utils/sha256.h
+$(ETUDEHISTORY): $(ETUDE_HISTORY_CHECK_SRC) tools/etude/history_json.h \
+                 tools/etude/include/etude/history.h utils/sha256.h
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99
 

@@ -1,6 +1,6 @@
 # Etude
 
-Etude is the test runner that replaces `tests/run`: a controller in hosted C99 that runs Rach2's tests on Linux, macOS, Windows and Rach2, and `etude-guest`, its helper inside Rach2. This directory implements the history store and the executors of host processes on POSIX systems and on Windows, and defines the contracts the runner parts share: the case manifest, the report a test program writes, the results of an attempt, the frames between the controller and `etude-guest`, the invocation of a guest case, the interface of a machine scenario, and the history of runs. Its validator, `casecheck`, checks manifests, reports and results against them.
+Etude is the test runner that replaces `tests/run`: a controller in hosted C99 that runs Rach2's tests on Linux, macOS, Windows and Rach2, and `etude-guest`, its helper inside Rach2. This directory implements the history store, the executors of host processes on POSIX systems and on Windows, and the cache of etude's versions on a machine, and defines the contracts the runner parts share: the case manifest, the report a test program writes, the results of an attempt, the frames between the controller and `etude-guest`, the invocation of a guest case, the interface of a machine scenario, and the history of runs. Its validator, `casecheck`, checks manifests, reports and results against them.
 
 ## Use
 
@@ -12,6 +12,14 @@ Etude is the test runner that replaces `tests/run`: a controller in hosted C99 t
     casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
     casecheck [-s SCHEMAS] schema NAME FILE...
     casecheck --selftest DIR
+
+`version.sh` builds etude's programs from the source of this tree, or of a commit, on a machine that has a POSIX sh, make, a C compiler and a SHA-256 tool and nothing of etude, unless that machine's cache has them built already:
+
+    sh tools/etude/version.sh [-r REV] [-c CC] [-C CACHE] [-w] HOST
+    sh tools/etude/version.sh [-r REV] [-c CC] [-C CACHE] -l
+    sh tools/etude/version.sh [-r REV] [-c CC] [-C CACHE] -s
+
+It reaches HOST through ssh(1), a Windows machine with `-w`; `-l` builds on this machine and `-s` prints the script it would send. `-c` gives the compiler's command line and `-C` the cache, each by default the platform's. It prints `etude-version: result: built KEY DIR` or `etude-version: result: reused KEY DIR`, DIR being the version's directory on the machine, whose `bin/` has the programs, and exits 0; it exits 1 when the version is neither built nor found.
 
 `manifest` checks each manifest's shape by its schema and then the rules below that relate its values: identities given once, alternatives that name declared assertions, an assertion's source that its domain has, a role that agrees with its end and its native plan, artifacts that `prepare` makes, bounds in order and inside the whole case's, the fixtures each placement has, and, with `-r`, a `where` that names a line of the tree at ROOT. `timing` checks them so and prints each line a timing assumption declares, as `FILE:LINE KIND CASE`. `report` judges a program's output as an executor will, by Report records, and prints each assertion the program must give, the report's state and the outcome; it exits 0 only for a pass. `results` checks each document of a JSON Lines file by Results, and with `-o` refuses an attempt whose assertions give another outcome than the one a history records. `schema` checks documents, or the lines of a `.jsonl` file, against `schemas/NAME.schema.json`. A finding goes to stderr as `casecheck: FILE:LINE: WHAT`; the status is 1 after one and 2 for a wrong usage or a file that cannot be read. SCHEMAS is `tools/etude/schemas` by default.
 
@@ -34,6 +42,8 @@ Etude is the test runner that replaces `tests/run`: a controller in hosted C99 t
 | [`json.c`](json.c), [`schema.c`](schema.c) | The strict JSON reader and canonical form, and the checker of the schemas' keywords |
 | [`win/winexec.h`](win/winexec.h) | The Windows adapter: processes in Job Objects, their output, usage and end, and paths, clocks and sockets |
 | [`win/exec.c`](win/exec.c) | The executor of host processes on Windows, on the adapter |
+| [`version.sh`](version.sh), [`bootstrap.sh`](bootstrap.sh) | The request for a version on a machine, and its build there into the machine's cache |
+| [`sources.mk`](sources.mk), [`version.mk`](version.mk) | The sources of the programs, and the recipe that builds a cached version |
 
 The examples beside the schemas describe real tests as their conversions will declare them: [a host program](schemas/case.host.example.json), `tests/host/sha256_hosttest.c`; [guest programs](schemas/case.guest.example.json), four probes of the `default` suite, three of which also run natively and one of which needs the designated init; and [a machine scenario](schemas/case.machine.example.json), the power-off and readback of the `shutdown` suite. [`schemas/invocation.example.json`](schemas/invocation.example.json) runs `errnoprobe` natively, and [`schemas/results.example.jsonl`](schemas/results.example.jsonl) gives six attempts' results: a native pass, a pass by the trusted branch of `rngprobe`, an assertion failure, the designated init's exit, a lost connection and a report with an assertion not run. The inventory digests in the results are those of the guest example's cases; the other digests and the identities are illustrations.
 
@@ -178,7 +188,36 @@ The plan's items refer to a case by three digests, each of a canonical JSON docu
 
 Equal manifests therefore give equal digests, and a comparison of two runs finds a changed workload by its digest. The results document of each attempt is the history's `assertion_results` blob.
 
+### The version cache
+
+A machine keeps the versions of etude built on it in a cache: `${XDG_CACHE_HOME:-$HOME/.cache}/etude` on Linux, macOS and Rach2, `%LOCALAPPDATA%\etude` on Windows, or the directory `-C` gives. A version is etude's programs built from one source by one recipe, for one platform, by one compiler. Its key is the SHA-256 of the first five lines of its record:
+
+    etude-version 1
+    source 1ca680ae57597b453d86eb671e431d2d4d8967214c0a8c1e6f629c3501073ce0
+    platform macos arm64
+    compiler a856ec74c559401131ad608625ef252fb2db6c78bc0c480c1c4c782ee4896db1
+    flags -std=c99 -O2
+
+`source` is the SHA-256 of the source's list, a line `SHA256  PATH` for each of its files in the byte order of their paths. The source is the C files, headers and make files under `tools/etude` but its fixtures, the schemas under `tools/etude/schemas`, and `utils/sha256.c` and `sha256.h`; a change anywhere else, a kernel commit among them, keeps the key. `platform` is the platform as `tools/setup/prereq.sh` names it, and the machine as `uname -m` gives it. `compiler` is the SHA-256 of what the compiler prints for `-v`, and `flags` are its flags, which with `version.mk` make the recipe.
+
+The rest of the record gives the `key`, the compiler's command line as `cc`, the version's directory as `build`, relative to the cache, and a line `program NAME SHA256` for each program. The cache has two directories:
+
+| Path | Contents |
+| --- | --- |
+| `versions/KEY` | The record of a published version, a hard link of its build's `version` |
+| `builds/KEY.XXXXXX/` | A build: `src/`, its source; `sources`, the source's list; `bin/`, the programs; `version`, its record |
+
+Versions of different keys live side by side, and a published version is never changed. A build directory that no record names is a build that failed or was stopped, and nothing uses it. A published version whose record or programs do not match their digests is damaged, and a request for it fails until a person removes `versions/KEY`.
+
 ## Design
+
+### Building a version
+
+`version.sh` makes a script of `bootstrap.sh`, the source and the call of `etude_main`, and gives it to a POSIX sh on the machine with `ssh -T -o BatchMode=yes HOST 'sh -s'`. The account's own shell runs that command, and `sh -s`, a word and a flag, reads the same in sh, bash, dash, zsh, ksh, fish and csh; for Windows, `C:\msys64\usr\bin\env.exe PATH=/usr/bin:/ucrt64/bin sh -s` reads the same in cmd.exe and in PowerShell, the shells its SSH server offers. Each file of the source is the body of a quoted here-document whose end line has a random nonce in it. The script defines functions alone until its last line, `etude_main < /dev/null`, so that a script cut short anywhere ends in a syntax error or before that line, and changes nothing on the machine.
+
+`etude_main` chooses the compiler and flags of its platform: `cc` with `-std=c99 -O2`; `-std=c99 -static` on Rach2, as its TinyCC links; MinGW-w64's `/ucrt64/bin/gcc` and programs named `.exe` on Windows. It computes the key, and when `versions/KEY` exists it checks the record's key and the programs' digests and reports the version reused. Otherwise it makes a build directory with `mktemp -d`, writes the source there, requires the list's digest to be the one `version.sh` computed, runs `make -f tools/etude/version.mk` in the source, writes the record and checks it, and publishes it with `ln`, which fails when `versions/KEY` exists. Of two builds of one key at once the first link wins, and the other removes its directory and reports the winner's version reused. An exit trap removes the directory of a build that failed, or that a signal other than SIGKILL stopped.
+
+The result is the line `@etude-version NONCE built|reused KEY DIR` on the machine's standard output. `version.sh` takes only the line with its own nonce, and passes the rest, such as what the account's startup files print, to stderr.
 
 ### The history store
 
@@ -230,13 +269,15 @@ On Windows a host program runs through [`win/winexec.h`](win/winexec.h), which i
 
 ## Building
 
-`make build/tools/etude/history_check` builds the stream checker with the host compiler in C99. `history_check SCHEMA STREAM` checks a closed file's shape and stream order; a valid stream alone makes no claim about the run's outcome. It returns 2 for invalid input or a lost final record. The normal host-tools build includes it. Executors link `history.c`, `history_json.c` and `history_collect.c` and `utils/sha256.c`, and include `include/`. The POSIX executor is `capture.c` and the three sources of `posix/`; nothing builds it yet but its host test. The Windows executor is `capture.c`, `win/exec.c`, `win/winexec.c`, `win/winsys.c` and `win/winfmt.c`, built with MinGW-w64 and linked with `-lws2_32`; nothing builds it yet but `wincheck.sh`.
+[`sources.mk`](sources.mk) lists the sources of `casecheck` and `history_check` for the top-level Makefile and for [`version.mk`](version.mk), which builds them for a cached version. `make build/tools/etude/history_check` builds the stream checker with the host compiler in C99. `history_check SCHEMA STREAM` checks a closed file's shape and stream order; a valid stream alone makes no claim about the run's outcome. It returns 2 for invalid input or a lost final record. The normal host-tools build includes it. Executors link `history.c`, `history_json.c` and `history_collect.c` and `utils/sha256.c`, and include `include/`. The POSIX executor is `capture.c` and the three sources of `posix/`; nothing builds it yet but its host test. The Windows executor is `capture.c`, `win/exec.c`, `win/winexec.c`, `win/winsys.c` and `win/winfmt.c`, built with MinGW-w64 and linked with `-lws2_32`; nothing builds it yet but `wincheck.sh`.
 
 ## Limits
 
 The history store checks record shapes, stream order and local interval arithmetic. The executors other than the POSIX and Windows ones, `etude-guest` and `libetude-case` are not implemented, and `tests/cases/` has no manifest. The probes print their own lines and are judged by their exit status, as `tests/run` judges them now. A schema-valid document alone does not establish a complete case, a valid report or a pass. Cross-stream references, hashed content, assertion coverage and aggregate results require the consumer's checks.
 
 The POSIX executor has no command of its own and no caller but its test. It waits for the keeper's handshake inside `etude_exec_start`, and is used from one thread. It keeps no ledger: a claim it reports unconfirmed is for the caller to keep. Signals to the case's process group after the case's process has been reaped could reach a group whose number the system has reused. Elsewhere than Linux and macOS a process's start cannot be read, so a `child` record makes the cleanup unconfirmed.
+
+`bootstrap.sh` has not run on a Windows machine or on Rach2. Its test runs the Windows path under stand-ins for MSYS2's `uname` and `cygpath`, and BusyBox's sh and tools where the host has BusyBox, but neither MinGW-w64 nor Rach2's TinyCC. Without a terminal, sshd sends no signal when a connection is lost, so a build goes on and publishes its version, which the next request reuses. A build stopped by SIGKILL leaves its directory, which nothing deletes. The record has no admission format, so nothing yet refuses to run two versions whose claims on a machine disagree.
 
 `casecheck report` reads a file of output, not a live transport, and judges only the assertions whose source is the program; the executor's assertions need the end and the console that only an executor sees. The source checks of `suitecheck.sh` read the forms a line shows: a sleep through a probe's own wrapper is found at the wrapper's system call, and a skip only where a line prints it.
 
@@ -245,6 +286,8 @@ The POSIX executor has no command of its own and no caller but its test. It wait
 `tests/run host` runs `etude_history_hosttest.c` under the sanitizers. It checks all record kinds, existing complete and incomplete examples, rejected shapes and interval arithmetic, concurrent private writers, competing creation of one stream, inherited writer refusal, interrupted tails, interior damage, duplicate IDs, sequence gaps, byte limits, write failure, clocks, missing measurements, overflow and simultaneous memory peaks. `etude_history_mutate.sh` proves the interrupted-tail and missing-processor-scope checks with faults in private source copies, followed by a restored pass. It changes no source in the working tree.
 
 It also runs [`tests/host/etude_exec_hosttest.c`](../../tests/host/etude_exec_hosttest.c), which runs itself as the case's program. Eleven attempts run at once and each must keep its own identity, output and end: two exits, a signal, three cancellations (one obeying SIGTERM, one ignoring it, one with a child stopped by SIGSTOP whose handler must run), reported and unreported descendants, the processor time and memory of a tree, and output past its bound with a record after it. The test also checks POSIX interfaces alone, the subreaper on Linux, a refused registration, a failed exec, a killed keeper and an ended controller.
+
+[`tests/system/etude_version_test.sh`](../../tests/system/etude_version_test.sh), which `tests/run host` runs, runs a private copy of this directory against stand-ins for ssh(1) and the compiler. It checks a build and its record; reuse, with no compile, after changes outside the source; versions of two sources and two compilers side by side, the first unchanged; the shells sh and bash, and dash, zsh, ksh, mksh, yash, fish, tcsh and csh where the host has them, each with startup files that print, a false result line among their output; BusyBox's sh and tools, as on Rach2, where the host has BusyBox; a build stopped by SIGTERM, which leaves nothing, and by SIGKILL, whose directory the next build passes by; a failed compile; a script cut at four places, which changes nothing; damaged source; two builds of one version at once; Windows; a commit's source; and a build of the real programs with the host's compiler, which then check examples. Its `--mutate` mode plants six faults in the copy and requires the rows each one breaks to fail.
 
 `casecheck --selftest tools/etude/fixtures` runs each line of [`fixtures/expect`](fixtures/expect), a command over the fixtures with the exit status and a line of output it must give, and `tests/run style` runs it. Each rule of a manifest has a case of `fixtures/rules.json` that breaks that rule alone, and a line that expects its message; the reports and results documents beside it each plant one fault in a valid one. A new rule adds its case, or its document, and its line.
 
