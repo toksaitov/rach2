@@ -1,60 +1,33 @@
 #!/bin/sh
-# recovery_key_test.sh [--mutate | --texts]: check `make recovery-key`, the
-# root Makefile's recipe that composes the recovery system's authorized keys,
-# and the KRFFS image that stages them, with no guest and no real keys.
+# recovery_key_test.sh: check `make recovery-key`, the root Makefile's
+# recipe that composes the recovery system's authorized keys, and the KRFFS
+# image that stages them, with no guest and no real keys.
 #
 # The recipe must keep the default key and a key file a person put in its
 # place, add the keys of RECOVERY_EXTRA_KEYS so that the image trusts both
 # the builder's key and the operator's, leave an unchanged file alone on a
 # second run, and refuse a private key, a missing, an empty, a malformed or
-# a mixed extra file without changing the keys. --mutate drops the extra key
-# in gen_recovery_key.sh, then compiles a stager that keeps only the first
-# line of authorized_keys; each must fail, and the restored sources must make
-# the same image. --texts checks that each fault is once in its source.
+# a mixed extra file without changing the keys. RECOVERY_KEY_SCRIPT, when
+# set, names the gen_recovery_key.sh the recipe runs, and
+# RECOVERY_KEY_STAGER a stageimage.krffs to stage with in place of one
+# compiled from the tree's source; tests/proofs/recovery-key.json runs
+# faulty ones so.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$REPO/tests/system/runlock.sh"
-    runlock_hold "$REPO" recovery-key-test "$REPO/tests/system/recovery_key_test.sh" "$@"
-fi
-case "${1:-}" in
-    ''|--mutate|--texts) ;;
-    *) echo "recovery-key-test: usage: recovery_key_test.sh [--mutate | --texts]" >&2; exit 2 ;;
-esac
-# once FILE TEXT: TEXT, which a fault changes, is once in FILE.
-once()
-{
-    if [ "$(grep -Fc "$2" "$1" 2>/dev/null)" != 1 ]; then
-        echo "recovery-key-test: not once in $1: $2" >&2
-        exit 1
-    fi
-}
-
-if [ "${1:-}" = --texts ]; then
-    # shellcheck disable=SC2016
-    once "$REPO/krffs/gen_recovery_key.sh" 'cat "$TMP.line" >> "$TMP"'
-    once "$REPO/krffs/stageimage.krffs.c" 'ok = stage_file(file_system, path, mode, uid, gid, data, len);'
-    echo 'recovery-key-test: texts: every fault is once in its source'
-    exit 0
-fi
+. "$REPO/tests/system/runlock.sh"
+runlock_hold "$REPO" recovery-key-test "$REPO/tests/system/recovery_key_test.sh" "$@"
+[ "$#" = 0 ] || { echo "recovery-key-test: usage: recovery_key_test.sh" >&2; exit 2; }
+key_script=${RECOVERY_KEY_SCRIPT:-$REPO/krffs/gen_recovery_key.sh}
+stager=${RECOVERY_KEY_STAGER:-}
 mkdir -p "$REPO/build"
 WORK=
 keep=
 
-# Put back the private sources and touch them.
-restore() {
-    cp "$WORK/key.source" "$WORK/krffs/gen_recovery_key.sh"
-    cp "$WORK/stager.source" "$WORK/stageimage.krffs.c"
-    touch "$WORK/krffs/gen_recovery_key.sh" "$WORK/stageimage.krffs.c"
-}
-
-# Put back the private sources, then remove the work directory, unless the
-# test failed after printing its path, which sets `keep`; a signal clears
-# `keep`.
+# Remove the work directory, unless the test failed after printing its path,
+# which sets `keep`; a signal clears `keep`.
 cleanup() {
     exit_status=$?
     [ -n "$WORK" ] || return 0
-    [ ! -f "$WORK/stager.source" ] || restore
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
         rm -rf "$WORK"
     fi
@@ -66,10 +39,7 @@ WORK=$(mktemp -d "$REPO/build/recovery-key-test.XXXXXX")
 echo "recovery-key-test: logs: $WORK"
 keep=1
 mkdir "$WORK/krffs" "$WORK/bin"
-cp "$REPO/krffs/gen_recovery_key.sh" "$WORK/krffs/gen_recovery_key.sh"
-cp "$REPO/krffs/stageimage.krffs.c" "$WORK/stageimage.krffs.c"
-cp "$WORK/krffs/gen_recovery_key.sh" "$WORK/key.source"
-cp "$WORK/stageimage.krffs.c" "$WORK/stager.source"
+cp "$key_script" "$WORK/krffs/gen_recovery_key.sh"
 
 # Report $* with the logs' directory and exit 1.
 fail() {
@@ -106,14 +76,15 @@ for tool in mkfs readfile; do
         $extra > "$tool.build.log" 2>&1
 done
 
-# Compile the stager whole from its private source.
-build_stager() {
+if [ -n "$stager" ]; then
+    cp "$stager" bin/stageimage.krffs
+else
     "${CC:-cc}" -O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 \
-        -I "$REPO/krffs" -o bin/stageimage.krffs stageimage.krffs.c \
+        -I "$REPO/krffs" -o bin/stageimage.krffs "$REPO/krffs/stageimage.krffs.c" \
         "$REPO/krffs/krffs_file_system.c" "$REPO/krffs/krffs_node.c" \
         "$REPO/krffs/krffs_platform.c" "$REPO/krffs/krffs_utilities.c" \
-        "$REPO/krffs/krffs_allocator.c"
-}
+        "$REPO/krffs/krffs_allocator.c" > stager.build.log 2>&1
+fi
 
 # check_pair PHASE: compose the keys with the operator's through the recipe,
 # stage them into PHASE.krffs through the manifest's directive, and require
@@ -132,14 +103,12 @@ check_pair() {
     fi
 }
 
-build_stager > stager.build.log 2>&1
-cp bin/stageimage.krffs fixed.stager
 make recovery-key > default.log 2>&1
 cmp -s krffs/authorized_keys krffs/recovery_authorized_keys || fail 'default key changed'
 cp operator.pub krffs/recovery_authorized_keys
 make recovery-key >> default.log 2>&1
 cmp -s operator.pub krffs/recovery_authorized_keys || fail 'custom key overwritten'
-check_pair fixed > fixed.log 2>&1
+check_pair pair > pair.log 2>&1 || { cat pair.log >&2; fail 'the builder and operator keys'; }
 echo 'recovery-key-test: passed: image trusts builder and operator'
 touch -t 200101010000 krffs/recovery_authorized_keys
 cp -p krffs/recovery_authorized_keys unchanged
@@ -157,43 +126,3 @@ for invalid in operator missing empty malformed mixed; do
 done
 echo 'recovery-key-test: passed: defaults, preservation, repetition and invalid input'
 
-if [ "${1:-}" = --mutate ]; then
-    # shellcheck disable=SC2016
-    sed 's/cat "\$TMP.line" >> "\$TMP"/: "\$TMP.line"/' key.source \
-        > krffs/gen_recovery_key.sh
-    if check_pair omitted > omitted.log 2>&1; then
-        fail 'omitted operator key passed'
-    fi
-    grep -q 'image does not trust both keys' omitted.log || fail 'unexpected omission failure'
-    restore
-    build_stager > restored.build.log 2>&1
-    check_pair restored > restored.log 2>&1
-    cmp -s fixed.krffs restored.krffs || fail 'restored image differs'
-    echo 'recovery-key-test: passed: omitted operator fails; restored image passes'
-
-    awk '
-        /ok = stage_file\(file_system, path, mode, uid, gid, data, len\);/ {
-            print "        if (strcmp(path, \"/root/.ssh/authorized_keys\") == 0) {"
-            print "            char *end = memchr(data, '\''\\n'\'', len);"
-            print "            if (end != NULL) len = (size_t)(end - data) + 1;"
-            print "        }"
-        }
-        { print }
-    ' stager.source > stageimage.krffs.c
-    build_stager > truncated.build.log 2>&1
-    cp bin/stageimage.krffs truncated.stager
-    if cmp -s fixed.stager truncated.stager; then
-        fail 'stager mutation did not change the executable'
-    fi
-    if check_pair truncated > truncated.log 2>&1; then
-        fail 'compiled key truncation passed'
-    fi
-    grep -q 'image does not trust both keys' truncated.log || fail 'unexpected truncation failure'
-    restore
-    build_stager > rebuilt.build.log 2>&1
-    cp bin/stageimage.krffs rebuilt.stager
-    cmp -s fixed.stager rebuilt.stager || fail 'rebuilt stager differs'
-    check_pair rebuilt > rebuilt.log 2>&1
-    cmp -s fixed.krffs rebuilt.krffs || fail 'rebuilt image differs'
-    echo 'recovery-key-test: passed: compiled truncation fails; restored image passes'
-fi

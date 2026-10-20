@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "proof": "recovery-key",
+  "summary": "recovery_key_test.sh, `make recovery-key` and the KRFFS image that stages its keys, on private copies of gen_recovery_key.sh and the stager",
+  "tree": "private",
+  "sources": ["krffs/gen_recovery_key.sh", "krffs/stageimage.krffs.c"],
+  "artifacts": ["${WORK}/gen_recovery_key.sh", "${WORK}/stageimage.krffs"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "cp ${SRC}/krffs/gen_recovery_key.sh ${WORK}/gen_recovery_key.sh && cc -O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 -I krffs -o ${WORK}/stageimage.krffs ${SRC}/krffs/stageimage.krffs.c krffs/krffs_file_system.c krffs/krffs_node.c krffs/krffs_platform.c krffs/krffs_utilities.c krffs/krffs_allocator.c"],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "RECOVERY_KEY_SCRIPT=${WORK}/gen_recovery_key.sh RECOVERY_KEY_STAGER=${WORK}/stageimage.krffs exec sh tests/system/recovery_key_test.sh"],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "omitted",
+      "summary": "gen_recovery_key.sh drops the operator's key from the composed list",
+      "edits": [
+        {"file": "krffs/gen_recovery_key.sh", "find": "cat \"$TMP.line\" >> \"$TMP\"", "replace": ": \"$TMP.line\""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["recovery-key-test: failed: image does not trust both keys", "recovery-key-test: failed: the builder and operator keys"]
+      }
+    },
+    {
+      "name": "truncated",
+      "summary": "the stager keeps only the first line of authorized_keys",
+      "edits": [
+        {"file": "krffs/stageimage.krffs.c", "find": "        ok = stage_file(file_system, path, mode, uid, gid, data, len);\n", "replace": "        if (strcmp(path, \"/root/.ssh/authorized_keys\") == 0) {\n            char *end = memchr(data, '\\n', len);\n            if (end != NULL) len = (size_t)(end - data) + 1;\n        }\n        ok = stage_file(file_system, path, mode, uid, gid, data, len);\n"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["recovery-key-test: failed: image does not trust both keys", "recovery-key-test: failed: the builder and operator keys"]
+      }
+    }
+  ]
+}
