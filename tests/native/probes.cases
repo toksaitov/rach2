@@ -95,6 +95,7 @@ case loopdevprobe.vfat image:loopdev-fat,loopdev-ext2,loopdev-krffs \
 case loopprobe \
     ports:7100,7101,7102,7200,7203,7205,7206,7207,7300,7301,7310,7311,7312,7313,7314,7315,7316,7317,7318,7319,7320,7321,7322,7323,7324,7325 -- \
     loopprobe machine=native
+case lstest -- lstest
 # machine=native leaves out the fall of MemFree after the unmap.
 case memprobe -- memprobe machine=native
 case memprobe.total -- memprobe total
