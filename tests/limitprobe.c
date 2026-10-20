@@ -31,11 +31,19 @@
  * owned by uid 1000 or 1001. Neither path nor limit depends on the root
  * file system's type.
  *
+ * A native run gives these as arguments (probe_args.h): `hello=PATH` is the
+ * readable file in place of /hello, `scratch=PATH` the file the size limit
+ * writes in place of /tmp/limitprobe.f, `ids=OLD:NEW,...` the users in place
+ * of 1000 and 1001, and the probe executes itself by the absolute path it was
+ * started by in place of /limitprobe. Without them it uses the paths and ids
+ * above.
+ *
  * Prints "LIMITPROBE OK" and exits 0, or "LIMITPROBE FAIL: " and the reason
  * and exits 1.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define RLIMIT_FSIZE  1
 #define RLIMIT_NPROC  6
@@ -63,6 +71,11 @@
 #define SIGCHLD 17
 #define SIGXFSZ 25
 #define SIG_IGN 1
+
+/* The readable file, the size limit's scratch file, this program's path and
+ * the two users, or the values the arguments give in their place. */
+static const char *hello_path, *scratch_path, *self_path;
+static long id_1000, id_1001;
 
 struct rlimit64 {
     unsigned cur_lo, cur_hi, max_lo, max_hi;
@@ -178,7 +191,7 @@ static int body_nofile(void)
         return 2;
     }
     for (i = 0; i < 8; i++) {
-        fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
+        fd = syscall3(SYS_OPEN, (long)hello_path, O_RDONLY, 0);
         if (fd < 0) {
             break;
         }
@@ -189,7 +202,7 @@ static int body_nofile(void)
     if (syscall2(SYS_DUP2, 0, 9) != -EBADF) {
         return 5; /* a number past the limit */
     }
-    argv[0] = (char *)"/limitprobe";
+    argv[0] = (char *)self_path;
     argv[1] = (char *)"show";
     argv[2] = 0;
     syscall3(SYS_EXECVE, (long)argv[0], (long)argv, 0);
@@ -207,7 +220,7 @@ static int body_sandbox(void)
     long tv[2];
     int fd, i;
 
-    fd = syscall3(SYS_OPEN, (long)"/hello", O_RDONLY, 0);
+    fd = syscall3(SYS_OPEN, (long)hello_path, O_RDONLY, 0);
     if (fd < 0 || set_limit(RLIMIT_FSIZE, 0, 0) != 0 || set_limit(RLIMIT_NOFILE, 0, 0) != 0 ||
         set_limit(RLIMIT_NPROC, 0, 0) != 0) {
         return 2;
@@ -248,7 +261,7 @@ static int body_fsize(void)
         syscall4(SYS_RT_SIGACTION, SIGXFSZ, (long)&ignore, 0, 8) != 0) {
         return 2;
     }
-    fd = syscall3(SYS_OPEN, (long)"/tmp/limitprobe.f", O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)scratch_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         return 3;
     }
@@ -256,7 +269,7 @@ static int body_fsize(void)
     again = syscall3(SYS_WRITE, fd, (long)block, 1);
     cut = syscall2(SYS_FTRUNCATE, fd, 8192);
     syscall1(SYS_CLOSE, fd);
-    syscall1(SYS_UNLINK, (long)"/tmp/limitprobe.f");
+    syscall1(SYS_UNLINK, (long)scratch_path);
     return wrote == 4096 && again == -EFBIG && cut == -EFBIG ? 0 : 4;
 }
 
@@ -297,7 +310,7 @@ static int body_hard(void)
     if (set_limit(RLIMIT_NOFILE, 512, 1024) != 0) {
         return 3; /* root raising it back */
     }
-    if (set_limit(RLIMIT_NOFILE, 512, 512) != 0 || syscall1(SYS_SETUID, 1000) != 0) {
+    if (set_limit(RLIMIT_NOFILE, 512, 512) != 0 || syscall1(SYS_SETUID, id_1000) != 0) {
         return 4;
     }
     if (set_limit(RLIMIT_NOFILE, 512, 1000) != -EPERM) {
@@ -354,7 +367,7 @@ static int body_zombie(void)
     if (pid_limit(pid, 0, 0, &rl) != 0 || rl.cur_lo != 90 || rl.max_lo != 90) {
         return 6; /* and reads what it set */
     }
-    if (syscall1(SYS_SETUID, 1001) != 0 || pid_limit(pid, 0, 0, &rl) != -EPERM) {
+    if (syscall1(SYS_SETUID, id_1001) != 0 || pid_limit(pid, 0, 0, &rl) != -EPERM) {
         return 7; /* another user is refused */
     }
     if (wait_status(pid) != 0 || pid_limit(pid, 0, 0, &rl) != -ESRCH) {
@@ -380,7 +393,7 @@ static int body_nproc(void)
     char byte;
 
     syscall1(SYS_CLOSE, release_w);
-    if (syscall1(SYS_SETUID, 1000) != 0 || set_limit(RLIMIT_NPROC, 4, 4) != 0) {
+    if (syscall1(SYS_SETUID, id_1000) != 0 || set_limit(RLIMIT_NPROC, 4, 4) != 0) {
         return 2;
     }
     for (i = 0; i < 3; i++) {
@@ -411,7 +424,7 @@ static int body_others(void)
 {
     int pid;
 
-    if (syscall1(SYS_SETUID, 1001) != 0) {
+    if (syscall1(SYS_SETUID, id_1001) != 0) {
         return 2;
     }
     pid = syscall1(SYS_FORK, 0);
@@ -430,7 +443,7 @@ static int body_others(void)
  * Returns 0, 2 when the setup fails, and 3 when the fork is not EAGAIN. */
 static int body_setuid(void)
 {
-    if (set_limit(RLIMIT_NPROC, 5, 5) != 0 || syscall1(SYS_SETUID, 1000) != 0) {
+    if (set_limit(RLIMIT_NPROC, 5, 5) != 0 || syscall1(SYS_SETUID, id_1000) != 0) {
         return 2;
     }
     return syscall1(SYS_FORK, 0) == -EAGAIN ? 0 : 3;
@@ -461,20 +474,25 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe, entered with `sp` at argc: `run_show` when the first argument
- * begins with 's', and otherwise the rows of the opening comment. */
+/** The probe, entered with `sp` at argc: `run_show` when the first
+ * positional argument begins with 's', and otherwise the rows of the opening
+ * comment. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
     struct rlimit64 rl;
     static int fds[2], release[2];
     int family, others;
     char byte;
 
-    if (argc >= 2 && argv[1][0] == 's') {
+    probe_args((int)sp[0], (char **)(sp + 1));
+    if (probe_word(1) != 0 && probe_word(1)[0] == 's') {
         run_show();
     }
+    hello_path = probe_arg("hello", "/hello");
+    scratch_path = probe_arg("scratch", "/tmp/limitprobe.f");
+    self_path = probe_self("/limitprobe");
+    id_1000 = probe_id(1000);
+    id_1001 = probe_id(1001);
     if (get_limit(RLIMIT_NOFILE, &rl) != 0 || rl.cur_lo != 1024 || rl.max_lo != 1024) {
         fail("the descriptor limit is not the table's");
     }
