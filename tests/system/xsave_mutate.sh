@@ -4,9 +4,16 @@
 # rach2/sys/arch/x86/fpu.c, on the kernel, test image and emulator of the
 # architecture ARCH names.
 #
-# Each fault is built into the main tree's kernel in turn and must fail the
-# probe, the host tests or both, with the words given for it; the source is
-# restored after each, and the restored kernel must match the first. --texts
+# The probe boots under the processor profile max, which declares XSAVE and
+# AVX, and its report records are judged by tools/etude/casecheck as the case
+# guest.default.xsaveprobe of tools/etude/schemas/case.guest.example.json,
+# placed qemu. Each fault is built into the main tree's kernel in turn and
+# must fail the report, with the assertion and words given for it, the host
+# tests, or both; the source is restored after each, and the restored kernel
+# must match the first. The unchanged kernel then boots under the profile
+# qemu64, which has neither: the probe passes by its branches fxsave and
+# none, which the judge refuses for the case of the profile max, as it
+# refuses any processor that lacks a feature its profile declares. --texts
 # checks that each fault is once in fpu.c.
 set -eu
 
@@ -90,6 +97,8 @@ RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
 tree=${ARCH_BUILD#"$repo"/}
 mkdir -p build
+casecheck=build/tools/etude/casecheck
+manifest=tools/etude/schemas/case.guest.example.json
 work=
 source=rach2/sys/arch/x86/fpu.c
 child=
@@ -168,34 +177,47 @@ host_tests()
     return "$failed"
 }
 
+# boot PHASE PROFILE: boot the tree's kernel under the processor profile
+# PROFILE, run xsaveprobe, and judge its records into $work/PHASE.judged,
+# with the status casecheck gave in `status`.
+boot()
+{
+    build/tests/system/runutil group build/tests/system/harness \
+        --kernel "$tree/rach2/kernel" --initrd "$tree/images/test.krffs" \
+        --qemu-arg=-cpu --qemu-arg="$("$casecheck" processor "$2")" --append rach2.rescue \
+        --timeout 60 --steptmo 30 --ok '@etude 1 end ' \
+        --log "$work/$1.serial.log" \
+        "expect=Type 'help'" 'send=exec /xsaveprobe' 'expect=@etude 1 end ' \
+        >"$work/$1.log" 2>&1 &
+    child=$!
+    wait "$child" || :
+    stop_child
+    grep -a 'xsaveprobe\|XSAVEPROBE\|HARNESS' "$work/$1.serial.log" "$work/$1.log" || :
+    tr -d '\r' < "$work/$1.serial.log" | grep -a '^@etude 1 ' > "$work/$1.records" || :
+    status=0
+    "$casecheck" report "$manifest" guest.default.xsaveprobe "$RACH2_ARCH" qemu \
+        "$work/$1.records" >"$work/$1.judged" 2>&1 || status=$?
+    cat "$work/$1.judged"
+}
+
 # run_phase PHASE PROBE MATCH HOST HOSTMATCH: build the kernel and run
-# xsaveprobe, which must pass or fail as PROBE says, failing with words that
-# match MATCH when it is not empty; then run the host tests, which must pass
-# or fail as HOST says, failing with words that contain HOSTMATCH.
+# xsaveprobe, whose report must pass or fail as PROBE says, failing with a
+# line that matches the extended expression MATCH when it is not empty; then
+# run the host tests, which must pass or fail as HOST says, failing with
+# words that contain HOSTMATCH.
 run_phase()
 {
     phase=$1
     rebuild >"$work/$phase.build.log" 2>&1
     cat "$work/$phase.build.log"
     cp "$tree/rach2/kernel" "$work/$phase.kernel"
-    build/tests/system/runutil group build/tests/system/harness \
-        --kernel "$tree/rach2/kernel" --initrd "$tree/images/test.krffs" \
-        --qemu-arg=-cpu --qemu-arg=max --append rach2.rescue \
-        --timeout 60 --steptmo 30 --ok 'XSAVEPROBE OK' --never 'XSAVEPROBE FAIL' \
-        --log "$work/$phase.serial.log" \
-        "expect=Type 'help'" 'send=exec /xsaveprobe' 'expect=XSAVEPROBE' \
-        >"$work/$phase.log" 2>&1 &
-    child=$!
-    status=0
-    wait "$child" || status=$?
-    stop_child
-    grep -a 'xsaveprobe\|XSAVEPROBE\|HARNESS' "$work/$phase.serial.log" "$work/$phase.log" || :
+    boot "$phase" max
     if [ "$2" = pass ]; then
-        [ "$status" -eq 0 ] || { echo "xsave-mutation: $phase: the probe failed" >&2; exit 1; }
+        [ "$status" -eq 0 ] || { echo "xsave-mutation: $phase: the report failed" >&2; exit 1; }
     else
-        [ "$status" -ne 0 ] || { echo "xsave-mutation: $phase: the fault passed the probe" >&2; exit 1; }
-        [ -z "$3" ] || grep -aE "XSAVEPROBE FAIL: .*$3" "$work/$phase.serial.log" >/dev/null || {
-            echo "xsave-mutation: $phase: the probe failed for another reason" >&2; exit 1;
+        [ "$status" -eq 1 ] || { echo "xsave-mutation: $phase: the fault passed the report" >&2; exit 1; }
+        [ -z "$3" ] || grep -E "$3" "$work/$phase.judged" >/dev/null || {
+            echo "xsave-mutation: $phase: the report failed for another reason" >&2; exit 1;
         }
     fi
     hstatus=0
@@ -208,38 +230,39 @@ run_phase()
             echo "xsave-mutation: $phase: the host tests failed for another reason" >&2; exit 1;
         }
     fi
-    echo "xsave-mutation: result: $phase: probe status $status, host tests status $hstatus"
+    echo "xsave-mutation: result: $phase: report status $status, host tests status $hstatus"
 }
 
 echo "xsave-mutation: $RACH2_ARCH: logs: $work"
 keep=1
-make -s ARCH="$RACH2_ARCH" rach2 tests krffs test-image \
+make -s ARCH="$RACH2_ARCH" rach2 tests krffs test-image "$casecheck" \
     build/tests/system/harness build/tests/system/runutil >"$work/build.log" 2>&1
 cat "$work/build.log"
 run_phase fixed pass '' pass ''
 
 fpu_fault switch
-run_phase switch fail 'the upper half' pass ''
+run_phase switch fail 'assert switches fail: .*the upper half' pass ''
 restore
 
 fpu_fault xcr0
-run_phase xcr0 fail 'XCR0 is not x87, SSE, and AVX' pass ''
+run_phase xcr0 fail 'assert xcr0 fail: XCR0 is not x87, SSE, and AVX' pass ''
 restore
 
 fpu_fault magic1
-run_phase magic1 fail 'lack FP_XSTATE_MAGIC1' fail 'FP_XSTATE_MAGIC1'
+run_phase magic1 fail 'assert signals fail: .*lack FP_XSTATE_MAGIC1' fail 'FP_XSTATE_MAGIC1'
 restore
 
 fpu_fault ucflags
-run_phase ucflags fail 'lack UC_FP_XSTATE' pass ''
+run_phase ucflags fail 'assert signals fail: .*lack UC_FP_XSTATE' pass ''
 restore
 
 fpu_fault sigreturn
-run_phase sigreturn fail 'clobbered the registers: ymm0: the upper half' fail 'XSTATE_BV comes back'
+run_phase sigreturn fail 'assert signals fail: .*clobbered the registers: ymm0: the upper half' \
+    fail 'XSTATE_BV comes back'
 restore
 
 fpu_fault view
-run_phase view fail 'XCR0 at byte 464' fail 'the view has XCR0 at byte 464'
+run_phase view fail 'assert ptrace fail: .*XCR0 at byte 464' fail 'the view has XCR0 at byte 464'
 restore
 
 fpu_fault magic2
@@ -247,9 +270,18 @@ run_phase magic2 pass '' fail 'without FP_XSTATE_MAGIC2'
 restore
 
 fpu_fault header
-run_phase header fail '' fail 'XCOMP_BV set is refused'
+run_phase header fail 'assert header (fail: |missing)' fail 'XCOMP_BV set is refused'
 restore
 
 run_phase restored pass '' pass ''
 cmp "$work/fixed.kernel" "$work/restored.kernel"
-echo "xsave-mutation: $RACH2_ARCH: result: pass, every fault failed and the restored kernel matched"
+boot noavx qemu64
+if [ "$status" -ne 1 ] ||
+    ! grep -F 'the program took none where the processor gives avx' "$work/noavx.judged" >/dev/null; then
+    echo "xsave-mutation: noavx: the report passed without AVX under the profile max" >&2
+    exit 1
+fi
+"$casecheck" report -f xsave=absent -f avx=absent "$manifest" guest.default.xsaveprobe \
+    "$RACH2_ARCH" native "$work/noavx.records" ||
+    { echo "xsave-mutation: noavx: the report fails where the processor has neither" >&2; exit 1; }
+echo "xsave-mutation: $RACH2_ARCH: result: pass, every fault failed, the restored kernel matched, and a processor without AVX failed the profile max"

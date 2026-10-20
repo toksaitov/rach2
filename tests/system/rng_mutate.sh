@@ -1,27 +1,38 @@
 #!/bin/sh
-# rng_mutate.sh [--texts]: show that rngprobe catches a fault in kcpu_id,
-# the CPUID helper of rach2/sys/arch/x86/kcpu.c that the probe compiles in:
-# the subleaf operand changed from an input to an output.
+# rng_mutate.sh [--texts]: show that rngprobe's report catches two faults
+# under the processor profile max, which declares RDSEED and RDRAND: a fault
+# in kcpu_id, the CPUID helper of rach2/sys/arch/x86/kcpu.c that the probe
+# compiles in, whose subleaf operand becomes an output; and a kernel whose
+# krandom_is_trusted in rach2/sys/lib/krandom.c trusts neither instruction.
 #
-# The probe is built from a private copy of its sources for each phase, for the
-# architecture ARCH names, and must pass, then fail with
-# `RNGPROBE FAIL (cpuid subleaf zero)` under the fault, then pass with the
-# source restored. --texts checks that the operand is once in kcpu.c.
+# The probe is built from a private copy of its sources for each phase, for
+# the architecture ARCH names, and its report records are judged by
+# tools/etude/casecheck as the case guest.default.rngprobe of
+# tools/etude/schemas/case.guest.example.json, placed qemu. It must pass;
+# then fail its assertion cpuid-leaf7 under the first fault; then, with the
+# kernel's fault built into the main tree's kernel, take the fail-closed
+# branch, which the probe and the old suites accept and the judge refuses
+# since the profile gives the trusted one; then pass with both sources
+# restored and the restored kernel the same as the first. --texts checks that
+# each fault is once in its source.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# rc_once FILE: the operand the fault changes is once in FILE.
-rc_once()
+# once FILE TEXT: TEXT, which a fault changes, is once in FILE.
+once()
 {
-    if [ "$(grep -c '"+c"(rc)' "$1" 2>/dev/null)" != 1 ]; then
-        echo "rng-mutation: the cpuid operand is not once in $1" >&2
+    if [ "$(grep -cF "$2" "$1" 2>/dev/null)" != 1 ]; then
+        echo "rng-mutation: the text a fault changes is not once in $1: $2" >&2
         exit 1
     fi
 }
+trust='return cc_src == KRANDOM_SRC_RDSEED || cc_src == KRANDOM_SRC_RDRAND;'
+distrust='return 0;'
 
 if [ "${1:-}" = --texts ]; then
-    rc_once rach2/sys/arch/x86/kcpu.c
+    once rach2/sys/arch/x86/kcpu.c '"+c"(rc)'
+    once rach2/sys/lib/krandom.c "$trust"
     echo 'rng-mutation: texts: every fault is once in its source'
     exit 0
 fi
@@ -35,35 +46,56 @@ REPO=$repo
 . "$repo/mk/arch.sh"
 RACH2_QEMU=$ARCH_QEMU
 export RACH2_QEMU
-kernel=${ARCH_BUILD#"$repo"/}/rach2/kernel
-for artifact in "$kernel" build/tests/system/harness \
-    build/krffs/mkfs.krffs build/krffs/stageimage.krffs build/krffs/readfile.krffs; do
-    [ -x "$artifact" ] || { echo "rng-mutation: missing $artifact" >&2; exit 1; }
-done
+tree=${ARCH_BUILD#"$repo"/}
+kernel=$tree/rach2/kernel
+casecheck=build/tools/etude/casecheck
+manifest=tools/etude/schemas/case.guest.example.json
+krandom=rach2/sys/lib/krandom.c
 mkdir -p build/review-proof
 work=
 child=
 keep=
-# Stop the running boot and put back the saved source.
-restore()
+changed=
+
+# Stop the running boot.
+stop_child()
 {
     if [ -n "$child" ]; then
         kill -TERM "$child" 2>/dev/null || :
         wait "$child" 2>/dev/null || :
         child=
     fi
-    cp "$work/saved.c" "$source"
-    touch "$source"
 }
 
-# Restore once the source is saved, then remove the work directory, unless
-# the proof failed after printing its path, which sets `keep`; a signal
-# clears `keep`.
+# Remove krandom.c's object and the kernel, and make the kernel again.
+rebuild()
+{
+    rm -f "$tree/rach2/sys/lib/krandom.o" "$kernel"
+    make -s ARCH="$RACH2_ARCH" rach2
+}
+
+# Put back the saved krandom.c, touch it, and mark it unchanged.
+restore_kernel()
+{
+    cp "$work/krandom.saved" "$krandom"
+    touch "$krandom"
+    changed=
+}
+
+# Stop the boot, put back the private kcpu.c, and when the kernel's fault is
+# in the tree, restore it and rebuild. The work directory is removed too,
+# unless the proof failed after printing its path, which sets `keep`; a
+# signal clears `keep`.
 cleanup()
 {
     exit_status=$?
+    stop_child
     if [ -n "$work" ] && [ -f "$work/saved.c" ]; then
-        restore
+        cp "$work/saved.c" "$source"
+    fi
+    if [ -n "$changed" ]; then
+        restore_kernel
+        rebuild >"$work/cleanup.build.log" 2>&1
     fi
     if [ "$exit_status" -eq 0 ] || [ -z "$keep" ]; then
         rm -rf ${work:+"$work"}
@@ -74,16 +106,26 @@ trap 'keep=; exit 129' HUP
 trap 'keep=; exit 130' INT
 trap 'keep=; exit 143' TERM
 work=$(mktemp -d "$repo/build/review-proof/rng.XXXXXX")
-mkdir -p "$work/rach2/sys/lib" "$work/rach2/sys/arch/x86" "$work/tests" "$work/utils"
+mkdir -p "$work/rach2/sys/lib" "$work/rach2/sys/arch/x86" "$work/tests" "$work/utils" \
+    "$work/tools/etude/include/etude"
 cp rach2/sys/arch/x86/kcpu.c rach2/sys/arch/x86/kcpu.h "$work/rach2/sys/arch/x86/"
 cp rach2/sys/lib/kint.h "$work/rach2/sys/lib/"
-cp tests/rngprobe.c tests/probe.h "$work/tests/"
+cp tests/rngprobe.c tests/probe.h tests/probe_report.h "$work/tests/"
+cp tools/etude/include/etude/report.h "$work/tools/etude/include/etude/"
 cp utils/pingcall.h "$work/utils/"
 source="$work/rach2/sys/arch/x86/kcpu.c"
 cp "$source" "$work/saved.c"
+cp "$krandom" "$work/krandom.saved"
+echo "rng-mutation: $RACH2_ARCH: logs: $work"
+keep=1
+make -s ARCH="$RACH2_ARCH" rach2 build/tests/system/harness build/krffs/mkfs.krffs \
+    build/krffs/stageimage.krffs build/krffs/readfile.krffs "$casecheck" >"$work/build.log" 2>&1 ||
+    { cat "$work/build.log"; exit 1; }
+cpu=$("$casecheck" processor max)
 
-# run_phase PHASE: build the probe, stage it in an image, boot it, and
-# require the result PHASE must give.
+# run_phase PHASE STATUS MATCH: build the probe, stage it in an image, boot
+# it under the profile max, and judge its records, which must give the
+# casecheck status STATUS and, when MATCH is not empty, a line with MATCH.
 run_phase()
 {
     phase=$1
@@ -97,32 +139,44 @@ run_phase()
         >"$work/$phase.image.log" 2>&1
     build/krffs/readfile.krffs "$work/$phase.krffs" /rngprobe "$work/$phase.extracted"
     cmp "$binary" "$work/$phase.extracted"
+    cp "$kernel" "$work/$phase.kernel"
     build/tests/system/harness --kernel "$kernel" \
         --initrd "$work/$phase.krffs" --append 'rach2.nonet rach2.noaudio' \
-        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max \
-        --log "$work/$phase.console.log" --timeout 30 \
-        --ok 'RNGPROBE OK' --never 'RNGPROBE FAIL' \
-        "expect=Type 'help'" 'send=exec /rngprobe' 'expect=RNGPROBE OK' \
+        --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg="$cpu" \
+        --log "$work/$phase.console.log" --timeout 30 --ok '@etude 1 end ' \
+        "expect=Type 'help'" 'send=exec /rngprobe' 'expect=@etude 1 end ' \
         >"$work/$phase.log" 2>&1 &
     child=$!
-    status=0
-    wait "$child" || status=$?
+    wait "$child" || :
     child=
     cat "$work/$phase.log"
-    if [ "$phase" = mutated ]; then
-        [ "$status" -eq 1 ] &&
-            grep -q 'RNGPROBE FAIL (cpuid subleaf zero)' "$work/$phase.console.log" || exit 1
-    else
-        [ "$status" -eq 0 ] || exit 1
-    fi
-    echo "rng-mutation: result: $phase status $status"
+    tr -d '\r' < "$work/$phase.console.log" | grep -a '^@etude 1 ' > "$work/$phase.records" || :
+    judged=0
+    "$casecheck" report "$manifest" guest.default.rngprobe "$RACH2_ARCH" qemu \
+        "$work/$phase.records" >"$work/$phase.judged" 2>&1 || judged=$?
+    cat "$work/$phase.judged"
+    [ "$judged" -eq "$2" ] ||
+        { echo "rng-mutation: $phase: casecheck status $judged, not $2" >&2; exit 1; }
+    [ -z "$3" ] || grep -F -- "$3" "$work/$phase.judged" >/dev/null ||
+        { echo "rng-mutation: $phase: the report failed for another reason" >&2; exit 1; }
+    echo "rng-mutation: result: $phase: casecheck status $judged"
 }
-echo "rng-mutation: logs: $work"
-keep=1
-run_phase fixed
-rc_once "$source"
+
+run_phase fixed 0 'branch source trusted decided by feature'
+once "$source" '"+c"(rc)'
 sed 's/"+c"(rc)/"=c"(rc)/' "$work/saved.c" > "$source"
-run_phase mutated
-restore
-run_phase restored
+run_phase cpuid 1 'assert cpuid-leaf7 fail'
+cp "$work/saved.c" "$source"
+once "$krandom" "$trust"
+changed=1
+sed "s/$trust/$distrust/" "$work/krandom.saved" > "$krandom"
+rebuild >"$work/distrust.build.log" 2>&1 || { cat "$work/distrust.build.log"; exit 1; }
+run_phase distrust 1 'the program took fail-closed where the processor gives trusted'
+grep -a 'RNGPROBE OK (fail-closed)' "$work/distrust.console.log" >/dev/null ||
+    { echo "rng-mutation: distrust: the probe did not pass by its fail-closed branch" >&2; exit 1; }
+restore_kernel
+rebuild >"$work/restored.build.log" 2>&1 || { cat "$work/restored.build.log"; exit 1; }
+run_phase restored 0 'outcome pass'
 cmp "$work/saved.c" "$source"
+cmp "$work/fixed.kernel" "$work/restored.kernel"
+echo "rng-mutation: $RACH2_ARCH: result: pass, both faults failed the report and the restored kernel matched"

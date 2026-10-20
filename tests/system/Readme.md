@@ -149,9 +149,9 @@ These two run no test on the unmodified tree: they require the kernel rebuilt at
 * `itimer_mutate.sh`: `sigprobe`'s interval timer rows.
 * `pty_hangup_mutate.sh`: `ptyprobe`'s row of two readers released when the master closes.
 * `sigcontext_mutate.sh`: `musl/sigmusl`'s signal frame rows, on i686 alone.
-* `xsave_mutate.sh`: `xsaveprobe` and the frame host tests, against eight faults in `sys/arch/x86/fpu.c`.
+* `xsave_mutate.sh`: `xsaveprobe`'s report, judged as etude will under the processor profile `max`, and the frame host tests, against eight faults in `sys/arch/x86/fpu.c`, and the report of a processor without XSAVE and AVX, which that profile refuses.
 * `ptrace_debug_mutate.sh`: `musl/ptracemusl`'s syscall step and debug register rows, and the x86-64 debug entry; the rows that need KVM are reported as not run without it.
-* `rng_mutate.sh`: `rngprobe`'s rows that use the kernel's CPUID helper, `sys/arch/x86/kcpu.c`.
+* `rng_mutate.sh`: `rngprobe`'s report, judged as etude will under the processor profile `max`, against a fault in the kernel's CPUID helper, `sys/arch/x86/kcpu.c`, and a kernel that trusts neither RDSEED nor RDRAND (`sys/lib/krandom.c`).
 * `rtc_mutate.sh`: the clock's time between ticks, in `rtc_hosttest` and in a guest boot.
 * `probe_roots_mutate.sh` and `ext2_map_mutate.sh`: the ext2 rows of `vfsprobe` and `musl/mapmusl` on an ext2 root.
 * `ext2_batch_mutate.sh`: the ext2 driver's count of disk commands for batched writes.
