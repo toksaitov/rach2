@@ -1,6 +1,6 @@
 /*
- * casecheck: the validator of etude's case manifests, report records and
- * results, tools/etude/Readme.md's contracts.
+ * casecheck: the validator of etude's case manifests, report records,
+ * results and runs, tools/etude/Readme.md's contracts.
  *
  * casecheck [-s SCHEMAS] [-r ROOT] manifest FILE...
  *     checks each case manifest: its shape by schemas/case.schema.json, and
@@ -23,6 +23,13 @@
  * casecheck [-s SCHEMAS] schema NAME FILE...
  *     checks each document of FILE, or each line of a FILE whose name ends
  *     in .jsonl, against schemas/NAME.schema.json.
+ * casecheck [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] ARCH SET
+ *         SUITES HISTORY...
+ *     reads the history of one run, its streams or directories of them, as
+ *     ci does: prints each item that did not pass and a last line,
+ *     `casecheck: result: passed` or `casecheck: result: failed: NAME...`,
+ *     each NAME a suite of SUITES, SET, or `runner` when the records cannot
+ *     show what ran; verdict.c says how.
  * casecheck processor NAME
  *     prints the QEMU `-cpu` value of the processor profile NAME, which a
  *     script that boots QEMU itself passes, as the QEMU launcher does.
@@ -32,8 +39,10 @@
  *     output with what the line expects.
  *
  * A finding goes to stderr as `casecheck: FILE:LINE: WHAT`. The exit status
- * is 0 when nothing is found (for `report`, when the report gives a pass),
- * 1 after a finding, and 2 for a wrong usage or a file that cannot be read.
+ * is 0 when nothing is found (for `report`, when the report gives a pass;
+ * for `verdict`, when the run passed), 1 after a finding, and 2 for a wrong
+ * usage or a file that cannot be read, which for `verdict` is only the results
+ * schema.
  * SCHEMAS is tools/etude/schemas by default.
  */
 #include "casecheck.h"
@@ -365,6 +374,8 @@ static int run(int argc, char **argv)
         status = command_results(&set, args, n);
     } else if (strcmp(command, "schema") == 0) {
         status = command_schema(&o, args, n);
+    } else if (strcmp(command, "verdict") == 0) {
+        status = judge_verdict(&set, args, n);
     } else if (strcmp(command, "processor") == 0) {
         status = command_processor(args, n);
     } else {
@@ -384,6 +395,8 @@ static void usage(void)
                     "MANIFEST CASE ARCH PLACEMENT [OUTPUT]\n"
                     "       casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...\n"
                     "       casecheck [-s SCHEMAS] schema NAME FILE...\n"
+                    "       casecheck [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] "
+                    "ARCH SET SUITES HISTORY...\n"
                     "       casecheck processor NAME\n"
                     "       casecheck --selftest DIR\n");
 }

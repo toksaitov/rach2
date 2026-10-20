@@ -1,6 +1,6 @@
 /*
  * casecheck.h: the parts of casecheck, the validator of etude's case
- * manifests, report records and results, that its files share.
+ * manifests, report records, results and runs, that its files share.
  */
 #ifndef ETUDE_CASECHECK_H
 #define ETUDE_CASECHECK_H
@@ -48,5 +48,8 @@ int print_timing(const struct cases *set);
 
 int judge_report(struct cases *set, char **args, int n);
 int judge_results(const struct cases *set, const char *path, const char *claim);
+int judge_document(const struct cases *set, const struct json *doc, const char *file, char *why,
+                   size_t n);
+int judge_verdict(struct cases *set, char **args, int n);
 
 #endif

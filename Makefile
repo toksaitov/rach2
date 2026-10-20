@@ -430,12 +430,14 @@ $(SIZECHECK): tools/verify/sizecheck.c
 	$(HOST_LINK)
 
 # etude's validator (tools/etude/casecheck.c): the case manifests, report
-# records and results against their contracts, which suitecheck.sh runs. Etude
-# is hosted C99, so the validator is compiled as C99. sources.mk lists the
-# sources of etude's programs, for this build and for a cached version's.
+# records, results and runs against their contracts, which suitecheck.sh and
+# tools/ci/run.sh run. Etude is hosted C99, so the validator is compiled as
+# C99. sources.mk lists the sources of etude's programs, for this build and
+# for a cached version's.
 include tools/etude/sources.mk
 $(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/json.h tools/etude/schema.h \
-              tools/etude/include/etude/processor.h utils/sha256.h
+              tools/etude/include/etude/processor.h tools/etude/include/etude/history.h \
+              tools/etude/history_json.h utils/sha256.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
 

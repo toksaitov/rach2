@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "family_id": "fixture.host",
+  "summary": "A host case of the verdict's fixtures",
+  "cases": [
+    {
+      "case_id": "fixture.host.vectors",
+      "behavior": "utils/sha256.c gives the FIPS 180-4 digests",
+      "units": [
+        "tests/host/sha256_hosttest.c"
+      ],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [
+          "cc"
+        ],
+        "features": {}
+      },
+      "execution": {
+        "program": "sha256_hosttest",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "nothing outside its scratch directory"
+      },
+      "assertions": [
+        {
+          "assertion_id": "empty",
+          "checks": "the digest of the empty message",
+          "source": "program"
+        },
+        {
+          "assertion_id": "million",
+          "checks": "a million a's fed a thousand bytes at a time",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 100000,
+          "initial_us": 30000000,
+          "ceiling_us": 120000000
+        },
+        "gap": {
+          "floor_us": 100000,
+          "initial_us": 30000000,
+          "ceiling_us": 120000000
+        },
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 16777216,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "sha256_hosttest",
+          "node": "tests/host/sha256_hosttest",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "host"
+      }
+    }
+  ]
+}

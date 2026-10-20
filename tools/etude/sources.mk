@@ -3,11 +3,12 @@
 # both include, so that one file lists them. Paths are relative to the root
 # of the tree.
 
-# casecheck, the validator of manifests, reports and results.
+# casecheck, the validator of manifests, reports, results and runs.
 ETUDE_CASECHECK_SRC = tools/etude/casecheck.c tools/etude/cases.c \
                       tools/etude/judge.c tools/etude/json.c \
                       tools/etude/processor.c tools/etude/schema.c \
-                      utils/sha256.c
+                      tools/etude/verdict.c tools/etude/history.c \
+                      tools/etude/history_json.c utils/sha256.c
 
 # history_check, the checker of a closed history stream.
 ETUDE_HISTORY_CHECK_SRC = tools/etude/history_check.c tools/etude/history.c \

@@ -132,6 +132,41 @@
 1 results ./results-twice.jsonl ../schemas/case.guest.example.json | enosys-unimplemented appears 2 times
 1 results ./results-missing.jsonl ./rules.json | guest.default.errnoprobe is no case of the manifests given
 
+# A run's history passes only when the plan has what was asked for, every
+# attempt of each item passed, with results in the store that say so, and the
+# run's summary agrees with the records. verdict/pass is a run that passes;
+# each other stream there takes the place of one of its streams, and plants
+# one fault. A fault of the records adds `runner`, which comes first.
+0 verdict -b ./verdict/store -c 0123456789abcdef0123456789abcdef01234567 -m ./verdict/cases i686 core default,host ./verdict/pass | casecheck: result: passed
+0 verdict -b ./verdict/store -m ./verdict/cases i686 core host ./verdict/pass | casecheck: result: passed
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-failure.jsonl | item item-d0: fixture.default.errno on i686: failure, in default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-failure.jsonl | casecheck: result: failed: default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | the run's summary gives the item item-d0 pass, and its attempts give failure
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | casecheck: result: failed: runner default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-retry.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-retry.jsonl | item item-d0: fixture.default.errno on i686: failure, in default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-unfinished.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-unfinished.jsonl | item item-d0: fixture.default.errno on i686: incomplete, in default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-unfinished.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-unfinished.jsonl | casecheck: result: failed: default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/item-d1-notrun.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | the attempt attempt-d1 is recorded as a pass, and its results give incomplete, as enosys is not_run
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/item-h-absent.jsonl ./verdict/pass/run.jsonl | the results of the attempt attempt-h, a pass, are not in the store
+1 verdict -m ./verdict/cases i686 core default,host ./verdict/pass | the results of the attempt attempt-h, a pass, are not in the store
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/item-h-damaged.jsonl ./verdict/pass/run.jsonl | the bytes are not those the attempt attempt-h gives as its results
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/item-h-step.jsonl ./verdict/pass/run.jsonl | the attempt attempt-h is recorded as a pass, and its step sha256_hosttest is failure
+1 verdict -b ./verdict/store -m ./verdict/absent i686 core default,host ./verdict/pass | fixture.host.vectors is no case of the manifests given
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-partial.jsonl | item item-d1: fixture.default.errno on i686: incomplete, in default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-partial.jsonl | casecheck: result: failed: default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/item-d1-lost.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | the last record is cut off, so its writer did not close the stream
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-short.jsonl | the run's summary leaves out the item item-d1
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-prepared.jsonl | casecheck: result: failed: core
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass ./verdict/stray.jsonl | the record stray/0 is of the run fixture-old-run, not fixture-run
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl | the history has no run record, so the run did not finish
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/cases | the directory has no history stream
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host,fpu ./verdict/pass | the plan has no item of the suite fpu
+1 verdict -b ./verdict/store -m ./verdict/cases-more i686 core default,host ./verdict/pass | the plan has 2 of the 3 items of fixture.default.errno on i686
+1 verdict -b ./verdict/store -m ./verdict/cases-more i686 core default,host ./verdict/pass | the plan has 0 of the 1 items of fixture.default.idle on i686
+1 verdict -b ./verdict/store -c 1111111111111111111111111111111111111111 -m ./verdict/cases i686 core default,host ./verdict/pass | the plan tested the commit 0123456789abcdef0123456789abcdef01234567, not 1111111111111111111111111111111111111111
+2 verdict -b ./verdict/store -m ./verdict/cases i386 core default,host ./verdict/pass
+2 verdict -b ./verdict/store -m ./verdict/cases i686 core default,,host ./verdict/pass
+
 # A processor profile gives QEMU its model and its declared features.
 0 processor qemu64 | qemu64,rdrand=off,rdseed=off,xsave=off,avx=off
 0 processor max | max,rdrand=on,rdseed=on,xsave=on,avx=on,enforce=on

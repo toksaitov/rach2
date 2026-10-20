@@ -1033,18 +1033,19 @@ static enum attempt derive(const struct checking *k, char *why, size_t n)
 }
 
 /**
- * Checks one results document; prints its outcome and compares it with `claim`.
+ * Checks one results document against its case in `set`; returns the outcome
+ * its assertions give, with the first assertion that decides it in `why`, or
+ * -1 when `set` has no case of it.
  */
-static void check_document(const struct cases *set, struct checking *k, const char *claim)
+static int examine(const struct cases *set, struct checking *k, char *why, size_t n)
 {
-    char hex[65], why[300];
+    char hex[65];
     const char *case_id = json_text(k->doc, "case_id");
-    enum attempt result;
 
     k->c = find_case(set, case_id, NULL);
     if (k->c == NULL) {
         finding(k->file, k->line, "%s is no case of the manifests given", case_id);
-        return;
+        return -1;
     }
     inventory_digest(k->c, hex);
     if (!same(hex, json_text(k->doc, "inventory_sha256"))) {
@@ -1060,7 +1061,39 @@ static void check_document(const struct cases *set, struct checking *k, const ch
     check_assertions(k);
     check_report(k);
     check_termination(k);
-    result = derive(k, why, sizeof why);
+    return (int)derive(k, why, n);
+}
+
+/**
+ * Checks the results document `doc`, read from `file`, against its case in
+ * `set`, as `results` checks each document of its file, and prints nothing
+ * but its findings. Returns the attempt outcome its assertions
+ * give, with the first assertion that decides it in `why`, or -1 when `set`
+ * has no case of it. The caller has checked `doc` against the results schema.
+ */
+int judge_document(const struct cases *set, const struct json *doc, const char *file, char *why,
+                   size_t n)
+{
+    struct checking k;
+
+    memset(&k, 0, sizeof k);
+    k.file = file;
+    k.doc = doc;
+    return examine(set, &k, why, n);
+}
+
+/**
+ * Checks one results document; prints its outcome and compares it with `claim`.
+ */
+static void check_document(const struct cases *set, struct checking *k, const char *claim)
+{
+    char why[300];
+    const char *case_id = json_text(k->doc, "case_id");
+    int result = examine(set, k, why, sizeof why);
+
+    if (result < 0) {
+        return;
+    }
     say("%s:%d: %s %s: %s%s%s\n", k->file, k->line, case_id, json_text(k->doc, "attempt_id"),
         ATTEMPTS[result], why[0] ? ", as " : "", why);
     if (claim != NULL && !same(claim, ATTEMPTS[result])) {
