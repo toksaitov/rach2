@@ -337,9 +337,9 @@ incomplete()
     esac
 }
 
-# record FILE LEDGER [HOST PLATFORM QEMU ACCELERATORS MEMORY]: require FILE to be
-# the record of version key in dir with the ledger LEDGER, of this machine
-# unless the rest is given.
+# record FILE LEDGER [HOST PLATFORM QEMU ACCELERATORS MEMORY]: require the
+# record of version key in dir with the ledger LEDGER, of this machine unless
+# the rest is given.
 record()
 {
     {

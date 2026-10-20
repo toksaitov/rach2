@@ -250,7 +250,9 @@ static int boundary_check(const struct etude_machine_spec *spec, int *boundary)
 {
     struct etude_qemu_memory memory;
     struct stat st;
+#if defined(__APPLE__)
     struct rlimit core;
+#endif
     int e = etude_qemu_memory(spec->profile, &memory);
 
     if (e != 0) {
@@ -264,12 +266,14 @@ static int boundary_check(const struct etude_machine_spec *spec, int *boundary)
         errno = ENOMEM;
         return -1;
     }
+#if defined(__APPLE__)
     if (getrlimit(RLIMIT_CORE, &core) != 0)
         return -1;
     if (core.rlim_cur != 0) {
         errno = ENOTSUP;
         return -1;
     }
+#endif
     if (spec->profile->kernel == NULL) {
         errno = EINVAL;
         return -1;

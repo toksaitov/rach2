@@ -950,7 +950,9 @@ static void test_memory(void)
     struct etude_qemu_profile p;
     struct etude_qemu_site site = {ETUDE_ACCEL_TCG, self, self, NULL, NULL, 1};
     struct etude_machine_spec spec;
+#if defined(__APPLE__)
     struct rlimit core, changed;
+#endif
     struct etude_machine *m = NULL;
     struct etude_qemu *q = etude_qemu_new();
     char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
@@ -999,6 +1001,7 @@ static void test_memory(void)
     errno = 0;
     CHECK(etude_qemu_start(q, &spec, &m) != 0 && errno == ENOMEM && m == NULL,
           "unsafe boundary allocation refused before execution");
+#if defined(__APPLE__)
     CHECK(getrlimit(RLIMIT_CORE, &core) == 0, "read the core-file limit");
     if (core.rlim_max > 0) {
         changed = core;
@@ -1010,9 +1013,9 @@ static void test_memory(void)
               "boundary core files refused before execution");
         CHECK(setrlimit(RLIMIT_CORE, &core) == 0, "restore the core-file limit");
     } else {
-        printf("etude_qemu_hosttest: not run: refusal of enabled core files: "
-               "the hard limit already disables them\n");
+        CHECK(core.rlim_cur == 0, "the hard core-file limit already disables core files");
     }
+#endif
     p.memory_bytes = UINT64_C(8) << 30;
     CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "lazy 8 GiB workload refused");
     p.memory_bytes = ETUDE_BIGMEM_CONFIGURED;

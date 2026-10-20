@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-boundary-core",
-  "summary": "the boundary launch refuses a nonzero core-file limit before starting QEMU",
+  "summary": "the macOS boundary launch refuses a nonzero core-file limit before starting QEMU",
   "tree": "private",
   "sources": [
     "tools/etude/posix/qemu.c"
