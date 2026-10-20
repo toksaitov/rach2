@@ -27,6 +27,12 @@ ETUDE_HISTORY_FAILURES_SRC = tools/etude/history_failures.c tools/etude/failures
                              tools/etude/history.c tools/etude/history_json.c \
                              tools/etude/history_collect.c utils/sha256.c
 
+# history_lines, the compatible formatter, which prints a run's history as the
+# lines of tests/run.
+ETUDE_HISTORY_LINES_SRC = tools/etude/history_lines.c tools/etude/lines.c \
+                          tools/etude/history.c tools/etude/history_json.c \
+                          tools/etude/history_collect.c utils/sha256.c
+
 # etude-remote, the responder of remote execution on Linux and macOS.
 ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
                    tools/etude/posix/exec.c tools/etude/posix/keeper.c \
