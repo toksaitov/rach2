@@ -32,10 +32,12 @@ extern char **environ;
 #define SHELL_READY "Type 'help' for available commands."
 #define GUEST_EXEC  "exec /etude-guest --stage / --resend-ms "
 
-/* The most disks, devices and boot options a profile gives the launcher. */
-#define DISKS_MAX   ETUDE_QEMU_DISKS
-#define DEVICES_MAX 16
-#define OPTIONS_MAX 32
+/* The most disks, devices, boot options and forwards a profile gives the
+ * launcher. */
+#define DISKS_MAX    ETUDE_QEMU_DISKS
+#define DEVICES_MAX  16
+#define OPTIONS_MAX  32
+#define FORWARDS_MAX 16
 
 /* The longest invocation, manifest or guest invocation the library reads. */
 #define DOCUMENT_MAX (4u * 1024 * 1024)
@@ -123,6 +125,7 @@ struct etude_case_machine {
     struct etude_qemu_disk disks[DISKS_MAX + 1];
     struct etude_qemu_device devices[DEVICES_MAX + 1];
     const char *options[OPTIONS_MAX + 1];
+    struct etude_qemu_forward forwards[FORWARDS_MAX];
     struct etude_qemu_profile profile;
     struct etude_machine_spec spec;
     unsigned boot;               /* the machine's boot, counted from 1 */
@@ -1407,6 +1410,53 @@ static enum etude_status memory_share(const struct etude_case *c, const struct m
     return ETUDE_OK;
 }
 
+/** Give integer member `key` of `o` when it is one of 0 to 65535, or -1. */
+static long jport(const struct eh_json *o, const char *key)
+{
+    const struct eh_json *v = eh_json_get(o, key);
+
+    if (v == NULL || v->type != 'n' || v->number < 0 || v->number > 65535)
+        return -1;
+    return (long)v->number;
+}
+
+/**
+ * Give the cards of boot `m` the forwards of the devices of its manifest's
+ * profile, `list`, which devices_of has read into `m->devices`: each forward
+ * with its protocol, the case's local port it names, counted from 0, and the
+ * guest's port. The launcher refuses a port the case does not hold.
+ */
+static enum etude_status make_networks(struct etude_case_machine *m, const struct eh_json *list)
+{
+    const struct eh_json *d, *f;
+    const char *protocol;
+    size_t i = 0, k = 0;
+
+    for (d = list != NULL ? list->child : NULL; d != NULL; d = d->next, i++) {
+        m->devices[i].forwards = m->forwards + k;
+        f = d->type == 'o' ? eh_json_get(d, "forwards") : NULL;
+        for (f = f != NULL ? f->child : NULL; f != NULL; f = f->next, k++) {
+            protocol = jtext(f, "protocol");
+            if (k == FORWARDS_MAX || protocol == NULL ||
+                (strcmp(protocol, "tcp") != 0 && strcmp(protocol, "udp") != 0) ||
+                jport(f, "port") < 0 || jport(f, "guest_port") < 0)
+                goto refused;
+            m->forwards[k].udp = strcmp(protocol, "udp") == 0;
+            m->forwards[k].port = (unsigned)jport(f, "port");
+            m->forwards[k].guest_port = (unsigned)jport(f, "guest_port");
+            m->devices[i].forward_count++;
+        }
+    }
+    m->profile.ports = m->c->ports;
+    m->profile.port_count = m->c->port_count;
+    return ETUDE_OK;
+refused:
+    diag("machine %s: a profile of more forwards than the launcher takes, or a forward it "
+         "cannot read",
+         m->decl->id);
+    return ETUDE_REFUSED;
+}
+
 /**
  * Make the launcher's profile of boot `m` with the disks `disks`, names of
  * the profile's own disks, or all of them for NULL. A CD's medium is the
@@ -1427,6 +1477,8 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
              m->decl->id);
         return ETUDE_REFUSED;
     }
+    if (make_networks(m, eh_json_get(qp, "devices")) != ETUDE_OK)
+        return ETUDE_REFUSED;
     v = v != NULL && v->type == 'a' ? v->child : NULL;
     for (i = 0; disks != NULL ? disks[i] != NULL : v != NULL; i++) {
         if (disks != NULL)

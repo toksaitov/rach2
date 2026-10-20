@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "proof": "etude-forward-casecheck",
+  "summary": "casecheck refuses the forwards of a machine's cards that the QEMU launcher would refuse, and those of a guest case's cards",
+  "tree": "private",
+  "sources": [
+    "tools/etude/cases.c"
+  ],
+  "artifacts": [
+    "${WORK}/casecheck"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tools/etude -I tools/etude/include -I utils tools/etude/casecheck.c ${SRC}/tools/etude/cases.c tools/etude/digest.c tools/etude/judge.c tools/etude/json.c tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c tools/etude/verdict.c tools/etude/history.c tools/etude/history_json.c utils/sha256.c -o ${WORK}/casecheck"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/casecheck",
+      "--selftest",
+      "tools/etude/fixtures"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "past-taken",
+      "summary": "a forward of a port past those the case reserves is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (port >= ports) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.past:"
+        ]
+      }
+    },
+    {
+      "name": "twice-taken",
+      "summary": "a local port forwarded twice by one protocol is taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (forwarded_before(devs, i, j, f)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.twice:"
+        ]
+      }
+    },
+    {
+      "name": "protocol-ignored",
+      "summary": "a local port forwarded by TCP and by UDP is taken for one forwarded twice",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "same(json_text(g, \"protocol\"), json_text(f, \"protocol\")) &&",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "0 manifest ./networks-ok.json"
+        ]
+      }
+    },
+    {
+      "name": "guest-boot-taken",
+      "summary": "forwards of a card of a guest case's boot are taken",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "if (json_member(devs->item[i], \"forwards\") != NULL) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.networks.guest-boot:"
+        ]
+      }
+    }
+  ]
+}

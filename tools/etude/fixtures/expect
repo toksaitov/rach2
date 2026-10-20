@@ -270,3 +270,11 @@
 1 manifest ./disks-shape.json | /disks/6/serial: "a,b" does not match
 1 manifest ./disks-shape.json | /disks/7/bus: "usb" is not one of the values the schema allows
 1 manifest ./disks-shape.json | /disks/8/format: is a member the schema does not allow
+
+# A machine's cards forward only the ports the case reserves, each once by a
+# protocol; the cards of a guest case's boot forward none.
+0 -r ../../.. manifest ../schemas/case.forward.example.json
+0 manifest ./networks-ok.json
+1 manifest ./networks.json | fixture.networks.past: the machine server forwards port 1, but the case reserves 1
+1 manifest ./networks.json | fixture.networks.twice: the machine server forwards its tcp port 0 twice
+1 manifest ./networks.json | fixture.networks.guest-boot: a guest case's boot has no forwards, since only a scenario reaches a forward

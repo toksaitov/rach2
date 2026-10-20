@@ -40,13 +40,18 @@
  * A media row boots a machine twice with the same empty sparse disk of 4 TiB
  * on NVMe and a CD whose medium is the artifact's object, and the stand-in
  * says the drives it was given; the disk is removed after the pass.
+ * A machine's first card forwards the case's two ports, one by TCP and one by
+ * UDP, and its second card has a user network without forwards; a machine
+ * that forwards a port the case does not hold is refused before QEMU starts.
  * This program is also the peer that a scenario runs as a service; two machines
  * at once reach it, a service ended unseen is a fault, and failing rows at each
  * stage end their own processes while a held row keeps its own. With the real
  * QEMU, a disk root written at the debug shell and powered off is read back by
  * the next boot, etude-guest runs the test image's /hello, two machines run
- * /tcptest against the peer, and the kernel finds the size of the media row's
- * empty disk.
+ * /tcptest against the peer, QEMU accepts a connection at the forwarded TCP
+ * port and has bound the forwarded UDP port, and the kernel finds the size of
+ * the media row's empty disk. With ETUDE_TEST_FORWARD set the program runs the
+ * two forward rows alone.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -638,6 +643,21 @@ static int fake_network(int argc, char **argv)
            card != NULL && strcmp(card, "mac=52:54:00:12:34:58") == 0;
 }
 
+/** Print the value of each `-netdev` of `argv` on the console `fd`, as
+ * `fake: netdev VALUE`. */
+static void fake_netdevs(int fd, int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i + 1 < argc; i++) {
+        if (strcmp(argv[i], "-netdev") == 0) {
+            put(fd, "fake: netdev ");
+            put(fd, argv[i + 1]);
+            put(fd, "\r\n");
+        }
+    }
+}
+
 /**
  * Say each `-drive` and `-device` argument of the stand-in's command line
  * on console `fd`, as `fake: drive ARG` or `fake: device ARG`.
@@ -659,9 +679,10 @@ static void fake_drives(int fd, int argc, char **argv)
 
 /**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: answer QMP's start, say that
- * the machine runs and the shell is ready, and act on what the console
- * types, as fake_console does. In the mode `media` it first says each of its
- * `-drive` and `-device` arguments on the console, as fake_drives does.
+ * the machine runs, in the mode `media` say each of its `-drive` and `-device`
+ * arguments on the console, as fake_drives does, print the value of each
+ * `-netdev`, say that the shell is ready, and act on what the console types,
+ * as fake_console does.
  */
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
@@ -704,6 +725,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
     }
     if (strcmp(mode, "media") == 0)
         fake_drives(con.fd, argc, argv);
+    fake_netdevs(con.fd, argc, argv);
     put(con.fd, "fake: ready\r\nType 'help' for available commands.\r\n> ");
     for (;;) {
         p[0].fd = con.fd;
@@ -1035,6 +1057,64 @@ static int scenario_guest(struct etude_case *c, int real)
         return 0;
     expect(c, "guest-lost", etude_guest(m, "killer", &end), ETUDE_LOST);
     etude_assert(c, "guest-lost-end", end.end == ETUDE_END_LOST, "taken for another end");
+    return 0;
+}
+
+/**
+ * Run the forward rows. The machine fixture forwards the case's first port
+ * by TCP to the guest's port 22 and its second by UDP to the guest's port
+ * 9999, on the user network of its first card; its second card has a user
+ * network without forwards. Under the stand-in QEMU's `-netdev` values say
+ * so, and the machine other, which forwards a third port the case does not
+ * hold, is refused before QEMU starts. Under the real QEMU a connection to
+ * the first port is accepted, and the second port is bound, once the shell
+ * is up.
+ */
+static int scenario_forward(struct etude_case *c, int real)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    struct sockaddr_in a;
+    char line[160];
+    uint64_t at;
+    int fd;
+
+    if (etude_step(c, "boot") != ETUDE_OK)
+        return 1;
+    expect(c, "booted", etude_boot(c, "fixture", NULL, &m, &end), ETUDE_OK);
+    if (m == NULL)
+        return 0;
+    if (real) {
+        expect(c, "shell", etude_console_wait(m, "Type 'help'", 0, &at), ETUDE_OK);
+        a = loopback((long)etude_port(c, 0));
+        fd = socket(AF_INET, SOCK_STREAM, 0);
+        etude_assert(c, "tcp-forward",
+                     fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0,
+                     "nothing accepts a connection at the first port");
+        if (fd >= 0)
+            close(fd);
+        a = loopback((long)etude_port(c, 1));
+        fd = socket(AF_INET, SOCK_DGRAM, 0);
+        etude_assert(c, "udp-forward",
+                     fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 &&
+                         errno == EADDRINUSE,
+                     "nothing has bound the second port");
+        if (fd >= 0)
+            close(fd);
+        return 0;
+    }
+    snprintf(line, sizeof(line),
+             "fake: netdev user,id=net0,hostfwd=tcp:127.0.0.1:%u-:22,"
+             "hostfwd=udp:127.0.0.1:%u-:9999\r",
+             etude_port(c, 0), etude_port(c, 1));
+    expect(c, "forwarded", etude_console_wait(m, line, 0, &at), ETUDE_OK);
+    expect(c, "second-card", etude_console_wait(m, "fake: netdev user,id=net1\r", 0, &at),
+           ETUDE_OK);
+    if (etude_step(c, "other") != ETUDE_OK)
+        return 1;
+    expect(c, "unheld-refused", etude_boot(c, "other", NULL, &m, &end), ETUDE_FAILED);
+    etude_assert(c, "unheld-unstarted", m == NULL && end.end == ETUDE_END_QEMU_EXITED,
+                 "a forward of a port the case does not hold started");
     return 0;
 }
 
@@ -1376,6 +1456,8 @@ int etude_scenario(struct etude_case *c)
         return scenario_memory(c, row);
     if (strcmp(row, "media") == 0 || strcmp(row, "real-media") == 0)
         return scenario_media(c, row[0] == 'r');
+    if (strcmp(row, "forward") == 0 || strcmp(row, "real-forward") == 0)
+        return scenario_forward(c, row[0] == 'r');
     return scenario_services(c, row);
 }
 
@@ -1543,12 +1625,54 @@ static const char *row_disks(const struct row *r)
     return r->disk != NULL ? "[\"disk\"]" : "[]";
 }
 
+/* The machines of the forward rows: fixture, whose first card forwards the
+ * case's two ports, and other, which forwards a third that the case does not
+ * hold. The first `%s` is fixture's initrd. */
+static const char forward_machines[] =
+    "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
+    "\"disks\": [], \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
+    "\"firmware\": \"direct\", \"devices\": [{\"model\": \"rtl8139\", \"forwards\": "
+    "[{\"protocol\": \"tcp\", \"port\": 0, \"guest_port\": 22}, {\"protocol\": \"udp\", "
+    "\"port\": 1, \"guest_port\": 9999}]}, \"e1000\"], \"boot_options\": []}, \"console\": "
+    "\"serial\", \"qmp\": true, \"helper\": false}, {\"machine_id\": \"other\", \"qemu\": "
+    "{\"kernel\": \"kernel\", \"initrd\": null, \"disks\": [], \"cpu\": \"max\", "
+    "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", \"devices\": "
+    "[{\"model\": \"rtl8139\", \"forwards\": [{\"protocol\": \"tcp\", \"port\": 2, "
+    "\"guest_port\": 22}]}], \"boot_options\": []}, \"console\": \"serial\", \"qmp\": true, "
+    "\"helper\": false}";
+
+/* The case's ports in a forward row, each free when the row starts: the
+ * first for TCP and the second for UDP. */
+static unsigned forward_ports[2];
+
+/** Say whether row `r` is a forward row, whose case has two ports. */
+static int forward_row(const struct row *r)
+{
+    return strcmp(r->name, "forward") == 0 || strcmp(r->name, "real-forward") == 0;
+}
+
+/** Give a port of 127.0.0.1 that is free now for sockets of `type`, or 0. */
+static unsigned free_port(int type)
+{
+    struct sockaddr_in a = loopback(0);
+    socklen_t len = sizeof(a);
+    unsigned port = 0;
+    int fd = socket(AF_INET, type, 0);
+
+    if (fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
+        getsockname(fd, (struct sockaddr *)&a, &len) == 0)
+        port = ntohs(a.sin_port);
+    if (fd >= 0)
+        close(fd);
+    return port;
+}
+
 /** Write row `r`'s case, as one family's manifest, to `path`. A memory row
  * of two machines reserves the boundary machine's memory, and in
  * memory-share and memory-qmp the other's as well. */
 static int write_manifest(const char *path, const struct row *r)
 {
-    char steps[2048], asserts[4096], machine[1024], text[16384];
+    char steps[2048], asserts[4096], machine[2048], text[16384];
     unsigned long long reserved = 268435456;
 
     json_list(steps, sizeof(steps), r->steps, 1);
@@ -1556,6 +1680,10 @@ static int write_manifest(const char *path, const struct row *r)
     if (boundary_pair(r)) {
         fix_format(machine, sizeof(machine), "%s", memory_machines);
         reserved = strcmp(r->name, "memory-pair") != 0 ? 4563402752ull : 4294967296ull;
+    } else if (forward_row(r)) {
+        fix_format(machine, sizeof(machine), forward_machines,
+                   r->mode == NULL ? "\"initrd\"" : "null");
+        reserved = 536870912;
     } else {
         fix_format(
             machine, sizeof(machine),
@@ -1593,7 +1721,7 @@ static int write_manifest(const char *path, const struct row *r)
         "\"ceiling_us\": 3}}], \"bounds\": {\"case\": {\"floor_us\": 1, \"initial_us\": 2, "
         "\"ceiling_us\": 3}, \"gap\": {\"floor_us\": 1, \"initial_us\": 2, \"ceiling_us\": 3}, "
         "\"stages\": {}}, \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, "
-        "\"memory_bytes\": %llu, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": 0, "
+        "\"memory_bytes\": %llu, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": %d, "
         "\"loop_devices\": 0}, \"prepare\": [{\"name\": \"kernel\", \"node\": \"k\", "
         "\"per_architecture\": true}, {\"name\": \"disk\", \"node\": \"d\", \"per_architecture\": "
         "true}, {\"name\": \"initrd\", \"node\": \"i\", \"per_architecture\": true}, {\"name\": "
@@ -1601,7 +1729,7 @@ static int write_manifest(const char *path, const struct row *r)
         "\"node\": \"v\", \"per_architecture\": false}, {\"name\": \"killer\", \"node\": \"x\", "
         "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
         "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
-        r->name, steps, machine, asserts, reserved);
+        r->name, steps, machine, asserts, reserved, forward_row(r) ? 2 : 0);
     return write_file(path, text, strlen(text));
 }
 
@@ -1672,7 +1800,7 @@ struct site {
 static int write_scenario(const char *path, const struct row *r, const struct site *s,
                           const char *manifest, const char *scratch)
 {
-    char steps[1024] = "", one[160], word[64], text[8192], ports[16] = "";
+    char steps[1024] = "", one[160], word[64], text[8192], ports[32] = "";
     const char *p = r->steps;
     size_t n;
 
@@ -1688,6 +1816,8 @@ static int write_scenario(const char *path, const struct row *r, const struct si
     }
     if (r->pair)
         fix_format(ports, sizeof(ports), "%u", row_port);
+    if (forward_row(r))
+        fix_format(ports, sizeof(ports), "%u, %u", forward_ports[0], forward_ports[1]);
     fix_format(text, sizeof(text),
                "{\"schema_version\": 1, \"run_id\": \"test-run\", \"attempt_id\": \"test-%s\", "
                "\"manifest\": \"%s\", \"case_id\": \"test.scenario.%s\", \"architecture\": "
@@ -2045,10 +2175,17 @@ static void row_start(struct row_run *rr, const struct row *r, const struct site
         exit(1);
     fix_format(mark, sizeof(mark), "%s/%s", fix_dir(), r->name);
     rr->port = row_port = r->pair ? reserve_peer(&rr->peer, mark) : 0;
+    if (forward_row(r)) {
+        forward_ports[0] = free_port(SOCK_STREAM);
+        forward_ports[1] = free_port(SOCK_DGRAM);
+    }
     fix_format(manifest, sizeof(manifest), "%s/%s.manifest.json", fix_dir(), r->name);
     fix_format(inv, sizeof(inv), "%s/%s.invocation.json", fix_dir(), r->name);
     fix_format(rr->scratch, sizeof(rr->scratch), "%s/%s.scratch", fix_dir(), r->name);
-    if ((r->pair && row_port == 0) || mkdir(rr->scratch, 0700) != 0 ||
+    if ((r->pair && row_port == 0) ||
+        (forward_row(r) && (forward_ports[0] == 0 || forward_ports[1] == 0 ||
+                            forward_ports[0] == forward_ports[1])) ||
+        mkdir(rr->scratch, 0700) != 0 ||
         (r->pair ? write_pair_manifest(manifest, r) : write_manifest(manifest, r)) != 0 ||
         write_scenario(inv, r, s, manifest, rr->scratch) != 0) {
         printf("etude-scenario-test: fail: %s: its files cannot be written\n", r->name);
@@ -2552,8 +2689,19 @@ static const struct row real_rows[] = {
      NULL, 0, NULL, 0},
 };
 
-/** Run the stand-in rows, the stop row and the damaged row. */
-static void test_stand_in(void)
+/* The forward rows, under the stand-in and under the real QEMU. */
+static const struct row forward_rows[] = {
+    {"forward", "disk", "boot:fixture other:other",
+     "booted forwarded second-card unheld-refused unheld-unstarted", NULL, 0, STEP_US, 0, 1, 1, 0,
+     NULL, 0, NULL, 0},
+    {"real-forward", NULL, "boot:fixture", "booted shell tcp-forward udp-forward", NULL, 0, REAL_US,
+     0, 1, 0, 0, NULL, 0, NULL, 0},
+};
+
+/** Run the audio rows and, unless ETUDE_TEST_AUDIO_ONLY is set, the stand-in
+ * rows, the stop row, the forward row and the damaged row; or the forward row
+ * alone when `forward_only` is set. */
+static void test_stand_in(int forward_only)
 {
     struct site s;
     size_t i;
@@ -2564,26 +2712,32 @@ static void test_stand_in(void)
         fails++;
         return;
     }
-    for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
-        run_row(&audio_rows[i], &s, NULL);
-    if (getenv("ETUDE_TEST_AUDIO_ONLY") != NULL) {
-        etude_store_close(s.store);
-        return;
+    if (!forward_only) {
+        for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
+            run_row(&audio_rows[i], &s, NULL);
+        if (getenv("ETUDE_TEST_AUDIO_ONLY") != NULL) {
+            etude_store_close(s.store);
+            return;
+        }
+        for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
+            run_row(&stand_in_rows[i], &s, NULL);
+        run_row(stop_row, &s, WAITING);
+        run_row(pair_row, &s, NULL);
+        test_isolation(&s);
     }
-    for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
-        run_row(&stand_in_rows[i], &s, NULL);
-    run_row(stop_row, &s, WAITING);
-    run_row(pair_row, &s, NULL);
-    test_isolation(&s);
+    run_row(&forward_rows[0], &s, NULL);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the disk artifact is unchanged");
-    CHECK(damage(s.store, s.kernel) == 0, "damaged");
-    run_row(damaged_row, &s, NULL);
+    if (!forward_only) {
+        CHECK(damage(s.store, s.kernel) == 0, "damaged");
+        run_row(damaged_row, &s, NULL);
+    }
     CHECK(!machines_left(), "every stand-in QEMU and etude-guest has ended");
     etude_store_close(s.store);
 }
 
-/** Run the real rows. */
-static void test_real(void)
+/** Run the real rows, or the real forward row alone when `forward_only` is
+ * set. */
+static void test_real(int forward_only)
 {
     struct site s;
     size_t i;
@@ -2593,8 +2747,9 @@ static void test_real(void)
         fails++;
         return;
     }
-    for (i = 0; i < sizeof(real_rows) / sizeof(real_rows[0]); i++)
+    for (i = 0; !forward_only && i < sizeof(real_rows) / sizeof(real_rows[0]); i++)
         run_row(&real_rows[i], &s, NULL);
+    run_row(&forward_rows[1], &s, NULL);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the real disk artifact is unchanged");
     etude_store_close(s.store);
 }
@@ -2608,6 +2763,7 @@ static void test_real(void)
 static void __attribute__((constructor)) dispatch(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
+    int forward_only;
 
     if (argc == 2)
         return;
@@ -2621,10 +2777,11 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
     }
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         exit(1);
-    test_stand_in();
+    forward_only = getenv("ETUDE_TEST_FORWARD") != NULL && *getenv("ETUDE_TEST_FORWARD") != '\0';
+    test_stand_in(forward_only);
     if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL &&
         (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
-        test_real();
+        test_real(forward_only);
     if (fails != 0)
         exit(1);
     fix_passed();

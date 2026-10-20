@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "proof": "etude-forward-scenario",
+  "summary": "the forward rows of etude_scenario_hosttest.c, under the stand-in and the real QEMU, find a forward the library or the launcher loses",
+  "tree": "private",
+  "sources": [
+    "tools/etude/posix/scenario.c",
+    "tools/etude/qemu_profile.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_scenario_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -Wall -Wextra -Werror -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude -I tools/etude/posix -I tools/etude/guest -I utils tests/host/etude_scenario_hosttest.c ${SRC}/tools/etude/posix/scenario.c tools/etude/posix/case_main.c tools/etude/serial.c tools/etude/posix/qemu.c ${SRC}/tools/etude/qemu_profile.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/processor.c tools/etude/posix/process.c tools/etude/posix/store.c tools/etude/capture.c tools/etude/history_json.c tools/etude/guest/guest.c tools/etude/guest/fixture.c tools/etude/guest/wire.c utils/sha256.c -o ${WORK}/etude_scenario_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "ETUDE_TEST_FORWARD=1",
+      "${WORK}/etude_scenario_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "etude-scenario-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "forwards-dropped",
+      "summary": "the library gives the launcher none of the forwards of the profile's cards",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "m->devices[i].forward_count++;",
+          "replace": "(void)0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert forwarded pass`",
+          "forward: no `assert unheld-refused pass`",
+          "real-forward: no `assert tcp-forward pass`",
+          "real-forward: no `assert udp-forward pass`"
+        ]
+      }
+    },
+    {
+      "name": "ports-dropped",
+      "summary": "the library gives the launcher none of the case's ports",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "m->profile.ports = m->c->ports;",
+          "replace": "m->profile.ports = NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert booted pass`",
+          "real-forward: no `assert booted pass`"
+        ]
+      }
+    },
+    {
+      "name": "protocol-swapped",
+      "summary": "the launcher forwards the TCP port by UDP and the UDP port by TCP",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "f->udp ? \"udp\" : \"tcp\"",
+          "replace": "f->udp ? \"tcp\" : \"udp\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forward: no `assert forwarded pass`",
+          "real-forward: no `assert tcp-forward pass`",
+          "real-forward: no `assert udp-forward pass`"
+        ]
+      }
+    }
+  ]
+}

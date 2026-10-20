@@ -47,23 +47,14 @@ struct line {
 };
 
 /**
- * Add an argument made from `format`, in which each `%s` is replaced by the
- * next string, with its commas doubled when `quote` is set, as QEMU's option
- * syntax needs inside a value.
+ * Write `format` and a NUL at the end of the line's bytes, each `%s`
+ * replaced by the next string of `ap`, with its commas doubled when `quote`
+ * is set, as QEMU's option syntax needs inside a value.
  */
-static void add(struct line *l, int quote, const char *format, ...)
+static void emit(struct line *l, int quote, const char *format, va_list ap)
 {
-    char *start = l->buf + l->used;
     const char *f, *s;
-    va_list ap;
 
-    if (l->error)
-        return;
-    if (l->n + 2 > l->max) {
-        l->error = E2BIG;
-        return;
-    }
-    va_start(ap, format);
     for (f = format; *f != '\0'; f++) {
         if (f[0] == '%' && f[1] == 's') {
             for (s = va_arg(ap, const char *); *s != '\0'; s++) {
@@ -78,14 +69,45 @@ static void add(struct line *l, int quote, const char *format, ...)
             l->buf[l->used++] = *f;
         }
     }
-    va_end(ap);
     if (l->used + 1 >= l->size) {
         l->error = E2BIG;
         return;
     }
     l->buf[l->used++] = '\0';
+}
+
+/** Add an argument made from `format`, as emit writes it. */
+static void add(struct line *l, int quote, const char *format, ...)
+{
+    char *start = l->buf + l->used;
+    va_list ap;
+
+    if (l->error)
+        return;
+    if (l->n + 2 > l->max) {
+        l->error = E2BIG;
+        return;
+    }
+    va_start(ap, format);
+    emit(l, quote, format, ap);
+    va_end(ap);
+    if (l->error)
+        return;
     l->argv[l->n++] = start;
     l->argv[l->n] = NULL;
+}
+
+/** Append `format` to the last argument, as emit writes it. */
+static void append(struct line *l, int quote, const char *format, ...)
+{
+    va_list ap;
+
+    if (l->error || l->n == 0)
+        return;
+    l->used--;
+    va_start(ap, format);
+    emit(l, quote, format, ap);
+    va_end(ap);
 }
 
 /** Say whether `s` is a nonempty word of printable ASCII without a space. */
@@ -261,7 +283,7 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
             return EINVAL;
         if (!nic_model(d->model)) {
             if (d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
-                d->mac != NULL)
+                d->mac != NULL || d->forward_count != 0)
                 return EINVAL;
             continue;
         }
@@ -303,6 +325,61 @@ static size_t device_count(const struct etude_qemu_device *devices)
     return n;
 }
 
+/**
+ * Give local port `i` of profile `p`, or 0 when the profile does not hold it:
+ * there is no such port, or it is not one of 1024 to 65535.
+ */
+static unsigned held_port(const struct etude_qemu_profile *p, unsigned i)
+{
+    if (p->ports == NULL || i >= p->port_count || p->ports[i] < 1024 || p->ports[i] > 65535)
+        return 0;
+    return p->ports[i];
+}
+
+/**
+ * Say whether a forward of profile `p` that comes before forward `j` of
+ * device `i` forwards the local port of `f` by the protocol of `f`.
+ */
+static int forwarded_before(const struct etude_qemu_profile *p, size_t i, size_t j,
+                            const struct etude_qemu_forward *f)
+{
+    const struct etude_qemu_forward *g;
+    size_t k, n;
+
+    for (k = 0; k <= i; k++)
+        for (n = 0; n < (k < i ? p->devices[k].forward_count : j); n++) {
+            g = &p->devices[k].forwards[n];
+            if (!g->udp == !f->udp && held_port(p, g->port) == held_port(p, f->port))
+                return 1;
+        }
+    return 0;
+}
+
+/**
+ * Check the forwards of the cards of profile `p`: each from a local port the
+ * profile holds to a port of the guest, and no local port forwarded twice by
+ * one protocol, which QEMU could not listen on twice.
+ */
+static int forward_check(const struct etude_qemu_profile *p)
+{
+    const struct etude_qemu_device *d;
+    const struct etude_qemu_forward *f;
+    size_t i, j;
+
+    for (i = 0; i < device_count(p->devices); i++) {
+        d = &p->devices[i];
+        if (d->forward_count > 0 && d->forwards == NULL)
+            return EINVAL;
+        for (j = 0; j < d->forward_count; j++) {
+            f = &d->forwards[j];
+            if (held_port(p, f->port) == 0 || f->guest_port < 1 || f->guest_port > 65535 ||
+                forwarded_before(p, i, j, f))
+                return EINVAL;
+        }
+    }
+    return 0;
+}
+
 /** Add a card's network options to `buf`; validated values fit in 256 bytes. */
 static void network_options(const struct etude_qemu_device *d, char *buf, size_t size)
 {
@@ -311,16 +388,40 @@ static void network_options(const struct etude_qemu_device *d, char *buf, size_t
              d->dhcpstart ? d->dhcpstart : "", d->dns ? ",dns=" : "", d->dns ? d->dns : "");
 }
 
-/** Attach a device; `*nics` counts the cards already on user networks. */
-static void add_device(struct line *l, const struct etude_qemu_device *d, unsigned *nics)
+/**
+ * Add the `-netdev` of card `d`, whose id is `id`: a user network with the
+ * card's options and its forwards of the local ports of profile `p`.
+ */
+static void add_network(struct line *l, const struct etude_qemu_profile *p,
+                        const struct etude_qemu_device *d, const char *id)
 {
-    char id[16], options[256];
+    char options[256], port[16], guest[16];
+    const struct etude_qemu_forward *f;
+    size_t i;
+
+    network_options(d, options, sizeof(options));
+    add(l, 0, "-netdev");
+    add(l, 0, "user,id=%s%s", id, options);
+    for (i = 0; i < d->forward_count; i++) {
+        f = &d->forwards[i];
+        snprintf(port, sizeof(port), "%u", held_port(p, f->port));
+        snprintf(guest, sizeof(guest), "%u", f->guest_port);
+        append(l, 0, ",hostfwd=%s:127.0.0.1:%s-:%s", f->udp ? "udp" : "tcp", port, guest);
+    }
+}
+
+/**
+ * Attach device `d` of profile `p`; `*nics` counts the cards already on user
+ * networks.
+ */
+static void add_device(struct line *l, const struct etude_qemu_profile *p,
+                       const struct etude_qemu_device *d, unsigned *nics)
+{
+    char id[16];
 
     if (nic_model(d->model)) {
         snprintf(id, sizeof(id), "net%u", (*nics)++);
-        network_options(d, options, sizeof(options));
-        add(l, 0, "-netdev");
-        add(l, 0, "user,id=%s%s", id, options);
+        add_network(l, p, d, id);
         add(l, 0, "-device");
         add(l, 0, "%s,netdev=%s%s%s", d->model, id, d->mac ? ",mac=" : "", d->mac ? d->mac : "");
         return;
@@ -450,6 +551,8 @@ static int profile_check(const struct etude_qemu_profile *p)
     for (i = 0; i < count(p->boot_options); i++)
         if (!word(p->boot_options[i]))
             return EINVAL;
+    if (forward_check(p) != 0)
+        return EINVAL;
     if (p->firmware == ETUDE_FIRMWARE_DIRECT)
         return p->kernel != NULL && *p->kernel != '\0' ? 0 : EINVAL;
     if (p->firmware != ETUDE_FIRMWARE_SEABIOS && p->firmware != ETUDE_FIRMWARE_OVMF)
@@ -540,7 +643,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add_disk(&l, &p->disks[i], i, &ide);
     add_audio(&l, p->audio, audio);
     for (i = 0; i < device_count(p->devices); i++)
-        add_device(&l, &p->devices[i], &nics);
+        add_device(&l, p, &p->devices[i], &nics);
     add(&l, 0, "-chardev");
     add(&l, 1, "socket,id=etude-console,path=%s", console);
     add(&l, 0, "-serial");

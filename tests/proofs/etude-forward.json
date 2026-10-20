@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "proof": "etude-forward",
+  "summary": "the QEMU launcher forwards the profile's ports on its cards' user networks, after each card's network options, and refuses a forward it cannot make",
+  "tree": "private",
+  "sources": [
+    "tools/etude/qemu_profile.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_qemu_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude tests/host/etude_qemu_hosttest.c ${SRC}/tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/capture.c tools/etude/history_json.c tools/etude/processor.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c -o ${WORK}/etude_qemu_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_qemu_hosttest",
+      "--forwards"
+    ],
+    "bound_s": 15
+  },
+  "faults": [
+    {
+      "name": "forward-dropped",
+      "summary": "a card's forwards are left off its -netdev",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "append(l, 0, \",hostfwd=%s:127.0.0.1:%s-:%s\", f->udp ? \"udp\" : \"tcp\", port, guest);",
+          "replace": ";"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forwards: the command line is",
+          "a card's network options and its forwards: the command line is",
+          "a forward on the second card: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "protocol-swapped",
+      "summary": "a TCP forward is made a UDP one and a UDP forward a TCP one",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "f->udp ? \"udp\" : \"tcp\"",
+          "replace": "f->udp ? \"tcp\" : \"udp\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forwards: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "unheld-taken",
+      "summary": "a forward of a port past the profile's ports is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "p->ports == NULL || i >= p->port_count || ",
+          "replace": "p->ports == NULL || "
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a forward of a port the case does not hold"
+        ]
+      }
+    },
+    {
+      "name": "low-port-taken",
+      "summary": "a forward of a port below 1024 is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "p->ports[i] < 1024 || ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a forward of a port below 1024"
+        ]
+      }
+    },
+    {
+      "name": "twice-taken",
+      "summary": "a local port forwarded twice by one protocol is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "held_port(p, g->port) == held_port(p, f->port))",
+          "replace": "held_port(p, g->port) == held_port(p, f->port) && 0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a TCP port forwarded twice",
+          "a UDP port forwarded twice"
+        ]
+      }
+    },
+    {
+      "name": "protocol-ignored",
+      "summary": "a local port forwarded by TCP and by UDP is refused as one forwarded twice",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "!g->udp == !f->udp && ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "forwards: the launcher refuses the profile"
+        ]
+      }
+    },
+    {
+      "name": "card-unchecked",
+      "summary": "a forward on a device that is no network card is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "d->mac != NULL || d->forward_count != 0)",
+          "replace": "d->mac != NULL)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a forward on a device that is no network card"
+        ]
+      }
+    },
+    {
+      "name": "guest-port-unchecked",
+      "summary": "a forward to the guest's port 0 or past 65535 is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "f->guest_port < 1 || f->guest_port > 65535 ||",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a forward to the guest's port 0",
+          "a forward to the guest's port 65536"
+        ]
+      }
+    }
+  ]
+}

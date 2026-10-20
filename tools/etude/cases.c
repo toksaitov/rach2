@@ -632,6 +632,84 @@ static void rule_steps(const struct rule *r)
     }
 }
 
+/**
+ * Returns 1 when a forward of the devices `devs` that comes before forward
+ * `j` of device `i` forwards the local port of `f` by its protocol.
+ */
+static int forwarded_before(const struct json *devs, size_t i, size_t j, const struct json *f)
+{
+    const struct json *list, *g;
+    size_t k, n;
+
+    for (k = 0; k <= i; k++) {
+        list = json_member(devs->item[k], "forwards");
+        for (n = 0; list != NULL && n < (k < i ? list->count : j); n++) {
+            g = list->item[n];
+            if (same(json_text(g, "protocol"), json_text(f, "protocol")) &&
+                json_member(g, "port")->integer == json_member(f, "port")->integer) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Reports what the launcher would refuse of the forwards of the cards of
+ * machine `m`: a forward of a local port past those the case reserves, and a
+ * local port forwarded twice by one protocol.
+ */
+static void machine_networks(const struct rule *r, const struct json *m)
+{
+    const struct json *devs = json_member(json_member(m, "qemu"), "devices");
+    long long ports = json_member(json_member(r->c, "resources"), "ports")->integer;
+    const char *case_id = json_text(r->c, "case_id"), *id = json_text(m, "machine_id");
+    size_t i, j;
+
+    for (i = 0; devs != NULL && i < devs->count; i++) {
+        const struct json *list = json_member(devs->item[i], "forwards");
+
+        for (j = 0; list != NULL && j < list->count; j++) {
+            const struct json *f = list->item[j];
+            long long port = json_member(f, "port")->integer;
+
+            if (port >= ports) {
+                finding(r->file, f->line,
+                        "%s: the machine %s forwards port %lld, but the case reserves %lld",
+                        case_id, id, port, ports);
+            }
+            if (forwarded_before(devs, i, j, f)) {
+                finding(r->file, f->line, "%s: the machine %s forwards its %s port %lld twice",
+                        case_id, id, json_text(f, "protocol"), port);
+            }
+        }
+    }
+}
+
+/**
+ * A machine's forwards are those the launcher takes, and the cards of a guest
+ * case's boot have none, since only a scenario reaches a forward.
+ */
+static void rule_networks(const struct rule *r)
+{
+    const struct json *qemu = json_member(json_member(r->c, "requirements"), "qemu");
+    const struct json *devs = json_member(qemu, "devices");
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    for (i = 0; devs != NULL && i < devs->count; i++) {
+        if (json_member(devs->item[i], "forwards") != NULL) {
+            finding(r->file, devs->item[i]->line,
+                    "%s: a guest case's boot has no forwards, since only a scenario reaches a "
+                    "forward",
+                    json_text(r->c, "case_id"));
+        }
+    }
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        machine_networks(r, machines->item[i]);
+    }
+}
+
 /** Reports a bound whose floor, initial value and ceiling are out of order. */
 static void ordered(const struct rule *r, const struct json *bound, const char *what)
 {
@@ -725,8 +803,7 @@ static long long fixture_count(const struct json *list, const char *kind)
 static int qemu_memory(const struct rule *r, const struct json *qemu,
                        struct etude_qemu_memory *memory)
 {
-    static const struct etude_qemu_device device[] = {{"device", NULL, NULL, NULL, NULL, NULL},
-                                                      {0}};
+    static const struct etude_qemu_device device[] = {{.model = "device"}, {0}};
     static const struct etude_qemu_disk disk[] = {{"disk", ETUDE_BUS_IDE, 0, NULL, 0},
                                                   {NULL, ETUDE_BUS_IDE, 0, NULL, 0}};
     const struct json *arches = json_member(r->c, "architectures");
@@ -1010,6 +1087,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_processor(&r);
     rule_network(&r);
     rule_steps(&r);
+    rule_networks(&r);
     rule_bounds(&r);
     rule_progress(&r);
     rule_resources(&r);

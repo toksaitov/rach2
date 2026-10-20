@@ -39,6 +39,14 @@
  * only the 72 GiB boundary boot in the real QEMU, which must report the
  * counts bigmem.sh requires and keep QEMU's resident peak within the
  * reservation.
+ *
+ * The forward rows check the user network of each network card as text: the
+ * forwards of the case's local ports by TCP and by UDP, a card without
+ * forwards, and a card's network options before its forwards. They refuse a
+ * forward on a device that is no network card, a forward of a port the
+ * profile does not hold or that is below 1024, one to the guest's port 0 or
+ * 65536, and a local port forwarded twice by one protocol. With `--forwards`
+ * the program runs only these rows.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -1083,11 +1091,8 @@ static void test_audio(void)
 }
 
 /* The devices of the complete command-line fixture. */
-static const struct etude_qemu_device argv_devices[] = {{"rtl8139", NULL, NULL, NULL, NULL, NULL},
-                                                        {"e1000", NULL, NULL, NULL, NULL, NULL},
-                                                        {"vga", NULL, NULL, NULL, NULL, NULL},
-                                                        {"ahci", NULL, NULL, NULL, NULL, NULL},
-                                                        {0}};
+static const struct etude_qemu_device argv_devices[] = {
+    {.model = "rtl8139"}, {.model = "e1000"}, {.model = "vga"}, {.model = "ahci"}, {0}};
 
 /**
  * Fill `d` with `ide` disks on IDE and then `nvme` on NVMe, each with a
@@ -1302,9 +1307,13 @@ static int has_argument(char *const argv[], const char *option, const char *valu
 static void test_network_argv(void)
 {
     struct etude_qemu_device devices[] = {
-        {"rtl8139", "192.168.90.0/24", "192.168.90.2", "192.168.90.20", "192.168.90.3",
-         "52:54:00:12:34:56"},
-        {"e1000", "10.0.3.0/24", NULL, NULL, NULL, "52:54:00:12:34:58"},
+        {.model = "rtl8139",
+         .net = "192.168.90.0/24",
+         .host = "192.168.90.2",
+         .dhcpstart = "192.168.90.20",
+         .dns = "192.168.90.3",
+         .mac = "52:54:00:12:34:56"},
+        {.model = "e1000", .net = "10.0.3.0/24", .mac = "52:54:00:12:34:58"},
         {0}};
     struct etude_qemu_profile p = {0};
     struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "qemu32", "qemu64", NULL, NULL, 0};
@@ -1376,8 +1385,7 @@ static void test_network_refused(void)
                                           "52:54:00:12:34:5",
                                           "52:54:00:12:34:56,other=1",
                                           NULL};
-    struct etude_qemu_device devices[] = {
-        {"e1000", NULL, NULL, NULL, NULL, NULL}, {"rtl8139", NULL, NULL, NULL, NULL, NULL}, {0}};
+    struct etude_qemu_device devices[] = {{.model = "e1000"}, {.model = "rtl8139"}, {0}};
     size_t i;
 
     for (i = 0; bad_net[i] != NULL; i++) {
@@ -1411,6 +1419,112 @@ static void test_network_refused(void)
     CHECK(etude_qemu_devices_check(devices) == 0, "default skips used station address");
     devices[0].model = "ahci";
     CHECK(etude_qemu_devices_check(devices) == EINVAL, "network options on another device");
+}
+
+/**
+ * Check that the launcher makes a command line of profile `p` on `site`, and
+ * that its arguments, joined by spaces, have `want` among them; `row` names
+ * the check.
+ */
+static void has(const struct etude_qemu_profile *p, const struct etude_qemu_site *site,
+                const char *want, const char *row)
+{
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
+    size_t used = 0;
+    int i;
+
+    line[0] = '\0';
+    if (make(p, site, argv, buf, sizeof(buf)) != 0) {
+        printf("etude-qemu-test: fail: %s: the launcher refuses the profile\n", row);
+        fails++;
+        return;
+    }
+    for (i = 0; argv[i] != NULL && used < sizeof(line); i++)
+        used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s", i ? " " : "", argv[i]);
+    if (strstr(line, want) == NULL) {
+        printf("etude-qemu-test: fail: %s: the command line is\n  %s\nwithout\n  %s\n", row, line,
+               want);
+        fails++;
+    }
+}
+
+/**
+ * Check the forwards of the case's local ports to the guest on the user
+ * networks of a profile's cards, with a card's network options, and the
+ * forwards the launcher refuses.
+ */
+static void test_forwards(void)
+{
+    static const unsigned ports[] = {40001, 40002, 1023, 40003};
+    static const char *const want =
+        "-netdev user,id=net0,hostfwd=tcp:127.0.0.1:40001-:22,"
+        "hostfwd=udp:127.0.0.1:40001-:9999,hostfwd=udp:127.0.0.1:40002-:7502 "
+        "-device rtl8139,netdev=net0 -netdev user,id=net1 -device e1000,netdev=net1 "
+        "-chardev";
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_forward fw[3] = {{0, 0, 22}, {1, 0, 9999}, {1, 1, 7502}};
+    struct etude_qemu_forward bad;
+    struct etude_qemu_device devices[] = {
+        {.model = "vga"}, {.model = "rtl8139"}, {.model = "e1000"}, {0}};
+    struct etude_qemu_profile p;
+    struct etude_qemu_profile b;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    memset(&p, 0, sizeof(p));
+    devices[1].forwards = fw;
+    devices[1].forward_count = 3;
+    p.architecture = "i686";
+    p.kernel = "/k/kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = devices;
+    p.ports = ports;
+    p.port_count = 2;
+    has(&p, &site, want, "forwards");
+    devices[1].net = "192.168.90.0/24";
+    devices[1].dhcpstart = "192.168.90.20";
+    devices[1].mac = "52:54:00:12:34:60";
+    has(&p, &site,
+        "-netdev user,id=net0,net=192.168.90.0/24,dhcpstart=192.168.90.20,"
+        "hostfwd=tcp:127.0.0.1:40001-:22,hostfwd=udp:127.0.0.1:40001-:9999,"
+        "hostfwd=udp:127.0.0.1:40002-:7502 -device rtl8139,netdev=net0,mac=52:54:00:12:34:60 ",
+        "a card's network options and its forwards");
+    devices[1].net = devices[1].dhcpstart = devices[1].mac = NULL;
+#define NET_REFUSED(change, row)                                       \
+    do {                                                               \
+        b = p;                                                         \
+        change;                                                        \
+        CHECK(make(&b, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
+    } while (0)
+    devices[0].forwards = fw;
+    devices[0].forward_count = 1;
+    NET_REFUSED((void)0, "a forward on a device that is no network card");
+    devices[0].forwards = NULL;
+    devices[0].forward_count = 0;
+    devices[2].forward_count = 1;
+    NET_REFUSED((void)0, "forwards without their list");
+    devices[2].forwards = &bad;
+    bad = fw[0];
+    bad.port = 2;
+    NET_REFUSED(b.port_count = 3, "a forward of a port below 1024");
+    bad.port = 3;
+    NET_REFUSED((void)0, "a forward of a port the case does not hold");
+    NET_REFUSED(b.ports = NULL, "a forward without the case's ports");
+    bad.port = 1;
+    bad.guest_port = 0;
+    NET_REFUSED((void)0, "a forward to the guest's port 0");
+    bad.guest_port = 65536;
+    NET_REFUSED((void)0, "a forward to the guest's port 65536");
+    bad = fw[0];
+    NET_REFUSED((void)0, "a TCP port forwarded twice");
+    bad = fw[2];
+    NET_REFUSED((void)0, "a UDP port forwarded twice");
+    bad.udp = 0;
+    has(&p, &site, "-netdev user,id=net1,hostfwd=tcp:127.0.0.1:40002-:7502 -device e1000",
+        "a forward on the second card");
+#undef NET_REFUSED
 }
 
 /** Reject a reduced reservation and any change to the boundary workload. */
@@ -1532,10 +1646,13 @@ int main(int argc, char **argv)
         test_argv();
     } else if (argc == 2 && strcmp(argv[1], "--uefi") == 0) {
         test_uefi();
+    } else if (argc == 2 && strcmp(argv[1], "--forwards") == 0) {
+        test_forwards();
     } else {
         test_argv();
         test_network_argv();
         test_network_refused();
+        test_forwards();
         test_audio_argv();
         test_audio();
         test_memory();

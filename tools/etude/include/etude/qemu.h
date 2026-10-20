@@ -29,7 +29,18 @@ enum etude_firmware {
     ETUDE_FIRMWARE_OVMF     /* the UEFI firmware boots from the disks */
 };
 
-/* A device, optionally with its user network and station address. */
+/* A forward of one of the case's local ports to a port of the guest: QEMU
+ * listens on 127.0.0.1 at the local port and joins each connection, or each
+ * datagram, to the port at the first address that DHCP gives on the card's
+ * user network, 10.0.2.15 unless the card says otherwise. */
+struct etude_qemu_forward {
+    int udp;             /* a UDP port; a TCP port when 0 */
+    unsigned port;       /* which of the profile's `ports`, counted from 0 */
+    unsigned guest_port; /* 1 to 65535 */
+};
+
+/* A device, optionally with its user network, its forwards and its station
+ * address. */
 struct etude_qemu_device {
     const char *model; /* NULL ends the device list */
     const char *net;   /* IPv4 network/prefix, or NULL for 10.0.2.0/24 */
@@ -37,12 +48,14 @@ struct etude_qemu_device {
     const char *dhcpstart;
     const char *dns;
     const char *mac; /* six hexadecimal octets, or NULL for QEMU's default */
+    const struct etude_qemu_forward *forwards; /* `forward_count` of them */
+    size_t forward_count;
 };
 
 /**
  * Check device models and network options, including IPv4 subnet membership,
  * unicast station addresses and duplicate explicit or default addresses.
- * Network options are valid only for rtl8139 and e1000.
+ * Network options and forwards are valid only for rtl8139 and e1000.
  *
  * @return 0, or EINVAL for an invalid device list; NULL is an empty list.
  */
@@ -87,6 +100,9 @@ struct etude_qemu_profile {
     const struct etude_qemu_device *devices; /* ended by a NULL model */
     const char *const *boot_options;         /* the kernel's command line, ended
                                                 by NULL; direct firmware alone */
+    const unsigned *ports;                   /* the case's local ports, each
+                                                above 1023, `port_count` of them */
+    size_t port_count;
 };
 
 /* Admission amounts for one QEMU, separate from its configured RAM. */
@@ -167,8 +183,11 @@ struct etude_qemu_line {
  * WAV path, required when the profile selects an audio card.
  *
  * @return 0, or an error number: EINVAL for a profile the launcher cannot
- *         make, ENOENT for a firmware the site lacks, E2BIG when `out` is too
- *         small; ENOTSUP for a lazy boundary profile the site has not enabled.
+ *         make, among them a forward of a port that is not one of the
+ *         profile's `ports` and a local port forwarded twice by one
+ *         protocol; ENOENT for a firmware the site lacks, E2BIG when `out` is
+ *         too small; ENOTSUP for a lazy boundary profile the site has not
+ *         enabled.
  */
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
