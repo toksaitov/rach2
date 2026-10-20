@@ -1,5 +1,7 @@
 /* Drive etude-guest through pipes, as the controller drives it through SSH
- * and the serial console, and check the contracts of its commands.
+ * and the serial console, and check the contracts of its commands. Run as
+ * `--setsid PROGRAM [ARG...]`, this program is setsid(1) for the scripts it
+ * runs, since macOS has none.
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c
  * host-deps: tools/etude/history_json.c utils/sha256.c
@@ -27,8 +29,14 @@
 
 int etude_guest_main(int argc, char **argv);
 
+/* The bytes of a path, as many as realpath(3) may write on Linux; the
+ * freestanding <limits.h> of the host tests' build has no PATH_MAX. */
+#define PATH_CAP 4096
+
 static int failures;
 static char work[512];
+/* This program, by an absolute path. */
+static char self[PATH_CAP];
 static pid_t guest = -1;
 static int to_guest = -1;
 static int from_guest = -1;
@@ -356,7 +364,7 @@ static void put_invocation(const char *name, const char *script, const char *tok
                            const struct shape *sh, char inv[65])
 {
     const char *input = sh->input;
-    char text[4096];
+    char text[8192];
     char files[512];
     char hex[65];
     char c[24];
@@ -379,11 +387,11 @@ static void put_invocation(const char *name, const char *script, const char *tok
         "\"attempt_id\": \"attempt-%s\", \"attempt_token\": \"%s\", "
         "\"case_id\": \"host.etude.guest\", \"program\": \"%s\", \"arguments\": [\"a b\"], "
         "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\", "
-        "\"MARKS\": \"%s/marks\"}, \"stdin\": %s, \"role\": \"%s\", \"files\": [%s], "
-        "\"fixtures\": %s, \"deadline_us\": %ld, \"grace_us\": 500000, "
+        "\"MARKS\": \"%s/marks\", \"HOSTTEST\": \"%s\"}, \"stdin\": %s, \"role\": \"%s\", "
+        "\"files\": [%s], \"fixtures\": %s, \"deadline_us\": %ld, \"grace_us\": 500000, "
         "\"output_max_bytes\": %ld}",
-        token, token, name, work, input ? "\"input.txt\"" : "null", sh->role, files, sh->fixtures,
-        sh->deadline_ms * 1000, case_keep);
+        token, token, name, work, self, input ? "\"input.txt\"" : "null", sh->role, files,
+        sh->fixtures, sh->deadline_ms * 1000, case_keep);
     put_file("invocation.json", text, (size_t)n, "0644", inv, c);
 }
 
@@ -822,7 +830,7 @@ static void check_interruptions(void)
     static const char hang[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
                                "echo $$ > \"$MARKS.leader\"\n"
                                "sleep 60 &\necho $! > \"$MARKS.member\"\n"
-                               "setsid sleep 60 &\necho \"@etude 1 child $!\"\n"
+                               "\"$HOSTTEST\" --setsid sleep 60 &\necho \"@etude 1 child $!\"\n"
                                "echo $! > \"$MARKS.escaped\"\necho ready\nwait\n";
     struct ending e;
     struct got g;
@@ -1203,10 +1211,30 @@ static void check_serial(void)
     end_guest();
 }
 
-int main(void)
+/** Execute `argv` in a new session, as setsid(1) does, for the `hang`
+ * script's child that leaves the attempt's process group; 127 when it
+ * cannot. */
+static int setsid_main(char **argv)
+{
+    if (setsid() < 0) {
+        perror("etude_guest_hosttest: setsid");
+        return 127;
+    }
+    execvp(argv[0], argv);
+    perror(argv[0]);
+    return 127;
+}
+
+int main(int argc, char **argv)
 {
     char *tmp = getenv("TMPDIR");
 
+    if (argc >= 3 && strcmp(argv[1], "--setsid") == 0)
+        return setsid_main(argv + 2);
+    if (!realpath(argv[0], self)) {
+        perror(argv[0]);
+        return 2;
+    }
     signal(SIGPIPE, SIG_IGN);
     atexit(cleanup);
     signal(SIGINT, stopped);
