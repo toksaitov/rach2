@@ -1467,8 +1467,9 @@ run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE)
 	sh tests/system/suites/mount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
 
-# `tests/run load`: the machine under load for twenty seconds and the
-# longest delays it saw, from `/proc/stat`, within their bounds.
+# `tests/run load`: the machine under load while six lines are typed at its
+# console: every line read, no request quarantined by its deadline, and the
+# longest delays it saw, from `/proc/stat`, printed.
 LOAD_DISK = $(IMAGES_DIR)/load-test.disk
 run-load: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/load.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)

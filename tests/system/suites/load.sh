@@ -2,15 +2,16 @@
 #
 # load.sh: the machine under load and the longest delays it saw.
 #
-# `loadprobe` runs its load for twenty seconds, prints the four delays
-# `/proc/stat` keeps as its longest, and requires what it counts: three lines
-# read and no request quarantined by its deadline. Its writers have a disk
-# with a FAT32 partition, under the lag device so that their writes go
-# through the request layer whose delays are recorded; its pinger has the
-# harness's network card; and its reader has the console, where the harness
-# types each line once the reader has said it took the last. The lag's
-# deadline counts the flush after each write, so that disk keeps the guest's
-# flushes from the host (cache=unsafe), as tests/system/Readme.md says.
+# `loadprobe` runs its load until its reader has read the six lines typed
+# here, prints the four delays `/proc/stat` keeps as its longest, and
+# requires what it counts: every line read and no request quarantined by its
+# deadline. Its writers have a disk with a FAT32 partition, under the lag
+# device so that their writes go through the request layer whose delays are
+# recorded; its pinger has the harness's network card; and its reader has
+# the console, where the harness types each line once the reader has said it
+# took the last. The lag's deadline counts the flush after each write, so
+# that disk keeps the guest's flushes from the host (cache=unsafe), as
+# tests/system/Readme.md says.
 #
 # Usage: load.sh KERNEL IMAGE HARNESS DISK
 set -u
@@ -34,7 +35,7 @@ if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     "send=five" "expect=LOADPROBE read" "send=six" "expect=LOADPROBE read" \
     "expect=LOADPROBE" > /dev/null 2>&1; then
     grep -a 'LOADPROBE timer' "$DISK.log" | tail -1 | tr -d '\r' | sed 's/^/load-test: /'
-    echo "load-test: twenty seconds of spinning, writing, pinging and typing: every line read, the counters printed, nothing quarantined: OK"
+    echo "load-test: spinning, writing and pinging while six lines are typed: every line read, the counters printed, nothing quarantined: OK"
 else
     grep -a 'LOADPROBE' "$DISK.log" | tr -d '\r' >&2 || true
     fail "the load boot"
@@ -44,7 +45,7 @@ fi
 # data port, whose transfers run with interrupts off, so the writer is inside
 # a system call from one write to the next. A timer interrupt that lands
 # inside the call requests a switch, and the call's exit takes it, so the
-# reader gets its lines and the probe's own sleep ends.
+# reader gets its lines and the probe ends the load at the last.
 if "$HARNESS" --kernel "$KERNEL" --initrd "$IMAGE" \
     --qemu-arg=-cpu --qemu-arg=max \
     --drive "file=$DISK,format=raw,if=ide,index=0,media=disk" \

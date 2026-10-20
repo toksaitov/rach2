@@ -5,14 +5,18 @@
  * sync it over and over, one pings the gateway through the kernel's own
  * ping every fifty milliseconds, and one reads lines from the console,
  * which the harness types one after another, each once the reader has
- * said it took the last, for twenty seconds. Then the parent kills them
- * all, reads `/proc/stat`, and prints the four delays the kernel kept as
- * its longest: the gap between two timer ticks, a block request from its
+ * said it took the last. The load lasts until the reader has reported
+ * LOAD_LINES lines over a pipe, or until the pipe ends because the reader
+ * did; however long the harness and the loaded machine take, the parent
+ * waits for the lines and not for a time. Then the parent kills them all,
+ * reads `/proc/stat`, and prints the four delays the kernel kept as its
+ * longest: the gap between two timer ticks, a block request from its
  * taking to its completion, a wait for the request limit, and a console
  * line from readable to read. The four delays depend on the machine and
- * are printed, not judged; what is judged is counted: at least three lines
- * must have been read, and no request may have been quarantined by its
- * deadline, which /proc/disk counts.
+ * are printed, not judged; what is judged is counted: every line the
+ * harness typed must have been read, and no request may have been
+ * quarantined by its deadline, which /proc/disk counts. The suite's wait
+ * for the probe's token ends a run whose reader never gets its lines.
  *
  * Prints "LOADPROBE timer N disk N diskwait N console N lines N" and then
  * "LOADPROBE OK" and exits 0, or "LOADPROBE FAIL: " and the reason and
@@ -28,6 +32,9 @@
 #define O_CREAT  0100
 #define O_TRUNC  01000
 #define SIGKILL  9
+
+/* The lines tests/system/suites/load.sh types, one after each read. */
+#define LOAD_LINES 6
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -146,17 +153,19 @@ static void pinger(void)
     }
 }
 
-/** The console reader: count each line read into `report`, one byte each,
- * and print "LOADPROBE read" for it, after which the harness types the next
- * line. It does not return. */
+/** The console reader: print "LOADPROBE read" for each line read, after
+ * which the harness types the next line, and then count the line into
+ * `report`, one byte each. The answer comes first, so that the parent, which
+ * kills the reader at the last line's byte, does so after the harness has
+ * seen the last answer. It does not return. */
 static void reader(int report)
 {
     char c;
 
     for (;;) {
         if (syscall3(SYS_READ, 0, (long)&c, 1) == 1 && c == '\n') {
-            syscall3(SYS_WRITE, report, (long)"l", 1);
             puts("LOADPROBE read");
+            syscall3(SYS_WRITE, report, (long)"l", 1);
         }
     }
 }
@@ -226,12 +235,49 @@ static int wanted(const char *arg, char kind)
 }
 
 /**
+ * Run load process `i` of the ten, as the argument `arg` asks: 0 to 5 spin,
+ * 6 and 7 write, 8 pings and 9 reads the console. Only the reader keeps the
+ * write end of `report`, so the pipe ends when it does. A process whose load
+ * is not wanted waits in pause until it is killed. It does not return.
+ */
+static void load_child(int i, const char *arg, const int report[2])
+{
+    syscall1(SYS_CLOSE, report[0]);
+    if (i != 9 || !wanted(arg, 'r')) {
+        syscall1(SYS_CLOSE, report[1]);
+    }
+    if (i < 6) {
+        if (wanted(arg, 's')) {
+            for (;;) {
+                /* A spin, meant to last until the kill. */
+                __asm__ __volatile__("" ::: "memory");
+            }
+        }
+    } else if (i < 8) {
+        writer_syncs = !(arg && wanted(arg, 'n'));
+        if (wanted(arg, 'w') || (i == 6 && wanted(arg, 'W'))) {
+            writer(i == 6 ? "/lo/load1.bin" : "/lo/load2.bin");
+        }
+    } else if (i == 8) {
+        if (wanted(arg, 'p')) {
+            pinger();
+        }
+    } else if (wanted(arg, 'r')) {
+        reader(report[1]);
+    }
+    for (;;) {
+        syscall0(SYS_PAUSE);
+    }
+}
+
+/**
  * The probe, entered with `sp` at argc. Every load runs unless the first
  * argument names some by their first letters: `s`pinners, `w`riters, `W` for
  * the first writer alone, `p`inger, `r`eader. With an argument, `n` makes
  * the writers skip the sync and `k` mounts the volume as KRFFS in place of
- * FAT32. A child whose load is not wanted sleeps for 30 seconds, and is
- * killed at 20.
+ * FAT32. A child whose load is not wanted waits in pause until it is
+ * killed. Without the reader nothing reports lines, and the load is killed
+ * as soon as every child has closed its end of the report pipe.
  */
 void probe_main(unsigned long *sp)
 {
@@ -259,33 +305,14 @@ void probe_main(unsigned long *sp)
             fail("fork of a load process");
         }
         if (pids[i] == 0) {
-            syscall1(SYS_CLOSE, report[0]);
-            if (i < 6) {
-                if (wanted(arg, 's')) {
-                    for (;;) {
-                        /* A spin, meant to last until the kill. */
-                        __asm__ __volatile__("" ::: "memory");
-                    }
-                }
-            } else if (i < 8) {
-                writer_syncs = !(arg && wanted(arg, 'n'));
-                if (wanted(arg, 'w') || (i == 6 && wanted(arg, 'W'))) {
-                    writer(i == 6 ? "/lo/load1.bin" : "/lo/load2.bin");
-                }
-            } else if (i == 8) {
-                if (wanted(arg, 'p')) {
-                    pinger();
-                }
-            } else if (wanted(arg, 'r')) {
-                reader(report[1]);
-            }
-            sleep_ms(30000);
-            sys_exit(0);
+            load_child(i, arg, report);
         }
     }
     syscall1(SYS_CLOSE, report[1]);
     quarantines = file_field("/proc/disk", "disk-quarantines ");
-    sleep_ms(20000);
+    while (lines < LOAD_LINES && syscall3(SYS_READ, report[0], (long)&byte, 1) == 1) {
+        lines++;
+    }
     for (i = 0; i < 10; i++) {
         syscall2(SYS_KILL, pids[i], SIGKILL);
     }
@@ -296,9 +323,6 @@ void probe_main(unsigned long *sp)
         if ((status & 0x7F) == 0) {
             fail("a load process exited on its own before it was killed");
         }
-    }
-    while (syscall3(SYS_READ, report[0], (long)&byte, 1) == 1) {
-        lines++;
     }
     timer = file_field("/proc/stat", "latency_timer_us ");
     disk = file_field("/proc/stat", "latency_disk_us ");
@@ -318,8 +342,8 @@ void probe_main(unsigned long *sp)
     if (timer == 0xFFFFFFFFu || disk == 0xFFFFFFFFu || console == 0xFFFFFFFFu) {
         fail("/proc/stat has no latency lines");
     }
-    if (lines < 3 && wanted(arg, 'r')) {
-        fail("the console reader had fewer than three lines");
+    if (lines < LOAD_LINES && wanted(arg, 'r')) {
+        fail("the console reader ended before it read every line");
     }
     if (quarantines == 0xFFFFFFFFu ||
         file_field("/proc/disk", "disk-quarantines ") != quarantines) {

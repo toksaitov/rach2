@@ -58,7 +58,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `ping` (full tier; needs qemu; 128 MiB): the ICMP path against the SLIRP gateway, which is why it is its own target rather than a probe in the suite.
 * `packet` (full tier; needs qemu; 128 MiB): the packet socket, which is how a DHCP client sees a reply that arrives before this machine owns an address.
 * `ping-e1000` (full tier; needs qemu; 128 MiB): the ping suite on the e1000 card.
-* `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load for twenty seconds and the longest delays it saw, from `/proc/stat`, within their bounds.
+* `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load while six lines are typed at its console: every line read, no request quarantined by its deadline, and the longest delays it saw, from `/proc/stat`, printed.
 * `authority` (core tier; needs qemu; 128 MiB): which kernel may write the whole disk.
 * `queue` (core tier; needs qemu, mformat, mke2fs; 128 MiB): real AHCI reads, interrupts, ext2 batch writes and fallback root faults beside raw reads; controlled host models test deadlines.
 * `persist-ahci` (full tier; needs qemu; 128 MiB): fsync durability across a reboot with the disk on an AHCI controller.
