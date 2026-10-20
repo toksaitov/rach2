@@ -669,7 +669,7 @@ tests/system/runner/runtests.c:selftest lines 142 the checker's own selftest, it
 tests/system/runner/runutil.c:check_token complexity 29 a parser over an external format, one check per field in the format's order
 tests/system/runner/runutil.c:main complexity 36 a parser over an external format, one check per field in the format's order
 tests/system/runner/runutil.c:supervise complexity 54 a parser over an external format, one check per field in the format's order
-tests/system/runner/runutil.c:supervise lines 172 a parser over an external format, one check per field in the format's order
+tests/system/runner/runutil.c:supervise lines 158 a parser over an external format, one check per field in the format's order
 
 tests/touchtest.c:_start lines 142 a probe, one sequence of steps in the order the log records them
 
