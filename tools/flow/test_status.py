@@ -7,6 +7,7 @@ import hashlib
 import os
 from pathlib import Path
 import pwd
+import shlex
 import sys
 import time
 
@@ -348,8 +349,11 @@ def claims(directory):
             rows.append(f"    request {claim['id']} of {claim.get('account', '?')}: {role}, "
                         f"for {asks(claim)}")
         else:
+            drop = (f"build/tools/etude/etude-ledger drop {shlex.quote(directory)} "
+                    f"{shlex.quote(claim['id'])}")
             fault = ("end its processes" if verdict[0] == "live"
-                     else "a person must establish that nothing of it runs and drop it")
+                     else "a person must establish that nothing of it runs and drop it "
+                          f"with {drop}")
             rows.append(f"    claim {claim['id']}: {verdict[0]}: {verdict[1]}; "
                         f"holds {asks(claim)}; fault: {fault}")
     print(f"  ledger {directory}: {owned} claims owned by running workers")

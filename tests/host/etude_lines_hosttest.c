@@ -900,6 +900,11 @@ static void check_reader(const char *root, const char *ledger, const char *owner
     has(out, "request D1 of tester: waiting, for cpu_millis 200", "the ledger's requests");
     has(out, "claim A1: uncertain: its owner found the cleanup unconfirmed; holds cpu_millis 500",
         "a claim its owner found unconfirmed is uncertain");
+    snprintf(text, sizeof(text),
+             "fault: a person must establish that nothing of it runs and drop it with "
+             "build/tools/etude/etude-ledger drop %s A1\n",
+             ledger);
+    has(out, text, "an uncertain claim names the command that drops it");
     has(out, "claim E1: live: its owner has ended and a process of it runs; holds cpu_millis 100",
         "a claim whose owner ended while its process runs is live");
 }
