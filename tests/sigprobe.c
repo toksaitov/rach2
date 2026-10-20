@@ -226,10 +226,11 @@ static int sleeps_cut_short(void)
 }
 
 /**
- * Whether process `pid` is asleep: `S` in the state field of its
- * `/proc/<pid>/stat`, the field after the parenthesised name.
+ * The state letter of process `pid`, the field after the parenthesised name
+ * in its `/proc/<pid>/stat`: `S` for a sleep a signal ends, `Z` for a
+ * zombie. 0 when the file cannot be opened or has no state.
  */
-static int asleep(int pid)
+static char state_of(int pid)
 {
     static char path[32], text[256];
     static const char head[] = "/proc/", tail[] = "/stat";
@@ -258,10 +259,33 @@ static int asleep(int pid)
     syscall1(SYS_CLOSE, fd);
     for (i = 0; i + 2 < len; i++) {
         if (text[i] == ')' && text[i + 1] == ' ') {
-            return text[i + 2] == 'S';
+            return text[i + 2];
         }
     }
     return 0;
+}
+
+/**
+ * Wait until the child `pid` is asleep, `S` in its stat: 1. Returns 0 once
+ * it is a zombie or its stat cannot be read, since it can then no longer
+ * fall asleep. The probe yields between looks, and their number decides
+ * nothing; the runner's limit on the probe's step ends a run whose child
+ * neither sleeps nor ends.
+ */
+static int seen_asleep(int pid)
+{
+    char state;
+
+    for (;;) {
+        state = state_of(pid);
+        if (state == 'S') {
+            return 1;
+        }
+        if (state == 0 || state == 'Z') {
+            return 0;
+        }
+        syscall0(SYS_SCHED_YIELD);
+    }
 }
 
 /** Sleep `ms` milliseconds; returns what the call returned. */
@@ -440,12 +464,11 @@ static void uncatchable_rows(void)
  * for this one: a delivery that entered the disposition it had just cleared
  * would jump to address zero.
  *
- * Row 6: the child sleeps far longer than the probe waits; the parent waits
- * until /proc shows it asleep, so the signal lands in the sleep however late
- * the child runs, then signals it and requires the kernel's count of the
- * sleeps a signal cut short to rise, which a sleep that ran to its deadline
- * would not do. The wait is at most 500 sleeps of 10 ms, each one or two
- * ticks, and a child not seen asleep by then fails its own row.
+ * Row 6: the child sleeps for 30 seconds; the parent waits until /proc
+ * shows it asleep, so the signal lands in the sleep however late the child
+ * runs, then signals it and requires the kernel's count of the sleeps a
+ * signal cut short to rise, which a sleep that ran to its deadline would not
+ * do. A child that ends before it is seen asleep fails its own row.
  */
 PROBE_START void _start(void)
 {
@@ -501,7 +524,6 @@ PROBE_START void _start(void)
     /* 6. A signal ends a sleep where it lands. */
     {
         int before = sleeps_cut_short();
-        int i;
 
         check(before >= 0, "/proc/stat reports sleeps_interrupted");
         install(SIGUSR1, usr1_handler);
@@ -511,10 +533,7 @@ PROBE_START void _start(void)
             sys_exit(sleep_ms(30000) == -4 ? 0 : 1); /* -EINTR is -4 */
         }
         if (pid > 0) {
-            for (i = 0; i < 500 && !asleep(pid); i++) {
-                sleep_ms(10);
-            }
-            check(i < 500, "the sleeper is seen asleep before it is signalled");
+            check(seen_asleep(pid), "the sleeper is seen asleep before it is signalled");
             syscall2(SYS_KILL, pid, SIGUSR1);
             check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the sleeper");
             check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
