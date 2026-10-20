@@ -163,4 +163,4 @@ A suite below runs as `tests/run NAME`, and a mutation script with `sh` from the
 * `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
 * `tests/host/bootslot_mutate.sh`, `growroot_mutate.sh` and `grubwindow_mutate.sh`, and the catalogues `tests/proofs/account.json`, `file-read.json`, `netutil.json`, `rm.json` and `userland.json`, compile faults into private copies of these sources, each of which must fail its host test while the restored copy passes. `tests/system/servicelog_mutate.sh`, `recovery_disk_key_mutate.sh` and `install_keys_mutate.sh` do the same for suites.
-* No suite runs `audiotest`; `sh tests/system/hda_mutate.sh` runs it through `tests/musl/hdaprobe.c`.
+* No suite runs `audiotest`; `tests/proofs/hda-guest.json` runs it through `tests/musl/hdaprobe.c`.

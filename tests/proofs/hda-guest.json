@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "proof": "hda-guest",
+  "summary": "hdaprobe booted beside audiotest on an Intel HD Audio controller, with synthfs's audio node renamed so that the probe's open of /proc/audio fails, and `hdaprobe absent` booted with rach2.noaudio",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/synthfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/hdaprobe",
+    "${WORK}/audiotest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 check-libc utils musl-programs build/tests/system/harness && for profile in rach2-metal rach2-metal-disk os-real; do grep -Fqx 'file 0755 /bin/audiotest build/utils/audiotest' krffs/manifests/$profile.manifest || exit 1; done && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/musl/hdaprobe utils/audiotest && sh tests/proofs/guest.sh image ${WORK} 2 utils/audiotest=/bin/audiotest tests/musl/hdaprobe"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "status=0; /bin/sh tests/proofs/guest.sh boot ${WORK} --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-device --qemu-arg=intel-hda --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=${WORK}/audio.wav --timeout 45 --steptmo 20 --ok 'HDAPROBE OK' --never 'HDAPROBE FAIL' --append 'rach2.rescue rach2.nonet' \"expect=Type 'help'\" 'send=exec /hdaprobe' 'expect=HDAPROBE' 'expect=returning to kernel shell' || status=1; /bin/sh tests/proofs/guest.sh boot ${WORK} --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max --qemu-arg=-device --qemu-arg=intel-hda --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=${WORK}/audio.wav --timeout 45 --steptmo 20 --ok 'HDAPROBE OK' --never 'HDAPROBE FAIL' --append 'rach2.rescue rach2.nonet rach2.noaudio' \"expect=Type 'help'\" 'send=exec /hdaprobe absent' 'expect=HDAPROBE' 'expect=returning to kernel shell' || status=1; exit $status"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "renamed",
+      "summary": "synthfs's audio node renamed, so that the open of /proc/audio fails",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/synthfs.c",
+          "find": "\"audio\", VNODE_PROC_AUDIO",
+          "replace": "\"audio-disabled\", VNODE_PROC_AUDIO"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "HDAPROBE FAIL: open /proc/audio"
+        ]
+      }
+    }
+  ]
+}

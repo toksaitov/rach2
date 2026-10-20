@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "proof": "exit-guest",
+  "summary": "exitprobe's normal, signal and exec rows, each booted alone, with two faults in each of the kernel's exit callers: the call of proc_exit_cleanup taken out, and a sleep of two ticks after the cleanup has published the death",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/syscall_proc.c",
+    "rach2/kernel.c",
+    "rach2/sys/proc/exit.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/exitprobe"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image build/tests/system/harness && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/exitprobe && sh tests/proofs/guest.sh image ${WORK} 2 tests/exitprobe"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "RACH2_DEADLINES=scaled RACH2_DEADLINE_FACTOR=${RACH2_TIMEOUT_FACTOR:-1}; export RACH2_DEADLINES RACH2_DEADLINE_FACTOR; timeout=$(awk -v f=\"$RACH2_DEADLINE_FACTOR\" 'BEGIN { t = 5000 * f; if (t > int(t)) t = int(t) + 1; print t }'); status=0; for row in normal signal exec; do /bin/sh tests/proofs/guest.sh boot ${WORK} --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max --append rach2.rescue --timeout 30 --steptmo 15 --ok \"EXITPROBE OK $row\" --never 'EXITPROBE FAIL' --never 'panic: stopped:' \"expect=Type 'help'\" \"send=exec /exitprobe $row $timeout\" \"expect=exitprobe: waiting: $row\" \"expect=EXITPROBE OK $row\" 'expect=exited with status 0, returning to kernel shell' || status=1; done; exit $status"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "normal-remove",
+      "summary": "the exit system call's call of proc_exit_cleanup taken out",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "if (!proc_exit_cleanup(code)) {",
+          "replace": "if (1) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EXITPROBE FAIL normal: reap or release"
+        ]
+      }
+    },
+    {
+      "name": "signal-remove",
+      "summary": "the death by a signal's call of proc_exit_cleanup taken out",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "last = proc_exit_cleanup(signo);",
+          "replace": "last = 0;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EXITPROBE FAIL signal: reap or release"
+        ]
+      }
+    },
+    {
+      "name": "normal-wait",
+      "summary": "the exit system call sleeps for two ticks after the cleanup has published its death",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/exit.c",
+          "find": "        if (parent->state == PROC_BLOCKED) {\n            sched_make_ready(parent);\n        }\n    }\n    return 1;\n}\n",
+          "replace": "        if (parent->state == PROC_BLOCKED) {\n            sched_make_ready(parent);\n        }\n    }\n    return 1;\n}\n\n\n#include \"wait_queue.h\"\n#include \"../lib/kirq.h\"\nextern volatile uint32_t kernel_ticks;\nvoid exit_proof_wait(void);\nint exit_proof_waited(int last);\n\n/** Complete the wait after the real timer wakes this process. */\nstatic int exit_proof_awake(void *arg)\n{\n    (void)arg;\n    return current_proc->wakeup_tick == 0;\n}\n\n/** Exercise a finite wait after publication, violating the exit contract. */\nvoid exit_proof_wait(void)\n{\n    wait_queue_t queue;\n    uint32_t flags, target;\n    flags = kirq_save();\n    wait_queue_init(&queue);\n    target = kernel_ticks + 2;\n    current_proc->wakeup_tick = target ? target : 1;\n    wq_wait_event_nointr(&queue, exit_proof_awake, 0);\n    kirq_restore(flags);\n}\n\n/** Wait after the cleanup has published the death, and pass on its result. */\nint exit_proof_waited(int last)\n{\n    exit_proof_wait();\n    return last;\n}\n"
+        },
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "/*\n * The process system calls: exit, exec, fork and wait, signals, identities,\n",
+          "replace": "int exit_proof_waited(int last);\n/*\n * The process system calls: exit, exec, fork and wait, signals, identities,\n"
+        },
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "if (!proc_exit_cleanup(code)) {",
+          "replace": "if (!exit_proof_waited(proc_exit_cleanup(code))) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "EXITPROBE FAIL normal: reap or release"
+        ]
+      }
+    },
+    {
+      "name": "signal-wait",
+      "summary": "the death by a signal sleeps for two ticks after the cleanup has published it",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/exit.c",
+          "find": "        if (parent->state == PROC_BLOCKED) {\n            sched_make_ready(parent);\n        }\n    }\n    return 1;\n}\n",
+          "replace": "        if (parent->state == PROC_BLOCKED) {\n            sched_make_ready(parent);\n        }\n    }\n    return 1;\n}\n\n\n#include \"wait_queue.h\"\n#include \"../lib/kirq.h\"\nextern volatile uint32_t kernel_ticks;\nvoid exit_proof_wait(void);\nint exit_proof_waited(int last);\n\n/** Complete the wait after the real timer wakes this process. */\nstatic int exit_proof_awake(void *arg)\n{\n    (void)arg;\n    return current_proc->wakeup_tick == 0;\n}\n\n/** Exercise a finite wait after publication, violating the exit contract. */\nvoid exit_proof_wait(void)\n{\n    wait_queue_t queue;\n    uint32_t flags, target;\n    flags = kirq_save();\n    wait_queue_init(&queue);\n    target = kernel_ticks + 2;\n    current_proc->wakeup_tick = target ? target : 1;\n    wq_wait_event_nointr(&queue, exit_proof_awake, 0);\n    kirq_restore(flags);\n}\n\n/** Wait after the cleanup has published the death, and pass on its result. */\nint exit_proof_waited(int last)\n{\n    exit_proof_wait();\n    return last;\n}\n"
+        },
+        {
+          "file": "rach2/kernel.c",
+          "find": "/* The shared boot (`kernel_main`), the mount of the root, the kernel debug\n",
+          "replace": "int exit_proof_waited(int last);\n/* The shared boot (`kernel_main`), the mount of the root, the kernel debug\n"
+        },
+        {
+          "file": "rach2/kernel.c",
+          "find": "last = proc_exit_cleanup(signo);",
+          "replace": "last = exit_proof_waited(proc_exit_cleanup(signo));"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "panic: stopped: a dying process was scheduled again"
+        ]
+      }
+    }
+  ]
+}

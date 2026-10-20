@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "proof": "init-refusal",
+  "summary": "the row of tests/system/init_refusal.sh, a root whose /sbin/init is a link to itself, which the kernel must refuse and halt on, with the kernel built from a private copy of rach2/ and mk/ and the lookup's test of -ENOENT widened to any failure",
+  "tree": "private",
+  "sources": [
+    "rach2/kernel.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nRACH2_ARCH=${ARCH:-i686}\ntree=${WORK}/tree\nREPO=$tree\n. ./mk/arch.sh\nsh tests/proofs/guest.sh make build/tests/system/harness build/tests/system/runutil build/tools/image/mkmbr build/tools/inspect/elfcheck\nif [ ! -d \"$tree\" ]; then\n    mkdir -p \"$tree/build/tools/inspect\"\n    cp -R rach2 mk \"$tree/\"\n    printf 'build/tools/inspect/elfcheck: ;\\n' >\"$tree/Makefile\"\nfi\ncp build/tools/inspect/elfcheck \"$tree/build/tools/inspect/elfcheck\"\ncp ${SRC}/rach2/kernel.c \"$tree/rach2/kernel.c\"\nrm -f \"$ARCH_BUILD/rach2/kernel.o\" \"$ARCH_BUILD/rach2/kernel\"\nmake -s -j8 -C \"$tree/rach2\" \"ARCH=$RACH2_ARCH\"\ncp \"$ARCH_BUILD/rach2/kernel\" ${WORK}/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "RACH2_ARCH=${ARCH:-i686}\nREPO=$(pwd)\n. ./mk/arch.sh\nRACH2_QEMU=$ARCH_QEMU\nexport RACH2_QEMU\nstatus=0\nsh tests/system/init_refusal.sh ${WORK}/kernel build/tests/system/harness build/tools/image/mkmbr ${WORK}/row || status=$?\ncat ${WORK}/row.log 2>/dev/null\nexit $status"
+    ],
+    "bound_s": 600
+  },
+  "faults": [
+    {
+      "name": "fallthrough",
+      "summary": "the init lookup's test of -ENOENT widened to any failure, which takes a link loop for an absent init and opens the debug shell",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "        if (rc == -ENOENT) {\n",
+          "replace": "        if (rc != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "no /sbin/init in the root; falling back to the debug shell",
+          "Kernel debug shell active"
+        ]
+      }
+    }
+  ]
+}

@@ -15,8 +15,8 @@
 #
 # OUT is a path prefix: OUT.disk is the disk and OUT.log the console, which
 # is kept, as is the monitor's OUT.monitor.log after a failure. `tests/run
-# bootline` runs this on the kernel under test, and init_refusal_mutate.sh
-# runs it on kernels built from a private copy.
+# bootline` runs this on the kernel under test, and the proof
+# tests/proofs/init-refusal.json runs it on kernels built from a private copy.
 #
 set -u
 KERNEL=$1; HARNESS=$2; MKMBR=$3; OUT=$4

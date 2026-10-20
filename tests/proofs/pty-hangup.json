@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "pty-hangup",
+  "summary": "ptyprobe booted alone, with the closed master taken out of the slave's wait predicate, so that blocked canonical readers sleep on after the hangup",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/tty/pty.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/ptyprobe"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image build/tests/system/harness && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/ptyprobe && sh tests/proofs/guest.sh image ${WORK} 2 tests/ptyprobe"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "boot",
+      "${WORK}",
+      "--net",
+      "hubport,id=net0,hubid=0",
+      "--qemu-arg=-cpu",
+      "--qemu-arg=max",
+      "--append",
+      "rach2.rescue",
+      "--timeout",
+      "40",
+      "--steptmo",
+      "15",
+      "--ok",
+      "PTYPROBE OK",
+      "--never",
+      "PTYPROBE FAIL",
+      "expect=Type 'help'",
+      "send=exec /ptyprobe",
+      "expect=PTYPROBE",
+      "expect=returning to kernel shell"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "awake",
+      "summary": "the closed master taken out of the slave's wait predicate in pty.c, so that blocked canonical readers sleep on",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "    return !p->master_open || n_tty_readable(&p->slave.ldisc);\n",
+          "replace": "    return n_tty_readable(&p->slave.ldisc);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "PTYPROBE FAIL (hangup releases both blocked readers)"
+        ]
+      }
+    }
+  ]
+}
