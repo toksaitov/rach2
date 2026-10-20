@@ -1,0 +1,303 @@
+{
+  "schema_version": 1,
+  "proof": "casecheck-disks",
+  "summary": "casecheck's self-test lines of a profile's disks, each fault in a private copy of cases.c or of the case schema found by its own line",
+  "tree": "private",
+  "sources": [
+    "tools/etude/cases.c",
+    "tools/etude/schemas/case.schema.json"
+  ],
+  "artifacts": [
+    "${WORK}/casecheck",
+    "${WORK}/schemas/case.schema.json"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "${CC:-cc} -std=c99 -O1 -I tools/etude -I tools/etude/include -I utils tools/etude/casecheck.c ${SRC}/tools/etude/cases.c tools/etude/digest.c tools/etude/judge.c tools/etude/json.c tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c tools/etude/verdict.c tools/etude/history.c tools/etude/history_json.c utils/sha256.c -o ${WORK}/casecheck && mkdir -p ${WORK}/schemas && cp tools/etude/schemas/*.json ${WORK}/schemas/ && cp ${SRC}/tools/etude/schemas/case.schema.json ${WORK}/schemas/case.schema.json"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "d=$TMPDIR/selftest && mkdir -p $d/fixtures && cp tools/etude/fixtures/disks.json tools/etude/fixtures/disks-bad.json tools/etude/fixtures/disks-shape.json $d/fixtures/ && grep -F ' ./disks' tools/etude/fixtures/expect > $d/fixtures/expect && ln -s ${WORK}/schemas $d/schemas && ${WORK}/casecheck --selftest $d/fixtures; s=$?; rm -rf $d; exit $s"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "casecheck selftest: line "
+  },
+  "faults": [
+    {
+      "name": "twice",
+      "summary": "a disk given twice in a profile is not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "            if (same(disk_name(v)->string, disk_name(disks->item[j])->string)) {\n",
+          "replace": "            if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| twice: the disk stick is given twice in a profile"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "count",
+      "summary": "disks that the launcher does not attach together are not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "    if (etude_qemu_disks_check(d) != 0) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| ide-five: the launcher attaches at most 8 disks of a profile",
+          "| nine: the launcher attaches at most 8 disks of a profile"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "empty-artifact",
+      "summary": "an empty disk with the name of a prepared artifact is not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "    if (has_member(json_member(r->c, \"prepare\"), \"name\", name)) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| empty-artifact: the empty disk stick is an artifact that prepare lists"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "sizes",
+      "summary": "an empty disk given two sizes is not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "                w->integer != size->integer) {\n",
+          "replace": "                0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| empty-sizes: the empty disk big is given two sizes"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "empty-prepared",
+      "summary": "an empty disk is required to be a prepared artifact",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "        if (json_member(disks->item[i], \"size_bytes\") == NULL) {\n",
+          "replace": "        if (1) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "0 manifest ./disks.json"
+        ]
+      }
+    },
+    {
+      "name": "cd-name",
+      "summary": "the name of a disk given as an object is not looked for in prepare",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "            prepared(r, disk_name(disks->item[i]), \"the disk\");\n",
+          "replace": "            prepared(r, disks->item[i], \"the disk\");\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| cd-unprepared: the disk nothing-built is no artifact that prepare lists"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "nvme-serial",
+      "summary": "the schema takes an NVMe disk without a serial",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"then\": {\"required\": [\"serial\"]}, \"else\"",
+          "replace": "\"then\": {}, \"else\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/0: has no member \"serial\""
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ide-serial",
+      "summary": "the schema takes a serial on IDE",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"else\": {\"not\": {\"required\": [\"serial\"]}}",
+          "replace": "\"else\": {}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/1: has \"serial\", which this form does not allow"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "cd-bus",
+      "summary": "the schema takes a CD on NVMe",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"bus\": {\"const\": \"ide\"}, ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/2/bus: is not \"ide\""
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "cd-size",
+      "summary": "the schema takes a CD that is an empty disk",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": ", \"not\": {\"required\": [\"size_bytes\"]}",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/3: has \"size_bytes\", which this form does not allow"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "cd-discard",
+      "summary": "the schema takes a CD with discard",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"discard\": {\"const\": false}",
+          "replace": "\"discard\": {\"type\": \"boolean\"}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/4/discard: is not false"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "serial-length",
+      "summary": "the schema takes a serial of 21 characters",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "{0,19}$\"",
+          "replace": "{0,20}$\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/5/serial: \"abcdefghijklmnopqrstu\" does not match"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "serial-comma",
+      "summary": "the schema takes a serial with a comma",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$\"",
+          "replace": "\"^[A-Za-z0-9][!-~]{0,19}$\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/6/serial: \"a,b\" does not match"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "bus-usb",
+      "summary": "the schema takes a bus the launcher does not attach",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"bus\": {\"enum\": [\"ide\", \"nvme\"]}",
+          "replace": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"usb\"]}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/7/bus: \"usb\" is not one of the values the schema allows"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "open",
+      "summary": "the schema takes a disk with a member it does not define",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"type\": \"object\", \"additionalProperties\": false,\n          \"required\": [\"name\"],",
+          "replace": "\"type\": \"object\",\n          \"required\": [\"name\"],"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/8/format: is a member the schema does not allow"
+        ],
+        "only": true
+      }
+    }
+  ]
+}
