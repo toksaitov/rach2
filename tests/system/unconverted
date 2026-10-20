@@ -12,7 +12,6 @@ tests/fsbaseprobe.c: 1 sleep
 tests/host/etude_exec_hosttest.c: 2 skip
 tests/host/exfat_hosttest.c: 1 skip
 tests/host/exfat_scan_mutate.sh: 1 sleep
-tests/host/ext2_batch_mutate.sh: 1 sleep
 tests/host/fat_barriers_mutate.sh: 1 sleep
 tests/host/fat_synced_mutate.sh: 1 sleep
 tests/host/fat32_hosttest.c: 1 skip

@@ -103,7 +103,7 @@ A new inode belongs to the caller's effective user and group, or to the director
 ## Tests
 
 * `tests/run host` runs `tests/host/ext2_hosttest.c`, with the batch rows in `ext2_batch_cases.h` and `ext2_batch_lifecycle.h`, and `tests/host/ext2_reserve_hosttest.c`. The first mounts, reads and writes volumes the host's `mke2fs` makes, sound and damaged, checks signed and clamped timestamps through a remount, and stops all but one of its write sequences after every write on a `dirsync` mount to judge the stop by `e2fsck` and by the check.
-* `sh tests/host/ext2_batch_mutate.sh`, `sh tests/host/ext2_reserve_mutate.sh` and `sh tests/system/ext2_batch_mutate.sh` prove those rows and the batch's disk-command counts with compiled faults.
+* `tests/proofs/ext2-batch.json` and `tests/proofs/ext2-reserve.json`, which `sh tools/etude/proof.sh` runs, and `sh tests/system/ext2_batch_mutate.sh` prove those rows and the batch's disk-command counts with compiled faults.
 * `tests/run ext2` runs file-system probes on an ext2 root and on a mounted volume, and boots os-real on an ext2 root through a kill, the check, a fault and recovery's `e2fsck`.
 * `tests/run large` writes a file past 4 GiB, and `tests/run selfbuild-ext2` builds the kernel on an ext2 root.
 

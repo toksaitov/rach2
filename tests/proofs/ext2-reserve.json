@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "proof": "ext2-reserve",
+  "summary": "ext2_reserve_hosttest.c, the ext2 driver's checks of free and reserved blocks before a write, with faults in rach2/sys/fs/ext2.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/fs/ext2.c"
+  ],
+  "artifacts": [
+    "${WORK}/ext2_reserve_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp -R ${SRC}/. \"$t/\"\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I \"$t/rach2/sys\" -I \"$t/rach2/sys/lib\" -I \"$t/rach2/sys/proc\" tests/host/ext2_reserve_hosttest.c \"$t/rach2/sys/lib/kstring.c\" \"$t/rach2/sys/lib/kctypes.c\" -o ${WORK}/ext2_reserve_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/ext2_reserve_hosttest"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "ext2-reserve-hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "estimate",
+      "summary": "a walk of the data blocks with an estimate of the pointer blocks in place of writeback_space",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/ext2.c",
+          "find": "static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,\n                           uint32_t count)\n{\n    uint32_t first = (uint32_t)(offset >> em->block_shift);\n    uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);\n    uint32_t base = 0, span = 1, slot;\n    uint64_t need = 0;\n    int level = 0;\n\n    for (slot = 0; slot < EXT2_NDIR + 3 && base <= last; slot++) {\n        if (slot >= EXT2_NDIR) {\n            span *= em->block_size / 4;\n            level++;\n        }\n        if (first < base + span) {\n            uint32_t begin = first > base ? first - base : 0;\n            uint32_t end = last < base + span ? last - base : span - 1;\n            struct writeback_step step;\n            int rc;\n\n            step.block = n->block[slot];\n            step.level = level;\n            step.first = begin;\n            step.last = end;\n            rc = writeback_missing(em, n, &step, &need);\n\n            if (rc != 0) {\n                return rc;\n            }\n            if (need > em->free_blocks ||\n                (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {\n                return -ENOSPC;\n            }\n        }\n        base += span;\n    }\n    return 0;\n}\n",
+          "replace": "static int writeback_space(struct ext2_mount *em, struct ext2_node *n,\n                           uint64_t offset, uint32_t count)\n{\n    uint32_t first = (uint32_t)(offset >> em->block_shift);\n    uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);\n    uint64_t need = 0;\n    uint32_t i;\n    int rc;\n\n    for (i = first; i <= last && need <= em->free_blocks + 3; i++) {\n        uint32_t b;\n\n        rc = block_at(em, n, i, &b);\n        if (rc != 0) {\n            return rc;\n        }\n        if (b == 0) {\n            need++;\n        }\n    }\n    if (need > 0) {\n        need += pointer_levels(em, last) + (last - first) / (em->block_size / 4);\n    }\n    if (need > em->free_blocks ||\n        (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {\n        return -ENOSPC;\n    }\n    return 0;\n}\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ext2-reserve-hosttest: fail: boundary shortage is refused before accepting bytes"
+        ]
+      }
+    },
+    {
+      "name": "pending",
+      "summary": "a reservation check that leaves out the blocks the batch has reserved",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/ext2.c",
+          "find": "    if (em->free_blocks <= (uint32_t)count ||\n        (!may_use_reserved() && em->free_blocks - (uint32_t)count <= em->r_blocks)) {\n",
+          "replace": "    if (em->free_blocks == 0 ||\n        (!may_use_reserved() && em->free_blocks <= em->r_blocks)) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ext2-reserve-hosttest: fail: piece quota includes uncommitted reservations"
+        ]
+      }
+    },
+    {
+      "name": "original",
+      "summary": "the estimate, with no check in writeback_reserve at all",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/ext2.c",
+          "find": "static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,\n                           uint32_t count)\n{\n    uint32_t first = (uint32_t)(offset >> em->block_shift);\n    uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);\n    uint32_t base = 0, span = 1, slot;\n    uint64_t need = 0;\n    int level = 0;\n\n    for (slot = 0; slot < EXT2_NDIR + 3 && base <= last; slot++) {\n        if (slot >= EXT2_NDIR) {\n            span *= em->block_size / 4;\n            level++;\n        }\n        if (first < base + span) {\n            uint32_t begin = first > base ? first - base : 0;\n            uint32_t end = last < base + span ? last - base : span - 1;\n            struct writeback_step step;\n            int rc;\n\n            step.block = n->block[slot];\n            step.level = level;\n            step.first = begin;\n            step.last = end;\n            rc = writeback_missing(em, n, &step, &need);\n\n            if (rc != 0) {\n                return rc;\n            }\n            if (need > em->free_blocks ||\n                (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {\n                return -ENOSPC;\n            }\n        }\n        base += span;\n    }\n    return 0;\n}\n",
+          "replace": "static int writeback_space(struct ext2_mount *em, struct ext2_node *n,\n                           uint64_t offset, uint32_t count)\n{\n    uint32_t first = (uint32_t)(offset >> em->block_shift);\n    uint32_t last = (uint32_t)((offset + count - 1) >> em->block_shift);\n    uint64_t need = 0;\n    uint32_t i;\n    int rc;\n\n    for (i = first; i <= last && need <= em->free_blocks + 3; i++) {\n        uint32_t b;\n\n        rc = block_at(em, n, i, &b);\n        if (rc != 0) {\n            return rc;\n        }\n        if (b == 0) {\n            need++;\n        }\n    }\n    if (need > 0) {\n        need += pointer_levels(em, last) + (last - first) / (em->block_size / 4);\n    }\n    if (need > em->free_blocks ||\n        (!may_use_reserved() && need > 0 && em->free_blocks - need < em->r_blocks)) {\n        return -ENOSPC;\n    }\n    return 0;\n}\n"
+        },
+        {
+          "file": "rach2/sys/fs/ext2.c",
+          "find": "    if (em->free_blocks <= (uint32_t)count ||\n        (!may_use_reserved() && em->free_blocks - (uint32_t)count <= em->r_blocks)) {\n        return -ENOSPC;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ext2-reserve-hosttest: fail: unprivileged boundary write preserves reserved blocks"
+        ]
+      }
+    }
+  ]
+}
