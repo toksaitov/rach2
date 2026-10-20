@@ -27,7 +27,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -38,6 +37,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/artifact.h"
 #include "sha256.h"

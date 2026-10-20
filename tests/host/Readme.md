@@ -63,6 +63,7 @@ A test's opening comment may have four kinds of line, which `host.sh` reads with
 
 ### Shared code
 
+* `compat/pathmax_host.h` includes the host's pathname limit for POSIX tests. On macOS it includes `sys/syslimits.h` explicitly, since Clang's `limits.h` omits the system headers under `-ffreestanding`.
 * `compat/crypt.h`, `compat/shadow.h` and `compat/sys/random.h` declare the three musl interfaces `utils/pwauth.c` uses, for hosts that lack the headers (macOS has no `crypt.h` and no `getrandom`). They are musl's declarations, and the tests define the symbols.
 * `compat/netutil/` has the `net/if.h`, `net/route.h` and `netpacket/packet.h` structures the network utilities use, for the tests that compile those utilities.
 * `compat/e2fsprogs/` configures e2fsprogs' `unix_io.c` for the two alignment tests and gives them an in-memory sector device.

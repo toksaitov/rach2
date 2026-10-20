@@ -27,7 +27,6 @@
  */
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,6 +40,7 @@
 #include <sys/prctl.h>
 #endif
 
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/ledger.h"
 

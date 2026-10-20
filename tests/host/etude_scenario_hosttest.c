@@ -41,7 +41,6 @@
  */
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
@@ -56,6 +55,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/artifact.h"
 #include "etude/scenario.h"

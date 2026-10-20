@@ -29,7 +29,6 @@
  * must give a failed accelerator.
  */
 #include <errno.h>
-#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -42,6 +41,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/qemu.h"
 

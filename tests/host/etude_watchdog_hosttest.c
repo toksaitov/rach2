@@ -30,7 +30,6 @@
  * gap, and QMP gives its status and its registers before it is stopped.
  */
 #include <errno.h>
-#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +42,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/watchdog.h"
 

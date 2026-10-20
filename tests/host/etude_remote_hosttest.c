@@ -35,7 +35,6 @@
  */
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -48,6 +47,7 @@
 
 #include "../../tools/etude/guest/wire.h"
 #include "../../utils/sha256.h"
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/remote.h"
 

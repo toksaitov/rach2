@@ -40,7 +40,6 @@
  */
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -49,6 +48,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "../../utils/sha256.h"
 #include "compare.h"
