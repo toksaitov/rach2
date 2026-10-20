@@ -1198,7 +1198,7 @@ static int build_vectors(const struct invocation *inv, const char *work, const c
         e = malloc(len);
         if (!e)
             return -1;
-        sprintf(e, "%s=", v->key);
+        snprintf(e, len, "%s=", v->key);
         for (p = s; *p;) {
             if (strncmp(p, "${WORKSPACE}", 12) == 0) {
                 strcat(e, work);
