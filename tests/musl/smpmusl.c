@@ -29,7 +29,9 @@
  * after a spin of its own length, at a different place in the tick.
  *
  * Prints "SMPMUSL OK (N processors)", or "(1 processor)", on success and
- * "SMPMUSL FAIL (detail)" otherwise.
+ * "SMPMUSL FAIL (detail)" otherwise. The number is the one argument without
+ * `=`; a native run gives the machine's own count and NAME=VALUE arguments
+ * beside it (tests/native/Readme.md), which leave the rows as they are.
  */
 
 #define _GNU_SOURCE
@@ -47,6 +49,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The futex operations, which musl's headers do not name. */
 #define FUTEX_WAIT 0
@@ -577,14 +581,15 @@ static int sleeps(void)
  */
 int main(int argc, char **argv)
 {
-    if (argc == 2 && strcmp(argv[1], "child") == 0) {
+    probe_args(argc, argv);
+    if (probe_words() == 1 && strcmp(probe_word(1), "child") == 0) {
         return CHILD_STATUS;
     }
-    if (argc != 2 || atoi(argv[1]) < 1 || atoi(argv[1]) > 64) {
+    if (probe_words() != 1 || atoi(probe_word(1)) < 1 || atoi(probe_word(1)) > 64) {
         printf("SMPMUSL FAIL (usage: smpmusl N, the processors the boot has)\n");
         return 2;
     }
-    cpus = atoi(argv[1]);
+    cpus = atoi(probe_word(1));
     self = argv[0];
     if (counts() || execs() || pipes() || futexes() || unmaps() || sleeps()) {
         return 1;

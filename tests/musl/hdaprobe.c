@@ -10,7 +10,10 @@
  * stopped, with 32000 Hz requested and programmed and the converter's format
  * (16-bit stereo at 32 kHz) read back. Run as `hdaprobe absent` under
  * `rach2.noaudio`, it checks the file the same way and then that the report
- * shows no controller ready and nothing playing.
+ * shows no controller ready and nothing playing. Given `machine=native`
+ * (tests/native/Readme.md) without `absent`, it checks the file alone and
+ * leaves out the rows on the report's text and the tone, since they are
+ * written against the codec QEMU emulates.
  *
  * Prints "HDAPROBE OK: ..." on success or "HDAPROBE FAIL: <row>" for the first
  * failed check. No suite runs it; `tests/system/hda_mutate.sh` boots it and
@@ -25,6 +28,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The last report read, terminated. */
 static char text[8192];
@@ -77,8 +82,10 @@ int main(int argc, char **argv)
     const char *stream;
     char linkpath[64], target[64];
     int length;
-    int absent = argc > 1 && strcmp(argv[1], "absent") == 0;
+    int absent;
 
+    probe_args(argc, argv);
+    absent = probe_words() > 0 && strcmp(probe_word(1), "absent") == 0;
     fd = open("/proc/audio", O_RDONLY);
     require(fd >= 0, "open /proc/audio");
     require(stat("/proc/audio", &path) == 0 && fstat(fd, &opened) == 0, "stat report");
@@ -100,6 +107,10 @@ int main(int argc, char **argv)
     require(found == 1, "directory lists audio once");
     read_report(fd);
     close(fd);
+    if (probe_native() && !absent) {
+        puts("HDAPROBE OK: proc report file");
+        return 0;
+    }
     if (absent) {
         require(strstr(text, "hda ready 0 playing 0") != NULL, "noaudio report");
         puts("HDAPROBE OK: noaudio report");

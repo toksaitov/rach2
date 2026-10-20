@@ -40,6 +40,12 @@
  * "PASSWDMUSL FAIL (detail)" otherwise. It restores all three databases byte
  * for byte before it exits, since the probes share one boot and the ones
  * after this read the same files.
+ *
+ * `probe` is uid 1000 and `probe2` uid 1001, or the NEW of each when a native
+ * run gives `ids=OLD:NEW,...` (tests/native/Readme.md) and a private root
+ * whose account files have them there. Given `machine=native`, it runs the
+ * trusted side alone, and on a machine whose `getrandom` fails with EIO it
+ * fails, since that side cannot run there.
  */
 
 #define _GNU_SOURCE /* crypt, getrandom */
@@ -59,6 +65,7 @@
 #include <sys/wait.h>
 
 #include "pwauth.h"
+#include "../probe_args.h"
 
 #define PASSWD_PATH "/passwd"
 #define ETC_PASSWD  "/etc/passwd"
@@ -73,8 +80,8 @@
 #define PROBE2_USER "probe2"
 #define PROBE2_PASS "probe2pass"
 
-#define PROBE_UID  1000
-#define PROBE2_UID 1001
+#define PROBE_UID  ((int)probe_id(1000))
+#define PROBE2_UID ((int)probe_id(1001))
 
 /* The three databases, their contents as `main` found them, which
  * `restore_databases` writes back, and the length `slurp` returned for each. */
@@ -1332,7 +1339,7 @@ static int check_refusals(void)
  * `tests/run noentropy` matches a token and never reads the status, so the
  * fail-closed side prints its own token and exits 1.
  */
-int main(void)
+int main(int argc, char **argv)
 {
     unsigned char sample[16];
     ssize_t drawn;
@@ -1340,6 +1347,7 @@ int main(void)
     int trusted = 0;
     int rc;
 
+    probe_args(argc, argv);
     signal(SIGPIPE, SIG_IGN);
 
     for (i = 0; i < 3; i++) {
@@ -1361,6 +1369,8 @@ int main(void)
             rc = check_concurrent();
         }
         trusted = 1;
+    } else if (drawn < 0 && errno == EIO && probe_native()) {
+        rc = fail("the machine has no trusted entropy, so the trusted side cannot run");
     } else if (drawn < 0 && errno == EIO) {
         rc = check_entropy();
     } else {

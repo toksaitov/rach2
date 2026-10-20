@@ -37,6 +37,11 @@
  * forgotten. A netlink protocol the kernel does not have fails with
  * EPROTONOSUPPORT.
  *
+ * Given `machine=native` (tests/native/Readme.md), it leaves out the changes,
+ * since they take away the address and the route of
+ * the interface a native run reaches the machine by, and use the addresses of
+ * QEMU's user network.
+ *
  * It prints "NETLINKMUSL OK" and exits 0 on success, or prints "NETLINKMUSL
  * FAIL (detail: errno N)" and exits 1 at the first failure.
  */
@@ -51,6 +56,8 @@
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* Linux's netlink ABI, which the musl build has no uapi headers for:
  * <linux/netlink.h> and <linux/rtnetlink.h>, the parts used here. */
@@ -918,12 +925,16 @@ static int uevents(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    int changes;
     int fd;
 
-    if (route_socket(&fd) || requests(fd) || address_changes(fd) || route_changes(fd) ||
-        lookups(fd) || table_changes(fd) || padded(fd) || truncation(fd) || interfaces() ||
+    probe_args(argc, argv);
+    changes = !probe_native();
+    if (route_socket(&fd) || requests(fd) ||
+        (changes && (address_changes(fd) || route_changes(fd))) || lookups(fd) ||
+        (changes && table_changes(fd)) || padded(fd) || truncation(fd) || interfaces() ||
         uevents()) {
         return 1;
     }

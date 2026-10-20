@@ -67,6 +67,12 @@
  *
  * It prints "CALLSMUSL OK" and exits 0 on success, or prints "CALLSMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure.
+ *
+ * The setgid directory's group is 4242, the other user is 4243 and the closed
+ * port is 47, or the NEW of each in `ids=OLD:NEW,...` and `ports=OLD:NEW,...`
+ * (tests/native/Readme.md). Given `machine=native`, it leaves out the
+ * adjtimex row, since the machine's NTP client has already adjusted the clock
+ * that row requires unsynchronized.
  */
 
 #define _GNU_SOURCE
@@ -99,6 +105,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /*
  * The calls of 64-bit fields and offsets, by their i386 names: i386's
@@ -187,7 +195,7 @@ static int refusals(void)
 
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
-    a.sin_port = htons(47);
+    a.sin_port = htons((uint16_t)probe_port(47));
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (fd < 0 || connect(fd, (struct sockaddr *)&a, sizeof a) != 0) {
         return fail("a UDP socket connected to a closed local port");
@@ -330,21 +338,22 @@ static int signalfds(void)
 static int setgids(void)
 {
     const char *dir = "/tmp/callsmusl.sg";
+    gid_t group = (gid_t)probe_id(4242);
     struct stat st;
     int fd;
 
     unlink("/tmp/callsmusl.sg/f");
     rmdir("/tmp/callsmusl.sg/d");
     rmdir(dir);
-    if (mkdir(dir, 0775) != 0 || chown(dir, (uid_t)-1, 4242) != 0 || chmod(dir, 02775) != 0) {
+    if (mkdir(dir, 0775) != 0 || chown(dir, (uid_t)-1, group) != 0 || chmod(dir, 02775) != 0) {
         return fail("a setgid directory of group 4242 in /tmp");
     }
     fd = open("/tmp/callsmusl.sg/f", O_CREAT | O_WRONLY, 0644);
-    if (fd < 0 || close(fd) != 0 || stat("/tmp/callsmusl.sg/f", &st) != 0 || st.st_gid != 4242) {
+    if (fd < 0 || close(fd) != 0 || stat("/tmp/callsmusl.sg/f", &st) != 0 || st.st_gid != group) {
         return fail("a file made in a setgid directory did not take its group");
     }
     if (mkdir("/tmp/callsmusl.sg/d", 0755) != 0 || stat("/tmp/callsmusl.sg/d", &st) != 0 ||
-        st.st_gid != 4242 || !(st.st_mode & S_ISGID)) {
+        st.st_gid != group || !(st.st_mode & S_ISGID)) {
         return fail("a directory made in a setgid directory did not take its group and the bit");
     }
     unlink("/tmp/callsmusl.sg/f");
@@ -363,11 +372,12 @@ static int setgids(void)
 static int privacies_child(pid_t parent)
 {
     char path[64], link[64];
+    uid_t user = (uid_t)probe_id(4243);
     struct stat st;
     DIR *d;
     int fd;
 
-    if (setuid(4243) != 0) {
+    if (setuid(user) != 0) {
         return 1;
     }
     snprintf(path, sizeof path, "/proc/%d/maps", (int)parent);
@@ -389,8 +399,8 @@ static int privacies_child(pid_t parent)
     }
     if (stat("/proc/self/", &st) != 0 || st.st_uid != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || stat("/proc/self/", &st) != 0 ||
-        st.st_uid != 4243 || stat("/proc/self/status", &st) != 0 || st.st_uid != 4243 ||
-        fstat(fd, &st) != 0 || st.st_uid != 4243) {
+        st.st_uid != user || stat("/proc/self/status", &st) != 0 || st.st_uid != user ||
+        fstat(fd, &st) != 0 || st.st_uid != user) {
         return 5;
     }
     return 0;
@@ -961,8 +971,8 @@ static int adjusts(void)
     struct timex tx;
 
     memset(&tx, 0, sizeof tx);
-    if (adjtimex(&tx) != TIME_ERROR || !(tx.status & STA_UNSYNC) || tx.tick != 10000 ||
-        tx.tolerance != (500L << 16)) {
+    if (!probe_native() && (adjtimex(&tx) != TIME_ERROR || !(tx.status & STA_UNSYNC) ||
+                            tx.tick != 10000 || tx.tolerance != (500L << 16))) {
         return fail("adjtimex did not read an unsynchronized clock with its 10 ms tick");
     }
     memset(&tx, 0, sizeof tx);
@@ -1444,8 +1454,9 @@ static int rtcs(void)
     return status;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
         privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems() ||

@@ -14,6 +14,11 @@
  * permission bits opens for an unprivileged caller; /dev/ptmx allocates no
  * terminal; and O_NOFOLLOW opens the /proc/self link itself.
  *
+ * The unprivileged caller is uid and gid 1000, or the NEW of 1000 when a
+ * native run gives `ids=OLD:NEW,...` (tests/native/Readme.md). Given
+ * `machine=native`, it leaves out the count of /dev/pts around the open of
+ * /dev/ptmx, since other logins move it.
+ *
  * Prints `OPATHMUSL OK` and exits 0 on success, and prints
  * `OPATHMUSL FAIL (detail)` and exits 1 otherwise.
  */
@@ -33,6 +38,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* fchown of 32-bit ids: fchown32 on i386, whose fchown takes 16-bit ones,
  * and fchown on x86-64, which has only that. */
@@ -229,7 +236,7 @@ static int permission_rows(void)
     if (pid == 0) {
         int fd;
 
-        if (setgid(1000) != 0 || setuid(1000) != 0) {
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
             _exit(2);
         }
         if (!refused(open(FILE_PATH, O_RDONLY), EACCES)) {
@@ -301,9 +308,9 @@ static int synth_rows(void)
         return fail("/dev/null");
     }
     close(fd);
-    before = pts_count();
+    before = probe_native() ? 0 : pts_count();
     fd = open("/dev/ptmx", O_PATH | O_RDWR);
-    if (fd < 0 || before < 0 || pts_count() != before || !refuses_io(fd)) {
+    if (fd < 0 || before < 0 || (!probe_native() && pts_count() != before) || !refuses_io(fd)) {
         return fail("/dev/ptmx allocates no terminal");
     }
     close(fd);
@@ -340,8 +347,9 @@ static int synth_rows(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (file_rows() != 0 || permission_rows() != 0 || dir_rows() != 0 || synth_rows() != 0) {
         unlink(FILE_PATH);
         return 1;

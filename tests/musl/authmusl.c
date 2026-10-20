@@ -22,6 +22,12 @@
  *
  * Prints "AUTHMUSL OK" on success, "AUTHMUSL FAIL" otherwise. Linked against
  * the ported musl.
+ *
+ * The uid and gid it drops to are 1000, or their NEW in `ids=OLD:NEW,...`
+ * (tests/native/Readme.md). Given `machine=native`, it leaves out both clock
+ * rows, root's step and the unprivileged one's refusal, since either would
+ * step the machine's own clock; a native
+ * run also gives it a UTS namespace of its own for the host name.
  */
 
 #define _GNU_SOURCE /* dup3, sethostname */
@@ -36,6 +42,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+
+#include "../probe_args.h"
 
 /*
  * The numbers of the system calls whose times are a long wide: i386's stime
@@ -170,13 +178,18 @@ static int account_rows(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct rlimit rl;
     char host[64];
     int fd, nfd, fl;
     uid_t ru, eu, su;
+    uid_t user;
+    gid_t group;
 
+    probe_args(argc, argv);
+    user = (uid_t)probe_id(1000);
+    group = (gid_t)probe_id(1000);
     if (account_rows() != 0) {
         return 1;
     }
@@ -198,7 +211,7 @@ int main(void)
         printf("AUTHMUSL FAIL (hostname round-trip: %s)\n", host);
         return 1;
     }
-    if (clock_step(100000) != 0) {
+    if (!probe_native() && clock_step(100000) != 0) {
         printf("AUTHMUSL FAIL (root sets the real time forward and back)\n");
         return 1;
     }
@@ -225,12 +238,12 @@ int main(void)
     close(fd);
     close(nfd);
 
-    if (seteuid(1000) != 0 || geteuid() != 1000 || getuid() != 0) {
+    if (seteuid(user) != 0 || geteuid() != user || getuid() != 0) {
         printf("AUTHMUSL FAIL (seteuid excursion out)\n");
         return 1;
     }
     /* musl's seteuid is setresuid(-1, e, -1), which leaves the saved uid. */
-    if (getresuid(&ru, &eu, &su) != 0 || ru != 0 || eu != 1000 || su != 0) {
+    if (getresuid(&ru, &eu, &su) != 0 || ru != 0 || eu != user || su != 0) {
         printf("AUTHMUSL FAIL (saved uid during excursion)\n");
         return 1;
     }
@@ -238,11 +251,11 @@ int main(void)
         printf("AUTHMUSL FAIL (seteuid excursion back)\n");
         return 1;
     }
-    if (setgid(1000) != 0 || setuid(1000) != 0) {
-        printf("AUTHMUSL FAIL (drop to 1000)\n");
+    if (setgid(group) != 0 || setuid(user) != 0) {
+        printf("AUTHMUSL FAIL (drop to %lu)\n", (unsigned long)user);
         return 1;
     }
-    if (getuid() != 1000 || geteuid() != 1000 || getgid() != 1000) {
+    if (getuid() != user || geteuid() != user || getgid() != group) {
         printf("AUTHMUSL FAIL (identity after drop)\n");
         return 1;
     }
@@ -254,7 +267,7 @@ int main(void)
         printf("AUTHMUSL FAIL (an unprivileged caller set the host name)\n");
         return 1;
     }
-    if (clock_step(1000) == 0 || errno != EPERM) {
+    if (!probe_native() && (clock_step(1000) == 0 || errno != EPERM)) {
         printf("AUTHMUSL FAIL (an unprivileged caller set the time)\n");
         return 1;
     }

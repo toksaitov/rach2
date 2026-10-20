@@ -66,6 +66,11 @@
  * require the debug-entry fixture of ptrace_debug_mutate.sh. They require a
  * forced TRAP_HWBKPT at the system call's return with SIGTRAP blocked, and
  * EINTR from an infinite poll. They fail if the debug entry is not exercised.
+ *
+ * NAME=VALUE arguments are not row names. Given `machine=native`
+ * (tests/native/Readme.md), the row of a /proc/PID/mem descriptor leaves out
+ * its comparison of MemFree, since the machine's services move free memory
+ * meanwhile.
  */
 
 #define _GNU_SOURCE
@@ -88,6 +93,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /*
  * The fields of each architecture's user_regs_struct the rows read: the
@@ -703,7 +710,7 @@ static int mem_after_end(void)
     if (got != 0) {
         rc = fail("a /proc/PID/mem read reached a child that had ended");
     }
-    if (after < before - 8192) {
+    if (!probe_native() && after < before - 8192) {
         rc = fail("a /proc/PID/mem descriptor kept the memory of a child that ended");
     }
     return rc;
@@ -2147,9 +2154,10 @@ int main(int argc, char **argv)
 {
     unsigned int i;
 
-    if (argc == 2) {
+    probe_args(argc, argv);
+    if (probe_words() == 1) {
         for (i = 0; i < sizeof(named_rows) / sizeof(named_rows[0]); i++) {
-            if (strcmp(argv[1], named_rows[i].name) == 0) {
+            if (strcmp(probe_word(1), named_rows[i].name) == 0) {
                 if (named_rows[i].row() != 0) {
                     return 1;
                 }
@@ -2159,7 +2167,7 @@ int main(int argc, char **argv)
         }
         return fail("unknown row");
     }
-    if (argc != 1) {
+    if (probe_words() != 0) {
         return fail("unexpected argument count");
     }
     if (first_rows() || second_rows()) {

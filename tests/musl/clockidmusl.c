@@ -32,7 +32,9 @@
  * another thread of the process, spinning, has advanced it that far.
  *
  * It prints "CLOCKIDMUSL OK" and exits 0 on success, or prints "CLOCKIDMUSL
- * FAIL (detail)" and exits 1 at the first failure.
+ * FAIL (detail)" and exits 1 at the first failure. Given `machine=native`
+ * (tests/native/Readme.md), it leaves out the row of real time past 2^31
+ * seconds, since it sets the machine's clock.
  */
 
 #define _GNU_SOURCE
@@ -49,6 +51,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /*
  * The kernel's timespec of a long's width, which the raw calls take: 32 bits
@@ -629,14 +633,12 @@ static const char *boot_time_disagrees(void)
 }
 
 /**
- * Check times past 32 bits. Real time set to ten seconds past 2^31 reads back
+ * Check real time past 32 bits: set to ten seconds past 2^31 it reads back
  * whole, fine and coarse, the coarse clock as much as two ticks earlier, and
  * the boot time moves with it (`boot_time_disagrees`); it is set back after.
- * On x86-64, whose raw calls take a long, a relative sleep of 2^32 seconds and
- * an absolute sleep to 2^62 seconds of time since boot each wait until a
- * signal ends them. Returns 0, or 1 after the failure is printed.
+ * Returns 0, or 1 after the failure is printed.
  */
-static int wide_times(void)
+static int wide_real_time(void)
 {
     struct timespec saved, mono0, past;
     const char *boot;
@@ -662,6 +664,21 @@ static int wide_times(void)
     }
     if (boot != NULL) {
         return fail(boot);
+    }
+    return 0;
+}
+
+/**
+ * Check times past 32 bits: the real time of `wide_real_time`, which a native
+ * run leaves out, and on x86-64, whose raw calls take
+ * a long, a relative sleep of 2^32 seconds and an absolute sleep to 2^62
+ * seconds of time since boot, which each wait until a signal ends them.
+ * Returns 0, or 1 after the failure is printed.
+ */
+static int wide_times(void)
+{
+    if (!probe_native() && wide_real_time() != 0) {
+        return 1;
     }
 #if defined __x86_64__
     {
@@ -694,8 +711,9 @@ static int wide_times(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (clocks() != 0 || child_clock() != 0 || sleeps() != 0 || cpu_sleep_sibling() != 0 ||
         wide_times() != 0) {
         return 1;

@@ -15,6 +15,11 @@
  * since the default disposition is what the test checks: interrupting a
  * program terminates it.
  *
+ * A native case runs it on a pseudo-terminal whose input is the byte 0x03,
+ * which tests the line discipline's `VINTR` without the console, and passes
+ * on its death by SIGINT (tests/native/musl.cases). It takes no arguments and
+ * ignores any it is given.
+ *
  * Built by tests/musl/build.sh.
  */
 

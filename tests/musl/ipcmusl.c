@@ -46,6 +46,10 @@
  * reads /NAME, then "/NAME (deleted)" with no link counted once mq_unlink
  * has taken the name, as on Linux.
  *
+ * Given `machine=native` (tests/native/Readme.md), it still makes the
+ * thousand refusals and leaves out the comparison of the kernel's heap, since
+ * the machine's services allocate from it meanwhile.
+ *
  * Prints `IPCMUSL OK` and exits 0 on success, and prints
  * `IPCMUSL FAIL (detail)` and exits 1 otherwise.
  */
@@ -69,6 +73,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* The longest wait, in seconds, for another process to be seen asleep or
  * waiting on a semaphore: a bound that ends a wait the kernel never
@@ -197,7 +203,7 @@ static int oversized_rows(void)
         }
     }
     after = heap_used();
-    if (before == 0 || after > before + 4096) {
+    if (!probe_native() && (before == 0 || after > before + 4096)) {
         return fail("a thousand refused segments leave the kernel's heap as it was");
     }
     return 0;
@@ -782,8 +788,9 @@ static int mq_rows(void)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (shm_rows() || sem_rows() || msg_rows() || cut_rows() || mq_rows() || mq_files()) {
         return 1;
     }

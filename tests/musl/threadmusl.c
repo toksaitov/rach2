@@ -42,6 +42,13 @@
  *
  * Needs: the console as stdin, in canonical mode, as a boot of the default
  * suite has it; the framebuffer's row reads it.
+ *
+ * A native run (tests/native/Readme.md) gives the socket rows' ports as
+ * `ports=OLD:NEW,...`, and the program compares /proc/self/exe with the
+ * absolute path it was started by. Given `machine=native`, it leaves out the
+ * framebuffer's row; given `row=framebuffer`, it
+ * opens /dev/console as its standard input and runs that row alone, and
+ * prints "THREADMUSL OK (framebuffer)" when it passes.
  */
 
 #define _GNU_SOURCE
@@ -66,12 +73,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 #define THREADS 4
 #define ROUNDS  10000
 
 /* The loopback ports of the socket rows, on which no other probe listens. */
-#define LOST_TCP_PORT 7480
-#define LOST_UDP_PORT 7481
+#define LOST_TCP_PORT ((unsigned short)probe_port(7480))
+#define LOST_UDP_PORT ((unsigned short)probe_port(7481))
 
 /* The framebuffer's requests, as the kernel numbers them. */
 #define FB_SETPALETTE 0x4603
@@ -621,7 +630,7 @@ static int sharing(void)
         return fail("the directory and umask a thread changed");
     }
     n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    if (n <= 0 || (exe[n] = '\0', strcmp(exe, "/musl/threadmusl") != 0)) {
+    if (n <= 0 || (exe[n] = '\0', strcmp(exe, probe_self("/musl/threadmusl")) != 0)) {
         return fail("/proc/self/exe");
     }
 
@@ -1189,8 +1198,33 @@ static int framebuffer_row(void)
  */
 static int later_rows(void)
 {
-    return sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0 ||
-           lost_tcp_rows() != 0 || lost_udp_row() != 0 || framebuffer_row() != 0;
+    if (sharing() != 0 || handler_mask_row() != 0 || lost_status_row() != 0 ||
+        lost_tcp_rows() != 0 || lost_udp_row() != 0) {
+        return 1;
+    }
+    return !probe_native() && framebuffer_row() != 0;
+}
+
+/**
+ * Run the framebuffer's row alone, with descriptor 0 opened on the console,
+ * as the argument `row=framebuffer` asks. Returns 0 when it passes, and 1
+ * after a failure is printed.
+ */
+static int framebuffer_alone(void)
+{
+    int fd = open("/dev/console", O_RDWR);
+
+    if (fd < 0 || dup2(fd, 0) != 0) {
+        return fail("the console as standard input");
+    }
+    if (fd != 0) {
+        close(fd);
+    }
+    if (framebuffer_row() != 0) {
+        return 1;
+    }
+    printf("THREADMUSL OK (framebuffer)\n");
+    return 0;
 }
 
 /**
@@ -1354,13 +1388,17 @@ static int two_execs(void)
     return ok ? 0 : fail("two execs at once");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     pthread_t t[THREADS], spare;
     void *result;
     int i, status;
     pid_t pid;
 
+    probe_args(argc, argv);
+    if (strcmp(probe_arg("row", ""), "framebuffer") == 0) {
+        return framebuffer_alone();
+    }
     mine = 1;
     for (i = 0; i < THREADS; i++) {
         if (pthread_create(&t[i], NULL, count, (void *)(long)i) != 0) {
