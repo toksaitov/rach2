@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "proof": "install-keys",
+  "summary": "the installer suite's resume rows on i686, on the test stick and disk staged with the tree's utils/rach2-install",
+  "tree": "shared",
+  "sources": ["utils/rach2-install"],
+  "artifacts": ["${WORK}/rach2-install"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "tag=; [ ! -f krffs/recovery_authorized_keys ] || tag=-with-key; make -s -j8 rach2 utils krffs ARCH=i686 </dev/null && rm -f build/images/rach2-recovery*.krffs build/images/rach2-recovery*.iso build/images/installer-test.disk build/images/install-test-stick.img build/images/installer-root.ext2 && make -s -j8 build/images/install-test-stick.img build/tests/host/mkexfatfixture build/tests/system/harness build/tests/system/runutil ARCH=i686 </dev/null && rm -f ${WORK}/rach2-install && build/krffs/readfile.krffs build/images/rach2-recovery$tag.krffs /bin/rach2-install ${WORK}/rach2-install"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/rows ${WORK}/demo_ed25519; (umask 077; cp krffs/rach2_demo_ed25519 ${WORK}/demo_ed25519) || exit 1; status=0; sh tests/system/suites/installer.sh build/images/install-test-stick.img build/images/installer-test.disk build/tests/system/harness ${WORK}/rows \"$(cat krffs/rach2_demo_password)\" build/images/install-test-stick.img build/images/installer-test.disk 2327 unused ${WORK}/demo_ed25519 resume build/images/installer-root.ext2 >${WORK}/rows.log 2>&1 || status=$?; cat ${WORK}/rows.log; rows=${WORK}/rows; [ ! -f $rows/archive-stop.log ] || cat $rows/archive-stop.log; if [ $status -eq 0 ]; then for line in 'row archive-stop: the complete legacy archive supplies the machine configuration: OK' 'retried from the marked archive: OK' 'row 17: host and account keys match the installed machine: OK' 'row 17: root logs in with its restored key: OK' 'row 19: the update run again in the same boot puts back the homes the first one kept: OK'; do grep -Fq \"$line\" ${WORK}/rows.log || { echo \"installer-proof: FAIL: missing: $line\"; status=1; }; done; fi; exit $status"],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "keys",
+      "summary": "write_archive does not archive the machine's Dropbear keys, so the update loses them",
+      "edits": [
+        {"file": "utils/rach2-install", "find": "    if [ -d \"$1/etc/dropbear\" ]; then\n        cp -R \"$1/etc/dropbear\" \"$next_archive/etc/dropbear\" ||\n            die \"the host keys could not be archived\"\n    fi\n    if ssh_host_keys \"$1\"; then\n        { mkdir -p \"$next_archive/etc/ssh\" && cp \"$1\"/etc/ssh/ssh_host_* \"$next_archive/etc/ssh/\"; } ||\n            die \"OpenSSH's host keys could not be archived\"\n    fi\n    archive_account_keys \"$1\" || die \"the account keys could not be archived\"\n", "replace": ""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row 17:", "retried from the marked archive: OK"]
+      }
+    },
+    {
+      "name": "archive",
+      "summary": "the update rebuilds the archive slot it was chosen from, which leaves no complete copy when it stops",
+      "edits": [
+        {"file": "utils/rach2-install", "find": "    rm -f \"$next_archive/generation\"", "replace": "    [ -z \"$archive\" ] || next_archive=\"$archive\"\n    rm -f \"$next_archive/generation\""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row archive-stop: the retry did not recover", "STOP_STATUS=99"]
+      }
+    },
+    {
+      "name": "case",
+      "summary": "two key names that differ only in case are not refused, so FAT32 folds them into one file",
+      "edits": [
+        {"file": "utils/rach2-install", "find": "                die \"ssh key names collide on FAT32: $entry and $other\"", "replace": "                :"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row archive-keys: two key names that differ only in case were not refused"]
+      }
+    },
+    {
+      "name": "retry",
+      "summary": "an update run again in the same boot ignores the copy the first kept before it wrote the root",
+      "edits": [
+        {"file": "utils/rach2-install", "find": "    if [ -f \"$keep/root-written\" ]; then", "replace": "    if false; then"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row 19: the update run again in the same boot lost the homes", "row 19: the first update stops with the image's root written: OK"]
+      }
+    }
+  ]
+}
