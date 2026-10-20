@@ -133,7 +133,7 @@ A device that has gone is taken down on the next pass, the devices below a hub f
 
 ### The latency record
 
-Under `rach2.usblatency`, `stamp.c` records the path of the last USB keystroke and logs one line, `usb: latency: ...`, when a reader takes its byte: the times of the handler's entry, of the code reaching the input layer and of the read, in microseconds relative to the drain that took the event; whether a blocked reader was recorded and then dispatched; how many pumps ran before the dispatch; and how many bytes `getrandom` completed meanwhile. The controller gives no timestamp of its own.
+Under `rach2.usblatency`, `stamp.c` records the path of the last USB keystroke and logs one line, `usb: latency: ...`, when a reader takes its byte: the times of the handler's entry, of the code reaching the input layer and of the read, in microseconds relative to the drain that took the event; whether a blocked reader was recorded and then dispatched; how many pumps ran before the dispatch; and how many bytes `getrandom` completed meanwhile. A code that arrives after the reader's dispatch and before its read, such as the key's release, does not replace the keystroke the reader was woken for. The controller gives no timestamp of its own.
 
 ### Stopping
 

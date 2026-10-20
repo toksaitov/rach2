@@ -66,7 +66,8 @@ uint32_t usb_fallback_count(void);
  * Called by the HID driver after each code it hands on, inside the pump. It
  * is the third of the four stamps the latency record prints; the fourth is
  * taken where a reader takes the byte. Only the latest keystroke is kept, and
- * one from a pump that took no events clears it.
+ * one from a pump that took no events clears it, until the reader it woke is
+ * dispatched; from then to the read, a later code changes nothing.
  */
 void usb_stamp_wake(void);
 

@@ -299,6 +299,17 @@ int main(int argc, char **argv)
     usb_stamp_wake();
     usb_stamp_read();
     CHECK(records == 0, "a pump without an event invalidates the record");
+    begin(1);
+    schedule();
+    usb_stamp_pump(50000, 51000, 0, 1);
+    clock_us = 52000;
+    usb_stamp_wake();
+    clock_us = 112000;
+    irq_flags = 0x200;
+    usb_stamp_read();
+    CHECK(records == 1 && strstr(record, "msi 1, entry -30000, wake 1000, read 81000") != 0 &&
+              strstr(record, "tracked 1, dispatch 1") != 0,
+          "a code after the dispatch leaves the keystroke's record");
     if (!failures) {
         printf("usbstamp-test: result: pass\n");
     }

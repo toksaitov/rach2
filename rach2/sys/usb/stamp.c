@@ -89,8 +89,14 @@ void usb_stamp_work(uint32_t bytes)
     kirq_restore(flags);
 }
 
+/** A code that follows a keystroke whose reader has been dispatched, such as
+ * the key's release, is type-ahead and leaves that keystroke's record as it
+ * is until the read. */
 void usb_stamp_wake(void)
 {
+    if (pending && stamp.dispatched) {
+        return;
+    }
     if (!pump_took) {
         pending = 0;
         return;
