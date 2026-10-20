@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "proof": "recovery-disk-key",
+  "summary": "rows 6b and 6c of the installer suite on i686, the recovery system's SSH key on an installed disk, on the tree's recovery init and installer",
+  "tree": "shared",
+  "sources": ["utils/init.c", "utils/rach2-install"],
+  "artifacts": ["${WORK}/init-recovery", "${WORK}/rach2-install"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "tag=; [ ! -f krffs/recovery_authorized_keys ] || tag=-with-key; make -s -j8 rach2 utils krffs ARCH=i686 </dev/null && rm -f build/images/rach2-recovery*.krffs build/images/rach2-recovery*.iso build/images/installer-test.disk build/images/install-test-stick.img build/utils/sbin/init-recovery && make -s utils ARCH=i686 </dev/null && make -s -j8 build/images/install-test-stick.img build/images/installer-test.disk build/tests/system/harness build/tests/system/runutil ARCH=i686 </dev/null && cp build/utils/sbin/init-recovery ${WORK}/init-recovery && rm -f ${WORK}/rach2-install && build/krffs/readfile.krffs build/images/rach2-recovery$tag.krffs /bin/rach2-install ${WORK}/rach2-install"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/rows; status=0; sh tests/system/suites/installer.sh build/images/install-test-stick.img build/images/installer-test.disk build/tests/system/harness ${WORK}/rows \"$(cat krffs/rach2_demo_password)\" build/images/install-test-stick.img build/images/installer-test.disk 2331 unused krffs/rach2_demo_ed25519 recoverykey >${WORK}/rows.log 2>&1 || status=$?; cat ${WORK}/rows.log; if [ $status -eq 0 ]; then for line in 'row 6b: root logs in to the recovery system with the key the install placed: OK' 'row 6c: and nothing answers SSH: OK'; do grep -Fq \"$line\" ${WORK}/rows.log || { echo \"installer-proof: FAIL: missing: $line\"; status=1; }; done; fi; exit $status"],
+    "bound_s": 2400
+  },
+  "faults": [
+    {
+      "name": "init-mutated",
+      "summary": "the recovery init does not read the disk's key, since it asks the boot line for a slot no boot names",
+      "edits": [
+        {"file": "utils/init.c", "find": "boot_line_has(\"rach2.slot=recovery\")", "replace": "boot_line_has(\"rach2.slot=never\")"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row 6b: the placed key"]
+      }
+    },
+    {
+      "name": "installer-mutated",
+      "summary": "the installer does not copy the key it was given to the recovery partition",
+      "edits": [
+        {"file": "utils/rach2-install", "find": "        cp \"$key_copy\" \"$RECOVERY_MNT/$RECOVERY_KEYS_FILE\" ||", "replace": "        : \"$key_copy\" ||"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row 6b: the recovery partition's key file holds"]
+      }
+    },
+    {
+      "name": "server-always",
+      "summary": "the recovery init starts its SSH server with no key to let in",
+      "edits": [
+        {"file": "utils/init.c", "find": "if (s->sshd.pid < 0 && anyone_to_let_in()) {", "replace": "if (s->sshd.pid < 0) {"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row 6c: init started an SSH server on a recovery system with no key"]
+      }
+    },
+    {
+      "name": "server-late",
+      "summary": "the recovery init starts its SSH server one turn of its loop late, after its first test for a key",
+      "edits": [
+        {"file": "utils/init.c", "find": "if (s->sshd.pid < 0 && anyone_to_let_in()) {", "replace": "if (s->sshd.pid < 0 && (anyone_to_let_in() || s->sshd.spawned++ > 0)) {"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["FAIL: row 6c: init started an SSH server on a recovery system with no key"]
+      }
+    }
+  ]
+}
