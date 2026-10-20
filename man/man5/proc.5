@@ -757,6 +757,10 @@ is
 or
 .Ql unknown .
 Vendor and product IDs are hexadecimal; class and protocol are decimal.
+A keyboard's or mouse's line ends with
+.Ql reports N ,
+the reports it has delivered since it was attached, so a program can count
+what arrived however many reports the controller took in one interrupt.
 .Pp
 USB disks follow in this form:
 .Dl diskN VENDOR PRODUCT SECTORS sectors K parts STATE flushes F

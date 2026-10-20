@@ -99,7 +99,7 @@ A low- or full-speed device's translator is the nearest high-speed hub above it,
 
 ### Keyboards and mice
 
-A keyboard or mouse has one interrupt IN transfer outstanding, of the endpoint's packet size up to 8 bytes; each completion goes to `hid_report` and the next is queued. After a failed transfer the core quiesces the endpoint and resumes.
+A keyboard or mouse has one interrupt IN transfer outstanding, of the endpoint's packet size up to 8 bytes; each completion goes to `hid_report`, is counted in the device's record as the `reports` field of its `/proc/usb` line, and the next is queued. After a failed transfer the core quiesces the endpoint and resumes.
 
 A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key usages. `hid.c` keeps each device's previous report and sends the difference as set-1 make and break codes, with the 0xE0 prefix for the right Ctrl and Alt, the GUI and Application keys, the arrows, the editing keys, and the keypad's Enter and slash. The table covers usages 0x04 to 0x65, and a usage without a code sends nothing. A report whose key slots hold an error usage, 0x01 to 0x03, which a keyboard sends when it cannot tell which keys are down, has its modifiers read and its keys ignored, so the held keys stay down. When a keyboard goes, `hid_gone` releases every key it had down.
 

@@ -136,6 +136,9 @@ struct usb_device_state {
     int abandoned;
     uint32_t short_by; /* bytes the last control transfer came back short */
     int reporting;     /* a report transfer is outstanding on `ep_dci` */
+    /* A keyboard's or mouse's reports handed to `hid_report` since the
+     * device was entered, for /proc/usb. */
+    uint32_t reports;
     /* A quiesce in progress on this device's endpoint `quiesce_dci`: 1 with
      * the stop or the reset out, 2 with the dequeue out. */
     int quiesce_stage;
@@ -877,6 +880,7 @@ static void step_running(struct usb_device_state *d)
             arm(d);
             return;
         } else {
+            d->reports++;
             hid_report(d->index + 1, kind, d->report,
                        (int)(completion.length - completion.residual));
         }
@@ -1376,6 +1380,7 @@ static void device_arrive(struct xhci_ctrl *hc, int owner, int port)
             dev_at(i)->abandoned = 0;
             dev_at(i)->have_control = 0;
             dev_at(i)->have_report = 0;
+            dev_at(i)->reports = 0;
             dev_at(i)->refused = 0;
             dev_at(i)->unentered = 0;
             dev_at(i)->interface.found = 0;
@@ -1917,6 +1922,10 @@ int usb_core_describe(int index, char *out, int size)
     at = put_num(out, size, at, (uint32_t)d->interface.class_code, 10);
     at = put_str(out, size, at, " protocol ");
     at = put_num(out, size, at, (uint32_t)d->interface.protocol, 10);
+    if (d->interface.kind == USB_KIND_HID) {
+        at = put_str(out, size, at, " reports ");
+        at = put_num(out, size, at, d->reports, 10);
+    }
     at = put_str(out, size, at, "\n");
     out[at] = '\0';
     kirq_restore(flags);

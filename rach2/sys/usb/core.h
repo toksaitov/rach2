@@ -268,7 +268,9 @@ int usb_core_row(int index, struct usb_sys_row *row);
  * Describe the running device at table entry `index` for `/proc/usb`, as one
  * line in `out`, `size` bytes with its terminator: `port PATH SPEED
  * VENDOR:PRODUCT class C protocol P`, with PATH the root port and then each
- * hub's port, from 1, joined by dots, and the identifiers in hex.
+ * hub's port, from 1, joined by dots, and the identifiers in hex. A keyboard's
+ * or mouse's line ends with `reports N`, the reports it has delivered to the
+ * class driver since it was entered.
  *
  * Returns the number of bytes written, or zero when `index` names no running
  * device or `size` is less than 8. Called in process context; the entry, and

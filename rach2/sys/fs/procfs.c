@@ -2595,14 +2595,14 @@ static int procfs_gen_vmstat(struct procfs_text *t)
 
 /**
  * Render /proc/usb: one line for each device the USB stack has configured,
- * with the root port it is on, its speed, what it says it is, and the class
- * it was driven as; then one line for each stick that is a disk, with its
- * node, what the drive says it is, its size and whether it is still there; on
- * a machine that has had a stick, a line with how many names are free and how
- * many sticks have been given up since boot; and, while the stack has not
- * finished with a device present (`usb_core_busy`), a last line with how
- * many. A machine with no controller, or one booted without USB, has the
- * file, empty.
+ * with the root port it is on, its speed, what it says it is, the class it
+ * was driven as and, for a keyboard or mouse, the reports it has delivered;
+ * then one line for each stick that is a disk, with its node, what the drive
+ * says it is, its size and whether it is still there; on a machine that has
+ * had a stick, a line with how many names are free and how many sticks have
+ * been given up since boot; and, while the stack has not finished with a
+ * device present (`usb_core_busy`), a last line with how many. A machine with
+ * no controller, or one booted without USB, has the file, empty.
  */
 static int procfs_gen_usb(struct procfs_text *t)
 {

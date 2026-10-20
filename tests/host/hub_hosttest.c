@@ -27,10 +27,11 @@
  * below, and its class driver told when its report endpoint had halted; a hub
  * pulled with two devices below closing both children before itself; a
  * power-on after an over-current asked for again until it is queued;
- * `/proc/usb` reading the table with interrupts off; the stack counted busy
- * from the hub's arrival until its scan ends and its devices run; a hub with
- * twenty ports keeping all twenty, a device on port twenty named through its
- * translator; and a hub that stalls its descriptor request closed.
+ * `/proc/usb` reading the table with interrupts off and counting a
+ * keyboard's reports; the stack counted busy from the hub's arrival until its
+ * scan ends and its devices run; a hub with twenty ports keeping all twenty, a
+ * device on port twenty named through its translator; and a hub that stalls
+ * its descriptor request closed.
  *
  * No hosted headers: the kernel headers define the fixed-width types, and
  * the libc calls are declared by hand as the other host tests declare them.
@@ -1392,23 +1393,42 @@ static void concurrent_changes(void)
           closes == 1 && model.power_offs == 1 && model.warm_resets == 0 && running_count() == 1);
 }
 
-/** Read `/proc/usb`'s lines for a keyboard on port 2 of the hub. */
+/** Read `/proc/usb`'s lines for a keyboard on port 2 of the hub, before and
+ * after it delivers two reports. */
 static void proc_usb_lines(void)
 {
     char line[96];
     int i;
     int found = 0;
+    int kbd = -1;
     int saves = irq_saves;
 
     line[0] = '\0';
     for (i = 0; i < USB_MAX_DEVICES; i++) {
         if (usb_core_describe(i, line, (int)sizeof(line)) > 0 && contains(line, "class 3")) {
             found = contains(line, "port 1.2 ");
+            kbd = i;
         }
     }
     CHECK("/proc/usb gives the keyboard's location as 1.2", found);
     CHECK("and reads the device table with interrupts off",
           irq_saves == saves + USB_MAX_DEVICES && irq_depth == 0);
+    if (kbd < 0) {
+        return;
+    }
+    usb_core_describe(kbd, line, (int)sizeof(line));
+    CHECK("a keyboard that has reported nothing has 0 reports",
+          contains(line, "protocol 1 reports 0\n"));
+    answer(dev_at(kbd)->slot, dev_at(kbd)->ep_dci, USB_XFER_OK, 8, 0, 0);
+    pump(10);
+    answer(dev_at(kbd)->slot, dev_at(kbd)->ep_dci, USB_XFER_SHORT, 8, 2, 0);
+    pump(10);
+    usb_core_describe(kbd, line, (int)sizeof(line));
+    CHECK("and 2 after two reports", contains(line, "protocol 1 reports 2\n"));
+    answer(dev_at(kbd)->slot, dev_at(kbd)->ep_dci, USB_XFER_STALLED, 8, 8, 0);
+    pump(10);
+    usb_core_describe(kbd, line, (int)sizeof(line));
+    CHECK("and a failed report transfer is not counted", contains(line, "protocol 1 reports 2\n"));
 }
 
 /**
