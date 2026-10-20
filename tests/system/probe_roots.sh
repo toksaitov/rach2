@@ -3,7 +3,8 @@
 # krffs or an ext2 root made from the test manifest, and run each PROBE as
 # init from the debug shell. The default is the ten probes tests/Readme.md
 # lists for an installed root. Each probe staged must be the built one, and
-# each must exit with status 0.
+# each must exit with status 0. A probe that fails does not stop the ones
+# after it; the script fails once they have all run.
 set -eu
 
 # The build tree of the architecture tests/system/suites.mk names.
@@ -64,6 +65,7 @@ case "$root" in
 esac
 cksum "$kernel" "$prefix".* >"$prefix.artifacts"
 
+failed=
 for probe in "$@"; do
     # A probe under $ARCH_BUILD/tests/musl is named by its path there, and its
     # files here by that path with dashes for the slashes.
@@ -85,12 +87,15 @@ for probe in "$@"; do
     wait "$child" || status=$?
     stop_child
     cat "$prefix.$tag.log" "$prefix.$tag.serial.log"
-    [ "$status" -eq 0 ] || {
-        echo "probe-roots: failed: $root $probe status $status" >&2; exit 1;
-    }
-    grep -Eq '(^|] )sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell' \
-        "$prefix.$tag.serial.log" || {
-        echo "probe-roots: missing init exit: $root $probe" >&2; exit 1;
-    }
-    echo "probe-roots: result: $root $probe pass"
+    if [ "$status" -ne 0 ]; then
+        echo "probe-roots: failed: $root $probe status $status" >&2
+        failed="$failed $probe"
+    elif ! grep -Eq '(^|] )sys_exit: init process [0-9]+ exited with status 0, returning to kernel shell' \
+        "$prefix.$tag.serial.log"; then
+        echo "probe-roots: missing init exit: $root $probe" >&2
+        failed="$failed $probe"
+    else
+        echo "probe-roots: result: $root $probe pass"
+    fi
 done
+[ -z "$failed" ] || { echo "probe-roots: result: fail: $root:$failed" >&2; exit 1; }
