@@ -1079,10 +1079,10 @@ static void from_guest(struct harness *h, const char *buf, size_t n)
 }
 
 /* What a wait goes on until, besides the end of the operation. */
-enum wait { UNTIL_END, UNTIL_STARTED, UNTIL_READY };
+enum serve_until { UNTIL_END, UNTIL_STARTED, UNTIL_READY };
 
 /** Say whether the wait is over. */
-static int satisfied(struct harness *h, enum wait w)
+static int satisfied(struct harness *h, enum serve_until w)
 {
     if (etude_serial_status(h->s) != ETUDE_SERIAL_BUSY)
         return 1;
@@ -1097,7 +1097,7 @@ static int satisfied(struct harness *h, enum wait w)
  * Carry the console both ways until the wait is over, sending again what the
  * controller has due; 1, or 0 when BOUND_US passed first.
  */
-static int serve(struct harness *h, enum wait w)
+static int serve(struct harness *h, enum serve_until w)
 {
     uint64_t until = now_us() + BOUND_US;
     char buf[4096];
@@ -1200,7 +1200,7 @@ static int prepare(struct harness *h, const char *run_id, const char *name, cons
 
 /** Begin a run of `token` from the invocation `inv` and wait as `w` says;
  * whether the wait ended before the bound. */
-static int run(struct harness *h, const char *token, const char *inv, enum wait w)
+static int run(struct harness *h, const char *token, const char *inv, enum serve_until w)
 {
     memset(h->out, 0, sizeof(h->out));
     h->outlen[0] = h->outlen[1] = 0;

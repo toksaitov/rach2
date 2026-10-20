@@ -280,9 +280,9 @@ static void send_cmd(const char *type, ...)
 }
 
 /** The next command number, as text. */
-static const char *new_cmd(char *out)
+static const char *new_cmd(char out[24])
 {
-    sprintf(out, "%lu", cmd_no++);
+    snprintf(out, 24, "%lu", cmd_no++);
     return out;
 }
 
