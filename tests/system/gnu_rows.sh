@@ -3,7 +3,7 @@
 #
 # gnu_rows.sh: the rows of `tests/run gnu` that run on the machine.
 #
-# Usage: gnu_rows.sh NAME [ARCH]
+# Usage: gnu_rows.sh NAME [ARCH] [ARGUMENT...]
 #
 # The gnu suite puts this script on the machine it boots, the GNU system's
 # ext2 root, and runs it there as root under /bin/bash, once for each row,
@@ -20,14 +20,43 @@
 # must name and which decides what a row expects of glibc's loader, of the
 # class `file` names a program by and of the triple config.guess names.
 #
+# A native run, on a Rach2 that is already up, gives ARGUMENTs of the form
+# NAME=VALUE, as tests/native/Readme.md says: `work=DIR` and `home=DIR`,
+# relative to the starting directory, in place of /tmp/gnu/NAME and /root;
+# `stage=DIR` for the files the suite stages in /tmp/gnu; `ports=OLD:NEW,...`
+# for the ports a row listens on; `ifname=`, `addr=` and `gateway=` for the
+# machine's interface, its ADDRESS/PREFIX and its gateway in place of QEMU's
+# eth0, 10.0.2.15/24 and 10.0.2.2; and `machine=native`, under which a row
+# leaves out the checks that change the machine or count all of it.
+#
 
 set -u
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 export HOME=/root LC_ALL=C
 
 ROW=${1:-}
-MACHINE=${2:-i686}
+MACHINE=i686
 WORK=/tmp/gnu/$ROW
+STAGE=/tmp/gnu
+PORTS=
+IFNAME=eth0
+ADDR=10.0.2.15/24
+GATEWAY=10.0.2.2
+NATIVE=
+[ $# -lt 2 ] || case "$2" in *=*) ;; *) MACHINE=$2 ;; esac
+for arg in "${@:2}"; do
+    case "$arg" in
+        work=*) WORK=$(realpath -m -- "${arg#work=}") ;;
+        home=*) HOME=$(realpath -m -- "${arg#home=}") ;;
+        stage=*) STAGE=$(realpath -m -- "${arg#stage=}") ;;
+        ports=*) PORTS=${arg#ports=} ;;
+        ifname=*) IFNAME=${arg#ifname=} ;;
+        addr=*) ADDR=${arg#addr=} ;;
+        gateway=*) GATEWAY=${arg#gateway=} ;;
+        machine=native) NATIVE=1 ;;
+    esac
+done
+mkdir -p "$HOME"
 case "$MACHINE" in
     x86_64)
         LOADER=/lib64/ld-linux-x86-64.so.2
@@ -60,6 +89,15 @@ has() {
         *"$3"*) ;;
         *) fail "$1: [$(printf '%s' "$2" | tail -n 3 | tr '\n' ' ')] has no [$3]" ;;
     esac
+}
+
+# port OLD: the port a native run maps OLD to, or OLD.
+port() {
+    local pair
+    for pair in ${PORTS//,/ }; do
+        [ "${pair%%:*}" != "$1" ] || { echo "${pair#*:}"; return; }
+    done
+    echo "$1"
 }
 
 # runs WHAT COMMAND...: require COMMAND to exit with status 0.
@@ -136,6 +174,7 @@ row_openssh() {
 
     has "the version" "$(ssh -V 2>&1)" "OpenSSH_10.5p1"
     runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
+    [ -z "$NATIVE" ] || return 0
     cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
     same "ssh" "$(ssh "${opts[@]}" root@127.0.0.1 echo ssh row 2>&1)" "ssh row"
     # shellcheck disable=SC2016 # the dollar is the remote shell's
@@ -200,16 +239,18 @@ row_perl() {
 # A file URL, and HTTPS from openssl's test server on this machine, whose
 # certificate curl is given; curl tries again while the server starts.
 row_curl() {
-    local server
+    local server name=rach2 https
+    https=$(port 4433)
 
-    same "a file URL" "$(curl -sS file:///etc/hostname)" "rach2"
+    [ -z "$NATIVE" ] || name=$(cat /etc/hostname)
+    same "a file URL" "$(curl -sS file:///etc/hostname)" "$name"
     runs "a certificate" openssl req -x509 -newkey ed25519 -keyout "$WORK/key.pem" \
         -out "$WORK/cert.pem" -days 1 -nodes -subj /CN=localhost -addext subjectAltName=DNS:localhost
-    openssl s_server -quiet -accept 127.0.0.1:4433 -key "$WORK/key.pem" -cert "$WORK/cert.pem" \
+    openssl s_server -quiet -accept "127.0.0.1:$https" -key "$WORK/key.pem" -cert "$WORK/cert.pem" \
         -www > "$WORK/server.log" 2>&1 &
     server=$!
     has "HTTPS" "$(curl -sS --retry 120 --retry-connrefused --retry-delay 1 \
-        --cacert "$WORK/cert.pem" https://localhost:4433/ 2>&1)" "TLSv1.3"
+        --cacert "$WORK/cert.pem" "https://localhost:$https/" 2>&1)" "TLSv1.3"
     kill "$server"
     wait "$server" 2> /dev/null
 }
@@ -358,30 +399,34 @@ row_xz() {
 # asks first and complains of when it cannot, a listener among them, and the
 # counts of ss -s; and lspci, which reads the PCI devices from /sys.
 row_iproute2() {
-    has "ip addr" "$(ip -4 addr show 2>&1)" "inet 10.0.2.15/24"
-    has "ip route" "$(ip route show 2>&1)" "default via 10.0.2.2"
-    has "ip link" "$(ip -o link show 2>&1)" "eth0: <"
+    local pid line listen bridge="00:00.0 Class 0600: 8086:"
+    local sysfs=/sys/bus/pci/devices/0000:00:00.0
+    has "ip addr" "$(ip -4 addr show 2>&1)" "inet $ADDR"
+    has "ip route" "$(ip route show 2>&1)" "default via $GATEWAY"
+    has "ip link" "$(ip -o link show 2>&1)" "$IFNAME: <"
     has "lo" "$(ip -o addr show lo 2>&1)" "inet 127.0.0.1/8 scope host lo"
-    has "ip link of one interface by its name" "$(ip link show eth0 2>&1)" "link/ether"
-    has "ip -s link's counters" "$(ip -s link show eth0 2>&1)" "RX:"
-    has "ip neigh" "$(ip neigh show 2>&1)" "10.0.2.2 dev eth0 lladdr"
-    has "ip route get" "$(ip route get 10.0.2.2 2>&1)" "10.0.2.2 dev eth0 src 10.0.2.15"
+    has "ip link of one interface by its name" "$(ip link show "$IFNAME" 2>&1)" "link/ether"
+    has "ip -s link's counters" "$(ip -s link show "$IFNAME" 2>&1)" "RX:"
+    has "ip neigh" "$(ip neigh show 2>&1)" "$GATEWAY dev $IFNAME lladdr"
+    has "ip route get" "$(ip route get "$GATEWAY" 2>&1)" "$GATEWAY dev $IFNAME src ${ADDR%/*}"
     has "ip rule" "$(ip rule 2>&1)" "32766:	from all lookup main"
-    has "tc qdisc" "$(tc qdisc 2>&1)" "qdisc noqueue 0: dev eth0 root"
+    has "tc qdisc" "$(tc qdisc 2>&1)" "qdisc noqueue 0: dev $IFNAME root"
     has "ip netconf" "$(ip netconf 2>&1)" "inet all forwarding off rp_filter off"
-    local pid line
+    listen=$(port 5999)
     mkfifo "$WORK/bound"
-    perl -MIO::Socket::INET -e '$| = 1; my $s = IO::Socket::INET->new(LocalPort => 5999, Listen => 1) or die; print "bound\n"; sleep' > "$WORK/bound" &
+    LISTEN=$listen perl -MIO::Socket::INET -e '$| = 1; my $s = IO::Socket::INET->new(LocalPort => $ENV{LISTEN}, Listen => 1) or die; print "bound\n"; sleep' > "$WORK/bound" &
     pid=$!
     read -r line < "$WORK/bound"
     same "the listener" "$line" "bound"
-    has "the listener in /proc/net/tcp" "$(cat /proc/net/tcp)" ":176F "
-    has "ss -tln" "$(ss -tln 2>&1)" "0.0.0.0:5999"
+    has "the listener in /proc/net/tcp" "$(cat /proc/net/tcp)" "$(printf ':%04X ' "$listen")"
+    has "ss -tln" "$(ss -tln 2>&1)" "0.0.0.0:$listen"
     same "what ss -a says on stderr" "$(ss -a 2>&1 >/dev/null)" ""
     has "ss -s" "$(ss -s 2>&1)" "TCP:   "
     same "what ss -s says on stderr" "$(ss -s 2>&1 >/dev/null)" ""
     kill "$pid"
-    has "lspci, from /sys" "$(lspci 2>&1)" "00:00.0 Class 0600: 8086:"
+    [ -z "$NATIVE" ] ||
+        bridge="00:00.0 Class $(cut -c3-6 "$sysfs/class"): $(cut -c3- "$sysfs/vendor"):"
+    has "lspci, from /sys" "$(lspci 2>&1)" "$bridge"
 }
 
 # loopctl attaches a file named relative to the current directory, which it
@@ -460,8 +505,8 @@ row_pkgconf() {
 row_procps() {
     same "ps -p" "$(ps -p 1 -o pid=,comm= | tr -s ' ')" " 1 init"
     has "ps -u" "$(ps -u root -o comm=)" "sshd"
-    same "pgrep -u" "$(pgrep -u root -x sshd | wc -l)" "1"
-    has "pgrep -c" "$(pgrep -c -x sshd)" "1"
+    same "pgrep -u" "$(pgrep -u root -P 1 -x sshd | wc -l)" "1"
+    has "pgrep -c" "$(pgrep -c -P 1 -x sshd)" "1"
     has "uptime -p" "$(uptime -p)" "up "
     has "free" "$(free -k)" "Mem:"
     same "vmstat" "$(vmstat 1 2 | wc -l)" "4"
@@ -540,11 +585,12 @@ row_rsync() {
     output "rsync -a --delete" rsync -ai --delete "$WORK/src/" "$WORK/dst/"
     same "what changed" "$(printf '%s\n' "$OUT" | awk '$2 != "./" { print $2 }' | sort | tr '\n' ' ')" \
         "b c "
+    has "the version" "$(rsync --version | head -n 1)" "version 3.5.1"
+    [ -z "$NATIVE" ] || return 0
     runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
     cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
     runs "rsync over ssh" rsync -a -e "$rsh" "$WORK/src/" "root@127.0.0.1:$WORK/remote/"
     runs "the copy over ssh" diff -r "$WORK/src" "$WORK/remote"
-    has "the version" "$(rsync --version | head -n 1)" "version 3.5.1"
 }
 
 # nano edits a file on a terminal script gives it: the text typed, then
@@ -780,15 +826,17 @@ row_cmake() {
 
 # dig and host ask a name server, here a responder in Python on 127.0.0.1
 # that answers every question with 192.0.2.1. The questions wait until its
-# port, 5353, is in /proc/net/udp: one sent before it is bound is refused at
-# once, and dig's five tries can all be spent before Python has started.
+# port, 5353 or the one a native run maps it to, is in /proc/net/udp: one
+# sent before it is bound is refused at once, and dig's five tries can all
+# be spent before Python has started.
 row_dig() {
-    local server i=0
+    local server i=0 dns
+    dns=$(port 5353)
 
     cat > "$WORK/dns.py" << 'EOF'
 import socket, struct, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.bind(("127.0.0.1", 5353))
+s.bind(("127.0.0.1", int(sys.argv[2])))
 for _ in range(int(sys.argv[1])):
     q, peer = s.recvfrom(512)
     end = 12
@@ -799,14 +847,14 @@ for _ in range(int(sys.argv[1])):
     answer = struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + socket.inet_aton("192.0.2.1")
     s.sendto(head + question + answer, peer)
 EOF
-    python3 "$WORK/dns.py" 20 &
+    python3 "$WORK/dns.py" 20 "$dns" &
     server=$!
-    until grep -q ':14E9 ' /proc/net/udp || [ $i -ge 600 ]; do
+    until grep -q "$(printf ':%04X ' "$dns")" /proc/net/udp || [ $i -ge 600 ]; do
         sleep 0.1
         i=$((i + 1))
     done
-    same "dig" "$(dig +short +tries=5 +time=2 -p 5353 @127.0.0.1 row.example A)" "192.0.2.1"
-    has "host" "$(host -W 2 -p 5353 -t A row.example 127.0.0.1)" "has address 192.0.2.1"
+    same "dig" "$(dig +short +tries=5 +time=2 -p "$dns" @127.0.0.1 row.example A)" "192.0.2.1"
+    has "host" "$(host -W 2 -p "$dns" -t A row.example 127.0.0.1)" "has address 192.0.2.1"
     kill "$server" 2> /dev/null
     wait "$server" 2> /dev/null
 }
@@ -848,11 +896,11 @@ row_chattr() {
 more"
     runs "chattr -a" chattr -a "$WORK/attr"
     runs "the removal" rm "$WORK/attr"
-    echo mine > /tmp/rowattr
-    chown test /tmp/rowattr
-    has "an owner's chattr +i" "$(su test -c 'chattr +i /tmp/rowattr' 2>&1)" \
+    echo mine > "$WORK/rowattr"
+    chown test "$WORK/rowattr"
+    has "an owner's chattr +i" "$(su test -c "chattr +i $WORK/rowattr" 2>&1)" \
         "Operation not permitted"
-    rm -f /tmp/rowattr
+    rm -f "$WORK/rowattr"
 }
 
 # The file page cache: a page of an ext2 file that a private mapping read,
@@ -899,6 +947,7 @@ tty 2755"
 row_disknode() {
     same "the node" "$(stat -c '%F %a %U' /dev/disk0)" "block special file 400 root"
     same "its first sector" "$(dd if=/dev/disk0 bs=512 count=1 2>/dev/null | wc -c)" "512"
+    [ -z "$NATIVE" ] || return 0
     has "a write refused" \
         "$(dd if=/dev/disk0 bs=512 count=1 2>/dev/null | dd of=/dev/disk0 bs=512 count=1 conv=notrunc 2>&1)" \
         "Device or resource busy"
@@ -971,7 +1020,7 @@ row_gnupg() {
 # configure in a login shell, for a prefix of the user's own, whose
 # config.guess names the build from uname, then make, and the sed it made.
 row_autotools() {
-    runs "the tarball" tar -xJf /tmp/gnu/sed.tar.xz -C "$WORK"
+    runs "the tarball" tar -xJf "$STAGE/sed.tar.xz" -C "$WORK"
     cd "$WORK"/sed-* || {
         fail "no sed directory"
         return
@@ -1119,6 +1168,7 @@ EOF
         fail "chromium-headless-shell: status $?: $(tail -n 3 "$WORK/chromium.err" | tr '\n' ' ')"
     has "the dumped DOM" "$OUT" '<p id="out">script ran: 42</p>'
     same "the browser's complaints of D-Bus" "$(grep -c 'dbus/' "$WORK/chromium.err")" "0"
+    [ -z "$NATIVE" ] || return 0
     before=$(awk '$1 == "disk-commands" {print $2}' /proc/disk)
     su test -c "bash -lc 'chromium-headless-shell --headless --dump-dom \
         --user-data-dir=$WORK/profile file://$WORK/page.html'" > /dev/null 2>&1

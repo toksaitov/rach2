@@ -3,7 +3,7 @@
 #
 # agents_rows.sh: run one row of `tests/run agents` on the machine.
 #
-# Usage: agents_rows.sh NAME [VERSION]
+# Usage: agents_rows.sh NAME [VERSION] [ARGUMENT...]
 #
 # The agents suite puts this script and the rows of tests/system/agents/ in
 # /tmp/agents on the machine it boots, the GNU root with the agents layer,
@@ -24,6 +24,16 @@
 # `AGENTROW OK NAME` when every comparison holds, and otherwise
 # `AGENTROW FAIL NAME: ` with the first that did not.
 #
+# A native run, on a Rach2 that is already up, starts the script as root and
+# gives ARGUMENTs of the form NAME=VALUE, as tests/native/Readme.md says:
+# `work=DIR` and `home=DIR`, relative to the starting directory, in place of
+# /tmp/agents/work/NAME and the account's home; `stage=DIR` for the files
+# the suite stages in /tmp/agents; `ids=OLD:NEW,...`, whose NEW for 1000,
+# the test account's id, the script runs the row as, with no account of its
+# own; `ports=OLD:NEW,...` for the ports a row listens on; and
+# `machine=native`, under which a row leaves out what needs the fake API
+# server or QEMU's restricted network.
+#
 
 set -u
 export PATH=/usr/bin:/bin:/usr/sbin:/sbin
@@ -33,12 +43,42 @@ ROW=${1:-}
 # shellcheck disable=SC2034 # the rows read it
 VERSION=${2:-}
 WORK=/tmp/agents/work/$ROW
+STAGE=/tmp/agents
+IDS=
+PORTS=
+NATIVE=
+# shellcheck disable=SC2034 # the rows read NATIVE
+for arg in "${@:3}"; do
+    case "$arg" in
+        work=*) WORK=$(realpath -m -- "${arg#work=}") ;;
+        home=*) HOME=$(realpath -m -- "${arg#home=}") ;;
+        stage=*) STAGE=$(realpath -m -- "${arg#stage=}") ;;
+        ids=*) IDS=${arg#ids=} ;;
+        ports=*) PORTS=${arg#ports=} ;;
+        machine=native) NATIVE=1 ;;
+    esac
+done
+export HOME
 # shellcheck disable=SC2034 # the rows read it
-CA=/tmp/agents/ca.pem
+CA=$STAGE/ca.pem
 PANE=
 SELECTED=
 FAILED=
 OUT=
+
+# mapped OLD LIST: the NEW that LIST, OLD:NEW,..., gives OLD, or OLD.
+mapped() {
+    local pair
+    for pair in ${2//,/ }; do
+        [ "${pair%%:*}" != "$1" ] || { echo "${pair#*:}"; return; }
+    done
+    echo "$1"
+}
+
+# port OLD: the port a native run maps OLD to, or OLD.
+port() {
+    mapped "$1" "$PORTS"
+}
 
 # fail WHAT: record WHAT unless an earlier comparison already failed.
 fail() {
@@ -78,9 +118,9 @@ status() {
 }
 
 # tree: make WORK/tree a git repository with one commit of the tree's tests
-# and tools, from the tar the suite put in /tmp/agents, or fail and return 1.
+# and tools, from the tar the suite stages, or fail and return 1.
 tree() {
-    if ! { mkdir "$WORK/tree" && tar -xf /tmp/agents/tree.tar -C "$WORK/tree" &&
+    if ! { mkdir "$WORK/tree" && tar -xf "$STAGE/tree.tar" -C "$WORK/tree" &&
         git -C "$WORK/tree" init -q && git -C "$WORK/tree" add -A &&
         git -C "$WORK/tree" -c user.name=rach2 -c user.email=test@rach2.invalid commit -qm tree; }; then
         fail "the tree's tests and tools in a git repository"
@@ -250,12 +290,19 @@ unmodified() {
     [ ! -e /etc/ld.so.preload ] || fail "$what: the root has /etc/ld.so.preload"
 }
 
-if [ -z "$ROW" ] || [ ! -f "/tmp/agents/$ROW.sh" ]; then
+if [ -z "$ROW" ] || [ ! -f "$STAGE/$ROW.sh" ]; then
     echo "AGENTROW FAIL $ROW: no such row"
     exit 2
 fi
+if [ -n "$IDS" ] && [ "$(id -u)" = 0 ]; then
+    user=$(mapped 1000 "$IDS")
+    mkdir -p "$WORK" "$HOME" && chown "$user:$user" "$WORK" "$HOME" || exit 2
+    exec perl -e '$( = $ARGV[0]; $) = "$ARGV[0] $ARGV[0]"; $< = $> = $ARGV[0];
+        $< == $ARGV[0] && $> == $ARGV[0] or die "agents-rows: setuid: $!\n";
+        shift; exec @ARGV or die "agents-rows: exec: $!\n"' "$user" /bin/bash "$0" "$@"
+fi
 # shellcheck disable=SC1090 # the row is chosen at run time
-. "/tmp/agents/$ROW.sh"
+. "$STAGE/$ROW.sh"
 if ! declare -F row > /dev/null; then
     echo "AGENTROW FAIL $ROW: $ROW.sh defines no function row"
     exit 2
@@ -266,18 +313,17 @@ cleanup() {
         row_cleanup
     fi
     cd / || return
-    rm -rf "$WORK"
+    find "$WORK" -mindepth 1 -delete 2> /dev/null
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-rm -rf "$WORK"
-mkdir -p "$WORK"
+mkdir -p "$WORK" && find "$WORK" -mindepth 1 -delete
 cd "$WORK" || exit 2
 row
 cd / || exit 2
-rm -rf "$WORK"
+find "$WORK" -mindepth 1 -delete 2> /dev/null
 if [ -n "$FAILED" ]; then
     echo "AGENTROW FAIL $ROW: $FAILED"
     exit 1

@@ -6,7 +6,8 @@
 # and offers a sign-in by browser or by API key; Esc there ends it, not
 # signed in, with status 0. A headless session then reads the shared fixture,
 # runs its check, edits the greeting and commits, against the fake Model API.
-# The host verifies the returned repository and every recorded request.
+# The host verifies the returned repository and every recorded request. A
+# native run leaves out the session, which needs the fake API server.
 # bound: 600
 # hosts: muse.fakeapi.test
 # script: fakeapi/muse.json
@@ -38,6 +39,7 @@ row() {
     has "the trust" "$(cat "$WORK/home/.config/muse/trust.json" 2>&1)" "$WORK/project"
     tmux -L muse kill-server 2> /dev/null
 
+    [ -z "$NATIVE" ] || return 0
     muse_session exec
 }
 

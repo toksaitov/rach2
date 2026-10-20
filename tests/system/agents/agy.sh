@@ -4,7 +4,8 @@
 # --help. Then its screen in tmux, offline and in a home of the row's own:
 # the menu of ways to sign in, and after Google OAuth is chosen, Google's
 # sign-in address and the prompt for the code the browser shows. Every
-# process of the program exits once tmux has ended.
+# process of the program exits once tmux has ended. A native run leaves out
+# the screen, which needs QEMU's restricted network to be offline.
 # bound: 900
 
 # screen WHAT SECONDS TEXT: wait until the pane shows TEXT, and keep the
@@ -44,6 +45,7 @@ row() {
     output "agy --help" agy --help
     has "agy --help" "$OUT" "Usage of agy:"
     has "agy --help" "$OUT" "--dangerously-skip-permissions"
+    [ -z "$NATIVE" ] || return 0
 
     mkdir -p "$WORK/home"
     output "tmux" tmux -S "$WORK/tmux" new-session -d -s agy -x 120 -y 40 \
