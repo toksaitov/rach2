@@ -116,15 +116,17 @@ struct etude_proof_opts {
  * as a suite runs a test whose build only its proof describes.
  *
  * A build or a test runs through the executor in the tree's root, under its
- * bound, and must end with every process it started. In its arguments and its
- * artifacts' paths, `${TREE}` is the tree's root, `${SRC}` the root the
+ * bound, with a new directory of its own in the work directory as its
+ * `TMPDIR`, and must end with every process it started. In its arguments and
+ * its artifacts' paths, `${TREE}` is the tree's root, `${SRC}` the root the
  * sources are read from (the tree's for a shared proof, a private copy's
- * otherwise), `${WORK}` the work directory and `${PHASE}` `base`,
- * `fault-NAME` or `restored-NAME`. A shared proof requires the tree's run
- * lock to be held by the process RACH2_TREE_HELD names. Each phase's
+ * otherwise), `${WORK}` the work directory's absolute path and `${PHASE}`
+ * `base`, `fault-NAME` or `restored-NAME`. A shared proof requires the tree's
+ * run lock to be held by the process RACH2_TREE_HELD names. Each phase's
  * artifacts are put in the store. The sources are restored on every path out,
  * a signal's included; the work directory is removed after a pass or a
- * signal and kept, with each phase's output, after a failure.
+ * signal and kept, with each phase's output and each command's `TMPDIR`,
+ * after a failure.
  *
  * @return 0 for a proof that passed, 1 for one that failed, 2 for an error
  *         of the system or a tree that is not held, and ETUDE_PROOF_STOPPED.

@@ -6,8 +6,10 @@
 # line and one that fails a check the fault does not name each taken as a
 # fault found, a build that changes its source unseen, an edit applied to a
 # text found twice, a shared tree taken as held when it is not, a source
-# left no newer than an artifact whose time is ahead, and a stopped proof that
-# keeps its work or leaves its faults in the tree must each be found.
+# left no newer than an artifact whose time is ahead, a stopped proof that
+# keeps its work or leaves its faults in the tree, commands given the
+# driver's TMPDIR, a relative work path left relative, and a work that keeps
+# an unwritable directory after a pass must each be found.
 #
 # Usage: sh tests/host/etude_proof_mutate.sh [--texts]
 set -eu
@@ -45,6 +47,9 @@ faults = {
                   '(status == 0 && !r->o->keep)'),
     'stop-restore': ('        if (!s->dirty)\n            continue;\n',
                      '        if (!s->dirty || *r->stop)\n            continue;\n'),
+    'tmpdir': ('        spec.envp = env;\n', '        spec.envp = environ;\n'),
+    'absolute': ("    if (r->work != NULL && r->work[0] != '/') {\n", '    if (0) {\n'),
+    'writable': ('    chmod(path, (st.st_mode & 07777) | S_IRWXU);\n', ''),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -59,10 +64,10 @@ if [ "${1:-}" = --texts ]; then
     export RACH2_FAULT_TEXTS
     apply_fault tools/etude/proof.c once
     for fault in unreached restored passed status lines only kept held newer stop-work \
-        stop-restore; do
+        stop-restore tmpdir absolute writable; do
         apply_fault tools/etude/posix/proof.c "$fault"
     done
-    echo 'etude-proof-mutation: texts: all twelve faults found once'
+    echo 'etude-proof-mutation: texts: all fifteen faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -70,7 +75,8 @@ runlock_hold "$repo" etude-proof-mutation "$repo/tests/host/etude_proof_mutate.s
 work=
 child=
 
-# Stop a test before removing its private sources and evidence.
+# Stop a test before removing its private sources and evidence, with the
+# unwritable directories a faulty driver left in the test's fixtures.
 cleanup()
 {
     status=$?
@@ -79,7 +85,7 @@ cleanup()
         wait "$child" 2>/dev/null || :
     fi
     if [ "$status" -eq 0 ] || [ -n "${stopped:-}" ]; then
-        [ -z "$work" ] || rm -rf "$work"
+        [ -z "$work" ] || { chmod -R u+rwx "$work" 2>/dev/null; rm -rf "$work"; }
     else
         echo "etude-proof-mutation: evidence: $work" >&2
     fi
@@ -150,5 +156,8 @@ prove posix/proof.c held 'shared: a proof whose tree is not held is refused'
 prove posix/proof.c newer 'sound: a build that judges by time stamps ahead of the clock'
 prove posix/proof.c stop-work 'stopped: the work is removed'
 prove posix/proof.c stop-restore 'stopped: the tree is restored'
+prove posix/proof.c tmpdir "scratch: the faulty test's TMPDIR is its own in the work"
+prove posix/proof.c absolute 'relative: a relative work directory gives the commands an absolute'
+prove posix/proof.c writable 'scratch: the work is removed after a pass, with an unwritable'
 restore
 run_phase restored 0

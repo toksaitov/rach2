@@ -23,10 +23,14 @@
  * edit whose text is not found once each fail the proof. So do a faulty run
  * that leaves state the restored build takes in, a build that changes its
  * source, a test that prints a failure and passes, and a test that runs past
- * its bound. A shared proof needs the
- * tree's run lock, puts its faults into the tree and restores it, also when
- * a signal stops it while a faulty test runs.
+ * its bound. Each build and test has a TMPDIR of its own in the work, also
+ * when the work's path is relative, and the driver's TMPDIR gets nothing: a
+ * faulty test's scratch there is kept with the work after a failure and
+ * removed with it after a pass, with a directory the test left unwritable.
+ * A shared proof needs the tree's run lock, puts its faults into the tree and
+ * restores it, also when a signal stops it while a faulty test runs.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -73,10 +77,21 @@ static int base_only;
 /* The build: the sources without their comments. */
 #define BUILD "cat ${SRC}/src/a.txt ${SRC}/src/b.txt | grep -v '^#' > ${WORK}/art"
 
-/* The test: one failure line for each wrong value. */
-#define TEST                                                                              \
+/* The test's checks: one failure line for each wrong value, and `f` set. */
+#define CHECKS                                                                            \
     "f=0; grep -q '^value=good$' ${WORK}/art || { echo 'toy-test: fail: value'; f=1; }; " \
-    "grep -q '^count=2$' ${WORK}/art || { echo 'toy-test: fail: count'; f=1; }; exit $f"
+    "grep -q '^count=2$' ${WORK}/art || { echo 'toy-test: fail: count'; f=1; }; "
+
+/* The test. */
+#define TEST CHECKS "exit $f"
+
+/* A test that says where its TMPDIR is and makes a directory there with a
+ * file in a directory of its own, which `mode` may leave unwritable, and
+ * removes it only when it passes. */
+#define SCRATCH_TEST(mode)                                                       \
+    "echo tmp: $TMPDIR; d=$(mktemp -d \"$TMPDIR/rach2-toy.XXXXXX\") && "         \
+    "mkdir $d/sub && touch $d/sub/f && chmod " mode " $d/sub || exit 9; " CHECKS \
+    "[ $f -ne 0 ] || { chmod 700 $d/sub; rm -rf $d; }; exit $f"
 
 /* The schemas of this tree, which the tests run from the top of. */
 #define SCHEMAS "tools/etude/schemas"
@@ -240,6 +255,31 @@ static int exists(const char *path)
     struct stat st;
 
     return lstat(path, &st) == 0;
+}
+
+/** Count the entries of the directory `path`, or give -1 when it cannot be
+ * read. */
+static int entries(const char *path)
+{
+    struct dirent *e;
+    DIR *d = opendir(path);
+    int n = 0;
+
+    if (d == NULL)
+        return -1;
+    while ((e = readdir(d)) != NULL)
+        n += strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0;
+    closedir(d);
+    return n;
+}
+
+/** Say whether the file `name` of the work `work` contains `text`. */
+static int work_has(const char *work, const char *name, const char *text)
+{
+    char path[1200], buf[4096];
+
+    fix_format(path, sizeof path, "%s/%s", work, name);
+    return strstr(get(path, buf, sizeof buf), text) != NULL;
 }
 
 /** Print a row's log when its checks failed, so that the failure is read. */
@@ -537,6 +577,101 @@ static void test_bound(void)
     show("bound", &out, before);
 }
 
+/**
+ * Each command's TMPDIR is a new directory of its own in the work, which
+ * keeps a faulty test's scratch after a failure and goes with the work after
+ * a pass, and the driver's own TMPDIR gets nothing.
+ */
+static void test_scratch(void)
+{
+    struct cat c = {"private", "echo tmp: $TMPDIR; " BUILD, SCRATCH_TEST("700"), 30, F_VALUE};
+    char tree[1024], driver[1024], old[1024], want[1200], path[1200];
+    const char *env = getenv("TMPDIR");
+    struct outcome out;
+    int before = fails;
+
+    fix_format(old, sizeof old, "%s", env != NULL ? env : "");
+    make_tree("scratch", tree);
+    place(driver, sizeof driver, "driver-tmp");
+    if (mkdir(driver, 0700) != 0) {
+        CHECK(0, "scratch: the driver's TMPDIR is made");
+        return;
+    }
+    setenv("TMPDIR", driver, 1);
+    prove("scratch", tree, &c, NULL, 1, &out);
+    CHECK(out.status == 0, "scratch: the proof passes");
+    fix_format(want, sizeof want, "tmp: %s/base.build.tmp\n", out.work);
+    CHECK(work_has(out.work, "base.build.out", want),
+          "scratch: the build's TMPDIR is its own in the work");
+    fix_format(want, sizeof want, "tmp: %s/fault-value.test.tmp\n", out.work);
+    CHECK(work_has(out.work, "fault-value.test.out", want),
+          "scratch: the faulty test's TMPDIR is its own in the work");
+    fix_format(path, sizeof path, "%s/fault-value.test.tmp", out.work);
+    CHECK(entries(path) == 1, "scratch: the faulty test's scratch is in its TMPDIR");
+    fix_format(path, sizeof path, "%s/restored-value.test.tmp", out.work);
+    CHECK(entries(path) == 0, "scratch: the restored test's TMPDIR is apart from the faulty one's");
+    CHECK(entries(driver) == 0, "scratch: the driver's TMPDIR gets nothing");
+    show("scratch", &out, before);
+    before = fails;
+    c.test = SCRATCH_TEST("500");
+    prove("scratch-pass", tree, &c, NULL, 0, &out);
+    CHECK(out.status == 0 && !exists(out.work) && entries(driver) == 0,
+          "scratch: the work is removed after a pass, with an unwritable directory a faulty "
+          "test left");
+    show("scratch-pass", &out, before);
+    before = fails;
+    c.test = SCRATCH_TEST("700");
+    c.faults = FAULT("value", EDIT("src/a.txt", "value=good", "value=bad"),
+                     FAILS(3, "\"toy-test: fail: value\"", "false"));
+    prove("scratch-fail", tree, &c, NULL, 0, &out);
+    fix_format(path, sizeof path, "%s/fault-value.test.tmp", out.work);
+    CHECK(out.status == 1 && strstr(out.log, "etude-proof: evidence: ") != NULL &&
+              entries(path) == 1,
+          "scratch: a failed proof keeps the faulty test's scratch with the evidence");
+    show("scratch-fail", &out, before);
+    if (old[0] != '\0')
+        setenv("TMPDIR", old, 1);
+    else
+        unsetenv("TMPDIR");
+}
+
+/** A work directory given by a relative path gives an absolute TMPDIR. */
+static void test_relative(void)
+{
+    struct cat c = {"private", BUILD, "echo tmp: $TMPDIR; " TEST, 30, F_VALUE};
+    struct etude_proof_opts o;
+    struct etude_proof *p = NULL;
+    char tree[1024], cat[1024], top[1024], here[1024] = "", want[1200], path[1200], buf[4096];
+    int status = -1;
+
+    make_tree("relative", tree);
+    place(cat, sizeof cat, "cat-relative.json");
+    write_cat(cat, &c);
+    if (etude_proof_read(cat, SCHEMAS, stdout, &p) != 0) {
+        CHECK(0, "relative: the catalogue is read");
+        return;
+    }
+    if (getcwd(top, sizeof top) != NULL && chdir(fix_dir()) == 0) {
+        memset(&o, 0, sizeof(o));
+        o.tree = tree;
+        o.work = "work-relative";
+        o.base = 1;
+        o.keep = 1;
+        o.log = stdout;
+        if (getcwd(here, sizeof here) != NULL)
+            status = etude_proof_run(p, &o);
+        if (chdir(top) != 0) {
+            printf("etude-proof-test: fail: %s cannot be reached again\n", top);
+            exit(1);
+        }
+    }
+    etude_proof_free(p);
+    fix_format(want, sizeof want, "tmp: %s/work-relative/base.test.tmp\n", here);
+    fix_format(path, sizeof path, "%s/work-relative/base.test.out", here);
+    CHECK(status == 0 && strstr(get(path, buf, sizeof buf), want) != NULL,
+          "relative: a relative work directory gives the commands an absolute TMPDIR");
+}
+
 /** Hold the run lock of `tree` for this process, as runlock_exec.sh does. */
 static void hold(const char *tree)
 {
@@ -655,6 +790,8 @@ int main(void)
     test_base();
     test_refused();
     test_bound();
+    test_scratch();
+    test_relative();
     test_shared();
     test_stopped();
     if (fails != 0)

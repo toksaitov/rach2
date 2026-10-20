@@ -229,7 +229,13 @@ static int make_parents(char *path)
     return 0;
 }
 
-/** Remove the file or the directory tree at `path`; 0, or -1. */
+/**
+ * Remove the file or the directory tree at `path`; 0, or -1.
+ *
+ * Each directory is made readable, writable and searchable before it is
+ * read, since a command's scratch may have one that is not; a symbolic link
+ * is removed, not followed.
+ */
 static int remove_tree(const char *path)
 {
     struct dirent *d;
@@ -242,6 +248,7 @@ static int remove_tree(const char *path)
         return errno == ENOENT ? 0 : -1;
     if (!S_ISDIR(st.st_mode))
         return unlink(path);
+    chmod(path, (st.st_mode & 07777) | S_IRWXU);
     dir = opendir(path);
     if (dir == NULL)
         return -1;
@@ -482,8 +489,41 @@ static void await(const struct run *r, struct etude_proc *p, uint64_t bound_us, 
 }
 
 /**
- * Run command `argv`, named `what`, in the tree's root under `bound_us`, and
- * say in `*x` how it ended.
+ * Give the environment of a command: the driver's, with `TMPDIR` naming
+ * `tmp`, or NULL when memory ran out. The array and its first entry, the
+ * `TMPDIR`, are from malloc; env_free frees them.
+ */
+static char **command_env(const char *tmp)
+{
+    size_t n = 0, k = 1, i, len = strlen(tmp) + sizeof("TMPDIR=");
+    char **env;
+
+    while (environ[n] != NULL)
+        n++;
+    env = calloc(n + 2, sizeof(*env));
+    if (env == NULL || (env[0] = malloc(len)) == NULL) {
+        free(env);
+        return NULL;
+    }
+    snprintf(env[0], len, "TMPDIR=%s", tmp);
+    for (i = 0; i < n; i++)
+        if (strncmp(environ[i], "TMPDIR=", 7) != 0)
+            env[k++] = environ[i];
+    return env;
+}
+
+/** Free an environment that command_env gave. */
+static void env_free(char **env)
+{
+    if (env != NULL)
+        free(env[0]);
+    free(env);
+}
+
+/**
+ * Run command `argv`, named `what`, in the tree's root under `bound_us`, with
+ * the new directory `WORK/PHASE.WHAT.tmp` as its `TMPDIR`, and say in `*x`
+ * how it ended.
  *
  * @return 0, -1 with errno set when it did not start, or
  *         ETUDE_PROOF_STOPPED.
@@ -492,31 +532,39 @@ static int run_command(const struct run *r, char *const *argv, uint64_t bound_us
                        struct ran *x)
 {
     struct etude_exec_spec spec;
-    struct etude_proc *p;
-    char **args = expand_list(r, argv);
-    char id[160];
-    int e;
+    struct etude_proc *p = NULL;
+    char **args = expand_list(r, argv), **env = NULL;
+    char id[160], name[160], *tmp;
+    int e = 0;
 
     memset(x, 0, sizeof(*x));
-    if (args == NULL) {
-        errno = ENOMEM;
-        return -1;
-    }
-    snprintf(id, sizeof id, "proof/%s/%s/%s", r->p->name, r->phase, what);
-    memset(&spec, 0, sizeof(spec));
-    spec.attempt_id = id;
-    spec.argv = args;
-    spec.envp = environ;
-    spec.cwd = r->o->tree;
-    spec.output_max = PROOF_OUTPUT_MAX;
-    spec.grace_us = PROOF_GRACE_US;
-    if (etude_exec_start(r->ex, &spec, &p) != 0) {
+    snprintf(name, sizeof name, "%s.%s.tmp", r->phase, what);
+    tmp = join(r->work, name);
+    if (tmp != NULL)
+        env = command_env(tmp);
+    if (args == NULL || env == NULL)
+        e = ENOMEM;
+    else if (mkdir(tmp, 0700) != 0)
         e = errno;
-        list_free(args);
+    if (e == 0) {
+        snprintf(id, sizeof id, "proof/%s/%s/%s", r->p->name, r->phase, what);
+        memset(&spec, 0, sizeof(spec));
+        spec.attempt_id = id;
+        spec.argv = args;
+        spec.envp = env;
+        spec.cwd = r->o->tree;
+        spec.output_max = PROOF_OUTPUT_MAX;
+        spec.grace_us = PROOF_GRACE_US;
+        if (etude_exec_start(r->ex, &spec, &p) != 0)
+            e = errno != 0 ? errno : EIO;
+    }
+    list_free(args);
+    env_free(env);
+    free(tmp);
+    if (e != 0) {
         errno = e;
         return -1;
     }
-    list_free(args);
     await(r, p, bound_us, x);
     collect(r, p, what, x);
     etude_proc_free(p);
@@ -834,7 +882,13 @@ static int tree_held(const struct run *r)
     return ok && (kill((pid_t)pid, 0) == 0 || errno == EPERM);
 }
 
-/** Make the work directory, open the store and the executor; 0, or 2. */
+/**
+ * Make the work directory, open the store and the executor; 0, or 2.
+ *
+ * The work's path is made absolute, since `${WORK}` and each command's
+ * `TMPDIR` must name it from the tree's root and from any directory a command
+ * moves to.
+ */
 static int open_run(struct run *r)
 {
     const char *tmp = getenv("TMPDIR");
@@ -852,6 +906,18 @@ static int open_run(struct run *r)
             free(r->work);
             r->work = NULL;
         }
+    }
+    if (r->work != NULL && r->work[0] != '/') {
+        char *made = r->work;
+
+        r->work = realpath(made, NULL);
+        if (r->work == NULL) {
+            int e = errno;
+
+            rmdir(made);
+            errno = e;
+        }
+        free(made);
     }
     if (r->work == NULL)
         return sys_error(r, "the work directory", errno);
