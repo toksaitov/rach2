@@ -469,6 +469,13 @@ $(ETUDEREMOTE): $(ETUDE_REMOTE_SRC) tools/etude/include/etude/remote.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
+# The external bridge to the old runner's host and port locks.
+ETUDEBRIDGE = build/tools/etude/etude-bridge
+$(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
+                tools/etude/include/etude/ledger.h tools/etude/posix/posix.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
+
 # etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
 # starts beside a case, built here so that `make` compiles it under the host
 # flags.
@@ -1207,7 +1214,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(ETUDELOAD) $(ETUDEPROOF) \
-             $(ETUDEHOST) $(PECHECK) $(ETUDESERIAL)
+             $(ETUDEHOST) $(ETUDEBRIDGE) $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

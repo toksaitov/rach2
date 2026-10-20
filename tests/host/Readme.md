@@ -1,6 +1,6 @@
 # Host tests
 
-The host tests compile kernel and user sources as ordinary programs for the build machine and run them under AddressSanitizer and UndefinedBehaviorSanitizer. A test drives the real code against models of what surrounds it (a device's registers, a disk, a scheduler, a peer on the network), so a bounds fault, an overflow or a wrong branch shows in a few seconds on the host rather than as a fault inside QEMU. What needs the machine itself, a system call through the trap path, a privilege change, a real device or a whole subsystem at once, is tested by the guest suites of [`tests/system/`](../system/Readme.md). This directory has the 163 `*_hosttest.c` programs, the headers, models and fixture builders they share, and the mutation scripts that prove them.
+The host tests compile kernel and user sources as ordinary programs for the build machine and run them under AddressSanitizer and UndefinedBehaviorSanitizer. A test drives the real code against models of what surrounds it (a device's registers, a disk, a scheduler, a peer on the network), so a bounds fault, an overflow or a wrong branch shows in a few seconds on the host rather than as a fault inside QEMU. What needs the machine itself, a system call through the trap path, a privilege change, a real device or a whole subsystem at once, is tested by the guest suites of [`tests/system/`](../system/Readme.md). This directory has the 167 `*_hosttest.c` programs, the headers, models and fixture builders they share, and the mutation scripts that prove them.
 
 ## Running
 
@@ -55,7 +55,7 @@ A test reaches the code under test in one of two ways. It names separately compi
 A test's opening comment may have four kinds of line, which `host.sh` reads with `grep`:
 
 * `host-deps: PATH ...`: sources, by path from the repository root, compiled and linked with the test. The line repeats, one list per line. A list wrapped onto a following comment line without its own `host-deps:` prefix stops the suite, since the rest of the list would be lost; a named file that does not exist fails the test.
-* `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 35 tests have one.
+* `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 49 tests have one.
 * `host-seconds: N`: the time limit, in place of 60 seconds. The interruption matrices run external checkers on copies of the volumes: `ext2_hosttest.c` and `fat32_hosttest.c` declare 300 seconds, and `exfat_hosttest.c` 450.
 * `host-alone: REASON`: the test runs when no other check runs, after the others, for the reason given: a window of a fraction of a second that a machine busy with the other checks could miss. `etude_qemu_hosttest.c`, `etude_remote_hosttest.c`, `etude_repeat_hosttest.c` and `etude_watchdog_hosttest.c` have one.
 

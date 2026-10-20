@@ -43,3 +43,9 @@ ETUDE_PROOF_SRC = tools/etude/posix/etude_proof.c tools/etude/posix/proof.c \
                   tools/etude/posix/store.c tools/etude/posix/exec.c \
                   tools/etude/posix/keeper.c tools/etude/posix/process.c \
                   tools/etude/capture.c utils/sha256.c
+
+# etude-bridge, the external admission wrapper for old checkouts and new runs.
+ETUDE_BRIDGE_SRC = tools/etude/posix/etude_bridge.c tools/etude/posix/bridge.c \
+                   tools/etude/ledger.c tools/etude/posix/exec.c \
+                   tools/etude/posix/keeper.c tools/etude/posix/process.c \
+                   tools/etude/capture.c utils/sha256.c

@@ -20,3 +20,9 @@ remote: $(OUT)/etude-remote$(EXE)
 
 $(OUT)/etude-remote$(EXE): $(ETUDE_REMOTE_SRC)
 	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Itools/etude/include -o $@ $(ETUDE_REMOTE_SRC)
+
+# The POSIX wrapper used outside an old checkout for bisection.
+bridge: $(OUT)/etude-bridge$(EXE)
+
+$(OUT)/etude-bridge$(EXE): $(ETUDE_BRIDGE_SRC)
+	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Itools/etude/include -Iutils -o $@ $(ETUDE_BRIDGE_SRC)

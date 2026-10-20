@@ -249,3 +249,7 @@ unusedStructMember:*tools/etude/win/winexec.h
 # The frame codec's structure: cppcheck checks wire.h alone, and its members
 # are read in guest.c, wire.c, the etudeserial driver and the host test.
 unusedStructMember:*tools/etude/guest/wire.h
+
+# The bridge's request is a public structure read in posix/bridge.c and
+# posix/etude_bridge.c, beyond the header's own analysis unit.
+unusedStructMember:*tools/etude/include/etude/bridge.h
