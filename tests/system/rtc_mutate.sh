@@ -114,7 +114,9 @@ cp "$work/source.saved" "$source"
 
 # run_phase PHASE EXPECTED: compile and run the host test, and with --guest
 # build the kernel and run stattest on the KRFFS root. With EXPECTED `pass`
-# both must pass; otherwise both must fail.
+# both must pass and the host test print nothing; otherwise both must fail,
+# and the host test print only its FAIL lines, among them the first reading
+# between two ticks in subtick_rows.
 run_phase()
 {
     phase=$1
@@ -129,11 +131,14 @@ run_phase()
     status=0
     "$work/$phase.host" >"$work/$phase.host.log" 2>&1 || status=$?
     cat "$work/$phase.host.log"
-    [ ! -s "$work/$phase.host.log" ]
     if [ "$expected" = pass ]; then
         [ "$status" -eq 0 ]
+        [ ! -s "$work/$phase.host.log" ]
     else
-        [ "$status" -gt 0 ] && [ "$status" -le 100 ]
+        [ "$status" -gt 0 ]
+        [ "$status" -le 100 ]
+        [ "$(grep -cv '^  FAIL: tests/host/rtc_hosttest\.c:[0-9]*: ' "$work/$phase.host.log")" -eq 0 ]
+        grep -qF ': sec == 10 && ns == 41000' "$work/$phase.host.log"
     fi
     echo "rtc-mutation: result: $phase host status $status"
     [ "$mode" = --guest ] || return 0
