@@ -1,10 +1,12 @@
 {
   "schema_version": 1,
   "proof": "legacyset",
-  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver, each fault found by its own row",
+  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver and its cases, each fault found by its own row",
   "tree": "private",
   "sources": [
-    "tools/etude/posix/legacy_set.c"
+    "tools/etude/posix/legacy_set.c",
+    "tools/etude/posix/legacy_cases.c",
+    "tools/etude/posix/legacy.c"
   ],
   "artifacts": [
     "${WORK}/etude_legacyset_hosttest"
@@ -13,7 +15,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude -I tools/etude/posix tests/host/etude_legacyset_hosttest.c tools/etude/posix/legacy.c ${SRC}/tools/etude/posix/legacy_set.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c tools/etude/watchdog.c tools/etude/supervise.c tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c tools/etude/posix/bridge.c tools/etude/posix/status.c tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c tools/etude/compare_run.c tools/etude/history.c tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c -o ${WORK}/etude_legacyset_hosttest"
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude -I tools/etude/posix tests/host/etude_legacyset_hosttest.c ${SRC}/tools/etude/posix/legacy.c ${SRC}/tools/etude/posix/legacy_set.c ${SRC}/tools/etude/posix/legacy_cases.c tools/etude/digest.c tools/etude/json.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c tools/etude/watchdog.c tools/etude/supervise.c tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c tools/etude/posix/bridge.c tools/etude/posix/status.c tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c tools/etude/compare_run.c tools/etude/history.c tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c -o ${WORK}/etude_legacyset_hosttest"
     ],
     "bound_s": 300
   },
@@ -65,8 +67,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "    for (i = 0; i < x->n; i++)\n        if (o->members[i].serial)\n            x->mem[k++].m = &o->members[i];\n    for (i = 0; i < x->n; i++)\n        if (!o->members[i].serial)\n            x->mem[k++].m = &o->members[i];\n",
-          "replace": "    for (i = 0; i < x->n; i++)\n        x->mem[k++].m = &o->members[i];\n"
+          "find": "    for (i = 0; i < o->nmembers; i++)\n        if (o->members[i].serial)\n            k = take_members(x, i, k);\n    for (i = 0; i < o->nmembers; i++)\n        if (!o->members[i].serial)\n            k = take_members(x, i, k);\n",
+          "replace": "    for (i = 0; i < o->nmembers; i++)\n        k = take_members(x, i, k);\n"
         }
       ],
       "fails": {
@@ -235,8 +237,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "    if (o->locks == NULL &&\n        (offset == NULL ||",
-          "replace": "    if (0 &&\n        (offset == NULL ||"
+          "find": "    if (o->locks == NULL && registry_suites(o) > 0 &&\n",
+          "replace": "    if (0 &&\n"
         }
       ],
       "fails": {
@@ -260,6 +262,312 @@
         "status": 1,
         "lines": [
           ": mixed: the driver leaks nothing: "
+        ]
+      }
+    },
+    {
+      "name": "feed",
+      "summary": "a case's output does not feed its watchdog, so its progress is not seen",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "            etude_supervised_feed(c->sup, buf, got);\n",
+          "replace": "            (void)buf;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": cases: progress keeps a case within its gap bound: "
+        ]
+      }
+    },
+    {
+      "name": "perarch",
+      "summary": "a program built for each architecture is taken from build on x86_64",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "        dir = per->integer && strcmp(arch, \"x86_64\") == 0 ? \"build/x86_64\" : \"build\";\n",
+          "replace": "        dir = ((void)arch, \"build\");\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": cases64: the program of each architecture: "
+        ]
+      }
+    },
+    {
+      "name": "none",
+      "summary": "a case of no architecture is given the run's",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "        return strcmp(a->string, \"none\") == 0 ? \"none\" : NULL;\n",
+          "replace": "        return strcmp(a->string, \"none\") == 0 ? arch : NULL;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": cases: the case of no architecture passed: "
+        ]
+      }
+    },
+    {
+      "name": "repetitions",
+      "summary": "a case runs once whatever its repetitions",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    k->reps = count_of(w, \"repetitions\");\n",
+          "replace": "    k->reps = 1;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": cases: both repetitions passed: "
+        ]
+      }
+    },
+    {
+      "name": "environment",
+      "summary": "a case's program is not told its case",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "\"ETUDE_CASE=%s\", k->case_id);\n",
+          "replace": "\"ETUDE_CASX=%s\", k->case_id);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": environment: the case, its architecture and seed, and the driver's own: "
+        ]
+      }
+    },
+    {
+      "name": "tmpdir",
+      "summary": "a case's program is not given its scratch directory as TMPDIR",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "\"TMPDIR=%s\", m->work);\n",
+          "replace": "\"TMPDIX=%s\", m->work);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": scratch: TMPDIR is the case's scratch: "
+        ]
+      }
+    },
+    {
+      "name": "scratch",
+      "summary": "a case's scratch directory is kept after a pass",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    else if (legacy_remove_tree(m->work) != 0)\n",
+          "replace": "    else if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": scratch: removed after a pass: "
+        ]
+      }
+    },
+    {
+      "name": "bound",
+      "summary": "a case runs under the driver's bound in place of its own",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    c->wd.case_us = k->case_us;\n",
+          "replace": "    c->wd.case_us = UINT64_C(60000000);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": casesmixed: a case past its case bound is incomplete: "
+        ]
+      }
+    },
+    {
+      "name": "end",
+      "summary": "casecheck is told that a stopped case exited or was killed",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (r->expiry != ETUDE_EXPIRY_NONE || r->end == ETUDE_END_STOPPED)\n        return \"stopped\";\n",
+          "replace": "    if (0)\n        return \"stopped\";\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": casesmixed: a case past its bound was stopped: "
+        ]
+      }
+    },
+    {
+      "name": "reason",
+      "summary": "an attempt's reason does not name the assertion that decided it",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        came_out(c, outcome_of(v.outcome), 0, \"%s\", v.reason);\n",
+          "replace": "        came_out(c, outcome_of(v.outcome), 0, \"%s\", \"judged\");\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": casesmixed: a failed assertion fails, with its detail: "
+        ]
+      }
+    },
+    {
+      "name": "blob",
+      "summary": "the results kept are the driver's own, not casecheck's",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (m->judged != NULL)\n        return keep(x, m->judged, m->njudged, t);\n",
+          "replace": "    if (0)\n        return keep(x, m->judged, m->njudged, t);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": verdict: the run of passing cases passes: "
+        ]
+      }
+    },
+    {
+      "name": "inventory",
+      "summary": "the assertion inventory kept is not the canonical document casecheck digests",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    rc |= keep_bytes(x, k->inventory.data, k->inventory.len, m->assertions",
+          "replace": "    rc |= keep_bytes(x, k->inventory.data, k->inventory.len - 1, m->assertions"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": verdict: the run of passing cases passes: "
+        ]
+      }
+    },
+    {
+      "name": "goals",
+      "summary": "the cases' programs are not given to the preparation as goals",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    case_goals(x, c->argv, &k);\n",
+          "replace": "    (void)case_goals;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": prepare: the program a goal: "
+        ]
+      }
+    },
+    {
+      "name": "required",
+      "summary": "the preparation's goals are built but not recorded",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "        if (list_add(&p->required, p->o->goals[i]) != 0 || list_add(&p->goals, p->o->goals[i]) != 0)\n",
+          "replace": "        if (list_add(&p->goals, p->o->goals[i]) != 0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": prepare: the program a goal: "
+        ]
+      }
+    },
+    {
+      "name": "family",
+      "summary": "a manifest of another suite's family is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (!of_suite(m->family, suite))\n",
+          "replace": "    if (0 && !of_suite(m->family, suite))\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": its family fixture.good is not of the suite other: "
+        ]
+      }
+    },
+    {
+      "name": "domain",
+      "summary": "a case of another domain is taken as a host case",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (domain == NULL || strcmp(domain, \"host\") != 0)\n",
+          "replace": "    if (domain == NULL)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": fixture.bad.one: a case of the domain guest; the set driver runs host cases alone: "
+        ]
+      }
+    },
+    {
+      "name": "fixture",
+      "summary": "a case that needs a fixture other than scratch is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "        if ((f = json_text(iso->item[i], \"fixture\")) == NULL || strcmp(f, \"scratch\") != 0)\n",
+          "replace": "        if ((f = json_text(iso->item[i], \"fixture\")) == NULL)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": fixture.bad.one: the case needs the fixture network: "
+        ]
+      }
+    },
+    {
+      "name": "judge",
+      "summary": "a suite of cases runs without casecheck",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (o->casecheck == NULL)\n        return refuse(x, \"a suite run by its cases needs casecheck's path\");\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": a suite run by its cases needs casecheck's path: "
         ]
       }
     }
