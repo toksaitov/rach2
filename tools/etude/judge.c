@@ -60,6 +60,7 @@ struct judging {
     int errors;
     int has_end;
     int parse_errors;
+    int prior;               /* the errors before the missing end's */
     const char *decided[32]; /* each group's alternative, or NULL */
     const char *how[32];     /* "feature" or "report", or NULL for neither */
     int reported[32];        /* the group's branch record was read */
@@ -290,8 +291,8 @@ static int group_index(const struct json *c, const char *id)
  * without one from `features`, a list of `NAME=present` and `NAME=absent`;
  * returns 0, or -1 when a feature a group names is not given.
  */
-static int decide_features(struct judging *j, const struct etude_processor *p, char **features,
-                           int n)
+static int decide_features(struct judging *j, const struct etude_processor *p,
+                           char *const *features, int n)
 {
     const struct json *groups = json_member(j->c, "branches");
     size_t g, f;
@@ -521,10 +522,57 @@ static int required(const struct judging *j, const struct json *a)
 }
 
 /**
+ * Returns the outcome of the program's assertion `a` by its record, which it
+ * gives in `*r`, or -1 when the attempt does not require `a`.
+ */
+static int program_outcome(const struct judging *j, const struct json *a, const struct rec **r)
+{
+    *r = record_of(j, json_text(a, "assertion_id"));
+    if (!required(j, a)) {
+        return -1;
+    }
+    if (*r == NULL) {
+        return OUTCOME_MISSING;
+    }
+    if ((*r)->verb == VERB_NOTRUN) {
+        return OUTCOME_NOT_RUN;
+    }
+    return (*r)->failed ? OUTCOME_FAIL : OUTCOME_PASS;
+}
+
+/**
+ * Reports each record of an assertion whose alternative did not run, and,
+ * when the report has its end, each assertion the program must give and did
+ * not.
+ */
+static void judge_required(struct judging *j)
+{
+    const struct json *list = json_member(j->c, "assertions");
+    size_t i;
+
+    for (i = 0; i < list->count; i++) {
+        const struct json *a = list->item[i];
+        const char *id = json_text(a, "assertion_id");
+        const struct rec *r;
+        int outcome;
+
+        if (!same(json_text(a, "source"), "program")) {
+            continue;
+        }
+        outcome = program_outcome(j, a, &r);
+        if (outcome < 0 && r != NULL) {
+            report_error(j, r->line, "%s belongs to an alternative that did not run", id);
+        } else if (outcome == OUTCOME_MISSING && j->has_end) {
+            report_error(j, 0, "%s was never reported", id);
+        }
+    }
+}
+
+/**
  * Prints the outcome of each assertion the program must report, and returns the
  * attempt's.
  */
-static enum attempt judge_outcomes(struct judging *j)
+static enum attempt print_outcomes(const struct judging *j)
 {
     const struct json *list = json_member(j->c, "assertions");
     enum attempt result = ATTEMPT_PASS;
@@ -533,52 +581,49 @@ static enum attempt judge_outcomes(struct judging *j)
     for (i = 0; i < list->count; i++) {
         const struct json *a = list->item[i];
         const char *id = json_text(a, "assertion_id");
-        const struct rec *r = record_of(j, id);
+        const struct rec *r;
+        int outcome;
 
-        if (!same(json_text(a, "source"), "program")) {
+        if (!same(json_text(a, "source"), "program") || (outcome = program_outcome(j, a, &r)) < 0) {
             continue;
         }
-        if (!required(j, a)) {
-            if (r != NULL) {
-                report_error(j, r->line, "%s belongs to an alternative that did not run", id);
-            }
-            continue;
-        }
-        if (r == NULL) {
-            say("assert %s missing\n", id);
-            if (j->has_end) {
-                report_error(j, 0, "%s was never reported", id);
-            }
-            result = result == ATTEMPT_FAILURE ? result : ATTEMPT_INCOMPLETE;
-        } else if (r->verb == VERB_NOTRUN) {
-            say("assert %s not_run: %s\n", id, r->text);
-            result = result == ATTEMPT_FAILURE ? result : ATTEMPT_INCOMPLETE;
-        } else if (r->failed) {
-            say("assert %s fail: %s\n", id, r->text);
-            result = ATTEMPT_FAILURE;
+        if (outcome == OUTCOME_PASS || outcome == OUTCOME_MISSING) {
+            say("assert %s %s\n", id, OUTCOMES[outcome]);
         } else {
-            say("assert %s pass\n", id);
+            say("assert %s %s: %s\n", id, OUTCOMES[outcome], r->text);
+        }
+        if (outcome == OUTCOME_FAIL) {
+            result = ATTEMPT_FAILURE;
+        } else if (outcome != OUTCOME_PASS && result == ATTEMPT_PASS) {
+            result = ATTEMPT_INCOMPLETE;
         }
     }
     return result;
 }
 
-/**
- * Reports each group whose branch the report does not give, and prints each
- * group's.
- */
+/** Reports each group whose branch the report does not give. */
 static void judge_groups(struct judging *j)
 {
     const struct json *groups = json_member(j->c, "branches");
     size_t g;
 
     for (g = 0; g < groups->count && g < 32; g++) {
-        const char *group_id = json_text(groups->item[g], "group_id");
         if (!j->reported[g] && j->has_end) {
-            report_error(j, 0, "no branch record for the group %s", group_id);
+            report_error(j, 0, "no branch record for the group %s",
+                         json_text(groups->item[g], "group_id"));
         }
-        say("branch %s %s decided by %s\n", group_id, j->decided[g] != NULL ? j->decided[g] : "-",
-            j->how[g] != NULL ? j->how[g] : "nothing");
+    }
+}
+
+/** Prints each group's branch and what decided it. */
+static void print_groups(const struct judging *j)
+{
+    const struct json *groups = json_member(j->c, "branches");
+    size_t g;
+
+    for (g = 0; g < groups->count && g < 32; g++) {
+        say("branch %s %s decided by %s\n", json_text(groups->item[g], "group_id"),
+            j->decided[g] != NULL ? j->decided[g] : "-", j->how[g] != NULL ? j->how[g] : "nothing");
     }
 }
 
@@ -599,16 +644,15 @@ static size_t counted(const struct judging *j)
 /**
  * Returns the state of the report: `absent` with no record at all, `complete`
  * with an end and no error, `truncated` with no end and no other error than
- * that, and `invalid` otherwise. `prior` is the count of errors before the
- * missing end's.
+ * that, and `invalid` otherwise.
  */
-static const char *report_state(const struct judging *j, int prior)
+static const char *report_state(const struct judging *j)
 {
     if (j->n == 0 && j->parse_errors == 0) {
         return "absent";
     }
     if (!j->has_end) {
-        return prior == 0 ? "truncated" : "invalid";
+        return j->prior == 0 ? "truncated" : "invalid";
     }
     return j->errors == 0 ? "complete" : "invalid";
 }
@@ -655,78 +699,132 @@ static const struct etude_processor *placed_processor(const struct json *c, cons
     return same(placement, "qemu") ? etude_processor_find(json_text(qemu, "cpu")) : NULL;
 }
 
+/* The arguments of `report` and `attempt`: the processor's features, then
+ * the manifest, the case, the architecture, the placement and the rest. */
+struct request {
+    char *features[64]; /* each `NAME=present` or `NAME=absent` of a -f */
+    int nfeatures;
+    char **arg;
+    int n;
+};
+
+/** Takes the -f options of `args` into `q`, and the arguments after them. */
+static void read_request(char **args, int n, struct request *q)
+{
+    int i = 0;
+
+    q->nfeatures = 0;
+    for (; i + 1 < n && strcmp(args[i], "-f") == 0 && q->nfeatures < 64; i += 2) {
+        q->features[q->nfeatures++] = args[i + 1];
+    }
+    q->arg = args + i;
+    q->n = n - i;
+}
+
+/**
+ * Starts the judgement `j` of the case the request names: reads its
+ * manifest, finds the case, checks that the architecture and placement are
+ * its, and decides the groups the processor's features decide. A guest case
+ * placed `qemu` has the features its processor profile declares, and takes
+ * no `-f`. Returns 0; 1 for a manifest with a finding, a case it lacks or a
+ * placement the case cannot have; or 2 for a usage fault or a manifest that
+ * cannot be read.
+ */
+static int open_case(struct cases *set, const struct request *q, struct judging *j)
+{
+    const struct etude_processor *processor;
+    int status;
+
+    memset(j, 0, sizeof *j);
+    status = load_manifests(set, q->arg, 1);
+    j->c = find_case(set, q->arg[1], NULL);
+    if (status != 0 || j->c == NULL) {
+        if (status == 0) {
+            finding(q->arg[0], 0, "no case %s", q->arg[1]);
+        }
+        return status == 2 ? 2 : 1;
+    }
+    if (!applies(j->c, q->arg[2], q->arg[3])) {
+        return 1;
+    }
+    processor = placed_processor(j->c, q->arg[3]);
+    if (processor != NULL && q->nfeatures > 0) {
+        finding(NULL, 0,
+                "%s: placed qemu, its processor is the profile %s's, and -f gives a "
+                "native or host machine's",
+                q->arg[1], processor->name);
+        return 2;
+    }
+    return decide_features(j, processor, q->features, q->nfeatures) != 0 ? 2 : 0;
+}
+
+/**
+ * Judges the records of `path`, `-` for standard input, as the report of
+ * the case `open_case` opened: each record against the case, each group's
+ * branch and each assertion the program must give, and its end. Reports
+ * each error as a finding. Returns 0, or 2 when the file cannot be read;
+ * the caller frees `j->rec`.
+ */
+static int judge_text(struct judging *j, const char *path)
+{
+    size_t len;
+    char *text;
+
+    j->input = path;
+    text = read_file(path, &len);
+    if (text == NULL) {
+        return 2;
+    }
+    j->rec = json_alloc(RECORDS_MAX * sizeof *j->rec);
+    read_records(j, text);
+    judge_records(j);
+    judge_groups(j);
+    judge_required(j);
+    j->prior = j->errors;
+    if (!j->has_end && (j->n > 0 || j->parse_errors > 0)) {
+        report_error(j, 0, "the report has no end record");
+    }
+    free(text);
+    return 0;
+}
+
 /**
  * Judges a program's output as the report of a case. `args` are, after any
  * `-f NAME=present|absent` options for the processor's features, the
  * manifest, the case, the architecture, the placement and the output's
- * file, `-` or none for standard input. A guest case placed `qemu` has the
- * features its processor profile declares, and takes no `-f`. Prints the
- * report's state, each group's branch, each assertion the program must
- * report and the outcome they give; returns 0 when they give a pass, 1 when
- * not, and 2 for a usage fault or a file that cannot be read.
+ * file, `-` or none for standard input. Prints the report's state, each
+ * group's branch, each assertion the program must report and the outcome
+ * they give; returns 0 when they give a pass, 1 when not, and 2 for a usage
+ * fault or a file that cannot be read.
  */
 int judge_report(struct cases *set, char **args, int n)
 {
-    const struct etude_processor *processor;
-    char *features[64];
-    int nfeatures = 0, i = 0, status, prior;
+    struct request q;
     struct judging j;
-    size_t len;
-    char *text;
     enum attempt result;
+    int status;
 
-    for (; i + 1 < n && strcmp(args[i], "-f") == 0 && nfeatures < 64; i += 2) {
-        features[nfeatures++] = args[i + 1];
-    }
-    if (n - i < 4 || n - i > 5) {
+    read_request(args, n, &q);
+    if (q.n < 4 || q.n > 5) {
         return 2;
     }
-    memset(&j, 0, sizeof j);
-    status = load_manifests(set, &args[i], 1);
-    j.c = find_case(set, args[i + 1], NULL);
-    if (status != 0 || j.c == NULL) {
-        if (status == 0) {
-            finding(args[i], 0, "no case %s", args[i + 1]);
-        }
-        return status == 2 ? 2 : 1;
+    status = open_case(set, &q, &j);
+    if (status != 0) {
+        return status;
     }
-    if (!applies(j.c, args[i + 2], args[i + 3])) {
-        return 1;
-    }
-    processor = placed_processor(j.c, args[i + 3]);
-    if (processor != NULL && nfeatures > 0) {
-        finding(NULL, 0,
-                "%s: placed qemu, its processor is the profile %s's, and -f gives a "
-                "native or host machine's",
-                args[i + 1], processor->name);
+    if (judge_text(&j, q.n == 5 ? q.arg[4] : "-") != 0) {
         return 2;
     }
-    if (decide_features(&j, processor, features, nfeatures) != 0) {
-        return 2;
-    }
-    j.input = n - i == 5 && strcmp(args[i + 4], "-") != 0 ? args[i + 4] : "-";
-    text = read_file(j.input, &len);
-    if (text == NULL) {
-        return 2;
-    }
-    j.rec = json_alloc(RECORDS_MAX * sizeof *j.rec);
-    read_records(&j, text);
-    judge_records(&j);
-    judge_groups(&j);
-    result = judge_outcomes(&j);
-    prior = j.errors;
-    if (!j.has_end && (j.n > 0 || j.parse_errors > 0)) {
-        report_error(&j, 0, "the report has no end record");
-    }
-    say("report %s, %lu records\n", report_state(&j, prior), (unsigned long)counted(&j));
-    if (same(report_state(&j, prior), "invalid")) {
+    print_groups(&j);
+    result = print_outcomes(&j);
+    say("report %s, %lu records\n", report_state(&j), (unsigned long)counted(&j));
+    if (same(report_state(&j), "invalid")) {
         result = ATTEMPT_FAILURE;
     } else if (j.errors > 0 || j.n == 0) {
         result = result == ATTEMPT_FAILURE ? result : ATTEMPT_INCOMPLETE;
     }
     say("outcome %s\n", ATTEMPTS[result]);
     free(j.rec);
-    free(text);
     return result == ATTEMPT_PASS ? 0 : 1;
 }
 
