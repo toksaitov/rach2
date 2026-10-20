@@ -195,9 +195,10 @@ fi
 if ! wait_token "init: sshd: started as pid" "$(scaled 60)"; then
     fail "init never reported starting the SSH server"
 fi
-# sshd_pid N: the pid of init's Nth record of starting the server.
+# sshd_pid N: the pid of init's Nth record of starting the server. A record
+# may follow the login prompt on its line, since the prompt ends in no newline.
 sshd_pid() {
-    sed -n 's/^init: sshd: started as pid \([0-9]*\).*/\1/p' "$LOG" | sed -n "$1p"
+    sed -n 's/.*init: sshd: started as pid \([0-9][0-9]*\).*/\1/p' "$LOG" | sed -n "$1p"
 }
 BEFORE="$(sshd_pid 1)"
 
