@@ -16,13 +16,21 @@
  * Needs: the console as stdin. One row reads /proc/self/fd/0 and requires it
  * to name /dev/console, which is true of a console session and not of one
  * carried over SSH.
+ *
+ * Two arguments (probe_args.h) let a native run, whose descriptor 0 is not
+ * the console, make the same checks: `console=open` makes that row open
+ * /dev/console and read the link of the new descriptor in place of
+ * descriptor 0's, and `absent=DOMAIN:BUS:SLOT.FUNCTION` names the PCI
+ * function the machine does not have, 0000:00:1e.7 without it.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define O_RDONLY    0
 #define O_WRONLY    1
 #define O_RDWR      2
+#define O_NOCTTY    0400
 #define O_DIRECTORY 0200000
 
 /* A linux_dirent64 record has its 64-bit d_ino first, its length at 16 and
@@ -65,6 +73,11 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/* The arguments: whether row (f) opens /dev/console, and the PCI function
+ * that must be absent. */
+static int console_open;
+static const char *absent_function;
+
 /** Count a failure and print `msg` when `cond` is false. */
 static void check(int cond, const char *msg)
 {
@@ -92,6 +105,26 @@ static int do_read(int fd, char *buf, int n)
 static int do_readlink(const char *path, char *buf, int n)
 {
     return syscall3(SYS_READLINK, (long)path, (long)buf, n);
+}
+
+/** Copy the strings `a`, `b` and `c` into `out`, of `size` bytes, as one
+ * string, cut short where `out` is full. */
+static void join3(char *out, int size, const char *a, const char *b, const char *c)
+{
+    const char *parts[3];
+    int i, n = 0;
+
+    parts[0] = a;
+    parts[1] = b;
+    parts[2] = c;
+    for (i = 0; i < 3; i++) {
+        const char *p = parts[i];
+
+        while (*p && n < size - 1) {
+            out[n++] = *p++;
+        }
+    }
+    out[n] = '\0';
 }
 
 /** The leading decimal number of `s`. */
@@ -201,6 +234,7 @@ static void null_is_not_a_disk(void)
 static void past_a_file(void)
 {
     static char pts[24] = "/dev/pts/";
+    static char absent[96];
     char digits[12];
     int master, index = -1, n = 9, d = 0;
 
@@ -211,7 +245,8 @@ static void past_a_file(void)
           "/proc/1999999999/stat/x is ENOENT");
     check(do_open("/sys/bus/pci/devices/0000:00:00.0/uevent/x", O_RDONLY) == -ENOTDIR,
           "a path past the host bridge's uevent is ENOTDIR");
-    check(do_open("/sys/bus/pci/devices/0000:00:1e.7/uevent/x", O_RDONLY) == -ENOENT,
+    join3(absent, (int)sizeof(absent), "/sys/bus/pci/devices/", absent_function, "/uevent/x");
+    check(do_open(absent, O_RDONLY) == -ENOENT,
           "a path past an absent function's uevent is ENOENT");
 
     master = do_open("/dev/ptmx", O_RDWR);
@@ -310,13 +345,60 @@ static void framebuffer(void)
     syscall1(SYS_CLOSE, next[1]);
 }
 
-/** The probe: the rows (a) to (f), then `framebuffer` and `past_a_file`,
- * whose failures the framebuffer's child would otherwise inherit. */
-PROBE_START void _start(void)
+/**
+ * Row (f): /proc/self/fd/0 is a symlink to the console, which is what
+ * ttyname reads; or, with `console=open`, the descriptor of a /dev/console
+ * the probe opens is.
+ */
+static void console_link(void)
+{
+    char buf[64], number[12], link[24], digits[12];
+    int fd, n, i, d = 0;
+
+    if (!console_open) {
+        n = do_readlink("/proc/self/fd/0", buf, 64);
+        check(n == 12 && streq_n(buf, "/dev/console", 12), "/proc/self/fd/0 -> /dev/console");
+        return;
+    }
+    fd = do_open("/dev/console", O_RDONLY | O_NOCTTY);
+    check(fd >= 0, "open /dev/console");
+    i = fd > 0 ? fd : 0;
+    do {
+        digits[d++] = (char)('0' + i % 10);
+        i /= 10;
+    } while (i > 0);
+    for (i = 0; i < d; i++) {
+        number[i] = digits[d - 1 - i];
+    }
+    number[d] = '\0';
+    join3(link, (int)sizeof(link), "/proc/self/fd/", number, "");
+    n = do_readlink(link, buf, 64);
+    check(n == 12 && streq_n(buf, "/dev/console", 12),
+          "/proc/self/fd/N of an open /dev/console -> /dev/console");
+    if (fd >= 0) {
+        syscall1(SYS_CLOSE, fd);
+    }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: the rows (a) to (f), then
+ * `framebuffer` and `past_a_file`, whose failures the framebuffer's child
+ * would otherwise inherit. */
+void probe_main(unsigned long *sp)
 {
     char buf[64];
     char buf2[64];
     int fd, n, i, allzero, differ;
+    const char *mode;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_arg("console", "");
+    console_open =
+        mode[0] == 'o' && mode[1] == 'p' && mode[2] == 'e' && mode[3] == 'n' && mode[4] == '\0';
+    absent_function = probe_arg("absent", "0000:00:1e.7");
 
     /* (a) /dev/zero: a read returns the requested count, all zero. */
     fd = do_open("/dev/zero", O_RDONLY);
@@ -384,12 +466,7 @@ PROBE_START void _start(void)
         syscall1(SYS_CLOSE, fd);
     }
 
-    /* (f) /proc/self/fd/0 is a symlink to the console (what ttyname reads). */
-    {
-        n = do_readlink("/proc/self/fd/0", buf, 64);
-        check(n == 12 && streq_n(buf, "/dev/console", 12), "/proc/self/fd/0 -> /dev/console");
-    }
-
+    console_link();
     framebuffer();
     past_a_file();
     if (fails == 0) {

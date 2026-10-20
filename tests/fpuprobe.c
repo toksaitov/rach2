@@ -29,6 +29,11 @@
  * fnsave where the instruction kills it with SIGILL. `fpuprobe x87` must
  * find fnsave, and the other modes another path.
  *
+ * The child executes this program by the absolute path it was started by,
+ * as a native run starts it (probe_args.h), and by /fpuprobe, its path on
+ * the test image, when it was started by a name that is not absolute. The
+ * mode is the first argument without `=`.
+ *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names, guest.fpu.fpuprobe without it, and beside them "FPUPROBE OK" with
  * exit status 0, or "FPUPROBE FAIL: " and the reason with exit status 1. A
@@ -37,6 +42,7 @@
  */
 
 #include "probe.h"
+#include "probe_args.h"
 #include "probe_report.h"
 
 #if defined __x86_64__
@@ -462,8 +468,9 @@ static void run_signals(void)
     }
 }
 
-/** A child sets the state and executes /fpuprobe with `reset` or
- * `reset-x87`, which must exit 0; it exits 2 when the exec fails. */
+/** A child sets the state and executes this program, /fpuprobe on the test
+ * image, with `reset` or `reset-x87`, which must exit 0; it exits 2 when the
+ * exec fails. */
 static void run_exec(void)
 {
     struct values mine;
@@ -481,7 +488,7 @@ static void run_exec(void)
         argv[0] = (char *)"fpuprobe";
         argv[1] = (char *)(with_sse ? "reset" : "reset-x87");
         argv[2] = 0;
-        syscall3(SYS_EXECVE, (long)"/fpuprobe", (long)argv, 0);
+        syscall3(SYS_EXECVE, (long)probe_self("/fpuprobe"), (long)argv, 0);
         sys_exit(2);
     }
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || status != 0) {
@@ -618,19 +625,22 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe, entered with `sp` at argc: `run_reset` when the first argument
- * begins with 'r', without SSE for `reset-x87`; otherwise the branch and the
- * rows in order, without SSE when the argument begins with 'x'. */
+/** The probe, entered with `sp` at argc: `run_reset` when the mode begins
+ * with 'r', without SSE for `reset-x87`; otherwise the branch and the rows
+ * in order, without SSE when the mode begins with 'x'. */
 void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
+    const char *mode;
 
-    if (argc >= 2 && argv[1][0] == 'r') {
-        with_sse = argv[1][5] == '\0';
+    probe_args(argc, argv);
+    mode = probe_word(1);
+    if (mode != 0 && mode[0] == 'r') {
+        with_sse = mode[5] == '\0';
         run_reset();
     }
-    if (argc >= 2 && argv[1][0] == 'x') {
+    if (mode != 0 && mode[0] == 'x') {
         with_sse = 0;
     }
     report_begin(report_case(argv + argc + 1, "guest.fpu.fpuprobe"));
