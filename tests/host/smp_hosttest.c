@@ -22,10 +22,10 @@
  * `CPU_ONLINE_WAIT_US`, and a processor that comes after it stops,
  * neither online nor counted.
  *
- * tests/host/smp_mutate.sh compiles a shootdown that interrupts idle
- * processors, one that skips every processor, and a release that interrupts
- * none, and requires each to fail its row. Returns 0 when every row passes,
- * 1 otherwise.
+ * tests/proofs/smp.json compiles a shootdown that interrupts idle processors,
+ * one that skips every processor, and a release that interrupts none, and
+ * requires each to fail its row. Returns 0 when every row passes, 1
+ * otherwise.
  */
 
 #include "proc/smp.c"

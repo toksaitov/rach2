@@ -1,0 +1,1225 @@
+{
+  "schema_version": 1,
+  "proof": "syscall",
+  "summary": "syscall_hosttest.c, the state checks of connect, the framebuffer calls, the clocks, the sleeps, the interval timers and alarm, with 70 faults in private copies of rach2/sys/syscall.c and syscall_net.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/syscall.c",
+    "rach2/sys/syscall_net.c"
+  ],
+  "artifacts": [
+    "${WORK}/syscall_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/t && mkdir -p ${WORK}/t/tests/host && cp -R rach2 ${WORK}/t/ && cp -R ${SRC}/. ${WORK}/t/ && exec ${CC:-cc} -std=c99 -g -O1 -ffreestanding -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/arch/x86 -I ${WORK}/t/rach2/sys/arch/i686 -I ${WORK}/t/rach2/sys/lib -I ${WORK}/t/rach2/sys/proc tests/host/syscall_hosttest.c ${WORK}/t/rach2/sys/lib/kstring.c ${WORK}/t/rach2/sys/lib/kctypes.c -o ${WORK}/syscall_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "ASAN_OPTIONS=abort_on_error=0",
+      "UBSAN_OPTIONS=abort_on_error=0",
+      "${WORK}/syscall_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "syscall-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "connect-wait",
+      "summary": "the connect wait ends only in ESTABLISHED, not on a completed handshake",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "sock->tcb == NULL || connect_established(sock) || sock->tcb->state == TCP_CLOSED",
+          "replace": "sock->tcb == NULL || sock->tcb->state == TCP_ESTABLISHED || sock->tcb->state == TCP_CLOSED"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "completed handshake wakes caller"
+        ]
+      }
+    },
+    {
+      "name": "connect-result",
+      "summary": "a blocking connect judges its result by ESTABLISHED alone",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "if (!connect_established(entry->sock)) {",
+          "replace": "if (!entry->sock->tcb || entry->sock->tcb->state != TCP_ESTABLISHED) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "blocking connect result"
+        ]
+      }
+    },
+    {
+      "name": "connect-nonblock",
+      "summary": "a nonblocking connect judges completion by ESTABLISHED alone",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_net.c",
+          "find": "if (connect_established(entry->sock)) {",
+          "replace": "if (entry->sock->tcb && entry->sock->tcb->state == TCP_ESTABLISHED) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "completed nonblocking connect"
+        ]
+      }
+    },
+    {
+      "name": "framebuffer-owner",
+      "summary": "the framebuffer calls skip the owner check",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "if (fb_owner_pid != current_proc->tgid &&",
+          "replace": "if (0 && fb_owner_pid != current_proc->tgid &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "stale text request refused",
+          "stale graphics request refused",
+          "stale palette request refused"
+        ]
+      }
+    },
+    {
+      "name": "framebuffer-reentry",
+      "summary": "graphics mode may be entered again while active",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "if (!gfx_is_active()) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "graphics reentered"
+        ]
+      }
+    },
+    {
+      "name": "clock",
+      "summary": "the monotonic clock is read from the 32-bit tick count, which wraps",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        out->tv_sec = seconds32;\n        out->tv_nsec = ticks32 * 10000000u;",
+          "replace": "        out->tv_sec = total32 / 100u;\n        out->tv_nsec = (total32 % 100u) * 10000000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "monotonic survives tick wrap"
+        ]
+      }
+    },
+    {
+      "name": "sleep-mask",
+      "summary": "the sleep checks for a pending signal with interrupts on",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "uint32_t flags = kirq_save();\n        int32_t left = (int32_t)(target - kernel_ticks);",
+          "replace": "uint32_t flags = 0;\n        int32_t left = (int32_t)(target - kernel_ticks);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "pending check runs with interrupts masked"
+        ]
+      }
+    },
+    {
+      "name": "sleep-block-order",
+      "summary": "the sleep lifts the mask before it marks itself blocked",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "current_proc->state = PROC_BLOCKED;\n        kirq_restore(flags);\n        schedule(); /* yield",
+          "replace": "kirq_restore(flags);\n        current_proc->state = PROC_BLOCKED;\n        schedule(); /* yield"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and the mask is lifted with the sleeper already blocked"
+        ]
+      }
+    },
+    {
+      "name": "sleep-arm-order",
+      "summary": "the sleep stores its deadline after it lifts the mask",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "current_proc->wakeup_tick = target != 0 ? target : 1u;\n        current_proc->state = PROC_BLOCKED;\n        kirq_restore(flags);",
+          "replace": "current_proc->state = PROC_BLOCKED;\n        kirq_restore(flags);\n        current_proc->wakeup_tick = target != 0 ? target : 1u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and with its deadline stored"
+        ]
+      }
+    },
+    {
+      "name": "sleep-halt-unmasked",
+      "summary": "the sleep halts with interrupts on",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        flags = kirq_save();\n        if (current_proc->state == PROC_BLOCKED) {\n            idle_wait_irq_off();\n        }\n        kirq_restore(flags);",
+          "replace": "        if (current_proc->state == PROC_BLOCKED) {\n            idle_wait_irq_off();\n        }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the sleep halts with interrupts masked"
+        ]
+      }
+    },
+    {
+      "name": "sleep-halt-read",
+      "summary": "the sleep reads its state before it masks interrupts to halt",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        flags = kirq_save();\n        if (current_proc->state == PROC_BLOCKED) {\n            idle_wait_irq_off();\n        }\n        kirq_restore(flags);",
+          "replace": "        if (current_proc->state == PROC_BLOCKED) {\n            flags = kirq_save();\n            idle_wait_irq_off();\n            kirq_restore(flags);\n        }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a deadline tick that comes as the sleep masks after a yield is seen"
+        ]
+      }
+    },
+    {
+      "name": "sleep-left-early",
+      "summary": "the sleep reads the ticks left before it masks interrupts",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        uint32_t flags = kirq_save();\n        int32_t left = (int32_t)(target - kernel_ticks);",
+          "replace": "        int32_t left = (int32_t)(target - kernel_ticks);\n        uint32_t flags = kirq_save();"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a deadline tick that comes as the sleep masks after a halt is seen"
+        ]
+      }
+    },
+    {
+      "name": "sleep-switch",
+      "summary": "the sleep halts unless it is ready, so a sleeper switched back to waits",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        if (current_proc->state == PROC_BLOCKED) {\n            idle_wait_irq_off();",
+          "replace": "        if (current_proc->state != PROC_READY) {\n            idle_wait_irq_off();"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleeper switched back to after a signal runs again at once"
+        ]
+      }
+    },
+    {
+      "name": "sleep-early-return",
+      "summary": "the sleep returns at its first wait instead of halting",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        if (current_proc->state == PROC_BLOCKED) {\n            idle_wait_irq_off();\n        }",
+          "replace": "        if (current_proc->state == PROC_BLOCKED) {\n            kirq_restore(flags);\n            break;\n        }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep with no signal runs to its deadline"
+        ]
+      }
+    },
+    {
+      "name": "sleep-deadline",
+      "summary": "a relative sleep lasts one tick too many",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    rc = sleep_until(now + ticks, urem);",
+          "replace": "    rc = sleep_until(now + ticks + 1u, urem);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of three ticks from tick 1000 blocks until 1003"
+        ]
+      }
+    },
+    {
+      "name": "sleep-held",
+      "summary": "a sleep on the held clock does not sleep",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    rc = sleep_until_time(KCLOCK_MONO, &end);",
+          "replace": "    rc = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of 15 ms from a clock 8 ms ahead of tick 1000 ends at 1003"
+        ]
+      }
+    },
+    {
+      "name": "sleep-held-rem",
+      "summary": "the remainder of a sleep on the held clock leaves out its phase",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        rem.tv_nsec = end.tv_nsec - (long)nsec;",
+          "replace": "        rem.tv_nsec = end.tv_nsec;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and a signal at tick 1002 leaves the 3 ms the clock lacks"
+        ]
+      }
+    },
+    {
+      "name": "sleep-zero",
+      "summary": "a sleep of zero blocks for a tick",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (req->tv_sec == 0 && req->tv_nsec == 0) {\n        return 0;\n    }",
+          "replace": "    if (req->tv_sec == 0 && req->tv_nsec == 0) {\n        return sleep_until(now + 1u, urem);\n    }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of zero does not block"
+        ]
+      }
+    },
+    {
+      "name": "sleep-nsec",
+      "summary": "nanoseconds are rounded down to ticks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;",
+          "replace": "uint32_t nsec_ticks = (uint32_t)req->tv_nsec / 10000000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of 15 ms from tick 1100 blocks until 1102"
+        ]
+      }
+    },
+    {
+      "name": "sleep-nsec-one",
+      "summary": "nanoseconds are rounded up from one nanosecond too many",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;",
+          "replace": "uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999998u) / 10000000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of 1 ns on the process CPU clock lasts to its next tick"
+        ]
+      }
+    },
+    {
+      "name": "sleep-nsec-near",
+      "summary": "nanoseconds are rounded to the nearest tick",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 9999999u) / 10000000u;",
+          "replace": "uint32_t nsec_ticks = ((uint32_t)req->tv_nsec + 5000000u) / 10000000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of 1 ns on the process CPU clock lasts to its next tick"
+        ]
+      }
+    },
+    {
+      "name": "sleep-arg-sec",
+      "summary": "a negative second is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;",
+          "replace": "return req->tv_nsec >= 0 && req->tv_nsec < 1000000000;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of a negative second is refused"
+        ]
+      }
+    },
+    {
+      "name": "sleep-arg-nsec",
+      "summary": "a nanosecond count of 1000000000 is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;",
+          "replace": "return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec <= 1000000000;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of 1000000000 ns is refused"
+        ]
+      }
+    },
+    {
+      "name": "sleep-arg-nsec-neg",
+      "summary": "a negative nanosecond count is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return req->tv_sec >= 0 && req->tv_nsec >= 0 && req->tv_nsec < 1000000000;",
+          "replace": "return req->tv_sec >= 0 && req->tv_nsec < 1000000000;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of -1 ns is refused"
+        ]
+      }
+    },
+    {
+      "name": "sleep-remainder",
+      "summary": "the remainder after a signal is a tick too long",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "left = (int32_t)(target - now) > 0 ? target - now : 0u;",
+          "replace": "left = (int32_t)(target - now) > 0 ? target - now + 1u : 0u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and the whole request is left"
+        ]
+      }
+    },
+    {
+      "name": "sleep-last-tick",
+      "summary": "the remainder after a signal is a tick too short",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "left = (int32_t)(target - now) > 0 ? target - now : 0u;",
+          "replace": "left = (int32_t)(target - now) > 1 ? target - now - 1u : 0u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a signal as the last tick begins leaves that tick"
+        ]
+      }
+    },
+    {
+      "name": "sleep-cut-short",
+      "summary": "a sleep cut short in its last tick is not counted",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    process_count_sleep_cut_short();\n    if (urem) {",
+          "replace": "    if ((int32_t)(target - kernel_ticks) > 1)\n        process_count_sleep_cut_short();\n    if (urem) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and the sleep is counted as one a signal cut short"
+        ]
+      }
+    },
+    {
+      "name": "sleep-signal-first",
+      "summary": "the sleep checks for a signal before its deadline",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        if (left <= 0) {\n            kirq_restore(flags);\n            break;\n        }\n        if (signal_pending()) {\n            kirq_restore(flags);\n            return nanosleep_interrupted(urem, target);\n        }",
+          "replace": "        if (signal_pending()) {\n            kirq_restore(flags);\n            return nanosleep_interrupted(urem, target);\n        }\n        if (left <= 0) {\n            kirq_restore(flags);\n            break;\n        }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a signal at the deadline ends nothing"
+        ]
+      }
+    },
+    {
+      "name": "sleep-rearm",
+      "summary": "a sleep woken without a signal does not arm its deadline again",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "current_proc->wakeup_tick = target != 0 ? target : 1u;",
+          "replace": "current_proc->wakeup_tick = current_proc->state == PROC_RUNNING ? (target != 0 ? target : 1u) : 0u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "blocks again with its deadline armed"
+        ]
+      }
+    },
+    {
+      "name": "sleep-wrap",
+      "summary": "a deadline that wraps to 0 is stored as 0, which means none",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "current_proc->wakeup_tick = target != 0 ? target : 1u;",
+          "replace": "current_proc->wakeup_tick = target;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep whose deadline wraps to 0 blocks until 1"
+        ]
+      }
+    },
+    {
+      "name": "sleep-clamp",
+      "summary": "the longest sleep is one tick past the signed range",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (ticks > 0x7FFFFFFEu) {\n        ticks = 0x7FFFFFFEu; /* keep the signed (target-now) delta valid */",
+          "replace": "    if (ticks > 0x7FFFFFFFu) {\n        ticks = 0x7FFFFFFFu; /* keep the signed (target-now) delta valid */"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the longest sleep begun at tick 0x80000000 blocks"
+        ]
+      }
+    },
+    {
+      "name": "sleep-sec-clamp",
+      "summary": "seconds are not clamped before they are turned into ticks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    uint32_t sec = req->tv_sec > 21474836L ? 21474836u : (uint32_t)req->tv_sec;",
+          "replace": "    uint32_t sec = (uint32_t)req->tv_sec;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a sleep of 42949673 s is shortened to the limit"
+        ]
+      }
+    },
+    {
+      "name": "sleep-unmask",
+      "summary": "a sleep that reaches its deadline returns with interrupts masked",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        if (left <= 0) {\n            kirq_restore(flags);\n            break;\n        }",
+          "replace": "        if (left <= 0) {\n            break;\n        }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the sleep returns with the mask lifted"
+        ]
+      }
+    },
+    {
+      "name": "sleep-running",
+      "summary": "a sleep returns without setting its state to running",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    current_proc->wakeup_tick = 0;\n    current_proc->state = PROC_RUNNING;\n    return 0;\n}",
+          "replace": "    current_proc->wakeup_tick = 0;\n    return 0;\n}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the sleep returns running with no deadline"
+        ]
+      }
+    },
+    {
+      "name": "rem-sec",
+      "summary": "the remainder has no whole seconds",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "rem.tv_sec = (int32_t)(left / 100u);\n        ns = (int32_t)((left % 100u) * 10000000u) - (int32_t)phase_ns;",
+          "replace": "rem.tv_sec = 0;\n        ns = (int32_t)(left * 10000000u) - (int32_t)phase_ns;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a remainder of 1.99 s is 1 s and 990 ms"
+        ]
+      }
+    },
+    {
+      "name": "rem-zero",
+      "summary": "a sleep that runs to its deadline does not zero the remainder",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "if (copy_to_user(urem, &zero, sizeof(zero)) != 0) {",
+          "replace": "if (0 && copy_to_user(urem, &zero, sizeof(zero)) != 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a signal at the deadline ends nothing"
+        ]
+      }
+    },
+    {
+      "name": "timer-first",
+      "summary": "a timer is due a tick early",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "p->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);",
+          "replace": "p->alarm_tick = proc_alarm_at(kernel_ticks, value);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a timer of three ticks set at tick 1000 is due at 1004"
+        ]
+      }
+    },
+    {
+      "name": "timer-left",
+      "summary": "the time left on a timer reads a tick too long",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return (int32_t)left > 1 ? left - 1u : 1u;",
+          "replace": "return (int32_t)left > 0 ? left : 1u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and it reads back as the three ticks set"
+        ]
+      }
+    },
+    {
+      "name": "timer-floor",
+      "summary": "a timer due at the next tick reads as zero",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return (int32_t)left > 1 ? left - 1u : 1u;",
+          "replace": "return (int32_t)left > 1 ? left - 1u : 0u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a timer due at the next tick reads as one tick"
+        ]
+      }
+    },
+    {
+      "name": "timer-disarm",
+      "summary": "a value of zero does not disarm the timer",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (value == 0) {\n        p->alarm_tick = 0;",
+          "replace": "    if (0) {\n        p->alarm_tick = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a value of zero disarms the timer"
+        ]
+      }
+    },
+    {
+      "name": "timer-round",
+      "summary": "microseconds are rounded down to ticks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;",
+          "replace": "ticks = whole * 100u + (uint32_t)usec / 10000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a timer of 5 ms is armed, due at 1202"
+        ]
+      }
+    },
+    {
+      "name": "timer-usec-one",
+      "summary": "microseconds are rounded up from one microsecond too many",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;",
+          "replace": "ticks = whole * 100u + ((uint32_t)usec + 9998u) / 10000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a timer of 1 us is armed, due at 1202"
+        ]
+      }
+    },
+    {
+      "name": "timer-usec-near",
+      "summary": "microseconds are rounded to the nearest tick",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "ticks = whole * 100u + ((uint32_t)usec + 9999u) / 10000u;",
+          "replace": "ticks = whole * 100u + ((uint32_t)usec + 5000u) / 10000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a timer of 1 us is armed, due at 1202"
+        ]
+      }
+    },
+    {
+      "name": "timer-sec-clamp",
+      "summary": "timer seconds are not clamped before they are turned into ticks",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "uint32_t whole = (unsigned long)sec > 21474836u ? 21474836u : (uint32_t)sec;",
+          "replace": "uint32_t whole = (uint32_t)sec;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a timer of 42949673 s is shortened to the limit"
+        ]
+      }
+    },
+    {
+      "name": "timer-clamp",
+      "summary": "the longest timer is a tick too long",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;",
+          "replace": "return ticks > 0x7FFFFFFEu ? 0x7FFFFFFEu : ticks;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the longest timer set at tick 0x80000001 reads back as the longest"
+        ]
+      }
+    },
+    {
+      "name": "timer-clamp-low",
+      "summary": "the longest timer is a tick too short",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return ticks > 0x7FFFFFFDu ? 0x7FFFFFFDu : ticks;",
+          "replace": "return ticks > 0x7FFFFFFCu ? 0x7FFFFFFCu : ticks;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the longest timer set at tick 0x80000001 reads back as the longest"
+        ]
+      }
+    },
+    {
+      "name": "timer-interval-read",
+      "summary": "an interval reads back in thousandths of its microseconds",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "*usec = (long)((ticks % 100u) * 10000u);",
+          "replace": "*usec = (long)((ticks % 100u) * 1000u);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and its interval"
+        ]
+      }
+    },
+    {
+      "name": "timer-interval-sec",
+      "summary": "the seconds of an interval are dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "               itimer_ticks(set.interval_sec, set.interval_usec));",
+          "replace": "               itimer_ticks(0, set.interval_usec));"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an interval of 1.5 s reads back as 1.5 s"
+        ]
+      }
+    },
+    {
+      "name": "timer-interval-read-sec",
+      "summary": "an interval reads back without its whole seconds",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "itimer_put(tg->leader->alarm_interval, &out->interval_sec, &out->interval_usec);",
+          "replace": "itimer_put(tg->leader->alarm_interval % 100u, &out->interval_sec, &out->interval_usec);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an interval of 1.5 s reads back as 1.5 s"
+        ]
+      }
+    },
+    {
+      "name": "timer-usec",
+      "summary": "an interval of 1000000 microseconds is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "set.interval_sec < 0 || set.interval_usec < 0 || set.interval_usec >= 1000000) {",
+          "replace": "set.interval_sec < 0 || set.interval_usec < 0 || set.interval_usec > 1000000) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an interval of 1000000 us is refused"
+        ]
+      }
+    },
+    {
+      "name": "timer-mask",
+      "summary": "setitimer arms the timer with interrupts on",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    flags = kirq_save();\n    itimer_read(which, &was);",
+          "replace": "    flags = 0;\n    itimer_read(which, &was);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the timer is armed with interrupts masked"
+        ]
+      }
+    },
+    {
+      "name": "getitimer-which",
+      "summary": "getitimer reads a timer of any index, past its table",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (which < ITIMER_REAL || which > ITIMER_PROF) {\n        return -EINVAL;\n    }\n    flags = kirq_save();\n    itimer_read(which, &cur);",
+          "replace": "    flags = kirq_save();\n    itimer_read(which, &cur);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "index 2 out of bounds for type"
+        ]
+      }
+    },
+    {
+      "name": "alarm-round",
+      "summary": "alarm drops the fraction of the time left",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if ((seconds == 0 && usec != 0) || usec >= 500000u) {\n        seconds++;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "alarm reports 4.7 s left as 5"
+        ]
+      }
+    },
+    {
+      "name": "alarm-nearest",
+      "summary": "alarm rounds every fraction up",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if ((seconds == 0 && usec != 0) || usec >= 500000u) {",
+          "replace": "    if ((seconds == 0 && usec != 0) || usec != 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "alarm reports 4.43 s left as 4"
+        ]
+      }
+    },
+    {
+      "name": "alarm-half",
+      "summary": "alarm rounds half a second down",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if ((seconds == 0 && usec != 0) || usec >= 500000u) {",
+          "replace": "    if ((seconds == 0 && usec != 0) || usec > 500000u) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "alarm reports 4.5 s left as 5"
+        ]
+      }
+    },
+    {
+      "name": "alarm-interval",
+      "summary": "alarm keeps the interval of the timer it replaces",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0),\n        0);",
+          "replace": "        itimer_ticks((int32_t)(SC_ARG(params, 0) > 21474836u ? 21474836u : SC_ARG(params, 0)), 0),\n        current_proc->alarm_interval);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and leaves no interval"
+        ]
+      }
+    },
+    {
+      "name": "alarm-mask",
+      "summary": "alarm arms the timer with interrupts on",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    uint32_t flags = kirq_save();\n    uint32_t left = itimer_left();",
+          "replace": "    uint32_t flags = 0;\n    uint32_t left = itimer_left();"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the timer is armed with interrupts masked"
+        ]
+      }
+    },
+    {
+      "name": "clock-coarse",
+      "summary": "coarse real time reads the clock's current time, not the boot's epoch plus the uptime at the tick",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        rtc_coarse_realtime(&seconds, &nanoseconds);",
+          "replace": "        get_current_time(&seconds, &nanoseconds);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "coarse real time is the boot's epoch plus the uptime at the tick"
+        ]
+      }
+    },
+    {
+      "name": "clock-cpu-system",
+      "summary": "the process CPU clock reads user time alone",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "return c->user_only ? user : user + sys;",
+          "replace": "return user;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the process CPU clock reads user and system time"
+        ]
+      }
+    },
+    {
+      "name": "clock-cpu-user",
+      "summary": "a CPU clock of user time reads system time too",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "out->user_only = ((uint32_t)clk & CPUCLOCK_WHICH) == CPUCLOCK_VIRT;",
+          "replace": "out->user_only = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a CPU clock of user time reads user time alone"
+        ]
+      }
+    },
+    {
+      "name": "clock-cpu-pid",
+      "summary": "a CPU clock by pid does not find its process",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    out->proc = get_process(id);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a CPU clock by pid reads that process's time"
+        ]
+      }
+    },
+    {
+      "name": "clock-cpu-thread",
+      "summary": "a thread clock of another process is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (!out->proc || (out->thread && out->proc->tg != current_proc->tg) ||\n",
+          "replace": "    if (!out->proc ||\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a thread clock of another process is refused"
+        ]
+      }
+    },
+    {
+      "name": "clock-descriptor",
+      "summary": "a descriptor's clock is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "if (clk >= 0 || ((uint32_t)clk & CPUCLOCK_WHICH) == 3u) {",
+          "replace": "if (clk >= 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a descriptor's clock is refused"
+        ]
+      }
+    },
+    {
+      "name": "clock-res",
+      "summary": "time since boot resolves to the tick, not the microsecond",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    return c->kind == KCLOCK_REAL || c->kind == KCLOCK_MONO ? 1000 : 10000000;",
+          "replace": "    return c->kind == KCLOCK_REAL ? 1000 : 10000000;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "time since boot, raw and boot time resolve to the microsecond"
+        ]
+      }
+    },
+    {
+      "name": "clock-sleep-clock",
+      "summary": "a sleep on CLOCK_REALTIME_COARSE is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||\n        clk == CLOCK_REALTIME_COARSE || clk == CLOCK_MONOTONIC_COARSE) {",
+          "replace": "    if (clk == CLOCK_THREAD_CPUTIME_ID || clk == CLOCK_MONOTONIC_RAW ||\n        clk == CLOCK_MONOTONIC_COARSE) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a clock Linux cannot sleep on is refused"
+        ]
+      }
+    },
+    {
+      "name": "clock-sleep-thread",
+      "summary": "a sleep on a thread CPU clock by id is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (clk < 0 && ((uint32_t)clk & CPUCLOCK_PERTHREAD)) {\n        return -EINVAL;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a thread CPU clock by id cannot be slept on"
+        ]
+      }
+    },
+    {
+      "name": "clock-sleep-due",
+      "summary": "the tick of an absolute deadline is rounded down",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "due = (uint64_t)sec * 100u + ((uint32_t)when->tv_nsec + 9999999u) / 10000000u;",
+          "replace": "due = (uint64_t)sec * 100u + (uint32_t)when->tv_nsec / 10000000u;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "10.035 s since boot is reached at tick 1004"
+        ]
+      }
+    },
+    {
+      "name": "clock-sleep-epoch",
+      "summary": "an absolute real-time deadline is not counted from the boot's epoch",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        if (kind == KCLOCK_REAL) {\n            sec -= rtc_boot_epoch();\n        }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "real time is counted from the boot's epoch"
+        ]
+      }
+    },
+    {
+      "name": "clock-sleep-absolute-rem",
+      "summary": "an absolute sleep writes a remainder",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "    if (absolute) {\n        urem = NULL;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and an absolute one leaves no remainder"
+        ]
+      }
+    },
+    {
+      "name": "clock-sleep-cpu-due",
+      "summary": "the remainder of a CPU clock sleep is taken from its deadline",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "rem.tv_nsec = (int32_t)(((due - now) % 100u) * 10000000u);",
+          "replace": "rem.tv_nsec = (int32_t)((due % 100u) * 10000000u);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "and leaves the ticks still due"
+        ]
+      }
+    }
+  ]
+}

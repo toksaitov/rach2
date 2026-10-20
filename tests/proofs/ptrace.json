@@ -1,0 +1,696 @@
+{
+  "schema_version": 1,
+  "proof": "ptrace",
+  "summary": "ptrace_hosttest.c with eleven faults in a private copy of rach2/sys/proc/ptrace.c and debugreg_hosttest.c with 28 in rach2/sys/arch/x86/debugreg.c; the test runs both",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/proc/ptrace.c",
+    "rach2/sys/arch/x86/debugreg.c"
+  ],
+  "artifacts": [
+    "${WORK}/ptrace_hosttest",
+    "${WORK}/debugreg_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/t && mkdir -p ${WORK}/t/tests/host && cp -R rach2 ${WORK}/t/ && cp -R ${SRC}/. ${WORK}/t/ && ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -ffreestanding -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/lib -I ${WORK}/t/rach2/sys/proc -o ${WORK}/ptrace_hosttest tests/host/ptrace_hosttest.c ${WORK}/t/rach2/sys/lib/kstring.c ${WORK}/t/rach2/sys/lib/kctypes.c && exec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -DRACH2_HOST_CPU -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -ffreestanding -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/lib -I ${WORK}/t/rach2/sys/proc -o ${WORK}/debugreg_hosttest tests/host/debugreg_hosttest.c ${WORK}/t/rach2/sys/lib/kstring.c ${WORK}/t/rach2/sys/lib/kctypes.c"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "s=0; for t in ptrace_hosttest debugreg_hosttest; do ${WORK}/$t || { r=$?; [ $s -ne 0 ] || s=$r; }; done; exit $s"
+    ],
+    "bound_s": 20
+  },
+  "faults": [
+    {
+      "name": "regset",
+      "summary": "a regset call does not look the tracee up again after its copy sleeps",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    if (!set) {\n        t = ptrace_tracee(pid);\n",
+          "replace": "    if (!set) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "regset revalidates after sleeping copy"
+        ]
+      }
+    },
+    {
+      "name": "listen",
+      "summary": "an interrupt does not stop a listening tracee again",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "        } else if (t->ptrace & PT_LISTEN) {\n            ptrace_restop(t);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "interrupt releases listening tracee"
+        ]
+      }
+    },
+    {
+      "name": "return-stops",
+      "summary": "the return to user mode takes one stop, not every one pending",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    while ((self->ptrace & PT_TRACED) && (self->ptrace & (PT_START | PT_INTERRUPT)) &&",
+          "replace": "    if ((self->ptrace & PT_TRACED) && (self->ptrace & (PT_START | PT_INTERRUPT)) &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "listening interrupts stop before user return"
+        ]
+      }
+    },
+    {
+      "name": "return-kill",
+      "summary": "a kill does not end the sequence of stops at the return to user mode",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "           !kill_pending()) {",
+          "replace": "           1) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kill ends return stop sequence"
+        ]
+      }
+    },
+    {
+      "name": "options",
+      "summary": "PTRACE_SETOPTIONS takes the upper bits of the word",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "        if (data & ~(unsigned long)PTRACE_O_MASK) {",
+          "replace": "        if (data & ~PTRACE_O_MASK) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "setoptions refuses upper bits"
+        ]
+      }
+    },
+    {
+      "name": "seize",
+      "summary": "PTRACE_SEIZE reads its options as 32 bits",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "static int ptrace_attach(process_t *t, int seize, unsigned long opts)",
+          "replace": "static int ptrace_attach(process_t *t, int seize, uint32_t opts)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "seize refuses upper bits without attaching"
+        ]
+      }
+    },
+    {
+      "name": "step",
+      "summary": "a single step through a system call reports no TRAP_TRACE",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    int stepping = leaving && (self->ptrace & PT_STEP);",
+          "replace": "    int stepping = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "syscall single step reports TRAP_TRACE"
+        ]
+      }
+    },
+    {
+      "name": "trapped-ids",
+      "summary": "the trap notice has the tracee's ids as the kernel sees them",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    chld.pid = pid_seen_by(tracer, self->pid);\n    chld.uid = ns_uid_from_kernel(proc_userns(tracer), self->ruid);",
+          "replace": "    chld.pid = self->pid;\n    chld.uid = self->ruid;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "trap notice has tracee ids as tracer sees them"
+        ]
+      }
+    },
+    {
+      "name": "resume-ids",
+      "summary": "a resumed signal has the tracer's ids as the kernel sees them",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    } else {\n        tracer_info(info);\n    }",
+          "replace": "    } else {\n        k_memset(info, 0, sizeof(*info));\n        info->code = SI_USER;\n        info->pid = self->tracer;\n    }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "resumed signal has tracer ids as tracee sees them"
+        ]
+      }
+    },
+    {
+      "name": "syscall-ids",
+      "summary": "a system-call stop's signal has a pid but no uid as the tracee sees them",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "        tracer_info(&info);\n        signal_post_thread(self, sig, &info);",
+          "replace": "        k_memset(&info, 0, sizeof(info));\n        info.code = SI_USER;\n        info.pid = pid_seen_by(self, self->tracer);\n        signal_post_thread(self, sig, &info);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "syscall stop signal has tracer ids as tracee sees them"
+        ]
+      }
+    },
+    {
+      "name": "end-receiver",
+      "summary": "the end notice is made for the parent, not the tracer",
+      "edits": [
+        {
+          "file": "rach2/sys/proc/ptrace.c",
+          "find": "    proc_child_info(p, tracer, &info);",
+          "replace": "    proc_child_info(p, get_process(p->parent_pid), &info);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "end notice is made for the tracer"
+        ]
+      }
+    },
+    {
+      "name": "switch",
+      "summary": "a switch keeps hardware enables of a thread that has none",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    } else if (dr7_live[cpu]) {",
+          "replace": "    } else if (old && (old->debugreg[7] & DR7_ENABLES)) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "detach then switch clears hardware enables"
+        ]
+      }
+    },
+    {
+      "name": "stale",
+      "summary": "a stale hit sends a trap",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if ((dr6 & DR6_HITS) && current_proc && !(current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "stale hit sends no trap"
+        ]
+      }
+    },
+    {
+      "name": "migration",
+      "summary": "a deferred hit does not follow its thread",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "        old->debug_pending |= deferred[cpu];",
+          "replace": "        old->debug_pending |= 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "deferred trap follows thread"
+        ]
+      }
+    },
+    {
+      "name": "delivery",
+      "summary": "a deferred hit is never posted",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "        signal_post_thread(current_proc, SIGTRAP, &info);",
+          "replace": "        (void)info;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "deferred trap follows thread"
+        ]
+      }
+    },
+    {
+      "name": "kernel-step",
+      "summary": "a kernel single step is taken as a hardware breakpoint; the same change was the old fault pending-step",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if ((info.code == TRAP_HWBKPT || info.code == TRAP_TRACE) && (current_proc->debugreg[7] & DR7_ENABLES)) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kernel single step does not duplicate syscall exit stop",
+          "kernel step posts no signal"
+        ]
+      }
+    },
+    {
+      "name": "pending",
+      "summary": "no deferred hit is posted before a wait",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    dr6 = deferred[cpu] | current_proc->debug_pending;",
+          "replace": "    dr6 = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "deferred hit is posted before a wait"
+        ]
+      }
+    },
+    {
+      "name": "pending-saved",
+      "summary": "a saved hit is not posted after a migration",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    dr6 = deferred[cpu] | current_proc->debug_pending;",
+          "replace": "    dr6 = deferred[cpu];"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "saved hit is posted after migration"
+        ]
+      }
+    },
+    {
+      "name": "pending-stale",
+      "summary": "a detached hit posts a signal",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if (dr6 & DR6_HITS) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "detached hit posts no signal"
+        ]
+      }
+    },
+    {
+      "name": "dequeue",
+      "summary": "no deferred hit is posted for a dequeue",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    debugreg_deliver();",
+          "replace": "    return;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "deferred hit is posted for dequeue with siginfo"
+        ]
+      }
+    },
+    {
+      "name": "dequeue-repeat",
+      "summary": "a dequeued hit is posted again at the return to user mode",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    current_proc->debug_pending = 0;",
+          "replace": "    current_proc->debug_pending |= 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "dequeued hit is not posted again at user return"
+        ]
+      }
+    },
+    {
+      "name": "user-force",
+      "summary": "a delayed user hit is posted, not forced, through a blocked mask",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "            signal_force(current_proc, SIGTRAP, &info);",
+          "replace": "            signal_post_thread(current_proc, SIGTRAP, &info);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "delayed user hit is deliverable at syscall return"
+        ]
+      }
+    },
+    {
+      "name": "user-entry",
+      "summary": "addresses next to the gate count as its entry",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (pc != (uintptr_t)&DEBUG_SYSCALL_ENTRY) {",
+          "replace": "    if (pc < (uintptr_t)&DEBUG_SYSCALL_ENTRY - 1 || pc > (uintptr_t)&DEBUG_SYSCALL_ENTRY + 1) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "adjacent gate addresses leave status-less exception unchanged"
+        ]
+      }
+    },
+    {
+      "name": "user-origin",
+      "summary": "a user hit at the gate entry is not marked as one",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "        deferred[cpu] |= DEFER_USER;",
+          "replace": "        deferred[cpu] |= 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "exact gate entry forces blocked trap"
+        ]
+      }
+    },
+    {
+      "name": "user-status",
+      "summary": "the code of a delayed user hit reads the marker bit as status",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    info.code = debugreg_code(dr6 & ~DEFER_USER);",
+          "replace": "    info.code = debugreg_code(dr6);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "delayed user hit keeps status and syscall frame"
+        ]
+      }
+    },
+    {
+      "name": "user-wait-post",
+      "summary": "the pending check posts a delayed user hit into a signal wait",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (!arch_debug_pending()) {",
+          "replace": "    if (1) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "pending check keeps delayed user hit out of signal waits"
+        ]
+      }
+    },
+    {
+      "name": "user-wait-cpu",
+      "summary": "the wait check reads the thread's saved hits alone",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;",
+          "replace": "    return (current_proc->debug_pending & DEFER_USER) != 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "delayed user hit interrupts wait regardless of mask and disposition"
+        ]
+      }
+    },
+    {
+      "name": "user-wait-saved",
+      "summary": "the wait check reads the processor's deferred hits alone",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;",
+          "replace": "    return (deferred[arch_cpu_id()] & DEFER_USER) != 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "delayed user hit interrupts wait regardless of mask and disposition"
+        ]
+      }
+    },
+    {
+      "name": "user-wait-stale",
+      "summary": "a detached user hit interrupts a wait",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if (!current_proc) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "detached user hit does not interrupt wait"
+        ]
+      }
+    },
+    {
+      "name": "user-wait-kernel",
+      "summary": "a kernel hit forces a wait interruption",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;",
+          "replace": "    return (deferred[arch_cpu_id()] | current_proc->debug_pending) != 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "kernel hit does not force a wait interruption"
+        ]
+      }
+    },
+    {
+      "name": "user-wait-no-thread",
+      "summary": "no current thread forces a wait interruption",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {\n        return 0;",
+          "replace": "    if (!current_proc || !(current_proc->debugreg[7] & DR7_ENABLES)) {\n        return 1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "no current thread means no forced wait interruption"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-origin",
+      "summary": "a status-less user hit is captured only with a status bit",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if (deferred[cpu] & DR6_HITS) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "status-less user hit is deliverable at syscall return"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-code",
+      "summary": "a status-less user hit gets no TRAP_HWBKPT code",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (dr6 & DEFER_USER) {\n        info.code = TRAP_HWBKPT;\n    }",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "status-less user hit is deliverable at syscall return"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-dr6",
+      "summary": "a status-less user hit gets a status bit it did not have",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    info.code = debugreg_code(dr6 & ~DEFER_USER);",
+          "replace": "    info.code = debugreg_code((dr6 & ~DEFER_USER) | ((dr6 & DEFER_USER) ? 1ul : 0ul));"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "status-less user hit keeps status and syscall frame"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-capture",
+      "summary": "a status-less entry is captured for a thread with no enables",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (current_proc && (current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if (current_proc) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "stale status-less entry records no user hit"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-stale",
+      "summary": "a detach does not cancel a status-less user hit",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    if (info.code == TRAP_HWBKPT && (current_proc->debugreg[7] & DR7_ENABLES)) {",
+          "replace": "    if (info.code == TRAP_HWBKPT) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "detach cancels status-less user hit without changing mask"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-repeat-cpu",
+      "summary": "the processor keeps a status-less user hit after it is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    dr6 = deferred[cpu] | current_proc->debug_pending;\n    deferred[cpu] = 0;",
+          "replace": "    dr6 = deferred[cpu] | current_proc->debug_pending;\n    deferred[cpu] &= DEFER_USER;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "status-less user hit checked during wait is forced only once"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-repeat-saved",
+      "summary": "the thread keeps a status-less user hit after it is taken",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    current_proc->debug_pending = 0;",
+          "replace": "    current_proc->debug_pending &= DEFER_USER;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "status-less user hit is forced only once"
+        ]
+      }
+    },
+    {
+      "name": "user-no-status-wait",
+      "summary": "a status-less user hit interrupts a wait only with a status bit",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/debugreg.c",
+          "find": "    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0;",
+          "replace": "    return ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DEFER_USER) != 0 &&\n        ((deferred[arch_cpu_id()] | current_proc->debug_pending) & DR6_HITS) != 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "status-less user hit interrupts wait regardless of mask and disposition"
+        ]
+      }
+    }
+  ]
+}
