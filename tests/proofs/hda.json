@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "proof": "hda",
+  "summary": "hda_hosttest.c, the HDA driver against a model codec, with 18 faults in private copies of rach2/sys/audio/hda.c and of the driver's report in rach2/sys/fs/procfs.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/audio/hda.c",
+    "rach2/sys/fs/procfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/hda_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wno-empty-body -fsanitize=address,undefined -fno-sanitize-recover=all -I ${SRC}/rach2/sys -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I rach2/sys/audio -I rach2/sys/fs tests/host/hda_hosttest.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c -o ${WORK}/hda_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/hda_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "hda-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "rate32",
+      "summary": "32 kHz given the format bits of 44.1 kHz",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "{32000, 0x0A00}",
+          "replace": "{32000, 0x4000}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: rates:"
+        ]
+      }
+    },
+    {
+      "name": "rate96",
+      "summary": "96 kHz given the format bits of 48 kHz",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "{96000, 0x0800}",
+          "replace": "{96000, 0x0000}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: rates:"
+        ]
+      }
+    },
+    {
+      "name": "capability",
+      "summary": "a rate chosen without the converter's capability",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "hda_rates[i].rate == sample_rate && (pcm & (1u << i))",
+          "replace": "hda_rates[i].rate == sample_rate"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: capabilities:"
+        ]
+      }
+    },
+    {
+      "name": "inheritance",
+      "summary": "a converter's rates read from the converter even when it inherits the function group's",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "(widgets & (1u << 4)) ? nid : audio_fg_nid",
+          "replace": "nid"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: capabilities:"
+        ]
+      }
+    },
+    {
+      "name": "fallback",
+      "summary": "the fallback rate search skipping 88.2, 176.4 and 384 kHz",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "if (pcm & (1u << i)) {",
+          "replace": "if ((pcm & (1u << i)) && i != 7 && i != 9 && i != 11) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: rates:"
+        ]
+      }
+    },
+    {
+      "name": "shortoffset",
+      "summary": "a short connection list read at the word's index, not the entry's",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "HDA_VERB_GET_CONN_LIST | i",
+          "replace": "HDA_VERB_GET_CONN_LIST | (bits == 8 ? i / per_word : i)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: short-offset:"
+        ]
+      }
+    },
+    {
+      "name": "longoffset",
+      "summary": "a long connection list read at the word's index, not the entry's",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "HDA_VERB_GET_CONN_LIST | i",
+          "replace": "HDA_VERB_GET_CONN_LIST | (bits == 16 ? i / per_word : i)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: long-offset:"
+        ]
+      }
+    },
+    {
+      "name": "width",
+      "summary": "a long entry's node cut to eight bits",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "node = entry & (range_bit - 1);",
+          "replace": "node = entry & 0xFF;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: long-width:"
+        ]
+      }
+    },
+    {
+      "name": "range",
+      "summary": "a range entry that lists only its last node",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "first = (uint32_t)previous + 1;",
+          "replace": "first = node;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: short-range:"
+        ]
+      }
+    },
+    {
+      "name": "route",
+      "summary": "the pin's connection select written as 0",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "HDA_VERB_SET_CONN_SEL | pin_conn_sel);",
+          "replace": "HDA_VERB_SET_CONN_SEL | 0);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: route:"
+        ]
+      }
+    },
+    {
+      "name": "report",
+      "summary": "the driver's report giving 0 as the programmed rate",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/procfs.c",
+          "find": "audio_field(t, \" programmed \", r->programmed_rate);",
+          "replace": "audio_field(t, \" programmed \", 0);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: proc-audio:"
+        ]
+      }
+    },
+    {
+      "name": "underrun",
+      "summary": "an empty period that keeps a whole frame in its fraction, which later writes then lose",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "                frac &= 0xFFFFu;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: underrun:"
+        ]
+      }
+    },
+    {
+      "name": "phase",
+      "summary": "an empty period that drops its fractional phase",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "                frac &= 0xFFFFu;",
+          "replace": "                frac = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: underrun:"
+        ]
+      }
+    },
+    {
+      "name": "ich9",
+      "summary": "ICH9's controllers taken for HDMI controllers",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "device_id == 0x160c) {",
+          "replace": "device_id == 0x160c || (device_id >= 0x2930 && device_id < 0x2940)) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: hdmi:"
+        ]
+      }
+    },
+    {
+      "name": "crestline",
+      "summary": "the Crestline HDMI codec, 0x29fb, not taken for HDMI",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "device < 0x2900) || device == 0x29fb)",
+          "replace": "device < 0x2900))"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: hdmi:"
+        ]
+      }
+    },
+    {
+      "name": "codecrange",
+      "summary": "Intel codecs up to 0x2aff taken for HDMI",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "device < 0x2900) || device == 0x29fb)",
+          "replace": "device < 0x2b00) || device == 0x29fb)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: hdmi:"
+        ]
+      }
+    },
+    {
+      "name": "lateirq",
+      "summary": "an interrupt after the shutdown that reads the unmapped controller",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "    if (!hda_base) {\n        return;\n    }\n\n    intsts = hda_read32(HDA_INTSTS);",
+          "replace": "    intsts = hda_read32(HDA_INTSTS);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: shutdown:"
+        ]
+      }
+    },
+    {
+      "name": "shutdown",
+      "summary": "a second shutdown that writes the unmapped controller's registers",
+      "edits": [
+        {
+          "file": "rach2/sys/audio/hda.c",
+          "find": "static void hda_shutdown(void)\n{\n    if (!hda_base) {\n        return;\n    }",
+          "replace": "static void hda_shutdown(void)\n{"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "hda-test: fail: shutdown:"
+        ]
+      }
+    }
+  ]
+}

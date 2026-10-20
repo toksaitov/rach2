@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "proof": "ip",
+  "summary": "the IP transmit rows of packet_hosttest.c with seven faults in a private copy of rach2/sys/network/ip/ip.c, each of which must fail its row with status 1; the test includes ip.c by a path relative to itself, so the build copies the test and rach2/sys under the work directory",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/network/ip/ip.c"
+  ],
+  "artifacts": [
+    "${WORK}/packet_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e; rm -rf ${WORK}/b; mkdir -p ${WORK}/b/rach2 ${WORK}/b/tests/host; cp -R rach2/sys ${WORK}/b/rach2/sys; cp ${SRC}/rach2/sys/network/ip/ip.c ${WORK}/b/rach2/sys/network/ip/ip.c; cp tests/host/packet_hosttest.c ${WORK}/b/tests/host/; ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I ${WORK}/b/rach2/sys -I ${WORK}/b/rach2/sys/lib -I ${WORK}/b/rach2/sys/proc -I utils -I krffs -I tests/host/compat ${WORK}/b/tests/host/packet_hosttest.c ${WORK}/b/rach2/sys/lib/kstring.c ${WORK}/b/rach2/sys/lib/kctypes.c -o ${WORK}/packet_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/packet_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "  FAIL: "
+  },
+  "faults": [
+    {
+      "name": "log-per-drop",
+      "summary": "a log line for every datagram the full loopback ring refuses",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "        if (!loop_drop_logged) {\n            loop_drop_logged = 1;\n",
+          "replace": "        {\n            loop_drop_logged = 1;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "one line records the refusals, not one a datagram"
+        ]
+      }
+    },
+    {
+      "name": "silent-drop",
+      "summary": "a refusal reported as sent",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "further drops are counted\");\n        }\n        return -ENOBUFS;",
+          "replace": "further drops are counted\");\n        }\n        return 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a datagram past a full loopback ring is refused with -ENOBUFS"
+        ]
+      }
+    },
+    {
+      "name": "uncounted",
+      "summary": "a refusal left uncounted",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "        loop_dropped++;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "each refused datagram is counted"
+        ]
+      }
+    },
+    {
+      "name": "overwrite",
+      "summary": "a refused datagram copied over the oldest one queued",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "        loop_dropped++;\n",
+          "replace": "        k_memcpy(loop_ring[loop_tail % LOOP_RING_SLOTS], ip_tx_buf, total_len);\n        loop_dropped++;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the drain delivers the datagrams the ring took, in the order sent, and none it refused"
+        ]
+      }
+    },
+    {
+      "name": "first-card",
+      "summary": "a subnet broadcast sent by the first card whatever its subnet",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "out = ip_broadcast_iface(dst_ip);",
+          "replace": "out = netdev_first();"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the second card's subnet broadcast leaves by that card"
+        ]
+      }
+    },
+    {
+      "name": "limited-scan",
+      "summary": "the limited broadcast given to a card whose subnet's broadcast it equals",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "    if (dst == 0xFFFFFFFFu) {\n        return netdev_first();",
+          "replace": "    if (0) {\n        return netdev_first();"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the limited broadcast leaves by the first card beside a card masked /1"
+        ]
+      }
+    },
+    {
+      "name": "idle-ticks",
+      "summary": "a tick on an idle machine counted as one datagram left for the timer whatever the ring holds",
+      "edits": [
+        {
+          "file": "rach2/sys/network/ip/ip.c",
+          "find": "    loop_left_idle += loop_head - loop_tail;\n",
+          "replace": "    loop_left_idle++;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "an empty ring leaves nothing for the timer"
+        ]
+      }
+    }
+  ]
+}
