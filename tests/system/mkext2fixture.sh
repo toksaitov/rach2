@@ -6,7 +6,9 @@
 # profile mkext2.sh writes, and a disk with that volume as its first MBR
 # partition, type 0x83, at sector 2048. The host's mke2fs writes the
 # volume, so the driver is judged against the reference writer and not
-# against itself.
+# against itself. The volume is also kept as
+# build/tests/system/ext2-fixture.vol, the image a native run's maps take it
+# from (tests/native/maps).
 #
 # Usage: mkext2fixture.sh OUTPUT.disk MKMBR
 #
@@ -43,6 +45,8 @@ E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
     -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
     -L e2fixture -d "$TREE" "$VOL" 16M 2>&1 | grep -v '128-byte inodes' || true
 e2fsck -fn "$VOL" > /dev/null 2>&1 || { echo "mkext2fixture: e2fsck finds the fixture faulty" >&2; exit 1; }
+mkdir -p "$REPO/build/tests/system"
+cp "$VOL" "$REPO/build/tests/system/ext2-fixture.vol"
 
 dd if=/dev/zero of="$DISK" bs=1048576 count=1 2>/dev/null
 cat "$VOL" >> "$DISK"
