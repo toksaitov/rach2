@@ -240,3 +240,40 @@ int fx_exec_unrun(void)
     etude_exec_free(ex);
     return r;
 }
+
+int fx_exec_sample(void)
+{
+    char *argv[] = {target, "hold", "64", "300", NULL};
+    struct etude_exec_spec spec;
+    struct etude_proc *p = NULL;
+    struct etude_proc *done = NULL;
+    struct etude_exec *ex;
+    ULONGLONG t0 = GetTickCount64();
+    uint64_t cpu = 0, rss = 0, cpu_end, rss_end;
+    int running, ended;
+    int r = 0;
+
+    ex = etude_exec_new();
+    CHECK(ex != NULL, "no executor");
+    spec_of(&spec, "sample", argv);
+    if (etude_exec_start(ex, &spec, &p) != 0) {
+        r = failed("start: %s", strerror(errno));
+        etude_exec_free(ex);
+        return r;
+    }
+    while (strstr(etude_proc_result(p)->out.data, "ready\n") == NULL &&
+           GetTickCount64() - t0 < BOUND)
+        etude_exec_wait(ex, 1000);
+    running = etude_proc_sample(p, &cpu, &rss);
+    etude_exec_cancel(p);
+    while (done != p && GetTickCount64() - t0 < BOUND)
+        done = etude_exec_wait(ex, 1000);
+    ended = etude_proc_sample(p, &cpu_end, &rss_end);
+    if (running != 1 || cpu < 300000 || rss < 64ull << 20)
+        r = failed("the running case sampled %d, with %llu us and %llu bytes", running,
+                   (unsigned long long)cpu, (unsigned long long)rss);
+    else if (done != p || ended != 0)
+        r = failed("the ended case sampled %d", ended);
+    etude_exec_free(ex);
+    return r;
+}

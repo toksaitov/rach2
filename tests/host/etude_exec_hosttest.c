@@ -22,7 +22,10 @@
  * for Rach2 defines __rach2__, as etude's recipe there does. A refused
  * registration and a
  * failed exec must leave nothing running, a killed keeper must give a lost
- * end, and a controller that ends must have its case ended by the keeper.
+ * end, and a controller that ends must have its case ended by the keeper. A
+ * case that holds memory and has used processor time must be sampled with
+ * both while it runs on Linux and Rach2, and with neither elsewhere, and not
+ * once it has ended.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -219,6 +222,19 @@ static void ready(const char *token)
     say(line);
 }
 
+/** Hold BURN_BYTES, use BURN_US of processor time, say ready, and wait. */
+static void keep_busy(const char *token)
+{
+    char *mem = malloc(BURN_BYTES);
+
+    if (mem == NULL)
+        _exit(125);
+    memset(mem, 1, BURN_BYTES);
+    burn(BURN_US);
+    ready(token);
+    idle();
+}
+
 /**
  * Start a child that handles SIGTERM and stops itself, say ready once it is
  * seen stopped, and exit with the child's status. This process ignores
@@ -307,6 +323,8 @@ static int run_case(const char *mode, const char *token, const char *arg)
         return open(arg, O_WRONLY | O_CREAT, 0644) < 0;
     } else if (strcmp(mode, "clean") == 0) {
         return check_start();
+    } else if (strcmp(mode, "keep") == 0) {
+        keep_busy(token);
     } else if (strcmp(mode, "hold") == 0) {
         if (open(arg, O_WRONLY) < 0)
             return 1;
@@ -778,6 +796,41 @@ static void test_unrun(struct etude_exec *ex)
 }
 
 /**
+ * Sample a case that holds memory and has used processor time, and sample it
+ * again once it has been cancelled and has finished. /proc counts processor
+ * time in clock ticks, which lag the case's own count by up to a tick.
+ */
+static void test_sample(struct etude_exec *ex)
+{
+    struct want w = {"keep", "x", NULL, LONG_GRACE, 1, STOPPED, -1, SIGNALED, SIGTERM, CONFIRMED};
+    struct etude_exec_spec s;
+    struct attempt a;
+    uint64_t cpu = 0, rss = 0, cpu_end, rss_end;
+    int running = -2;
+
+    memset(&a, 0, sizeof(a));
+    a.w = w;
+    spec_for(&s, &a, 0);
+    CHECK(etude_exec_start(ex, &s, &a.p) == 0, "sample");
+    if (a.p == NULL)
+        return;
+    while (etude_exec_wait(ex, -1) != a.p) {
+        if (!a.cancelled && strstr(etude_proc_result(a.p)->out.data, "ready") != NULL) {
+            running = etude_proc_sample(a.p, &cpu, &rss);
+            a.cancelled = 1;
+            etude_exec_cancel(a.p);
+        }
+    }
+#if defined(__linux__) || defined(__rach2__)
+    CHECK(running == 1 && cpu >= BURN_US / 2 && rss >= BURN_BYTES, "sample");
+#else
+    CHECK(running == -1, "sample");
+#endif
+    CHECK(etude_proc_sample(a.p, &cpu_end, &rss_end) == 0, "sample");
+    etude_proc_free(a.p);
+}
+
+/**
  * Kill an attempt's keeper while its case runs: the end is lost, the cleanup
  * unconfirmed and the usage unavailable. The test then ends the case itself.
  */
@@ -869,6 +922,7 @@ int main(int argc, char **argv)
     test_posix_only(ex);
     test_reaper(ex);
     test_unrun(ex);
+    test_sample(ex);
     test_lost_keeper(ex);
     test_controller_gone();
     etude_exec_free(ex);

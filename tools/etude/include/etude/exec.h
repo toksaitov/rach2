@@ -206,6 +206,19 @@ void etude_exec_cancel(struct etude_proc *p);
 /** Give what was observed of an attempt so far. */
 const struct etude_exec_result *etude_proc_result(const struct etude_proc *p);
 
+/**
+ * Sample a running attempt: the processor time used so far, in microseconds,
+ * and the resident memory of the case's process now.
+ *
+ * On Linux and Rach2 the time is that of the case's process and of the
+ * children it has reaped, from /proc; on Windows it is that of every process
+ * the case's job has held, and the memory is the process's working set.
+ *
+ * @return 1 with the sample; 0 when the case's process has ended; -1 where
+ *         the platform gives no sample.
+ */
+int etude_proc_sample(const struct etude_proc *p, uint64_t *cpu_us, uint64_t *rss_bytes);
+
 /** Free an attempt that etude_exec_wait has returned. */
 void etude_proc_free(struct etude_proc *p);
 

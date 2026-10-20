@@ -546,6 +546,13 @@ const struct etude_exec_result *etude_proc_result(const struct etude_proc *p)
     return &p->r;
 }
 
+int etude_proc_sample(const struct etude_proc *p, uint64_t *cpu_us, uint64_t *rss_bytes)
+{
+    if (p->exited)
+        return 0;
+    return posix_usage(&p->r.process, cpu_us, rss_bytes);
+}
+
 void etude_proc_free(struct etude_proc *p)
 {
     struct etude_proc **pp;

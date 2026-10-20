@@ -305,6 +305,17 @@ static int do_touch(int argc, wchar_t **argv)
     return 0;
 }
 
+/** hold MB MS: hold MB MiB, burn MS, say `ready`, and hang. */
+static int do_hold(int argc, wchar_t **argv)
+{
+    (void)argc;
+    touch(wcstoul(argv[2], NULL, 10));
+    burn(wcstoul(argv[3], NULL, 10));
+    say("ready\n");
+    Sleep(INFINITE);
+    return 0;
+}
+
 /** hang: wait for ever. */
 static int do_hang(int argc, wchar_t **argv)
 {
@@ -440,6 +451,7 @@ static const struct {
     {L"connect", 2, do_connect},
     {L"cat", 0, do_cat},
     {L"big", 1, do_big},
+    {L"hold", 2, do_hold},
 };
 
 int wmain(int argc, wchar_t **argv)

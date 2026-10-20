@@ -1,7 +1,7 @@
 #!/bin/sh
-# wincheck.sh: build etude's Windows adapter and executor and their fixtures
-# with MinGW-w64, check that the programs import no MSYS or Cygwin runtime,
-# and run the fixtures on Windows.
+# wincheck.sh: build etude's Windows adapter and executor, etude-tooling and
+# their fixtures with MinGW-w64, check that the programs import no MSYS or
+# Cygwin runtime, and run the fixtures on Windows.
 #
 # Usage: sh tools/etude/wincheck.sh [FIXTURE...]
 #        sh tools/etude/wincheck.sh --mutate | --texts
@@ -11,8 +11,8 @@
 # that Windows's TEMP, since a Windows program cannot write a WSL account's
 # home. ETUDE_WIN_CC names the compiler; by default it is
 # x86_64-w64-mingw32-gcc where that is on the path, then MSYS2's UCRT64 gcc.
-# The sources are copied to the build directory, in the layout of
-# tools/etude, and compiled there; the directory is removed on every exit.
+# The sources are copied to the build directory, in the layout of the tree,
+# and compiled there; the directory is removed on every exit.
 # A machine with no Windows fails the check.
 #
 # --mutate proves the fixtures: it runs them on the unmodified sources, then
@@ -43,6 +43,19 @@ no-end-stop|win/exec.c|        etude_win_stop(c);|        (void)c;|exec-attempts
 refusal-ignored|win/exec.c|    return p->reg_error != 0;|    return 0;|exec-unrun
 child-unrecorded|win/exec.c|            if (p->child_reg != NULL \&\&|            if (0 \&\&|ledger
 verdict-on-windows|ledger.c|    if (strcmp(c->system, "win32") != 0 \&\& !verdict_confirmed(l, c->id)) {|    if (!verdict_confirmed(l, c->id)) {|ledger
+serial-per-supervisor|win/winexec.c|    s->serial = (unsigned long)InterlockedIncrement(\&started);|    s->serial++;|tooling-job
+sample-ended|win/exec.c|    if (p->child->main_ended \|\| WaitForSingleObject(p->child->process, 0) == WAIT_OBJECT_0)|    if (0)|exec-sample
+sample-no-time|win/exec.c|    *cpu_us = u.user_us + u.kernel_us;|    *cpu_us = 0;|exec-sample tooling-sample
+path-case|tooling.c|#define name_cmp  _strnicmp|#define name_cmp  strncmp|tooling-made
+text-outputs|tooling.c|    if ((f = fopen(names, "wb")) == NULL)|    if ((f = fopen(names, "w")) == NULL)|tooling-job
+text-stdout|etude_tooling.c|    _setmode(_fileno(stdout), _O_BINARY);|    (void)0;|tooling-job
+unchecked-digest|tooling.c|    if (file_sha256(part, hex) != 0 \|\| strcmp(hex, m->image_sha256) != 0) {|    if (file_sha256(part, hex) != 0) {|tooling-digest
+unprovisioned|tooling.c|    if (!b->provisioned \|\| b->failed[0] != '\0')|    if (b->failed[0] == 'x')|tooling-provision
+status-unchecked|tooling.c|            if (sscanf(data, "%d", \&status) != 1 \|\| status != res->status) {|            if (sscanf(data, "%d", \&status) != 1) {|tooling-lie
+no-outputs|tooling.c|        if (run_program(site->envp, out, res->why, sizeof(res->why)) != 0)|        if (0)|tooling-job
+no-deadline|tooling.c|            etude_exec_cancel(b->p);|            (void)b;|tooling-late
+no-bootindex|tooling.c|    disk(l, "root", root, "qcow2", NULL, ",bootindex=0");|    disk(l, "root", root, "qcow2", NULL, "");|tooling-line
+status-passes|tooling.c|    if (s->done \&\& !res->making \&\& i == ETUDE_TOOLING_JOB \&\& res->status != 0) {|    if (0) {|tooling-status
 EOF
 }
 
@@ -53,9 +66,10 @@ field() {
         sed 's/\x01/|/g; s/\x02/\&/g'
 }
 
-# count FILE TEXT: how many lines of FILE are TEXT.
+# count FILE TEXT: how many lines of FILE are TEXT. The texts reach awk
+# through its environment, where it reads no escape sequences.
 count() {
-    awk -v t="$2" '$0 == t { n++ } END { print n + 0 }' "$1"
+    T=$2 awk '$0 == ENVIRON["T"] { n++ } END { print n + 0 }' "$1"
 }
 
 if [ "${1:-}" = --texts ]; then
@@ -129,27 +143,38 @@ else
     pecheck=$work/pecheck.exe
 fi
 
-# copy DIR: copy the sources to DIR.
+# copy DIR: copy the sources to DIR/tools/etude and DIR/utils.
 copy() {
-    mkdir -p "$1/win" "$1/include/etude"
-    cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$repo"/utils/sha256.h \
-        "$repo"/utils/sha256.c "$1/"
-    cp "$src"/include/etude/*.h "$1/include/etude/"
+    e=$1/tools/etude
+    mkdir -p "$e/win" "$e/include/etude" "$e/schemas" "$1/utils"
+    cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
+    cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$src"/tooling.c "$src"/etude_tooling.c \
+        "$src"/history.c "$src"/history_json.h "$src"/history_json.c "$src"/history_collect.c "$e/"
+    cp "$src"/include/etude/*.h "$e/include/etude/"
+    cp "$src"/schemas/history.schema.json "$e/schemas/"
     cp "$src"/win/winexec.h "$src"/win/winexec.c "$src"/win/winsys.c "$src"/win/winfmt.h \
         "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/wintarget.c "$src"/win/winfixture.h \
-        "$src"/win/winfixture.c "$src"/win/winexecfix.c "$src"/win/winledgerfix.c "$1/win/"
+        "$src"/win/winfixture.c "$src"/win/winexecfix.c "$src"/win/winledgerfix.c \
+        "$src"/win/wintoolfix.c "$src"/win/winstand.c "$e/win/"
 }
 
-# compile DIR FLAGS: build the two programs in DIR/win. A Windows program
-# started from WSL reads the shell's standard input, so it gets none.
+# compile DIR FLAGS: build the programs in DIR/tools/etude/win. A Windows
+# program started from WSL reads the shell's standard input, so it gets none.
 compile() {
     (
-        cd "$1/win"
+        cd "$1/tools/etude/win"
+        executor='exec.c ../capture.c winexec.c winsys.c winfmt.c'
+        history='../history.c ../history_json.c ../history_collect.c ../../../utils/sha256.c'
         # shellcheck disable=SC2086
-        "$cc" $2 -I ../include -o winfixture.exe winfixture.c winexecfix.c winledgerfix.c \
-            exec.c ../capture.c ../ledger.c ../sha256.c winexec.c winsys.c winfmt.c -lws2_32
+        "$cc" $2 -I ../include -I ../../../utils -o winfixture.exe winfixture.c winexecfix.c \
+            winledgerfix.c wintoolfix.c ../ledger.c $executor ../../../utils/sha256.c -lws2_32
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
+        # shellcheck disable=SC2086
+        "$cc" $2 -o winstand.exe winstand.c
+        # shellcheck disable=SC2086
+        "$cc" $2 -I ../include -o etude-tooling.exe ../etude_tooling.c ../tooling.c $executor \
+            $history -lws2_32
     ) </dev/null
 }
 
@@ -160,7 +185,7 @@ fixtures() {
     dir=$1
     log=$2
     shift 2
-    (cd "$dir/win" && ./winfixture.exe "$@") </dev/null >"$log" 2>&1
+    (cd "$dir/tools/etude/win" && ./winfixture.exe "$@") </dev/null >"$log" 2>&1
 }
 
 # pristine NAME...: build the unmodified sources and require the fixtures
@@ -170,7 +195,8 @@ pristine() {
     mkdir "$work/ok"
     copy "$work/ok"
     compile "$work/ok" "$flags -Wall -Wextra -Werror"
-    "$pecheck" "$work/ok/win/winfixture.exe" "$work/ok/win/wintarget.exe"
+    w=$work/ok/tools/etude/win
+    "$pecheck" "$w/winfixture.exe" "$w/wintarget.exe" "$w/winstand.exe" "$w/etude-tooling.exe"
     if fixtures "$work/ok" "$work/ok.log" "$@"; then
         cat "$work/ok.log"
         return 0
@@ -198,9 +224,9 @@ while IFS= read -r f; do
     rm -rf "$work/m"
     mkdir "$work/m"
     copy "$work/m"
-    awk -v t="$text" -v r="$repl" '$0 == t { print r; next } { print }' \
-        "$src/$file" >"$work/m/$file"
-    if [ "$(count "$work/m/$file" "$text")" -ne 0 ]; then
+    T=$text R=$repl awk '$0 == ENVIRON["T"] { print ENVIRON["R"]; next } { print }' \
+        "$src/$file" >"$work/m/tools/etude/$file"
+    if [ "$(count "$work/m/tools/etude/$file" "$text")" -ne 0 ]; then
         echo "wincheck: $name: the fault was not applied" >&2
         bad=1
         continue
@@ -225,8 +251,8 @@ while IFS= read -r f; do
             bad=1
         fi
     done
-    echo "wincheck: $name: caught by $names: $(grep "^winfixture: result: fail: " "$work/m.log" |
-        head -n 1 | cut -d: -f4-)"
+    printf 'wincheck: %s: caught by %s: %s\n' "$name" "$names" \
+        "$(grep "^winfixture: result: fail: " "$work/m.log" | head -n 1 | cut -d: -f4-)"
 done <"$work/faults"
 echo "wincheck: the restored sources"
 pristine

@@ -5,6 +5,8 @@
  * the suspended start and the registration, the accounting of a tree of
  * processes, the end of a tree by its job and by the death of its
  * controller, output, arguments, paths, the environment, sockets and clocks.
+ * Others run the executor of etude/exec.h, the ledger, and etude-tooling,
+ * which must also be beside this program, with winstand.exe.
  *
  * Usage: winfixture [NAME...] runs the fixtures named, or all of them, and
  * prints `winfixture: result: pass: NAME` or `winfixture: result: fail: NAME:
@@ -49,7 +51,7 @@ struct cap {
 
 static struct etude_win_sup sup;
 static char self[MAX_PATH * 4];
-static char scratch[MAX_PATH * 4];
+char scratch[MAX_PATH * 4];
 char target[sizeof scratch + 16];
 static const char *current;
 static char detail[512];
@@ -1134,7 +1136,19 @@ static const struct {
     {"concurrent", fx_concurrent},
     {"exec-attempts", fx_exec_attempts},
     {"exec-unrun", fx_exec_unrun},
+    {"exec-sample", fx_exec_sample},
     {"ledger", fx_ledger},
+    {"tooling-made", fx_tooling_made},
+    {"tooling-digest", fx_tooling_digest},
+    {"tooling-provision", fx_tooling_provision},
+    {"tooling-job", fx_tooling_job},
+    {"tooling-status", fx_tooling_status},
+    {"tooling-unmade", fx_tooling_unmade},
+    {"tooling-late", fx_tooling_late},
+    {"tooling-crash", fx_tooling_crash},
+    {"tooling-lie", fx_tooling_lie},
+    {"tooling-line", fx_tooling_line},
+    {"tooling-sample", fx_tooling_sample},
 };
 
 /** Find this program's path and directory, and the target's path beside it. */

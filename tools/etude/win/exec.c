@@ -11,6 +11,8 @@
 #include "../capture.h"
 #include "winexec.h"
 
+#include <psapi.h>
+
 /* The method identity of the processor time, as the history records it. */
 #define METHOD_CPU "win32-job-accounting-v1"
 
@@ -357,6 +359,21 @@ void etude_exec_cancel(struct etude_proc *p)
 const struct etude_exec_result *etude_proc_result(const struct etude_proc *p)
 {
     return &p->r;
+}
+
+int etude_proc_sample(const struct etude_proc *p, uint64_t *cpu_us, uint64_t *rss_bytes)
+{
+    struct etude_win_usage u;
+    PROCESS_MEMORY_COUNTERS m;
+
+    if (p->child->main_ended || WaitForSingleObject(p->child->process, 0) == WAIT_OBJECT_0)
+        return 0;
+    if (etude_win_usage(p->child, &u) != 0 ||
+        !GetProcessMemoryInfo(p->child->process, &m, sizeof m))
+        return -1;
+    *cpu_us = u.user_us + u.kernel_us;
+    *rss_bytes = m.WorkingSetSize;
+    return 1;
 }
 
 void etude_proc_free(struct etude_proc *p)

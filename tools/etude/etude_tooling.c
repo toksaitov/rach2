@@ -11,9 +11,13 @@
 #include "etude/tooling.h"
 
 #ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+
 #define environ _environ
-#endif
+#else
 extern char **environ;
+#endif
 
 /* The most files, disks and outputs a job names. */
 #define LIST_MAX 64
@@ -325,6 +329,10 @@ int main(int argc, char **argv)
     int i, rest, made;
     FILE *f;
 
+#ifdef _WIN32
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+#endif
     if ((i = read_options(argc, argv, &op, &rest)) < 0)
         return usage();
     command = argv[i];

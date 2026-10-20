@@ -20,8 +20,6 @@
 #include <process.h>
 #else
 #include <unistd.h>
-
-#include "posix/posix.h"
 #endif
 
 #include "../../utils/sha256.h"
@@ -45,10 +43,27 @@
 #define PATH_LEN 4096
 
 #ifdef _WIN32
-#define PATH_SEP ';'
-#define getpid   _getpid
+#define PATH_SEP  ';'
+#define getpid    _getpid
+#define is_sep(c) ((c) == '/' || (c) == '\\')
+#define name_cmp  _strnicmp
 #else
-#define PATH_SEP ':'
+#define PATH_SEP  ':'
+#define is_sep(c) ((c) == '/')
+#define name_cmp  strncmp
+#endif
+
+/* The methods of a step's processor time and memory, which are QEMU's: on
+ * Windows its job's time and its working set, elsewhere its process's time
+ * and resident set; and what the scope of a step says of them. */
+#ifdef _WIN32
+#define METHOD_CPU    "tooling-qemu-job-cpu-win32-v1"
+#define METHOD_MEMORY "tooling-qemu-working-set-win32-v1"
+#define ACCOUNTING    "the step's processor time is QEMU's job's and its memory QEMU's working set"
+#else
+#define METHOD_CPU    "tooling-qemu-cpu-v1"
+#define METHOD_MEMORY "tooling-qemu-rss-v1"
+#define ACCOUNTING    "the step's processor time and memory are QEMU's process"
 #endif
 
 /* A growing string. */
@@ -226,12 +241,14 @@ static int make_dirs(const char *path)
     if (fmt(buf, sizeof(buf), "%s", path) != 0)
         return -1;
     for (p = buf + 1; *p; p++) {
-        if (*p != '/')
+        char sep = *p;
+
+        if (!is_sep(sep))
             continue;
         *p = '\0';
-        if (make_dir(buf) != 0 && errno != EEXIST)
+        if (make_dir(buf) != 0 && errno != EEXIST && !exists(buf))
             return -1;
-        *p = '/';
+        *p = sep;
     }
     return make_dir(buf) != 0 && errno != EEXIST ? -1 : 0;
 }
@@ -283,13 +300,16 @@ static int read_only(const char *path)
 #endif
 }
 
-/** Find the value of environment variable `name` in `envp`. */
+/**
+ * Find the value of environment variable `name` in `envp`, whose names
+ * Windows compares without regard to case, as its `Path` shows.
+ */
 static const char *env_get(char *const *envp, const char *name)
 {
     size_t n = strlen(name);
 
     for (; envp != NULL && *envp != NULL; envp++)
-        if (strncmp(*envp, name, n) == 0 && (*envp)[n] == '=')
+        if (name_cmp(*envp, name, n) == 0 && (*envp)[n] == '=')
             return *envp + n + 1;
     return NULL;
 }
@@ -484,13 +504,8 @@ static void sample(struct boot *b)
 {
     struct etude_reading now;
     uint64_t cpu, rss;
-    int rc = -1;
+    int rc = etude_proc_sample(b->p, &cpu, &rss);
 
-#ifndef _WIN32
-    rc = posix_usage(&etude_proc_result(b->p)->process, &cpu, &rss);
-#else
-    cpu = rss = 0;
-#endif
     if (etude_history_now(&now) != 0)
         return;
     if (b->sampled && now.monotonic_us - b->last_us > b->gap_us)
@@ -514,7 +529,7 @@ static void step_peak(struct boot *b)
         return;
     if (s->peak_bytes.reason != NULL || s->peak_bytes.method == NULL ||
         b->rss > s->peak_bytes.value)
-        s->peak_bytes = sampled(1, b->rss, b->gap_us, "tooling-qemu-rss-v1", NULL);
+        s->peak_bytes = sampled(1, b->rss, b->gap_us, METHOD_MEMORY, NULL);
 }
 
 /** Begin step `i` now, at QEMU's processor time of the last sample. */
@@ -550,7 +565,7 @@ static void step_end(struct boot *b, const struct etude_reading *now, int cpu_ok
     step_peak(b);
     if (cpu_ok && b->step_cpu_ok && cpu >= b->step_cpu0)
         s->cpu_us = sampled(1, cpu - b->step_cpu0, b->gap_us > 0 ? b->gap_us : POLL_MS * 1000u,
-                            "tooling-qemu-cpu-v1", NULL);
+                            METHOD_CPU, NULL);
 }
 
 /** Act on one whole line of the channel. */
@@ -984,7 +999,7 @@ static int make_volume(const struct etude_tooling_site *site, const struct etude
         fmt(sectors, sizeof(sectors), "%lu",
             (unsigned long)(job->volume_mib > 0 ? job->volume_mib : 64) * 2048ul) != 0)
         return failure(why, whylen, "the path is too long");
-    if ((f = fopen(names, "w")) == NULL)
+    if ((f = fopen(names, "wb")) == NULL)
         return failure(why, whylen, "%s cannot be written", names);
     for (p = job->outputs; p != NULL && *p != NULL; p++)
         fprintf(f, "%s\n", *p);
@@ -1290,8 +1305,8 @@ int etude_tooling_record(struct etude_history *h, const struct etude_tooling_ids
         tprintf(&scope,
                 ",\"qemu\":{\"pid\":%ld,\"start\":%llu},\"accounting\":", res->cost.qemu.pid,
                 (unsigned long long)res->cost.qemu.start);
-        tstring(&scope, "the step's processor time and memory are QEMU's process, sampled at its "
-                        "ends; the totals are the whole tree's over the boot");
+        tstring(&scope, ACCOUNTING ", sampled at its ends; the totals are the whole tree's over "
+                                   "the boot");
         tprintf(&scope, ",\"totals\":{\"tree_cpu_us\":");
         exec_measure(&scope, &res->cost.cpu_us);
         tprintf(&scope, ",\"peak_bytes\":");
