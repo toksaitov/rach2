@@ -39,8 +39,9 @@
 #
 # OUT is a path prefix: OUT.b.disk to OUT.h.disk are the disks, and OUT.b.log
 # to OUT.h.log the consoles, which are kept.
-# `tests/run parts` runs this on the recovery kernel, and gpt_write_mutate.sh
-# on kernels built from a private copy.
+# `tests/run parts` runs this on the recovery kernel, and
+# tests/proofs/gpt-write.json on kernels built from a private copy. When a
+# refusal fails, the row also reports whether the disk changed.
 #
 set -u
 KERNEL=$1; IMAGE=$2; HARNESS=$3; MKGPT=$4; OUT=$5
@@ -94,6 +95,8 @@ refused() {
         > "$OUT.$1.harness.log" 2>&1; then
         sed -n 's/^HARNESS: /gpt-write: /p' "$OUT.$1.harness.log" >&2
         tail -20 "$log" >&2
+        cmp "$saved" "$disk" > /dev/null ||
+            echo "gpt-write: FAIL: $2: the disk write changed the disk" >&2
         fail "$2: the recovery shell's disk write was not refused"
     fi
     cmp "$saved" "$disk" > /dev/null || fail "$2: the refused disk write changed the disk"

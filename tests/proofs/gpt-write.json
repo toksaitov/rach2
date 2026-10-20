@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "proof": "gpt-write",
+  "summary": "the row of gpt_write_refusal.sh, the recovery shell's `disk write` at GPT and MBR disks, on i686, with recovery kernels built from a private copy of rach2/",
+  "tree": "private",
+  "sources": ["rach2/kernel.c"],
+  "artifacts": ["${WORK}/kernel"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/tree && mkdir -p ${WORK}/tree/build/tools/inspect && cp -R rach2 mk ${WORK}/tree/ && cp ${SRC}/rach2/kernel.c ${WORK}/tree/rach2/kernel.c && make -s test-image build/tests/system/harness build/tools/image/mkgpt build/tools/inspect/elfcheck ARCH=i686 </dev/null && cp build/tools/inspect/elfcheck ${WORK}/tree/build/tools/inspect/elfcheck && printf 'build/tools/inspect/elfcheck: ;\\n' >${WORK}/tree/Makefile && make -s -j8 -C ${WORK}/tree/rach2 COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY ARCH=i686 </dev/null && cp ${WORK}/tree/build/rach2-recovery/kernel ${WORK}/kernel"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "mkdir -p ${WORK}/${PHASE} && exec sh tests/system/gpt_write_refusal.sh ${WORK}/kernel build/images/test.krffs build/tests/system/harness build/tools/image/mkgpt ${WORK}/${PHASE}/row"],
+    "bound_s": 2400
+  },
+  "faults": [
+    {
+      "name": "refusal-removed",
+      "summary": "the refusal of a disk with a GPT header taken out, so that the command writes the backup header",
+      "edits": [
+        {"file": "rach2/kernel.c", "find": "    if (is_gpt) {\n        console_printf(\"disk: GPT disk; the last sector is its backup header, not \"\n                       \"a scratch sector\\n\");\n        return;\n    }\n", "replace": "    (void)is_gpt;\n"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["gpt-write: FAIL: a GPT disk with no protective MBR: the disk write changed the disk", "gpt-write: FAIL: a GPT disk with no protective MBR: the recovery shell's disk write was not refused", "disk: last-sector round-trip"]
+      }
+    },
+    {
+      "name": "backup-unread",
+      "summary": "the read of the last sector taken out, so that a disk whose LBA 1 says nothing is taken for one without a table",
+      "edits": [
+        {"file": "rach2/kernel.c", "find": "        if (block0->read(block0, lba, 1, disk_sector) != 0) {\n            console_printf(\"disk: the last sector is unreadable; it is not written\\n\");\n            return;\n        }\n        is_gpt = holds_gpt_header(disk_sector);\n", "replace": ""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["gpt-write: FAIL: a GPT disk with no protective MBR whose primary header is gone: the disk write changed the disk", "gpt-write: FAIL: a GPT disk with no protective MBR whose primary header is gone: the recovery shell's disk write was not refused", "disk: last-sector round-trip"]
+      }
+    },
+    {
+      "name": "mbr-unread",
+      "summary": "the check of the MBR's entries taken out, so that a partition reaching the last sector is not seen",
+      "edits": [
+        {"file": "rach2/kernel.c", "find": "            return (int)i + 1;\n", "replace": "            return 0;\n"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["gpt-write: FAIL: an MBR disk whose partition reaches the last sector: the disk write changed the disk", "gpt-write: FAIL: an MBR disk whose partition reaches the last sector: the recovery shell's disk write was not refused", "disk: last-sector round-trip"]
+      }
+    }
+  ]
+}
