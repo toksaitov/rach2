@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "proof": "fixture-readers",
+  "summary": "The readers' bounds and exported lengths of the fixture builders mkexfatfixture.c and mkfatfixture.c, through exfatcheck_hosttest.c and fatcheck_hosttest.c, which compile the private copies the build gives them",
+  "tree": "private",
+  "sources": [
+    "tests/host/mkexfatfixture.c",
+    "tests/host/mkfatfixture.c"
+  ],
+  "artifacts": [
+    "${WORK}/exfatcheck_hosttest",
+    "${WORK}/fatcheck_hosttest",
+    "${WORK}/builders/mkexfatfixture.c",
+    "${WORK}/builders/mkfatfixture.c"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nd=${WORK}/builders\nrm -rf \"$d\"\nmkdir -p \"$d\"\ncp tests/host/exfat_upcase.inc \"$d/\"\ncp ${SRC}/tests/host/mkexfatfixture.c ${SRC}/tests/host/mkfatfixture.c \"$d/\"\nfor k in exfat fat; do\n    ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host/compat -DFIXDIR='\"${WORK}/fixtures\"' \"-DBUILDER_SOURCE=\\\"$d/mk${k}fixture.c\\\"\" tests/host/${k}check_hosttest.c tests/host/compat/fixdir_host.c -o ${WORK}/${k}check_hosttest\ndone"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/fixtures\nmkdir ${WORK}/fixtures\nr=0\ns=0\n${WORK}/exfatcheck_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\ns=0\n${WORK}/fatcheck_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\nexit $r"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "path",
+      "summary": "a path component longer than the reader's buffer compared in place",
+      "edits": [
+        {
+          "file": "tests/host/mkexfatfixture.c",
+          "find": "        size_t n;\n",
+          "replace": "        size_t n;\n        char want[600];\n"
+        },
+        {
+          "file": "tests/host/mkexfatfixture.c",
+          "find": "        n = slash ? (size_t)(slash - p) : strlen(p);\n",
+          "replace": "        n = slash ? (size_t)(slash - p) : strlen(p);\n        memcpy(want, p, n);\n        want[n] = 0;\n"
+        },
+        {
+          "file": "tests/host/mkexfatfixture.c",
+          "find": "            if (strlen(name) == n && memcmp(name, p, n) == 0) {\n",
+          "replace": "            if (strcmp(name, want) == 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: oversized path component"
+        ]
+      }
+    },
+    {
+      "name": "extent",
+      "summary": "a directory's extent outside the heap read all the same",
+      "edits": [
+        {
+          "file": "tests/host/mkexfatfixture.c",
+          "find": "        if (nofat && !read_extent(v, first, length)) {\n",
+          "replace": "        if (0 && nofat && !read_extent(v, first, length)) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: reject directory after heap"
+        ]
+      }
+    },
+    {
+      "name": "length",
+      "summary": "a file exported to its valid length, not its data length",
+      "edits": [
+        {
+          "file": "tests/host/mkexfatfixture.c",
+          "find": "    if (valid > length || (length && nofat && !read_extent(v, first, length))) {\n",
+          "replace": "    length = valid;\n    if (valid > length || (length && nofat && !read_extent(v, first, length))) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: zero tail through DataLength"
+        ]
+      }
+    },
+    {
+      "name": "ordinal",
+      "summary": "a long name of more than twenty entries taken",
+      "edits": [
+        {
+          "file": "tests/host/mkfatfixture.c",
+          "find": "    return pending == 1 && seq >= 1 && seq <= 20 && (ordinal & 0xa0) == 0;\n",
+          "replace": "    return pending == 1 && seq >= 1 && (ordinal & 0xa0) == 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'reject twenty-one-entry name'"
+        ]
+      }
+    },
+    {
+      "name": "restart",
+      "summary": "a long name that starts again before its twenty entries taken",
+      "edits": [
+        {
+          "file": "tests/host/mkfatfixture.c",
+          "find": "    return pending == 1 && seq >= 1 && seq <= 20 && (ordinal & 0xa0) == 0;\n",
+          "replace": "    return pending >= 1 && seq >= 1 && seq <= 20 && (ordinal & 0xa0) == 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'reject repeated start before twenty entries'"
+        ]
+      }
+    }
+  ]
+}

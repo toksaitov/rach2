@@ -19,6 +19,12 @@
 
 #include "fixdir_host.h"
 
+/* The source of the builder the test compiles. A proof,
+ * tests/proofs/fixture-readers.json, names a copy of its own. */
+#ifndef BUILDER_SOURCE
+#define BUILDER_SOURCE "tests/host/mkexfatfixture.c"
+#endif
+
 static int fails;
 
 /** The builder's command, run with leak detection off. */
@@ -333,7 +339,7 @@ int main(void)
 
     fix_format(cmd, sizeof(cmd),
                "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-               "-fno-sanitize-recover=all -o %s tests/host/mkexfatfixture.c",
+               "-fno-sanitize-recover=all -o %s " BUILDER_SOURCE,
                cc ? cc : "cc", fix_path("mkexfatfixture"));
     if (system(cmd) != 0) {
         printf("exfatcheck_hosttest: cannot build the fixture builder\n");
