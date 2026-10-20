@@ -696,12 +696,8 @@ static const struct row rows[] = {
 /** Check the maps the formatter refuses before it reads a history. */
 static void check_maps(void)
 {
-    static const char *const maps[] = {"runner guest.fpu\n",
-                                       "fpu guest.fpu\nusb guest.fpu\n",
-                                       "Fpu guest.fpu\n",
-                                       "fpu\n",
-                                       "fpu guest.fpu\nfpu guest.usb\n",
-                                       "# no suite\n"};
+    static const char *const maps[] = {"fpu guest.fpu\nusb guest.fpu\n", "Fpu guest.fpu\n", "fpu\n",
+                                       "fpu guest.fpu\nfpu guest.usb\n", "# no suite\n"};
     static char out[4096], err[4096];
     size_t i;
     for (i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
@@ -709,7 +705,7 @@ static void check_maps(void)
         if (format(NULL, path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
             !strstr(err, "history_lines: ")) {
             fprintf(stderr, "etude_lines_hosttest: map \"%s\": %s%s", maps[i], out, err);
-            CHECK(0, "a map that names runner, an identity twice or no case is refused");
+            CHECK(0, "a map that names an identity twice or no case is refused");
         }
     }
 }
@@ -729,6 +725,34 @@ static void check_named(void)
         fprintf(stderr, "etude_lines_hosttest: named: status %d\n--- stdout\n%s--- stderr\n%s",
                 status, out, err);
         CHECK(0, "a failure named outside the suites fails a run whose suites passed");
+    }
+}
+
+/** Check the runner's own suite, `runner`, in the map: it passes as any
+ * suite does, and a fault of the runner fails it, with one result line and
+ * the name once in the failed line. */
+static void check_runner(void)
+{
+    static char out[4096], err[4096];
+    int status;
+    put("runner.map", "runner guest.fpu\ndefault guest.default\n", 0644);
+    status = format(NULL, path("runner.map"), path("pass.jsonl"), out, err, sizeof(out));
+    if (status != 0 || !strstr(out, "run: runner: PASS in 2s") ||
+        !strstr(out, "run: result: all 2 suites passed")) {
+        fprintf(stderr, "etude_lines_hosttest: runner: status %d\n--- stdout\n%s--- stderr\n%s",
+                status, out, err);
+        CHECK(0, "the runner's own suite is a suite of the map");
+    }
+    put("runner.map", "runner guest.default\n", 0644);
+    status = format(NULL, path("runner.map"), path("failure.jsonl"), out, err, sizeof(out));
+    if (status != 1 || !strstr(err, "run: runner: FAIL in 2s\n") ||
+        strstr(err, "run: runner: FAIL in 2s\nrun: runner: FAIL") ||
+        !strstr(err, "run: runner: guest.fpu.xsave on x86_64 is in no suite of the map") ||
+        !strstr(err, "run: result: failed: runner\n") || strstr(out, "run: runner: PASS")) {
+        fprintf(stderr,
+                "etude_lines_hosttest: runner fault: status %d\n--- stdout\n%s--- stderr\n%s",
+                status, out, err);
+        CHECK(0, "the runner's own suite is a suite of the map");
     }
 }
 
@@ -992,6 +1016,7 @@ int main(int argc, char **argv)
         check_row(&rows[i]);
     check_maps();
     check_named();
+    check_runner();
     check_status();
     if (failures)
         fprintf(stderr, "etude_lines_hosttest: %d checks failed\n", failures);

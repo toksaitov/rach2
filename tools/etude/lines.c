@@ -170,7 +170,7 @@ static int map_line(struct lines *l, char *line)
     struct suite *s, *more;
     char *word = strtok(line, " \t");
     size_t i;
-    if (!word || !suite_name(word) || !strcmp(word, "runner"))
+    if (!word || !suite_name(word))
         return -1;
     for (i = 0; i < l->nsuites; i++)
         if (!strcmp(l->suites[i].name, word))
@@ -605,12 +605,31 @@ static const char *seconds(int known, uint64_t us)
     return out;
 }
 
+/** Say whether suite `si` is the runner's own, `runner`, which a fault of
+ * the runner fails as well. */
+static int runner_suite(const struct lines *l, size_t si)
+{
+    return !strcmp(l->suites[si].name, "runner");
+}
+
+/** Say whether the map has the runner's own suite. */
+static int has_runner_suite(const struct lines *l)
+{
+    size_t i;
+    for (i = 0; i < l->nsuites; i++)
+        if (runner_suite(l, i))
+            return 1;
+    return 0;
+}
+
 /** Print a suite's items that did not pass, and its result line. */
 static void print_suite(const struct lines *l, size_t si)
 {
     const struct suite *s = &l->suites[si];
     enum rank word = s->items ? s->worst : R_INCOMPLETE;
     size_t i;
+    if (l->nfaults && runner_suite(l, si))
+        word = R_FAILURE;
     for (i = 0; i < l->nitems; i++) {
         const struct item *it = &l->items[i];
         if (it->suite == (int)si && it->rank != R_PASS)
@@ -628,6 +647,8 @@ static void print_runner(const struct lines *l)
     size_t i;
     for (i = 0; i < l->nfaults; i++)
         say(stderr, "run: runner: %s", l->faults[i]);
+    if (has_runner_suite(l))
+        return;
     if (l->run)
         elapsed = eh_json_get(eh_json_get(l->run->data, "time"), "elapsed_us");
     if (elapsed)
@@ -647,12 +668,12 @@ static void print_failed(const struct lines *l)
     }
     names[0] = 0;
     for (i = 0; i < l->nsuites; i++)
-        if (l->suites[i].own)
+        if (l->suites[i].own || (l->nfaults && runner_suite(l, i)))
             used += (size_t)snprintf(names + used, size - used, "%s%s", used ? " " : "",
                                      l->suites[i].name);
     for (i = 0; i < l->nextra; i++)
         used += (size_t)snprintf(names + used, size - used, "%s%s", used ? " " : "", l->extra[i]);
-    if (l->nfaults)
+    if (l->nfaults && !has_runner_suite(l))
         snprintf(names + used, size - used, "%srunner", used ? " " : "");
     if (names[0])
         say(stderr, "run: result: failed: %s", names);
