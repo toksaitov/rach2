@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "proof": "museapi",
+  "summary": "the museapi suite on x86-64 against two faults in the fake API server's Responses protocol; the server is Python and runs as it is, so nothing is built",
+  "tree": "shared",
+  "sources": [
+    "tests/system/fakeapi/proto_responses.py"
+  ],
+  "artifacts": [
+    "${WORK}/proto_responses.py"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "cp tests/system/fakeapi/proto_responses.py ${WORK}/"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 exec sh tests/proofs/guest.sh run museapi 'museapi-test: PASS'"
+    ],
+    "bound_s": 1800
+  },
+  "faults": [
+    {
+      "name": "result-accepted",
+      "summary": "proto_responses.py takes any output of a tool call as the one a turn expects, so the wrong tool result is accepted for want of a refusal",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/proto_responses.py",
+          "find": "        if all(w in text for w in wanted):",
+          "replace": "        if True:"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "museapi-test: FAIL: the server did not refuse a wrong tool result"
+        ]
+      }
+    },
+    {
+      "name": "namespace-unsearched",
+      "summary": "a namespace's functions are looked for among the request's top-level tools, so the server finds none of Muse's tools and refuses its first turn",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/proto_responses.py",
+          "find": "        tools = [t for space in spaces for t in space.get(\"tools\") or []]",
+          "replace": "        tools = list(tools)"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "museapi-test: FAIL: muse exec ended with status"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "proof": "agents-accept",
+  "summary": "the agentsaccept suite, the QEMU mode of agents_accept.sh, on x86-64 with Claude Code alone, against a kernel that does not tell a terminal's programs that its window changed size",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/tty/pty.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 sh tests/proofs/guest.sh make rach2 && ARCH=x86_64 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 RACH2_ACCEPT_AGENTS=claude exec sh tests/proofs/guest.sh run agentsaccept 'agents-accept: PASS'"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "winch",
+      "summary": "a pseudo-terminal's master sends no SIGWINCH when it sets the window size, as sshd does when the client's window changes, so the tmux client on the machine never learns the new size",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "        if (p->slave.fg_pgid != 0) {\n            tty_signal_group(p->slave.fg_pgid, SIGWINCH);\n",
+          "replace": "        if (0) {\n            tty_signal_group(p->slave.fg_pgid, SIGWINCH);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "agents-accept: FAIL: claude: the resized terminal: got [120x39 120x39 1]"
+        ]
+      }
+    }
+  ]
+}

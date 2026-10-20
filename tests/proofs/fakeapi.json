@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "proof": "fakeapi",
+  "summary": "the fakeapi suite on x86-64 against a fault in the plain protocol's check of a request and one in the server's verdict; the server is Python and runs as it is, so nothing is built",
+  "tree": "shared",
+  "sources": [
+    "tests/system/fakeapi/proto_plain.py",
+    "tests/system/fakeapi/fakeapi.py"
+  ],
+  "artifacts": [
+    "${WORK}/proto_plain.py",
+    "${WORK}/fakeapi.py"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "cp tests/system/fakeapi/proto_plain.py tests/system/fakeapi/fakeapi.py ${WORK}/"
+    ],
+    "bound_s": 60
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 exec sh tests/proofs/guest.sh run fakeapi 'fakeapi-test: PASS'"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "path-ignored",
+      "summary": "proto_plain.py's check of the path is taken out, so the request the script does not expect plays the last step",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/proto_plain.py",
+          "find": "    if request.path != expected[\"path\"]:",
+          "replace": "    if False and request.path != expected[\"path\"]:"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "fakeapi-test: FAIL: the server answered a request its script does not expect"
+        ]
+      }
+    },
+    {
+      "name": "unexpected-uncounted",
+      "summary": "fakeapi.py no longer counts an unexpected request as a failure, so the server's verdict passes the run",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "                self.failures.append(f\"request {n}: {request.describe()}: {reason}\")",
+          "replace": "                pass"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "fakeapi-test: FAIL: the server's verdict, status 0, did not fail the run for the unexpected request"
+        ]
+      }
+    }
+  ]
+}
