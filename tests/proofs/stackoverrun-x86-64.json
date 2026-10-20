@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "proof": "stackoverrun-x86-64",
+  "summary": "the memory suite's two stack-overrun rows on x86-64, whose double fault has an interrupt stack of its own, with faults in the guard pages and in vector 8's gate",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/mm/kheap.c",
+    "rach2/kernel.c",
+    "rach2/sys/arch/x86_64/idt.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=x86_64 sh tests/proofs/guest.sh make rach2 test-image build/tests/system/harness && ARCH=x86_64 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel images/test.krffs"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "ARCH=x86_64",
+      "sh",
+      "tests/proofs/guest.sh",
+      "exec",
+      "${WORK}",
+      "/bin/sh",
+      "-c",
+      ". tests/system/stackoverrun_row.sh; status=0; for where in fork boot; do stackoverrun_row build/tests/system/harness \"$1/kernel\" \"$1/test.krffs\" \"$where\" \"$1/$where.console.log\" || status=1; done; exit \"$status\"",
+      "stackoverrun",
+      "${WORK}"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "guard-mapped",
+      "summary": "kalloc_guarded mapping the guard page below a stack like the pages above it, which breaks the fork row",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/kheap.c",
+          "find": "    if (guard >= heap_pages || map_run(guard + 1, count) != 0) {\n",
+          "replace": "    if (guard >= heap_pages || map_run(guard, count + 1) != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "stackoverrun: fork: fail: the overrun was not reported",
+          "stackoverrun: boot: pass"
+        ]
+      }
+    },
+    {
+      "name": "boot-guard-mapped",
+      "summary": "guard_boot_stack leaving the page below the boot stack mapped, which breaks the boot row",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    unmap_kernel_frame((uintptr_t)stack_guard);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "stackoverrun: fork: pass",
+          "stackoverrun: boot: fail: the overrun was not reported"
+        ]
+      }
+    },
+    {
+      "name": "interrupt-gate",
+      "summary": "vector 8's gate without the double fault's interrupt stack, which breaks both rows, since the double fault then faults a third time",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86_64/idt.c",
+          "find": "    set_gate(8, isr8, GATE_KERNEL, IST_DOUBLE_FAULT);\n",
+          "replace": "    set_gate(8, isr8, GATE_KERNEL, 0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "stackoverrun: fork: fail: the overrun was not reported",
+          "stackoverrun: boot: fail: the overrun was not reported"
+        ]
+      }
+    }
+  ]
+}

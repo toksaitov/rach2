@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "proof": "sigcontext",
+  "summary": "sigmusl on i686 alone, with FXSR and with rach2.nofxsr, on a kernel whose sigframe.c does not fill the ucontext's registers",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/arch/i686/sigframe.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/sigmusl"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 sh tests/proofs/guest.sh make rach2 test-image build/tests/system/harness && ARCH=i686 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/musl/sigmusl && ARCH=i686 sh tests/proofs/guest.sh image ${WORK} 2 tests/musl/sigmusl"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "status=0; ARCH=i686 sh tests/proofs/guest.sh boot \"$1\" --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max --append 'rach2.rescue' --timeout 30 --steptmo 10 --ok 'SIGMUSL OK' --never 'SIGMUSL FAIL' \"expect=Type 'help'\" 'send=exec /sigmusl' 'expect=SIGMUSL' 'expect=returning to kernel shell' >\"$1/fxsr.out\" 2>&1 || status=$?; sed 's/^/fxsr: /' \"$1/fxsr.out\"; fxsr=$status; status=0; ARCH=i686 sh tests/proofs/guest.sh boot \"$1\" --net hubport,id=net0,hubid=0 --qemu-arg=-cpu --qemu-arg=max --append 'rach2.rescue rach2.nofxsr' --timeout 30 --steptmo 10 --ok 'SIGMUSL OK' --never 'SIGMUSL FAIL' \"expect=Type 'help'\" 'send=exec /sigmusl' 'expect=SIGMUSL' 'expect=returning to kernel shell' >\"$1/x87.out\" 2>&1 || status=$?; sed 's/^/x87: /' \"$1/x87.out\"; [ \"$fxsr\" -eq 0 ] && [ \"$status\" -eq 0 ]",
+      "sigcontext",
+      "${WORK}"
+    ],
+    "bound_s": 300
+  },
+  "faults": [
+    {
+      "name": "short",
+      "summary": "the call of fill_sigcontext taken out of the i686 sigframe.c",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/sigframe.c",
+          "find": "        fill_sigcontext(&frame.rt.uc.mc, tf, fp_addr, oldmask);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "fxsr: SIGMUSL FAIL: ucontext cs=0x0 esp=0x0 fpregs=0x0",
+          "x87: SIGMUSL FAIL: ucontext cs=0x0 esp=0x0 fpregs=0x0"
+        ]
+      }
+    }
+  ]
+}

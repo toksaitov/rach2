@@ -1,9 +1,10 @@
 # stackoverrun_row.sh: the memory suite's row for a kernel stack that runs out.
 # shellcheck shell=sh
 #
-# tests/system/suites/memory.sh sources it to run the row, and
-# tests/system/stackoverrun_mutate.sh to prove the row against compiled
-# faults, so the two cannot come to judge different things.
+# tests/system/suites/memory.sh sources it to run the row, and the test of
+# tests/proofs/stackoverrun-i686.json and stackoverrun-x86-64.json to prove
+# the row against compiled faults, so the two cannot come to judge different
+# things.
 #
 # stackoverrun_row HARNESS KERNEL IMAGE WHERE LOG boots KERNEL on IMAGE with
 # `rach2.stackoverrun=WHERE`: `fork` descends a stack from kstack_alloc, as a

@@ -107,7 +107,7 @@ grep -aq "strings: swept" "$LOG" || \
 echo "memory-test: the copies, the fill and the move swept at every length and alignment: OK"
 # A kernel stack that runs out, on a stack of each kind: the boot must name
 # the thread whose stack ran out and stop (tests/system/stackoverrun_row.sh,
-# which tests/system/stackoverrun_mutate.sh proves).
+# which tests/proofs/stackoverrun-*.json prove).
 for where in fork boot; do
     row=$(stackoverrun_row "$HARNESS" "$KERNEL" "$IMAGE" "$where" "$OUT.stackoverrun-$where.log") ||
         fail "$row"
