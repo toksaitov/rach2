@@ -66,8 +66,14 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     size_t out = 0, err = 0;
     int rc = 2, done = 0;
 
-    if (ex == NULL || etude_ledger_verdict_path(l, id, verdict, sizeof(verdict)) != 0)
+    if (ex == NULL) {
+        fprintf(stderr, "etude-bridge: executor: %s\n", strerror(errno));
         goto done;
+    }
+    if (etude_ledger_verdict_path(l, id, verdict, sizeof(verdict)) != 0) {
+        fprintf(stderr, "etude-bridge: verdict: %s\n", strerror(errno));
+        goto done;
+    }
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = id;
     spec.argv = argv;
@@ -78,8 +84,14 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     spec.child = etude_ledger_child;
     spec.reg_ctx = l;
     spec.verdict = verdict;
-    if (stopped || etude_exec_start(ex, &spec, &p) != 0)
+    if (stopped) {
+        fprintf(stderr, "etude-bridge: start: cancelled by signal %d\n", (int)stopped);
         goto done;
+    }
+    if (etude_exec_start(ex, &spec, &p) != 0) {
+        fprintf(stderr, "etude-bridge: start: %s: %s\n", argv[0], strerror(errno));
+        goto done;
+    }
     while (!done) {
         if (stopped || posix_now_us() >= until)
             etude_exec_cancel(p);
@@ -91,9 +103,28 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     r = etude_proc_result(p);
     *cleanup = r->cleanup;
     rc = r->end == ETUDE_END_EXITED ? r->value : 2;
-    if (r->cleanup != ETUDE_CLEANUP_CONFIRMED || r->out.total > r->out.kept ||
-        r->err.total > r->err.kept)
+    if (r->end == ETUDE_END_SIGNALED)
+        fprintf(stderr, "etude-bridge: end: signal %d\n", r->value);
+    else if (r->end == ETUDE_END_STOPPED) {
+        if (stopped)
+            fprintf(stderr, "etude-bridge: end: cancelled by signal %d\n", (int)stopped);
+        else
+            fprintf(stderr, "etude-bridge: end: time limit exceeded: %u seconds\n", seconds);
+    } else if (r->end != ETUDE_END_EXITED)
+        fprintf(stderr, "etude-bridge: end: lost\n");
+    if (r->cleanup != ETUDE_CLEANUP_CONFIRMED) {
+        fprintf(stderr, "etude-bridge: cleanup: %s\n",
+                r->cleanup == ETUDE_CLEANUP_PENDING ? "pending" : "unconfirmed");
         rc = 2;
+    }
+    if (r->out.total > r->out.kept) {
+        fprintf(stderr, "etude-bridge: output: stdout exceeded %zu bytes\n", spec.output_max);
+        rc = 2;
+    }
+    if (r->err.total > r->err.kept) {
+        fprintf(stderr, "etude-bridge: output: stderr exceeded %zu bytes\n", spec.output_max);
+        rc = 2;
+    }
 done:
     if (ex != NULL)
         etude_exec_free(ex);

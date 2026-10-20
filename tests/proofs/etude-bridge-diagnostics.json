@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "proof": "etude-bridge-diagnostics",
+  "summary": "A missing program reports its path and system error on stderr",
+  "tree": "private",
+  "sources": [
+    "tools/etude/posix/etude_bridge.c",
+    "tests/host/etude_bridge_hosttest.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_bridge_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tools/etude/include -I tools/etude/posix -I utils -I tests/host -I tests/host/compat ${SRC}/tests/host/etude_bridge_hosttest.c tools/etude/posix/bridge.c tools/etude/ledger.c tools/etude/capture.c utils/sha256.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c -o ${WORK}/etude_bridge_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_bridge_hosttest"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "silent-start",
+      "summary": "The bridge omits the error when a program cannot start",
+      "edits": [
+        {
+          "file": "tools/etude/posix/etude_bridge.c",
+          "find": "        fprintf(stderr, \"etude-bridge: start: %s: %s\\n\", argv[0], strerror(errno));\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-bridge-test: fail: missing program diagnostic:"
+        ]
+      }
+    }
+  ]
+}

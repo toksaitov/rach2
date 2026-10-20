@@ -372,6 +372,46 @@ static void wrapper(const char *ledger)
     active_worker = 0;
 }
 
+/** A missing program gives its path and the system error on stderr. */
+static void missing_program(const char *ledger)
+{
+    const char *program = fix_path("no-program");
+    FILE *err = fopen(fix_path("missing-stderr"), "w+");
+    char actual[4096], expected[4096];
+    size_t n;
+    pid_t pid;
+    int st;
+
+    CHECK(err != NULL, "missing program stderr file");
+    if (err == NULL)
+        return;
+    pid = fork();
+    CHECK(pid >= 0, "missing program fork");
+    if (pid == 0) {
+        char *args[] = {"etude-bridge",    "-d",   (char *)fix_dir(), (char *)ledger,
+                        "missing-program", "test", "shared",          "1,1,1",
+                        "10,20,10",        "5",    (char *)program,   NULL};
+        if (dup2(fileno(err), STDERR_FILENO) < 0)
+            _exit(99);
+        fclose(err);
+        optind = 1;
+        _exit(bridge_main(11, args));
+    }
+    if (pid > 0) {
+        active_worker = pid;
+        CHECK(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 2,
+              "missing program status");
+        active_worker = 0;
+        rewind(err);
+        n = fread(actual, 1, sizeof(actual) - 1, err);
+        actual[n] = '\0';
+        snprintf(expected, sizeof(expected), "etude-bridge: start: %s: %s\n", program,
+                 strerror(ENOENT));
+        CHECK(!ferror(err) && strcmp(actual, expected) == 0, "missing program diagnostic");
+    }
+    fclose(err);
+}
+
 /** Exercise the bridge with private locks, without using host admission. */
 int main(void)
 {
@@ -398,6 +438,7 @@ int main(void)
     ports(l, ledger);
     etude_ledger_close(l);
     wrapper(ledger);
+    missing_program(ledger);
 #if defined(__linux__)
     lost_controller(ledger);
     abandoned(ledger);
