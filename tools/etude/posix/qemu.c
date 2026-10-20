@@ -188,12 +188,16 @@ static void machine_release(struct etude_machine *m)
     free(m);
 }
 
-/** Make the machine's private directory and the paths of its sockets. */
+/**
+ * Make the machine's private directory and the paths of its sockets: under
+ * TMPDIR, or under /tmp when TMPDIR is unset, relative, or too long for the
+ * sockets' paths to fit their addresses.
+ */
 static int machine_dir(struct etude_machine *m)
 {
     const char *tmp = getenv("TMPDIR");
 
-    if (tmp == NULL || tmp[0] != '/')
+    if (tmp == NULL || tmp[0] != '/' || strlen(tmp) + sizeof("/etude-qemu.XXXXXX") > sizeof(m->dir))
         tmp = "/tmp";
     if ((size_t)snprintf(m->dir, sizeof(m->dir), "%s/etude-qemu.XXXXXX", tmp) >= sizeof(m->dir)) {
         m->dir[0] = '\0';
