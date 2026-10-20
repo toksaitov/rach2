@@ -35,7 +35,7 @@ These variables change a run:
 
 A run that boots machines claims a block of host ports, so several clones on one host can run the same network suite at once; [the system tests' Readme](system/Readme.md) describes the claim and the other rules the runner keeps.
 
-The fault proofs, the scripts that compile a deliberate fault into the kernel or a program and require a test to catch it, are run by hand as `sh tests/host/NAME.sh`, `sh tests/system/NAME.sh` or `sh tests/system/accept/NAME.sh`; [the host tests' Readme](host/Readme.md) and the system tests' Readme list them.
+The fault proofs, which compile a deliberate fault into the kernel or a program and require a test to catch it, are run by hand. Most are catalogues of etude's proof driver in `proofs/`, run as `build/tools/etude/etude-proof -t . tests/proofs/NAME.json` or, for one whose build reads the tree's own sources, `sh tools/etude/proof.sh tests/proofs/NAME.json`, as [etude's Readme](../tools/etude/Readme.md) describes under Proofs; the rest are scripts, run as `sh tests/host/NAME.sh`, `sh tests/system/NAME.sh` or `sh tests/system/accept/NAME.sh`. [The host tests' Readme](host/Readme.md) and the system tests' Readme name the proof of each test.
 
 ### By hand
 
@@ -110,4 +110,4 @@ A probe is a C file at this directory's top, added to `PROGS` in `tests/Makefile
 
 Then give the program its place. Add it to `PROBES` in `system/runner/runtests.c` when it can run in the shared boot of the test image and must exit 0. Otherwise add it to a suite and list it in `probe-suites` with that suite's name, or, for a fixture or a program run by hand, list it in `probe-helpers` with its use. Then give it a native case in [`native/`](native/Readme.md), which runs it on a Rach2 that is already up, or a line of `native/machine` with the reason it needs a machine of QEMU's. A new suite is described in [the system tests' Readme](system/Readme.md#adding-tests).
 
-A new test is trusted only after a fault compiled into what it runs has made it fail and the restored source has made it pass again; `AGENTS.md` and the `testing` skill give the rule, and `system/probe_faults.txt` is the list of such faults for the `default` suite's rows. Run the new test's suite, `tests/run style` and `tests/run host` before committing.
+A new test is trusted only after a fault compiled into what it runs has made it fail and the restored source has made it pass again; `AGENTS.md` and the `testing` skill give the rule, and the catalogues `proofs/probe-PROBE.json`, with `system/probe_faults.txt` for the rows they do not cover, list such faults for the `default` suite's rows. Run the new test's suite, `tests/run style` and `tests/run host` before committing.
