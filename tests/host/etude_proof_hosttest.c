@@ -27,6 +27,7 @@
  * when the work's path is relative, and the driver's TMPDIR gets nothing: a
  * faulty test's scratch there is kept with the work after a failure and
  * removed with it after a pass, with a directory the test left unwritable.
+ * A work that cannot be removed after a pass is named with the reason.
  * A shared proof needs the tree's run lock, puts its faults into the tree and
  * restores it, also when a signal stops it while a faulty test runs.
  */
@@ -635,6 +636,34 @@ static void test_scratch(void)
         unsetenv("TMPDIR");
 }
 
+/* A test that leaves in the work, once, a directory whose path is longer than
+ * PATH_MAX: two chains of 25 names of 100 characters, one moved to the end of
+ * the other, since mkdir cannot be given a path that long. */
+#define DEEP_TEST                                                                    \
+    "n=$(printf %0100d 0); p=$n; i=1; while [ $i -lt 25 ]; do p=$p/$n; "             \
+    "i=$((i+1)); done; [ -d ${WORK}/a ] || { mkdir -p ${WORK}/a/$p ${WORK}/b/$p && " \
+    "mv ${WORK}/b ${WORK}/a/$p/; } || exit 9; " TEST
+
+/**
+ * A passing proof whose work has a path longer than PATH_MAX keeps the work,
+ * and names it with the reason.
+ */
+static void test_unremoved(void)
+{
+    struct cat c = {"private", BUILD, DEEP_TEST, 30, F_VALUE};
+    char tree[1024], want[1200];
+    struct outcome out;
+    int before = fails;
+
+    make_tree("unremoved", tree);
+    prove("unremoved", tree, &c, NULL, 0, &out);
+    fix_format(want, sizeof want, "etude-proof: not removed: %s: %s\n", out.work,
+               strerror(ENAMETOOLONG));
+    CHECK(out.status == 0 && exists(out.work) && strstr(out.log, want) != NULL,
+          "unremoved: a work that cannot be removed after a pass is named with the reason");
+    show("unremoved", &out, before);
+}
+
 /** A work directory given by a relative path gives an absolute TMPDIR. */
 static void test_relative(void)
 {
@@ -791,6 +820,7 @@ int main(void)
     test_refused();
     test_bound();
     test_scratch();
+    test_unremoved();
     test_relative();
     test_shared();
     test_stopped();

@@ -8,8 +8,9 @@
 # text found twice, a shared tree taken as held when it is not, a source
 # left no newer than an artifact whose time is ahead, a stopped proof that
 # keeps its work or leaves its faults in the tree, commands given the
-# driver's TMPDIR, a relative work path left relative, and a work that keeps
-# an unwritable directory after a pass must each be found.
+# driver's TMPDIR, a relative work path left relative, a work that keeps an
+# unwritable directory after a pass, and a work left after a pass with no
+# line that names it must each be found.
 #
 # Usage: sh tests/host/etude_proof_mutate.sh [--texts]
 set -eu
@@ -50,6 +51,8 @@ faults = {
     'tmpdir': ('        spec.envp = env;\n', '        spec.envp = environ;\n'),
     'absolute': ("    if (r->work != NULL && r->work[0] != '/') {\n", '    if (0) {\n'),
     'writable': ('    chmod(path, (st.st_mode & 07777) | S_IRWXU);\n', ''),
+    'unremoved': ('        if (remove_tree(r->work) != 0)\n',
+                  '        if (remove_tree(r->work) != 0 && 0)\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -64,10 +67,10 @@ if [ "${1:-}" = --texts ]; then
     export RACH2_FAULT_TEXTS
     apply_fault tools/etude/proof.c once
     for fault in unreached restored passed status lines only kept held newer stop-work \
-        stop-restore tmpdir absolute writable; do
+        stop-restore tmpdir absolute writable unremoved; do
         apply_fault tools/etude/posix/proof.c "$fault"
     done
-    echo 'etude-proof-mutation: texts: all fifteen faults found once'
+    echo 'etude-proof-mutation: texts: all sixteen faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -159,5 +162,6 @@ prove posix/proof.c stop-restore 'stopped: the tree is restored'
 prove posix/proof.c tmpdir "scratch: the faulty test's TMPDIR is its own in the work"
 prove posix/proof.c absolute 'relative: a relative work directory gives the commands an absolute'
 prove posix/proof.c writable 'scratch: the work is removed after a pass, with an unwritable'
+prove posix/proof.c unremoved 'unremoved: a work that cannot be removed after a pass is named'
 restore
 run_phase restored 0

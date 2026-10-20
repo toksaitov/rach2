@@ -230,7 +230,8 @@ static int make_parents(char *path)
 }
 
 /**
- * Remove the file or the directory tree at `path`; 0, or -1.
+ * Remove the file or the directory tree at `path`; 0, or -1 with `errno` set
+ * by the first removal that failed.
  *
  * Each directory is made readable, writable and searchable before it is
  * read, since a command's scratch may have one that is not; a symbolic link
@@ -242,7 +243,7 @@ static int remove_tree(const char *path)
     struct stat st;
     char *sub;
     DIR *dir;
-    int status = 0;
+    int status = 0, e = 0;
 
     if (lstat(path, &st) != 0)
         return errno == ENOENT ? 0 : -1;
@@ -256,12 +257,17 @@ static int remove_tree(const char *path)
         if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0)
             continue;
         sub = join(path, d->d_name);
-        if (sub == NULL || remove_tree(sub) != 0)
+        if ((sub == NULL || remove_tree(sub) != 0) && status == 0) {
+            e = sub == NULL ? ENOMEM : errno;
             status = -1;
+        }
         free(sub);
     }
     closedir(dir);
-    return rmdir(path) != 0 ? -1 : status;
+    if (rmdir(path) != 0 && status == 0)
+        return -1;
+    errno = e;
+    return status;
 }
 
 /** Say whether the file at `path` has exactly `len` bytes of `text`. */
@@ -961,9 +967,10 @@ static void close_run(struct run *r, int status)
         etude_exec_free(r->ex);
     if (r->store != NULL)
         etude_store_close(r->store);
-    if (r->work != NULL && ((status == 0 && !r->o->keep) || status == ETUDE_PROOF_STOPPED))
-        remove_tree(r->work);
-    else if (r->work != NULL)
+    if (r->work != NULL && ((status == 0 && !r->o->keep) || status == ETUDE_PROOF_STOPPED)) {
+        if (remove_tree(r->work) != 0)
+            fprintf(r->o->log, "etude-proof: not removed: %s: %s\n", r->work, strerror(errno));
+    } else if (r->work != NULL)
         fprintf(r->o->log, "etude-proof: evidence: %s\n", r->work);
     free(r->work);
     free(r->srcroot);
