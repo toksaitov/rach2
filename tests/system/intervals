@@ -39,3 +39,5 @@ tests/host/etude_sched_hosttest.c: a job holds its claims so the workers' claims
 tests/timeprobe.c: naps between looks; the parent's are the sleep tested
 tests/host/etude_native_hosttest.c: a process or a group is looked at again every 20 ms
 tests/host/etude_legacyrun_hosttest.c: a FIFO is looked at again every 50 ms
+tests/host/etude_legacyset_hosttest.c: a set is looked at again every 50 ms
+tests/host/etude_legacyset_hosttest.c: the record is read again every 50 ms
