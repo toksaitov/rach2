@@ -657,7 +657,7 @@ int main(int argc, char **argv)
     first = i;
     if (argc - first < 2) {
         fprintf(stderr, "usage: sizecheck [--pmccabe TABLE] [--lines N] [--params N] [--nesting N] "
-                        "[--complexity N] REASONS FILE...\n");
+                        "[--complexity N] [--report] REASONS FILE...\n");
         return 2;
     }
     read_reasons(argv[first]);
