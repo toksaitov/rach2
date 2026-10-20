@@ -638,11 +638,14 @@ static void test_scratch(void)
 
 /* A test that leaves in the work, once, a directory whose path is longer than
  * PATH_MAX: two chains of 25 names of 100 characters, one moved to the end of
- * the other, since mkdir cannot be given a path that long. */
-#define DEEP_TEST                                                                    \
-    "n=$(printf %0100d 0); p=$n; i=1; while [ $i -lt 25 ]; do p=$p/$n; "             \
-    "i=$((i+1)); done; [ -d ${WORK}/a ] || { mkdir -p ${WORK}/a/$p ${WORK}/b/$p && " \
-    "mv ${WORK}/b ${WORK}/a/$p/; } || exit 9; " TEST
+ * the other. Each name is made and entered from its parent so that no call
+ * needs the whole path, even on hosts whose PATH_MAX is less than one chain. */
+#define DEEP_TEST                                             \
+    "n=$(printf %0100d 0); [ -d ${WORK}/a ] || { "            \
+    "mkdir ${WORK}/a ${WORK}/b || exit 9; for d in b a; do "  \
+    "(cd ${WORK}/$d || exit 9; i=0; while [ $i -lt 25 ]; do " \
+    "mkdir $n && cd $n || exit 9; i=$((i+1)); done; "         \
+    "[ $d = b ] || mv ${WORK}/b .) || exit 9; done; }; " TEST
 
 /**
  * A passing proof whose work has a path longer than PATH_MAX keeps the work,
