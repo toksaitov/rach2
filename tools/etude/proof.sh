@@ -5,6 +5,7 @@
 # holds nothing and builds nothing.
 #
 # Usage: sh tools/etude/proof.sh [-w WORK] [-b STORE] [-k] PROOF [FAULT...]
+#        sh tools/etude/proof.sh [-w WORK] [-b STORE] [-k] --base PROOF
 #        sh tools/etude/proof.sh --texts PROOF...
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
