@@ -10,10 +10,13 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
+#include <process.h>
 #define popen  _popen
 #define pclose _pclose
+#define getpid _getpid
 #define QUIET  "2>NUL"
 #else
+#include <unistd.h>
 #define QUIET "2>/dev/null"
 #endif
 
@@ -83,38 +86,60 @@ static int matches(const char *bytes, size_t length, const char *hex)
     return !strcmp(actual, hex);
 }
 
+/** Say whether the file `path` has exactly the `length` bytes `bytes`. */
+static int holds(const char *path, const char *bytes, size_t length)
+{
+    char *old;
+    size_t old_length;
+    int same;
+    if (cmp_read_file(path, length, &old, &old_length))
+        return 0;
+    same = old_length == length && !memcmp(old, bytes, length);
+    free(old);
+    return same;
+}
+
 /**
  * Keep bytes in the store as a file named by their SHA-256, unless the store
- * has them already; give the file's path and the digest. Return -1 when the
- * file cannot be written, or holds other bytes.
+ * has them already; give the file's path and the digest. The bytes go to a
+ * partial file of this process's, which is synchronized and renamed to the
+ * name, so that a write cut short, as on a full disk, leaves nothing under
+ * the name, and a file there with other bytes is replaced. Return -1 when the
+ * file cannot be written.
  */
 int cmp_store(const char *store, const char *bytes, size_t length, char *path, size_t size,
               char hex[65])
 {
+    static unsigned long made;
     struct sha256 sha;
     unsigned char digest[32];
-    char *old;
-    size_t old_length;
+    char part[4200];
     FILE *file;
+    int ok;
     sha256_init(&sha);
     sha256_update(&sha, (const unsigned char *)bytes, length);
     sha256_final(&sha, digest);
     sha256_hex(digest, hex);
-    if ((size_t)snprintf(path, size, "%s/%s", store, hex) >= size)
+    if ((size_t)snprintf(path, size, "%s/%s", store, hex) >= size ||
+        (size_t)snprintf(part, sizeof(part), "%s.%ld.%lu.part", path, (long)getpid(), made++) >=
+            sizeof(part))
         return -1;
-    if (!cmp_read_file(path, length, &old, &old_length)) {
-        int same = old_length == length && !memcmp(old, bytes, length);
-        free(old);
-        return same ? 0 : -1;
-    }
-    file = fopen(path, "wb");
+    if (holds(path, bytes, length))
+        return 0;
+    file = fopen(part, "wb");
     if (!file)
         return -1;
-    if (fwrite(bytes, 1, length, file) != length) {
-        fclose(file);
-        return -1;
-    }
-    return fclose(file) ? -1 : 0;
+    ok = fwrite(bytes, 1, length, file) == length && fflush(file) == 0;
+#ifndef _WIN32
+    ok = ok && fsync(fileno(file)) == 0;
+#endif
+    ok = fclose(file) == 0 && ok;
+    /* The C runtime of Windows renames to no name that exists. */
+    if (ok && rename(part, path) != 0)
+        ok = remove(path) == 0 && rename(part, path) == 0;
+    if (!ok)
+        remove(part);
+    return ok || holds(path, bytes, length) ? 0 : -1;
 }
 
 /** Write a word for a shell, quoted when it has a character the shell reads. */
