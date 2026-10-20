@@ -17,28 +17,19 @@
 # milestone's directory. A vendored Readme with a heading out of the list must
 # not be read.
 #
-# With --mutate each fault below is put into the private copy of one checker,
-# must fail the row named for it, and is restored and touched before every row
-# runs again.
+# STYLE_CHECKERS names the directory the two checkers are copied from, by
+# default the tree's tools/verify; tests/proofs/style-scope.json runs the rows
+# against copies with faults in them.
 #
-# --texts puts each fault into its copy and restores it, and runs no row.
-#
-# Usage: sh tests/system/style_scope_test.sh [--mutate | --texts]
+# Usage: sh tests/system/style_scope_test.sh
 #
 set -eu
 
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'style-scope-test: usage: style_scope_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'style-scope-test: usage: style_scope_test.sh' >&2; exit 2; }
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" style-scope-test "$repo/tests/system/style_scope_test.sh" "$@"
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" style-scope-test "$repo/tests/system/style_scope_test.sh" "$@"
 work=
 trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
@@ -52,13 +43,11 @@ for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host t
     mkdir -p "$tree/$d"
 done
 for f in scripts.sh textcheck.sh; do
-    cp "$repo/tools/verify/$f" "$tree/tools/verify/$f"
-    cp "$repo/tools/verify/$f" "$tree/saved/$f"
+    cp "${STYLE_CHECKERS:-$repo/tools/verify}/$f" "$tree/tools/verify/$f"
 done
 # The byte scanner the text check runs, compiled into the private tree; with no
 # makefile there, the check's own make finds it present and does nothing.
-# --texts runs no row and needs none.
-[ "$mutate" -eq 2 ] || "${CC:-cc}" -O2 -Wall -Wextra -Werror \
+"${CC:-cc}" -O2 -Wall -Wextra -Werror \
     -o "$tree/build/tools/verify/asciiscan" "$repo/tools/verify/asciiscan.c"
 
 # One clean file of each kind, and the vendored scripts the list must leave out.
@@ -166,96 +155,6 @@ rows()
     planted text-doc-link man/Readme.md 6 '[milestone cited]'
 }
 
-# change FAULT: put FAULT into the private copy of its checker; the text it
-# replaces must occur once there.
-change()
-{
-    python3 - "$tree/tools/verify" "$1" <<'PY'
-import pathlib
-import sys
-
-directory, fault = pathlib.Path(sys.argv[1]), sys.argv[2]
-faults = {
-    'list-extensionless': ('scripts.sh',
-        " -o ! -name '*.*' \\) -print", " \\) -print"),
-    'list-script': ('scripts.sh',
-        " -o -name '*.script' -o", " -o"),
-    'list-vendored': ('scripts.sh',
-        "    -path 'vendor/busybox/busybox-*' -prune -o \\\n", ""),
-    'text-ascii': ('textcheck.sh',
-        "py_files; config_files; } |", "py_files; } |"),
-    'text-config': ('textcheck.sh',
-        "        grep -n ' -- ' \"$f\" \\\n", "        grep -n ' --- ' \"$f\" \\\n"),
-    'text-diary': ('textcheck.sh',
-        "        grep -nE '\\b(Phase|Part) [0-9]' \"$f\" \\\n",
-        "        grep -nE '\\b(Phase|Part) [0-9]x' \"$f\" \\\n"),
-    'text-code': ('textcheck.sh',
-        "    { ch_files; other_code_files; } | sort -u | while IFS= read -r f; do\n"
-        "        [ -f \"$f\" ] || continue\n"
-        "        sed 's/\"[^\"]*\"//g' \"$f\" | grep -n ' -- '",
-        "    ch_files | sort -u | while IFS= read -r f; do\n"
-        "        [ -f \"$f\" ] || continue\n"
-        "        sed 's/\"[^\"]*\"//g' \"$f\" | grep -n ' -- '"),
-    'text-order': ('textcheck.sh',
-        "                    last = rank[h]\n", "                    last = 0\n"),
-    'text-heading': ('textcheck.sh',
-        "if (!(h in rank))", "if (0)"),
-    'text-milestone': ('textcheck.sh',
-        "tolower($0) ~ /milestones? +[0-9]/ ||", "$0 ~ /milestones? +[0-9]/ ||"),
-    'text-docs': ('textcheck.sh',
-        "    find man '(' -name", "    find man -prune -o '(' -name"),
-}
-name, old, new = faults[fault]
-path = directory / name
-text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit("style-scope-test: pattern is not unique: " + fault)
-path.write_text(text.replace(old, new))
-PY
-}
-
-if [ "$mutate" -ne 2 ]; then
-    rows
-    [ -z "$failed" ] || exit 1
-    echo "style-scope-test: result: pass: every row"
-    [ "$mutate" -eq 1 ] || exit 0
-fi
-
-for fault in list-extensionless list-script list-vendored text-ascii text-config \
-    text-diary text-code text-order text-heading text-milestone text-docs; do
-    case $fault in
-        list-*) copy=scripts.sh; named=scripts-list ;;
-        text-ascii) copy=textcheck.sh; named=text-config-ascii ;;
-        text-config) copy=textcheck.sh; named=text-config-dash ;;
-        text-diary) copy=textcheck.sh; named=text-config-diary ;;
-        text-code) copy=textcheck.sh; named=text-code-dash ;;
-        text-order) copy=textcheck.sh; named=text-doc-order ;;
-        text-heading) copy=textcheck.sh; named=text-doc-heading ;;
-        text-milestone) copy=textcheck.sh; named=text-doc-milestone ;;
-        text-docs) copy=textcheck.sh; named=text-doc-link ;;
-    esac
-    change "$fault"
-    if [ "$mutate" -eq 2 ]; then
-        cp "$tree/saved/$copy" "$tree/tools/verify/$copy"
-        continue
-    fi
-    touch "$tree/tools/verify/$copy"
-    rows >"$work/$fault.log"
-    case " $failed " in
-        *" $named "*) echo "style-scope-test: result: $fault: the fault fails $named" ;;
-        *)
-            cat "$work/$fault.log"
-            echo "style-scope-test: result: fail: the $fault fault passed $named" >&2
-            exit 1 ;;
-    esac
-    cp "$tree/saved/$copy" "$tree/tools/verify/$copy"
-    touch "$tree/tools/verify/$copy"
-    rows >"$work/$fault.restored.log"
-    [ -z "$failed" ] || { cat "$work/$fault.restored.log"; exit 1; }
-    echo "style-scope-test: result: $fault: restored, every row passes"
-done
-if [ "$mutate" -eq 2 ]; then
-    echo 'style-scope-test: texts: every fault is once in its source'
-    exit 0
-fi
-echo "style-scope-test: result: pass: eleven faults failed their rows; restored rows passed"
+rows
+[ -z "$failed" ] || exit 1
+echo "style-scope-test: result: pass: every row"

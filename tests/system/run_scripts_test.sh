@@ -20,28 +20,19 @@
 # stand-in uname names the host system as UNAME_S says, Linux by default, and
 # a stand-in x86_64-elf-gdb waits for those arguments and exits.
 #
-# With --mutate each fault below is put into the private copy of one script,
-# must fail the row named for it, and is restored and touched before every row
-# runs again.
+# RUN_SCRIPTS names the directory the scripts are copied from, by default the
+# tree's rach2/; tests/proofs/run-scripts.json runs the rows against copies
+# with faults in them.
 #
-# --texts puts each fault into its copy and restores it, and runs no row.
-#
-# Usage: sh tests/system/run_scripts_test.sh [--mutate | --texts]
+# Usage: sh tests/system/run_scripts_test.sh
 #
 set -eu
 
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'run-scripts-test: usage: run_scripts_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'run-scripts-test: usage: run_scripts_test.sh' >&2; exit 2; }
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" run-scripts-test "$repo/tests/system/run_scripts_test.sh" "$@"
-fi
+. "$repo/tests/system/runlock.sh"
+runlock_hold "$repo" run-scripts-test "$repo/tests/system/run_scripts_test.sh" "$@"
 work=
 trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP
@@ -51,11 +42,10 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-run-scripts.XXXXXX")
 # The scripts name their files from `cd` and `pwd`, which fold a doubled
 # slash, so the expected paths are made the same way.
 work=$(CDPATH='' cd -- "$work" && pwd)
-mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" "$work/saved" \
+mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" \
     "$work/build/x86_64/rach2" "$work/build/x86_64/images"
 for f in run.sh run_from_disk.sh run_from_iso.sh debug.sh qemu_devices.sh; do
-    cp "$repo/rach2/$f" "$work/rach2/$f"
-    cp "$repo/rach2/$f" "$work/saved/$f"
+    cp "${RUN_SCRIPTS:-$repo/rach2}/$f" "$work/rach2/$f"
 done
 : >"$work/build/rach2/kernel"
 : >"$work/build/x86_64/rach2/kernel"
@@ -236,80 +226,6 @@ rows()
     refused iso-usage 2 'usage: ./run_from_iso.sh'
 }
 
-# Change one private copy where the old text occurs exactly once.
-change()
-{
-    python3 - "$work/rach2/$1" "$2" "$3" <<'PY'
-import pathlib
-import sys
-
-path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit("run-scripts-test: pattern is not unique: " + old)
-path.write_text(text.replace(old, new))
-PY
-    touch "$work/rach2/$1"
-}
-
-if [ "$mutate" -ne 2 ]; then
-    rows
-    [ -z "$failed" ] || exit 1
-    echo "run-scripts-test: result: pass: every row"
-    [ "$mutate" -eq 1 ] || exit 0
-fi
-
-# The dollars are the scripts' own, left for their shell.
-# shellcheck disable=SC2016
-for fault in run-default run-override disk-default disk-override iso-default iso-override \
-    display-default display-x11 net-off debug-rescue; do
-    case $fault in
-        run-*) copy=run.sh ;;
-        disk-*) copy=run_from_disk.sh ;;
-        iso-*) copy=run_from_iso.sh ;;
-        display-* | net-*) copy=qemu_devices.sh ;;
-        debug-*) copy=debug.sh ;;
-    esac
-    case $fault in
-        display-default)
-            change "$copy" 'DISPLAY_MODE="${DISPLAY_MODE:-none}"' ':'
-            named=run-nodisplay ;;
-        display-x11)
-            change "$copy" '[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]' '[ -z "${WAYLAND_DISPLAY:-}" ]'
-            named=run-x11 ;;
-        net-off)
-            change "$copy" 'NET_OPTS="-nic none"' 'NET_OPTS=""'
-            named=run-nonet ;;
-        debug-rescue)
-            change "$copy" '    set -- -append rach2.rescue' '    set --'
-            named=debug-rescue ;;
-        *-default)
-            change "$copy" 'CPU="${CPU:-max}"' 'CPU="${CPU:-qemu64}"'
-            named=${fault%-default}-default ;;
-        *-override)
-            change "$copy" 'CPU="${CPU:-max}"' 'CPU=max'
-            named=${fault%-override}-cpu ;;
-    esac
-    if [ "$mutate" -eq 2 ]; then
-        cp "$work/saved/$copy" "$work/rach2/$copy"
-        continue
-    fi
-    rows >"$work/$fault.log"
-    case " $failed " in
-        *" $named "*) echo "run-scripts-test: result: $fault: the fault fails $named" ;;
-        *)
-            cat "$work/$fault.log"
-            echo "run-scripts-test: result: fail: the $fault fault passed $named" >&2
-            exit 1 ;;
-    esac
-    cp "$work/saved/$copy" "$work/rach2/$copy"
-    touch "$work/rach2/$copy"
-    rows >"$work/$fault.restored.log"
-    [ -z "$failed" ] || { cat "$work/$fault.restored.log"; exit 1; }
-    echo "run-scripts-test: result: $fault: restored, every row passes"
-done
-if [ "$mutate" -eq 2 ]; then
-    echo 'run-scripts-test: texts: every fault is once in its source'
-    exit 0
-fi
-echo "run-scripts-test: result: pass: ten faults failed their rows; restored rows passed"
+rows
+[ -z "$failed" ] || exit 1
+echo "run-scripts-test: result: pass: every row"

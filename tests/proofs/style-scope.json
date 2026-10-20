@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "proof": "style-scope",
+  "summary": "style_scope_test.sh against private copies of tools/verify/scripts.sh and textcheck.sh, each fault failing the row named for it",
+  "tree": "private",
+  "sources": [
+    "tools/verify/scripts.sh",
+    "tools/verify/textcheck.sh"
+  ],
+  "artifacts": [
+    "${WORK}/verify/scripts.sh",
+    "${WORK}/verify/textcheck.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "mkdir -p ${WORK}/verify && exec cp ${SRC}/tools/verify/scripts.sh ${SRC}/tools/verify/textcheck.sh ${WORK}/verify/"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "STYLE_CHECKERS=${WORK}/verify",
+      "sh",
+      "tests/system/style_scope_test.sh"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "style-scope-test: result: fail: "
+  },
+  "faults": [
+    {
+      "name": "list-extensionless",
+      "summary": "scripts.sh leaves out the scripts with no suffix",
+      "edits": [
+        {
+          "file": "tools/verify/scripts.sh",
+          "find": " -o ! -name '*.*' \\) -print",
+          "replace": " \\) -print"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: scripts-list:"
+        ]
+      }
+    },
+    {
+      "name": "list-script",
+      "summary": "scripts.sh leaves out the `.script` files",
+      "edits": [
+        {
+          "file": "tools/verify/scripts.sh",
+          "find": " -o -name '*.script' -o",
+          "replace": " -o"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: scripts-list:"
+        ]
+      }
+    },
+    {
+      "name": "list-vendored",
+      "summary": "scripts.sh lists BusyBox's vendored tree",
+      "edits": [
+        {
+          "file": "tools/verify/scripts.sh",
+          "find": "    -path 'vendor/busybox/busybox-*' -prune -o \\\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: scripts-list:"
+        ]
+      }
+    },
+    {
+      "name": "text-ascii",
+      "summary": "textcheck.sh does not scan the configuration files for non-ASCII bytes",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "py_files; config_files; } |",
+          "replace": "py_files; } |"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-config-ascii:"
+        ]
+      }
+    },
+    {
+      "name": "text-config",
+      "summary": "textcheck.sh misses a spaced \"--\" on a manifest line",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "        grep -n ' -- ' \"$f\" \\\n",
+          "replace": "        grep -n ' --- ' \"$f\" \\\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-config-dash:"
+        ]
+      }
+    },
+    {
+      "name": "text-diary",
+      "summary": "textcheck.sh misses a \"Phase\" tag in a suppression file",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "        grep -nE '\\b(Phase|Part) [0-9]' \"$f\" \\\n",
+          "replace": "        grep -nE '\\b(Phase|Part) [0-9]x' \"$f\" \\\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-config-diary:"
+        ]
+      }
+    },
+    {
+      "name": "text-code",
+      "summary": "textcheck.sh misses a spaced \"--\" in an assembly comment",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "    { ch_files; other_code_files; } | sort -u | while IFS= read -r f; do\n        [ -f \"$f\" ] || continue\n        sed 's/\"[^\"]*\"//g' \"$f\" | grep -n ' -- '",
+          "replace": "    ch_files | sort -u | while IFS= read -r f; do\n        [ -f \"$f\" ] || continue\n        sed 's/\"[^\"]*\"//g' \"$f\" | grep -n ' -- '"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-code-dash:"
+        ]
+      }
+    },
+    {
+      "name": "text-order",
+      "summary": "textcheck.sh misses a heading out of order",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "                    last = rank[h]\n",
+          "replace": "                    last = 0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-doc-order:"
+        ]
+      }
+    },
+    {
+      "name": "text-heading",
+      "summary": "textcheck.sh misses a heading not in the list",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "if (!(h in rank))",
+          "replace": "if (0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-doc-heading:"
+        ]
+      }
+    },
+    {
+      "name": "text-milestone",
+      "summary": "textcheck.sh misses a milestone cited by number",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "tolower($0) ~ /milestones? +[0-9]/ ||",
+          "replace": "$0 ~ /milestones? +[0-9]/ ||"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-doc-milestone:"
+        ]
+      }
+    },
+    {
+      "name": "text-docs",
+      "summary": "textcheck.sh does not read man/'s documents",
+      "edits": [
+        {
+          "file": "tools/verify/textcheck.sh",
+          "find": "    find man '(' -name",
+          "replace": "    find man -prune -o '(' -name"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-scope-test: result: fail: text-doc-link:"
+        ]
+      }
+    }
+  ]
+}

@@ -8,39 +8,21 @@
 # The rows run a recipe of the vendor stamps' shape, in a private tree, over
 # the real mk/dryrun.mk: with no flags and with --no-print-directory the build
 # must run, and with -n, with --dry-run, and with -n beside
-# --no-print-directory it must not. `--mutate` puts the first-word test back in
-# the private copy of the rule and requires the --no-print-directory row to
-# fail, then restores it and requires every row to pass again. The fault
-# replaces the rule whole; --texts checks that mk/dryrun.mk still defines the
-# DRY_RUN it replaces, once, and runs no row.
+# --no-print-directory it must not. DRYRUN_MK names the rule to copy, by
+# default the tree's; tests/proofs/dryrun.json runs the rows against a copy
+# with the first-word test put back.
 #
 # Usage:
-#     sh tests/system/dryrun_test.sh [--mutate | --texts]
+#     sh tests/system/dryrun_test.sh
 #
 set -eu
 
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'dryrun-test: usage: dryrun_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
-[ "$#" -le 1 ] || exit 2
+[ "$#" -eq 0 ] || { echo 'dryrun-test: usage: dryrun_test.sh' >&2; exit 2; }
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$REPO/tests/system/runlock.sh"
-    runlock_hold "$REPO" dryrun-test "$REPO/tests/system/dryrun_test.sh" "$@"
-fi
+. "$REPO/tests/system/runlock.sh"
+runlock_hold "$REPO" dryrun-test "$REPO/tests/system/dryrun_test.sh" "$@"
 cd "$REPO"
-if [ "$mutate" -eq 2 ]; then
-    if [ "$(grep -c '^DRY_RUN :=' mk/dryrun.mk 2>/dev/null)" != 1 ]; then
-        echo 'dryrun-test: mk/dryrun.mk does not define DRY_RUN once' >&2
-        exit 1
-    fi
-    echo 'dryrun-test: texts: every fault is once in its source'
-    exit 0
-fi
 mkdir -p build
 WORK=
 trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
@@ -55,7 +37,7 @@ say() { echo "dryrun-test: $1"; }
 bad() { echo "dryrun-test: FAIL: $1" >&2; fails=$((fails + 1)); }
 
 mkdir -p "$WORK/mk"
-cp mk/dryrun.mk "$WORK/mk/dryrun.mk"
+cp "${DRYRUN_MK:-mk/dryrun.mk}" "$WORK/mk/dryrun.mk"
 cat > "$WORK/build.sh" <<'EOB'
 #!/bin/sh
 echo built > "$(dirname "$0")/marker"
@@ -106,33 +88,6 @@ rows()
     row '-n with --no-print-directory' skipped -n --no-print-directory
 }
 
-if [ "$mutate" -eq 0 ]; then
-    rows
-    [ "$fails" = 0 ] || exit 1
-    say PASS
-    exit 0
-fi
-
 rows
-[ "$fails" = 0 ] || { echo 'dryrun-test: FAIL: the fixed rule did not pass' >&2; exit 1; }
-say 'the fixed rule passes every row'
-
-# The fault is a rule that looks for the letter n in the first word of
-# MAKEFLAGS, which reads --no-print-directory as -n.
-cat > "$WORK/mk/dryrun.mk" <<'EOD'
-DRY_RUN := $(findstring n,$(firstword $(MAKEFLAGS)))
-EOD
-fails=0
-rm -f "$WORK/marker"
-out=$( (cd "$WORK" && make --no-print-directory stamp) 2>&1 ) || true
-case "$out" in
-    *'dry run'*) say 'the first-word rule skips the build under --no-print-directory: the mutation is caught' ;;
-    *) echo 'dryrun-test: FAIL: the mutation built anyway' >&2; exit 1 ;;
-esac
-[ -f "$WORK/marker" ] && { echo 'dryrun-test: FAIL: the mutation built the stamp' >&2; exit 1; }
-
-cp mk/dryrun.mk "$WORK/mk/dryrun.mk"
-touch "$WORK/mk/dryrun.mk"
-rows
-[ "$fails" = 0 ] || { echo 'dryrun-test: FAIL: the restored rule did not pass' >&2; exit 1; }
-say 'restored: PASS'
+[ "$fails" = 0 ] || exit 1
+say PASS

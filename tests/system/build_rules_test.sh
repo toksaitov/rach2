@@ -47,14 +47,13 @@
 #     runs the ISH sub-make and does not link the object with the host cc.
 #
 # The trees hold copies of the real files, and marker directories stand for
-# build/, so a clean there cannot reach the real one. --mutate puts each fault
-# into the private copy that holds it, requires the row named for it to fail,
-# then restores and touches the copy and requires every row again. --texts
-# puts each fault into its copy and restores it, and runs no row, so that a
-# fault whose text has left its file is found without the rows.
+# build/, so a clean there cannot reach the real one. BUILD_RULES_OVERLAY
+# names a directory whose files, at their paths in the tree, replace the
+# tree's in both private trees; tests/proofs/build-rules.json runs the rows
+# with copies that have faults in them.
 #
 # Usage:
-#     sh tests/system/build_rules_test.sh [--mutate | --texts]
+#     sh tests/system/build_rules_test.sh
 #
 set -eu
 # The fixture lists i686 and x86-64 sources by naming each architecture, so
@@ -62,19 +61,11 @@ set -eu
 # flags of the make that runs a suite, which tests/run gives ARCH.
 unset ARCH MAKEFLAGS MFLAGS
 
-case ${1:-} in
-    '') mutate=0 ;;
-    --mutate) mutate=1 ;;
-    --texts) mutate=2 ;;
-    *) echo 'build-rules-test: usage: build_rules_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
-[ "$#" -le 1 ] || exit 2
+[ "$#" -eq 0 ] || { echo 'build-rules-test: usage: build_rules_test.sh' >&2; exit 2; }
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-if [ "${1:-}" != --texts ]; then
-    . "$REPO/tests/system/runlock.sh"
-    runlock_hold "$REPO" build-rules-test "$REPO/tests/system/build_rules_test.sh" "$@"
-fi
+. "$REPO/tests/system/runlock.sh"
+runlock_hold "$REPO" build-rules-test "$REPO/tests/system/build_rules_test.sh" "$@"
 cd "$REPO"
 mkdir -p build/tests
 WORK=
@@ -139,11 +130,13 @@ cp -R mk "$C/mk"
 mkdir -p "$C/krffs/manifests"
 cp krffs/manifests/*.manifest "$C/krffs/manifests/"
 rm -f "$C/krffs/recovery_authorized_keys"
-cp "$S/tools/verify/check_sources.sh" "$WORK/check_sources.saved"
-cp "$C/mk/toolchain.mk" "$WORK/toolchain.saved"
-cp "$C/Makefile" "$WORK/Makefile.saved"
-cp "$C/mk/images.mk" "$WORK/images.saved"
-cp "$C/mk/arch.mk" "$WORK/arch.saved"
+if [ -n "${BUILD_RULES_OVERLAY:-}" ]; then
+    (cd "$BUILD_RULES_OVERLAY" && find . -type f) | while IFS= read -r f; do
+        for t in "$S" "$C"; do
+            [ ! -f "$t/$f" ] || cp "$BUILD_RULES_OVERLAY/$f" "$t/$f"
+        done
+    done
+fi
 
 # The PATH with each directory that holds a cross compiler replaced by one of
 # links to everything else in it: make, the shell and the utilities are still
@@ -544,132 +537,5 @@ rows()
     ish_absolute_row
 }
 
-# Change one private copy where the old text occurs exactly once.
-mutate()
-{
-    python3 - "$1" "$2" "$3" <<'PY'
-import pathlib
-import sys
-
-path, old, new = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-text = path.read_text()
-if text.count(old) != 1:
-    raise SystemExit("build-rules-test: pattern is not unique: " + old)
-path.write_text(text.replace(old, new))
-PY
-    touch "$1"
-}
-
-# Move the lines of the private Makefile from the one that begins FIRST to
-# the one that begins LAST: to the top of the private mk/images.mk with
-# `images`, or to just after the line AFTER with `after`.
-move_lines()
-{
-    python3 - "$C/Makefile" "$C/mk/images.mk" "$1" "$2" "$3" "${4:-}" <<'PY'
-import pathlib
-import sys
-
-makefile, images = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-first, last, where, after = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
-lines = makefile.read_text().splitlines(keepends=True)
-starts = [i for i, l in enumerate(lines) if l.startswith(first)]
-ends = [i for i, l in enumerate(lines) if l.startswith(last)]
-if len(starts) != 1 or len(ends) != 1 or ends[0] < starts[0]:
-    raise SystemExit("build-rules-test: the lines to move are not unique: " + first)
-block = lines[starts[0]:ends[0] + 1]
-del lines[starts[0]:ends[0] + 1]
-if where == "images":
-    images.write_text("".join(block) + images.read_text())
-else:
-    at = [i for i, l in enumerate(lines) if l.startswith(after)]
-    if len(at) != 1:
-        raise SystemExit("build-rules-test: the line to move after is not unique: " + after)
-    lines[at[0] + 1:at[0] + 1] = block
-makefile.write_text("".join(lines))
-PY
-    touch "$C/Makefile" "$C/mk/images.mk"
-}
-
-if [ "$mutate" -ne 2 ]; then
-    rows
-    [ -z "$failed" ] || exit 1
-    [ "$mutate" -eq 1 ] || exit 0
-fi
-
-# Each fault, the copy it changes and the row it must fail. The make faults
-# are no rule for the GRUB disk, the tools' names defined in mk/images.mk
-# after the disk rules that name them, and the fragment included before the
-# names its own rules take; the parts fault is os-real's prerequisites without
-# e2fsprogs.
-# shellcheck disable=SC2016
-for fault in unlisted missing clean grub-target tools-late include-early plain-sealed one-arch \
-    release parts ish-absolute; do
-    case $fault in
-        unlisted)
-            copies="$S/tools/verify/check_sources.sh=$WORK/check_sources.saved"
-            mutate "$S/tools/verify/check_sources.sh" 'unlisted=$(comm -13 "$lf" "$df")' 'unlisted='
-            row='sources-unlisted' ;;
-        missing)
-            copies="$S/tools/verify/check_sources.sh=$WORK/check_sources.saved"
-            mutate "$S/tools/verify/check_sources.sh" 'missing=$(comm -23 "$lf" "$df")' 'missing='
-            row='sources-missing' ;;
-        clean)
-            copies="$C/mk/toolchain.mk=$WORK/toolchain.saved"
-            mutate "$C/mk/toolchain.mk" 'ifneq ($(filter-out clean,$(or $(MAKECMDGOALS),build)),)' \
-                'ifneq ($(or $(MAKECMDGOALS),build),)'
-            row='clean-without-cross-compiler' ;;
-        grub-target)
-            copies="$C/Makefile=$WORK/Makefile.saved"
-            mutate "$C/Makefile" 'os-real-grub-disk: krffs' 'os-real-grub-disk-gone: krffs'
-            row='grub-disk-rule' ;;
-        tools-late)
-            copies="$C/Makefile=$WORK/Makefile.saved $C/mk/images.mk=$WORK/images.saved"
-            move_lines 'MKMBR           =' 'MKEXFATFIXTURE  =' images
-            row='disk-tools' ;;
-        include-early)
-            copies="$C/Makefile=$WORK/Makefile.saved"
-            move_lines 'include mk/images.mk' 'include mk/images.mk' after 'os-real-ext2: $(OS_REAL_EXT2)'
-            row='images-include' ;;
-        plain-sealed)
-            copies="$C/Makefile=$WORK/Makefile.saved"
-            mutate "$C/Makefile" 'SEALED_DISK = $(IMAGES_DIR)/rach2-sealed$(RECOVERY_KEY_TAG).disk' \
-                'SEALED_DISK = $(IMAGES_DIR)/rach2-sealed.disk'
-            row='key-names' ;;
-        one-arch)
-            copies="$C/mk/arch.mk=$WORK/arch.saved"
-            mutate "$C/mk/arch.mk" 'ARCH_BUILDS = build build/x86_64' 'ARCH_BUILDS = build'
-            row='key-names' ;;
-        release)
-            copies="$C/Makefile=$WORK/Makefile.saved"
-            mutate "$C/Makefile" '$(error release: refused:' '$(info release: allowed:'
-            row='release-guard' ;;
-        parts)
-            copies="$C/Makefile=$WORK/Makefile.saved"
-            mutate "$C/Makefile" 'check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)' \
-                'check-dropbearmulti ports/doom $(MAN_ALL)'
-            row='manifest-parts' ;;
-        ish-absolute)
-            copies="$C/Makefile=$WORK/Makefile.saved"
-            mutate "$C/Makefile" '$(CURDIR)/$(ARCH_BUILD)/ish/ish:' '$(CURDIR)/$(ARCH_BUILD)/ish/ish-gone:'
-            row='ish-absolute' ;;
-    esac
-    if [ "$mutate" -eq 2 ]; then
-        for pair in $copies; do
-            cp "${pair#*=}" "${pair%%=*}"
-        done
-        continue
-    fi
-    rows
-    case " $failed " in
-        *" $row "*) echo "build-rules-test: result: $fault: the fault fails $row" ;;
-        *) echo "build-rules-test: result: fail: the $fault fault passed $row" >&2; exit 1 ;;
-    esac
-    for pair in $copies; do
-        cp "${pair#*=}" "${pair%%=*}"
-        touch "${pair%%=*}"
-    done
-    rows
-    [ -z "$failed" ] || exit 1
-    echo "build-rules-test: result: $fault: restored, every row passes"
-done
-[ "$mutate" -ne 2 ] || echo 'build-rules-test: texts: every fault is once in its source'
+rows
+[ -z "$failed" ] || exit 1
