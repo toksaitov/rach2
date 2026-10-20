@@ -7,21 +7,31 @@
  * returned selector into %gs. It then writes sentinel words through %gs and
  * reads them again while the kernel is entered over and over:
  *
- *   1. Solo phase: thousands of system calls plus busy-waits across many
- *      100 Hz timer interrupts. Every %gs:off read must still equal the
+ *   1. Solo phase: thousands of system calls plus busy-waits, until the
+ *      probe has seen its user time (times(2)) rise at SOLO_INTERRUPTS of
+ *      its looks: each rise is at least one timer interrupt taken from user
+ *      mode since the look before. Every %gs:off read must still equal the
  *      sentinel, so the entry and exit paths of both the system call and the
  *      interrupt must save and restore %gs; one that loaded %gs from the
  *      saved %ds fails at once.
  *
  *   2. Isolation phase: fork a child that points its own TLS descriptor at a
- *      different TCB with different sentinels. Parent and child then spin so
- *      the scheduler switches between them hundreds of times, and then hand
- *      a byte back and forth over two pipes, so that each round takes one
- *      switch to the child and one back; each must always read back its own
- *      sentinels. This holds only if the context switch reprograms the
- *      shared TLS GDT descriptor for each process. Both are bound to
- *      processor 0 first: on two processors each could keep one to itself,
- *      and no switch would go from one to the other.
+ *      different TCB with different sentinels. Parent and child then spin
+ *      until the parent has seen the child's user time (/proc/PID/stat) rise
+ *      at ISO_SWITCHES of its looks: on one processor, each rise is a switch
+ *      from the parent to the child and one back, both made by the
+ *      scheduler while neither process waited. Then they hand a byte back
+ *      and forth over two pipes, so that each round takes one switch to the
+ *      child and one back; each must always read back its own sentinels.
+ *      This holds only if the context switch reprograms the shared TLS GDT
+ *      descriptor for each process. Both are bound to processor 0 first: on
+ *      two processors each could keep one to itself, and no switch would go
+ *      from one to the other.
+ *
+ * The counts are of events the kernel records, so a slow or loaded machine
+ * spins longer and a fast one shorter, and the number of rounds decides
+ * nothing beyond the least each side makes. The runner's limit on the
+ * probe's step ends a run in which the counts never rise.
  *
  * Prints "All TLS checks passed!" and exits 0 when every check passes.
  * Otherwise it prints a line that begins "FAIL: " and exits 1, printing
@@ -52,12 +62,26 @@ typedef unsigned char u8;
 /* Number of sentinel slots checked per TCB (offsets 0,4,...,28). */
 #define NUM_SLOTS 8
 
-/* Iteration counts: thousands of system calls in the solo phase, hundreds of
- * switches in the isolation phase. */
+/* The least rounds each phase makes: thousands of system calls in the solo
+ * phase, thousands of busy waits on each side of the isolation phase. */
 #define SOLO_ITERS  40000
 #define ISO_ITERS   3000
 #define BUSY_SPIN   60000
 #define PING_ROUNDS 200
+
+/* The witnessed events each phase waits for: looks at which the probe's own
+ * user time had risen, each a timer interrupt from user mode, and looks at
+ * which the child's had, each a switch to the child and back. */
+#define SOLO_INTERRUPTS 10
+#define ISO_SWITCHES    20
+
+#define POLLIN 0x001
+
+struct pollfd {
+    int fd;
+    short events;
+    short revents;
+};
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, u32 n)
@@ -101,6 +125,12 @@ static int sys_waitpid(int pid, int *status, int options)
 static void sys_gettimeofday(long *tv2)
 {
     (void)syscall1(SYS_GETTIMEOFDAY, (long)tv2);
+}
+
+/** The times call: the user, system and children's ticks into `tms4`. */
+static void sys_times(long *tms4)
+{
+    (void)syscall1(SYS_TIMES, (long)tms4);
 }
 
 /**
@@ -224,21 +254,99 @@ static void busy(u32 spins)
     }
 }
 
+/** The ticks the timer has charged to this process in user mode, from
+ * times(2): each tick that interrupted its user code adds one. */
+static u32 own_user_ticks(void)
+{
+    long tms[4];
+
+    tms[0] = 0;
+    sys_times(tms);
+    return (u32)tms[0];
+}
+
+/**
+ * The state letter of the child `pid` from /proc/PID/stat, with its user
+ * ticks, field 14, in `*user`; 0 when the file cannot be read or is short.
+ */
+static char child_user_ticks(int pid, u32 *user)
+{
+    char path[32], text[256];
+    char digits[12];
+    int n = 0, at = 0, fd, len, i, state, field;
+    u32 v = (u32)pid;
+    const char *p;
+
+    for (p = "/proc/"; *p; p++) {
+        path[at++] = *p;
+    }
+    do {
+        digits[n++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    while (n) {
+        path[at++] = digits[--n];
+    }
+    for (p = "/stat"; *p; p++) {
+        path[at++] = *p;
+    }
+    path[at] = 0;
+    fd = syscall3(SYS_OPEN, (long)path, 0, 0);
+    if (fd < 0) {
+        return 0;
+    }
+    len = sys_read(fd, text, sizeof(text) - 1);
+    sys_close(fd);
+    if (len <= 0) {
+        return 0;
+    }
+    text[len] = 0;
+    for (i = len - 2; i >= 0 && !(text[i] == ')' && text[i + 1] == ' '); i--) {
+    }
+    if (i < 0) {
+        return 0;
+    }
+    state = i + 2; /* field 3 */
+    for (i = state, field = 3; field < 14 && text[i]; i++) {
+        if (text[i] == ' ') {
+            field++;
+        }
+    }
+    if (field != 14 || text[i] < '0' || text[i] > '9') {
+        return 0;
+    }
+    for (v = 0; text[i] >= '0' && text[i] <= '9'; i++) {
+        v = v * 10 + (u32)(text[i] - '0');
+    }
+    *user = v;
+    return text[state];
+}
+
 /**
  * The solo phase: the sentinels written through %gs survive thousands of
- * system calls and the timer interrupts of busy waits. `fails` is the count
- * of failures so far, and the new count is returned.
+ * system calls and the timer interrupts of busy waits. It runs SOLO_ITERS
+ * rounds, and on until its user time has risen at SOLO_INTERRUPTS of the
+ * looks taken after each busy wait, so that at least that many interrupts
+ * from user mode came and each was followed by a check. `fails` is the
+ * count of failures so far, and the new count is returned.
  */
 static int solo_phase(int fails)
 {
     long tv2[2];
-    int i;
+    u32 last, now;
+    int i, rises = 0;
 
     tls_fill(0xA5A50000u);
-    for (i = 0; i < SOLO_ITERS; i++) {
+    last = own_user_ticks();
+    for (i = 0; i < SOLO_ITERS || rises < SOLO_INTERRUPTS; i++) {
         sys_gettimeofday(tv2); /* int 0x80: the system call's %gs save */
         if ((i & 0x3FF) == 0) {
-            busy(BUSY_SPIN); /* span several timer IRQs */
+            busy(BUSY_SPIN); /* user code for the timer to interrupt */
+            now = own_user_ticks();
+            if (now != last) {
+                rises++;
+                last = now;
+            }
         }
         if (tls_check(0xA5A50000u) != 0) {
             fails++;
@@ -259,9 +367,11 @@ static int solo_phase(int fails)
 /**
  * The child of the isolation phase: it switches to its own TCB and checks
  * only its own sentinels, across switches and across each round of the byte
- * passed over the pipes. It exits 0 when all were intact, 8 when the base
- * it inherited did not read the parent's sentinels, 7 when it could not
- * set its own, and 1 on a mismatch. Does not return.
+ * passed over the pipes. It spins ISO_ITERS rounds, and on until the
+ * parent's first byte is readable, so that it runs beside the parent for as
+ * long as the parent spins. It exits 0 when all were intact, 8 when the
+ * base it inherited did not read the parent's sentinels, 7 when it could
+ * not set its own, and 1 on a mismatch or a failed poll. Does not return.
  *
  * Before it sets its own TLS, the child still has the base it inherited
  * across fork, which copies the TLS base and the %gs of the trap frame. Its
@@ -271,6 +381,7 @@ static int solo_phase(int fails)
  */
 static void iso_child(const int to_child[2], const int to_parent[2])
 {
+    struct pollfd ready;
     long tv2[2];
     char token;
     int centry;
@@ -292,12 +403,25 @@ static void iso_child(const int to_child[2], const int to_parent[2])
     load_gs(centry);
     tls_fill(0x5A5A0000u);
 
-    for (i = 0; i < ISO_ITERS; i++) {
+    ready.fd = to_child[0];
+    ready.events = POLLIN;
+    for (i = 0;; i++) {
         sys_gettimeofday(tv2);
         busy(BUSY_SPIN);
         if (tls_check(0x5A5A0000u) != 0) {
             cbad++;
             break;
+        }
+        ready.revents = 0;
+        if (i + 1 >= ISO_ITERS) {
+            int polled = syscall3(SYS_POLL, (long)&ready, 1, 0);
+
+            if (polled < 0) {
+                cbad++;
+            }
+            if (polled != 0) {
+                break;
+            }
         }
     }
     for (i = 0; i < PING_ROUNDS && cbad == 0; i++) {
@@ -312,16 +436,29 @@ static void iso_child(const int to_child[2], const int to_parent[2])
 /**
  * The parent's switches of the isolation phase: it keeps tcb_parent and
  * checks its sentinels across switches to the child, then across each
- * round of the byte it sends the child and gets back. `fails` is the count
+ * round of the byte it sends the child and gets back.
+ *
+ * The parent spins ISO_ITERS rounds, and on until the user time of the child
+ * `pid` has risen at ISO_SWITCHES of the looks it takes after each round.
+ * Both are on processor 0 and the parent waits for nothing while it spins,
+ * so a rise between two of its looks is the child having run in user mode
+ * between them: a switch away from the parent and one back, after which the
+ * parent checks. A child that has ended, or whose stat cannot be read, ends
+ * the spin as a failure, since it can no longer run. `fails` is the count
  * of failures so far, and the new count is returned.
  */
-static int iso_switches(const int to_child[2], const int to_parent[2], int fails)
+static int iso_switches(int pid, const int to_child[2], const int to_parent[2], int fails)
 {
     long tv2[2];
-    char token;
-    int i;
+    char token, state;
+    u32 last = 0, now = 0;
+    int i, rises = 0;
 
-    for (i = 0; i < ISO_ITERS; i++) {
+    if (child_user_ticks(pid, &last) == 0) {
+        puts_("FAIL: the child's user time cannot be read\n");
+        return fails + 1;
+    }
+    for (i = 0; i < ISO_ITERS || rises < ISO_SWITCHES; i++) {
         sys_gettimeofday(tv2);
         busy(BUSY_SPIN);
         if (tls_check(0xA5A50000u) != 0) {
@@ -332,6 +469,16 @@ static int iso_switches(const int to_child[2], const int to_parent[2], int fails
                 puts_("\n");
             }
             break;
+        }
+        state = child_user_ticks(pid, &now);
+        if (state == 0 || state == 'Z') {
+            puts_("FAIL: the child ended before it ran beside the parent\n");
+            fails++;
+            break;
+        }
+        if (now != last) {
+            rises++;
+            last = now;
         }
     }
     token = 'x';
@@ -365,7 +512,7 @@ static int iso_parent(int pid, const int to_child[2], const int to_parent[2], in
 
     sys_close(to_child[0]);
     sys_close(to_parent[1]);
-    fails = iso_switches(to_child, to_parent, fails);
+    fails = iso_switches(pid, to_child, to_parent, fails);
     sys_close(to_child[1]);
     got = sys_waitpid(pid, &status, 0);
     if (got != pid) {
