@@ -2638,11 +2638,18 @@ static int procfs_gen_vmstat(struct procfs_text *t)
  * been given up since boot; and, while the stack has not finished with a
  * device present (`usb_core_busy`), a last line with how many. A machine with
  * no controller, or one booted without USB, has the file, empty.
+ *
+ * The count is taken before the lines. Each line is read with interrupts off
+ * for that line alone, so the pump can run between two of them and finish a
+ * device whose line was already passed; counted after, that device would be
+ * neither listed nor busy. Counted first, a reading without the `busy` line
+ * lists every device that was running when it began, since a device not in
+ * progress then needs several passes of the pump before it runs.
  */
 static int procfs_gen_usb(struct procfs_text *t)
 {
     int i;
-    int busy;
+    int busy = usb_core_busy();
     char line[96];
 
     for (i = 0; i < USB_MAX_DEVICES; i++) {
@@ -2668,7 +2675,6 @@ static int procfs_gen_usb(struct procfs_text *t)
         ap_u32(t, usbdisk_teardowns());
         ap_str(t, " reclaimed\n");
     }
-    busy = usb_core_busy();
     if (busy > 0) {
         ap_str(t, "busy ");
         ap_u32(t, (uint32_t)busy);
