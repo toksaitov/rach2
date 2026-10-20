@@ -154,9 +154,10 @@ fi
 # ---- 6b: two hubs on two root ports with fourteen devices between them,
 #          sixteen in all, every one configured. A hub's last port is scanned
 #          like its first, which is what a table that fills from behind a hub
-#          needs. The probe is given the count, so it reads /proc/usb until
-#          the kernel lists all sixteen: the shell can start while the hubs
-#          are still being scanned. ----
+#          needs. The shell can start while the hubs are still being scanned,
+#          so the probe reads /proc/usb until the stack says it has finished
+#          with every device it found, and is given the count, so it then
+#          requires all sixteen. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub1 \
@@ -188,7 +189,8 @@ fi
 #          loaded host: a connection told to the core before the scan ends
 #          has its reset refused by a hub that cannot take one yet, and the
 #          port is given up. Every device must still be configured; the
-#          probe is run once the slowed scans have had their time. ----
+#          probe judges the table once the stack says the slowed scans and
+#          the enumeration behind them have ended. ----
 if run_harness --qemu-arg=-cpu --qemu-arg=max \
     --qemu-arg=-device --qemu-arg=qemu-xhci,id=xhci \
     --qemu-arg=-device --qemu-arg=usb-hub,bus=xhci.0,port=1,id=hub1 \

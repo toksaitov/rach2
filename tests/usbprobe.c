@@ -1,9 +1,13 @@
 /**
  * Reads `/proc/usb` and requires the devices the machine was given.
  *
- * `usbprobe N` reads the file again, a bounded number of times, until it
- * lists N devices, and says so: a slowed scan of the hubs may still be
- * configuring them when the shell runs the probe.
+ * The file is read again, yielding between reads, while its `busy` line says
+ * the stack has not finished with a device it found: a hub's scan, slowed or
+ * not, may still be configuring the devices below it when the probe runs.
+ * The probe judges the first reading without that line, the end of
+ * enumeration, so a slower machine delays the judgment and leaves the devices
+ * judged the same. `usbprobe N` then requires N devices and says so; a stack
+ * that finishes with fewer has lost one.
  *
  * The stack's own records say what the kernel found; this is the guest's view
  * of the same thing, which is what a program on the machine can act on. It
@@ -253,17 +257,46 @@ static int read_usb(void)
     return len;
 }
 
-/** The count of the lines in the first `len` bytes of `text`. */
-static int count_lines(int len)
+/** How many lines of the first `len` bytes of `text` begin with `word`. */
+static int lines_beginning(const char *word, int len)
 {
-    int i, lines = 0;
+    int n = (int)strlen(word);
+    int i;
+    int count = 0;
 
-    for (i = 0; i < len; i++) {
-        if (text[i] == '\n') {
-            lines++;
+    for (i = 0; i < len; i = line_end(i, len) + 1) {
+        if (i + n <= len && within(word, i, i + n)) {
+            count++;
         }
     }
-    return lines;
+    return count;
+}
+
+/** The count of the device lines, those that begin with `port `, in the
+ * first `len` bytes of `text`. */
+static int count_devices(int len)
+{
+    return lines_beginning("port ", len);
+}
+
+/**
+ * Read /proc/usb until the stack has finished with every device it found,
+ * which the file says by having no line that begins `busy `, and return the
+ * length of that reading in `text`.
+ *
+ * The stack moves in the timer's and the controller's interrupts, so the
+ * probe yields between readings and counts none of them: the suite's wait for
+ * the probe's word bounds a stack that never finishes.
+ */
+static int read_settled(void)
+{
+    int len = read_usb();
+
+    while (lines_beginning("busy ", len) > 0) {
+        syscall0(SYS_SCHED_YIELD);
+        len = read_usb();
+    }
+    return len;
 }
 
 void probe_main(unsigned long *sp);
@@ -271,10 +304,9 @@ void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
 /**
- * The probe: read the USB device table and say what it lists. With an
- * argument N the machine was given N devices and a slowed scan may still
- * be configuring them, so the file is read again until it lists that many,
- * a bounded number of times, and the count is said.
+ * The probe: read the USB device table once the stack has finished with the
+ * devices it found, and say what it lists. With an argument N the machine
+ * was given N devices, and the table must list that many.
  *
  * Each line is checked for a port, a speed, a device and a class, since a
  * file whose first line held every word and whose second was empty would
@@ -299,18 +331,10 @@ void probe_main(unsigned long *sp)
             want = want * 10 + (argv[1][i] - '0');
         }
     }
-    len = read_usb();
+    len = read_settled();
     if (want > 0) {
-        int tries;
-
-        for (tries = 0; count_lines(len) < want && tries < 600; tries++) {
-            static const long pause[2] = {0, 100000000};
-
-            syscall3(SYS_NANOSLEEP, (long)pause, 0, 0);
-            len = read_usb();
-        }
-        if (count_lines(len) < want) {
-            fail("fewer devices than the machine was given, after the wait");
+        if (count_devices(len) < want) {
+            fail("enumeration ended with fewer devices than the machine was given");
         }
         puts("USBPROBE settled: the devices the machine was given are listed\n");
     }
@@ -326,7 +350,7 @@ void probe_main(unsigned long *sp)
         fail("/proc/usb is empty and USB was not switched off");
     }
 
-    lines = count_lines(len);
+    lines = count_devices(len);
     if (lines < 2) {
         fail("fewer than two devices are listed");
     }
