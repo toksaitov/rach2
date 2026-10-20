@@ -23,6 +23,10 @@ same-block|posix/bridge.c|                return slot * 1000;|                re
 release-live|posix/bridge.c|        if (etude_ledger_list(l, visit, &q) == 0 && !q.found)|        if (etude_ledger_list(l, visit, &q) == 0)|uncertain retains locks after death
 native-overlap|posix/bridge.c|    return port >= 25000 && port <= 65535;|    return port >= 1024 && port <= 65535;|native avoids legacy range
 no-offset|posix/etude_bridge.c|        setenv("RACH2_PORT_OFFSET", offset, 1);|        unsetenv("RACH2_PORT_OFFSET");|old checkout offset registration and status
+no-wait|posix/etude_bridge.c|        if (seconds != 0 && e == EAGAIN && !stopped && posix_now_us() < until) {|        if (0) {|waits for admission
+stop-as-refusal|posix/etude_bridge.c|    result(record, stopped ? "stopped" : "refused", stopped ? stopped : -1);|    result(record, "refused", -1);|stop recorded
+incomplete-as-exit|posix/etude_bridge.c|    else if (rc < 0)|    else if (rc < -1)|incomplete recorded
+status-as-refusal|posix/etude_bridge.c|        result(q.record, "exited", rc);|        result(q.record, "refused", -1);|command status kept apart
 EOF
 }
 

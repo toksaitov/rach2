@@ -336,40 +336,187 @@ static void abandoned(const char *ledger)
 }
 #endif
 
-/** Run the external wrapper on a fixture old checkout, preserving its exit. */
-static void wrapper(const char *ledger)
+/** Start the bridge's main in a child with ARGS, a NULL-terminated list. */
+static pid_t bridge_child(char **args)
 {
     pid_t pid = fork();
-    int st;
+    int n = 0;
 
     if (pid == 0) {
-        char *args[] = {"etude-bridge",
-                        "-p",
-                        "-d",
-                        (char *)fix_dir(),
-                        (char *)ledger,
-                        "old-checkout",
-                        "test",
-                        "shared",
-                        "1,15,1",
-                        "10,20,10",
-                        "5",
-                        "/bin/sh",
-                        "-c",
-                        "test \"$RACH2_PORT_OFFSET\" = 0 || exit 90; "
-                        "grep -q 'state running' \"$1/claims\" || exit 91; exit 7",
-                        "sh",
-                        (char *)ledger,
-                        NULL};
+        while (args[n] != NULL)
+            n++;
         unsetenv("RACH2_PORT_OFFSET");
         unsetenv("SSH_TEST_PORT");
         optind = 1;
-        _exit(bridge_main(16, args));
+        _exit(bridge_main(n, args));
     }
     active_worker = pid;
-    CHECK(waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 7,
-          "old checkout offset registration and status");
+    return pid;
+}
+
+/** Wait for the bridge's child and give its exit status, or -1. */
+static int bridge_status(pid_t pid)
+{
+    int st;
+
     active_worker = 0;
+    if (waitpid(pid, &st, 0) != pid || !WIFEXITED(st))
+        return -1;
+    return WEXITSTATUS(st);
+}
+
+/** Say whether the result file at `path` is the one line `want`. */
+static int recorded(const char *path, const char *want)
+{
+    char line[64] = "";
+    FILE *f = fopen(path, "r");
+
+    if (f == NULL)
+        return 0;
+    if (fgets(line, sizeof(line), f) == NULL)
+        line[0] = '\0';
+    fclose(f);
+    line[strcspn(line, "\n")] = '\0';
+    return strcmp(line, want) == 0;
+}
+
+/* The claim a row looks for in the ledger. */
+static const char *sought;
+
+/** Note whether the sought request waits in the ledger. */
+static int waiting_visit(const struct etude_ledger_claim *c, void *ctx)
+{
+    int *found = ctx;
+
+    if (strcmp(c->id, sought) == 0 &&
+        (strcmp(c->state, "waiting") == 0 || strcmp(c->state, "blocked") == 0))
+        *found = 1;
+    return 0;
+}
+
+/** Wait up to ten seconds for request `id` to wait in the ledger. */
+static int waits_in(struct etude_ledger *l, const char *id)
+{
+    int i, found = 0;
+
+    sought = id;
+    for (i = 0; i < 1000 && !found; i++) {
+        if (etude_ledger_list(l, waiting_visit, &found) != 0)
+            return 0;
+        if (!found)
+            poll(NULL, 0, 10);
+    }
+    return found;
+}
+
+/** Hold fifteen of twenty units of memory, which a claim of ten cannot join. */
+static void hold(struct etude_ledger *l)
+{
+    struct etude_ledger_res res = {"memory_bytes", 15};
+    struct etude_ledger_res cap = {"memory_bytes", 20};
+    CHECK(etude_ledger_admit(l, "holding", "test", &res, 1, &cap, 1, 0) == 0, "hold");
+}
+
+/**
+ * A command waits with -w until a claim ends and room is free, and then the
+ * result file gives its own exit status; a wait past its bound and a stop
+ * during it are recorded as such and run nothing.
+ */
+static void waiting(struct etude_ledger *l, const char *ledger)
+{
+    const char *rec = fix_path("result");
+    const char *ran = fix_path("ran");
+    char *args[] = {"etude-bridge",
+                    "-d",
+                    (char *)fix_dir(),
+                    "-w",
+                    "10",
+                    "-r",
+                    (char *)rec,
+                    (char *)ledger,
+                    "waiter",
+                    "test",
+                    "shared",
+                    "1,10,1",
+                    "10,20,10",
+                    "5",
+                    "/bin/sh",
+                    "-c",
+                    ": > \"$1\"; exit 2",
+                    "sh",
+                    (char *)ran,
+                    NULL};
+    pid_t pid;
+    int st;
+
+    hold(l);
+    pid = bridge_child(args);
+    CHECK(waits_in(l, "waiter"), "waits for admission");
+    CHECK(access(ran, F_OK) != 0, "nothing runs while it waits");
+    CHECK(etude_ledger_finish(l, "holding", ETUDE_CLEANUP_CONFIRMED) == 0, "room freed");
+    st = bridge_status(pid);
+    CHECK(st == 2 && access(ran, F_OK) == 0, "admitted once room is free");
+    CHECK(recorded(rec, "exited 2"), "command status kept apart");
+
+    hold(l);
+    args[4] = "1";
+    args[8] = "expires";
+    unlink(ran);
+    pid = bridge_child(args);
+    st = bridge_status(pid);
+    CHECK(st == 2 && access(ran, F_OK) != 0, "admission wait bounded");
+    CHECK(recorded(rec, "refused"), "refusal recorded");
+
+    args[4] = "30";
+    args[8] = "stopped";
+    pid = bridge_child(args);
+    CHECK(waits_in(l, "stopped"), "stop waits first");
+    kill(pid, SIGTERM);
+    st = bridge_status(pid);
+    CHECK(st == 128 + SIGTERM && access(ran, F_OK) != 0, "stop during wait");
+    CHECK(recorded(rec, "stopped 15"), "stop recorded");
+    CHECK(etude_ledger_finish(l, "holding", ETUDE_CLEANUP_CONFIRMED) == 0, "hold ended");
+}
+
+/** A command killed by a signal fails, and its result is incomplete. */
+static void incomplete(const char *ledger)
+{
+    const char *rec = fix_path("result");
+    char *args[] = {"etude-bridge", "-d",   (char *)fix_dir(), "-r",    (char *)rec, (char *)ledger,
+                    "killed",       "test", "shared",          "1,1,1", "10,20,10",  "5",
+                    "/bin/sh",      "-c",   "kill -KILL $$",   NULL};
+
+    CHECK(bridge_status(bridge_child(args)) == 2, "killed command fails");
+    CHECK(recorded(rec, "incomplete"), "incomplete recorded");
+}
+
+/** Run the external wrapper on a fixture old checkout, preserving its exit. */
+static void wrapper(const char *ledger)
+{
+    const char *rec = fix_path("result");
+    char *args[] = {"etude-bridge",
+                    "-p",
+                    "-d",
+                    (char *)fix_dir(),
+                    "-r",
+                    (char *)rec,
+                    (char *)ledger,
+                    "old-checkout",
+                    "test",
+                    "shared",
+                    "1,15,1",
+                    "10,20,10",
+                    "5",
+                    "/bin/sh",
+                    "-c",
+                    "test \"$RACH2_PORT_OFFSET\" = 0 || exit 90; "
+                    "grep -q 'state running' \"$1/claims\" || exit 91; exit 7",
+                    "sh",
+                    (char *)ledger,
+                    NULL};
+
+    CHECK(bridge_status(bridge_child(args)) == 7, "old checkout offset registration and status");
+    CHECK(recorded(rec, "exited 7"), "exit recorded");
 }
 
 /** A missing program gives its path and the system error on stderr. */
@@ -436,7 +583,9 @@ int main(void)
     shared(l, ledger);
     exclusive(l, ledger);
     ports(l, ledger);
+    waiting(l, ledger);
     etude_ledger_close(l);
+    incomplete(ledger);
     wrapper(ledger);
     missing_program(ledger);
 #if defined(__linux__)

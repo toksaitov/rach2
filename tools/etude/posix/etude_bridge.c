@@ -53,7 +53,12 @@ static void output(const struct etude_output *o, size_t *seen, FILE *f)
     }
 }
 
-/** Run one command, with a registered process and a bound on its whole life. */
+/**
+ * Run one command, with a registered process and a bound on its whole life.
+ *
+ * @return the command's exit status when it exited by itself, with its
+ *         cleanup confirmed and its output whole, and -1 otherwise.
+ */
 static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned seconds,
                    enum etude_cleanup *cleanup)
 {
@@ -64,7 +69,7 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     char verdict[4096];
     uint64_t until = posix_now_us() + (uint64_t)seconds * 1000000;
     size_t out = 0, err = 0;
-    int rc = 2, done = 0;
+    int rc = -1, done = 0;
 
     if (ex == NULL) {
         fprintf(stderr, "etude-bridge: executor: %s\n", strerror(errno));
@@ -102,7 +107,7 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     }
     r = etude_proc_result(p);
     *cleanup = r->cleanup;
-    rc = r->end == ETUDE_END_EXITED ? r->value : 2;
+    rc = r->end == ETUDE_END_EXITED ? r->value : -1;
     if (r->end == ETUDE_END_SIGNALED)
         fprintf(stderr, "etude-bridge: end: signal %d\n", r->value);
     else if (r->end == ETUDE_END_STOPPED) {
@@ -115,15 +120,15 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     if (r->cleanup != ETUDE_CLEANUP_CONFIRMED) {
         fprintf(stderr, "etude-bridge: cleanup: %s\n",
                 r->cleanup == ETUDE_CLEANUP_PENDING ? "pending" : "unconfirmed");
-        rc = 2;
+        rc = -1;
     }
     if (r->out.total > r->out.kept) {
         fprintf(stderr, "etude-bridge: output: stdout exceeded %zu bytes\n", spec.output_max);
-        rc = 2;
+        rc = -1;
     }
     if (r->err.total > r->err.kept) {
         fprintf(stderr, "etude-bridge: output: stderr exceeded %zu bytes\n", spec.output_max);
-        rc = 2;
+        rc = -1;
     }
 done:
     if (ex != NULL)
@@ -134,8 +139,9 @@ done:
 /** Print the command's arguments and return the usage status. */
 static int usage(void)
 {
-    fprintf(stderr, "etude-bridge: usage: etude-bridge [-p] [-d locks] ledger id account "
-                    "shared|alone cpu,bytes,bytes capacity seconds command [args...]\n");
+    fprintf(stderr, "etude-bridge: usage: etude-bridge [-p] [-d locks] [-w seconds] [-r file] "
+                    "ledger id account shared|alone cpu,bytes,bytes capacity seconds "
+                    "command [args...]\n");
     return 2;
 }
 
@@ -152,44 +158,170 @@ static unsigned command_seconds(const char *text)
     return (unsigned)n;
 }
 
-/** Admit one bounded command and retain its locks through confirmed cleanup. */
-int main(int argc, char **argv)
+/**
+ * Write the bridge's own result to `path`, when -r named one, as one line:
+ * `exited N`, `refused`, `incomplete` or `stopped N`.
+ */
+static void result(const char *path, const char *word, int n)
 {
-    struct etude_ledger_res res[3], cap[3];
-    struct etude_ledger *l;
-    struct etude_bridge *b;
-    struct etude_bridge_spec bs;
-    enum etude_cleanup cleanup = ETUDE_CLEANUP_CONFIRMED;
-    const char *dir = "/tmp";
-    char offset[32];
-    unsigned seconds;
-    int opt, legacy = 0, alone, rc;
-    struct sigaction sa;
+    FILE *f;
 
-    while ((opt = getopt(argc, argv, "+pd:")) != -1) {
-        if (opt == 'p')
-            legacy = 1;
-        else if (opt == 'd')
-            dir = optarg;
-        else
-            return usage();
+    if (path == NULL)
+        return;
+    f = fopen(path, "w");
+    if (f == NULL || (n >= 0 ? fprintf(f, "%s %d\n", word, n) : fprintf(f, "%s\n", word)) < 0 ||
+        fclose(f) != 0)
+        fprintf(stderr, "etude-bridge: the result cannot be written to %s: %s\n", path,
+                strerror(errno));
+}
+
+/** Record a refusal, or the stop signal that caused it, and give the status. */
+static int refused(const char *record)
+{
+    result(record, stopped ? "stopped" : "refused", stopped ? stopped : -1);
+    return stopped ? 128 + stopped : 2;
+}
+
+/**
+ * Admit claim `id`, asking again each second for up to `seconds` while the
+ * request waits in the ledger, and once without waiting when `seconds` is 0.
+ *
+ * @return 0 once admitted; -1 with errno set when refused, ETIMEDOUT at the
+ *         bound and EINTR after a stop signal, with no request left waiting.
+ */
+static int admit(struct etude_ledger *l, const char *id, const char *account,
+                 const struct etude_ledger_res *res, const struct etude_ledger_res *cap,
+                 unsigned seconds)
+{
+    uint64_t until = posix_now_us() + (uint64_t)seconds * 1000000;
+    int e;
+
+    while (etude_ledger_admit(l, id, account, res, 3, cap, 3, seconds != 0) != 0) {
+        e = errno;
+        if (seconds != 0 && e == EAGAIN && !stopped && posix_now_us() < until) {
+            sleep(1);
+            continue;
+        }
+        if (seconds != 0 && (e == EAGAIN || stopped))
+            e = stopped ? EINTR : ETIMEDOUT;
+        if (seconds != 0)
+            etude_ledger_withdraw(l, id);
+        errno = e;
+        return -1;
+    }
+    return 0;
+}
+
+/* What the command line asks for. */
+struct request {
+    const char *dir, *record, *ledger, *id, *account;
+    unsigned wait, seconds; /* -w's bound and the command's, in seconds */
+    int legacy, alone;
+    struct etude_ledger_res res[3], cap[3];
+    char **command;
+};
+
+/** Read the command line into `q`; 0, or -1 for a wrong usage. */
+static int parse(int argc, char **argv, struct request *q)
+{
+    int opt;
+
+    memset(q, 0, sizeof(*q));
+    q->dir = "/tmp";
+    while ((opt = getopt(argc, argv, "+pd:w:r:")) != -1) {
+        switch (opt) {
+        case 'p':
+            q->legacy = 1;
+            break;
+        case 'd':
+            q->dir = optarg;
+            break;
+        case 'w':
+            q->wait = command_seconds(optarg);
+            if (q->wait == 0)
+                return -1;
+            break;
+        case 'r':
+            q->record = optarg;
+            break;
+        default:
+            return -1;
+        }
     }
     argc -= optind;
     argv += optind;
-    if (argc < 8 || argv[0][0] != '/' || dir[0] != '/' || amounts(argv[4], res) != 0 ||
-        amounts(argv[5], cap) != 0)
+    if (argc < 8 || argv[0][0] != '/' || q->dir[0] != '/' || amounts(argv[4], q->res) != 0 ||
+        amounts(argv[5], q->cap) != 0)
+        return -1;
+    q->alone = strcmp(argv[3], "alone") == 0;
+    if (!q->alone && strcmp(argv[3], "shared") != 0)
+        return -1;
+    q->alone = q->alone || q->res[1].amount > q->cap[1].amount / 2;
+    q->seconds = command_seconds(argv[6]);
+    q->ledger = argv[0];
+    q->id = argv[1];
+    q->account = argv[2];
+    q->command = argv + 7;
+    return q->seconds == 0 ? -1 : 0;
+}
+
+/**
+ * Admit the claim of `q` in `l` and take its locks, within -w's bound when
+ * one was given, and set RACH2_PORT_OFFSET for a legacy port block.
+ *
+ * @return the holder of the locks, or NULL with the claim released and the
+ *         reason on standard error.
+ */
+static struct etude_bridge *take(struct etude_ledger *l, const struct request *q)
+{
+    struct etude_bridge_spec bs = {q->ledger, q->id, q->dir, q->alone, q->legacy, 600000};
+    struct etude_bridge *b;
+    uint64_t began = posix_now_us(), spent;
+    char offset[32];
+
+    if (l == NULL || admit(l, q->id, q->account, q->res, q->cap, q->wait) != 0) {
+        if (errno == ETIMEDOUT)
+            fprintf(stderr, "etude-bridge: result: refused: admission: no room in %u seconds\n",
+                    q->wait);
+        else
+            fprintf(stderr, "etude-bridge: result: refused: admission: %s\n", strerror(errno));
+        return NULL;
+    }
+    if (q->wait != 0) {
+        spent = (posix_now_us() - began) / 1000;
+        bs.wait_ms =
+            spent < (uint64_t)q->wait * 1000 ? (unsigned)((uint64_t)q->wait * 1000 - spent) : 1;
+    }
+    b = etude_bridge_start(&bs);
+    if (b == NULL) {
+        fprintf(stderr, "etude-bridge: result: refused: locks: %s\n", strerror(errno));
+        etude_ledger_finish(l, q->id, ETUDE_CLEANUP_CONFIRMED);
+        return NULL;
+    }
+    if (q->legacy) {
+        snprintf(offset, sizeof(offset), "%d", etude_bridge_offset(b));
+        setenv("RACH2_PORT_OFFSET", offset, 1);
+        unsetenv("RACH2_HOST_LOCK");
+    }
+    return b;
+}
+
+/** Admit one bounded command and retain its locks through confirmed cleanup. */
+int main(int argc, char **argv)
+{
+    struct request q;
+    struct etude_ledger *l;
+    struct etude_bridge *b;
+    enum etude_cleanup cleanup = ETUDE_CLEANUP_CONFIRMED;
+    struct sigaction sa;
+    int rc;
+
+    if (parse(argc, argv, &q) != 0)
         return usage();
-    alone = strcmp(argv[3], "alone") == 0;
-    if (!alone && strcmp(argv[3], "shared") != 0)
-        return usage();
-    alone = alone || res[1].amount > cap[1].amount / 2;
-    seconds = command_seconds(argv[6]);
-    if (seconds == 0)
-        return usage();
-    if (legacy && (getenv("RACH2_PORT_OFFSET") != NULL || getenv("SSH_TEST_PORT") != NULL)) {
+    if (q.legacy && (getenv("RACH2_PORT_OFFSET") != NULL || getenv("SSH_TEST_PORT") != NULL)) {
         fprintf(stderr,
                 "etude-bridge: result: refused: legacy port overrides bypass reservations\n");
-        return 2;
+        return refused(q.record);
     }
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = stop;
@@ -197,32 +329,14 @@ int main(int argc, char **argv)
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
-    l = etude_ledger_open(argv[0]);
-    if (l == NULL || etude_ledger_admit(l, argv[1], argv[2], res, 3, cap, 3, 0) != 0) {
-        fprintf(stderr, "etude-bridge: result: refused: admission: %s\n", strerror(errno));
-        etude_ledger_close(l);
-        return 2;
-    }
-    bs.ledger = argv[0];
-    bs.id = argv[1];
-    bs.dir = dir;
-    bs.alone = alone;
-    bs.legacy = legacy;
-    bs.wait_ms = 600000;
-    b = etude_bridge_start(&bs);
+    l = etude_ledger_open(q.ledger);
+    b = take(l, &q);
     if (b == NULL) {
-        fprintf(stderr, "etude-bridge: result: refused: locks: %s\n", strerror(errno));
-        etude_ledger_finish(l, argv[1], ETUDE_CLEANUP_CONFIRMED);
         etude_ledger_close(l);
-        return 2;
+        return refused(q.record);
     }
-    if (legacy) {
-        snprintf(offset, sizeof(offset), "%d", etude_bridge_offset(b));
-        setenv("RACH2_PORT_OFFSET", offset, 1);
-        unsetenv("RACH2_HOST_LOCK");
-    }
-    rc = execute(l, argv[1], argv + 7, (unsigned)seconds, &cleanup);
-    if (etude_ledger_finish(l, argv[1], cleanup) != 0)
+    rc = execute(l, q.id, q.command, q.seconds, &cleanup);
+    if (etude_ledger_finish(l, q.id, cleanup) != 0)
         cleanup = ETUDE_CLEANUP_UNCONFIRMED;
     if (cleanup == ETUDE_CLEANUP_CONFIRMED)
         etude_bridge_join(b);
@@ -230,8 +344,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "etude-bridge: result: incomplete: locks retained by process %ld\n",
                 etude_bridge_pid(b));
         etude_bridge_detach(b);
-        rc = 2;
+        rc = -1;
     }
     etude_ledger_close(l);
-    return stopped ? 128 + stopped : rc;
+    if (stopped)
+        result(q.record, "stopped", stopped);
+    else if (rc < 0)
+        result(q.record, "incomplete", -1);
+    else
+        result(q.record, "exited", rc);
+    return stopped ? 128 + stopped : rc < 0 ? 2 : rc;
 }
