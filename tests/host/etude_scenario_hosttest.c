@@ -142,6 +142,92 @@ static struct sockaddr_in loopback(long port)
     return a;
 }
 
+/**
+ * Bind or connect `fd` to row `mark`'s private Unix socket. Use its name
+ * relative to the row's directory so that a long TMPDIR fits. Restore the
+ * current directory before returning 0 for success or -1 for an error.
+ */
+static int peer_endpoint(int fd, const char *mark, int binding)
+{
+    struct sockaddr_un a;
+    char path[PATH_MAX], *name;
+    int cwd, result, error;
+
+    if (mark == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    fix_format(path, sizeof(path), "%s.peer", mark);
+    name = strrchr(path, '/');
+    if (name == NULL || strlen(name + 1) >= sizeof(a.sun_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    *name++ = '\0';
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    strcpy(a.sun_path, name);
+    cwd = open(".", O_RDONLY);
+    if (cwd < 0)
+        return -1;
+    result = chdir(path);
+    if (result == 0)
+        result = binding ? bind(fd, (struct sockaddr *)&a, sizeof(a))
+                         : connect(fd, (struct sockaddr *)&a, sizeof(a));
+    error = errno;
+    if (fchdir(cwd) != 0)
+        exit(1);
+    close(cwd);
+    errno = error;
+    return result;
+}
+
+/**
+ * Receive the row's bound TCP socket from its controller and check its
+ * port. Give the descriptor, owned by the caller, or -1 for an error.
+ */
+static int peer_socket(const char *port)
+{
+    struct sockaddr_in a;
+    socklen_t len = sizeof(a);
+    struct msghdr msg;
+    struct cmsghdr *c;
+    union {
+        struct cmsghdr align;
+        char bytes[CMSG_SPACE(sizeof(int))];
+    } control;
+    char byte;
+    struct iovec iov = {&byte, 1};
+    int fd = -1, connection;
+
+    connection = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (connection < 0)
+        return -1;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.bytes;
+    msg.msg_controllen = sizeof(control.bytes);
+    if (peer_endpoint(connection, getenv("ETUDE_TEST_MARK"), 0) == 0 &&
+        recvmsg(connection, &msg, 0) == 1 && !(msg.msg_flags & MSG_CTRUNC)) {
+        c = CMSG_FIRSTHDR(&msg);
+        if (c != NULL && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS &&
+            c->cmsg_len == CMSG_LEN(sizeof(fd)))
+            memcpy(&fd, CMSG_DATA(c), sizeof(fd));
+    }
+    close(connection);
+    if (fd >= 0 && getsockname(fd, (struct sockaddr *)&a, &len) != 0) {
+        close(fd);
+        return -1;
+    }
+    if (fd >= 0 && a.sin_port != htons((unsigned short)strtol(port, NULL, 10))) {
+        close(fd);
+        errno = EINVAL;
+        return -1;
+    }
+    return fd;
+}
+
 /* The connections a peer serves at once. */
 #define PEER_CONNS 8
 
@@ -151,15 +237,15 @@ static struct sockaddr_in loopback(long port)
  * closed, `once` does so until its first connection closes and exits 0,
  * `early` exits 3 before it serves, and `mute` serves nothing and never says
  * that it is ready. A line `die` makes it exit 1 before it sends anything
- * back.
+ * back. The controller passes the bound socket over the row's private Unix
+ * socket; its port must be `port`.
  */
 static int peer(const char *port, const char *mode)
 {
-    struct sockaddr_in a = loopback(strtol(port, NULL, 10));
     struct pollfd p[PEER_CONNS + 1];
     char line[PEER_CONNS][256], text[300];
     size_t len[PEER_CONNS];
-    int l, one = 1, i, n, k;
+    int l, i, n, k;
     ssize_t got;
     char buf[512];
 
@@ -170,9 +256,10 @@ static int peer(const char *port, const char *mode)
     if (strcmp(mode, "mute") == 0)
         for (;;)
             pause();
-    l = socket(AF_INET, SOCK_STREAM, 0);
-    if (l < 0 || setsockopt(l, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0 ||
-        bind(l, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(l, PEER_CONNS) != 0) {
+    l = peer_socket(port);
+    if (l < 0 || listen(l, PEER_CONNS) != 0) {
+        if (l >= 0)
+            close(l);
         snprintf(text, sizeof(text), "peer: cannot serve: %s", strerror(errno));
         say(text);
         return 3;
@@ -1363,6 +1450,54 @@ static uint64_t now_ms(void)
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
+/* The controller's bound TCP socket and the Unix listener that passes it. */
+struct peer_fixture {
+    int tcp, handoff;
+    char path[PATH_MAX];
+};
+
+/** Pass `peer`'s TCP socket to one service that has connected to it. */
+static void peer_handoff(struct peer_fixture *peer)
+{
+    struct msghdr msg;
+    struct cmsghdr *c;
+    union {
+        struct cmsghdr align;
+        char bytes[CMSG_SPACE(sizeof(int))];
+    } control;
+    char byte = 0;
+    struct iovec iov = {&byte, 1};
+    struct sigaction ignore, old;
+    int connection = accept(peer->handoff, NULL, NULL);
+
+    if (connection < 0) {
+        CHECK(0, "the peer's socket request can be accepted");
+        return;
+    }
+    memset(&msg, 0, sizeof(msg));
+    memset(&control, 0, sizeof(control));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.bytes;
+    msg.msg_controllen = sizeof(control.bytes);
+    c = CMSG_FIRSTHDR(&msg);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(peer->tcp));
+    memcpy(CMSG_DATA(c), &peer->tcp, sizeof(peer->tcp));
+    memset(&ignore, 0, sizeof(ignore));
+    ignore.sa_handler = SIG_IGN;
+    sigemptyset(&ignore.sa_mask);
+    if (sigaction(SIGPIPE, &ignore, &old) != 0) {
+        CHECK(0, "the peer's socket transfer can ignore sigpipe");
+        close(connection);
+        return;
+    }
+    CHECK(sendmsg(connection, &msg, 0) == 1, "the peer receives its bound socket");
+    sigaction(SIGPIPE, &old, NULL);
+    close(connection);
+}
+
 /* One attempt that runs: its process, the pipe of its output, and the time
  * past which it is killed. */
 struct attempt {
@@ -1374,6 +1509,7 @@ struct attempt {
     int stopped;
     char err[PATH_MAX];
     struct outcome *o;
+    struct peer_fixture *peer;
 };
 
 /**
@@ -1421,7 +1557,7 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
 static int attempt_read(struct attempt *a, const char *want, const char *stop_at, uint64_t until)
 {
     struct outcome *o = a->o;
-    struct pollfd p;
+    struct pollfd p[2];
     ssize_t n;
 
     while (a->fd >= 0) {
@@ -1429,8 +1565,9 @@ static int attempt_read(struct attempt *a, const char *want, const char *stop_at
             return 1;
         if (until != 0 && now_ms() > until)
             return 0;
-        p.fd = a->fd;
-        p.events = POLLIN;
+        p[0].fd = a->fd;
+        p[1].fd = a->peer->handoff;
+        p[0].events = p[1].events = POLLIN;
         if (now_ms() > a->bound) {
             printf("etude-scenario-test: fail: %s: the attempt did not end within %d ms\n",
                    a->r->name, a->limit);
@@ -1438,7 +1575,11 @@ static int attempt_read(struct attempt *a, const char *want, const char *stop_at
             kill(a->pid, SIGKILL);
             break;
         }
-        if (poll(&p, 1, 1000) <= 0)
+        if (poll(p, 2, 1000) <= 0)
+            continue;
+        if (p[1].revents & POLLIN)
+            peer_handoff(a->peer);
+        if (p[0].revents == 0)
             continue;
         n = read(a->fd, o->out + o->len, sizeof(o->out) - 1 - o->len);
         if (n <= 0)
@@ -1576,20 +1717,27 @@ static char **row_env(const struct row *r, char *bufs[6])
     return env;
 }
 
-/** Give a port of 127.0.0.1 that nothing uses now, or 0. */
-static unsigned free_port(void)
+/**
+ * Bind a TCP socket for row `mark` and a Unix listener that passes it to
+ * each peer, in `peer`. Keep the TCP socket bound until the row ends, even
+ * between service instances. Give its port, or 0; the caller closes both
+ * descriptors and removes `peer->path` on every exit path.
+ */
+static unsigned reserve_peer(struct peer_fixture *peer, const char *mark)
 {
     struct sockaddr_in a = loopback(0);
     socklen_t len = sizeof(a);
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    unsigned port = 0;
 
-    if (fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
-        getsockname(fd, (struct sockaddr *)&a, &len) == 0)
-        port = ntohs(a.sin_port);
-    if (fd >= 0)
-        close(fd);
-    return port;
+    peer->tcp = socket(AF_INET, SOCK_STREAM, 0);
+    peer->handoff = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (peer->tcp < 0 || peer->handoff < 0 || fcntl(peer->tcp, F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(peer->handoff, F_SETFD, FD_CLOEXEC) != 0 ||
+        bind(peer->tcp, (struct sockaddr *)&a, sizeof(a)) != 0 ||
+        getsockname(peer->tcp, (struct sockaddr *)&a, &len) != 0 ||
+        peer_endpoint(peer->handoff, mark, 1) != 0)
+        return 0;
+    fix_format(peer->path, sizeof(peer->path), "%s.peer", mark);
+    return listen(peer->handoff, 1) == 0 ? ntohs(a.sin_port) : 0;
 }
 
 /* A row that runs, with what its files and its judgement need. */
@@ -1598,6 +1746,7 @@ struct row_run {
     struct attempt a;
     struct outcome *o;
     unsigned port;
+    struct peer_fixture peer;
     char scratch[PATH_MAX];
     char *bufs[6];
     char **env;
@@ -1607,15 +1756,17 @@ struct row_run {
 /** Write row `r`'s files on site `s` and start its attempt in `rr`. */
 static void row_start(struct row_run *rr, const struct row *r, const struct site *s, int limit)
 {
-    char manifest[PATH_MAX], inv[PATH_MAX];
+    char manifest[PATH_MAX], inv[PATH_MAX], mark[PATH_MAX];
 
     memset(rr, 0, sizeof(*rr));
+    rr->peer.tcp = rr->peer.handoff = -1;
     rr->r = r;
     rr->env = row_env(r, rr->bufs);
     rr->o = malloc(sizeof(*rr->o));
     if (rr->o == NULL)
         exit(1);
-    rr->port = row_port = r->pair ? free_port() : 0;
+    fix_format(mark, sizeof(mark), "%s/%s", fix_dir(), r->name);
+    rr->port = row_port = r->pair ? reserve_peer(&rr->peer, mark) : 0;
     fix_format(manifest, sizeof(manifest), "%s/%s.manifest.json", fix_dir(), r->name);
     fix_format(inv, sizeof(inv), "%s/%s.invocation.json", fix_dir(), r->name);
     fix_format(rr->scratch, sizeof(rr->scratch), "%s/%s.scratch", fix_dir(), r->name);
@@ -1629,6 +1780,7 @@ static void row_start(struct row_run *rr, const struct row *r, const struct site
     if (limit == 0)
         limit = r->mode != NULL ? FAKE_ATTEMPT_MS : REAL_ATTEMPT_MS;
     attempt_start(&rr->a, r, inv, rr->env, limit, rr->o);
+    rr->a.peer = &rr->peer;
     rr->started = 1;
 }
 
@@ -1642,6 +1794,12 @@ static void row_finish(struct row_run *rr, const char *stop_at, int judged)
         if (judged)
             judge(rr->r, rr->o, rr->scratch);
     }
+    if (rr->peer.tcp >= 0)
+        close(rr->peer.tcp);
+    if (rr->peer.handoff >= 0)
+        close(rr->peer.handoff);
+    if (rr->peer.path[0] != '\0')
+        unlink(rr->peer.path);
     for (i = 0; i < 6; i++)
         free(rr->bufs[i]);
     free(rr->env);
