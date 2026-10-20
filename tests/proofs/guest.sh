@@ -18,14 +18,17 @@
 #   guest.sh boot WORK ARG...        boot WORK/kernel with WORK/test.krffs
 #                                    under the harness with ARGs, and print
 #                                    its output and the console's log
-#   guest.sh default PROBE           boot the default suite and print its
+#   guest.sh default PROBE...        boot the default suite and print its
 #                                    output and the console's log, with
-#                                    `guest: fail: PROBE did not pass` when
-#                                    the runner did not pass PROBE
+#                                    `guest: fail: PROBE did not pass` for
+#                                    each PROBE the runner did not pass
 #   guest.sh run SUITE LINE...       run `tests/run SUITE` and print its
 #                                    output; a run that passes must print
 #                                    each LINE, or the test fails with
 #                                    `guest: fail: SUITE passed without LINE`
+#   guest.sh exec WORK COMMAND...    run COMMAND with ARCH the architecture,
+#                                    RACH2_QEMU its emulator and ARCH_BUILD
+#                                    its build tree relative to the root
 #
 # A catalogue's artifacts are the copies, whose paths do not depend on the
 # architecture. The image is not one, since its bytes depend on more than its
@@ -53,7 +56,7 @@ qemu()
 
 usage()
 {
-    echo 'guest: usage: guest.sh make TARGET... | copy WORK PATH... | image WORK MIB ENTRY... | boot WORK ARG... | default PROBE | run SUITE LINE...' >&2
+    echo 'guest: usage: guest.sh make TARGET... | copy WORK PATH... | image WORK MIB ENTRY... | boot WORK ARG... | default PROBE... | run SUITE LINE... | exec WORK COMMAND...' >&2
     exit 2
 }
 
@@ -111,8 +114,6 @@ case $verb in
         exit "$status"
         ;;
     default)
-        [ "$#" -eq 1 ] || usage
-        probe=$1
         log=$tree/images/default-test.log
         rm -f "$log"
         scratch=
@@ -130,9 +131,13 @@ case $verb in
         if ! grep -q '^runtests: [0-9]* of [0-9]* probes' "$scratch/out"; then
             echo 'guest: fail: the suite did not run'
             [ "$status" -ne 0 ] || status=1
-        elif ! grep -Eq "^  (musl/)?$probe +.* PASS\$" "$scratch/out"; then
-            echo "guest: fail: $probe did not pass"
-            [ "$status" -ne 0 ] || status=1
+        else
+            for probe in "$@"; do
+                if ! grep -Eq "^  (musl/)?$probe +.* PASS\$" "$scratch/out"; then
+                    echo "guest: fail: $probe did not pass"
+                    [ "$status" -ne 0 ] || status=1
+                fi
+            done
         fi
         exit "$status"
         ;;
@@ -157,6 +162,15 @@ case $verb in
             done
         fi
         exit "$status"
+        ;;
+    exec)
+        [ "$#" -ge 2 ] || usage
+        work=$1
+        shift
+        qemu "$work"
+        ARCH=$RACH2_ARCH ARCH_BUILD=$tree
+        export ARCH ARCH_BUILD
+        exec "$@"
         ;;
     *)
         usage
