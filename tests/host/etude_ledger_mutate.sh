@@ -79,7 +79,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-ledger-proof.XXXXXX")
 
 # run NAME [WARN]: build the host test against the copy in $work/etude, with
 # warnings as errors unless WARN is given, and run it, leaving its output in
-# $work/NAME.log; the status is the test's, or 2 when it does not build.
+# $work/NAME.log and the fixtures a failure keeps under $work; the status is
+# the test's, or 2 when it does not build.
 run() {
     e=$work/etude
     strict=-Werror
@@ -94,7 +95,7 @@ run() {
         cat "$work/$1.compile.log" >&2
         return 2
     }
-    perl -e 'alarm 60; exec @ARGV or die "etude-ledger-mutation: exec: $!\n"' \
+    TMPDIR=$work perl -e 'alarm 60; exec @ARGV or die "etude-ledger-mutation: exec: $!\n"' \
         "$work/$1" >"$work/$1.log" 2>&1 &
     child=$!
     s=0
