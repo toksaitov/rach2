@@ -58,7 +58,6 @@ tests/pingtest.c: 1 sleep
 tests/pollprobe.c: 1 sleep
 tests/poolprobe.c: 1 sleep
 tests/procprobe.c: 1 sleep
-tests/ptyprobe.c: 1 sleep
 tests/rawprobe.c: 1 sleep
 tests/sigprobe.c: 1 sleep
 tests/system/suites.mk: 3 skip

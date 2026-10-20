@@ -28,10 +28,13 @@
  * exit status; the parent checks the echo and the output it reads back on
  * the master. The child writes a readiness line before the parent writes
  * anything, so that the echo the parent checks is never settled while the
- * child has ECHO off, and every wait here is bounded (a non-blocking master,
- * a child reaped within a limit), so that a stalled half fails the test
- * rather than hanging it. Prints "PTYPROBE START", then "PTYPROBE OK" or
- * "PTYPROBE FAIL (why)". Freestanding; direct system calls (probe.h).
+ * child has ECHO off. Every wait ends on what it waits for or on evidence
+ * that it cannot come: the readiness line or the child's exit, a reader's
+ * state S in /proc/PID/stat or its exit, a released reader's exit or its
+ * sleep again after the hangup. No wait counts its looks or its time; the
+ * runner's limit on the probe's step ends a run that stalls. Prints
+ * "PTYPROBE START", then "PTYPROBE OK" or "PTYPROBE FAIL (why)".
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -137,35 +140,10 @@ static void puts(const char *s)
     sys_write(1, s, (int)strlen(s));
 }
 
-/** Sleep for `ms` milliseconds. */
-static void nap_ms(int ms)
+/** Give the processor to another process that can run, if any. */
+static void yield(void)
 {
-    long ts[2];
-
-    ts[0] = ms / 1000;
-    ts[1] = (ms % 1000) * 1000000;
-    syscall3(SYS_NANOSLEEP, (long)ts, 0, 0);
-}
-
-/**
- * Wait up to `ms` milliseconds for `pid` to exit, without blocking.
- *
- * Returns 1 with `*status` filled if it was reaped, else 0. A blocking wait
- * here would turn a child stuck before its own exit into a test that hangs
- * instead of one that fails.
- */
-static int reap_within(int pid, int *status, int ms)
-{
-    int waited = 0;
-
-    while (waited < ms) {
-        if (sys_waitpid(pid, status, WNOHANG) == pid) {
-            return 1;
-        }
-        nap_ms(20);
-        waited += 20;
-    }
-    return 0;
+    syscall0(SYS_SCHED_YIELD);
 }
 
 /** Substring search: 1 if `needle` occurs in `hay[0..len)`, else 0. */
@@ -347,33 +325,78 @@ static int open_pair(int *master, int *slave)
 }
 
 /**
- * Whether the reader `pid` reaches state S in /proc/PID/stat within two
- * seconds. A reader closes its master and reads, and has nothing else to
- * sleep on, so state S means it is blocked in its read. Returns 0 when it is
- * a zombie, its stat file cannot be opened, or the time runs out.
+ * The state letter of the unreaped child `pid`, the field after the
+ * parenthesised name in /proc/PID/stat: 'S' for a sleep a signal ends, 'Z'
+ * for a zombie. 0 when the file cannot be opened or has no state.
+ */
+static char child_state(int pid)
+{
+    char path[40], state[256];
+    int fd, n, i;
+
+    numbered_path(path, "/proc/", pid, "/stat");
+    fd = sys_open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = sys_read(fd, state, sizeof(state));
+    sys_close(fd);
+    for (i = n - 3; i >= 0; i--) {
+        if (state[i] == ')' && state[i + 1] == ' ') {
+            return state[i + 2];
+        }
+    }
+    return 0;
+}
+
+/**
+ * Wait until the reader `pid` is in state S. A reader closes its master and
+ * reads, and has nothing else to sleep on, so state S means it is blocked in
+ * its read. Returns 1 then, and 0 once it is a zombie or its stat file
+ * cannot be opened, since it can then no longer block. The probe yields
+ * between looks, and their number decides nothing.
  */
 static int reader_blocked(int pid)
 {
-    char path[40], state[256];
-    int tries, fd, n;
+    char state;
 
-    numbered_path(path, "/proc/", pid, "/stat");
-    for (tries = 0; tries < 100; tries++) {
-        fd = sys_open(path, O_RDONLY);
-        if (fd < 0) {
-            return 0;
-        }
-        n = sys_read(fd, state, sizeof(state));
-        sys_close(fd);
-        if (contains(state, n, ") S ")) {
+    for (;;) {
+        state = child_state(pid);
+        if (state == 'S') {
             return 1;
         }
-        if (contains(state, n, ") Z ")) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
-        nap_ms(20);
+        yield();
     }
-    return 0;
+}
+
+/**
+ * Wait until the reader `pid`, blocked before the master closed, is reaped
+ * with `*status` filled: 1. Returns 0 when it is seen in state S, or its
+ * stat file cannot be opened, before it is reaped.
+ *
+ * Closing the master wakes the slave's readers before close returns
+ * (`tty_hangup`), and a released reader reads the end of input twice and
+ * exits without sleeping again, so a reader seen asleep after the close was
+ * not released and never will be. Until it is reaped or seen asleep, the
+ * probe yields and looks again.
+ */
+static int reader_released(int pid, int *status)
+{
+    char state;
+
+    for (;;) {
+        if (sys_waitpid(pid, status, WNOHANG) == pid) {
+            return 1;
+        }
+        state = child_state(pid);
+        if (state == 0 || state == 'S') {
+            return 0;
+        }
+        yield();
+    }
 }
 
 /**
@@ -447,7 +470,7 @@ static int hangup_readers(int block_hup)
     sys_close(master);
     master = -1;
     for (i = 0; i < 2; i++) {
-        if (!reap_within(pids[i], &status, 2000)) {
+        if (!reader_released(pids[i], &status)) {
             puts("PTYPROBE FAIL (hangup releases both blocked readers)\n");
             goto done;
         }
@@ -510,24 +533,65 @@ done:
 }
 
 /**
+ * Read the non-blocking `master` into `mbuf`, of `cap` bytes, until the
+ * child `pid` has written its readiness line, and return the bytes read.
+ *
+ * Between empty reads the probe looks for the child's exit and yields. A
+ * child that exits before it is ready has refused its terminal, and the
+ * probe prints its status and exits with it; one that fills `mbuf` without
+ * the line is killed and the probe exits 1. Neither returns.
+ */
+static int await_ready(int master, int pid, char *mbuf, int cap)
+{
+    int n = 0, status = -1;
+
+    while (n < cap - 1) {
+        int r = sys_read(master, mbuf + n, cap - 1 - n);
+
+        if (r > 0) {
+            n += r;
+            if (contains(mbuf, n, "ready")) {
+                return n;
+            }
+            continue;
+        }
+        if (sys_waitpid(pid, &status, WNOHANG) == pid) {
+            status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+            numbered_path(mbuf, "PTYPROBE FAIL (the child refused its terminal: status ", status,
+                          ")\n");
+            puts(mbuf);
+            sys_exit(status);
+        }
+        yield();
+    }
+    syscall3(SYS_KILL, pid, SIGKILL, 0);
+    sys_waitpid(pid, &status, 0);
+    puts("PTYPROBE FAIL (the child never reported its terminal ready)\n");
+    sys_exit(1);
+    return 0;
+}
+
+/**
  * The probe's entry: the pair, the window size, the child on the slave, the
  * round trip, and the hangup rows.
  *
  * The child, a new session leader, makes the slave its controlling terminal,
  * runs its rows, writes "ready", reads the cooked line the parent sends and
  * writes "world"; when a row fails, it exits with that row's status, which
- * the parent prints. The parent puts the master in non-blocking mode first,
- * so that every wait is a bounded number of naps and a child that stalls
- * before it writes fails the test instead of hanging it; it waits for
- * "ready", writes "hello", which the slave reads cooked and the master gets
- * back as the echo, and then reads the echo and "world" back on the master.
+ * the parent prints. The parent puts the master in non-blocking mode and
+ * reads it until "ready" arrives or the child has exited, yielding between
+ * tries, so that a child that exits before it is ready fails the test
+ * instead of hanging it. It then writes "hello", which the slave reads
+ * cooked and the master gets back as the echo, reaps the child, and reads
+ * the echo and "world" back on the master: the child wrote both before it
+ * exited, so the master has them, and an empty read ends the reading.
  */
 PROBE_START void _start(void)
 {
     int master, slave, ptn, unlock, pid, status, nb;
     char path[32];
     char mbuf[128];
-    int n, i;
+    int n;
 
     puts("PTYPROBE START\n");
 
@@ -606,35 +670,12 @@ PROBE_START void _start(void)
         puts("PTYPROBE FAIL (the master would not go non-blocking)\n");
         sys_exit(1);
     }
-    n = 0;
-    for (i = 0; i < 100 && n < (int)sizeof(mbuf) - 1; i++) {
-        int r = sys_read(master, mbuf + n, (int)sizeof(mbuf) - 1 - n);
-        if (r > 0) {
-            n += r;
-            if (contains(mbuf, n, "ready")) {
-                break;
-            }
-            continue;
-        }
-        nap_ms(20);
-    }
-    if (!contains(mbuf, n, "ready")) {
-        status = -1;
-        if (!reap_within(pid, &status, 2000)) {
-            puts("PTYPROBE FAIL (the child never reported its terminal ready)\n");
-            sys_exit(1);
-        }
-        status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-        numbered_path(mbuf, "PTYPROBE FAIL (the child refused its terminal: status ", status,
-                      ")\n");
-        puts(mbuf);
-        sys_exit(status);
-    }
+    n = await_ready(master, pid, mbuf, (int)sizeof(mbuf));
     if (sys_write(master, "hello\n", 6) != 6) {
         puts("PTYPROBE FAIL (the master would not take the line)\n");
         sys_exit(1);
     }
-    if (!reap_within(pid, &status, 5000)) {
+    if (sys_waitpid(pid, &status, 0) != pid) {
         puts("PTYPROBE FAIL (the child never finished)\n");
         sys_exit(1);
     }
@@ -643,16 +684,15 @@ PROBE_START void _start(void)
         sys_exit(1);
     }
 
-    for (i = 0; i < 100 && n < (int)sizeof(mbuf) - 1; i++) {
+    while (n < (int)sizeof(mbuf) - 1) {
         int r = sys_read(master, mbuf + n, (int)sizeof(mbuf) - 1 - n);
-        if (r > 0) {
-            n += r;
-            if (contains(mbuf, n, "hello") && contains(mbuf, n, "world")) {
-                break;
-            }
-            continue;
+        if (r <= 0) {
+            break;
         }
-        nap_ms(20);
+        n += r;
+        if (contains(mbuf, n, "hello") && contains(mbuf, n, "world")) {
+            break;
+        }
     }
     if (!contains(mbuf, n, "hello") || !contains(mbuf, n, "world")) {
         puts("PTYPROBE FAIL (master round-trip)\n");
