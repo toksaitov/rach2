@@ -1,64 +1,79 @@
 # The native cases of the musl programs (Readme.md).
+
 case musl/addusermusl root:ext2-dir ids:1000 -- musl/addusermusl
-case musl/atcallmusl root:ext2-dir -- musl/atcallmusl
+case musl/atcallmusl root:ext2-dir stage:native/hello.txt -- musl/atcallmusl
+# Left out: root's step of the real-time clock and the refusal of an
+# unprivileged one.
 case musl/authmusl root:ext2-dir ids:1000 utsns -- musl/authmusl machine=native
 case musl/bindholdmusl root:krffs -- musl/bindholdmusl
 case musl/budgetmusl -- musl/budgetmusl
+# Left out: adjtimex's unsynchronized clock.
 case musl/callsmusl root:krffs ids:4242,4243 ports:47 alone -- musl/callsmusl machine=native
 case musl/capmusl ids:1000 -- musl/capmusl
-case musl/catfile root:ext2-dir -- musl/catfile
+case musl/catfile root:ext2-dir stage:native/hello.txt -- musl/catfile
 case musl/chrootmusl root:krffs ids:1000 -- musl/chrootmusl
+# Left out: the real time past 2^31 seconds.
 case musl/clockidmusl -- musl/clockidmusl machine=native
+# Left out: the bound on CLOCK_MONOTONIC since boot, and, with no peer, the
+# date against a reference.
 case musl/clockmusl -- musl/clockmusl machine=native
 case musl/clonemusl -- musl/clonemusl
 case musl/coremusl tmpfs:16M -- musl/coremusl dir=tmpfs/coremusl.d
 case musl/cowfork -- musl/cowfork
 case musl/cputimemusl -- musl/cputimemusl
-case musl/ctrlcmusl pty:ctrlcmusl.in end:signal:2 -- musl/ctrlcmusl machine=native
+case musl/ctrlcmusl pty:ctrlcmusl.in end:signal:2 -- musl/ctrlcmusl
 case musl/devtest pty -- musl/devtest
 case musl/direntmusl.ext2 mountns ids:1000 -- musl/direntmusl .
 case musl/direntmusl.krffs root:krffs ids:1000 -- musl/direntmusl
 case musl/epollmusl ports:7470 -- musl/epollmusl
 case musl/execargmusl root:ext2-dir -- musl/execargmusl
-case musl/fdcallmusl root:ext2-dir pty -- musl/fdcallmusl
+case musl/fdcallmusl root:ext2-dir stage:native/hello.txt pty -- musl/fdcallmusl
 case musl/fdexecmusl root:ext2-dir ids:1000 -- musl/fdexecmusl
 case musl/fifomusl root:krffs -- musl/fifomusl
+# Left out: the enumerated report, the codec and the tone.
 case musl/hdaprobe -- musl/hdaprobe machine=native
 case musl/hello -- musl/hello
 case musl/inotifymusl tmpfs:1M -- musl/inotifymusl dir=tmpfs/inotifymusl
+# Left out: the kernel's heap after a thousand refused segments.
 case musl/ipcmusl ipcns -- musl/ipcmusl machine=native
-case musl/ishmusl root:ext2-dir -- musl/ishmusl
+case musl/ishmusl root:ext2-dir env:HOME -- musl/ishmusl
 case musl/lchownmusl.ext2 -- musl/lchownmusl .
 case musl/lchownmusl.krffs root:krffs -- musl/lchownmusl
 case musl/lockmusl root:krffs -- musl/lockmusl
-case musl/loginmusl root:ext2-dir ids:1000 -- musl/loginmusl
+case musl/loginmusl root:ext2-dir ids:1000 stage:idreport -- musl/loginmusl
 case musl/mallocqsort -- musl/mallocqsort
 case musl/mapmusl.ext2 root:ext2-dir -- musl/mapmusl
 case musl/mapmusl.krffs root:krffs -- musl/mapmusl
 case musl/memfdmusl root:krffs -- musl/memfdmusl
 case musl/mknodmusl root:krffs ids:1000 -- musl/mknodmusl
+# Left out: the address, route, link and neighbour changes.
 case musl/netlinkmusl -- musl/netlinkmusl machine=native
 case musl/nsmusl root:ext2-dir ids:1000 ipcns -- musl/nsmusl
 case musl/ofdmusl root:ext2-dir -- musl/ofdmusl
+# Left out: the count of /dev/pts around the open of /dev/ptmx.
 case musl/opathmusl root:ext2-dir ids:1000 -- musl/opathmusl machine=native
+# Left out: the fail-closed side, which needs a processor without RDSEED and
+# RDRAND.
 case musl/passwdmusl root:ext2-dir ids:1000,1001 -- musl/passwdmusl machine=native
-case musl/pathmaxmusl root:krffs -- musl/pathmaxmusl
-case musl/permmusl root:krffs ids:1000 -- musl/permmusl
+case musl/pathmaxmusl root:krffs stage:hello,native/hello.txt -- musl/pathmaxmusl
+case musl/permmusl root:krffs ids:1000 stage:native/hello.txt -- musl/permmusl
 case musl/pipemusl -- musl/pipemusl
 case musl/pollmusl -- musl/pollmusl
 case musl/prctlmusl root:ext2-dir ids:1000 -- musl/prctlmusl
 case musl/preadmusl root:ext2-dir -- musl/preadmusl
 case musl/proclinkmusl root:ext2-dir ids:1000,1001 -- musl/proclinkmusl
+case musl/pselectmusl -- musl/pselectmusl
+# Left out: free memory after a child's end.
 case musl/ptracemusl -- musl/ptracemusl machine=native
 case musl/ptymusl -- musl/ptymusl
-case musl/pwauthmusl root:krffs ids:1000 -- musl/pwauthmusl
+case musl/pwauthmusl root:krffs ids:1000 stage:idreport -- musl/pwauthmusl
 case musl/readvmusl root:ext2-dir -- musl/readvmusl
 case musl/rngmusl -- musl/rngmusl
 case musl/schedmusl root:ext2-dir ids:1000 -- musl/schedmusl
 case musl/seccompmusl ids:1000 -- musl/seccompmusl
 case musl/sigframemusl -- musl/sigframemusl
 case musl/sigmusl -- musl/sigmusl
-case musl/smpmusl -- musl/smpmusl 4 machine=native
+case musl/smpmusl -- musl/smpmusl 4
 case musl/sockfillmusl ports:7000 -- musl/sockfillmusl
 case musl/sockflagmusl ports:7461 -- musl/sockflagmusl
 case musl/spawnmusl -- musl/spawnmusl
@@ -69,8 +84,9 @@ case musl/statmusl root:ext2-dir -- musl/statmusl
 case musl/statxmusl root:ext2-dir -- musl/statxmusl
 case musl/suidmusl root:ext2-dir ids:1000 -- musl/suidmusl
 case musl/tcpsendrecv peer:echo -- musl/tcpsendrecv
-case musl/textbusymusl root:krffs -- musl/textbusymusl
-case musl/threadmusl root:ext2-dir ports:7480,7481 -- musl/threadmusl machine=native
+case musl/textbusymusl root:krffs stage:musl/statushelper -- musl/textbusymusl helper=/statushelper
+# Left out: the framebuffer's row, which the case that follows runs alone.
+case musl/threadmusl ports:7480,7481 -- musl/threadmusl machine=native
 case musl/threadmusl.framebuffer console -- musl/threadmusl row=framebuffer
 case musl/timemusl -- musl/timemusl
 case musl/timerfdmusl -- musl/timerfdmusl
@@ -78,6 +94,6 @@ case musl/tmpfsmusl root:krffs -- musl/tmpfsmusl
 case musl/truncmusl root:krffs ids:1000 -- musl/truncmusl
 case musl/ttymusl pty:ttymusl.in -- musl/ttymusl
 case musl/unixmusl root:krffs ids:1000,65534 -- musl/unixmusl
-case musl/vforkmusl root:ext2-dir -- musl/vforkmusl
+case musl/vforkmusl -- musl/vforkmusl
 case musl/vmamusl -- musl/vmamusl
 case musl/waitidmusl -- musl/waitidmusl
