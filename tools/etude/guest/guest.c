@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/time.h>
@@ -146,6 +147,7 @@ static volatile sig_atomic_t got_end;
 static char boot[ETUDE_FRAME_TOKEN_LEN + 1];
 static char session[ETUDE_FRAME_TOKEN_LEN + 1];
 static int in_session;
+static int lock_fd = -1; /* the session's lock, over standard I/O */
 static uint64_t next_seq;
 static uint64_t recv_next;
 static int need_ack;
@@ -512,8 +514,10 @@ static int queue_room(void)
 }
 
 /**
- * Encode and queue a frame of `type` and `nfields` fields. An event is
- * sequenced; an alive frame has no session and SEQ 0, and an ack frame
+ * Encode and queue a frame of `type` and `nfields` fields. An event takes the
+ * next SEQ. An alive frame has no session: on the serial console its SEQ is 0
+ * and takes nothing, and over standard I/O it is the connection's first
+ * frame and takes SEQ 0, so that the events follow it from 1. An ack frame
  * carries the next SEQ without taking it.
  *
  * @return 0, or -1 when the frame does not fit the frame bound.
@@ -522,6 +526,7 @@ static int send_frame(const char *type, int nfields, const char *const *field)
 {
     int alive = strcmp(type, ETUDE_EV_ALIVE) == 0;
     int ack = strcmp(type, ETUDE_CMD_ACK) == 0;
+    int counted = !ack && (!alive || opt.stdio);
     size_t cap = alive ? ETUDE_FRAME_SERIAL_MAX : max_frame;
     char *text = malloc(cap + 1);
     size_t len;
@@ -529,14 +534,14 @@ static int send_frame(const char *type, int nfields, const char *const *field)
     if (!text)
         return -1;
     len = wire_encode(text, cap + 1, alive ? ETUDE_FRAME_NO_SESSION : session, boot,
-                      alive ? 0 : next_seq, !alive && recv_next > 0, recv_next - 1, type, nfields,
-                      field);
+                      alive && !opt.stdio ? 0 : next_seq, !alive && recv_next > 0, recv_next - 1,
+                      type, nfields, field);
     if (len == 0) {
         free(text);
         return -1;
     }
     enqueue(text, len, !alive && !ack, next_seq);
-    if (!alive && !ack)
+    if (counted)
         next_seq++;
     if (ack)
         need_ack = 0;
@@ -1934,8 +1939,11 @@ static void do_cancel(const struct wire_frame *f, const char *text)
  * end, as when an etude-guest was killed: its child, when it is still the
  * process the record names, is killed with its group, and the attempt is
  * recorded as lost, since neither its end nor its output's sizes were seen.
+ * `record` is given the settled record's text.
+ *
+ * @return 1 when the record was settled, 0 when it needed nothing.
  */
-static void settle_orphan(const char *token, char *record)
+static int settle_orphan(const char *token, char *record)
 {
     char cmd[24];
     char sess[ETUDE_FRAME_TOKEN_LEN + 1];
@@ -1951,11 +1959,11 @@ static void settle_orphan(const char *token, char *record)
 
     if (sscanf(record, "cmd %23s\nsession %16s\nowner %ld %llu\nchild %ld %llu", cmd, sess, &owner,
                &owner_start, &child, &child_start) != 6)
-        return;
+        return 0;
     p = strstr(record, "\nstate ");
     if (!p || (strncmp(p + 7, "running", 7) != 0 && strncmp(p + 7, "preparing", 9) != 0) ||
         same_process((pid_t)owner, owner_start))
-        return;
+        return 0;
     if (child > 0 && same_process((pid_t)child, child_start))
         kill(-(pid_t)child, SIGKILL);
     gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);
@@ -1973,6 +1981,7 @@ static void settle_orphan(const char *token, char *record)
         write_file(path, text, strlen(text));
     snprintf(record, 4096, "%s", text);
     note("attempt %s: its etude-guest was gone; recorded as lost", token);
+    return 1;
 }
 
 /** status CMD ATTEMPT: the attempt's state, and its final events again. */
@@ -2250,7 +2259,114 @@ static void command_text(const struct wire_frame *f, char *out, size_t cap)
         n += (size_t)snprintf(out + n, cap - n, " %s", f->field[i]);
 }
 
-/** Start a session from a hello frame. */
+/**
+ * Take the lock of the session, STATE/s/SESSION/lock, over standard I/O. An
+ * etude-guest of an earlier connection of the session holds it until it
+ * ends, which it does once it sees its connection lost. The one that the
+ * session's owner file names, when /proc shows it is still that process, is
+ * sent SIGTERM, which ends its attempts as a lost connection does, and the
+ * lock is taken once it has recorded their ends and exited. The wait ends
+ * early when this process is signalled or its input is closed.
+ *
+ * @return 0 with the lock held and this process in the owner file, or -1.
+ */
+static int lock_session(void)
+{
+    char path[PATH_CAP];
+    char text[64];
+    char drain[64];
+    struct pollfd p[2];
+    unsigned long long start;
+    long pid;
+    long signalled = 0;
+    int fd;
+    int n;
+
+    if (path_of(path, "%s/s/%s/lock", opt.state, session) < 0)
+        return -1;
+    fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return -1;
+    while (flock(fd, LOCK_EX | LOCK_NB) < 0) {
+        if (errno != EWOULDBLOCK && errno != EINTR) {
+            close(fd);
+            return -1;
+        }
+        if (path_of(path, "%s/s/%s/owner", opt.state, session) == 0 &&
+            read_file(path, text, sizeof(text)) > 0 &&
+            sscanf(text, "%ld %llu", &pid, &start) == 2 && pid != signalled &&
+            pid != (long)self_pid && same_process((pid_t)pid, start)) {
+            note("session: etude-guest %ld of an earlier connection is told to end", pid);
+            kill((pid_t)pid, SIGTERM);
+            signalled = pid;
+        }
+        p[0].fd = sig_pipe[0];
+        p[0].events = POLLIN;
+        p[1].fd = in_fd;
+        p[1].events = 0;
+        n = poll(p, 2, 50);
+        if (n > 0 && (p[0].revents & POLLIN))
+            while (read(sig_pipe[0], drain, sizeof(drain)) > 0)
+                ;
+        if (got_end || (n > 0 && (p[1].revents & (POLLHUP | POLLERR | POLLNVAL)))) {
+            close(fd);
+            return -1;
+        }
+    }
+    snprintf(text, sizeof(text), "%ld %llu\n", (long)self_pid, self_start);
+    if (path_of(path, "%s/s/%s/owner", opt.state, session) < 0 ||
+        write_file(path, text, strlen(text)) < 0) {
+        close(fd);
+        return -1;
+    }
+    lock_fd = fd;
+    return 0;
+}
+
+/**
+ * Settle the attempts of this session whose etude-guest is gone without
+ * having recorded their ends, as settle_orphan does, and add their final
+ * events to the records of their runs, so that a run sent again is answered
+ * with a whole end.
+ */
+static void settle_session(void)
+{
+    static char buf[4096];
+    char path[PATH_CAP];
+    char sess[ETUDE_FRAME_TOKEN_LEN + 1];
+    char cmd[24];
+    struct dirent *e;
+    char *p;
+    char *end;
+    DIR *d;
+
+    if (path_of(path, "%s/a", opt.state) < 0 || !(d = opendir(path)))
+        return;
+    while ((e = readdir(d)) != NULL) {
+        if (!wire_hex(e->d_name, ETUDE_FRAME_TOKEN_LEN) ||
+            path_of(path, "%s/a/%s/record", opt.state, e->d_name) < 0 ||
+            read_file(path, buf, sizeof(buf)) < 0 ||
+            sscanf(buf, "cmd %23s\nsession %16s", cmd, sess) != 2 || strcmp(sess, session) != 0 ||
+            !settle_orphan(e->d_name, buf))
+            continue;
+        p = strstr(buf, "\nstate ");
+        for (p = p ? strchr(p + 1, '\n') : NULL; p && p[1]; p = end) {
+            end = strchr(p + 1, '\n');
+            if (!end)
+                break;
+            *end = '\0';
+            cmd_append(cmd, p + 1);
+            *end = '\n';
+        }
+    }
+    closedir(d);
+}
+
+/**
+ * Start a session from a hello frame. Over standard I/O the session's lock
+ * is taken first, and the attempts that an etude-guest of the session left
+ * unsettled are settled.
+ */
 static int open_session(const struct wire_frame *f)
 {
     char path[PATH_CAP];
@@ -2264,8 +2380,17 @@ static int open_session(const struct wire_frame *f)
         note("session: %s: %s", path, strerror(errno));
         return -1;
     }
+    if (opt.stdio) {
+        if (lock_session() < 0) {
+            note("session: %s: the lock was not taken", session);
+            input_closed = 1;
+            return -1;
+        }
+        settle_session();
+    }
     in_session = 1;
-    next_seq = 0;
+    if (!opt.stdio)
+        next_seq = 0;
     recv_next = 0;
     max_frame = ETUDE_FRAME_SERIAL_MAX;
     return 0;
