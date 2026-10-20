@@ -11,72 +11,22 @@
 # cut off or inconsistent, a verdict that gave no result, and a status that
 # disagrees with the verdict. run.sh runs in a private tree with stand-ins
 # for git, make and tests/run, and with the built casecheck over the history
-# fixtures of tools/etude/fixtures/verdict.
+# fixtures of tools/etude/fixtures/verdict. CI_RUN_SH names the run.sh that
+# is copied into the tree, tools/ci/run.sh of this tree by default, so that
+# the catalogue tests/proofs/ci-run.json can test a copy with a fault in it.
 #
-# Usage: sh tests/system/ci_run_test.sh [--mutate | --texts]
-#
-# --mutate puts each fault of `fault` in a private copy of run.sh and
-# requires a row to fail with it, then runs the rows again on the true copy;
-# --texts checks that each fault's text is in run.sh, and runs nothing.
+# Usage: sh tests/system/ci_run_test.sh
 
 set -eu
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'ci-run-test: usage: ci_run_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'ci-run-test: usage: ci_run_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+run_sh=${CI_RUN_SH:-$repo/tools/ci/run.sh}
 fixtures=$repo/tools/etude/fixtures/verdict
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-# fault NAME: write the private run.sh with the fault NAME, or with none when
-# NAME is empty, refusing a fault whose text moved.
-fault()
-{
-    case ${1:-} in
-        '')
-            cp "$repo/tools/ci/run.sh" "$work/run.sh"
-            return 0 ;;
-        status)
-            # shellcheck disable=SC2016 # the script contains a literal $rc
-            sed 's/\[ "\$rc" != 0 \] || return 0/return 0/' "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        verdict)
-            # shellcheck disable=SC2016 # the script contains a literal $verdict
-            sed 's/if \[ "\$verdict" = 0 \] && grep -qx /if [ "$verdict" != 1 ] || grep -qx /' \
-                "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        agree)
-            # shellcheck disable=SC2016 # the script contains a literal $rc
-            sed 's/ || \[ "\$rc" = 0 \]; then$/; then/' "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        nested)
-            sed 's/for (i = last + 1; i <= NR; i++)/for (i = 1; i <= NR; i++)/' \
-                "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        history)
-            # shellcheck disable=SC2016 # the script contains a literal $results
-            sed 's/if \[ "\$results" = history \]; then/if false; then/' \
-                "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        tier)
-            # shellcheck disable=SC2016 # the script contains a literal $3
-            sed 's/\$3 == "core" && //' "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        once)
-            # shellcheck disable=SC2016 # the script contains a literal $f
-            sed 's/grep -qxF "\$f" "\$out\/failed" || echo/echo/' \
-                "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        place)
-            # shellcheck disable=SC2016 # the script contains a literal $out
-            sed 's/RACH2_RESULTS=\$out tests\/run/RACH2_RESULTS=$out\/results tests\/run/' \
-                "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        onerun)
-            sed 's/run_history core style host core$/run_history core core/' \
-                "$repo/tools/ci/run.sh" > "$work/run.sh" ;;
-        *) return 1 ;;
-    esac
-    ! cmp -s "$repo/tools/ci/run.sh" "$work/run.sh"
-}
 
 # install lines|history: put the private run.sh in the tree, reading results
 # as the word says.
@@ -89,18 +39,6 @@ install()
     sed 's/^results=lines$/results=history/' "$work/run.sh" > "$work/tree/tools/ci/run.sh"
     ! cmp -s "$work/run.sh" "$work/tree/tools/ci/run.sh"
 }
-
-faults='status verdict agree nested history tier once place onerun'
-if [ "$mode" = texts ]; then
-    work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-run-test.XXXXXX")
-    mkdir -p "$work/tree/tools/ci"
-    for name in $faults; do
-        fault "$name" || { echo "ci-run-test: the text of the fault $name is not in tools/ci/run.sh" >&2; exit 1; }
-    done
-    fault ''
-    install history || { echo 'ci-run-test: tools/ci/run.sh has no line results=lines' >&2; exit 1; }
-    exit 0
-fi
 
 casecheck=$repo/build/tools/etude/casecheck
 failures=$repo/build/tools/etude/history_failures
@@ -281,27 +219,9 @@ history_rows()
         { echo 'ci-run-test: core did not run as one run of style, host and core' >&2; return 1; }
 }
 
-all_rows()
-{
-    fault ''
-    lines_rows && history_rows
-}
-
-all_rows || { echo 'ci-run-test: result: fail: ci reading of results' >&2; exit 1; }
-checked=$rows
-if [ "$mode" = mutate ]; then
-    for name in $faults; do
-        fault "$name" || { echo "ci-run-test: the text of the fault $name is not in tools/ci/run.sh" >&2; exit 1; }
-        case $name in
-            nested) check=lines_rows ;;
-            *) check=history_rows ;;
-        esac
-        if "$check" 2>/dev/null; then
-            echo "ci-run-test: result: fail: the fault $name passed" >&2
-            exit 1
-        fi
-        echo "ci-run-test: the fault $name failed a row"
-    done
-    all_rows || { echo 'ci-run-test: result: fail: the rows after the faults' >&2; exit 1; }
+cp "$run_sh" "$work/run.sh"
+if ! { lines_rows && history_rows; }; then
+    echo 'ci-run-test: result: fail: ci reading of results' >&2
+    exit 1
 fi
-echo "ci-run-test: result: pass: $checked rows: the runner's lines, the build, a passing and a failing history, a failure or an unfinished attempt before a retry that passed, a status that disagrees, a missing or cut-off history, a suite left out, a missing verdict and the core set as one run"
+echo "ci-run-test: result: pass: $rows rows: the runner's lines, the build, a passing and a failing history, a failure or an unfinished attempt before a retry that passed, a status that disagrees, a missing or cut-off history, a suite left out, a missing verdict and the core set as one run"
