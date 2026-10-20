@@ -41,6 +41,9 @@
  * it renamed and unlinked its own file. Both run in a child the probe
  * execs, since the first program a boot loads has its segments copied.
  *
+ * A NAME=VALUE argument, such as the `root=PATH` a native run appends
+ * (tests/native/Readme.md), is not the child's mode.
+ *
  * Prints `MAPMUSL OK` and exits 0 on success, and prints
  * `MAPMUSL FAIL (detail)` and exits 1 otherwise.
  */
@@ -59,6 +62,8 @@
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 #define FILE_PATH "/tmp/mapmusl"
 #define SHM_PATH  "/dev/shm/mapmusl"
@@ -862,11 +867,12 @@ static int exec_segments(void)
 
 int main(int argc, char **argv)
 {
-    if (argc == 2 && strcmp(argv[1], "unlinked") == 0 &&
+    probe_args(argc, argv);
+    if (probe_words() == 1 && strcmp(probe_word(1), "unlinked") == 0 &&
         (rename(EXE_PATH, MOVED) != 0 || unlink(MOVED) != 0)) {
         return fail("the rename and the unlink of the program's own file");
     }
-    if (argc == 2) {
+    if (probe_words() == 1) {
         return segments();
     }
     if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||

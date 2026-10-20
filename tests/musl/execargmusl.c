@@ -14,8 +14,9 @@
  * smallest that must not. On x86-64 an argument and a variable at 4 GiB and 8
  * GiB, whose addresses have zero low words, are delivered.
  *
- * The program execs itself. With no arguments it is the parent and runs the
- * checks; otherwise it is the child, in the mode its first argument names or,
+ * The program execs itself. With no arguments, or only the NAME=VALUE ones a
+ * native run appends, such as `root=PATH` (tests/native/Readme.md), it is the
+ * parent and runs the checks; otherwise it is the child, in the mode its first argument names or,
  * with `EXECARG_EMPTY` set, the empty-argv mode, and it exits 0 only when it
  * was handed what the parent sent, so a vector delivered short fails the
  * check. The parent prints "EXECARGMUSL OK" and exits 0 on success, or
@@ -350,6 +351,15 @@ static int wide_pointers(void)
 }
 #endif
 
+/**
+ * Whether this image is the parent: started with no argument, or with the
+ * NAME=VALUE ones a native run appends, which no child's mode begins with.
+ */
+static int parent(int argc, char *argv[])
+{
+    return argc == 1 || (argc > 1 && strchr(argv[1], '=') != NULL);
+}
+
 int main(int argc, char *argv[])
 {
     int i;
@@ -357,7 +367,7 @@ int main(int argc, char *argv[])
     for (i = 0; i < MANY; i++) {
         snprintf(names[i], sizeof(names[i]), "a%04d", i);
     }
-    if (argc != 1 || getenv("EXECARG_EMPTY") != NULL) {
+    if (!parent(argc, argv) || getenv("EXECARG_EMPTY") != NULL) {
         return child(argc, argv);
     }
     if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0) {

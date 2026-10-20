@@ -14,7 +14,9 @@
  * changes the target, an O_PATH descriptor opened with O_NOFOLLOW refers to
  * the link for AT_EMPTY_PATH, and a dangling link can be changed and not
  * followed. A relative directory is taken from the working directory, as a
- * native run gives `.`, its workspace (tests/native/Readme.md).
+ * native run gives `.`, its workspace (tests/native/Readme.md), and a
+ * NAME=VALUE argument, such as the `root=PATH` a native run appends, is not
+ * the directory.
  *
  * The program runs as root. It prints `LCHOWNMUSL OK`, followed by
  * " (links)" when the link rows ran, and exits 0 on success, and prints
@@ -29,6 +31,8 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+
+#include "../probe_args.h"
 
 /* fchown of 32-bit ids: fchown32 on i386, whose fchown takes 16-bit ones,
  * and fchown on x86-64, which has only that. */
@@ -240,13 +244,17 @@ static void tidy(void)
 
 int main(int argc, char **argv)
 {
-    const char *dir = argc > 1 ? argv[1] : "/";
+    const char *dir;
     const char *sep;
     char where[200];
+    int given;
     int links;
     int fd;
     int rc;
 
+    probe_args(argc, argv);
+    given = probe_words() > 0;
+    dir = given ? probe_word(1) : "/";
     if (dir[0] != '/') {
         if (getcwd(where, sizeof(where)) == NULL) {
             return fail("the working directory");
@@ -268,7 +276,7 @@ int main(int argc, char **argv)
     }
     close(fd);
     links = symlink("lchown.tmp", link_name) == 0;
-    if (!links && (argc > 1 || errno != EPERM)) {
+    if (!links && (given || errno != EPERM)) {
         tidy();
         return fail("a symbolic link where the file system has them");
     }
