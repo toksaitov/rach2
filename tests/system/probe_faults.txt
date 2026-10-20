@@ -4038,6 +4038,22 @@ new
                 port = 0;
 end
 
+# The loopback ring left for the timer by a processor that halts over it.
+
+fault loopback-idle-undrained
+probe loopprobe
+file rach2/sys/proc/sched.c
+expect LOOPPROBE FAIL (a local round trip waited for the timer with nothing running)
+old
+    if (ip_loop_pending()) {
+        ip_loop_drain_from(IP_LOOP_FROM_IDLE);
+        return;
+    }
+    this_cpu()->idle_wait = 1;
+new
+    this_cpu()->idle_wait = 1;
+end
+
 # A descriptor in flight whose file a write moved.
 
 fault unix-inflight-count-by-node

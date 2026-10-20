@@ -12,14 +12,18 @@
  * for the next one. A TCP connection to the probe's own listener completes
  * its handshake, moves data both ways and reports the peer 127.0.0.1, and
  * one the server closes at once after accept still connects. A transfer
- * larger than the ring arrives whole with no datagram dropped, and the round
- * trips between two processes are delivered by the idle path, not the
- * timer. A listener bound to 127.0.0.1 is not reached at the machine's
- * interface address, a bind to an address the machine lacks is refused, and
- * a connect to a closed port is refused by the reset that answers its SYN.
- * The rows of TCP ports check a client's bound source port, the one
- * listener a port may have, ephemeral ports and a shutdown, and two sockets
- * that dial each other at once open one connection.
+ * larger than the ring arrives whole with no datagram dropped, and no leg of
+ * the round trips between two processes is left on the ring for the timer
+ * while the machine idles. A listener bound to 127.0.0.1 is not reached at
+ * the machine's interface address, a bind to an address the machine lacks
+ * is refused, and a connect to a closed port is refused by the reset that
+ * answers its SYN. The rows of TCP ports check a client's bound source port,
+ * the one listener a port may have, ephemeral ports and a shutdown, and two
+ * sockets that dial each other at once open one connection.
+ *
+ * A row that waits for a datagram or a connection blocks in the receive or
+ * in poll(2) until it comes, and judges what came; the suite's limit on the
+ * probe's run ends one that never does.
  *
  * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct system
  * calls (probe.h).
@@ -55,8 +59,10 @@ typedef unsigned char uint8_t;
 #define BOUND_LISTEN_PORT 7300
 #define BOUND_CLIENT_PORT 7301
 
-/* Where the simultaneous-open case's port pairs start; each round takes two. */
+/* Where the simultaneous-open case's port pairs start, and how many it takes
+ * in turn, a pair a round. */
 #define SIM_PORT_A      7310
+#define SIM_PAIRS       8
 #define TCP_PORT        7200
 /* The round trips of `tcp_loop_pingpong`, a byte each way. */
 #define PINGPONG_ROUNDS 200
@@ -66,7 +72,6 @@ typedef unsigned char uint8_t;
 #define EPIPE       32
 #define ENOTCONN    107
 #define EINPROGRESS 115
-#define EISCONN     106
 
 #define F_SETFL       4
 #define O_NONBLOCK    04000
@@ -309,6 +314,38 @@ static int sys_fcntl(int fd, int cmd, int arg)
     return syscall3(SYS_FCNTL, (long)fd, (long)cmd, (long)arg);
 }
 
+#define POLLIN  0x001
+#define POLLOUT 0x004
+#define POLLERR 0x008
+
+struct pollfd_probe {
+    int fd;
+    short events;
+    short revents;
+};
+
+/** poll(2) with no timeout: blocks until a descriptor of `fds` is ready, and
+ * returns how many are, or a negated errno. */
+static int sys_poll_wait(struct pollfd_probe *fds, unsigned int n)
+{
+    return syscall3(SYS_POLL, (long)fds, (long)n, (long)-1);
+}
+
+/** Block until `fd` reports one of `events`, or an error or hangup, which
+ * poll reports whether asked for or not; the events it reported. Fails the
+ * probe when poll fails. */
+static short wait_for(int fd, short events)
+{
+    struct pollfd_probe pfd;
+
+    pfd.fd = fd;
+    pfd.events = events;
+    pfd.revents = 0;
+    if (sys_poll_wait(&pfd, 1) != 1)
+        fail("a poll with no timeout returned without a ready descriptor");
+    return pfd.revents;
+}
+
 struct timespec_probe {
     long tv_sec;
     long tv_nsec;
@@ -449,8 +486,9 @@ static void udp_loop(void)
 
 /** A recvfrom given an address and no length pointer fails with EFAULT
  * before it takes the datagram, which the next recvfrom takes whole. A
- * kernel that took the datagram first would leave the receives after it
- * nothing, and they give up after two seconds. */
+ * second datagram follows the refused call, and the ring and the socket's
+ * queue keep their order, so the blocking receive after it takes the first
+ * if it is still queued and the second if the refused call took it. */
 static void udp_no_length(void)
 {
     unsigned long args[6];
@@ -458,7 +496,8 @@ static void udp_no_length(void)
     uint32_t salen = 16;
     char rbuf[32];
     const char *msg = "no-length";
-    int s, n, spin;
+    const char *after = "after";
+    int s, n;
 
     args[0] = AF_INET;
     args[1] = SOCK_DGRAM;
@@ -491,43 +530,41 @@ static void udp_no_length(void)
     if (socketcall(SC_RECVFROM, args) != -EFAULT)
         fail("a recvfrom with an address and no length was not EFAULT");
 
-    n = -EAGAIN;
-    for (spin = 0; spin < 100 && n == -EAGAIN; spin++) {
-        args[0] = (uint32_t)s;
-        args[1] = (unsigned long)rbuf;
-        args[2] = sizeof(rbuf);
-        args[3] = MSG_DONTWAIT;
-        args[4] = (unsigned long)src;
-        args[5] = (unsigned long)&salen;
-        n = socketcall(SC_RECVFROM, args);
-        if (n == -EAGAIN)
-            sys_nanosleep_ms(20);
-    }
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)after;
+    args[2] = (uint32_t)strlen(after);
+    args[3] = 0;
+    args[4] = (unsigned long)sa;
+    args[5] = 16;
+    if (socketcall(SC_SENDTO, args) != (int)strlen(after))
+        fail("udp sendto after the recvfrom with no length");
+
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)rbuf;
+    args[2] = sizeof(rbuf);
+    args[3] = 0;
+    args[4] = (unsigned long)src;
+    args[5] = (unsigned long)&salen;
+    n = socketcall(SC_RECVFROM, args);
     if (n != (int)strlen(msg) || !mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n))
         fail("a recvfrom refused with EFAULT took the datagram");
     sys_close(s);
 }
 
-/** recvfrom on `s` into `buf` with `flags` and MSG_DONTWAIT, no address
- * asked for, retried every 20 ms for two seconds while it answers EAGAIN:
- * the bytes received, or the last negated errno. */
-static int recv_spin(int s, char *buf, int len, int flags)
+/** recvfrom on `s` into `buf` with `flags`, no address asked for, blocking
+ * until a datagram or a stream's bytes arrive: the bytes received, or a
+ * negated errno. */
+static int recv_wait(int s, char *buf, int len, int flags)
 {
     unsigned long args[6];
-    int n = -EAGAIN, spin;
 
-    for (spin = 0; spin < 100 && n == -EAGAIN; spin++) {
-        args[0] = (uint32_t)s;
-        args[1] = (unsigned long)buf;
-        args[2] = (uint32_t)len;
-        args[3] = (uint32_t)flags | MSG_DONTWAIT;
-        args[4] = 0;
-        args[5] = 0;
-        n = socketcall(SC_RECVFROM, args);
-        if (n == -EAGAIN)
-            sys_nanosleep_ms(20);
-    }
-    return n;
+    args[0] = (uint32_t)s;
+    args[1] = (unsigned long)buf;
+    args[2] = (uint32_t)len;
+    args[3] = (uint32_t)flags;
+    args[4] = 0;
+    args[5] = 0;
+    return socketcall(SC_RECVFROM, args);
 }
 
 /** A datagram peeked at with MSG_PEEK stays queued, whole and with its
@@ -562,7 +599,7 @@ static void udp_peek(void)
     args[5] = 16;
     if (socketcall(SC_SENDTO, args) != (int)strlen(msg))
         fail("udp sendto for the peek");
-    if (recv_spin(s, rbuf, sizeof(rbuf), MSG_PEEK) != (int)strlen(msg))
+    if (recv_wait(s, rbuf, sizeof(rbuf), MSG_PEEK) != (int)strlen(msg))
         fail("a udp peek did not copy the datagram");
 
     args[0] = (uint32_t)s;
@@ -627,7 +664,7 @@ static void tcp_peek(void)
     if (sys_write(as, msg, strlen(msg)) != (int)strlen(msg))
         fail("tcp write for the peek");
 
-    n = recv_spin(cs, rbuf, 1, MSG_PEEK);
+    n = recv_wait(cs, rbuf, 1, MSG_PEEK);
     if (n != 1 || rbuf[0] != msg[0])
         fail("a tcp peek of one byte did not copy it");
     n = sys_read(cs, rbuf, sizeof(rbuf));
@@ -792,10 +829,68 @@ static char stream_byte(uint32_t n)
 }
 
 /**
+ * Send BULK_BYTES of the stream from `cs` and receive them at `as`, the two
+ * ends of one connection, both non-blocking, within this process. It waits
+ * in poll for either: the client writes when its ring has room and the
+ * server reads what has arrived, so the two take turns, and every byte must
+ * arrive in order. The wait in poll is also what delivers the loopback ring
+ * when no system call's exit has, since a blocked process's idle wait
+ * drains it. Fails the probe on a wrong byte, an error or an early end.
+ */
+static void bulk_transfer(int cs, int as)
+{
+    static char out[65536], in[16384];
+    struct pollfd_probe pfd[2];
+    uint32_t sent = 0, got = 0;
+    int n, i;
+
+    for (i = 0; i < (int)sizeof(out); i++) {
+        out[i] = stream_byte((uint32_t)i);
+    }
+    while (got < BULK_BYTES) {
+        pfd[0].fd = as;
+        pfd[0].events = POLLIN;
+        pfd[0].revents = 0;
+        pfd[1].fd = cs;
+        pfd[1].events = sent < BULK_BYTES ? POLLOUT : 0;
+        pfd[1].revents = 0;
+        if (sys_poll_wait(pfd, 2) <= 0)
+            fail("a poll of the bulk transfer returned without a ready descriptor");
+        if ((pfd[0].revents | pfd[1].revents) & POLLERR)
+            fail("the bulk connection reported an error");
+        if (sent < BULK_BYTES && (pfd[1].revents & POLLOUT)) {
+            /* A short write is ordinary; the next starts where it ended. */
+            uint32_t at = sent % sizeof(out);
+            uint32_t want = (uint32_t)sizeof(out) - at;
+
+            if (want > BULK_BYTES - sent)
+                want = BULK_BYTES - sent;
+            n = sys_write(cs, out + at, (int)want);
+            if (n <= 0)
+                fail("a bulk write that poll said had room wrote nothing");
+            sent += (uint32_t)n;
+        }
+        if (pfd[0].revents & POLLIN) {
+            n = sys_read(as, in, (int)sizeof(in));
+            if (n <= 0)
+                fail("the bulk connection ended before the transfer arrived");
+            for (i = 0; i < n; i++) {
+                if (in[i] != stream_byte((got + (uint32_t)i) % (uint32_t)sizeof(out))) {
+                    fail("bulk bytes came back wrong");
+                }
+            }
+            got += (uint32_t)n;
+        }
+    }
+    if (got != BULK_BYTES) {
+        fail("a transfer larger than the loopback ring did not arrive whole");
+    }
+}
+
+/**
  * More bytes than the loopback ring holds, BULK_BYTES, through the ring
- * within one process. The client writes without blocking and the server
- * reads what has arrived, so the two take turns; every byte must arrive in
- * order, and the kernel's count of datagrams the ring refused must not rise.
+ * within one process, as `bulk_transfer` moves them, and the kernel's count
+ * of datagrams the ring refused must not rise.
  *
  * A write offers up to 64 KiB, so that a call puts the most it can in the
  * ring: a window's worth, 65535 bytes, is 45 segments of 1460 bytes, of the
@@ -808,14 +903,9 @@ static void tcp_loop_bulk(void)
 {
     unsigned long args[6];
     uint8_t sa[16];
-    static char out[65536], in[16384];
-    uint32_t sent = 0, got = 0, spins = 0;
     uint32_t dropped_before, dropped_after;
-    int ls, cs, as, n, i;
+    int ls, cs, as;
 
-    for (i = 0; i < (int)sizeof(out); i++) {
-        out[i] = stream_byte((uint32_t)i);
-    }
     dropped_before = loop_dropped_now();
 
     args[0] = AF_INET;
@@ -860,32 +950,7 @@ static void tcp_loop_bulk(void)
     if (sys_fcntl(as, F_SETFL, O_NONBLOCK) != 0)
         fail("bulk server non-blocking");
 
-    while (got < BULK_BYTES && spins < 200000u) {
-        spins++;
-        if (sent < BULK_BYTES) {
-            /* A short write is ordinary; the next starts where it ended. */
-            uint32_t at = sent % sizeof(out);
-            uint32_t want = (uint32_t)sizeof(out) - at;
-
-            if (want > BULK_BYTES - sent)
-                want = BULK_BYTES - sent;
-            n = sys_write(cs, out + at, (int)want);
-            if (n > 0)
-                sent += (uint32_t)n;
-        }
-        n = sys_read(as, in, (int)sizeof(in));
-        if (n > 0) {
-            for (i = 0; i < n; i++) {
-                if (in[i] != stream_byte((got + (uint32_t)i) % (uint32_t)sizeof(out))) {
-                    fail("bulk bytes came back wrong");
-                }
-            }
-            got += (uint32_t)n;
-        }
-    }
-    if (got != BULK_BYTES) {
-        fail("a transfer larger than the loopback ring did not arrive whole");
-    }
+    bulk_transfer(cs, as);
     dropped_after = loop_dropped_now();
     if (dropped_after != dropped_before) {
         fail("the loopback ring refused a datagram during the transfer");
@@ -947,17 +1012,21 @@ static int pipe_pingpong_ms(void)
 
 /**
  * PINGPONG_ROUNDS round trips of a byte each way between this process and a
- * child over a loopback connection, judged by the kernel's count of the legs
- * the idle path delivered against the legs the timer did.
+ * child over a loopback connection, judged leg by leg by the kernel's count
+ * of the datagrams a tick found on the ring while every processor was idle
+ * (`loopback_left_idle` in /proc/stat).
  *
  * Each leg queues one datagram, below the three at which a system call's exit
- * delivers the ring, so only the idle path can deliver it before the next
- * tick: the sender blocks in its read, nothing else is runnable, and the
- * processor is about to idle. Of the 400 legs at least half must be delivered
- * by the idle path, and no more by the timer than by it; a leg left for the
- * timer costs a tick, and a connection that waits for it turns over one
- * window a tick. The times of these rounds and of the same rounds over pipes
- * are printed for a person and not judged.
+ * delivers the ring, and the sender then blocks in its read with nothing else
+ * runnable, so the processor goes to its idle wait, which delivers the ring
+ * before it halts. A tick may still deliver a leg first, when it comes
+ * between the write and the idle wait, and a slower processor makes that
+ * likelier; the count does not see those, since the processor was running.
+ * It sees a leg the idle wait left on the ring and halted over, which then
+ * waited for the timer: a connection that does turns over one window a tick.
+ * No leg may, so the count must not rise. The legs each path delivered and
+ * the times of these rounds and of the same rounds over pipes are printed for
+ * a person and not judged.
  */
 static void tcp_loop_pingpong(void)
 {
@@ -966,7 +1035,7 @@ static void tcp_loop_pingpong(void)
     long t0[2], t1[2];
     char one = 'p';
     int ls, cs, as, pid, status = 0, round, ms, base;
-    uint32_t idle, tick;
+    uint32_t idle, tick, left;
 
     base = pipe_pingpong_ms();
 
@@ -1021,6 +1090,7 @@ static void tcp_loop_pingpong(void)
         fail("ping-pong accept");
     idle = proc_stat_u32("loopback_delivered_idle ", 24);
     tick = proc_stat_u32("loopback_delivered_tick ", 24);
+    left = proc_stat_u32("loopback_left_idle ", 19);
     sys_gettimeofday(t0);
     for (round = 0; round < PINGPONG_ROUNDS; round++) {
         if (sys_write(as, &one, 1) != 1)
@@ -1037,6 +1107,7 @@ static void tcp_loop_pingpong(void)
     ms = elapsed_ms(t0, t1);
     idle = proc_stat_u32("loopback_delivered_idle ", 24) - idle;
     tick = proc_stat_u32("loopback_delivered_tick ", 24) - tick;
+    left = proc_stat_u32("loopback_left_idle ", 19) - left;
     print("LOOPPROBE ping-pong ");
     print_u32((uint32_t)ms);
     print(" ms over the loopback, ");
@@ -1045,9 +1116,11 @@ static void tcp_loop_pingpong(void)
     print_u32(idle);
     print(", by the timer ");
     print_u32(tick);
+    print(", left for the timer by an idle machine ");
+    print_u32(left);
     print("\n");
-    if (ms < 0 || base < 0 || idle < 2 * PINGPONG_ROUNDS / 2 || tick > idle) {
-        fail("a local round trip waits for the timer");
+    if (left != 0) {
+        fail("a local round trip waited for the timer with nothing running");
     }
 }
 
@@ -1412,6 +1485,15 @@ static void tcp_ports(void)
     sys_close(ls);
 }
 
+/** The datagrams the loopback ring has delivered since boot, by the tick, the
+ * idle wait and system calls' exits together. */
+static uint32_t loop_delivered_now(void)
+{
+    return proc_stat_u32("loopback_delivered_tick ", 24) +
+           proc_stat_u32("loopback_delivered_idle ", 24) +
+           proc_stat_u32("loopback_delivered_call ", 24);
+}
+
 /**
  * Simultaneous open (RFC 793): both ends send a SYN and neither has seen an
  * ACK. Two sockets, each bound to the port the other dials, connect without
@@ -1420,22 +1502,30 @@ static void tcp_ports(void)
  * SYN-ACK at its `iss`, the sequence the peer expects, and the two establish
  * a connection that carries a message from `a` to `b`.
  *
- * A round is decided by that message, not by a repeated connect, which is
- * EISCONN for a block in any state but SYN_SENT, a reset one in CLOSED too.
- * A round may lose: a tick of the 100 Hz timer between the two connects
- * delivers the first SYN before `b` has a block, and the reset refuses it.
- * The probe fails only when all eight rounds lose.
+ * A round waits in poll for `a` to connect or be refused, and is decided by
+ * the message, which `b` waits for in poll as well. A round may lose: a tick
+ * of the 100 Hz timer between the two connects delivers the first SYN
+ * before `b` has a block, and the reset refuses it. The kernel's count of
+ * the datagrams the ring delivered, read before the first connect and after
+ * the second, says whether that can have happened: a round that loses with
+ * the count unchanged had both SYNs on the ring at once, and fails the
+ * probe; one that loses after a delivery is tried again on the next pair of
+ * ports, SIM_PAIRS pairs in turn.
  */
 static void tcp_simultaneous(void)
 {
     unsigned long args[6];
     uint8_t sa[16];
-    int a, b, rc, spin, round, crossed = 0;
+    int a, b, rc, round, crossed = 0;
+    uint16_t port_a, port_b;
+    uint32_t before, delivered;
     const char *msg = "simultaneous";
     char rbuf[32];
     int n;
 
-    for (round = 0; round < 8 && !crossed; round++) {
+    for (round = 0; !crossed; round++) {
+        port_a = (uint16_t)(SIM_PORT_A + (round % SIM_PAIRS) * 2);
+        port_b = (uint16_t)(port_a + 1);
         args[0] = AF_INET;
         args[1] = SOCK_STREAM;
         args[2] = 0;
@@ -1447,13 +1537,13 @@ static void tcp_simultaneous(void)
         if (a < 0 || b < 0)
             fail("simultaneous sockets");
 
-        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2), 0, 0, 0, 0);
+        make_sockaddr(sa, port_a, 0, 0, 0, 0);
         args[0] = (uint32_t)a;
         args[1] = (unsigned long)sa;
         args[2] = 16;
         if (socketcall(SC_BIND, args) != 0)
             fail("simultaneous bind a");
-        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2 + 1), 0, 0, 0, 0);
+        make_sockaddr(sa, port_b, 0, 0, 0, 0);
         args[0] = (uint32_t)b;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -1463,7 +1553,8 @@ static void tcp_simultaneous(void)
         if (sys_fcntl(a, F_SETFL, O_NONBLOCK) < 0 || sys_fcntl(b, F_SETFL, O_NONBLOCK) < 0)
             fail("simultaneous nonblock");
 
-        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2 + 1), 127, 0, 0, 1);
+        before = loop_delivered_now();
+        make_sockaddr(sa, port_b, 127, 0, 0, 1);
         args[0] = (uint32_t)a;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -1471,23 +1562,16 @@ static void tcp_simultaneous(void)
         if (rc != -EINPROGRESS && rc != 0)
             fail("simultaneous connect a");
 
-        make_sockaddr(sa, (uint16_t)(SIM_PORT_A + round * 2), 127, 0, 0, 1);
+        make_sockaddr(sa, port_a, 127, 0, 0, 1);
         args[0] = (uint32_t)b;
         args[1] = (unsigned long)sa;
         args[2] = 16;
         rc = socketcall(SC_CONNECT, args);
         if (rc != -EINPROGRESS && rc != 0)
             fail("simultaneous connect b");
+        delivered = loop_delivered_now() - before;
 
-        for (spin = 0; spin < 100; spin++) {
-            args[0] = (uint32_t)a;
-            args[1] = (unsigned long)sa;
-            args[2] = 16;
-            if (socketcall(SC_CONNECT, args) == -EISCONN) {
-                break;
-            }
-            sys_nanosleep_ms(20);
-        }
+        (void)wait_for(a, POLLOUT);
 
         /* The round crossed when a message reaches `b`. */
         n = 0;
@@ -1498,28 +1582,23 @@ static void tcp_simultaneous(void)
         args[4] = 0;
         args[5] = 0;
         if (socketcall(SC_SENDTO, args) == (int)strlen(msg)) {
-            for (spin = 0; spin < 100; spin++) {
-                args[0] = (uint32_t)b;
-                args[1] = (unsigned long)rbuf;
-                args[2] = sizeof(rbuf);
-                args[3] = MSG_DONTWAIT;
-                args[4] = 0;
-                args[5] = 0;
-                n = socketcall(SC_RECVFROM, args);
-                if (n > 0) {
-                    break;
-                }
-                sys_nanosleep_ms(20);
-            }
+            (void)wait_for(b, POLLIN);
+            args[0] = (uint32_t)b;
+            args[1] = (unsigned long)rbuf;
+            args[2] = sizeof(rbuf);
+            args[3] = MSG_DONTWAIT;
+            args[4] = 0;
+            args[5] = 0;
+            n = socketcall(SC_RECVFROM, args);
         }
         if (n == (int)strlen(msg) && mem_eq((const uint8_t *)rbuf, (const uint8_t *)msg, n)) {
             crossed = 1;
+        } else if (delivered == 0) {
+            fail("crossing SYNs in flight at once opened no connection that carries data");
         }
         sys_close(a);
         sys_close(b);
     }
-    if (!crossed)
-        fail("the crossing SYNs never established a connection that has data");
 }
 
 /** A server that closes a connection at once after accept: the client's
