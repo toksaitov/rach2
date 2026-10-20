@@ -219,11 +219,6 @@ manifest imagerace-tree
 sentinel /prog 0755:0:0
 init none
 
-# The USB mutation image contains only its freshly compiled probe.
-manifest usbdisk-proof
-sentinel /usbdiskprobe 0755:0:0
-init none
-
 manifest rng-proof
 sentinel /rngprobe 0755:0:0
 init none
