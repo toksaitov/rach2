@@ -202,6 +202,20 @@ has()
     git -C "$work/clone" rev-parse -q --verify "refs/heads/$1" > /dev/null
 }
 
+# started PID LINK PATH: wait until /proc/PID/LINK names PATH, as the sweep
+# reads it, for at most 30 seconds: a busy row means nothing until its
+# process is in its directory or running its program.
+started()
+{
+    want=$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")
+    tries=0
+    while [ "$(readlink "/proc/$1/$2" 2> /dev/null)" != "$want" ]; do
+        [ "$tries" -lt 300 ] || return 1
+        sleep 0.1
+        tries=$((tries + 1))
+    done
+}
+
 # rows: set up, run tidy, prune_logs and scratch.pl from the copies, print
 # `tidy-test: failed: NAME` for each row that fails, and fail when any did.
 rows()
@@ -213,6 +227,15 @@ rows()
         busy=$!
         (cd / && exec "$work/tmp/rach2-prog.Pr0gPr/sleep" 300) &
         busy="$busy $!"
+        # shellcheck disable=SC2086 # busy is a list of process ids
+        set -- $busy
+        if ! started "$1" cwd "$work/tmp/rach2-busy.Bu5yBu" ||
+            ! started "$2" exe "$work/tmp/rach2-prog.Pr0gPr/sleep"; then
+            echo 'tidy-test: the busy processes did not start'
+            # shellcheck disable=SC2086 # busy is a list of process ids
+            { kill $busy 2> /dev/null; wait $busy 2> /dev/null; busy=; }
+            return 1
+        fi
     fi
     {
         # shellcheck source=tools/flow/lib.sh
