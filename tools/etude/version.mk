@@ -3,8 +3,9 @@
 # for. A POSIX make reads it: GNU make on Linux, macOS and Windows, pdpmake
 # on Rach2. OUT is the directory the programs go in, EXE the suffix of an
 # executable, and CC and CFLAGS the compiler and its flags, which bootstrap.sh
-# chooses for the platform. `all` builds the programs of every platform, and
-# `remote` etude-remote, which bootstrap.sh asks for on Linux and macOS.
+# chooses for the platform. `all` builds the programs of every platform,
+# `remote` etude-remote and `bridge` etude-bridge, which bootstrap.sh asks for
+# on Linux and macOS.
 
 include tools/etude/sources.mk
 
@@ -21,7 +22,7 @@ remote: $(OUT)/etude-remote$(EXE)
 $(OUT)/etude-remote$(EXE): $(ETUDE_REMOTE_SRC)
 	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Itools/etude/include -o $@ $(ETUDE_REMOTE_SRC)
 
-# The POSIX wrapper used outside an old checkout for bisection.
+# The admission wrapper that runs an old checkout's commands from outside it.
 bridge: $(OUT)/etude-bridge$(EXE)
 
 $(OUT)/etude-bridge$(EXE): $(ETUDE_BRIDGE_SRC)
