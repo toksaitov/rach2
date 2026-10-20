@@ -516,7 +516,6 @@ tests/memprobe.c:probe_main complexity 31 a probe, one sequence of steps in the 
 
 tests/modeprobe.c:probe_main lines 117 a probe, one sequence of steps in the order the log records them
 
-tests/mountprobe.c:rows_flags complexity 28 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_lifetime complexity 30 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_lifetime lines 128 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_placing complexity 26 a probe, one sequence of steps in the order the log records them
@@ -612,19 +611,19 @@ tests/netifprobe.c:packet_on_second lines 148 a probe, one sequence of steps in 
 tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the order the log records them
 tests/ownprobe.c:child_main lines 124 a probe, one sequence of steps in the order the log records them
 
-tests/packetprobe.c:_start complexity 145 a probe, one sequence of steps in the order the log records them
-tests/packetprobe.c:_start lines 629 a probe, one sequence of steps in the order the log records them
+tests/packetprobe.c:probe_main complexity 134 a probe, one sequence of steps in the order the log records them
+tests/packetprobe.c:probe_main lines 595 a probe, one sequence of steps in the order the log records them
 
 tests/partsprobe.c:probe_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/partsprobe.c:probe_main lines 109 a probe, one sequence of steps in the order the log records them
 
-tests/pingtest.c:_start complexity 31 a probe, one sequence of steps in the order the log records them
-tests/pingtest.c:_start lines 154 a probe, one sequence of steps in the order the log records them
-tests/pingtest.c:_start nesting 5 a probe, one sequence of steps in the order the log records them
+tests/pingtest.c:probe_main complexity 27 a probe, one sequence of steps in the order the log records them
+tests/pingtest.c:probe_main lines 150 a probe, one sequence of steps in the order the log records them
+tests/pingtest.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
-tests/pipeprobe.c:_start complexity 50 a probe, one sequence of steps in the order the log records them
-tests/pipeprobe.c:_start lines 239 a probe, one sequence of steps in the order the log records them
-tests/pipeprobe.c:_start nesting 5 a probe, one sequence of steps in the order the log records them
+tests/pipeprobe.c:probe_main complexity 50 a probe, one sequence of steps in the order the log records them
+tests/pipeprobe.c:probe_main lines 239 a probe, one sequence of steps in the order the log records them
+tests/pipeprobe.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/procprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
 tests/procprobe.c:probe_main lines 399 a probe, one sequence of steps in the order the log records them
@@ -632,12 +631,12 @@ tests/procprobe.c:probe_main lines 399 a probe, one sequence of steps in the ord
 tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
 tests/ptyprobe.c:_start lines 142 a probe, one sequence of steps in the order the log records them
 
-tests/rawprobe.c:_start complexity 44 a probe, one sequence of steps in the order the log records them
-tests/rawprobe.c:_start lines 352 a probe, one sequence of steps in the order the log records them
+tests/rawprobe.c:probe_main complexity 30 a probe, one sequence of steps in the order the log records them
+tests/rawprobe.c:probe_main lines 352 a probe, one sequence of steps in the order the log records them
 
 tests/rmtest.c:_start lines 138 a probe, one sequence of steps in the order the log records them
 
-tests/stattest.c:_start lines 177 a probe, one sequence of steps in the order the log records them
+tests/stattest.c:probe_main lines 177 a probe, one sequence of steps in the order the log records them
 
 tests/stdintest.c:_start lines 115 a probe, one sequence of steps in the order the log records them
 
@@ -676,16 +675,16 @@ tests/touchtest.c:_start lines 142 a probe, one sequence of steps in the order t
 
 tests/udptest.c:probe_main lines 125 a probe, one sequence of steps in the order the log records them
 
-tests/unlinkdirprobe.c:_start complexity 35 a probe, one sequence of steps in the order the log records them
-tests/unlinkdirprobe.c:_start lines 151 a probe, one sequence of steps in the order the log records them
+tests/unlinkdirprobe.c:probe_main complexity 35 a probe, one sequence of steps in the order the log records them
+tests/unlinkdirprobe.c:probe_main lines 151 a probe, one sequence of steps in the order the log records them
 
 tests/usbdiskprobe.c:part_hold complexity 43 a probe, one sequence of steps in the order the log records them
 tests/usbdiskprobe.c:part_hold lines 118 a probe, one sequence of steps in the order the log records them
 
 tests/usbprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
 
-tests/vfsprobe.c:_start complexity 102 a probe, one sequence of steps in the order the log records them
-tests/vfsprobe.c:_start lines 273 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:probe_main complexity 102 a probe, one sequence of steps in the order the log records them
+tests/vfsprobe.c:probe_main lines 273 a probe, one sequence of steps in the order the log records them
 
 tools/etude/guest/guest.c:load_invocation complexity 60 a parser over an external format, one check per field in the format's order
 

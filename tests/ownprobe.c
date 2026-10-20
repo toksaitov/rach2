@@ -88,6 +88,18 @@ static u32 stat_field(const char *path, int offset)
     return *(u32 *)(st + offset);
 }
 
+/** The owner of `path`, by `stat_field`. */
+static u32 uid_of(const char *path)
+{
+    return stat_field(path, KSTAT_UID);
+}
+
+/** The group of `path`, by `stat_field`. */
+static u32 gid_of(const char *path)
+{
+    return stat_field(path, KSTAT_GID);
+}
+
 /**
  * The rows that change the process's ids, run in a child so that the parent
  * stays root: creation under umask 027 by root and by an effective uid of
@@ -124,12 +136,10 @@ static void child_main(void)
 
     /* chown: a uid change is root's; the stored ids come back from stat. */
     if (syscall3(SYS_CHOWN, (long)"/own.txt", ID(1000), ID(1000)) != 0 ||
-        stat_field("/own.txt", KSTAT_UID) != ID(1000) ||
-        stat_field("/own.txt", KSTAT_GID) != ID(1000)) {
+        uid_of("/own.txt") != ID(1000) || gid_of("/own.txt") != ID(1000)) {
         fail("chown as root");
     }
-    if (syscall3(SYS_FCHOWN, fd, ID(1000), ID(2000)) != 0 ||
-        stat_field("/own.txt", KSTAT_GID) != ID(2000)) {
+    if (syscall3(SYS_FCHOWN, fd, ID(1000), ID(2000)) != 0 || gid_of("/own.txt") != ID(2000)) {
         fail("fchown as root");
     }
     if (syscall3(SYS_CHOWN, (long)"/own.d", ID(1000), ID(1000)) != 0) {

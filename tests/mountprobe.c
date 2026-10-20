@@ -282,6 +282,13 @@ static const char *in_mnt(const char *rest)
     return join3(p, (int)sizeof(paths[0]), mnt, rest, "");
 }
 
+/** A name in the file system above the mount reached by `..` from its root:
+ * the test image's /etc, or a native run's staged `hello`. */
+static const char *above_mnt(void)
+{
+    return in_mnt(probe_native() ? "/../hello" : "/../etc");
+}
+
 /** The path of `name`, a file at the root of the test image or in the
  * workspace of a native run. */
 static const char *at_top(const char *name)
@@ -335,12 +342,16 @@ static void native_paths(void)
 }
 
 /** Write `hello.txt` and a copy of the program `hello` on the writable mount
- * of a native run's empty volume, as the mount suite puts them on its own. */
+ * of a native run's empty volume, as the mount suite puts them on its own;
+ * without `machine=native` do nothing, since the suite's volume has them. */
 static void fill_volume(void)
 {
     static const char text[] = "hello from the mount suite\n";
     int in, out, n;
 
+    if (!probe_native()) {
+        return;
+    }
     out = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (out < 0 || syscall3(SYS_WRITE, out, (long)text, (int)sizeof(text) - 1) != 27) {
         fail("hello.txt is written on the writable mount");
@@ -432,9 +443,7 @@ static void rows_placing(void)
             fail("unlink and rmdir on the writable mount");
         }
     }
-    if (probe_native()) {
-        fill_volume();
-    }
+    fill_volume();
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("the writable mount is taken away");
     }
@@ -550,7 +559,7 @@ static void rows_reading(void)
     if (xstat(in_mnt("/../mnt/hello.txt")) != 0) {
         fail("dot-dot climbs out of the mount and back in");
     }
-    if (xstat(in_mnt(probe_native() ? "/../hello" : "/../etc")) != 0) {
+    if (xstat(above_mnt()) != 0) {
         fail("dot-dot at the mount root reaches the parent file system");
     }
     if (syscall2(SYS_RENAME, (long)in_mnt("/hello.txt"), (long)at_top("hello-moved")) != -EXDEV) {
@@ -626,6 +635,32 @@ static void row_working_directory(void)
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 after the working directory left");
     }
+}
+
+/**
+ * The exec child of `rows_lifetime`: open the file on the mount
+ * close-on-exec, say so through the pipe `opened`, and execute `stdintest`,
+ * whose standard input is the pipe `input` in a native run, which has no
+ * console. Exits 7 when the open fails, 6 when the pipe cannot become
+ * standard input, and 8 when the exec fails.
+ */
+static void exec_child(const int opened[2], const int input[2])
+{
+    char *av[2];
+
+    av[0] = (char *)(probe_native() ? "./stdintest" : "/stdintest");
+    av[1] = 0;
+    if (syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY | O_CLOEXEC, 0) < 0) {
+        sys_exit(7);
+    }
+    if (probe_native() && syscall2(SYS_DUP2, input[0], 0) != 0) {
+        sys_exit(6);
+    }
+    syscall3(SYS_WRITE, opened[1], (long)"o", 1);
+    syscall1(SYS_CLOSE, opened[1]);
+    syscall1(SYS_CLOSE, opened[0]);
+    syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1));
+    sys_exit(8);
 }
 
 /**
@@ -728,22 +763,7 @@ static void rows_lifetime(void)
     }
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        char *av[2];
-
-        av[0] = (char *)(probe_native() ? "./stdintest" : "/stdintest");
-        av[1] = 0;
-        fd = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY | O_CLOEXEC, 0);
-        if (fd < 0) {
-            sys_exit(7);
-        }
-        if (probe_native() && syscall2(SYS_DUP2, input[0], 0) != 0) {
-            sys_exit(6);
-        }
-        syscall3(SYS_WRITE, opened[1], (long)"o", 1);
-        syscall1(SYS_CLOSE, opened[1]);
-        syscall1(SYS_CLOSE, opened[0]);
-        syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1));
-        sys_exit(8);
+        exec_child(opened, input);
     }
     syscall1(SYS_CLOSE, opened[1]);
     if (syscall3(SYS_READ, opened[0], (long)&byte, 1) != 1) {
@@ -771,6 +791,34 @@ static void rows_lifetime(void)
     }
 
     row_working_directory();
+}
+
+/** A target too long for the mount's record (VFS_COVERED_PATH_MAX in
+ * rach2/sys/fs/vfs.h, 64 bytes with the NUL) claims nothing: a name of 69
+ * bytes at the root, or in a native run's workspace, is ENAMETOOLONG, and
+ * the source then mounts elsewhere. */
+static void row_long_target(void)
+{
+    static char longname[80];
+    const char *target;
+    int i;
+
+    longname[0] = '/';
+    for (i = 1; i < 70; i++) {
+        longname[i] = 'n';
+    }
+    longname[70] = 0;
+    target = probe_native() ? longname + 1 : longname;
+    if (syscall2(SYS_MKDIR, (long)target, 0755) != 0) {
+        fail("mkdir of the long target");
+    }
+    if (do_mount(src, target, MS_RDONLY, 0) != -ENAMETOOLONG) {
+        fail("a long target is ENAMETOOLONG");
+    }
+    syscall1(SYS_RMDIR, (long)target);
+    if (do_mount(src, mnt2, MS_RDONLY, 0) != 0 || syscall2(SYS_UMOUNT2, (long)mnt2, 0) != 0) {
+        fail("the source mounts after the refused long target");
+    }
 }
 
 /** The rows of umount2's flags and the permanent mounts, an unprivileged
@@ -859,28 +907,7 @@ static void rows_flags(void)
         fail("umount2 after running from the mount");
     }
 
-    {
-        static char longname[80];
-        const char *target;
-        int i;
-
-        longname[0] = '/';
-        for (i = 1; i < 70; i++) {
-            longname[i] = 'n';
-        }
-        longname[70] = 0;
-        target = probe_native() ? longname + 1 : longname;
-        if (syscall2(SYS_MKDIR, (long)target, 0755) != 0) {
-            fail("mkdir of the long target");
-        }
-        if (do_mount(src, target, MS_RDONLY, 0) != -ENAMETOOLONG) {
-            fail("a long target is ENAMETOOLONG");
-        }
-        syscall1(SYS_RMDIR, (long)target);
-        if (do_mount(src, mnt2, MS_RDONLY, 0) != 0 || syscall2(SYS_UMOUNT2, (long)mnt2, 0) != 0) {
-            fail("the source mounts after the refused long target");
-        }
-    }
+    row_long_target();
 }
 
 void probe_main(unsigned long *sp);

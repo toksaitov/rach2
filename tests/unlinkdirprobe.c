@@ -179,8 +179,7 @@ void probe_main(unsigned long *sp)
     char path[PATH_MAX_LEN];
     char dir[PATH_MAX_LEN];
     char buf[DIRENT_BUF];
-    int i, fd, rounds;
-    int removed = 0;
+    int i, fd, rounds, removed = 0;
     int64_t last_off = 0;
 
     probe_args((int)sp[0], (char **)(sp + 1));

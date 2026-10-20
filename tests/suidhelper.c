@@ -81,6 +81,14 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
+/** Keep the arguments `argc` and `argv` (probe_args.h) and return the
+ * scenario, the first positional argument, or NULL when there is none. */
+static const char *scenario_of(int argc, char **argv)
+{
+    probe_args(argc, argv);
+    return probe_word(1);
+}
+
 /**
  * Read the ids and AT_SECURE, and exit with the number of the first check of
  * the scenario the first positional argument names that fails, or 0: 90
@@ -92,18 +100,13 @@ void probe_main(unsigned long *sp)
 {
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
-    u32 ruid = 1, euid = 1, suid = 1;
-    u32 rgid = 1, egid = 1, sgid = 1;
-    u32 secure, user, other;
-    const char *scenario;
+    u32 ruid = 1, euid = 1, suid = 1, rgid = 1, egid = 1, sgid = 1, secure;
+    const char *scenario = scenario_of(argc, argv);
+    u32 user = (u32)probe_id(1000), other = (u32)probe_id(5);
 
-    probe_args(argc, argv);
-    scenario = probe_word(1);
     if (scenario == 0) {
         done(90);
     }
-    user = (u32)probe_id(1000);
-    other = (u32)probe_id(5);
     if (syscall3(SYS_GETRESUID, (long)&ruid, (long)&euid, (long)&suid) != 0) {
         done(91);
     }
