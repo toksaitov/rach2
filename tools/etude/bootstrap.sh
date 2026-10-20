@@ -130,8 +130,11 @@ etude_main()
     cc=${ETUDE_CC:-cc}
     exe=
     flags='-std=c99 -O2'
+    targets=all
     root=${ETUDE_CACHE:-}
     case $platform in
+        linux*|macos*)
+            targets='all remote' ;;
         windows*)
             cc=${ETUDE_CC:-/ucrt64/bin/gcc}
             exe=.exe
@@ -179,7 +182,8 @@ flags $flags"
     [ "$(etude_hash "$build/sources")" = "$ETUDE_SOURCE" ] ||
         etude_fail "the source arrived damaged: its digest is not $ETUDE_SOURCE"
     # shellcheck disable=SC2086 # CC is a command line
-    (cd "$build/src" && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags") >&2 ||
+    # shellcheck disable=SC2086 # TARGETS is a list of targets
+    (cd "$build/src" && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" $targets) >&2 ||
         etude_fail "the build of $key failed"
     {
         printf '%s\n' "$identity"

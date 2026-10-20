@@ -459,6 +459,16 @@ $(ETUDECOMPARE): $(ETUDE_HISTORY_COMPARE_SRC) tools/etude/compare.h tools/etude/
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99
 
+# etude's responder of remote execution (tools/etude/posix/etude_remote.c),
+# built here so that `make` compiles it under the host flags.
+ETUDEREMOTE = build/tools/etude/etude-remote
+$(ETUDEREMOTE): $(ETUDE_REMOTE_SRC) tools/etude/include/etude/remote.h \
+                tools/etude/include/etude/frame.h tools/etude/include/etude/exec.h \
+                tools/etude/guest/wire.h tools/etude/posix/posix.h tools/etude/capture.h \
+                tools/etude/json.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1168,7 +1178,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(ETUDECOMPARE) $(PECHECK) $(ETUDESERIAL)
+             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

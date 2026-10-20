@@ -12,9 +12,9 @@
  *   #E1 SESSION BOOT SEQ ACK TYPE FIELD... *CRC
  *
  * SESSION and BOOT are ETUDE_FRAME_TOKEN_LEN lowercase hexadecimal digits.
- * SEQ is the sender's decimal sequence number in this session, from 0; ACK
- * is the highest SEQ received in order from the peer, or "-" before any. A
- * FIELD is one or more bytes from '!' to '~'; bytes that are not are sent in
+ * SEQ is the sender's decimal sequence number on this connection, from 0;
+ * ACK is the highest SEQ received in order from the peer, or "-" before any.
+ * A FIELD is one or more bytes from '!' to '~'; bytes that are not are sent in
  * base64 (RFC 4648, with padding, without line breaks). CRC is eight
  * lowercase hexadecimal digits of the CRC-32 that zlib's crc32 computes, of
  * every byte from '#' to the space before '*'.
@@ -32,6 +32,9 @@
 
 /* The longest frame either side may offer for standard input and output. */
 #define ETUDE_FRAME_STDIO_MAX 65536
+
+/* The shortest largest frame a hello may offer: one console write. */
+#define ETUDE_FRAME_MIN ETUDE_FRAME_SERIAL_MAX
 
 /* The commands, from the controller to etude-guest. */
 #define ETUDE_CMD_HELLO  "hello"  /* CMD VERSIONS MAXFRAME */
@@ -53,8 +56,8 @@
 #define ETUDE_EV_STORED  "stored"  /* CMD NAME SHA256 */
 #define ETUDE_EV_STARTED "started" /* CMD ATTEMPT PID START */
 #define ETUDE_EV_OUT     "out"     /* CMD ATTEMPT FD OFFSET BASE64 */
-#define ETUDE_EV_EXIT    "exit"    /* CMD ATTEMPT KIND VALUE */
-#define ETUDE_EV_USAGE   "usage"   /* CMD ATTEMPT CPU-US PEAK-BYTES */
+#define ETUDE_EV_EXIT    "exit"    /* CMD ATTEMPT KIND VALUE, SIZE TOTAL SHA256 per stream */
+#define ETUDE_EV_USAGE   "usage"   /* CMD ATTEMPT CPU-US METHOD PEAK METHOD */
 #define ETUDE_EV_CLEANED "cleaned" /* CMD ATTEMPT confirmed|unconfirmed */
 #define ETUDE_EV_STATE   "state"   /* CMD ATTEMPT STATE */
 #define ETUDE_EV_SENT    "sent"    /* CMD NAME SIZE SHA256 */

@@ -1,7 +1,7 @@
 /*
  * wire.h: the codec of etude's frames (include/etude/frame.h): CRC-32,
- * base64, and the encoding and parsing of one frame. etude-guest and its
- * tests use it; the controller will.
+ * base64, and the encoding and parsing of one frame. etude-guest, the
+ * responder and the controller's side of remote execution use it.
  */
 #ifndef ETUDE_WIRE_H
 #define ETUDE_WIRE_H
@@ -9,8 +9,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* The most fields a frame may have after its type. */
-#define WIRE_FIELDS_MAX 8
+/* The most fields a frame may have after its type: an `exit`'s ten. */
+#define WIRE_FIELDS_MAX 10
 
 /* One parsed frame. The strings point into the line the parser was given. */
 struct wire_frame {

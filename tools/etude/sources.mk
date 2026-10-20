@@ -19,3 +19,9 @@ ETUDE_HISTORY_COMPARE_SRC = tools/etude/history_compare.c tools/etude/compare.c 
                             tools/etude/compare_run.c tools/etude/history.c \
                             tools/etude/history_json.c \
                             tools/etude/history_collect.c utils/sha256.c
+
+# etude-remote, the responder of remote execution on Linux and macOS.
+ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
+                   tools/etude/posix/exec.c tools/etude/posix/keeper.c \
+                   tools/etude/posix/process.c tools/etude/capture.c \
+                   tools/etude/guest/wire.c tools/etude/json.c utils/sha256.c

@@ -182,6 +182,11 @@ unusedStructMember:*krffs/krffs_node.h
 unusedStructMember:*krffs/krffs_file_system.h
 unusedStructMember:*tests/system/fixtures/vfs_unmount.c
 
+# The interface of etude's remote execution: etude_remote.c, checked alone,
+# fills the responder's configuration and reads none of the structures that
+# serve.c and remote.c read.
+unusedStructMember:*tools/etude/include/etude/remote.h
+
 # The index entries are a `char [][128]` array; C does not convert a pointer
 # to such an array to one with `const` inside, so the parameter cppcheck asks
 # for would need a cast at every call.
