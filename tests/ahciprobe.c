@@ -208,17 +208,58 @@ static void read_row(void)
     syscall2(SYS_EXIT, 0, 0);
 }
 
-/** The `fault` mode: blockprobe on the root in a child, and raw reads of
- * the disk's second partition beside it until the child exits; the child
- * must pass and at least 64 raw reads must have run. */
+/**
+ * The decimal value of `disk-drains` in /proc/disk: the queued commands a
+ * polled command found active and finished first. -1 when the file or the
+ * line is absent.
+ */
+static long disk_drains(void)
+{
+    static char text[20000];
+    static const char key[] = "disk-drains ";
+    int n = slurp("/proc/disk", text, (int)sizeof(text));
+    int i, k;
+    long v;
+
+    for (i = 0; i < n; i++) {
+        if (i > 0 && text[i - 1] != '\n') {
+            continue;
+        }
+        for (k = 0; key[k] && text[i + k] == key[k]; k++) {
+        }
+        if (key[k] || text[i + k] < '0' || text[i + k] > '9') {
+            continue;
+        }
+        for (v = 0, i += k; text[i] >= '0' && text[i] <= '9'; i++) {
+            v = v * 10 + (text[i] - '0');
+        }
+        return v;
+    }
+    return -1;
+}
+
+/**
+ * The `fault` mode: blockprobe on the root in a child, and raw reads of the
+ * disk's second partition beside it until the child exits. The child must
+ * pass, and `disk-drains` must have risen: a page fault's polled command
+ * found a raw read active on the port and finished it first, the meeting of
+ * the fault path and the queue that the row is for. How many raw reads ran
+ * beside the child depends on the speeds of the two, and is printed, not
+ * judged.
+ */
 static void fault_row(void)
 {
     static char buf[CHUNK];
     static const char *const argv[] = {"/blockprobe", 0};
     static const char *const envp[] = {0};
     int child, status = -1, fd, reads = 0;
+    long before, after;
 
     buf[0] = 0;
+    before = disk_drains();
+    if (before < 0) {
+        fail("/proc/disk has no disk-drains");
+    }
     child = syscall1(SYS_FORK, 0);
     if (child < 0) {
         fail("fork");
@@ -251,11 +292,15 @@ static void fault_row(void)
     if (((status >> 8) & 0xFF) != 0) {
         fail("blockprobe on the root beside the queue");
     }
+    after = disk_drains();
     puts("AHCIPROBE READ raw reads beside the faults:");
     putnum(reads);
     puts("");
-    if (reads < 64) {
-        fail("too few raw reads ran beside the faults to have met one");
+    puts("AHCIPROBE READ queued reads the faults finished first:");
+    putnum((int)(after - before));
+    puts("");
+    if (after <= before) {
+        fail("no fault's command found a raw read active on the port");
     }
     puts("AHCIPROBE OK");
     syscall2(SYS_EXIT, 0, 0);
