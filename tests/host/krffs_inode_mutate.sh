@@ -146,7 +146,11 @@ parts.append('''
 #define PATH_END_DOT 2
 #define PATH_END_DOTDOT 3
 static int current_proc = 1;
-struct vfs_mount { int unused; };
+struct vfs_type { int unused; };
+static const struct vfs_type vfs_krffs_type;
+struct vfs_mount { const struct vfs_type *type; };
+static struct vfs_mount root_mount = { &vfs_krffs_type };
+static struct vfs_mount *vfs_root_mount(void) { return &root_mount; }
 struct vfs_ref { struct vfs_mount *mnt; void *node; };
 static void vfs_walk_unlock(struct vfs_mount *m) { (void)m; }
 struct vpath { int unused; };
