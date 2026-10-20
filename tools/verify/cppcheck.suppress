@@ -231,6 +231,10 @@ unusedStructMember:*tools/etude/include/etude/repeat.h
 # are read in proof.c, posix/proof.c, posix/etude_proof.c and their host test.
 unusedStructMember:*tools/etude/include/etude/proof.h
 
+# The preparation adapter's options: cppcheck checks legacy.h alone, and its
+# members are read in posix/legacy.c, posix/etude_legacy.c and their host test.
+unusedStructMember:*tools/etude/include/etude/legacy.h
+
 # casecheck's shared structures: cppcheck checks each header alone, and the
 # members are read in the validator's .c files and the QEMU launcher.
 unusedStructMember:*tools/etude/casecheck.h

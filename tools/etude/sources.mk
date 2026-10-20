@@ -53,6 +53,13 @@ ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
                     tools/etude/history.c tools/etude/history_json.c \
                     tools/etude/history_collect.c utils/sha256.c
 
+# etude-legacy, the preparation adapter of the suites of tests/registry on
+# Linux and macOS.
+ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
+                   tools/etude/posix/exec.c tools/etude/posix/keeper.c \
+                   tools/etude/posix/process.c tools/etude/capture.c \
+                   utils/sha256.c
+
 # etude-load, the load fixture of shuffled and loaded repetitions on Linux
 # and macOS.
 ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c

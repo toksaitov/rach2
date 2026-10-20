@@ -541,6 +541,17 @@ $(ETUDEHOST): $(ETUDE_HOST_SRC) tools/etude/include/etude/exec.h tools/etude/pos
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
+# etude-legacy (tools/etude/posix/etude_legacy.c), the preparation adapter
+# that builds what the suites of tests/registry read before one starts, as
+# tests/run builds it: `components`, `prepare-all` and the artifacts it finds
+# in make's database.
+ETUDELEGACY = build/tools/etude/etude-legacy
+$(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
+                tools/etude/include/etude/exec.h tools/etude/posix/posix.h \
+                tools/etude/capture.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1252,7 +1263,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEREMOTE) \
              $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) $(ETUDELEDGER) \
-             $(PECHECK) $(ETUDESERIAL)
+             $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
