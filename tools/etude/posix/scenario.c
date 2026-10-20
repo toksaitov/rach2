@@ -777,6 +777,11 @@ static const char *detail_text(const char *in, char *out, size_t size)
     return out;
 }
 
+const char *etude_case_id(const struct etude_case *c)
+{
+    return c->case_id;
+}
+
 /** Find the declared assertion `id` of the scenario's, or NULL. */
 static struct assertion *find_assertion(struct etude_case *c, const char *id)
 {
@@ -1966,6 +1971,27 @@ enum etude_status etude_console_wait(struct etude_case_machine *m, const char *t
         return ETUDE_FAILED;
     }
     return ETUDE_LOST;
+}
+
+enum etude_status etude_console_find(struct etude_case_machine *m, const char *text, uint64_t from,
+                                     uint64_t *at)
+{
+    const struct etude_machine_result *r = mres(m);
+    long found;
+
+    if (!m->decl->console || text == NULL || *text == '\0') {
+        diag("machine %s: no console to search, or no text", m->decl->id);
+        m->c->faults++;
+        return ETUDE_REFUSED;
+    }
+    if (from < r->console.kept) {
+        found = find_text(r->console.data + from, r->console.kept - (size_t)from, text);
+        if (found >= 0) {
+            *at = from + (uint64_t)found;
+            return ETUDE_OK;
+        }
+    }
+    return r->console.total > r->console.kept ? ETUDE_LOST : ETUDE_FAILED;
 }
 
 enum etude_status etude_type(struct etude_case_machine *m, const char *text)

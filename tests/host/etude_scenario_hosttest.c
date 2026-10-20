@@ -22,7 +22,10 @@
  * program with the invocation, its report read from its standard output. A
  * machine boots on a private copy of its disk, writes to it and powers off; a
  * host step reads the write from the copy, and the next boot of the same copy
- * reads it back, and the artifact itself is unchanged. The same holds for a
+ * reads it back, and the artifact itself is unchanged. A search of the
+ * console of the machine that powered off finds what it printed after the
+ * offset given and nothing before it, and finds no text it did not print;
+ * etude_case_id gives the case's identity. The same holds for a
  * machine without the 8042 whose disk is a drive of a USB stick on a USB
  * controller, whose stand-in QEMU requires those arguments. A machine that says
  * it powers off and ends without QEMU's event, one killed by a signal, one
@@ -926,10 +929,15 @@ static int scenario_reboot(struct etude_case *c, int real)
     struct etude_case_machine *m;
     struct etude_termination end;
     char line[128], *reply = NULL;
-    uint64_t at;
+    uint64_t at, said = 0, past = 0;
 
     if (etude_step(c, "write") != ETUDE_OK || etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
         return 1;
+    if (!real)
+        etude_assert(c, "case-id",
+                     strncmp(etude_case_id(c), "test.scenario.", 14) == 0 &&
+                         strcmp(etude_case_id(c) + 14, getenv("ETUDE_TEST_ROW")) == 0,
+                     etude_case_id(c));
     copy = etude_private_copy(c, "disk");
     if (real)
         etude_assert(c, "on-ahci",
@@ -950,6 +958,12 @@ static int scenario_reboot(struct etude_case *c, int real)
     etude_type(m, real ? "poweroff\r" : "poweroff\n");
     expect(c, "stopped", etude_wait_end(m, &end), ETUDE_OK);
     etude_assert(c, "shutdown", end.end == ETUDE_END_SHUTDOWN, "not a shutdown");
+    if (!real) {
+        expect(c, "find-said", etude_console_find(m, "powering off", at, &said), ETUDE_OK);
+        expect(c, "find-past", etude_console_find(m, "powering off", said, &past), ETUDE_FAILED);
+        etude_assert(c, "find-at", said > at && past == 0, "not past the text");
+        expect(c, "find-absent", etude_console_find(m, "never printed", 0, &past), ETUDE_FAILED);
+    }
     if (etude_step(c, "check") != ETUDE_OK)
         return 1;
     scan[3] = (char *)copy;
@@ -1173,6 +1187,7 @@ static int scenario_misuse(struct etude_case *c)
     struct etude_case_machine *m, *m2;
     struct etude_termination end;
     const char *none[] = {"kernel", NULL};
+    uint64_t at;
 
     expect(c, "no-step", etude_boot(c, "fixture", NULL, &m, &end), ETUDE_REFUSED);
     etude_assert(c, "no-artifact", etude_artifact(c, "nothing") == NULL, "given");
@@ -1188,6 +1203,7 @@ static int scenario_misuse(struct etude_case *c)
     expect(c, "running", etude_boot(c, "fixture", NULL, &m2, &end), ETUDE_REFUSED);
     expect(c, "no-qmp", etude_qmp(m, "query-status", NULL, &reply), ETUDE_REFUSED);
     etude_assert(c, "no-capture", etude_capture(m, "net0") == NULL, "given");
+    expect(c, "no-text", etude_console_find(m, "", 0, &at), ETUDE_REFUSED);
     return 0;
 }
 
@@ -3034,17 +3050,17 @@ static const struct row capture_rows[] = {
 
 static const struct row stand_in_rows[] = {
     {"reboot", "disk", "write:fixture check readback:fixture",
-     "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
-     "second-stop",
+     "case-id qmp-status qmp-reply qmp-error stopped shutdown find-said find-past find-at "
+     "find-absent host-ran host-sees same-copy readback second-stop",
      "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0,
      "fixture.1.console=fake: wrote;fixture.2.console=fake: disk says", 0},
     {"network", "network", "write:fixture check readback:fixture",
-     "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
-     "second-stop",
+     "case-id qmp-status qmp-reply qmp-error stopped shutdown find-said find-past find-at "
+     "find-absent host-ran host-sees same-copy readback second-stop",
      "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
     {"usb", "usb", "write:fixture check readback:fixture",
-     "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
-     "second-stop",
+     "case-id qmp-status qmp-reply qmp-error stopped shutdown find-said find-past find-at "
+     "find-absent host-ran host-sees same-copy readback second-stop",
      "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
     {"lost", "lost", "lose:fixture", "lost-wait ended not-shutdown", "disk", 0, LOSS_US, 0, 1, 0, 0,
      NULL, 0, NULL, 0},
@@ -3058,7 +3074,7 @@ static const struct row stand_in_rows[] = {
      0, NULL, 0},
     {"misuse", "disk", "host boot:fixture",
      "no-step no-artifact no-copy host-step other-machine no-tool step-back machine-step "
-     "other-disk running no-qmp no-capture",
+     "other-disk running no-qmp no-capture no-text",
      "disk", 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"wrong", "wrong", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0,
      NULL, 0},

@@ -50,6 +50,14 @@ struct etude_termination {
  */
 int etude_scenario(struct etude_case *c);
 
+/**
+ * Give the identity of the attempt's case, as the invocation names it, so
+ * that one program may be the scenario of several cases of its family.
+ *
+ * @return the identity, owned by the library.
+ */
+const char *etude_case_id(const struct etude_case *c);
+
 /** Report assertion `id`: held when `held` is nonzero, else failed with
  * `detail`. */
 void etude_assert(struct etude_case *c, const char *id, int held, const char *detail);
@@ -116,6 +124,23 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
  * `at` the offset just past it.
  */
 enum etude_status etude_console_wait(struct etude_case_machine *m, const char *text, uint64_t from,
+                                     uint64_t *at);
+
+/**
+ * Search the console bytes the library has read from the machine, after
+ * byte `from`, for `text`, and give in `at` the offset just past its first
+ * occurrence. It does not wait and needs no step.
+ *
+ * The library reads a running machine's console only while it waits, so a
+ * search shows that text is absent only on a machine that has ended, whose
+ * console it has read to the end.
+ *
+ * @return ETUDE_OK when the text is there; ETUDE_FAILED when it is not;
+ *         ETUDE_LOST when it is not in the bytes kept and the console wrote
+ *         more than the case keeps, so that its absence cannot be shown; and
+ *         ETUDE_REFUSED for a machine without a console or an empty text.
+ */
+enum etude_status etude_console_find(struct etude_case_machine *m, const char *text, uint64_t from,
                                      uint64_t *at);
 
 /**
