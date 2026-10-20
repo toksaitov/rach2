@@ -45,7 +45,7 @@
         "lines": [
           "usb-latency-test: fail: the host test exits 1",
           "usb-latency-test: fail: verdict: spin: the checker refuses",
-          "usb-latency-test: fail: verdict: timer: the checker refuses",
+          "usb-latency-test: fail: verdict: timer beside getrandom: the checker refuses",
           "usb-latency-test: fail: verdict: random: the checker refuses"
         ],
         "only": true
@@ -66,7 +66,7 @@
         "lines": [
           "usb-latency-test: fail: the host test exits 1",
           "usb-latency-test: fail: verdict: spin: the checker refuses",
-          "usb-latency-test: fail: verdict: timer: the checker refuses",
+          "usb-latency-test: fail: verdict: timer beside getrandom: the checker refuses",
           "usb-latency-test: fail: verdict: random: the checker refuses"
         ],
         "only": true

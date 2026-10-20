@@ -1,13 +1,15 @@
 /**
- * Reads one line from the terminal and exits, so the kernel's record of the
- * keystroke's path holds nothing but the kernel's own work.
+ * Reads lines from the terminal, one key typed for each, and exits, so the
+ * kernel's record of each keystroke's path holds nothing but the kernel's own
+ * work.
  *
  * The stages the kernel stamps end at the reader's read. A program that
  * writes between its reads puts its own time into that number: the key
  * arrives while the program is still on the serial port with the last line,
  * and the read that follows is late for a reason that has nothing to do with
- * the interrupt. This one blocks on a single read and prints afterwards, so
- * the number in the record is the wake and the scheduler and nothing else.
+ * the interrupt. This one blocks in each read and prints only after the
+ * last, so the number in each record is the wake and the scheduler and
+ * nothing else.
  *
  * A child is forked first and left spinning in user mode, because the number
  * that matters is what happens to a reader that is not the context the
@@ -21,9 +23,11 @@
  * before the others start, and a reader woken on an idle processor would run
  * there without taking anything from the child.
  *
- * With the argument `random` the child is inside a large `getrandom`
- * instead of spinning, which is the loop inside one system call that the
- * scheduler's service point must break.
+ * Usage: keylatprobe [spin | random] [LINES]. With `random` the child is
+ * inside a large `getrandom` instead of spinning, which is the loop inside
+ * one system call that the scheduler's service point must break. LINES, 1
+ * to 99 and 1 when not given, is how many lines are read, each in a read of
+ * its own; the kernel prints a record for each.
  *
  * Prints "KEYLAT OK" and exits 0. Freestanding; direct system calls (probe.h).
  */
@@ -63,6 +67,17 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)s, (int)strlen(s));
 }
 
+/** The decimal number `s`, from 1 to 99, or 0 when it is not one. */
+static int lines_wanted(const char *s)
+{
+    int n = 0;
+
+    while (*s >= '0' && *s <= '9' && n < 100) {
+        n = n * 10 + (*s++ - '0');
+    }
+    return *s == '\0' && n >= 1 && n <= 99 ? n : 0;
+}
+
 /* The child's buffer in the `random` mode: a call that fills it is the
    loop inside one system call that the service point must break. */
 static unsigned char random_buf[8u << 20];
@@ -71,7 +86,7 @@ PROBE_SP_ENTRY;
 
 /**
  * Bind to processor 0, fork the child that keeps the processor, print
- * KEYLAT READING and read one line; then kill the child and report.
+ * KEYLAT READING and read the lines; then kill the child and report.
  *
  * The child never sleeps, so the reader runs only if something takes the
  * processor from it. In the `random` mode the child is inside a system call
@@ -88,11 +103,17 @@ void probe_main(unsigned long *sp)
     int argc = (int)sp[0];
     char **argv = (char **)(sp + 1);
     int random_mode = argc > 1 && argv[1][0] == 'r';
+    int lines = argc > 2 ? lines_wanted(argv[2]) : 1;
     static const unsigned long processor0 = 1;
     int child;
     int n;
+    int i;
     unsigned off;
 
+    if (lines == 0) {
+        puts("KEYLAT FAIL: the count of lines is not a number from 1 to 99\n");
+        sys_exit(1);
+    }
     if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
         puts("KEYLAT FAIL: the probe could not be bound to processor 0\n");
         sys_exit(1);
@@ -124,7 +145,10 @@ void probe_main(unsigned long *sp)
     }
 
     puts("KEYLAT READING\n");
-    n = syscall3(SYS_READ, STDIN_FILENO, (long)line, (int)sizeof(line));
+    n = 1;
+    for (i = 0; i < lines && n > 0; i++) {
+        n = syscall3(SYS_READ, STDIN_FILENO, (long)line, (int)sizeof(line));
+    }
     if (syscall3(SYS_KILL, child, SIGKILL, 0) != 0) {
         puts("KEYLAT FAIL: the child would not be killed\n");
         sys_exit(1);

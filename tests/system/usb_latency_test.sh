@@ -3,11 +3,14 @@
 # tests/host/usbstamp_hosttest.c, a host test built with the kernel's USB
 # stamp recorder and scheduler.
 #
-# The host test runs in six modes. The checker must accept the spin, timer
-# and random records and refuse the pump, work and undispatched ones, and it
-# must refuse a record with a malformed field, one with a field twice, one
-# with a field missing, and an empty one. USBSTAMP_TEST names a host test
-# built elsewhere to run in place of the private build;
+# The host test runs in six modes. The checker must accept the spin and
+# random records, accept the timer record beside getrandom and refuse it alone
+# beside the spinner, and refuse the pump, work and undispatched ones. Of the
+# records put together, it must accept a timer and a spin record as two keys,
+# and refuse two timer records, a spin and a pump record, and a spin record
+# given as two keys. It must refuse a record with a malformed field, one with
+# a field twice, one with a field missing, and an empty one. USBSTAMP_TEST
+# names a host test built elsewhere to run in place of the private build;
 # tests/proofs/usb-latency.json runs the rows with builds whose faults make
 # the checker refuse every record.
 set -eu
@@ -49,6 +52,21 @@ bad()
     fails=$((fails + 1))
 }
 
+# verdict CASE WANT RANDOM KEYS LOG: the checker, given RANDOM and KEYS, must
+# exit with WANT on LOG; a row of CASE fails otherwise.
+verdict()
+{
+    status=0
+    awk -v random="$3" -v keys="$4" -f tests/system/checkers/usblatency.awk \
+        "$5" || status=$?
+    [ "$status" -eq "$2" ] || {
+        result=accepts
+        [ "$status" -eq 0 ] || result=refuses
+        bad "verdict: $1: the checker $result the record"
+        cat "$5" >&2
+    }
+}
+
 if [ -n "${USBSTAMP_TEST:-}" ]; then
     cp "$USBSTAMP_TEST" "$work/test"
 else
@@ -80,19 +98,23 @@ for mode in spin timer random pump work undispatched; do
     child=
     [ "$status" -eq 0 ] || bad "$mode: the host test exits $status"
     want=0
-    case $mode in pump|work|undispatched) want=1 ;; esac
+    case $mode in timer|pump|work|undispatched) want=1 ;; esac
     random=0
     case $mode in random|work) random=1 ;; esac
-    status=0
-    awk -v random="$random" -f tests/system/checkers/usblatency.awk \
-        "$work/$mode.log" || status=$?
-    [ "$status" -eq "$want" ] || {
-        verdict=accepts
-        [ "$status" -eq 0 ] || verdict=refuses
-        bad "verdict: $mode: the checker $verdict the record"
-        cat "$work/$mode.log" >&2
-    }
+    verdict "$mode" "$want" "$random" 1 "$work/$mode.log"
+    if [ "$mode" = timer ]; then
+        verdict "timer beside getrandom" 0 1 1 "$work/$mode.log"
+    fi
 done
+[ "$fails" -eq 0 ] || exit 1
+
+cat "$work/timer.log" "$work/spin.log" >"$work/mixed.log"
+cat "$work/timer.log" "$work/timer.log" >"$work/ticks.log"
+cat "$work/spin.log" "$work/pump.log" >"$work/pumped.log"
+verdict "a timer and a spin record" 0 0 2 "$work/mixed.log"
+verdict "two timer records" 1 0 2 "$work/ticks.log"
+verdict "a spin and a pump record" 1 0 2 "$work/pumped.log"
+verdict "one spin record as two keys" 1 0 2 "$work/spin.log"
 [ "$fails" -eq 0 ] || exit 1
 
 sed 's/ tracked 1,/ tracked x,/' "$work/spin.log" >"$work/malformed.log"

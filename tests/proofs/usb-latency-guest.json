@@ -38,7 +38,7 @@
   "faults": [
     {
       "name": "preempt",
-      "summary": "the preemption after a device interrupt taken out, so a reader the keyboard woke waits for the timer, whose tick pumps the controller first, and the spin row fails its count of pumps",
+      "summary": "the preemption after a device interrupt taken out, so a reader the controller's interrupt woke waits for the timer, whose tick pumps the controller first, and the spin row, which requires one of its keys to be taken by the interrupt, fails its count of pumps",
       "edits": [
         {
           "file": "rach2/sys/arch/x86/isr.c",
