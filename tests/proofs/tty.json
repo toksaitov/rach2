@@ -1,0 +1,358 @@
+{
+  "schema_version": 1,
+  "proof": "tty",
+  "summary": "tty_hosttest.c and n_tty_hosttest.c with 19 faults in private copies of rach2/sys/tty/tty.c, pty.c, pty.h and n_tty.c; the test runs both",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/tty/tty.c",
+    "rach2/sys/tty/pty.c",
+    "rach2/sys/tty/pty.h",
+    "rach2/sys/tty/n_tty.c"
+  ],
+  "artifacts": [
+    "${WORK}/tty_hosttest",
+    "${WORK}/n_tty_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/t && mkdir -p ${WORK}/t/tests/host && cp -R rach2 ${WORK}/t/ && cp -R ${SRC}/. ${WORK}/t/ && for t in tty n_tty; do ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -I ${WORK}/t/rach2/sys -I ${WORK}/t/rach2/sys/tty -I ${WORK}/t/rach2/sys/lib -I ${WORK}/t/rach2/sys/proc tests/host/${t}_hosttest.c ${WORK}/t/rach2/sys/tty/n_tty.c -o ${WORK}/${t}_hosttest || exit; done"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "s=0; for t in tty_hosttest n_tty_hosttest; do ${WORK}/$t || { r=$?; [ $s -ne 0 ] || s=$r; }; done; exit $s"
+    ],
+    "bound_s": 30
+  },
+  "faults": [
+    {
+      "name": "split-queue",
+      "summary": "the master waits for room on a queue of its own, which a slave read does not wake",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.h",
+          "find": "    wait_queue_t m_read_wq;",
+          "replace": "    wait_queue_t m_read_wq;\n    wait_queue_t m_write_wq;"
+        },
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "    wait_queue_init(&p->m_read_wq);",
+          "replace": "    wait_queue_init(&p->m_read_wq);\n    wait_queue_init(&p->m_write_wq);"
+        },
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "wq_wait_event(&p->m_read_wq, ptm_has_room, p)",
+          "replace": "wq_wait_event(&p->m_write_wq, ptm_has_room, p)"
+        },
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);",
+          "replace": "    if (n > 0) {\n        wq_wake(&p->m_write_wq, WQ_ROOM);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "slave read wakes master POLLOUT"
+        ]
+      }
+    },
+    {
+      "name": "flush",
+      "summary": "TCFLSH does not wake the master writer",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);",
+          "replace": "    n_tty_flush(&t->ldisc);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "TCFLSH wakes master writer"
+        ]
+      }
+    },
+    {
+      "name": "termios-flush",
+      "summary": "TCSETSF does not wake the master writer",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "    readable = n_tty_set_termios(&t->ldisc, kt);\n    wq_wake(t->space_wq, WQ_ROOM);",
+          "replace": "    readable = n_tty_set_termios(&t->ldisc, kt);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "TCSETSF wakes master writer"
+        ]
+      }
+    },
+    {
+      "name": "partial-slave",
+      "summary": "a slave write whose copy fails part way does not wake the master's reader",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *buf, uint32_t count)\n{\n    uint8_t kbuf[256];\n    uint32_t done = 0;\n    uint32_t pushed = p->m_tail;\n\n    while (done < count) {\n        uint32_t chunk = count - done;\n        uint32_t fit;\n\n        while ((fit = pty_m_room(p) / pts_growth(p)) == 0) {\n            int32_t stop = !p->master_open ? -EIO : fd_is_nonblock(e) ? -EAGAIN : 0;\n\n            wake_master(p, &pushed);\n            if (stop == 0 && wq_wait_event(&p->slave.input_wq, pts_has_room, p) < 0) {\n                stop = -EINTR;\n            }\n            if (stop != 0) {\n                return done > 0 ? (int32_t)done : stop;\n            }\n        }\n        if (chunk > fit) {\n            chunk = fit;\n        }\n        if (chunk > sizeof(kbuf)) {\n            chunk = sizeof(kbuf);\n        }\n        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {\n            wake_master(p, &pushed);\n            return (done > 0)",
+          "replace": "static int32_t pts_write_out(fd_entry_t *e, struct pty *p, const char __user *buf, uint32_t count)\n{\n    uint8_t kbuf[256];\n    uint32_t done = 0;\n    uint32_t pushed = p->m_tail;\n\n    while (done < count) {\n        uint32_t chunk = count - done;\n        uint32_t fit;\n\n        while ((fit = pty_m_room(p) / pts_growth(p)) == 0) {\n            int32_t stop = !p->master_open ? -EIO : fd_is_nonblock(e) ? -EAGAIN : 0;\n\n            wake_master(p, &pushed);\n            if (stop == 0 && wq_wait_event(&p->slave.input_wq, pts_has_room, p) < 0) {\n                stop = -EINTR;\n            }\n            if (stop != 0) {\n                return done > 0 ? (int32_t)done : stop;\n            }\n        }\n        if (chunk > fit) {\n            chunk = fit;\n        }\n        if (chunk > sizeof(kbuf)) {\n            chunk = sizeof(kbuf);\n        }\n        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {\n            return (done > 0)"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "partial slave output wakes reader"
+        ]
+      }
+    },
+    {
+      "name": "partial-master",
+      "summary": "a master write whose copy fails part way does not wake the master's reader",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)\n{\n    struct pty *p = (struct pty *)e->priv;\n    uint8_t kbuf[256];\n    uint32_t done = 0;\n    uint32_t pushed = p->m_tail;\n\n    if (count == 0) {\n        return 0;\n    }\n    if (!user_range_ok((__force uintptr_t)buf, count)) {\n        return -EFAULT;\n    }\n    while (done < count) {\n        uint32_t chunk = count - done;\n        uint32_t i;\n\n        if (chunk > sizeof(kbuf)) {\n            chunk = sizeof(kbuf);\n        }\n        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {\n            wake_master(p, &pushed);\n            return (done > 0)",
+          "replace": "static int32_t ptm_write(fd_entry_t *e, const char __user *buf, uint32_t count)\n{\n    struct pty *p = (struct pty *)e->priv;\n    uint8_t kbuf[256];\n    uint32_t done = 0;\n    uint32_t pushed = p->m_tail;\n\n    if (count == 0) {\n        return 0;\n    }\n    if (!user_range_ok((__force uintptr_t)buf, count)) {\n        return -EFAULT;\n    }\n    while (done < count) {\n        uint32_t chunk = count - done;\n        uint32_t i;\n\n        if (chunk > sizeof(kbuf)) {\n            chunk = sizeof(kbuf);\n        }\n        if (copy_from_user(kbuf, (const void __user *)(buf + done), chunk) != 0) {\n            return (done > 0)"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "partial master echo wakes reader"
+        ]
+      }
+    },
+    {
+      "name": "latency-lock",
+      "summary": "the console pump reads the ready state with input interrupts on",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "            flags = kirq_save();\n            rc = tty_ready_cond(t);",
+          "replace": "            rc = tty_ready_cond(t);"
+        },
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);\n            kirq_restore(flags);",
+          "replace": "            rc = wq_wait_event(&t->input_wq, tty_ready_cond, t);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "console pump excludes input interrupts"
+        ]
+      }
+    },
+    {
+      "name": "veol-byte",
+      "summary": "a VEOL byte is stored and echoed as a newline",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/n_tty.c",
+          "find": "            echo(t, out, ctx, c);\n            if (t->line_len < N_TTY_LINE_MAX) {\n                t->line[t->line_len++] = c;",
+          "replace": "            echo(t, out, ctx, '\\n');\n            if (t->line_len < N_TTY_LINE_MAX) {\n                t->line[t->line_len++] = '\\n';"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "VEOL byte and boundary survive termios change"
+        ]
+      }
+    },
+    {
+      "name": "line-end",
+      "summary": "a VEOF boundary is not marked",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/n_tty.c",
+          "find": "t->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 1;",
+          "replace": "t->rq_end[(t->rq_tail - 1) & (N_TTY_READ_MAX - 1)] = 0;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "VEOF boundary precedes a later newline"
+        ]
+      }
+    },
+    {
+      "name": "slot-reset",
+      "summary": "a reused ring slot keeps its old end marker",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/n_tty.c",
+          "find": "        t->rq_end[t->rq_tail & (N_TTY_READ_MAX - 1)] = 0;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "ring reuse clears old end markers"
+        ]
+      }
+    },
+    {
+      "name": "input-kind",
+      "summary": "input written to the master wakes the slave for every kind of change",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "            t->ready_us = timer_now_us();\n        }\n        wq_wake(&t->input_wq, WQ_DATA);",
+          "replace": "            t->ready_us = timer_now_us();\n        }\n        wq_wake_all(&t->input_wq);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "input written to the master is data for the slave"
+        ]
+      }
+    },
+    {
+      "name": "echo-kind",
+      "summary": "input written with echo off is data for the master",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "p->m_tail != *from ? WQ_DATA : 0u",
+          "replace": "WQ_DATA"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "input written with echo off is no change for the master"
+        ]
+      }
+    },
+    {
+      "name": "room-kind",
+      "summary": "a slave read wakes the master for every kind of change",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "    if (n > 0) {\n        wq_wake(&p->m_read_wq, WQ_ROOM);",
+          "replace": "    if (n > 0) {\n        wq_wake_all(&p->m_read_wq);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a slave read is room for the master and no data"
+        ]
+      }
+    },
+    {
+      "name": "output-kind",
+      "summary": "slave output wakes the master for every kind of change",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "    wake_master(p, &pushed); /* output pushed into m_buf: wake the master */",
+          "replace": "    wq_wake_all(&p->m_read_wq);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "slave output is data for the master and no room"
+        ]
+      }
+    },
+    {
+      "name": "flush-kind",
+      "summary": "an input flush wakes the master for every kind of change",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "    n_tty_flush(&t->ldisc);\n    wq_wake(t->space_wq, WQ_ROOM);",
+          "replace": "    n_tty_flush(&t->ldisc);\n    wq_wake_all(t->space_wq);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "an input flush is room for the master and no data"
+        ]
+      }
+    },
+    {
+      "name": "signal-room",
+      "summary": "a signal character the master writes into full input is no room for it",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "    if (n_tty_held(&t->ldisc) < held) {\n        wq_wake(t->space_wq, WQ_ROOM);\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a signal char the master writes into full input is room for the master"
+        ]
+      }
+    },
+    {
+      "name": "erase-room",
+      "summary": "an erase the master writes is no room for it",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "    if (n_tty_held(&t->ldisc) < held) {",
+          "replace": "    if (signo != 0 && held) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "an erase the master writes is room for the master"
+        ]
+      }
+    },
+    {
+      "name": "nonblock-latency",
+      "summary": "a read that does not wait does not end the latency span",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/tty.c",
+          "find": "            n = tty_take(t, kbuf, count);\n            kirq_restore(flags);\n            usb_stamp_read();\n            return n;\n        }\n        kirq_restore(flags);\n        return -EAGAIN;",
+          "replace": "            n = n_tty_read(&t->ldisc, kbuf, count);\n            kirq_restore(flags);\n            usb_stamp_read();\n            return n;\n        }\n        kirq_restore(flags);\n        return -EAGAIN;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "a read that does not wait ends the latency span"
+        ]
+      }
+    },
+    {
+      "name": "output-growth",
+      "summary": "output processing is taken to grow a byte into eight",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "OPOST) ? 2u : 1u;",
+          "replace": "OPOST) ? 8u : 1u;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "the ring takes a newline into its last two bytes"
+        ]
+      }
+    },
+    {
+      "name": "copy-refit",
+      "summary": "slave output is not fitted again to the room left after its copy",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/pty.c",
+          "find": "        fit = pty_m_room(p) / pts_growth(p);\n        if (chunk > fit) {\n            chunk = fit;\n        }\n        tty_write(&p->slave, kbuf, (int)chunk);",
+          "replace": "        tty_write(&p->slave, kbuf, (int)chunk);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "slave output fits the room left after its copy"
+        ]
+      }
+    }
+  ]
+}
