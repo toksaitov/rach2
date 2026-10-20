@@ -29,6 +29,10 @@
  * first row and then only that a raw send and a datagram send off the subnet
  * are ENETUNREACH.
  *
+ * An echo reply is taken once the kernel's own ping has returned with it,
+ * and a time-exceeded message is waited for in poll with no timeout; the
+ * suite's limit ends a run in which it never comes.
+ *
  * Runs on the test image with QEMU's user network, where 10.0.2.2 is the
  * gateway and answers. Prints "RAWPROBE START", then "  FAIL: " and the row
  * for each failure, then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and
@@ -243,37 +247,63 @@ static int raw_take(unsigned long *args, int fd, uint8_t *buf, int cap)
 }
 
 /**
- * Wait up to `ms` for a datagram of ICMP type `want` and take it.
+ * Take the datagrams waiting on `fd`, without blocking, until one of ICMP
+ * type `want`.
  *
- * Returns its length, with the datagram in `buf`, or 0 if none arrived. Other
- * ICMP the machine receives while waiting is taken and skipped, so a reply to
+ * Returns its length, with the datagram in `buf`, or 0 when the queue holds
+ * none. Other ICMP queued before it is taken and skipped, so a reply to
  * something else cannot be mistaken for the message under test.
+ *
+ * `ip_rx` gives a datagram to every raw socket of its protocol before ICMP
+ * sees it, so the reply that ends the kernel's own ping is already queued on
+ * each raw socket when the ping returns, and a datagram `wait_for_icmp` saw
+ * on one socket is already on the others: neither needs a wait.
  */
-static int wait_for_icmp(unsigned long *args, int fd, uint8_t *buf, int cap, int want, int ms)
+static int take_icmp(unsigned long *args, int fd, uint8_t *buf, int cap, int want)
+{
+    for (;;) {
+        int n = raw_take(args, fd, buf, cap);
+        int hdr;
+
+        if (n < 0) {
+            return 0;
+        }
+        if (n < 20) {
+            continue;
+        }
+        hdr = (buf[0] & 0x0f) * 4;
+        if (n > hdr && buf[hdr] == (uint8_t)want) {
+            return n;
+        }
+    }
+}
+
+/**
+ * Wait in poll, with no timeout, for a datagram of ICMP type `want` on `fd`,
+ * and take it as `take_icmp` does.
+ *
+ * Returns its length, with the datagram in `buf`, or 0 when poll ends with
+ * nothing to read. A message that never comes leaves the probe waiting, and
+ * the suite's limit ends the run.
+ */
+static int wait_for_icmp(unsigned long *args, int fd, uint8_t *buf, int cap, int want)
 {
     struct pollfd_probe pfd;
-    int waited = 0;
 
-    while (waited < ms) {
+    for (;;) {
+        int n;
+
         pfd.fd = fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (sys_poll(&pfd, 1, 20) > 0 && (pfd.revents & POLLIN)) {
-            int n = raw_take(args, fd, buf, cap);
-            int hdr;
-
-            if (n < 20) {
-                waited += 20;
-                continue;
-            }
-            hdr = (buf[0] & 0x0f) * 4;
-            if (n > hdr && buf[hdr] == (uint8_t)want) {
-                return n;
-            }
+        if (sys_poll(&pfd, 1, -1) != 1 || !(pfd.revents & POLLIN)) {
+            return 0;
         }
-        waited += 20;
+        n = take_icmp(args, fd, buf, cap, want);
+        if (n > 0) {
+            return n;
+        }
     }
-    return 0;
 }
 
 /** open(2), read-only. */
@@ -419,7 +449,7 @@ static void socket_pressure(unsigned long *args, int fd_a)
     args[0] = GATEWAY_IP;
     n = socketcall(SC_PING, args);
     check_n(n >= 0, "the machine can still reach the gateway", n);
-    n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
+    n = take_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY);
     check(n > 0, "and a socket opened before the tables filled still receives");
 
     sys_close(release[1]);
@@ -534,8 +564,8 @@ PROBE_START void _start(void)
     n = socketcall(SC_PING, args);
     check_n(n >= 0, "the kernel's own ping reached the gateway", n);
 
-    n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY, 2000);
-    m = wait_for_icmp(args, fd_b, frame_b, (int)sizeof(frame_b), ICMP_ECHO_REPLY, 2000);
+    n = take_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY);
+    m = take_icmp(args, fd_b, frame_b, (int)sizeof(frame_b), ICMP_ECHO_REPLY);
     check(n > 0, "the first socket was given the echo reply");
     check(m > 0, "and so was the second, which is what a tap means");
     if (n > 0 && m > 0) {
@@ -593,8 +623,8 @@ PROBE_START void _start(void)
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == 4, "a probe leaves with that hop limit");
 
-        n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_TIME_EXCEEDED, 3000);
-        m = wait_for_icmp(args, fd_b, frame_b, (int)sizeof(frame_b), ICMP_TIME_EXCEEDED, 3000);
+        n = wait_for_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_TIME_EXCEEDED);
+        m = take_icmp(args, fd_b, frame_b, (int)sizeof(frame_b), ICMP_TIME_EXCEEDED);
         check(n > 0, "the hop limit expired and said so");
         check(m > 0, "and the other socket was told as well");
         sys_close(udp_fd);
