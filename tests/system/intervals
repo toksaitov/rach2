@@ -40,3 +40,4 @@ tests/system/suites/metal.sh: a reset before the session is tried again after a 
 tests/system/accept/metal_accept.sh: a reset before the session is tried again after a second
 tests/host/etude_watchdog_hosttest.c: a heartbeat every 20 ms, which is no progress
 tests/host/etude_watchdog_hosttest.c: progress every 20 ms, which the case's bound must end
+tests/host/etude_sched_hosttest.c: a job holds its claims so the workers' claims overlap

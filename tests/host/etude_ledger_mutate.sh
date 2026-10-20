@@ -25,7 +25,7 @@ unknown-start|ledger.c|    if (state < 0 \|\| !id->start_known \|\| !now.start_k
 no-verdict|ledger.c|    if (strcmp(c->system, "win32") != 0 && !verdict_confirmed(l, c->id)) {|    if (0) {|no-verdict cut-short
 no-group|ledger.c|    if (p->role == ROLE_CASE && group_runs(p->id.pid))|    if (0)|group-lives
 output-unchecked|posix/keeper.c|        write_verdict(kp->args, confirmed && outputs_closed(kp, grace));|        write_verdict(kp->args, confirmed);|unreported
-capacity|ledger.c|                if (strcmp(t->c[i].res[j].name, cap[k].name) == 0) {|                if (0) {|contention
+capacity|ledger.c|        if (held(l, t, cap[k].name, 0, &sum) != 0 \|\| add(&sum, want) != 0 \|\| sum > cap[k].amount)|        if (0)|contention
 owner-ignored|ledger.c|        return J_OWNED;|        break;|owned
 boot-ignored|ledger.c|    if (strcmp(c->boot, "-") != 0 && strcmp(l->boot, "-") != 0 && strcmp(c->boot, l->boot) != 0)|    if (0)|other-boot
 EOF

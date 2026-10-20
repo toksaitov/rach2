@@ -31,11 +31,12 @@
 /* The largest ledger file read, in bytes. */
 #define LEDGER_FILE_MAX (64u << 20)
 
-/* The longest boot identity, system name, state and resource name. */
+/* The longest boot identity, system name, state, resource and account. */
 #define BOOT_MAX     64
 #define SYSTEM_MAX   16
 #define STATE_MAX    16
 #define RES_NAME_MAX 64
+#define ACCOUNT_MAX  64
 
 /* The longest claim identity, as the history's identities. */
 #define ID_MAX 255
@@ -61,13 +62,18 @@ struct lproc {
     struct etude_pid id;
 };
 
-/* One claim, as the ledger file records it. */
+/*
+ * One claim, as the ledger file records it, or a request that waits to
+ * become one, whose state is waiting or blocked. A request holds nothing.
+ */
 struct claim {
     char *id;
     char system[SYSTEM_MAX];
     char boot[BOOT_MAX]; /* "-" where the system gives no boot identity */
     struct etude_pid owner;
-    char state[STATE_MAX]; /* reserved, running or uncertain */
+    char account[ACCOUNT_MAX]; /* "" for a claim that etude_ledger_reserve made */
+    char state[STATE_MAX];     /* reserved, running, uncertain, waiting or blocked */
+    uint64_t ticket;           /* a request's place in the order of arrival; 0 for a claim */
     struct etude_ledger_res *res;
     size_t nres;
     struct lproc *proc;
@@ -78,6 +84,15 @@ struct claim {
 struct table {
     struct claim *c;
     size_t n;
+};
+
+/* What a caller asks for: claim `id` of `res` within the machine's `cap`. */
+struct ask {
+    const char *id;
+    const char *account; /* "" for etude_ledger_reserve */
+    const struct etude_ledger_res *res, *cap;
+    size_t nres, ncap;
+    int wait; /* a request refused for now waits in the ledger */
 };
 
 struct etude_ledger {
@@ -91,8 +106,12 @@ struct etude_ledger {
 #endif
 };
 
-/* What recovery finds of a claim. */
-enum judged { J_FREE, J_OWNED, J_LIVE, J_UNCERTAIN };
+/*
+ * What recovery finds of a claim. J_ABANDONED is uncertain too: its owner
+ * and its processes have ended, its cleanup unconfirmed, and only a person
+ * can release it.
+ */
+enum judged { J_FREE, J_OWNED, J_LIVE, J_UNCERTAIN, J_ABANDONED };
 
 /* What a check finds of one process. */
 enum { P_GONE, P_RUNS, P_UNKNOWN };
@@ -127,6 +146,18 @@ static int is_id(const char *s)
 static int is_name(const char *s)
 {
     return is_token(s, RES_NAME_MAX - 1, "._:-");
+}
+
+/** Say whether `s` is an account's name. */
+static int is_account(const char *s)
+{
+    return is_token(s, ACCOUNT_MAX - 1, "._@-");
+}
+
+/** Say whether state `s` is a request's, which holds nothing. */
+static int is_request_state(const char *s)
+{
+    return strcmp(s, "waiting") == 0 || strcmp(s, "blocked") == 0;
 }
 
 /** Give a copy of `a`, `/` and `b` from malloc, or NULL. */
@@ -714,7 +745,11 @@ static int read_pid(char **f, struct etude_pid *id)
 /** Say whether claim `c`, read whole, has every part and sound values. */
 static int claim_sound(const struct claim *c)
 {
-    return c->system[0] != '\0' && c->boot[0] != '\0' && c->owner.pid != 0 &&
+    if (c->system[0] == '\0' || c->boot[0] == '\0' || c->owner.pid == 0)
+        return 0;
+    if (is_request_state(c->state))
+        return c->nproc == 0 && c->ticket != 0 && c->account[0] != '\0';
+    return c->ticket == 0 &&
            (strcmp(c->state, "reserved") == 0
                 ? c->nproc == 0
                 : strcmp(c->state, "running") == 0 || strcmp(c->state, "uncertain") == 0);
@@ -768,6 +803,10 @@ static int claim_line(struct claim *c, char **f, int n)
         return set_text(c->boot, BOOT_MAX, f[1], "-");
     if (n == 2 && strcmp(f[0], "state") == 0)
         return set_text(c->state, STATE_MAX, f[1], "");
+    if (n == 2 && strcmp(f[0], "account") == 0)
+        return set_text(c->account, ACCOUNT_MAX, f[1], "._@-");
+    if (n == 2 && strcmp(f[0], "ticket") == 0)
+        return c->ticket != 0 || number(f[1], &c->ticket) != 0 || c->ticket == 0 ? -1 : 0;
     if (n == 4 && strcmp(f[0], "owner") == 0)
         return c->owner.pid != 0 ? -1 : read_pid(f + 1, &c->owner);
     if (n == 3 && strcmp(f[0], "resource") == 0)
@@ -780,13 +819,14 @@ static int claim_line(struct claim *c, char **f, int n)
 /**
  * Parse the ledger file's text `s` into table `t`.
  *
- * @return 0, or EBADMSG for a file that does not parse, or ENOMEM.
+ * @return 0, or EBADMSG for a file that does not parse or has two blocked
+ *         requests, or ENOMEM.
  */
 static int table_parse(struct table *t, char *s)
 {
     struct claim *c = NULL;
     char *line, *nl, *f[5];
-    int n, first = 1;
+    int n, first = 1, blocked = 0;
 
     for (line = s; *line != '\0'; line = nl + 1) {
         nl = strchr(line, '\n');
@@ -808,7 +848,7 @@ static int table_parse(struct table *t, char *s)
                 return ENOMEM;
             strcpy(c->id, f[1]);
         } else if (n == 1 && strcmp(f[0], "end") == 0) {
-            if (!claim_sound(c))
+            if (!claim_sound(c) || (strcmp(c->state, "blocked") == 0 && blocked++ > 0))
                 return EBADMSG;
             c = NULL;
         } else if (n < 0 || claim_line(c, f, n) != 0) {
@@ -884,7 +924,11 @@ static int table_write(const struct table *t, const char *path)
 
         text_add(&b, "claim %s\nsystem %s\nboot %s\nowner", c->id, c->system, c->boot);
         text_pid(&b, &c->owner);
+        if (c->account[0] != '\0')
+            text_add(&b, "account %s\n", c->account);
         text_add(&b, "state %s\n", c->state);
+        if (c->ticket != 0)
+            text_add(&b, "ticket %llu\n", (unsigned long long)c->ticket);
         for (j = 0; j < c->nres; j++)
             text_add(&b, "resource %s %llu\n", c->res[j].name,
                      (unsigned long long)c->res[j].amount);
@@ -1010,7 +1054,8 @@ static void verdict_remove(const struct etude_ledger *l, const char *id)
 
 /**
  * Judge claim `c`: J_FREE when it is proved free, J_OWNED when its owner
- * runs, and otherwise J_LIVE or J_UNCERTAIN with the reason in `*why`.
+ * runs, and otherwise J_LIVE, J_UNCERTAIN or J_ABANDONED with the reason in
+ * `*why`.
  */
 static enum judged judge(const struct etude_ledger *l, const struct claim *c, const char **why)
 {
@@ -1031,7 +1076,7 @@ static enum judged judge(const struct etude_ledger *l, const struct claim *c, co
         *why = "its owner cannot be identified";
         return J_UNCERTAIN;
     }
-    if (strcmp(c->state, "reserved") == 0)
+    if (strcmp(c->state, "reserved") == 0 || is_request_state(c->state))
         return J_FREE;
     for (i = 0; i < c->nproc; i++) {
         switch (member_check(&c->proc[i])) {
@@ -1053,11 +1098,11 @@ static enum judged judge(const struct etude_ledger *l, const struct claim *c, co
     }
     if (strcmp(c->state, "uncertain") == 0) {
         *why = "its owner found the cleanup unconfirmed";
-        return J_UNCERTAIN;
+        return J_ABANDONED;
     }
     if (strcmp(c->system, "win32") != 0 && !verdict_confirmed(l, c->id)) {
         *why = "its keeper did not confirm the cleanup";
-        return J_UNCERTAIN;
+        return J_ABANDONED;
     }
     return J_FREE;
 }
@@ -1183,68 +1228,355 @@ int etude_ledger_verdict_path(const struct etude_ledger *l, const char *id, char
     return fail(e);
 }
 
-/** Say whether the claims of `t` and `res` together stay inside `cap`. */
-static int fits(const struct table *t, const struct etude_ledger_res *res, size_t nres,
-                const struct etude_ledger_res *cap, size_t ncap)
+/** Give the amount of resource `name` in `res`, or 0 when it has none. */
+static uint64_t amount_of(const struct etude_ledger_res *res, size_t nres, const char *name)
 {
-    uint64_t sum;
-    size_t i, j, k;
+    size_t j;
 
-    for (k = 0; k < ncap; k++) {
-        sum = 0;
-        for (j = 0; j < nres; j++)
-            if (strcmp(res[j].name, cap[k].name) == 0)
-                sum = res[j].amount;
-        for (i = 0; i < t->n; i++)
-            for (j = 0; j < t->c[i].nres; j++)
-                if (strcmp(t->c[i].res[j].name, cap[k].name) == 0) {
-                    if (sum > UINT64_MAX - t->c[i].res[j].amount)
-                        return 0;
-                    sum += t->c[i].res[j].amount;
-                }
-        if (sum > cap[k].amount)
+    for (j = 0; j < nres; j++)
+        if (strcmp(res[j].name, name) == 0)
+            return res[j].amount;
+    return 0;
+}
+
+/** Add `b` to `*a`; 0, or -1 when the sum overflows. */
+static int add(uint64_t *a, uint64_t b)
+{
+    if (*a > UINT64_MAX - b)
+        return -1;
+    *a += b;
+    return 0;
+}
+
+/**
+ * Give in `*sum` how much of resource `name` the claims of `t` hold, only
+ * those that judge finds abandoned when `stuck` is set; requests hold none.
+ *
+ * @return 0, or -1 when the sum overflows.
+ */
+static int held(const struct etude_ledger *l, const struct table *t, const char *name, int stuck,
+                uint64_t *sum)
+{
+    const char *why;
+    size_t i;
+
+    *sum = 0;
+    for (i = 0; i < t->n; i++) {
+        const struct claim *c = &t->c[i];
+
+        if (is_request_state(c->state))
+            continue;
+        if (stuck && judge(l, c, &why) != J_ABANDONED)
+            continue;
+        if (add(sum, amount_of(c->res, c->nres, name)) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+/**
+ * Say whether what `a` asks for fits beside the claims of `t` within the
+ * limits, and leaves free, of each resource it takes, what request `keep`
+ * needs of it. A resource that `a` does not take is not kept, so a request
+ * blocked on memory does not hold back a claim that takes processors alone.
+ */
+static int fits(const struct etude_ledger *l, const struct table *t, const struct ask *a,
+                const struct claim *keep)
+{
+    const struct etude_ledger_res *cap = a->cap;
+    uint64_t sum, want;
+    size_t k;
+
+    for (k = 0; k < a->ncap; k++) {
+        want = amount_of(a->res, a->nres, cap[k].name);
+        if (held(l, t, cap[k].name, 0, &sum) != 0 || add(&sum, want) != 0 || sum > cap[k].amount)
+            return 0;
+        if (keep != NULL && want > 0 &&
+            (add(&sum, amount_of(keep->res, keep->nres, cap[k].name)) != 0 || sum > cap[k].amount))
             return 0;
     }
     return 1;
 }
 
+/**
+ * Say whether `res` could ever fit in `cap`: within it alone, and beside the
+ * claims that only a person can release, those judge finds abandoned.
+ * Return 0 when it could, or ERANGE or ENOSPC when it could not.
+ */
+static int possible(const struct etude_ledger *l, const struct table *t,
+                    const struct etude_ledger_res *res, size_t nres,
+                    const struct etude_ledger_res *cap, size_t ncap)
+{
+    uint64_t sum;
+    size_t k;
+
+    for (k = 0; k < ncap; k++)
+        if (amount_of(res, nres, cap[k].name) > cap[k].amount)
+            return ERANGE;
+    for (k = 0; k < ncap; k++)
+        if (held(l, t, cap[k].name, 1, &sum) != 0 ||
+            add(&sum, amount_of(res, nres, cap[k].name)) != 0 || sum > cap[k].amount)
+            return ENOSPC;
+    return 0;
+}
+
+/** Count the claims of `t` that account `account` holds. */
+static size_t held_by(const struct table *t, const char *account)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < t->n; i++)
+        if (!is_request_state(t->c[i].state) && strcmp(t->c[i].account, account) == 0)
+            n++;
+    return n;
+}
+
+/**
+ * Give the request of `t` that comes first between accounts: of those that
+ * could ever fit, the one whose account holds the fewest claims, and of
+ * those, the one that arrived first; NULL when there is none.
+ */
+static struct claim *fairest(const struct etude_ledger *l, struct table *t,
+                             const struct etude_ledger_res *cap, size_t ncap)
+{
+    struct claim *best = NULL;
+    size_t i, n, best_n = 0;
+
+    for (i = 0; i < t->n; i++) {
+        struct claim *c = &t->c[i];
+
+        if (!is_request_state(c->state) || possible(l, t, c->res, c->nres, cap, ncap) != 0)
+            continue;
+        n = held_by(t, c->account);
+        if (best == NULL || n < best_n || (n == best_n && c->ticket < best->ticket)) {
+            best = c;
+            best_n = n;
+        }
+    }
+    return best;
+}
+
+/**
+ * Give the machine's protected request, the one blocked request whose needs
+ * every other admission leaves free: the request already blocked, unless it
+ * could never fit, and otherwise the fairest request, which becomes blocked
+ * and stays so until it is admitted or withdrawn. Set `*changed` when the
+ * table changes; NULL when no request waits.
+ */
+static struct claim *protect(const struct etude_ledger *l, struct table *t,
+                             const struct etude_ledger_res *cap, size_t ncap, int *changed)
+{
+    struct claim *p = NULL;
+    size_t i;
+
+    for (i = 0; i < t->n; i++)
+        if (strcmp(t->c[i].state, "blocked") == 0)
+            p = &t->c[i];
+    if (p != NULL && possible(l, t, p->res, p->nres, cap, ncap) != 0) {
+        strcpy(p->state, "waiting");
+        *changed = 1;
+        p = NULL;
+    }
+    if (p == NULL && (p = fairest(l, t, cap, ncap)) != NULL) {
+        strcpy(p->state, "blocked");
+        *changed = 1;
+    }
+    return p;
+}
+
+/** Say whether the `nres` resources `res` have names, each once. */
+static int res_sound(const struct etude_ledger_res *res, size_t nres)
+{
+    size_t i, j;
+
+    for (i = 0; i < nres; i++) {
+        if (res[i].name == NULL || !is_name(res[i].name))
+            return 0;
+        for (j = 0; j < i; j++)
+            if (strcmp(res[i].name, res[j].name) == 0)
+                return 0;
+    }
+    return 1;
+}
+
+/** Give claim `c` the resources `res` in place of its own; 0 or ENOMEM. */
+static int claim_set_res(struct claim *c, const struct etude_ledger_res *res, size_t nres)
+{
+    size_t i;
+    int e = 0;
+
+    for (i = 0; i < c->nres; i++)
+        free((char *)c->res[i].name);
+    free(c->res);
+    c->res = NULL;
+    c->nres = 0;
+    for (i = 0; i < nres && e == 0; i++)
+        e = claim_add_res(c, res[i].name, res[i].amount);
+    return e;
+}
+
+/**
+ * Add to `t` a claim of this process in state `state` of what `a` asks for,
+ * a request getting the next ticket; NULL when memory ran out.
+ */
+static struct claim *claim_new(const struct etude_ledger *l, struct table *t, const struct ask *a,
+                               const char *state)
+{
+    uint64_t ticket = 0;
+    struct claim *c;
+    size_t i;
+
+    for (i = 0; i < t->n; i++)
+        if (t->c[i].ticket > ticket)
+            ticket = t->c[i].ticket;
+    c = table_add(t);
+    if (c == NULL)
+        return NULL;
+    if ((c->id = malloc(strlen(a->id) + 1)) == NULL || claim_set_res(c, a->res, a->nres) != 0) {
+        table_remove(t, c);
+        return NULL;
+    }
+    strcpy(c->id, a->id);
+    strcpy(c->system, LEDGER_SYSTEM);
+    strcpy(c->boot, l->boot);
+    c->owner = l->self;
+    strcpy(c->account, a->account);
+    strcpy(c->state, state);
+    c->ticket = is_request_state(state) ? ticket + 1 : 0;
+    return c;
+}
+
 int etude_ledger_reserve(struct etude_ledger *l, const char *id, const struct etude_ledger_res *res,
                          size_t nres, const struct etude_ledger_res *cap, size_t ncap)
 {
-    struct claim *c = NULL;
+    const struct ask a = {
+        .id = id, .account = "", .res = res, .cap = cap, .nres = nres, .ncap = ncap, .wait = 0};
+    struct claim *p;
     struct table t;
     char **gone;
-    size_t i, n;
-    int e, w;
+    size_t n;
+    int e, w, changed;
 
-    if (!is_id(id))
+    if (!is_id(id) || !res_sound(res, nres))
         return fail(EINVAL);
     e = begin(l, &t);
     if (e != 0)
         return fail(e);
     n = sweep(l, &t, &gone);
+    changed = n > 0;
+    p = protect(l, &t, cap, ncap, &changed);
     if (table_find(&t, id) != NULL)
         e = EEXIST;
-    else if (!fits(&t, res, nres, cap, ncap))
+    else if (!fits(l, &t, &a, p))
         e = EAGAIN;
-    else if ((c = table_add(&t)) == NULL || (c->id = malloc(strlen(id) + 1)) == NULL)
+    else if (claim_new(l, &t, &a, "reserved") == NULL)
         e = ENOMEM;
     if (e == 0) {
-        strcpy(c->id, id);
-        strcpy(c->system, LEDGER_SYSTEM);
-        strcpy(c->boot, l->boot);
-        c->owner = l->self;
-        strcpy(c->state, "reserved");
-        for (i = 0; i < nres && e == 0; i++)
-            e = claim_add_res(c, res[i].name, res[i].amount);
-        if (e == 0)
-            verdict_remove(l, id);
-        if (e != 0)
-            table_remove(&t, c);
+        verdict_remove(l, id);
+        changed = 1;
     }
-    w = end(l, &t, 0, e == 0 || n > 0);
+    w = end(l, &t, 0, changed);
     swept(l, gone, n, w == 0);
     return fail(w != 0 ? w : e);
+}
+
+/**
+ * Decide what `a` asks for in table `t`, as etude_ledger_admit says, under
+ * the lock, and set `*changed` when `t` changes.
+ *
+ * @return 0 for a claim admitted, EAGAIN, ERANGE, ENOSPC or EEXIST as
+ *         etude_ledger_admit gives them, or ENOMEM.
+ */
+static int admit_in(const struct etude_ledger *l, struct table *t, const struct ask *a,
+                    int *changed)
+{
+    struct claim *c = table_find(t, a->id), *p;
+    int e;
+
+    if (c != NULL && (!is_request_state(c->state) || !is_mine(l, c)))
+        return EEXIST;
+    e = possible(l, t, a->res, a->nres, a->cap, a->ncap);
+    if (e != 0 && c != NULL) {
+        table_remove(t, c);
+        *changed = 1;
+    }
+    if (e != 0)
+        return e;
+    if (c != NULL) {
+        strcpy(c->account, a->account);
+        *changed = 1;
+        if (claim_set_res(c, a->res, a->nres) != 0)
+            return ENOMEM;
+    } else if (a->wait) {
+        *changed = 1;
+        if ((c = claim_new(l, t, a, "waiting")) == NULL)
+            return ENOMEM;
+    }
+    p = protect(l, t, a->cap, a->ncap, changed);
+    if (!fits(l, t, a, p == c ? NULL : p)) {
+        if (c != NULL && !a->wait) {
+            table_remove(t, c);
+            *changed = 1;
+        }
+        return EAGAIN;
+    }
+    if (c == NULL && (c = claim_new(l, t, a, "reserved")) == NULL)
+        return ENOMEM;
+    strcpy(c->state, "reserved");
+    c->ticket = 0;
+    *changed = 1;
+    return 0;
+}
+
+int etude_ledger_admit(struct etude_ledger *l, const char *id, const char *account,
+                       const struct etude_ledger_res *res, size_t nres,
+                       const struct etude_ledger_res *cap, size_t ncap, int wait)
+{
+    const struct ask a = {.id = id,
+                          .account = account,
+                          .res = res,
+                          .cap = cap,
+                          .nres = nres,
+                          .ncap = ncap,
+                          .wait = wait};
+    struct table t;
+    char **gone;
+    size_t n;
+    int e, w, changed;
+
+    if (!is_id(id) || !is_account(account) || !res_sound(res, nres))
+        return fail(EINVAL);
+    e = begin(l, &t);
+    if (e != 0)
+        return fail(e);
+    n = sweep(l, &t, &gone);
+    changed = n > 0;
+    e = admit_in(l, &t, &a, &changed);
+    if (e == 0)
+        verdict_remove(l, id);
+    w = end(l, &t, e == ENOMEM ? e : 0, changed);
+    swept(l, gone, n, w == 0);
+    return fail(w != 0 ? w : e);
+}
+
+int etude_ledger_withdraw(struct etude_ledger *l, const char *id)
+{
+    struct claim *c;
+    struct table t;
+    int e = begin(l, &t);
+
+    if (e != 0)
+        return fail(e);
+    c = table_find(&t, id);
+    if (c == NULL)
+        e = ENOENT;
+    else if (!is_mine(l, c))
+        e = EPERM;
+    else if (!is_request_state(c->state))
+        e = EINVAL;
+    else
+        table_remove(&t, c);
+    return fail(end(l, &t, e, 1));
 }
 
 /**
@@ -1266,7 +1598,7 @@ static int add_processes(struct etude_ledger *l, const char *id, const struct et
         e = ENOENT;
     else if (!is_mine(l, c))
         e = EPERM;
-    else if (child == NULL && strcmp(c->state, "reserved") != 0)
+    else if (is_request_state(c->state) || (child == NULL && strcmp(c->state, "reserved") != 0))
         e = EINVAL;
     if (e == 0 && child == NULL) {
         e = claim_add_proc(c, ROLE_KEEPER, keeper);
@@ -1309,6 +1641,8 @@ int etude_ledger_finish(struct etude_ledger *l, const char *id, enum etude_clean
         e = ENOENT;
     else if (!is_mine(l, c))
         e = EPERM;
+    else if (is_request_state(c->state))
+        e = EINVAL;
     else if (cleanup == ETUDE_CLEANUP_CONFIRMED)
         table_remove(&t, c);
     else
@@ -1355,6 +1689,7 @@ int etude_ledger_list(struct etude_ledger *l,
         v.id = c->id;
         v.system = c->system;
         v.owner = c->owner;
+        v.account = c->account;
         v.state = c->state;
         switch (judge(l, c, &v.why)) {
         case J_LIVE:

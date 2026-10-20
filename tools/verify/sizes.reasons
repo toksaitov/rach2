@@ -698,6 +698,10 @@ tools/etude/guest/guest.c:load_invocation complexity 60 a parser over an externa
 tools/etude/guest/wire.c:wire_encode params 10 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 tools/etude/guest/wire.c:wire_parse complexity 29 a parser over an external format, one check per field in the format's order
 
+tools/etude/ledger.c:etude_ledger_admit params 8 the resources and the limits are each an array with its count, as etude_ledger_reserve takes them
+
+tools/etude/sched.c:etude_sched_admit params 7 the jobs and the limits are each an array with its count, as etude_ledger_admit takes them
+
 tools/image/fatchains.c:print_chain complexity 29 an inspector's check, one walk over the format it reads
 
 tools/image/mkgpt.c:main complexity 54 an inspector's check, one walk over the format it reads

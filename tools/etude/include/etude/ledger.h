@@ -1,9 +1,10 @@
 /*
- * ledger.h: the durable claims of one machine's resources. A worker records
- * a claim before it runs anything, registers each process of the claim
- * before the process runs its program, and ends the claim when the cleanup
- * is confirmed. A claim whose worker has gone is released only when its
- * processes are proved to have ended. tools/etude/Readme.md describes it.
+ * ledger.h: the durable claims of one machine's resources, and the requests
+ * that wait for them. A worker records a claim before it runs anything,
+ * registers each process of the claim before the process runs its program,
+ * and ends the claim when the cleanup is confirmed. A claim whose worker has
+ * gone is released only when its processes are proved to have ended.
+ * tools/etude/Readme.md describes it.
  */
 #ifndef ETUDE_LEDGER_H
 #define ETUDE_LEDGER_H
@@ -29,12 +30,13 @@ enum etude_claim_status {
     ETUDE_CLAIM_UNCERTAIN /* nothing proves that its processes have ended */
 };
 
-/* One claim, as etude_ledger_list gives it; valid during the visit. */
+/* A claim or a request, as etude_ledger_list gives it, for the visit. */
 struct etude_ledger_claim {
     const char *id;
     const char *system; /* the operating system that recorded it */
     struct etude_pid owner;
-    const char *state; /* as recorded: reserved, running or uncertain */
+    const char *account; /* "" for a claim that etude_ledger_reserve made */
+    const char *state;   /* reserved, running or uncertain; a request's waiting or blocked */
     enum etude_claim_status status;
     const char *why; /* what keeps a claim that is not owned, or "" */
     const struct etude_ledger_res *res;
@@ -62,7 +64,9 @@ void etude_ledger_close(struct etude_ledger *l);
  *
  * The ledger first releases the claims that recovery proves free. With
  * `cap`, it refuses a claim that would take any resource the limits name
- * past its limit, counting every claim it keeps, whatever its status.
+ * past its limit, counting every claim it keeps, whatever its status, or
+ * that would take what the protected request needs, as etude_ledger_admit
+ * says.
  *
  * @return 0 once the claim is durable; -1 with errno EEXIST for an identity
  *         the ledger has, EAGAIN for a claim past a limit, EINVAL for a bad
@@ -71,6 +75,45 @@ void etude_ledger_close(struct etude_ledger *l);
  */
 int etude_ledger_reserve(struct etude_ledger *l, const char *id, const struct etude_ledger_res *res,
                          size_t nres, const struct etude_ledger_res *cap, size_t ncap);
+
+/**
+ * Ask for claim `id` of the resources `res` for account `account`, within
+ * the machine's limits `cap`, before anything of it runs.
+ *
+ * A request that is refused for now waits in the ledger when `wait` is set,
+ * and the next call with the same identity asks again; without `wait` it
+ * leaves nothing behind, and a request of that identity that waited is
+ * withdrawn. One waiting request of the machine is protected: the claim is
+ * admitted only when it fits beside every claim the ledger keeps and, of
+ * each resource it takes, leaves free what the protected request needs, so
+ * that the protected request is admitted once enough claims have ended. The
+ * protected request is chosen when there is none, from the requests that
+ * could ever fit: the one whose account holds the fewest claims, and of
+ * those the one that has waited longest. It stays protected until it is
+ * admitted or withdrawn, or until claims that only a person can release,
+ * whose worker and processes have ended with the cleanup unconfirmed, leave
+ * it no room. The worker withdraws a request it no longer wants, with
+ * etude_ledger_withdraw; a request whose owner has ended is removed.
+ *
+ * @return 0 once the claim is durable, as etude_ledger_reserve; -1 with
+ *         errno EAGAIN while the request waits or was refused for now, ERANGE
+ *         for a request that the limits cannot hold, ENOSPC for one that
+ *         cannot fit beside the claims only a person can release, EEXIST for an
+ *         identity of a claim, or of another owner's request, EINVAL for a
+ *         bad identity, account or name, or one of etude_ledger_reserve's.
+ */
+int etude_ledger_admit(struct etude_ledger *l, const char *id, const char *account,
+                       const struct etude_ledger_res *res, size_t nres,
+                       const struct etude_ledger_res *cap, size_t ncap, int wait);
+
+/**
+ * Withdraw request `id` of this process, which waits for admission.
+ *
+ * @return 0; or -1 with errno ENOENT for no such request, EPERM for one of
+ *         another owner, EINVAL for a claim already admitted, or one of
+ *         etude_ledger_reserve's.
+ */
+int etude_ledger_withdraw(struct etude_ledger *l, const char *id);
 
 /**
  * Register the keeper and the process of attempt `attempt_id`, whose claim
@@ -110,8 +153,8 @@ int etude_ledger_verdict_path(const struct etude_ledger *l, const char *id, char
  * and keep it as uncertain when it is not.
  *
  * @return 0; or -1 with errno ENOENT for no such claim, EPERM for a claim of
- *         another owner, EINVAL for a cleanup still pending, or one of
- *         etude_ledger_reserve's.
+ *         another owner, EINVAL for a cleanup still pending or a request, or
+ *         one of etude_ledger_reserve's.
  */
 int etude_ledger_finish(struct etude_ledger *l, const char *id, enum etude_cleanup cleanup);
 
@@ -130,8 +173,8 @@ int etude_ledger_finish(struct etude_ledger *l, const char *id, enum etude_clean
 int etude_ledger_recover(struct etude_ledger *l, size_t *freed);
 
 /**
- * Recover, then give each claim kept to `visit`, which returns nonzero to
- * stop.
+ * Recover, then give each claim and request kept to `visit`, which returns
+ * nonzero to stop.
  *
  * @return 0, the nonzero value `visit` returned, or -1 with errno set.
  */

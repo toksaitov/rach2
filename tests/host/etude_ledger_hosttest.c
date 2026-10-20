@@ -510,6 +510,17 @@ static void test_damaged(void)
         "claim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\nstate reserved\nend\n",
         "etude-ledger 1\nclaim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\nstate reserved\nend",
         "etude-ledger 1\n\n",
+        "etude-ledger 1\nclaim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\naccount a\n"
+        "state waiting\nend\n",
+        "etude-ledger 1\nclaim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\nstate waiting\n"
+        "ticket 1\nend\n",
+        "etude-ledger 1\nclaim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\naccount a\n"
+        "state blocked\nticket 1\nprocess case 1 1 1\nend\n",
+        "etude-ledger 1\nclaim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\nstate reserved\n"
+        "ticket 1\nend\n",
+        "etude-ledger 1\nclaim x\nsystem " SYSTEM "\nboot -\nowner 1 1 1\naccount a\n"
+        "state blocked\nticket 1\nend\nclaim z\nsystem " SYSTEM "\nboot -\nowner 1 1 1\n"
+        "account a\nstate blocked\nticket 2\nend\n",
     };
     const char *dir = fix_path("damaged");
     struct etude_ledger *l = etude_ledger_open(dir);
