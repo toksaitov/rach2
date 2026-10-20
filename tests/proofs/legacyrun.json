@@ -1,0 +1,271 @@
+{
+  "schema_version": 1,
+  "proof": "legacyrun",
+  "summary": "etude_legacyrun_hosttest.c against private copies of runutil.c and etude's suite adapter, each fault found by its own row",
+  "tree": "private",
+  "sources": [
+    "tests/system/runner/runutil.c",
+    "tools/etude/posix/legacy.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_legacyrun_hosttest",
+    "${WORK}/runutil.c"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "cp ${SRC}/tests/system/runner/runutil.c ${WORK}/runutil.c && exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude/posix tests/host/etude_legacyrun_hosttest.c ${SRC}/tools/etude/posix/legacy.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c utils/sha256.c -o ${WORK}/etude_legacyrun_hosttest"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "ETUDE_LEGACYRUN_RUNUTIL=${WORK}/runutil.c",
+      "${WORK}/etude_legacyrun_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "etude-legacyrun-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "settle",
+      "summary": "runutil does not look at the suite's machines once the suite has ended",
+      "edits": [
+        {
+          "file": "tests/system/runner/runutil.c",
+          "find": "    if (!fp || stopped)\n        return fp;\n",
+          "replace": "    if (1)\n        return fp;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": left: failed: "
+        ]
+      }
+    },
+    {
+      "name": "closed",
+      "summary": "runutil does not read the relays' record of a whole console",
+      "edits": [
+        {
+          "file": "tests/system/runner/runutil.c",
+          "find": "!among(relay, left, n) && !relay_closed(ledger, relay)) {\n",
+          "replace": "!among(relay, left, n) && 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": cut: incomplete: "
+        ]
+      }
+    },
+    {
+      "name": "children",
+      "summary": "no child record of a machine or its relay reaches the executor",
+      "edits": [
+        {
+          "file": "tests/system/runner/runutil.c",
+          "find": "    report_child(machine);\n    report_child(relay);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": lost: the machine ended: "
+        ]
+      }
+    },
+    {
+      "name": "drain",
+      "summary": "SIGTERM ends a relay before its machine's output ends",
+      "edits": [
+        {
+          "file": "tests/system/runner/runutil.c",
+          "find": "    sigaction(SIGINT, &sa, NULL);\n    sigaction(SIGTERM, &sa, NULL);\n    sigaction(SIGHUP, &sa, NULL);\n    pfd.fd = in;\n",
+          "replace": "    pfd.fd = in;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": term: passed: "
+        ]
+      }
+    },
+    {
+      "name": "signal",
+      "summary": "a target killed by a signal is recorded as one that exited 0",
+      "edits": [
+        {
+          "file": "tests/system/runner/runutil.c",
+          "find": "    return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);\n",
+          "replace": "    return WIFEXITED(status) ? WEXITSTATUS(status) : 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": killed: failed: "
+        ]
+      }
+    },
+    {
+      "name": "record",
+      "summary": "a missing record of the suite's end is read as a clean end",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    e->status = -1;\n    if (f == NULL)\n",
+          "replace": "    e->status = 0;\n    e->whole = 1;\n    if (f == NULL)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": lost: incomplete: "
+        ]
+      }
+    },
+    {
+      "name": "left",
+      "summary": "a machine left running does not fail the suite",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    if (e->left.n > 0) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": left: failed: "
+        ]
+      }
+    },
+    {
+      "name": "cut",
+      "summary": "a cut console does not leave the suite incomplete",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    else if (e->cut.n > 0)\n",
+          "replace": "    else if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": cut: incomplete: "
+        ]
+      }
+    },
+    {
+      "name": "idle",
+      "summary": "an idle stop is not judged as one",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    else if (e->idle)\n",
+          "replace": "    else if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": quiet: the result: "
+        ]
+      }
+    },
+    {
+      "name": "bound",
+      "summary": "a run past its bound is not judged as one",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    if (ended == ENDED_BOUND)\n        snprintf(why, n, \"it ran past",
+          "replace": "    if (ended == ENDED_BOUND && 0)\n        snprintf(why, n, \"it ran past"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": busy: the result: "
+        ]
+      }
+    },
+    {
+      "name": "stop",
+      "summary": "a stop signal is taken for a failure of the suite",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    if (ended == ENDED_STOP) {\n        fprintf(p->out, \"etude-legacy: %s: stopped",
+          "replace": "    if (0) {\n        fprintf(p->out, \"etude-legacy: %s: stopped"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": stop: stopped: "
+        ]
+      }
+    },
+    {
+      "name": "offset",
+      "summary": "a run with no port block is not refused",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    if (offset == NULL || *offset == '\\0' || offset[strspn(offset, \"0123456789\")] != '\\0')\n",
+          "replace": "    if (offset == NULL && 0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": refused: no port block: "
+        ]
+      }
+    },
+    {
+      "name": "changed",
+      "summary": "a suite runs on a preparation that changed",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "    if (status != 0)\n        return refuse(p,\n                      \"the preparation changed: ",
+          "replace": "    if (0)\n        return refuse(p,\n                      \"the preparation changed: "
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": refused: changed: "
+        ]
+      }
+    },
+    {
+      "name": "logs",
+      "summary": "a log older than the run is kept as its evidence",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": " && mtime_ns(&st) >= r->stamp &&\n",
+          "replace": " &&\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": left: an older log not kept: "
+        ]
+      }
+    }
+  ]
+}

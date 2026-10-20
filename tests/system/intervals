@@ -38,3 +38,4 @@ tests/host/etude_watchdog_hosttest.c: progress every 20 ms, which the case's bou
 tests/host/etude_sched_hosttest.c: a job holds its claims so the workers' claims overlap
 tests/timeprobe.c: naps between looks; the parent's are the sleep tested
 tests/host/etude_native_hosttest.c: a process or a group is looked at again every 20 ms
+tests/host/etude_legacyrun_hosttest.c: a FIFO is looked at again every 50 ms
