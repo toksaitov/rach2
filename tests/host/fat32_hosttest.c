@@ -27,7 +27,7 @@
  *
  * With `--barriers` the program runs only the interruption matrix and the
  * durability rows, the rows that judge the driver's barriers, and ends at
- * the first failure: the mode tests/host/fat_barriers_mutate.sh runs.
+ * the first failure: the mode tests/proofs/fat-barriers-fat32.json runs.
  */
 
 #include "../../rach2/sys/fs/fat32.h"
@@ -2563,12 +2563,12 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 }
 
 /**
- * Run every row. With `--barriers`, the mode fat_barriers_mutate.sh runs,
- * only the matrix and the durability rows run, and the first failure ends
- * the run; any other argument is a usage error, status 2. Returns 0 when
- * every row passed and 1 otherwise. The count of failures would make a poor
- * status, since an exit status keeps its low eight bits and 256 failures
- * would read as a pass.
+ * Run every row. With `--barriers`, the mode of
+ * tests/proofs/fat-barriers-fat32.json, only the matrix and the durability
+ * rows run, and the first failure ends the run; any other argument is a
+ * usage error, status 2. Returns 0 when every row passed and 1 otherwise.
+ * The count of failures would make a poor status, since an exit status
+ * keeps its low eight bits and 256 failures would read as a pass.
  */
 int main(int argc, char **argv)
 {

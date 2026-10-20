@@ -22,8 +22,7 @@
  *
  * With `--scan-cost` or `--barriers` the program runs only the cost rows, or
  * only the rows that judge the driver's barriers, and ends at the first
- * failure: the modes tests/host/exfat_scan_mutate.sh and
- * tests/host/fat_barriers_mutate.sh run.
+ * failure. tests/proofs/fat-barriers-exfat.json runs the second mode.
  */
 
 #include "../../rach2/sys/fs/exfat.h"
@@ -1748,7 +1747,7 @@ static uint64_t cache_gets(void)
  * each of the three costs would take: the twenty creates after the first
  * two hundred, one of which grows the directory, take at most 60 writes, 4
  * barriers and 4000 gets, and a lookup of the last name at most 200 gets.
- * tests/host/exfat_scan_mutate.sh puts each of the three back in turn and
+ * tests/proofs/exfat-scan.json puts each of the three back in turn and
  * requires its row to fail.
  */
 static void scan_cost_rows(void)
@@ -2453,10 +2452,9 @@ static void dirty_rows(void)
 }
 
 /**
- * Run every row; or with `--scan-cost` or `--barriers`, the modes the
- * mutation proofs run, only the rows a proof judges, the first failure
- * ending the run. Returns 0 when every check passed, 1 otherwise, and 2 for
- * an unknown mode.
+ * Run every row; or with `--scan-cost` or `--barriers`, only the cost rows
+ * or the barrier rows, the first failure ending the run. Returns 0 when
+ * every check passed, 1 otherwise, and 2 for an unknown mode.
  */
 int main(int argc, char **argv)
 {

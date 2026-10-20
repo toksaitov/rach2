@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "proof": "fat-barriers-fat32",
+  "summary": "The barrier rows of fat32_hosttest.c, its --barriers mode, with each call of sync_disk and block_flush in rach2/sys/fs/fat32.c dropped in turn but the flush of fat_rmdir, which has no fault: free_chain flushes next with no write between them, and no row can tell the two apart",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/fs/fat32.c"
+  ],
+  "artifacts": [
+    "${WORK}/fat32_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\" \"$t/tests/host\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp -R tests/host/compat \"$t/tests/host/compat\"\ncp tests/host/fat32_hosttest.c \"$t/tests/host/\"\ncp -R ${SRC}/. \"$t/\"\ncd \"$t\"\nfor x in fat32_hosttest; do\n    deps=$(grep -oE 'host-deps:[^*]*' tests/host/$x.c | sed 's/host-deps://' | tr '\\n' ' ')\n    ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -DFIXDIR='\"${WORK}/fixtures\"' -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I ${TREE}/utils -I ${TREE}/krffs -I tests/host/compat -o ${WORK}/$x tests/host/$x.c $deps\ndone"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/fixtures\nmkdir ${WORK}/fixtures\nexec ${WORK}/fat32_hosttest --barriers"
+    ],
+    "bound_s": 1200,
+    "fail_prefix": "FAIL: "
+  },
+  "faults": [
+    {
+      "name": "fat32-free-chain-block-flush",
+      "summary": "the flush of free_chain in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "\n    rc = block_flush(fm->dev);\n",
+          "replace": "\n    rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'unlink after a sync' stopped after write 10 of 11, the newest 1 of the pending writes kept, leaves a consistent volume"
+        ]
+      }
+    },
+    {
+      "name": "fat32-free-slots-sync-disk",
+      "summary": "the sync of free_slots in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "        }\n        rc = sync_disk(fm);\n",
+          "replace": "        }\n        rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'many files' stopped after write 82 of 113, the newest 1 of the pending writes kept, leaves a consistent volume"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-write-sync-disk",
+      "summary": "the sync of fat_write in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    }\n    rc = sync_disk(fm);\n    if (rc != 0) {\n",
+          "replace": "    }\n    rc = 0;\n    if (rc != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'create and write' stopped after write 7 of 7, the newest 1 of the pending writes kept, reads only what was written"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-write-block-flush",
+      "summary": "the flush of fat_write in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "            joined = rc == 0;\n        }\n        if (rc == 0) {\n            rc = block_flush(fm->dev);\n        }\n        if (rc != 0) {\n",
+          "replace": "            joined = rc == 0;\n        }\n        if (rc == 0) {\n            rc = 0;\n        }\n        if (rc != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'extend across a cluster' stopped after write 14 of 14, the newest 1 of the pending writes kept, reads only what was written"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-truncate-sync-disk-1",
+      "summary": "the first sync of fat_truncate in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "                rc = sync_disk(fm);\n",
+          "replace": "                rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'truncate' stopped after write 14 of 27, the newest 1 of the pending writes kept, reads only what was written"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-truncate-sync-disk-2",
+      "summary": "the second sync of fat_truncate in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "        if (run_first != 0) {\n            rc = sync_disk(fm);\n",
+          "replace": "        if (run_first != 0) {\n            rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'truncate' stopped after write 27 of 27, the newest 1 of the pending writes kept, reads only what was written"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-truncate-block-flush-1",
+      "summary": "the first flush of fat_truncate in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "                rc = block_flush(fm->dev);\n",
+          "replace": "                rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'truncate' stopped after write 21 of 28, the newest 1 of the pending writes kept, reads only what was written"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-truncate-block-flush-2",
+      "summary": "the second flush of fat_truncate in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "        rc = write_node_entry(fm, n);\n        if (rc == 0) {\n            rc = block_flush(fm->dev);\n        }\n",
+          "replace": "        rc = write_node_entry(fm, n);\n        if (rc == 0) {\n            rc = 0;\n        }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'truncate after a sync' stopped after write 10 of 13, the newest 1 of the pending writes kept, leaves a consistent volume"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-fsync-sync-disk",
+      "summary": "the sync of fat_fsync in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    vfs_ns_lock(mnt);\n    rc = sync_disk(fm);\n",
+          "replace": "    vfs_ns_lock(mnt);\n    rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: and the file is on the medium with its bytes, nothing pending kept"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-sync-sync-disk",
+      "summary": "the sync of fat_sync in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    }\n    rc = sync_disk(fm);\n    if (rc == 0) {\n",
+          "replace": "    }\n    rc = 0;\n    if (rc == 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: and the file is on the medium with its bytes, nothing pending kept"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-mkdir-sync-disk",
+      "summary": "the sync of fat_mkdir in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    if (rc == 0) {\n        rc = sync_disk(fm);\n",
+          "replace": "    if (rc == 0) {\n        rc = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'mkdir and rmdir' stopped after write 8 of 19, the newest 1 of the pending writes kept, leaves a consistent volume"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-rename-block-flush-1",
+      "summary": "the first flush of fat_rename in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    rc = free_name_entries(fm, od->first, &src);\n    if (rc == 0) {\n        rc = block_flush(fm->dev);\n    }\n",
+          "replace": "    rc = free_name_entries(fm, od->first, &src);\n    if (rc == 0) {\n        rc = 0;\n    }\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'rename' with barrier 3 of 3 failed and stopped 1 writes after, the newest 1 of the pending writes kept, leaves a consistent volume"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-rename-block-flush-2",
+      "summary": "the second flush of fat_rename in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "            rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, 1);\n        }\n        if (rc == 0) {\n            rc = block_flush(fm->dev);\n        }\n        if (rc != 0) {\n",
+          "replace": "            rc = fat_put_bytes(fm, cluster_offset(fm, c) + 32, dotdot, 32, 1);\n        }\n        if (rc == 0) {\n            rc = 0;\n        }\n        if (rc != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: 'rename' stopped after write 19 of 19, the newest 1 of the pending writes kept, leaves a consistent volume"
+        ]
+      }
+    },
+    {
+      "name": "fat32-fat-prepare-unmount-sync-disk",
+      "summary": "the sync of fat_prepare_unmount in fat32.c dropped",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    }\n    rc = sync_disk(fm);\n    if (rc == 0 && !fm->free_known && fm->fsinfo_sector != 0) {\n",
+          "replace": "    }\n    rc = 0;\n    if (rc == 0 && !fm->free_known && fm->fsinfo_sector != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "FAIL: and the file is on the medium with its bytes, nothing pending kept"
+        ]
+      }
+    }
+  ]
+}
