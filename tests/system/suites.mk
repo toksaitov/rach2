@@ -248,7 +248,8 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests tools/etude/guest utils
 
-prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDESERIAL) $(HARNESS) \
+prepare-images: $(DEMO_CREDS) $(BINFIND) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDELEGACY) $(ETUDELINES) \
+                $(ETUDESERIAL) $(HARNESS) \
                 $(HOSTPEER) $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(RUNUTIL) $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image \
                 os-simple-image rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
@@ -2135,9 +2136,10 @@ run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) $(ETUDEHOST) build/krffs/sta
 # `tests/run runner`: the harness's selftest, then the runner's own, tests/run
 # driven against a registry and a makefile of its own in a temporary
 # directory (tests/system/selftest.sh). It boots no machine and reads nothing
-# from the product, so it needs only the harness, runtests and the two
-# helpers.
-run-runner: $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(HOSTPEER)
+# from the product, so it needs only the harness, runtests, the two helpers,
+# and the set driver and the formatter, which the fixture's runs take from
+# this tree.
+run-runner: $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(HOSTPEER) $(ETUDELEGACY) $(ETUDELINES)
 	@$(HARNESS) --selftest
 	@./tests/system/selftest.sh
 

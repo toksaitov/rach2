@@ -9,11 +9,13 @@
 # stops slow1 before its end and names it, and never starts slow2, which it
 # names as not started. tests/run compiles runutil into the tree on every
 # run; the socket preflight, which the suites do not need, is replaced with a
-# program that does nothing.
+# program that does nothing. The tree has no etude of its own, and its runs
+# take etude-legacy and history_lines from this tree's build.
 #
 # With --mutate two faults are put into the private copies in turn: `status`
 # makes runutil report a status of 0 for any program that exits, and
-# `continue` takes `stopped=1` out of tests/run. Each must fail the checks
+# `continue` takes out of tests/run the `-k` that RACH2_STOP_ON_FAIL gives
+# the set driver. Each must fail the checks
 # that slow2 never started and that slow1 did not reach its end, and the
 # restored copies must pass with the helper of the first run. --texts checks
 # that each fault is once in its source.
@@ -43,7 +45,7 @@ once()
 if [ "$mutate" -eq 2 ]; then
     once "$repo/tests/system/runner/runutil.c" 'return WIFEXITED(status) ? WEXITSTATUS(status)'
     # shellcheck disable=SC2016
-    once "$repo/tests/run" '[ "$rc" = 0 ] || [ -z "${RACH2_STOP_ON_FAIL:-}" ] || stopped=1'
+    once "$repo/tests/run" '${RACH2_STOP_ON_FAIL:+-k} '
     echo 'selftest-stop: texts: every fault is once in its source'
     exit 0
 fi
@@ -95,7 +97,9 @@ printf '%s\n' 'failing|-|full' 'slow1|-|full' 'slow2|-|full' > "$tree/tests/regi
 printf '%s\n' 'int main(void) { return 0; }' > "$tree/tools/setup/hostcheck.c"
 cp "$repo/tools/setup/space.sh" "$tree/tools/setup/space.sh"
 cat > "$tree/Makefile" <<'MK'
-components prepare-all:
+components:
+	@mkdir -p build/rach2; : > build/rach2/kernel
+prepare-all:
 	@:
 prepare-tools:
 	@echo -
@@ -138,7 +142,9 @@ check_case()
         unset RACH2_KERNEL RACH2_TIMEOUT_FACTOR
         RACH2_WORKERS=2 RACH2_MEMORY_MIB=1024 RACH2_STOP_ON_FAIL=1 RACH2_IDLE_TIMEOUT=30
         TMPDIR=$tree/tmp
+        RACH2_ETUDE_BIN=$repo/build/tools/etude RACH2_ETUDE_SCHEMAS=$repo/tools/etude/schemas
         export RACH2_WORKERS RACH2_MEMORY_MIB RACH2_STOP_ON_FAIL RACH2_IDLE_TIMEOUT TMPDIR
+        export RACH2_ETUDE_BIN RACH2_ETUDE_SCHEMAS
         cd "$tree"
         exec sh tests/run failing slow1 slow2
     ) > "$work/$phase.log" 2>&1 &
@@ -179,10 +185,9 @@ if [ "$mutate" -eq 1 ]; then
                 ;;
             continue)
                 # shellcheck disable=SC2016
-                [ "$(grep -Fc '[ "$rc" = 0 ] || [ -z "${RACH2_STOP_ON_FAIL:-}" ] || stopped=1' "$tree/tests/run")" -eq 1 ]
+                [ "$(grep -Fc '${RACH2_STOP_ON_FAIL:+-k} ' "$tree/tests/run")" -eq 1 ]
                 # shellcheck disable=SC2016
-                sed '/\[ "$rc" = 0 \] || \[ -z "${RACH2_STOP_ON_FAIL:-}" \] || stopped=1/s/stopped=1/:/' \
-                    "$work/run.saved" > "$tree/tests/run"
+                sed 's/[$]{RACH2_STOP_ON_FAIL:+-k} //' "$work/run.saved" > "$tree/tests/run"
                 ;;
         esac
         touch "$source" "$tree/tests/run"

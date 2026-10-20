@@ -8,8 +8,9 @@
 # mistake in the runner is a failure here rather than a puzzling suite result.
 #
 # `tests/run runner` runs this. It boots no machine: every machine it drives is
-# a shell script on the PATH. It does read four built programs, the harness,
-# runtests, ptydrive and hostpeer, so `sh tests/system/selftest.sh` needs a
+# a shell script on the PATH. It does read six built programs, the harness,
+# runtests, ptydrive, hostpeer, and etude-legacy and history_lines, which
+# tests/run runs its suites with, so `sh tests/system/selftest.sh` needs a
 # tree that has built those. SELFTEST_RUN names the runner it tests, the
 # tree's tests/run by default; tests/proofs/rows-runner.json gives it a copy
 # with a fault in it.
@@ -76,8 +77,10 @@ out=$(sh "$REPO/tests/system/runutil_cpu.sh" 2>&1); rc=$?
 printf '%s\n' "$out"
 check "CPU activity follows descendants across process groups" 0 "$rc"
 
-# A tree the runner can drive: its own registry, its own suite targets, and a
-# `prepare-all` that builds the fixture's product and its shared image.
+# A tree the runner can drive: its own registry, its own suite targets, and
+# the targets the preparation runs: `components`, which also makes the kernel
+# the preparation requires, a `prepare-all` that builds the fixture's product
+# and its shared image, and `prepare-tools`.
 mkdir -p "$WORK/tests/system/runner" "$WORK/tools/setup"
 cp "${SELFTEST_RUN:-$REPO/tests/run}" "$WORK/tests/run"
 cp "$REPO/tests/system/runlock.sh" "$REPO/tests/system/runlock_exec.sh" "$WORK/tests/system/"
@@ -95,6 +98,11 @@ sleep() { "$SELFTEST_UTIL" sleep "$1"; }
 cp "$REPO/tests/system/deadline.sh" "$WORK/tests/system/deadline.sh"
 cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
 cp "$REPO/tools/setup/space.sh" "$WORK/tools/setup/space.sh"
+# The fixture's tree has no etude of its own: its runs take the set driver
+# and the formatter the tree built, and the tree's schemas.
+RACH2_ETUDE_BIN=$REPO/build/tools/etude
+RACH2_ETUDE_SCHEMAS=$REPO/tools/etude/schemas
+export RACH2_ETUDE_BIN RACH2_ETUDE_SCHEMAS
 # Calibration must never be invoked, even when the host would measure slowly.
 cat > "$WORK/tests/system/calibrate.sh" <<'CAL'
 #!/bin/sh
@@ -143,7 +151,8 @@ mkdir -p "$WORK/tests/system"
 echo "# the suites' makefile, as the runner sees it" > "$WORK/tests/system/suites.mk"
 cat > "$WORK/Makefile" <<'MK'
 components:
-	@echo components >> order.log; echo $$PPID >> components.count
+	@echo components >> order.log; echo $$PPID >> components.count; \
+	 mkdir -p build/rach2; echo kernel > build/rach2/kernel
 prepare-all: product build/images/shared.img
 	@echo prepared >> order.log; echo $$PPID >> prepared.count
 prepare-tools:
@@ -161,7 +170,7 @@ run-consolebusy:
 run-consolestuck:
 	@qemu-system-i386 --selftest-stuck > console.log 2>&1
 run-reporting:
-	@i=0; while [ $$i -lt 63 ]; do echo reporting-progress; sleep 1; i=$$((i+1)); done
+	@i=0; while [ $$i -lt 8 ]; do echo reporting-progress; sleep 1; i=$$((i+1)); done
 run-killed:
 	@rm -f kill-ready; qemu-system-i386 --selftest-killed & p=$$!; \
 	 i=0; while [ ! -s kill-ready ] && [ $$i -lt 100 ]; do sleep 0.1; i=$$((i+1)); done; \
@@ -391,26 +400,33 @@ check "a failing suite exits nonzero" 1 "$rc"
 check "and says which" 1 "$(printf '%s\n' "$out" | grep -c 'run: failing: FAIL')"
 
 # A failing suite's serial logs are kept where the next run does not write
-# over them: each failing run copies the log it wrote under build/images and
-# its machine's console into a directory of its own, which it names; the next
-# run's go into another, and the first is left as it was.
-kept() { # kept DIR: the files in DIR, then its log and its console
-    printf '%s|%s|%s' "$(cd "$WORK/$1" 2>/dev/null && find . -type f | sed 's|^\./||' | sort | tr '\n' ' ')" \
-        "$(cat "$WORK/$1/logging-test.log" 2>/dev/null)" "$(cat "$WORK/$1/console.log" 2>/dev/null)"
+# over them: each failing run keeps the work of its suite, with the log the
+# suite wrote under build/images and its machine's console, in a directory of
+# its own under build/tests/failed, which it names; the next run's go into
+# another, and the first is left as it was.
+kept() { # kept DIR: the logs DIR kept of the images, then the log and the console
+    printf '%s|%s|%s' "$(cd "$1/images" 2>/dev/null && find . -type f | sed 's|^\./||' | sort | tr '\n' ' ')" \
+        "$(cat "$1/images/logging-test.log" 2>/dev/null)" "$(cat "$1/machines.console" 2>/dev/null)"
+}
+under_failed() { # under_failed DIR: 1 when DIR is a failed logging suite's
+    case "$1" in
+        "$WORK"/build/tests/failed/*.logging) echo 1 ;;
+        *) echo 0 ;;
+    esac
 }
 rm -rf "$WORK/build/tests/failed" "$WORK/logging.count"
 out=$(run logging); rc=$?
-first=$(printf '%s\n' "$out" | sed -n 's/^run: logging: logs kept in //p')
+first=$(printf '%s\n' "$out" | sed -n 's/^etude-legacy: evidence: //p')
 check "a failing suite that writes a log fails" 1 "$rc"
-check "and says where its logs are kept" 1 "$(printf '%s\n' "$first" | grep -c '^build/tests/failed/logging\.')"
+check "and says where its logs are kept" 1 "$(under_failed "$first")"
 out=$(run logging)
-second=$(printf '%s\n' "$out" | sed -n 's/^run: logging: logs kept in //p')
+second=$(printf '%s\n' "$out" | sed -n 's/^etude-legacy: evidence: //p')
 check "the next failing run keeps its logs in a directory of its own" 1 \
-    "$([ -n "$first" ] && [ -n "$second" ] && [ "$first" != "$second" ] && echo 1 || echo 0)"
+    "$([ -n "$first" ] && [ "$(under_failed "$second")" = 1 ] && [ "$first" != "$second" ] && echo 1 || echo 0)"
 check "the first run's directory has its log and console alone, as it left them" \
-    'console.log logging-test.log |logging run 1|machine said 1' "$(kept "$first")"
+    'logging-test.log |logging run 1|machine said 1' "$(kept "$first")"
 check "and the second run's has its own" \
-    'console.log logging-test.log |logging run 2|machine said 2' "$(kept "$second")"
+    'logging-test.log |logging run 2|machine said 2' "$(kept "$second")"
 
 out=$(run nosuch); rc=$?
 check "an unknown name is refused" 2 "$rc"
@@ -467,7 +483,7 @@ check "a suite that needs no image runs beside the failing formatter's absence" 
 
 out=$(run passing failing); rc=$?
 check "a set with one failure exits nonzero" 1 "$rc"
-check "the failure is named in the result" 1 "$(printf '%s\n' "$out" | grep -c 'result: failed: failing')"
+check "the failure is named in the result" 1 "$(printf '%s\n' "$out" | grep -c '^run: result: failed: failing$')"
 check "the passing member is still reported" 1 "$(printf '%s\n' "$out" | grep -c 'run: passing: PASS')"
 
 out=$(run core); rc=$?
@@ -559,15 +575,20 @@ rm -rf "$WORK/build/images"
 
 # The memory budget: two suites that declare 3000 MiB each run one after the
 # other under a 4000 MiB budget with two workers free, and together under
-# 8000; the budget is printed with the workers.
+# 8000; the budget is printed with the workers. While the first runs, the
+# status reader finds the second waiting in the run's ledger for its memory
+# and QEMU's 128 MiB, 3279945728 bytes, and the first running.
 rm -f "$WORK/events"
 out=$(RACH2_MEMORY_MIB=4000 W=2 run hungry1 hungry2); rc=$?
 check "two suites past the memory budget run one after the other" 'hungry1-start hungry1-end hungry2-start hungry2-end ' \
     "$(tr '\n' ' ' < "$WORK/events")"
 if [ -r /proc/locks ]; then
-    check "a memory wait names the pending suite" 1 "$(printf '%s\n' "$out" | grep -c 'pending hungry2: 3000 MiB')"
-    check "a memory wait names its live holder" 1 "$(printf '%s\n' "$out" | grep -c 'holder hungry1 pid [0-9]* alive: 3000 MiB')"
-    check "a memory wait has a start time" 1 "$(printf '%s\n' "$out" | grep -c 'waits for memory since .* UTC; budget 4000 MiB')"
+    check "a memory wait names the pending suite" 1 "$(printf '%s\n' "$out" |
+        grep -c '^    waits for admission: legacy\.hungry2 on i686 .*, for cpu_millis [0-9]*, memory_bytes 3279945728, ')"
+    check "a memory wait names the suite that holds the memory" 1 "$(printf '%s\n' "$out" |
+        grep -c '^    working: legacy\.hungry1 on i686 in execute: ')"
+    check "a memory wait has a start time" 1 "$(printf '%s\n' "$out" |
+        grep -c '^    waits for admission: legacy\.hungry2 on i686 for [0-9]*s, since [0-9-]* [0-9:]* UTC; ')"
 fi
 check "and the budget is announced" 1 "$(printf '%s\n' "$out" | grep -c 'memory 4000 MiB')"
 rm -f "$WORK/events"
@@ -1197,32 +1218,34 @@ out=$(sh "$REPO/tests/system/selftest_stop.sh" 2>&1); rc=$?
 printf '%s\n' "$out"
 check "a stopped set reports its running and queued suites and stops their work" 0 "$rc"
 
-# A pooled suite's result is printed the moment it ends, not when the pool
-# ends: the fast suite's line is seen while the slow one has not written its
-# end marker.
+# A pooled suite's output is printed the moment it ends, not when the set
+# ends: the fast suite's output and its result line are seen while the slow
+# one has not written its end marker.
 rm -f "$WORK/slow1.done" "$WORK/stream.out"
 ( cd "$WORK" && PATH="$WORK/bin:$PATH" RACH2_WORKERS=2 sh tests/run slow1 passing > "$WORK/stream.out" 2>&1 ) &
 streamrun=$!
 seen=0
 i=0
 while [ "$i" -lt 30 ]; do
-    if grep -q 'run: passing: PASS' "$WORK/stream.out" 2>/dev/null && [ ! -f "$WORK/slow1.done" ]; then
+    if grep -q '^etude-legacy: result: passed: passing$' "$WORK/stream.out" 2>/dev/null &&
+       grep -q '^passing ran$' "$WORK/stream.out" && [ ! -f "$WORK/slow1.done" ]; then
         seen=1; break
     fi
     sleep 0.1; i=$((i + 1))
 done
 wait "$streamrun"
-check "a suite's result is printed while a slower one still runs" 1 "$seen"
+check "a suite's output is printed while a slower one still runs" 1 "$seen"
 
-# Progress goes to the run log while suite output is held. The bound here
-# exceeds the report interval, and the fixture remains active throughout.
+# Progress goes to the run's status record while suite output is held: the
+# record under build/ names the pooled suite as an attempt that runs before
+# its output, held to its end, reaches the run log.
 (cd "$WORK" && RACH2_WORKERS=2 sh tests/run reporting passing > "$WORK/progress.out" 2>&1) &
 progressrun=$!
 seen=0
-until_time=$(($(now) + 75))
+until_time=$(($(now) + 30))
 while [ "$(now)" -lt "$until_time" ]; do
-    if grep -q '^run: reporting: working for ' "$WORK/progress.out" &&
-       ! grep -q '^run: reporting: PASS' "$WORK/progress.out"; then
+    if cat "$WORK"/build/.run.status.* 2>/dev/null | grep -q '^attempt [^ ]* legacy\.reporting i686 execute running ' &&
+       ! grep -q '^reporting-progress$' "$WORK/progress.out"; then
         seen=1; break
     fi
     kill -0 "$progressrun" 2>/dev/null || break

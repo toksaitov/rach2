@@ -13,7 +13,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "make -s build/tests/system/harness build/tests/system/runtests build/tests/system/ptydrive build/tests/system/hostpeer && cp ${SRC}/tests/run ${WORK}/run"
+      "make -s build/tests/system/harness build/tests/system/runtests build/tests/system/ptydrive build/tests/system/hostpeer build/tools/etude/etude-legacy build/tools/etude/history_lines && cp ${SRC}/tests/run ${WORK}/run"
     ],
     "bound_s": 600
   },

@@ -108,6 +108,11 @@ fi
 # copy have no such target, so the name a caller set is dropped here.
 RACH2_KERNEL=""
 export RACH2_KERNEL
+# The trees have no etude of their own: their runs take the set driver and
+# the formatter this tree built, and this tree's schemas.
+RACH2_ETUDE_BIN=$repo/build/tools/etude
+RACH2_ETUDE_SCHEMAS=$repo/tools/etude/schemas
+export RACH2_ETUDE_BIN RACH2_ETUDE_SCHEMAS
 cp "$repo/tests/system/runner/runutil.c" "$work/runutil.saved"
 cp "$work/runutil.saved" "$work/runutil.c"
 cc -O2 -Wall -Wextra -Werror "$repo/tests/system/fixtures/runutil_owned.c" -o "$work/worker"
@@ -117,9 +122,10 @@ echo "runutil-owned: artifacts: $work"
 keep=1
 
 # make_tree NAME MODE: a tree with tests/run, the private helper and a
-# Makefile whose one suite starts a worker in MODE. No guest or socket is
-# used: only the host check, hostcheck.c, is a stand-in, and tests/run, its
-# helper and make are real.
+# Makefile whose one suite starts a worker in MODE, with the targets the
+# preparation runs and the kernel it requires. No guest or socket is used:
+# only the host check, hostcheck.c, is a stand-in, and tests/run, its helper,
+# etude-legacy and make are real.
 make_tree()
 {
     tree=$work/$1
@@ -147,7 +153,8 @@ HIDDEN
     printf '%s\n' 'owned|-|core' > "$tree/tests/registry" || return 125
     printf '%s\n' 'int main(void) { return 0; }' > "$tree/tools/setup/hostcheck.c" || return 125
     cp "$repo/tools/setup/space.sh" "$tree/tools/setup/space.sh" || return 125
-    printf 'components prepare-all:\n\t@:\nrun-owned:\n\t@./worker %s worker.pid\n' "$2" > "$tree/Makefile" || return 125
+    printf 'components:\n\t@mkdir -p build/rach2; : > build/rach2/kernel\nprepare-all prepare-tools:\n\t@:\nrun-owned:\n\t@./worker %s worker.pid\n' \
+        "$2" > "$tree/Makefile" || return 125
 }
 
 # check_case PHASE MODE: run the suite in a new tree for MODE and require the
