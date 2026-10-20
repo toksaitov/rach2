@@ -24,6 +24,8 @@ const char *const cmp_field_names[CMP_FIELDS] = {"case",
                                                  "concurrency policy",
                                                  "timing method"};
 
+const char *cmp_program = "history_compare";
+
 struct load_state {
     struct cmp_history *history;
     size_t order;
@@ -127,13 +129,13 @@ static int load_stream(struct cmp_history *h, const char *schema, const char *pa
     int status;
     FILE *file = fopen(path, "rb");
     if (!file) {
-        fprintf(stderr, "history_compare: %s: cannot read\n", path);
+        fprintf(stderr, "%s: %s: cannot read\n", cmp_program, path);
         return -1;
     }
     fclose(file);
     status = etude_history_read(path, schema, add_record, state, &line);
     if (state->failed) {
-        fprintf(stderr, "history_compare: %s: out of memory\n", path);
+        fprintf(stderr, "%s: %s: out of memory\n", cmp_program, path);
         return -1;
     }
     if (status < 0) {
@@ -202,7 +204,7 @@ static int index_records(struct cmp_history *h)
         struct cmp_record *r = h->by_id[i], *last = kept ? h->by_id[kept - 1] : NULL;
         if (last && !strcmp(last->id, r->id)) {
             if (last->length != r->length || memcmp(last->digest, r->digest, 32)) {
-                fprintf(stderr, "history_compare: record %s has two different contents\n", r->id);
+                fprintf(stderr, "%s: record %s has two different contents\n", cmp_program, r->id);
                 return -1;
             }
             continue;
@@ -274,7 +276,7 @@ int cmp_load(struct cmp_history *h, const char *schema, char **paths, int count)
     int i;
     memset(h, 0, sizeof(*h));
     if (!file) {
-        fprintf(stderr, "history_compare: %s: cannot read the schema\n", schema);
+        fprintf(stderr, "%s: %s: cannot read the schema\n", cmp_program, schema);
         return -1;
     }
     fclose(file);
