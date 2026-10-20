@@ -6,9 +6,14 @@
  * socket descriptor, closes, then checks that connecting to a closed port
  * fails instead of hanging. It exits 0 when the four tests pass and 1
  * otherwise.
+ *
+ * A native run (probe_args.h) gives the echo server as `peer=A.B.C.D:PORT`,
+ * in place of the gateway and the port, and the closed port of the same host
+ * as `closed=PORT`, in place of 9.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -133,32 +138,75 @@ static int make_stream_socket(void)
     return socketcall(SC_SOCKET, args);
 }
 
-/** Connect `fd` to `port` of the gateway 10.0.2.2: 0, or a negated errno. */
+/* The echo server's host, the gateway 10.0.2.2 unless `peer` names another. */
+static uint8_t server_ip[4] = {10, 0, 2, 2};
+
+/** Connect `fd` to `port` of the server's host: 0, or a negated errno. */
 static int connect_to(int fd, uint16_t port)
 {
     unsigned long args[3];
     uint8_t sa[16];
-    make_sockaddr(sa, port, 10, 0, 2, 2);
+    make_sockaddr(sa, port, server_ip[0], server_ip[1], server_ip[2], server_ip[3]);
     args[0] = (uint32_t)fd;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     return socketcall(SC_CONNECT, args);
 }
 
-/** The echo server's port: the first argument when there is one, since
- * tests/system/suites.mk moves the socket suite's port with the run's block
- * of ports, else DST_PORT. */
-static uint16_t server_port(unsigned long *sp)
+/**
+ * The address and port of the argument `peer=A.B.C.D:PORT` (probe_args.h)
+ * in `ip` and `*port`: 1, or 0 when there is no such argument or it is not
+ * of that form, which leaves both as they were.
+ */
+static int peer_address(uint8_t ip[4], uint16_t *port)
 {
-    char **argv = (char **)(sp + 1);
-    const char *p;
+    const char *s = probe_arg("peer", 0);
+    long part[5];
+    int i;
+
+    for (i = 0; s != 0 && i < 5; i++) {
+        part[i] = probe_number(&s);
+        if (part[i] < 0 || part[i] > (i < 4 ? 255 : 65535) ||
+            (i < 4 && *s++ != (i < 3 ? '.' : ':'))) {
+            return 0;
+        }
+    }
+    if (s == 0) {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        ip[i] = (uint8_t)part[i];
+    }
+    *port = (uint16_t)part[4];
+    return 1;
+}
+
+/** The echo server's port: the peer's when `peer` is given, else the first
+ * positional argument when there is one, since tests/system/suites.mk moves
+ * the socket suite's port with the run's block of ports, else DST_PORT; the
+ * peer's address is then the server's host. */
+static uint16_t server_port(void)
+{
+    const char *p = probe_word(1);
+    uint16_t port = DST_PORT;
     uint32_t n = 0;
 
-    if (sp[0] < 2)
+    if (peer_address(server_ip, &port))
+        return port;
+    if (p == 0)
         return DST_PORT;
-    for (p = argv[1]; *p >= '0' && *p <= '9'; p++)
+    for (; *p >= '0' && *p <= '9'; p++)
         n = n * 10 + (uint32_t)(*p - '0');
     return (uint16_t)n;
+}
+
+/** The closed port: the argument `closed`, else CLOSED_PORT. */
+static uint16_t closed_port(void)
+{
+    const char *p = probe_arg("closed", 0);
+    long n = p != 0 ? probe_number(&p) : -1;
+
+    return n >= 0 && n <= 65535 ? (uint16_t)n : CLOSED_PORT;
 }
 
 void probe_main(unsigned long *sp);
@@ -173,6 +221,7 @@ void probe_main(unsigned long *sp)
     uint8_t buf[64];
     int fd, fd2, n, msglen, passed = 0, failed = 0;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     msglen = (int)strlen(msg);
 
     puts("TCP socket test starting...");
@@ -185,7 +234,7 @@ void probe_main(unsigned long *sp)
         puts("FAILED (socket)");
         sys_exit(1);
     }
-    if (connect_to(fd, server_port(sp)) == 0) {
+    if (connect_to(fd, server_port()) == 0) {
         puts("OK");
         passed++;
     } else {
@@ -229,7 +278,7 @@ void probe_main(unsigned long *sp)
         puts("FAILED (socket)");
         failed++;
     } else {
-        if (connect_to(fd2, CLOSED_PORT) < 0) {
+        if (connect_to(fd2, closed_port()) < 0) {
             puts("OK (refused)");
             passed++;
         } else {

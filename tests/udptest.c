@@ -3,9 +3,14 @@
  * client of a host echo server at the SLIRP gateway 10.0.2.2:7777, or at the
  * port its argument names. It exits 0 when the five tests pass and 1
  * otherwise.
+ *
+ * A native run (probe_args.h) gives the echo server as `peer=A.B.C.D:PORT`,
+ * in place of the gateway and the port, and the local port it binds through
+ * `ports=OLD:NEW,...`, in place of 12345.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 /* An address of the kernel's, outside user space: 1 MiB on i386, where the
  * kernel is linked, and on x86-64 the last page, in the kernel's half. */
@@ -145,18 +150,52 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[7] = d;
 }
 
-/** The echo server's port: the first argument when there is one, since
- * tests/system/suites.mk moves the socket suite's port with the run's block
- * of ports, else DST_PORT. */
-static uint16_t server_port(unsigned long *sp)
+/* The echo server's host, the gateway unless `peer` names another. */
+static uint8_t server_ip[4] = {DST_IP_0, DST_IP_1, DST_IP_2, DST_IP_3};
+
+/**
+ * The address and port of the argument `peer=A.B.C.D:PORT` (probe_args.h)
+ * in `ip` and `*port`: 1, or 0 when there is no such argument or it is not
+ * of that form, which leaves both as they were.
+ */
+static int peer_address(uint8_t ip[4], uint16_t *port)
 {
-    char **argv = (char **)(sp + 1);
-    const char *p;
+    const char *s = probe_arg("peer", 0);
+    long part[5];
+    int i;
+
+    for (i = 0; s != 0 && i < 5; i++) {
+        part[i] = probe_number(&s);
+        if (part[i] < 0 || part[i] > (i < 4 ? 255 : 65535) ||
+            (i < 4 && *s++ != (i < 3 ? '.' : ':'))) {
+            return 0;
+        }
+    }
+    if (s == 0) {
+        return 0;
+    }
+    for (i = 0; i < 4; i++) {
+        ip[i] = (uint8_t)part[i];
+    }
+    *port = (uint16_t)part[4];
+    return 1;
+}
+
+/** The echo server's port: the peer's when `peer` is given, else the first
+ * positional argument when there is one, since tests/system/suites.mk moves
+ * the socket suite's port with the run's block of ports, else DST_PORT; the
+ * peer's address is then the server's host. */
+static uint16_t server_port(void)
+{
+    const char *p = probe_word(1);
+    uint16_t port = DST_PORT;
     uint32_t n = 0;
 
-    if (sp[0] < 2)
+    if (peer_address(server_ip, &port))
+        return port;
+    if (p == 0)
         return DST_PORT;
-    for (p = argv[1]; *p >= '0' && *p <= '9'; p++)
+    for (; *p >= '0' && *p <= '9'; p++)
         n = n * 10 + (uint32_t)(*p - '0');
     return (uint16_t)n;
 }
@@ -212,9 +251,11 @@ void probe_main(unsigned long *sp)
     uint8_t local_sa[16], dst_sa[16], rcv_sa[16];
     char msg[] = "rach2-udp-echo";
     uint8_t buf[64];
+    uint16_t dst_port;
     struct pollfd_probe pfd;
     int fd, n, msglen, passed = 0, failed = 0, ready;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
     msglen = (int)strlen(msg);
 
     puts("UDP socket test starting...");
@@ -237,7 +278,7 @@ void probe_main(unsigned long *sp)
 
     /* Test 2: bind a local port. */
     print("Test 2: bind local port... ");
-    make_sockaddr(local_sa, LOCAL_PORT, 0, 0, 0, 0);
+    make_sockaddr(local_sa, (uint16_t)probe_port(LOCAL_PORT), 0, 0, 0, 0);
     args[0] = (uint32_t)fd;
     args[1] = (unsigned long)local_sa;
     args[2] = 16;
@@ -270,7 +311,8 @@ void probe_main(unsigned long *sp)
 
     /* Test 4: echo round trip, sent again until the echo arrives. */
     print("Test 4: sendto + recvfrom echo... ");
-    make_sockaddr(dst_sa, server_port(sp), DST_IP_0, DST_IP_1, DST_IP_2, DST_IP_3);
+    dst_port = server_port();
+    make_sockaddr(dst_sa, dst_port, server_ip[0], server_ip[1], server_ip[2], server_ip[3]);
     ready = 0;
     while (ready == 0) {
         args[0] = (uint32_t)fd;

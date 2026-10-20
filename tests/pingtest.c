@@ -33,12 +33,19 @@
  * EMSGSIZE, and on x86-64 a size past 32 bits too, whose low word would be a
  * size it takes.
  *
+ * A native run (probe_args.h) gives the address that answers as the peer's,
+ * `peer=ADDRESS:PORT`, whose port the probe does not use, and the address
+ * nobody answers as `silent=ADDRESS`, in place of 10.0.2.2 and 10.0.2.99;
+ * and with `machine=native` the probe measures its times by CLOCK_MONOTONIC
+ * rather than the time of day, which the machine's NTP daemon may step.
+ *
  * Prints "PINGTEST OK" and exits 0 when every test passed, which the suites
  * that run it match; otherwise exits 1. Freestanding; direct system calls
  * (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 
@@ -50,6 +57,12 @@ typedef unsigned int uint32_t;
 #define GATEWAY_IP     0x0A000202UL /* 10.0.2.2  */
 #define UNREACHABLE_IP 0x0A000263UL /* 10.0.2.99 */
 #define LOOPBACK_IP    0x7F000001UL /* 127.0.0.1 */
+
+#define CLOCK_MONOTONIC 1
+
+/* The address that answers and the one nobody answers, GATEWAY_IP and
+ * UNREACHABLE_IP unless the arguments name others. */
+static uint32_t gateway_ip, silent_ip;
 
 /* What the kernel answers with, negated as a raw system call returns it. */
 #define PING_EBUSY     (-16)
@@ -206,11 +219,20 @@ static int sys_nanosleep(const struct timespec_probe *req)
 }
 
 /** Milliseconds since the epoch, modulo 100000 seconds, small enough to
- * subtract without overflow. */
+ * subtract without overflow; given `machine=native`, since boot by
+ * CLOCK_MONOTONIC, likewise. */
 static long now_ms(void)
 {
     struct timeval_probe tv;
 
+    if (probe_native()) {
+        struct timespec_probe ts;
+
+        ts.tv_sec = 0;
+        ts.tv_nsec = 0;
+        syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&ts);
+        return (ts.tv_sec % 100000L) * 1000L + ts.tv_nsec / 1000000L;
+    }
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     sys_gettimeofday(&tv);
@@ -264,6 +286,37 @@ static const char *child_in_ping(int fd, int child, long *began)
     return "";
 }
 
+/** The IPv4 address written in dots at the start of `s`, in host byte order,
+ * or `fallback` when `s` is NULL or does not begin with one. */
+static uint32_t arg_ip(const char *s, uint32_t fallback)
+{
+    uint32_t ip = 0;
+    long part;
+    int i;
+
+    for (i = 0; s != 0 && i < 4; i++) {
+        part = probe_number(&s);
+        if (part < 0 || part > 255 || (i < 3 && *s++ != '.')) {
+            return fallback;
+        }
+        ip = (ip << 8) | (uint32_t)part;
+    }
+    return s != 0 ? ip : fallback;
+}
+
+/** Print `ip`, in host byte order, in dots. */
+static void print_ip(uint32_t ip)
+{
+    int i;
+
+    for (i = 3; i >= 0; i--) {
+        print_num((int)((ip >> (8 * i)) & 0xFF));
+        if (i > 0) {
+            print(".");
+        }
+    }
+}
+
 /** Ping `ip`: the round-trip time in ticks, or a negated errno. */
 static int ping(uint32_t ip)
 {
@@ -279,7 +332,7 @@ static int gateway_replies(void)
     int i;
 
     for (i = 0; i < 3; i++) {
-        if (ping(GATEWAY_IP) < 0) {
+        if (ping(gateway_ip) < 0) {
             puts("FAILED (no reply)");
             return 0;
         }
@@ -304,7 +357,7 @@ static void dead_ping_child(int ready[2])
     sys_close(ready[0]);
     sys_write(ready[1], "p", 1);
     began = now_ms();
-    rtt = ping(UNREACHABLE_IP);
+    rtt = ping(silent_ip);
     ms = now_ms() - began;
     sys_write(ready[1], &ms, sizeof(ms));
     sys_close(ready[1]);
@@ -319,7 +372,7 @@ static int data_ping_refused(void)
     unsigned long args[3];
     int r1, r2 = -EMSGSIZE;
 
-    args[0] = GATEWAY_IP;
+    args[0] = gateway_ip;
     args[1] = 1473;
     args[2] = 64;
     r1 = socketcall(SC_PING_DATA, args);
@@ -339,17 +392,26 @@ static int data_ping_refused(void)
     return 0;
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** The probe's entry: the four tests in order, then the count of each
  * verdict. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int passed = 0, failed = 0, rtt;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    gateway_ip = arg_ip(probe_arg("peer", 0), GATEWAY_IP);
+    silent_ip = arg_ip(probe_arg("silent", 0), UNREACHABLE_IP);
     puts("ICMP ping test starting...");
     puts("");
 
     /* Test 1: three pings to the gateway get replies. */
-    print("Test 1: ping 10.0.2.2 x3... ");
+    print("Test 1: ping ");
+    print_ip(gateway_ip);
+    print(" x3... ");
     if (gateway_replies()) {
         passed++;
     } else {
@@ -357,8 +419,10 @@ PROBE_START void _start(void)
     }
 
     /* Test 2: a ping to an address nobody answers fails. */
-    print("Test 2: ping 10.0.2.99 times out... ");
-    rtt = ping(UNREACHABLE_IP);
+    print("Test 2: ping ");
+    print_ip(silent_ip);
+    print(" times out... ");
+    rtt = ping(silent_ip);
     if (rtt < 0) {
         puts("OK (timeout)");
         passed++;
