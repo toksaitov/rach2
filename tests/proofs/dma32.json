@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "proof": "dma32",
+  "summary": "The rows of ahci_hosttest.c and xhci_hosttest.c that give a controller addresses above 4 GiB, or move a buffer through the DMA pool when it takes only 32-bit ones, with faults in the two drivers",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/block/ahci.c",
+    "rach2/sys/usb/xhci.c"
+  ],
+  "artifacts": [
+    "${WORK}/ahci_hosttest",
+    "${WORK}/xhci_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e\nt=${WORK}/tree\nrm -rf \"$t\"\nmkdir -p \"$t/rach2\" \"$t/tests/host\"\ncp -R rach2/sys \"$t/rach2/sys\"\ncp -R tests/host/compat \"$t/tests/host/compat\"\ncp tests/host/ahci_hosttest.c tests/host/xhci_hosttest.c \"$t/tests/host/\"\ncp -R ${SRC}/. \"$t/\"\ncd \"$t\"\nfor x in ahci_hosttest xhci_hosttest; do\n    deps=$(grep -oE 'host-deps:[^*]*' tests/host/$x.c | sed 's/host-deps://' | tr '\\n' ' ')\n    ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I tests/host/compat -o ${WORK}/$x tests/host/$x.c $deps\ndone"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "r=0\ns=0\n${WORK}/ahci_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\ns=0\n${WORK}/xhci_hosttest || s=$?\n[ \"$s\" -eq 0 ] || [ \"$s\" -ge 128 ] || s=1\n[ \"$s\" -le \"$r\" ] || r=$s\nexit $r"
+    ],
+    "bound_s": 600,
+    "fail_prefix": "  FAIL: "
+  },
+  "faults": [
+    {
+      "name": "ahci-direct",
+      "summary": "AHCI that gives every piece as it is, whether or not the controller takes 64-bit addresses",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "    if (ahci_dma64 || *phys + len <= AHCI_FOUR_GIB) {\n",
+          "replace": "    if (1) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: in three pieces, each through a page of the DMA pool",
+          "  FAIL: the table names the pages, the high halves 0",
+          "  FAIL: the pages exist for the rows after"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-high-0",
+      "summary": "AHCI that writes 0 as each entry's high half",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "            prdt[n].dbau = ahci_hi(phys);\n",
+          "replace": "            prdt[n].dbau = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: named by its own pages, both halves"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-no-back",
+      "summary": "AHCI that does not copy a read back from the pool's pages",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "            b->to[n][i] = b->page[n][i];\n",
+          "replace": "            b->to[n][i] = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: and the bytes come back from the pages into it"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "xhci-heap",
+      "summary": "xHCI that takes its pages from the heap, whether or not the controller takes 64-bit addresses",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/xhci.c",
+          "find": "    if (hc->dma64) {\n        return kalloc_pages(1, phys);\n",
+          "replace": "    if (1) {\n        return kalloc_pages(1, phys);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: its context array from the DMA pool",
+          "  FAIL: with its context and control ring from the pool",
+          "  FAIL: and given back when it closes",
+          "  FAIL: the pieces that end above it through pages of the pool",
+          "  FAIL: an IN transfer is given",
+          "  FAIL: the pages go back with the records"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "xhci-direct",
+      "summary": "xHCI that gives every piece of a transfer as it is",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/xhci.c",
+          "find": "        need |= (uint64_t)phys[i] + len[i] > XHCI_FOUR_GIB;\n",
+          "replace": "        need |= 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: its pieces above 4 GiB have pages",
+          "  FAIL: and the medium holds the buffer's bytes, moved through the pool",
+          "  FAIL: and the medium's bytes land in the buffer, back from the pool"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "xhci-no-back",
+      "summary": "xHCI that does not copy an IN transfer back from the pages",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/xhci.c",
+          "find": "            b->to[i][j] = b->page[i][j];\n",
+          "replace": "            b->to[i][j] = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: its bytes come back up to the bytes moved",
+          "  FAIL: and the medium's bytes land in the buffer, back from the pool"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "xhci-copy",
+      "summary": "xHCI that copies each OUT piece from the buffer's start",
+      "edits": [
+        {
+          "file": "rach2/sys/usb/xhci.c",
+          "find": "                b->page[i][j] = at[j];\n",
+          "replace": "                b->page[i][j] = transfer->buffer[j];\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "  FAIL: holding its bytes",
+          "  FAIL: and the medium holds the buffer's bytes, moved through the pool"
+        ],
+        "only": true
+      }
+    }
+  ]
+}
