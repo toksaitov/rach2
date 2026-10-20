@@ -23,9 +23,10 @@
  * value. A writer to a raw pseudo-terminal slave whose master has not read
  * sleeps for room, as its state in /proc shows, and the master then reads
  * every byte of its 64 KiB; a non-blocking writer takes EAGAIN; two writers'
- * lines reach the master each whole. A signalfd reads a blocked signal sent
- * to the process, with its sender, and a sigqueue's value, and with none
- * pending a non-blocking read is EAGAIN. A setgid directory gives a file
+ * lines reach the master each whole, even when the first one's write waits
+ * for room. A signalfd reads a blocked signal sent to the process, with its
+ * sender, and a sigqueue's value, and with none pending a non-blocking read
+ * is EAGAIN. A setgid directory gives a file
  * made in it its group, and a directory its group and the bit. A process
  * of another user may not open the maps or the descriptors
  * of a root process under /proc, and reads its own. Its /proc directory is
@@ -123,6 +124,18 @@
 /* The longest wait, in seconds, for another process to be seen asleep: a
  * bound that ends a wait the kernel never satisfies, far past a correct one. */
 #define ASLEEP_BOUND 20
+
+/* The bytes of the line a child writes in `whole_writes`, its newline
+ * included: more than the master ring holds, so that the write waits for
+ * room part way through, and fewer than twice what the ring takes of it, so
+ * that one read of the ring makes room for the rest. */
+#define WHOLE_LINE 6000
+
+/* The rounds of `whole_writes`. A timer tick between the caller's read and
+ * its write may switch to the child, which then finishes its line first, and
+ * such a round passes even when the kernel cuts a waiting write; the caller
+ * writes first in the other rounds. */
+#define WHOLE_ROUNDS 4
 
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
@@ -435,64 +448,6 @@ static int privacies(void)
     return 0;
 }
 
-/**
- * Check that when two children write 20000 lines of seven letters to the
- * slave `name`, one write a line, of 'a' and of 'b', through output
- * processing, which turns each newline into two bytes, every line reaches
- * the master `master` whole, as Linux's terminal write lock keeps a write
- * from being cut by another's. Returns 0, or -1 when a line was mixed or a
- * child failed.
- */
-static int whole_writes(int master, const char *name)
-{
-    char got[4096], line[8], cur = 0;
-    int i, n, col = 0, bad = 0, status;
-    int slave = open(name, O_RDWR | O_NOCTTY);
-    struct termios t;
-    pid_t pids[2];
-
-    if (slave < 0 || tcgetattr(slave, &t) != 0) {
-        return -1;
-    }
-    t.c_oflag |= OPOST | ONLCR;
-    tcsetattr(slave, TCSANOW, &t);
-    for (i = 0; i < 2; i++) {
-        pids[i] = fork();
-        if (pids[i] == 0) {
-            int fd = open(name, O_WRONLY | O_NOCTTY), k;
-
-            memset(line, i == 0 ? 'a' : 'b', 7);
-            line[7] = '\n';
-            for (k = 0; k < 20000; k++) {
-                if (write(fd, line, 8) != 8) {
-                    _exit(1);
-                }
-            }
-            _exit(0);
-        }
-    }
-    close(slave);
-    while ((n = (int)read(master, got, sizeof got)) > 0) {
-        for (i = 0; i < n; i++) {
-            if (got[i] == '\n') {
-                bad += col != 7;
-                col = 0;
-            } else if (got[i] != '\r') {
-                bad += col != 0 && got[i] != cur;
-                cur = got[i];
-                col++;
-            }
-        }
-    }
-    for (i = 0; i < 2; i++) {
-        if (pids[i] < 0 || waitpid(pids[i], &status, 0) != pids[i] || !WIFEXITED(status) ||
-            WEXITSTATUS(status) != 0) {
-            return -1;
-        }
-    }
-    return bad == 0 ? 0 : -1;
-}
-
 /** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
  * no stat file. */
 static int proc_state(pid_t pid)
@@ -540,11 +495,108 @@ static int seen_asleep(pid_t pid)
 }
 
 /**
+ * One round of `whole_writes` on the slave descriptor `slave` and the master
+ * `master`: a child writes `line`, WHOLE_LINE bytes, and once it is seen
+ * asleep for room the caller reads what the ring holds and at once writes its
+ * own line. The master must then read `want`, the child's line whole and the
+ * caller's after it. Returns 0, or 1 after the failure is printed.
+ */
+static int whole_round(int master, int slave, const char *line, const char *want)
+{
+    char got[WHOLE_LINE + 10];
+    int n, have = 0, status;
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        _exit(write(slave, line, WHOLE_LINE) == WHOLE_LINE ? 0 : 1);
+    }
+    if (pid < 0) {
+        return fail("a child to write a line to the slave");
+    }
+    if (!seen_asleep(pid) || (have = (int)read(master, got, sizeof got)) <= 0 ||
+        have >= WHOLE_LINE || 2 * have <= WHOLE_LINE) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail("a slave write of a line longer than the master ring was not seen "
+                    "waiting for room with over half of it, and not all, in the ring");
+    }
+    if (write(slave, "bbbbbbb\n", 8) != 8) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return fail("a second writer's line to the slave was not written");
+    }
+    while (have < (int)sizeof got &&
+           (n = (int)read(master, got + have, sizeof got - (size_t)have)) > 0) {
+        have += n;
+    }
+    if (have != (int)sizeof got) {
+        kill(pid, SIGKILL);
+    }
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
+        have != (int)sizeof got || memcmp(got, want, sizeof got) != 0) {
+        return fail("two writers' lines to one slave were mixed");
+    }
+    return 0;
+}
+
+/**
+ * Check that a slave write that waits for room in the master ring is not cut
+ * by another writer's, as Linux's terminal write lock keeps it whole.
+ *
+ * In each of WHOLE_ROUNDS rounds (`whole_round`) a child writes a line of
+ * 'a' and a newline to the slave `name` through output processing, which
+ * makes the newline two bytes. Once the child is seen asleep for room, the
+ * caller reads what the ring holds, which makes room for the rest of the
+ * line, and at once writes its own line of 'b' to the slave. The caller's
+ * write must wait for the child's, so the master `master` reads the child's
+ * line whole and the caller's after it. The caller keeps itself and its
+ * children to the processor it runs on, so that a child goes on only when
+ * the caller sleeps or a timer tick switches to it, and restores its
+ * affinity at the end. Returns 0, or 1 after the failure is printed.
+ */
+static int whole_writes(int master, const char *name)
+{
+    char line[WHOLE_LINE], want[WHOLE_LINE + 10];
+    int slave = open(name, O_RDWR | O_NOCTTY);
+    int round, status = 0;
+    unsigned cpu;
+    cpu_set_t mask, one;
+    struct termios t;
+
+    if (slave < 0 || tcgetattr(slave, &t) != 0) {
+        return fail("a pseudo-terminal slave for two writers");
+    }
+    if (sched_getaffinity(0, sizeof mask, &mask) != 0 ||
+        syscall(SYS_getcpu, &cpu, NULL, NULL) != 0 || cpu >= CPU_SETSIZE) {
+        return fail("the caller's processor and affinity");
+    }
+    CPU_ZERO(&one);
+    CPU_SET(cpu, &one);
+    if (sched_setaffinity(0, sizeof one, &one) != 0) {
+        return fail("an affinity of the caller's processor alone");
+    }
+    t.c_oflag |= OPOST | ONLCR;
+    tcsetattr(slave, TCSANOW, &t);
+    memset(line, 'a', sizeof line - 1);
+    line[sizeof line - 1] = '\n';
+    memcpy(want, line, sizeof line - 1);
+    memcpy(want + sizeof line - 1, "\r\nbbbbbbb\r\n", 11);
+    for (round = 0; round < WHOLE_ROUNDS && status == 0; round++) {
+        status = whole_round(master, slave, line, want);
+    }
+    close(slave);
+    if (sched_setaffinity(0, sizeof mask, &mask) != 0 && status == 0) {
+        return fail("the caller's affinity restored");
+    }
+    return status;
+}
+
+/**
  * Check a slave written past what the master ring holds: a non-blocking
  * write is cut and then EAGAIN, and a child's 64 KiB, written while the
  * master does not read until the child is seen asleep for room, all reach
- * the master; two children's lines reach it each whole. Returns 0, or 1
- * after the failure is printed.
+ * the master; a line whose write waits for room reaches it whole, before
+ * another writer's. Returns 0, or 1 after the failure is printed.
  */
 static int flows(void)
 {
@@ -595,7 +647,7 @@ static int flows(void)
         return fail("a slave writer's 64 KiB did not all reach the master");
     }
     if (whole_writes(master, name) != 0) {
-        return fail("two writers' lines to one slave were mixed");
+        return 1;
     }
     close(master);
     return 0;
