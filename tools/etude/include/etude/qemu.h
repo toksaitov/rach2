@@ -252,12 +252,15 @@ void etude_machine_cancel(struct etude_machine *m);
 /**
  * Send QMP command `execute` of the caller's, with `arguments`, the text of
  * a JSON object on one line, or NULL. Its reply comes later, by
- * etude_machine_reply.
+ * etude_machine_reply. A boundary boot takes only `qmp_capabilities`,
+ * `quit`, the `query-` commands and `human-monitor-command` with an `info`
+ * command line, and only with arguments that parse as one object.
  *
  * @return the command's id, from ETUDE_QMP_FIRST_ID up; or -1 with errno
- *         EINVAL for a name or arguments QMP cannot take, EAGAIN before QMP
- *         has started the machine or once it has asked QEMU to quit, EPIPE
- *         when QMP is gone, or ENOMEM.
+ *         EINVAL for a name or arguments QMP cannot take, EPERM for a
+ *         command a boundary boot does not take, EAGAIN before QMP has
+ *         started the machine or once it has asked QEMU to quit, EPIPE when
+ *         QMP is gone, or ENOMEM.
  */
 long etude_machine_qmp(struct etude_machine *m, const char *execute, const char *arguments);
 

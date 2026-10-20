@@ -965,6 +965,35 @@ static int command_name(const char *name)
     return 1;
 }
 
+/**
+ * Say whether a boundary boot takes QMP command `execute` with `arguments`:
+ * `qmp_capabilities`, `quit`, a `query-` command, or the human monitor's
+ * `info`, each with no arguments or one JSON object. These read the machine's
+ * state or end it; another command, such as `object-add` or `migrate`, could
+ * make QEMU commit memory that the boundary profile does not reserve.
+ */
+static int boundary_command(const char *execute, const char *arguments)
+{
+    struct eh_json *args = NULL;
+    const struct eh_json *line;
+    int ok;
+
+    if (arguments != NULL) {
+        args = eh_json_parse(arguments);
+        if (args == NULL || args->type != 'o') {
+            eh_json_free(args);
+            return 0;
+        }
+    }
+    line = eh_json_get(args, "command-line");
+    ok = strcmp(execute, "qmp_capabilities") == 0 || strcmp(execute, "quit") == 0 ||
+         strncmp(execute, "query-", 6) == 0 ||
+         (strcmp(execute, "human-monitor-command") == 0 && line != NULL && line->type == 's' &&
+          strncmp(line->string, "info ", 5) == 0);
+    eh_json_free(args);
+    return ok;
+}
+
 long etude_machine_qmp(struct etude_machine *m, const char *execute, const char *arguments)
 {
     struct qmp_call *c;
@@ -974,6 +1003,10 @@ long etude_machine_qmp(struct etude_machine *m, const char *execute, const char 
 
     if (!command_name(execute) || (arguments != NULL && strchr(arguments, '\n') != NULL)) {
         errno = EINVAL;
+        return -1;
+    }
+    if (m->boundary && !boundary_command(execute, arguments)) {
+        errno = EPERM;
         return -1;
     }
     if (m->finished || m->qmp < 0 || m->qmp_state == QMP_GONE) {

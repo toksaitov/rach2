@@ -1558,7 +1558,8 @@ enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
     w.m = m;
     w.id = etude_machine_qmp(m->m, execute, arguments);
     if (w.id < 0) {
-        if (errno == EINVAL) {
+        if (errno == EINVAL || errno == EPERM) {
+            diag("machine %s: QMP command %s refused", m->decl->id, execute);
             m->c->faults++;
             return ETUDE_REFUSED;
         }

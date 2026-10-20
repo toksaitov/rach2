@@ -10,8 +10,9 @@
 # kept, a fixed port in place of the plan's, a second machine refused while
 # the first runs, a service's output that wakes no wait, a keeper that does
 # not end its case when its controller is killed, a machine's memory
-# profile left out of the launcher's profile, and a boot of a case whose
-# machines together need more memory than it reserves must each be found.
+# profile left out of the launcher's profile, a boot of a case whose
+# machines together need more memory than it reserves, and a boundary
+# machine that takes any QMP command must each be found.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -61,6 +62,8 @@ faults = {
              '    r->output = r->p == NULL && !own && !r->ready && 0;\n'),
     'controller': ('        kp->controller = 0;\n        m.type = KEEP_CANCEL;\n',
                    '        kp->controller = 0;\n        m.type = KEEP_GO;\n'),
+    'qmp': ('    if (m->boundary && !boundary_command(execute, arguments)) {\n',
+            '    if (m->boundary && !boundary_command(execute, arguments) && 0) {\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -74,20 +77,20 @@ PY
 fault_file()
 {
     case $1 in
-    wake) echo posix/qemu.c ;;
+    wake|qmp) echo posix/qemu.c ;;
     controller) echo posix/keeper.c ;;
     *) echo posix/scenario.c ;;
     esac
 }
 
-faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller memory share'
+faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller memory share qmp'
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     for fault in $faults; do
         apply_fault "tools/etude/$(fault_file "$fault")" "$fault"
     done
-    echo 'etude-scenario-mutation: texts: all eighteen faults found once'
+    echo 'etude-scenario-mutation: texts: all nineteen faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -185,5 +188,6 @@ prove wake 'pair: the attempt did not end within'
 prove controller 'kill-pair: [0-9]* of its processes are left'
 prove memory 'memory: no .assert refused pass.'
 prove share 'memory-pair: no .assert refused pass.'
+prove qmp 'memory-qmp: no .assert qmp-refused pass.'
 restore
 run_phase restored 0

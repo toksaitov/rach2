@@ -18,29 +18,30 @@
  * host-cflags: -I utils -Wall -Wextra -Werror
  * host-seconds: 300
  *
- * Each row is one attempt of a machine case, run as the executor runs it:
- * this program with the invocation, its report read from its standard
- * output. A machine boots on a private copy of its disk, writes to it and
- * powers off; a host step reads the write from the copy, and the next boot
- * of the same copy reads it back, and the artifact itself is unchanged. A
- * machine that says it powers off and ends without QEMU's event, one killed
- * by a signal, one whose console closes and one whose QMP closes are each
- * told apart from a shutdown, and a wait on each ends at once with the loss.
- * A wait past its step's bound ends at the bound; a stop signal ends the
- * scenario's wait, its machine and its report, and keeps its copies; a
- * scenario that asks for what its manifest does not declare is refused; a
- * failed accelerator, a damaged artifact and an unsafe memory profile are
- * reported. A case of a boundary machine and an ordinary one whose reservation
- * covers the boundary machine alone has a boot of either refused before QEMU
- * starts; with both covered, the boundary machine boots on the reservation left
- * beside the other. Under the stand-in the machine's etude-guest runs a guest
- * program whose report becomes the scenario's, and an etude-guest killed in the
- * middle of a run is a lost end. This program is also the peer that a scenario
- * runs as a service; two machines at once reach it, a service ended unseen is a
- * fault, and failing rows at each stage end their own processes while a held
- * row keeps its own. With the real QEMU, a disk root written at the debug shell
- * and powered off is read back by the next boot, etude-guest runs the test
- * image's /hello, and two machines run /tcptest against the peer.
+ * Each row is one attempt of a machine case, run as the executor runs it: this
+ * program with the invocation, its report read from its standard output. A
+ * machine boots on a private copy of its disk, writes to it and powers off; a
+ * host step reads the write from the copy, and the next boot of the same copy
+ * reads it back, and the artifact itself is unchanged. A machine that says it
+ * powers off and ends without QEMU's event, one killed by a signal, one whose
+ * console closes and one whose QMP closes are each told apart from a shutdown,
+ * and a wait on each ends at once with the loss. A wait past its step's bound
+ * ends at the bound; a stop signal ends the scenario's wait, its machine and
+ * its report, and keeps its copies; a scenario that asks for what its manifest
+ * does not declare is refused; a failed accelerator, a damaged artifact and an
+ * unsafe memory profile are reported. A case of a boundary machine and an
+ * ordinary one whose reservation covers the boundary machine alone has a boot
+ * of either refused before QEMU starts; with both covered, the boundary machine
+ * boots on the reservation left beside the other, answers QMP's queries and the
+ * human monitor's `info`, and has every other QMP command refused. Under the
+ * stand-in the machine's etude-guest runs a guest program whose report becomes
+ * the scenario's, and an etude-guest killed in the middle of a run is a lost
+ * end. This program is also the peer that a scenario runs as a service; two
+ * machines at once reach it, a service ended unseen is a fault, and failing
+ * rows at each stage end their own processes while a held row keeps its own.
+ * With the real QEMU, a disk root written at the debug shell and powered off is
+ * read back by the next boot, etude-guest runs the test image's /hello, and two
+ * machines run /tcptest against the peer.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -425,12 +426,15 @@ static int fake_read(struct fake_in *in)
     }
 }
 
-/** Give the command a QMP line executes, in `name`, and its id. */
+/** Give the command a QMP line executes, in `name`, and its id, the line's
+ * last `id`, since its arguments may have one of their own. */
 static long fake_command(const char *line, char *name, size_t size)
 {
-    const char *at = strstr(line, "\"execute\":\""), *id = strstr(line, "\"id\":");
+    const char *at = strstr(line, "\"execute\":\""), *id = NULL, *p;
     size_t n = 0;
 
+    for (p = strstr(line, "\"id\":"); p != NULL; p = strstr(p + 1, "\"id\":"))
+        id = p;
     name[0] = '\0';
     if (at == NULL)
         return -1;
@@ -869,20 +873,44 @@ static int scenario_noboot(struct etude_case *c, const char *row)
 /**
  * Run the memory rows of two machines, a boundary machine and an ordinary
  * one. In memory-pair the case reserves the boundary machine's memory alone,
- * and a boot of either is refused before QEMU starts; in memory-share it
- * reserves both, and the boundary machine boots.
+ * and a boot of either is refused before QEMU starts; in memory-share and
+ * memory-qmp it reserves both, and the boundary machine boots. In memory-qmp
+ * the boundary machine then answers a query and the human monitor's `info`,
+ * and QMP's `object-add` and the human monitor's `migrate` are refused.
  */
 static int scenario_memory(struct etude_case *c, const char *row)
 {
     struct etude_case_machine *m;
     struct etude_termination end;
     enum etude_status st;
+    char *reply;
 
     if (etude_step(c, "boot") != ETUDE_OK)
         return 1;
     st = etude_boot(c, "fixture", NULL, &m, &end);
-    if (strcmp(row, "memory-share") == 0) {
+    if (strcmp(row, "memory-share") == 0 || strcmp(row, "memory-qmp") == 0) {
         expect(c, "admitted", st, ETUDE_OK);
+        if (st != ETUDE_OK || strcmp(row, "memory-qmp") != 0)
+            return 0;
+        expect(c, "qmp-query", etude_qmp(m, "query-status", NULL, &reply), ETUDE_OK);
+        free(reply);
+        expect(c, "qmp-info",
+               etude_qmp(m, "human-monitor-command", "{\"command-line\": \"info registers -a\"}",
+                         &reply),
+               ETUDE_OK);
+        free(reply);
+        expect(c, "qmp-refused",
+               etude_qmp(m, "object-add",
+                         "{\"qom-type\": \"memory-backend-ram\", \"id\": \"more\", \"size\": "
+                         "68719476736}",
+                         &reply),
+               ETUDE_REFUSED);
+        free(reply);
+        expect(c, "hmp-refused",
+               etude_qmp(m, "human-monitor-command", "{\"command-line\": \"migrate file:more\"}",
+                         &reply),
+               ETUDE_REFUSED);
+        free(reply);
         return 0;
     }
     expect(c, "refused", st, ETUDE_REFUSED);
@@ -1193,7 +1221,7 @@ int etude_scenario(struct etude_case *c)
         return scenario_noboot(c, row);
     if (strcmp(row, "guest") == 0 || strcmp(row, "real-guest") == 0)
         return scenario_guest(c, row[0] == 'r');
-    if (strcmp(row, "memory-pair") == 0 || strcmp(row, "memory-share") == 0)
+    if (strncmp(row, "memory-", 7) == 0)
         return scenario_memory(c, row);
     return scenario_services(c, row);
 }
@@ -1349,7 +1377,7 @@ static int boundary_pair(const struct row *r)
 
 /** Write row `r`'s case, as one family's manifest, to `path`. A memory row
  * of two machines reserves the boundary machine's memory, and in
- * memory-share the other's as well. */
+ * memory-share and memory-qmp the other's as well. */
 static int write_manifest(const char *path, const struct row *r)
 {
     char steps[2048], asserts[4096], machine[1024], text[16384];
@@ -1359,7 +1387,7 @@ static int write_manifest(const char *path, const struct row *r)
     json_list(asserts, sizeof(asserts), r->asserts, 0);
     if (boundary_pair(r)) {
         fix_format(machine, sizeof(machine), "%s", memory_machines);
-        reserved = strcmp(r->name, "memory-share") == 0 ? 4563402752ull : 4294967296ull;
+        reserved = strcmp(r->name, "memory-pair") != 0 ? 4563402752ull : 4294967296ull;
     } else {
         fix_format(
             machine, sizeof(machine),
@@ -2295,6 +2323,8 @@ static const struct row stand_in_rows[] = {
      0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"memory-share", "disk", "boot:fixture", "admitted", NULL, 0, STEP_US, 0, 1, 0, 0, NULL, 0,
      NULL, 0},
+    {"memory-qmp", "disk", "boot:fixture", "admitted qmp-query qmp-info qmp-refused hmp-refused",
+     NULL, 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"guest", "disk", "run:fixture", "guest-pass guest-exit guest-ran guest-lost guest-lost-end",
      NULL, 1, LOSS_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
 };
