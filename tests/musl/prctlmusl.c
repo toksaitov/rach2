@@ -26,10 +26,24 @@
  * ended, which waitid with WNOWAIT reports, lets go of its file at its end, so
  * the tmpfs unmounts before the copy is reaped.
  *
- * The program runs itself in the modes `name`, `exe-moved`, `exe-ran` and
- * `exit-now`, named by its first argument. With none it runs the checks,
- * prints "PRCTLMUSL OK" and exits 0 on success, or prints "PRCTLMUSL FAIL
- * (detail)" and exits 1 at the first failure.
+ * The child subreaper rows run in a forked child S, since the probe may be
+ * init, which adopts every orphan anyway. S's mark reads 0, then 1 after S
+ * sets it, and a pointer of 0 to read it into is EFAULT; a fork does not
+ * pass the mark on, and an exec keeps it. S forks M, which forks Z, lets it
+ * end unreaped, and forks G, which spends three ticks of processor time,
+ * touches 2 MiB, sets its parent-death signal and waits for it. While M
+ * lives, /proc/self/task/S/children lists M alone, the file of another
+ * thread of S is empty, and /proc/self/children does not exist. When M
+ * ends, G finds that its parent is S, S's waitpid(-1, WNOHANG) reaps the
+ * zombie Z at once, and the file lists G; S's waitpid(-1) then reaps G, whose
+ * processor time and memory show in S's RUSAGE_CHILDREN, and the file is
+ * empty. With the mark cleared, the orphans of a second M go to init: that
+ * G's parent is not S, and S has no child left to wait for.
+ *
+ * The program runs itself in the modes `name`, `exe-moved`, `exe-ran`,
+ * `exit-now` and `subreaper-kept`, named by its first argument. With none it
+ * runs the checks, prints "PRCTLMUSL OK" and exits 0 on success, or prints
+ * "PRCTLMUSL FAIL (detail)" and exits 1 at the first failure.
  */
 
 #define _GNU_SOURCE
@@ -39,10 +53,14 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/prctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
+#include <sys/times.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -605,6 +623,410 @@ static int exit_lets_go(void)
     return 0;
 }
 
+/* The processor time, in microseconds, and the memory, in bytes, an orphan
+ * of the subreaper rows uses, and the most ticks since boot it may spin for
+ * that time. */
+#define ORPHAN_USEC  30000
+#define ORPHAN_HEAP  (2 * 1024 * 1024)
+#define ORPHAN_TICKS 1000
+
+/*
+ * The processes of one orphan row and their pipes: M, the child of S, forks
+ * Z and G and ends when S writes on `middle_go`; M writes Z's pid and G its
+ * own on `ready`, and G its report on `report`, and G ends when S writes on
+ * `orphan_go`. Each process closes the ends it does not use, so that the
+ * end of S lets M and G end too.
+ */
+struct orphan {
+    pid_t middle;
+    pid_t zombie;
+    pid_t orphan;
+    int ready[2];
+    int report[2];
+    int middle_go[2];
+    int orphan_go[2];
+};
+
+/* What G reports once its parent has ended: the parent it then has, and the
+ * processor time, in microseconds, and the most memory, in kilobytes, that
+ * getrusage(RUSAGE_SELF) gives it. */
+struct orphan_report {
+    pid_t parent;
+    long long usec;
+    long maxrss;
+};
+
+/** The user and system time of `ru` together, in microseconds. */
+static long long usec_of(const struct rusage *ru)
+{
+    return (long long)(ru->ru_utime.tv_sec + ru->ru_stime.tv_sec) * 1000000 + ru->ru_utime.tv_usec +
+           ru->ru_stime.tv_usec;
+}
+
+/**
+ * Spend a while in user mode without a system call. Returns the sum the loop
+ * computed, so that the compiler keeps the loop.
+ */
+static unsigned int spin(void)
+{
+    volatile unsigned int x = 0;
+    unsigned int i;
+
+    for (i = 0; i < 200000u; i++) {
+        x += i;
+    }
+    return x;
+}
+
+/** Run in a child of S: 0 when the child subreaper mark reads 0, and 1
+ * otherwise. */
+static int no_subreaper_mark(void)
+{
+    int mark = -1;
+
+    return prctl(PR_GET_CHILD_SUBREAPER, &mark, 0, 0, 0) == 0 && mark == 0 ? 0 : 1;
+}
+
+/** The image `exec_subreaper` runs: 0 when the mark set before the exec
+ * reads 1, and 1 otherwise. */
+static int subreaper_kept(void)
+{
+    int mark = -1;
+
+    return prctl(PR_GET_CHILD_SUBREAPER, &mark, 0, 0, 0) == 0 && mark == 1 ? 0 : 1;
+}
+
+/** Run in a child of S: set the mark and exec the probe in the
+ * `subreaper-kept` mode. Returns 2 when the exec fails. */
+static int exec_subreaper(void)
+{
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
+        return 1;
+    }
+    execl("/proc/self/exe", "prctlmusl", "subreaper-kept", (char *)0);
+    return 2;
+}
+
+/** Whether the text of /proc/self/task/`tid`/children is `want`. */
+static int children_are(pid_t tid, const char *want)
+{
+    char path[64];
+    char buf[64];
+    ssize_t n;
+    int fd;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/children", (int)tid);
+    fd = open(path, O_RDONLY);
+    n = fd >= 0 ? read(fd, buf, sizeof(buf) - 1) : -1;
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n < 0) {
+        return 0;
+    }
+    buf[n] = '\0';
+    return strcmp(buf, want) == 0;
+}
+
+/** Run as a second thread of S: whether its own children file is empty
+ * while S has a child. */
+static void *thread_children(void *arg)
+{
+    (void)arg;
+    return (void *)(long)children_are((pid_t)syscall(SYS_gettid), "");
+}
+
+/**
+ * Run as G: spend ORPHAN_USEC of processor time and touch ORPHAN_HEAP bytes,
+ * set SIGUSR1 as the parent-death signal, say so, and wait for the signal;
+ * then report the parent it has and its usage, and end when S says so or
+ * ends.
+ */
+static void orphan_main(struct orphan *o)
+{
+    struct orphan_report r;
+    struct rusage ru;
+    struct tms tms;
+    sigset_t usr1;
+    clock_t start = times(&tms);
+    pid_t self = getpid();
+    char *heap = malloc(ORPHAN_HEAP);
+    char c;
+    int sig;
+
+    sigemptyset(&usr1);
+    sigaddset(&usr1, SIGUSR1);
+    sigprocmask(SIG_BLOCK, &usr1, NULL);
+    if (!heap || prctl(PR_SET_PDEATHSIG, SIGUSR1, 0, 0, 0) != 0) {
+        _exit(1);
+    }
+    memset(heap, 1, ORPHAN_HEAP);
+    do {
+        spin();
+        getrusage(RUSAGE_SELF, &ru);
+    } while (usec_of(&ru) < ORPHAN_USEC && times(&tms) - start < ORPHAN_TICKS);
+    if (write(o->ready[1], &self, sizeof(self)) != (ssize_t)sizeof(self) ||
+        sigwait(&usr1, &sig) != 0) {
+        _exit(1);
+    }
+    memset(&r, 0, sizeof(r));
+    r.parent = getppid();
+    getrusage(RUSAGE_SELF, &ru);
+    r.usec = usec_of(&ru);
+    r.maxrss = ru.ru_maxrss;
+    write(o->report[1], &r, sizeof(r));
+    read(o->orphan_go[0], &c, 1);
+    _exit(0);
+}
+
+/**
+ * Run as M: fork Z, which ends at once, and leave it unreaped; fork G
+ * (`orphan_main`); and end when S writes on `middle_go` or ends.
+ */
+static void middle_main(struct orphan *o)
+{
+    siginfo_t si;
+    char c;
+
+    close(o->ready[0]);
+    close(o->report[0]);
+    close(o->middle_go[1]);
+    close(o->orphan_go[1]);
+    o->zombie = fork();
+    if (o->zombie == 0) {
+        _exit(0);
+    }
+    if (o->zombie < 0 || waitid(P_PID, (id_t)o->zombie, &si, WEXITED | WNOWAIT) != 0 ||
+        write(o->ready[1], &o->zombie, sizeof(o->zombie)) != (ssize_t)sizeof(o->zombie)) {
+        _exit(1);
+    }
+    if (fork() == 0) {
+        close(o->middle_go[0]);
+        orphan_main(o);
+    }
+    read(o->middle_go[0], &c, 1);
+    _exit(0);
+}
+
+/**
+ * Start an orphan row from S: fork M, which forks Z and G, and read the pids
+ * of Z and G, the second once G is ready. Returns 0, or -1.
+ */
+static int orphan_start(struct orphan *o)
+{
+    memset(o, 0, sizeof(*o));
+    if (pipe(o->ready) != 0 || pipe(o->report) != 0 || pipe(o->middle_go) != 0 ||
+        pipe(o->orphan_go) != 0) {
+        return -1;
+    }
+    o->middle = fork();
+    if (o->middle == 0) {
+        middle_main(o);
+    }
+    close(o->ready[1]);
+    close(o->report[1]);
+    close(o->middle_go[0]);
+    close(o->orphan_go[0]);
+    if (o->middle < 0 ||
+        read(o->ready[0], &o->zombie, sizeof(o->zombie)) != (ssize_t)sizeof(o->zombie) ||
+        read(o->ready[0], &o->orphan, sizeof(o->orphan)) != (ssize_t)sizeof(o->orphan)) {
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * End M, reap it, and read G's report into `r`, which G writes once M has
+ * ended; the wait is bounded by poll's ten seconds. Returns 0, or -1.
+ */
+static int orphan_end_middle(struct orphan *o, struct orphan_report *r)
+{
+    struct pollfd pfd;
+    int status;
+
+    if (write(o->middle_go[1], "x", 1) != 1 || waitpid(o->middle, &status, 0) != o->middle) {
+        return -1;
+    }
+    pfd.fd = o->report[0];
+    pfd.events = POLLIN;
+    if (poll(&pfd, 1, 10000) != 1 || read(o->report[0], r, sizeof(*r)) != (ssize_t)sizeof(*r)) {
+        return -1;
+    }
+    return 0;
+}
+
+/** Let G end, and close S's ends of the row's pipes. */
+static void orphan_close(struct orphan *o)
+{
+    write(o->orphan_go[1], "x", 1);
+    close(o->ready[0]);
+    close(o->report[0]);
+    close(o->middle_go[1]);
+    close(o->orphan_go[1]);
+}
+
+/**
+ * Run as S: set the child subreaper mark and check how it reads, that a
+ * fork does not pass it on and an exec keeps it, and that the process has no
+ * children file of its own. Returns 0, or the step that failed, 1 to 6.
+ */
+static int mark_rows(void)
+{
+    int mark = -1;
+
+    if (prctl(PR_GET_CHILD_SUBREAPER, &mark, 0, 0, 0) != 0 || mark != 0) {
+        return 1;
+    }
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0 ||
+        prctl(PR_GET_CHILD_SUBREAPER, &mark, 0, 0, 0) != 0 || mark != 1) {
+        return 2;
+    }
+    if (prctl(PR_GET_CHILD_SUBREAPER, (int *)0, 0, 0, 0) != -1 || errno != EFAULT) {
+        return 3;
+    }
+    if (in_child(no_subreaper_mark) != 0) {
+        return 4;
+    }
+    if (in_child(exec_subreaper) != 0) {
+        return 5;
+    }
+    if (open("/proc/self/children", O_RDONLY) != -1 || errno != ENOENT) {
+        return 6;
+    }
+    return 0;
+}
+
+/**
+ * Run as S, marked: check that the orphans of M come to S, the zombie Z and
+ * the living G, that S reaps both and counts G's usage, and what the
+ * children file lists meanwhile. Returns 0, or the step that failed, 7 to
+ * 16.
+ */
+static int adoption_rows(void)
+{
+    struct orphan_report r;
+    struct orphan o;
+    struct rusage before, after;
+    pthread_t t;
+    void *empty;
+    char want[32];
+    pid_t self = getpid();
+    int status;
+
+    if (orphan_start(&o) != 0) {
+        return 7;
+    }
+    snprintf(want, sizeof(want), "%d ", (int)o.middle);
+    if (!children_are(self, want)) {
+        return 8;
+    }
+    if (pthread_create(&t, NULL, thread_children, NULL) != 0 || pthread_join(t, &empty) != 0 ||
+        empty == NULL) {
+        return 9;
+    }
+    if (orphan_end_middle(&o, &r) != 0) {
+        return 10;
+    }
+    if (r.parent != self) {
+        return 11;
+    }
+    if (waitpid(-1, &status, WNOHANG) != o.zombie) {
+        return 12;
+    }
+    snprintf(want, sizeof(want), "%d ", (int)o.orphan);
+    if (!children_are(self, want)) {
+        return 13;
+    }
+    getrusage(RUSAGE_CHILDREN, &before);
+    orphan_close(&o);
+    if (waitpid(-1, &status, 0) != o.orphan || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return 14;
+    }
+    getrusage(RUSAGE_CHILDREN, &after);
+    if (r.usec < ORPHAN_USEC || usec_of(&after) - usec_of(&before) < r.usec ||
+        after.ru_maxrss < r.maxrss) {
+        return 15;
+    }
+    return children_are(self, "") ? 0 : 16;
+}
+
+/**
+ * Run as S, once every child is reaped: clear the mark, and check that the
+ * orphans of a second M do not come to S. Returns 0, or the step that
+ * failed, 7, 17 or 18.
+ */
+static int cleared_rows(void)
+{
+    struct orphan_report r;
+    struct orphan o;
+    int mark = -1;
+    int status;
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 0, 0, 0, 0) != 0 ||
+        prctl(PR_GET_CHILD_SUBREAPER, &mark, 0, 0, 0) != 0 || mark != 0) {
+        return 17;
+    }
+    if (orphan_start(&o) != 0 || orphan_end_middle(&o, &r) != 0) {
+        return 7;
+    }
+    orphan_close(&o);
+    if (r.parent == getpid() || waitpid(-1, &status, WNOHANG) != -1 || errno != ECHILD) {
+        return 18;
+    }
+    return 0;
+}
+
+/**
+ * Run as S: the child subreaper rows the header describes. Returns 0, or the
+ * number of the step that failed, which `subreaper` gives in words. On a
+ * failure S returns at once, and its end lets the row's processes end.
+ */
+static int subreaper_rows(void)
+{
+    int step = mark_rows();
+
+    if (step == 0) {
+        step = adoption_rows();
+    }
+    return step != 0 ? step : cleared_rows();
+}
+
+/**
+ * Check the child subreaper mark and the children file in a child S
+ * (`subreaper_rows`). Returns 0, or 1 after the failure is printed.
+ */
+static int subreaper(void)
+{
+    static const char *const steps[] = {
+        NULL,
+        "a process starts as a child subreaper",
+        "PR_SET_CHILD_SUBREAPER did not set the mark PR_GET_CHILD_SUBREAPER reads",
+        "PR_GET_CHILD_SUBREAPER with a pointer of 0 was not refused with EFAULT",
+        "a child inherited the child subreaper mark",
+        "an exec did not keep the child subreaper mark",
+        "/proc/self/children exists outside a thread's directory",
+        "the processes of an orphan row did not start or report",
+        "the children file did not list the one child",
+        "another thread's children file was not empty",
+        "the orphan did not report after its parent ended",
+        "an orphan did not come to the child subreaper",
+        "an orphan that had ended did not come to the child subreaper",
+        "the children file did not list the adopted orphan",
+        "the child subreaper's waitpid(-1) did not reap the adopted orphan",
+        "an adopted orphan's usage did not show in RUSAGE_CHILDREN",
+        "the children file was not empty once every child was reaped",
+        "PR_SET_CHILD_SUBREAPER of 0 did not clear the mark",
+        "an orphan came to a process whose mark was cleared",
+        "the child subreaper ended another way",
+    };
+    int status = in_child(subreaper_rows);
+
+    if (status < 0 || status > 19) {
+        status = 19;
+    }
+    return status != 0 ? fail(steps[status]) : 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc > 1 && strcmp(argv[1], "name") == 0) {
@@ -619,8 +1041,11 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "exit-now") == 0) {
         return 0;
     }
+    if (argc > 1 && strcmp(argv[1], "subreaper-kept") == 0) {
+        return subreaper_kept();
+    }
     if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0 ||
-        exe_follows() != 0 || exit_lets_go() != 0) {
+        exe_follows() != 0 || exit_lets_go() != 0 || subreaper() != 0) {
         return 1;
     }
     printf("PRCTLMUSL OK\n");

@@ -6755,3 +6755,31 @@ old
 new
         oldmask = current_proc->sig_blocked;
 end
+
+# Child subreapers, and the children file of a thread's directory.
+
+fault subreaper-ignored
+probe prctlmusl
+file rach2/sys/proc/process.c
+expect PRCTLMUSL FAIL (an orphan did not come to the child subreaper)
+old
+        if (subreaper != NULL) {
+            init = subreaper;
+new
+        if (subreaper != NULL && dead_pid == 0) {
+            init = subreaper;
+end
+
+fault children-file-empty
+probe prctlmusl
+file rach2/sys/fs/procfs.c
+expect PRCTLMUSL FAIL (the children file did not list the one child)
+old
+    if (self->pid != self->tgid) {
+        return t->len;
+    }
+new
+    if (self->pid != 0) {
+        return t->len;
+    }
+end
