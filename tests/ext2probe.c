@@ -21,11 +21,18 @@
  * `ext2probe cost-append` judges the appends alone, for
  * tests/system/ext2_batch_mutate.sh.
  *
+ * A native run gives the fixture as a loop device (probe_args.h): the first
+ * device that `loops=DEVICE,...` names is mounted in place of /dev/disk0p1,
+ * and `cost` counts that device's own writes and syncs, from /proc/loop, in
+ * place of the commands and flushes of every disk, from /proc/disk, which
+ * the other processes of a running machine move.
+ *
  * Prints "EXT2PROBE OK (mode)" or "EXT2PROBE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define AT_FDCWD            (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100
@@ -335,11 +342,17 @@ static void links_rows(void)
                 "/proc/self/fd/1 under O_CREAT|O_EXCL answers EEXIST");
 }
 
-/* The disk's counts of commands and cache flushes, from /proc/disk. */
+/* The disk's counts of commands and cache flushes, from /proc/disk, or the
+ * loop device's writes and syncs, from /proc/loop. */
 struct disk_counts {
     unsigned commands;
     unsigned flushes;
 };
+
+/* The fixture's node, and the name of its loop device, such as "loop2", or
+ * "" when it is not on one. */
+static char node[64] = "/dev/disk0p1";
+static char loop_name[16];
 
 static unsigned char cost_block[4096];
 
@@ -387,14 +400,73 @@ static unsigned disk_counter(const char *text, const char *key)
     fail("a disk counter is absent");
 }
 
-/** The disk's counts now. Reading `/proc/disk` takes a snapshot without
- * issuing a disk command. */
+/** The unsigned number after the word `key` and a space on the line that
+ * begins at `line`, past its first byte; an absent or empty number fails the
+ * probe. */
+static unsigned loop_counter(const char *line, const char *key)
+{
+    size_t len = strlen(key);
+
+    for (line++; *line && *line != '\n'; line++) {
+        size_t i = 0;
+
+        while (i < len && line[i] == key[i]) {
+            i++;
+        }
+        if (i == len && line[-1] == ' ' && line[i] == ' ' && line[i + 1] >= '0' &&
+            line[i + 1] <= '9') {
+            unsigned value = 0;
+
+            for (line += i + 1; *line >= '0' && *line <= '9'; line++) {
+                value = value * 10 + (unsigned)(*line - '0');
+            }
+            return value;
+        }
+    }
+    fail("a loop counter is absent");
+}
+
+/** The loop device's writes and syncs now, from its line of /proc/loop,
+ * "loopN BYTES rw writes W syncs S PATH". */
+static struct disk_counts loop_counts(void)
+{
+    static char text[1024];
+    struct disk_counts counts;
+    size_t len = strlen(loop_name);
+    int n = read_all("/proc/loop", text, sizeof(text) - 1);
+    int i;
+
+    if (n <= 0 || n == (int)sizeof(text) - 1) {
+        fail("reading the loop counters");
+    }
+    text[n] = '\0';
+    for (i = 0; i < n; i++) {
+        size_t k = 0;
+
+        while (k < len && text[i + k] == loop_name[k]) {
+            k++;
+        }
+        if ((i == 0 || text[i - 1] == '\n') && k == len && text[i + len] == ' ') {
+            counts.commands = loop_counter(text + i, "writes");
+            counts.flushes = loop_counter(text + i, "syncs");
+            return counts;
+        }
+    }
+    fail("the loop device has no line in /proc/loop");
+}
+
+/** The disk's counts now, or the loop device's. Reading `/proc/disk` takes
+ * a snapshot without issuing a disk command. */
 static struct disk_counts disk_counts(void)
 {
     static char text[8192];
     struct disk_counts counts;
-    int n = read_all("/proc/disk", text, sizeof(text) - 1);
+    int n;
 
+    if (loop_name[0]) {
+        return loop_counts();
+    }
+    n = read_all("/proc/disk", text, sizeof(text) - 1);
     if (n <= 0 || n == (int)sizeof(text) - 1) {
         fail("reading the disk counters");
     }
@@ -556,19 +628,49 @@ static void cost_rows(int append_only)
     cost_verify("/e2/cost-append", 64, 3);
 }
 
+/** Take the fixture's node from the first device of `loops=`, when it is
+ * given, and its last component as `loop_name`. */
+static void take_loop(void)
+{
+    const char *loops = probe_arg("loops", 0);
+    const char *last;
+    int n = 0;
+
+    if (loops == 0 || loops[0] == '\0') {
+        return;
+    }
+    while (n < (int)sizeof(node) - 1 && loops[n] && loops[n] != ',') {
+        node[n] = loops[n];
+        n++;
+    }
+    node[n] = '\0';
+    for (last = node, n = 0; node[n]; n++) {
+        if (node[n] == '/') {
+            last = node + n + 1;
+        }
+    }
+    for (n = 0; n < (int)sizeof(loop_name) - 1 && last[n]; n++) {
+        loop_name[n] = last[n];
+    }
+    loop_name[n] = '\0';
+}
+
 PROBE_SP_ENTRY;
 
 /** The probe's entry, given the initial stack `sp`: the mode from the first
- * argument, `links` by default, run on the fixture mounted on /e2. */
+ * positional argument, `links` by default, run on the fixture mounted on
+ * /e2. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
-    const char *mode = argc > 1 ? argv[1] : "links";
-    int writable = streq(mode, "cost") || streq(mode, "cost-append");
+    const char *mode;
+    int writable;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1) != 0 ? probe_word(1) : "links";
+    writable = streq(mode, "cost") || streq(mode, "cost-append");
+    take_loop();
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
-    if (syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/e2", (long)"ext2",
+    if (syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2",
                  writable ? MS_SYNCHRONOUS : MS_RDONLY, 0) != 0) {
         fail("mounting the fixture");
     }

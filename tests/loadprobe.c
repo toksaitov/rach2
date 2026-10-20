@@ -18,12 +18,21 @@
  * quarantined by its deadline, which /proc/disk counts. The suite's wait
  * for the probe's token ends a run whose reader never gets its lines.
  *
+ * The volume is /dev/disk0p1, mounted on /lo, and the pinger pings QEMU's
+ * gateway, 10.0.2.2. A native run gives its own as arguments
+ * (probe_args.h): the first device of `loops=DEVICE,...` is the volume,
+ * `dir=PATH` its mount point, and `gateway=ADDRESS` the machine's gateway,
+ * which the pinger pings. With `machine=native` the probe leaves out the
+ * check of /proc/disk's quarantines, which counts the requests of every
+ * disk of a running machine.
+ *
  * Prints "LOADPROBE timer N disk N diskwait N console N lines N" and then
  * "LOADPROBE OK" and exits 0, or "LOADPROBE FAIL: " and the reason and
  * exits 1.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define GATEWAY_IP 0x0A000202u
 
@@ -89,11 +98,78 @@ static void fail(const char *why)
     sys_exit(1);
 }
 
+/* The volume's node and mount point, the two writers' files on it, and the
+ * address the pinger pings, in host order. */
+static const char *node, *mount_dir;
+static char load_path[2][128];
+static unsigned ping_ip = GATEWAY_IP;
+
+/** Copy `dir` and `name` into `out`, of 128 bytes, as one string, cut short
+ * where `out` is full. */
+static void join(char *out, const char *dir, const char *name)
+{
+    int n = 0;
+
+    while (*dir && n < 127) {
+        out[n++] = *dir++;
+    }
+    while (*name && n < 127) {
+        out[n++] = *name++;
+    }
+    out[n] = '\0';
+}
+
+/** The IPv4 address at the start of `s`, A.B.C.D, in host order, or
+ * `fallback` when `s` is NULL or does not begin with one. */
+static unsigned parse_ip(const char *s, unsigned fallback)
+{
+    unsigned ip = 0;
+    int part;
+
+    if (s == 0) {
+        return fallback;
+    }
+    for (part = 0; part < 4; part++) {
+        unsigned v = 0;
+        int digits = 0;
+
+        while (*s >= '0' && *s <= '9' && digits < 3) {
+            v = v * 10 + (unsigned)(*s++ - '0');
+            digits++;
+        }
+        if (digits == 0 || v > 255 || (part < 3 && *s++ != '.')) {
+            return fallback;
+        }
+        ip = (ip << 8) | v;
+    }
+    return ip;
+}
+
+/** Take the volume's node, its mount point and the pinger's address from
+ * the arguments, with QEMU's as the defaults. */
+static void take_arguments(void)
+{
+    static char first[64];
+    const char *loops = probe_arg("loops", "");
+    int n;
+
+    for (n = 0; n < (int)sizeof(first) - 1 && loops[n] != '\0' && loops[n] != ','; n++) {
+        first[n] = loops[n];
+    }
+    first[n] = '\0';
+    node = n > 0 ? first : "/dev/disk0p1";
+    mount_dir = probe_arg("dir", "/lo");
+    join(load_path[0], mount_dir, "/load1.bin");
+    join(load_path[1], mount_dir, "/load2.bin");
+    ping_ip = parse_ip(probe_arg("gateway", 0), GATEWAY_IP);
+}
+
 /** Close the report reader and remove the mount after the loads end. */
 static void cleanup_mount(int report)
 {
     syscall1(SYS_CLOSE, report);
-    if (syscall2(SYS_UMOUNT2, (long)"/lo", 0) != 0 || syscall1(SYS_RMDIR, (long)"/lo") != 0) {
+    if (syscall2(SYS_UMOUNT2, (long)mount_dir, 0) != 0 ||
+        syscall1(SYS_RMDIR, (long)mount_dir) != 0) {
         fail("unmount and remove /lo");
     }
 }
@@ -147,7 +223,7 @@ static void pinger(void)
     unsigned long args[3];
 
     for (;;) {
-        args[0] = GATEWAY_IP;
+        args[0] = ping_ip;
         sock_call(SC_PING, args);
         sleep_ms(50);
     }
@@ -256,7 +332,7 @@ static void load_child(int i, const char *arg, const int report[2])
     } else if (i < 8) {
         writer_syncs = !(arg && wanted(arg, 'n'));
         if (wanted(arg, 'w') || (i == 6 && wanted(arg, 'W'))) {
-            writer(i == 6 ? "/lo/load1.bin" : "/lo/load2.bin");
+            writer(i == 6 ? load_path[0] : load_path[1]);
         }
     } else if (i == 8) {
         if (wanted(arg, 'p')) {
@@ -272,26 +348,28 @@ static void load_child(int i, const char *arg, const int report[2])
 
 /**
  * The probe, entered with `sp` at argc. Every load runs unless the first
- * argument names some by their first letters: `s`pinners, `w`riters, `W` for
- * the first writer alone, `p`inger, `r`eader. With an argument, `n` makes
- * the writers skip the sync and `k` mounts the volume as KRFFS in place of
- * FAT32. A child whose load is not wanted waits in pause until it is
- * killed. Without the reader nothing reports lines, and the load is killed
- * as soon as every child has closed its end of the report pipe.
+ * argument without `=` names some by their first letters: `s`pinners,
+ * `w`riters, `W` for the first writer alone, `p`inger, `r`eader. With such
+ * an argument, `n` makes the writers skip the sync and `k` mounts the volume
+ * as KRFFS in place of FAT32. A child whose load is not wanted waits in
+ * pause until it is killed. Without the reader nothing reports lines, and
+ * the load is killed as soon as every child has closed its end of the report
+ * pipe.
  */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
-    const char *arg = argc >= 2 ? argv[1] : 0;
+    const char *arg;
     int pids[10];
     int report[2];
     int i, lines = 0;
     unsigned timer, disk, diskwait, console, quarantines;
     char byte;
 
-    if (syscall2(SYS_MKDIR, (long)"/lo", 0755) != 0 ||
-        syscall5(SYS_MOUNT, (long)"/dev/disk0p1", (long)"/lo",
+    probe_args((int)sp[0], (char **)(sp + 1));
+    arg = probe_word(1);
+    take_arguments();
+    if (syscall2(SYS_MKDIR, (long)mount_dir, 0755) != 0 ||
+        syscall5(SYS_MOUNT, (long)node, (long)mount_dir,
                  (long)(wanted(arg, 'k') && arg ? "krffs" : "vfat"), 0, 0) != 0) {
         fail("the mount of the volume");
     }
@@ -345,8 +423,8 @@ void probe_main(unsigned long *sp)
     if (lines < LOAD_LINES && wanted(arg, 'r')) {
         fail("the console reader ended before it read every line");
     }
-    if (quarantines == 0xFFFFFFFFu ||
-        file_field("/proc/disk", "disk-quarantines ") != quarantines) {
+    if (!probe_native() && (quarantines == 0xFFFFFFFFu ||
+                            file_field("/proc/disk", "disk-quarantines ") != quarantines)) {
         fail("a request was quarantined by its deadline under the load");
     }
     cleanup_mount(report[0]);

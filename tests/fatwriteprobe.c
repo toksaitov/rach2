@@ -11,13 +11,22 @@
  * starts, which is where the suite kills it; `fatwriteprobe repair` mounts
  * what that left, which runs the check, and counts what survived. A second
  * argument names the type to mount in place of `vfat`, as the exfat suite
- * runs the same modes with `exfat`.
+ * runs the same modes with `exfat`. `fatwriteprobe write-readback` is `write`
+ * and then `readback`, with an unmount and a new mount in place of the
+ * reboot, for a run that cannot boot again.
+ *
+ * The mount directory is fw in the working directory, which is `/` on the
+ * test image. A native run gives the volume as a loop device
+ * (probe_args.h): the first device that `loops=DEVICE,...` names takes the
+ * place of /dev/disk0p2. The mode and the type are the first two arguments
+ * without `=`.
  *
  * Prints "FATWRITE OK (mode)" or "FATWRITE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define O_CREAT   0100
 #define O_RDONLY  0
@@ -117,9 +126,11 @@ static int do_mount(const char *src, const char *target, unsigned flags, const c
     return syscall5(SYS_MOUNT, (long)src, (long)target, (long)fs_type, (int)flags, (long)data);
 }
 
-#define FW      "/fw"
-#define SRC     "/dev/disk0p2"
+#define FW      "fw"
 #define O_TRUNC 01000
+
+/* The volume's node: /dev/disk0p2, or the first device of `loops=`. */
+static const char *volume = "/dev/disk0p2";
 
 static unsigned char pattern[65536];
 static unsigned char back[65536];
@@ -174,7 +185,7 @@ static void mode_write(void)
 
     fill_pattern();
     syscall2(SYS_MKDIR, (long)FW, 0755);
-    if (do_mount(SRC, FW, 0, 0) != 0) {
+    if (do_mount(volume, FW, 0, 0) != 0) {
         fail("the writable mount");
     }
     if (write_file(FW "/pattern.bin", pattern, sizeof(pattern)) != 0) {
@@ -215,7 +226,7 @@ static void mode_readback(void)
 
     fill_pattern();
     syscall2(SYS_MKDIR, (long)FW, 0755);
-    if (do_mount(SRC, FW, MS_RDONLY, 0) != 0) {
+    if (do_mount(volume, FW, MS_RDONLY, 0) != 0) {
         fail("the read-only mount for the read back");
     }
     n = read_file(FW "/pattern.bin", back, sizeof(back));
@@ -268,20 +279,19 @@ static void mode_crash(void)
 
     fill_pattern();
     syscall2(SYS_MKDIR, (long)FW, 0755);
-    if (do_mount(SRC, FW, 0, 0) != 0) {
+    if (do_mount(volume, FW, 0, 0) != 0) {
         fail("the writable mount for the crash");
     }
     puts("FATWRITE WRITING");
     for (i = 0;; i = (i + 1) % 200) {
-        name[0] = '/';
-        name[1] = 'f';
-        name[2] = 'w';
-        name[3] = '/';
-        name[4] = 'f';
-        name[5] = (char)('0' + i / 100);
-        name[6] = (char)('0' + (i / 10) % 10);
-        name[7] = (char)('0' + i % 10);
-        name[8] = 0;
+        name[0] = 'f';
+        name[1] = 'w';
+        name[2] = '/';
+        name[3] = 'f';
+        name[4] = (char)('0' + i / 100);
+        name[5] = (char)('0' + (i / 10) % 10);
+        name[6] = (char)('0' + i % 10);
+        name[7] = 0;
         {
             int rc = write_file(name, pattern, 1024);
 
@@ -300,7 +310,7 @@ static void mode_repair(void)
     static unsigned char dents[4096];
 
     syscall2(SYS_MKDIR, (long)FW, 0755);
-    if (do_mount(SRC, FW, 0, 0) != 0) {
+    if (do_mount(volume, FW, 0, 0) != 0) {
         fail("the mount after the crash");
     }
     fd = syscall3(SYS_OPEN, (long)FW, O_RDONLY, 0);
@@ -338,18 +348,45 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** Run the mode argv[1] names, `write` when none, on the type argv[2] names,
- * `vfat` when none, and exit 0. */
+/** Take the volume's node from the first device of `loops=`, when it is
+ * given. */
+static void take_volume(void)
+{
+    static char first[64];
+    const char *loops = probe_arg("loops", "");
+    int n;
+
+    for (n = 0; n < (int)sizeof(first) - 1 && loops[n] != '\0' && loops[n] != ','; n++) {
+        first[n] = loops[n];
+    }
+    first[n] = '\0';
+    if (n > 0) {
+        volume = first;
+    }
+}
+
+/** Run the mode the first positional argument names, `write` when none, on
+ * the type the second names, `vfat` when none, and exit 0. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
-    char mode = argc >= 2 ? argv[1][0] : 'w';
+    const char *word;
+    char mode;
+    static const char both[] = "write-readback";
+    int k;
 
-    if (argc >= 3) {
-        fs_type = argv[2];
+    probe_args((int)sp[0], (char **)(sp + 1));
+    take_volume();
+    word = probe_word(1);
+    mode = word != 0 ? word[0] : 'w';
+    if (probe_word(2) != 0) {
+        fs_type = probe_word(2);
     }
-    if (mode == 'r' && argv[1][1] == 'e' && argv[1][2] == 'p') {
+    for (k = 0; word != 0 && both[k] != '\0' && word[k] == both[k]; k++) {
+    }
+    if (word != 0 && both[k] == '\0' && word[k] == '\0') {
+        mode_write();
+        mode_readback();
+    } else if (mode == 'r' && word[1] == 'e' && word[2] == 'p') {
         mode_repair();
     } else if (mode == 'r') {
         mode_readback();

@@ -24,11 +24,22 @@
  * and requires the one-byte write there to be refused with `EFBIG`; the
  * kernel log has the refusal by name.
  *
+ * `write-verify MIB`: `write`, an unmount and a new mount, and `verify`, for
+ * a run that cannot boot again between the two.
+ *
+ * A native run gives the volume as a loop device (probe_args.h): NODE `-` is
+ * the first device that `loops=DEVICE,...` names, and `dir=PATH` is the
+ * mount point in place of `/big`. On a loop device the truncate's bound
+ * counts the device's own writes, from /proc/loop, in place of the commands
+ * of every disk, from /proc/disk, which the other processes of a running
+ * machine move.
+ *
  * Prints "BIGFILE OK (mode)" or "BIGFILE FAIL: reason". Freestanding;
  * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned long long u64;
 
@@ -111,6 +122,13 @@ static unsigned now(void)
 {
     return (unsigned)syscall1(SYS_TIMES, 0) / 100u;
 }
+
+/* The mount point, the paths of the three files on it, and the name of the
+ * volume's loop device, such as "loop2", or "" when the volume is not on
+ * one. */
+static const char *mount_dir;
+static char big_path[128], sparse_path[128], limit_path[128];
+static char loop_name[16];
 
 /** Print "BIGFILE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why) __attribute__((noreturn));
@@ -267,6 +285,68 @@ static void check_block(int fd, u64 at, const char *what)
     }
 }
 
+/** Copy `dir` and `name` into `out`, of 128 bytes, as one string, cut short
+ * where `out` is full. */
+static void join(char *out, const char *dir, const char *name)
+{
+    int n = 0;
+
+    while (*dir && n < 127) {
+        out[n++] = *dir++;
+    }
+    while (*name && n < 127) {
+        out[n++] = *name++;
+    }
+    out[n] = '\0';
+}
+
+/** The writes of the loop device `loop_name` from /proc/loop into `out`: 0,
+ * or -1 when the file cannot be read or has no line for the device. */
+static int loop_writes(u64 *out)
+{
+    static char text[1024];
+    const char *label = "writes ";
+    int fd = syscall3(SYS_OPEN, (long)"/proc/loop", O_RDONLY, 0);
+    int n, i, j, k;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = syscall3(SYS_READ, fd, (long)text, sizeof(text) - 1);
+    syscall1(SYS_CLOSE, fd);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = 0;
+    for (i = 0; text[i]; i++) {
+        if (i > 0 && text[i - 1] != '\n') {
+            continue;
+        }
+        for (k = 0; loop_name[k] && text[i + k] == loop_name[k]; k++) {
+        }
+        if (loop_name[k] || text[i + k] != ' ') {
+            continue;
+        }
+        for (i += k; text[i] && text[i] != '\n'; i++) {
+            for (j = 0; label[j] && text[i + j] == label[j]; j++) {
+            }
+            if (!label[j]) {
+                u64 v = 0;
+
+                i += j;
+                while (text[i] >= '0' && text[i] <= '9') {
+                    v = v * 10 + (u64)(text[i] - '0');
+                    i++;
+                }
+                *out = v;
+                return 0;
+            }
+        }
+        return -1;
+    }
+    return -1;
+}
+
 /** The disk layer's command count from /proc/disk into `out`, a total since
  * the boot that outgrows an int on a long run: 0, or -1 when the file cannot
  * be read or has no such line. */
@@ -304,6 +384,19 @@ static int disk_commands(u64 *out)
     return -1;
 }
 
+/** The count the truncate's bound judges: the writes of the loop device
+ * `loop_name` names, or the disk's commands when it names none. Fails with
+ * `loop_why` or `disk_why` when the count cannot be read. */
+static u64 device_count(const char *loop_why, const char *disk_why)
+{
+    u64 n;
+
+    if (loop_name[0] ? loop_writes(&n) != 0 : disk_commands(&n) != 0) {
+        fail(loop_name[0] ? loop_why : disk_why);
+    }
+    return n;
+}
+
 /**
  * The write mode: the file is written whole, read back, shrunk to three
  * quarters and grown by a mebibyte. The shrink frees a quarter of the file,
@@ -325,7 +418,7 @@ static void write_mode(u64 mib)
     unsigned t0, t1;
     long long got;
 
-    fd = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    fd = syscall3(SYS_OPEN, (long)big_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating big.bin", fd);
     }
@@ -368,7 +461,7 @@ static void write_mode(u64 mib)
     check_block(fd, line, "the block at the 4 GiB line");
     check_block(fd, line - BLOCK, "the block before the 4 GiB line");
     check_block(fd, total - 3 * CHUNK + BLOCK, "a block near the end");
-    fd2 = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDONLY, 0);
+    fd2 = syscall3(SYS_OPEN, (long)big_path, O_RDONLY, 0);
     if (fd2 < 0) {
         fail_with("a second open", fd2);
     }
@@ -398,18 +491,16 @@ static void write_mode(u64 mib)
     syscall1(SYS_CLOSE, fd3);
     syscall1(SYS_CLOSE, fd2);
     put("bigfile: read back\n");
-    if (disk_commands(&before) != 0) {
-        fail("reading /proc/disk before the truncate");
-    }
+    before = device_count("reading /proc/loop before the truncate",
+                          "reading /proc/disk before the truncate");
     if (ftruncate64(fd, three_quarters) != 0) {
         fail("the truncate to three quarters");
     }
-    if (disk_commands(&after) != 0) {
-        fail("reading /proc/disk after the truncate");
-    }
+    after = device_count("reading /proc/loop after the truncate",
+                         "reading /proc/disk after the truncate");
     put("bigfile: truncated: ");
     put_u64(after - before);
-    put(" commands\n");
+    put(loop_name[0] ? " writes\n" : " commands\n");
     if (after - before > 8 * ((total - three_quarters) >> 22) + 64) {
         fail_with("the truncate's commands", (int)(after - before));
     }
@@ -442,7 +533,7 @@ static void write_mode(u64 mib)
 static void verify_mode(u64 mib)
 {
     u64 total = ((mib << 20) >> 2) * 3 + CHUNK, done = 0;
-    int fd = syscall3(SYS_OPEN, (long)"/big/big.bin", O_RDONLY, 0);
+    int fd = syscall3(SYS_OPEN, (long)big_path, O_RDONLY, 0);
     long long got;
 
     if (fd < 0) {
@@ -475,7 +566,7 @@ static void verify_mode(u64 mib)
 static void sparse_mode(void)
 {
     u64 line = (u64)1 << 32, at = line - CHUNK / 2;
-    int fd = syscall3(SYS_OPEN, (long)"/big/sparse.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    int fd = syscall3(SYS_OPEN, (long)sparse_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     long long got;
 
     if (fd < 0) {
@@ -515,14 +606,14 @@ static void sparse_mode(void)
         fail_with("the size after the truncate", got);
     }
     syscall1(SYS_CLOSE, fd);
-    syscall1(SYS_UNLINK, (long)"/big/sparse.bin");
+    syscall1(SYS_UNLINK, (long)sparse_path);
 }
 
 /** The limit mode: a one-byte write at `offset` of a new file must fail with
  * -EFBIG and leave the file empty. */
 static void limit_mode(u64 offset)
 {
-    int fd = syscall3(SYS_OPEN, (long)"/big/limit.bin", O_RDWR | O_CREAT | O_TRUNC, 0644);
+    int fd = syscall3(SYS_OPEN, (long)limit_path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     long long got;
     int rc;
 
@@ -542,46 +633,103 @@ static void limit_mode(u64 offset)
         fail_with("the file grew", got);
     }
     syscall1(SYS_CLOSE, fd);
-    syscall1(SYS_UNLINK, (long)"/big/limit.bin");
+    syscall1(SYS_UNLINK, (long)limit_path);
 }
 
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** Mount argv[2] at /big as the type argv[3], run the mode argv[1] names with
- * argv[4], unmount, and print "BIGFILE OK (mode)". */
+/** The node NODE names: NODE itself, or for `-` the first device of
+ * `loops=`. Sets `loop_name` to the node's last component when that begins
+ * with "loop". */
+static const char *volume_node(const char *word)
+{
+    static char first[64];
+    const char *last;
+    int n = 0;
+
+    if (streq(word, "-")) {
+        const char *loops = probe_arg("loops", "");
+
+        while (n < (int)sizeof(first) - 1 && loops[n] && loops[n] != ',') {
+            first[n] = loops[n];
+            n++;
+        }
+        first[n] = '\0';
+        word = first;
+    }
+    for (last = word, n = 0; word[n]; n++) {
+        if (word[n] == '/') {
+            last = word + n + 1;
+        }
+    }
+    if (last[0] == 'l' && last[1] == 'o' && last[2] == 'o' && last[3] == 'p') {
+        for (n = 0; n < (int)sizeof(loop_name) - 1 && last[n]; n++) {
+            loop_name[n] = last[n];
+        }
+        loop_name[n] = '\0';
+    }
+    return word;
+}
+
+/** Mount `node` at the mount point as `type`, failing with `what`. */
+static void mount_volume(const char *node, const char *type, const char *what)
+{
+    int rc = syscall5(SYS_MOUNT, (long)node, (long)mount_dir, (long)type, 0, 0);
+
+    if (rc != 0) {
+        fail_with(what, rc);
+    }
+}
+
+/** Unmount the mount point, failing with `what`. */
+static void unmount_volume(const char *what)
+{
+    int rc = syscall2(SYS_UMOUNT2, (long)mount_dir, 0);
+
+    if (rc != 0) {
+        fail_with(what, rc);
+    }
+}
+
+/** Mount NODE at the mount point as the type TYPE, run the mode MODE names
+ * with ARG, unmount, and print "BIGFILE OK (mode)". */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
-    const char *mode;
-    int rc;
+    const char *mode, *node, *type, *arg;
 
-    if (argc < 5) {
+    probe_args((int)sp[0], (char **)(sp + 1));
+    if (probe_words() < 4) {
         fail("usage: bigfileprobe MODE NODE TYPE ARG");
     }
-    mode = argv[1];
-    syscall2(SYS_MKDIR, (long)"/big", 0755);
-    rc = syscall5(SYS_MOUNT, (long)argv[2], (long)"/big", (long)argv[3], 0, 0);
-    if (rc != 0) {
-        fail_with("mounting the volume", rc);
-    }
+    mode = probe_word(1);
+    node = volume_node(probe_word(2));
+    type = probe_word(3);
+    arg = probe_word(4);
+    mount_dir = probe_arg("dir", "/big");
+    join(big_path, mount_dir, "/big.bin");
+    join(sparse_path, mount_dir, "/sparse.bin");
+    join(limit_path, mount_dir, "/limit.bin");
+    syscall2(SYS_MKDIR, (long)mount_dir, 0755);
+    mount_volume(node, type, "mounting the volume");
     if (streq(mode, "write")) {
-        write_mode(parse(argv[4]));
+        write_mode(parse(arg));
     } else if (streq(mode, "verify")) {
-        verify_mode(parse(argv[4]));
+        verify_mode(parse(arg));
+    } else if (streq(mode, "write-verify")) {
+        write_mode(parse(arg));
+        unmount_volume("the unmount after the write");
+        mount_volume(node, type, "mounting the volume again");
+        verify_mode(parse(arg));
     } else if (streq(mode, "sparse")) {
         sparse_mode();
     } else if (streq(mode, "limit")) {
-        limit_mode(parse(argv[4]));
+        limit_mode(parse(arg));
     } else {
         fail("unknown mode");
     }
-    rc = syscall2(SYS_UMOUNT2, (long)"/big", 0);
-    if (rc != 0) {
-        fail_with("unmount", rc);
-    }
+    unmount_volume("unmount");
     put("BIGFILE OK (");
     put(mode);
     put(")\n");
