@@ -5284,7 +5284,7 @@ end
 fault statx-time-signed32
 probe statmusl
 file rach2/sys/syscall_fs.c
-expect for a time past 2^31 seconds)
+expect STATMUSL FAIL (stat reports -2147483638 for 2147483658 seconds)
 old
     sx->stx_mtime.tv_sec = st->st_mtime;
 new
@@ -5294,11 +5294,34 @@ end
 fault statx-time-unsigned32
 probe statmusl
 file rach2/sys/syscall_fs.c
-expect STATMUSL FAIL (a time before 1970 was not reported as one)
+expect STATMUSL FAIL (stat reports 4263431296 for -31536000 seconds)
 old
     sx->stx_mtime.tv_sec = st->st_mtime;
 new
     sx->stx_mtime.tv_sec = (uint32_t)st->st_mtime;
+end
+
+# utimensat_time64, which musl's utimensat calls on i386 for a time past
+# 2^31 seconds, and the 64-bit seconds it reads.
+
+fault utimensat-time64-missing
+probe statmusl
+file rach2/sys/arch/i686/systab.c
+expect STATMUSL FAIL (utimensat to 2147483658 seconds failed)
+old
+    table[SYS_UTIMENSAT_TIME64] = sys_utimensat_time64;
+new
+    (void)sys_utimensat_time64;
+end
+
+fault utimensat-time64-seconds32
+probe statmusl
+file rach2/sys/syscall_fs.c
+expect STATMUSL FAIL (stat reports -2147483638 for 2147483658 seconds)
+old
+        t[1].tv_sec = v[2];
+new
+        t[1].tv_sec = (long)v[2];
 end
 
 # /dev/rtc0, which hwclock reads.

@@ -159,6 +159,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_CLONE3] = sys_clone3;
     table[SYS_GETDENTS64] = sys_getdents64;
     table[SYS_UTIMENSAT] = sys_utimensat;
+    table[SYS_UTIMENSAT_TIME64] = sys_utimensat_time64;
     table[SYS_CLOCK_GETTIME] = sys_clock_gettime;
     table[SYS_CLOCK_SETTIME] = sys_clock_settime;
     table[SYS_ADJTIMEX] = sys_adjtimex;

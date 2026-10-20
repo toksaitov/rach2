@@ -42,7 +42,7 @@ given up its capabilities with
 Linux asks for a capability in each such place, and this kernel keeps
 every capability or none.
 .Ss System call numbers
-On i686 the kernel registers the following 304 calls, the operations of
+On i686 the kernel registers the following 305 calls, the operations of
 .Xr socketcall 2
 among them.
 .Bl -column "Number" "System call" -compact
@@ -351,6 +351,7 @@ The following operation numbers select calls through system call 102,
 .It 409 Ta Xr timer_settime64 2
 .It 410 Ta Xr timerfd_gettime64 2
 .It 411 Ta Xr timerfd_settime64 2
+.It 412 Ta Xr utimensat_time64 2
 .It 418 Ta Xr mq_timedsend_time64 2
 .It 419 Ta Xr mq_timedreceive_time64 2
 .It 420 Ta Xr semtimedop_time64 2

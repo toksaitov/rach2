@@ -302,6 +302,21 @@ reads the resolution; their seconds are those of the 32-bit calls.
 musl calls system call 266 for
 .Fn clock_getres
 directly.
+.Pp
+.Fn utimensat_time64
+.Pq system call 412
+is
+.Fn utimensat
+with timespecs of 64-bit fields, so that a time past 2038 can be set.
+Of each
+.Va tv_nsec
+only the low 32 bits are read, as on Linux i386, since GNU libc leaves the
+high half as padding.
+GNU libc tries it first for every
+.Fn utimensat
+and
+.Fn futimens ;
+musl makes it only for a time whose seconds do not fit in 32 bits.
 musl implements
 .Fn gettimeofday
 through
@@ -374,6 +389,12 @@ system time, and a reaped child's time is added to the children's totals.
 .Pa tests/musl/clockidmusl.c
 reads every clock and its resolution, and a child's CPU clock through
 .Fn clock_getcpuclockid .
+.Pa tests/musl/statmusl.c
+sets a file's times before 1970 and past 2^31 and 2^32 seconds, through
+its path and through a descriptor, and reads them back with
+.Fn stat
+and
+.Fn fstat .
 .Pa tests/musl/fdcallmusl.c
 sets a file's times through a null path and through an empty one with
 .Dv AT_EMPTY_PATH ,

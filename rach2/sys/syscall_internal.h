@@ -600,6 +600,7 @@ struct kernel_timespec {
 void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 
 long sys_utimensat(isr_params_t *params);
+long sys_utimensat_time64(isr_params_t *params);
 
 long sys_getdents64(isr_params_t *params);
 

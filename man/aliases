@@ -471,6 +471,7 @@ uptime 1 busybox-procps
 users 1 busybox-coreutils
 usleep 1 busybox-coreutils
 utimensat 2 gettimeofday
+utimensat_time64 2 gettimeofday
 uudecode 1 busybox-coreutils
 uuencode 1 busybox-coreutils
 vconfig 1 busybox-networking

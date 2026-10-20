@@ -199,14 +199,15 @@
 #define SYS_SCHED_SETAFFINITY      241
 #define SYS_SCHED_GETAFFINITY      242
 
-/* The clock calls with 64-bit times, whose names are longer than the column
- * above. */
+/* The clock calls with 64-bit times, and utimensat's, whose names are longer
+ * than the column above. */
 #define SYS_CLOCK_GETTIME64     403
 #define SYS_CLOCK_SETTIME64     404
 #define SYS_CLOCK_ADJTIME64     405
 #define SYS_CLOCK_ADJTIME       343
 #define SYS_ADJTIMEX            124
 #define SYS_CLOCK_GETRES_TIME64 406
+#define SYS_UTIMENSAT_TIME64    412
 
 /* Names, limits and identities. */
 #define SYS_SETHOSTNAME   74

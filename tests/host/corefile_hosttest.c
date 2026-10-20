@@ -123,6 +123,7 @@ static long sys_renameat(isr_params_t *params);
 static long sys_renameat2(isr_params_t *params);
 static void get_current_time(int64_t *seconds, int64_t *nanoseconds);
 static long sys_utimensat(isr_params_t *params);
+static long sys_utimensat_time64(isr_params_t *params);
 static long sys_getdents64(isr_params_t *params);
 static long sys_dup3(isr_params_t *params);
 static long sys_statx(isr_params_t *params);

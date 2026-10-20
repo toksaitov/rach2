@@ -21,11 +21,11 @@
  * is the time since boot, so the computed boot time is zero, which is also
  * what a synthetic node reports then.
  *
- * Times outside 32 bits are checked too: a time before 1970, which utimensat
- * sets, and one past 2^31 seconds, early 2038, which a file is stamped with
- * while the clock is set there, since i686's utimensat takes a 32-bit time.
+ * Times outside 32 bits are checked too: a time before 1970, and times past
+ * 2^31 and 2^32 seconds, in 2038 and 2106. On i686 musl sets the later two
+ * with utimensat_time64, since utimensat's timespec has 32-bit seconds there.
  * i386's stat64 has room for only the low 32 bits of a time; statx, which
- * musl's stat makes there, reports both whole.
+ * musl's stat makes there, reports them whole.
  *
  * Prints `STATMUSL OK` and exits 0 on success, and prints
  * `STATMUSL FAIL (detail)` and exits 1 otherwise.
@@ -78,8 +78,10 @@ struct old_stat {
 /* A time before 1970: 1 January 1969, a negative count of seconds. */
 #define BEFORE_1970 (-31536000L)
 
-/* The real time the file past 32 bits is stamped at: ten seconds past 2^31. */
+/* Times past the signed and the unsigned 32-bit seconds: ten seconds past
+ * 2^31, and past 2^32. */
 #define PAST_2038 (((time_t)1 << 31) + 10)
+#define PAST_2106 (((time_t)1 << 32) + 10)
 
 static const char *const PATH = "/stattest.tmp";
 static const char *const DIR = "/stattestdir";
@@ -152,68 +154,52 @@ static int old_stat_times(long before, long after)
 #endif
 
 /**
- * Check that stat, and fstat through `fd`, report the modification time of
- * `PATH` whole when it lies outside 32 bits: first a time before 1970, set
- * with utimensat, and then one past 2^31 seconds, stamped by a utimensat to
- * now with the clock set to `PAST_2038`. The clock is set back to the time it
- * kept, moved on by the time since boot. Returns 0, or 1 after the failure
- * is printed.
+ * Set `PATH`'s times to `when` and `WHEN_NSEC`, through the path, or through
+ * `fd` with futimens when `byfd`, and check that stat and fstat report them
+ * whole. Returns 0, or 1 after the failure is printed.
  */
-static int wide_times(int fd)
+static int wide_time(int fd, time_t when, int byfd)
 {
     struct timespec times[2];
-    struct timespec saved, mono0, mono1, past;
     struct stat st, fst;
-    int stamped;
+    char detail[96];
 
-    times[0].tv_sec = BEFORE_1970;
-    times[0].tv_nsec = 0;
+    times[0].tv_sec = when;
+    times[0].tv_nsec = WHEN_NSEC;
     times[1] = times[0];
-    if (utimensat(AT_FDCWD, PATH, times, 0) != 0) {
-        return fail("utimensat to a time before 1970 failed");
-    }
-    if (stat(PATH, &st) != 0 || st.st_mtim.tv_sec != BEFORE_1970 || fstat(fd, &fst) != 0 ||
-        fst.st_mtim.tv_sec != BEFORE_1970) {
-        return fail("a time before 1970 was not reported as one");
-    }
-
-    if (clock_gettime(CLOCK_REALTIME, &saved) != 0 || clock_gettime(CLOCK_MONOTONIC, &mono0) != 0) {
-        return fail("reading real time and time since boot");
-    }
-    past.tv_sec = PAST_2038;
-    past.tv_nsec = 0;
-    if (clock_settime(CLOCK_REALTIME, &past) != 0) {
-        return fail("setting real time past 2^31 seconds");
-    }
-    stamped = utimensat(AT_FDCWD, PATH, NULL, 0) == 0;
-    clock_gettime(CLOCK_MONOTONIC, &mono1);
-    saved.tv_sec += mono1.tv_sec - mono0.tv_sec;
-    saved.tv_nsec += mono1.tv_nsec - mono0.tv_nsec;
-    if (saved.tv_nsec < 0) {
-        saved.tv_nsec += 1000000000L;
-        saved.tv_sec--;
-    } else if (saved.tv_nsec >= 1000000000L) {
-        saved.tv_nsec -= 1000000000L;
-        saved.tv_sec++;
-    }
-    clock_settime(CLOCK_REALTIME, &saved);
-    if (!stamped) {
-        return fail("utimensat to now past 2^31 seconds failed");
-    }
-    if (stat(PATH, &st) != 0 || st.st_mtim.tv_sec < PAST_2038 ||
-        st.st_mtim.tv_sec > PAST_2038 + 60) {
-        char detail[96];
-
-        snprintf(detail, sizeof(detail), "stat reports %lld for a time past 2^31 seconds",
-                 (long long)st.st_mtim.tv_sec);
+    if ((byfd ? futimens(fd, times) : utimensat(AT_FDCWD, PATH, times, 0)) != 0) {
+        snprintf(detail, sizeof(detail), "%s to %lld seconds failed",
+                 byfd ? "futimens" : "utimensat", (long long)when);
 
         return fail(detail);
     }
-    if (fstat(fd, &fst) != 0 || fst.st_mtim.tv_sec != st.st_mtim.tv_sec) {
-        return fail("fstat did not report a time past 2^31 seconds as stat does");
+    if (stat(PATH, &st) != 0 || st.st_mtim.tv_sec != when || st.st_atim.tv_sec != when ||
+        st.st_mtim.tv_nsec != WHEN_NSEC) {
+        snprintf(detail, sizeof(detail), "stat reports %lld for %lld seconds",
+                 (long long)st.st_mtim.tv_sec, (long long)when);
+
+        return fail(detail);
+    }
+    if (fstat(fd, &fst) != 0 || fst.st_mtim.tv_sec != when || fst.st_atim.tv_sec != when) {
+        snprintf(detail, sizeof(detail), "fstat reports %lld for %lld seconds",
+                 (long long)fst.st_mtim.tv_sec, (long long)when);
+
+        return fail(detail);
     }
 
     return 0;
+}
+
+/**
+ * Check that stat, and fstat through `fd`, report the times of `PATH` whole
+ * when they lie outside 32 bits: a time before 1970, set through the path,
+ * one past 2^31 seconds, set through the path, and one past 2^32 seconds, set
+ * through `fd`. Returns 0, or 1 after the failure is printed.
+ */
+static int wide_times(int fd)
+{
+    return wide_time(fd, BEFORE_1970, 0) || wide_time(fd, PAST_2038, 0) ||
+           wide_time(fd, PAST_2106, 1);
 }
 
 int main(void)

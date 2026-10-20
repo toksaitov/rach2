@@ -11246,6 +11246,14 @@ void get_current_time(int64_t *seconds, int64_t *nanoseconds)
     rtc_realtime(seconds, nanoseconds);
 }
 
+/* A time utimensat is given: seconds of 64 bits, which i686's
+ * utimensat_time64 fills past 2038, and nanoseconds, UTIME_NOW or
+ * UTIME_OMIT. */
+struct utime_spec {
+    int64_t tv_sec;
+    long tv_nsec;
+};
+
 /** Whether `nsec` is a time's nanoseconds, UTIME_NOW or UTIME_OMIT. */
 static int utime_nsec_valid(long nsec)
 {
@@ -11265,7 +11273,7 @@ static int utime_nsec_valid(long nsec)
  * the call succeeds. On another type the read, the check and the store are
  * one step under the mount's namespace lock, as for chmod and chown.
  */
-static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kernel_timespec *times)
+static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime_spec *times)
 {
     krffs_node_t *kn = node;
     int64_t now_sec, now_nsec;
@@ -11357,7 +11365,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct kerne
  * under that lock and repoints the description, so a node read before the
  * wait for the lock could be the storage the file left.
  */
-static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
+static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     struct vfs_mount *mnt;
@@ -11392,8 +11400,7 @@ static int32_t utimes_fd(int fd, const struct kernel_timespec *times, int empty)
  * namespace lock from the resolution to the store, so a KRFFS write cannot
  * move the file between the two.
  */
-static int32_t utimes_path(const char *path, int flags, int dir,
-                           const struct kernel_timespec *times)
+static int32_t utimes_path(const char *path, int flags, int dir, const struct utime_spec *times)
 {
     struct vfs_ref ref;
     int32_t rc;
@@ -11410,7 +11417,41 @@ static int32_t utimes_path(const char *path, int flags, int dir,
 }
 
 /**
- * Update a file's access and modification timestamps (utimensat(2)).
+ * Read the pair of times utimensat is given at `u` into `t`: two timespecs of
+ * longs, 32 bits on i686 and 64 on x86-64, or with `wide` of 64-bit fields,
+ * utimensat_time64's on i686. Of a wide tv_nsec only the low 32 bits count,
+ * as on Linux i386, since GNU libc leaves the high half as padding. 0 or
+ * -EFAULT.
+ */
+static int32_t utimes_get(const void __user *u, int wide, struct utime_spec *t)
+{
+    if (wide) {
+        int64_t v[4];
+
+        if (copy_from_user(v, u, sizeof(v)) != 0) {
+            return -EFAULT;
+        }
+        t[0].tv_sec = v[0];
+        t[0].tv_nsec = (int32_t)v[1];
+        t[1].tv_sec = v[2];
+        t[1].tv_nsec = (int32_t)v[3];
+    } else {
+        struct kernel_timespec v[2];
+
+        if (copy_from_user(v, u, sizeof(v)) != 0) {
+            return -EFAULT;
+        }
+        t[0].tv_sec = v[0].tv_sec;
+        t[0].tv_nsec = v[0].tv_nsec;
+        t[1].tv_sec = v[1].tv_sec;
+        t[1].tv_nsec = v[1].tv_nsec;
+    }
+    return 0;
+}
+
+/**
+ * The body of utimensat, and of utimensat_time64 when `wide`, whose times
+ * `utimes_get` reads.
  *
  * Its arguments are dirfd, path, times and flags. `times` is the pair [atime,
  * mtime] or NULL, as `utimes_node` takes it, and a pair of UTIME_OMIT changes
@@ -11421,14 +11462,14 @@ static int32_t utimes_path(const char *path, int flags, int dir,
  * AT_EMPTY_PATH an empty path names the file `dirfd` refers to, or the working
  * directory for AT_FDCWD; `utimes_path` sets the times. Returns 0 or -errno.
  */
-long sys_utimensat(isr_params_t *params)
+static long utimensat_body(isr_params_t *params, int wide)
 {
     int dirfd = (int)SC_ARG(params, 0);
     const char __user *user_path = (const char __user *)SC_ARG(params, 1);
-    struct kernel_timespec __user *user_times = (struct kernel_timespec __user *)SC_ARG(params, 2);
+    const void __user *user_times = (const void __user *)SC_ARG(params, 2);
     int flags = (int)SC_ARG(params, 3);
-    struct kernel_timespec ktimes[2];
-    const struct kernel_timespec *times = NULL;
+    struct utime_spec ktimes[2];
+    const struct utime_spec *times = NULL;
     char *pathbuf;
     int empty = 0;
     int dir = 0;
@@ -11438,7 +11479,7 @@ long sys_utimensat(isr_params_t *params)
         return -EFAULT;
     }
     if (user_times) {
-        if (copy_from_user(ktimes, user_times, sizeof(ktimes)) != 0) {
+        if (utimes_get(user_times, wide, ktimes) != 0) {
             return -EFAULT;
         }
         if (ktimes[0].tv_nsec == UTIME_OMIT && ktimes[1].tv_nsec == UTIME_OMIT) {
@@ -11479,6 +11520,20 @@ long sys_utimensat(isr_params_t *params)
     rc = utimes_path(pathbuf, flags, dir, times);
     path_buf_put(pathbuf);
     return rc;
+}
+
+/** Update a file's access and modification timestamps (utimensat(2)), with
+ * the timespec of longs; `utimensat_body` has the contract. */
+long sys_utimensat(isr_params_t *params)
+{
+    return utimensat_body(params, 0);
+}
+
+/** utimensat_time64: utimensat with the 64-bit timespec, i686's call for a
+ * time past 2038. */
+long sys_utimensat_time64(isr_params_t *params)
+{
+    return utimensat_body(params, 1);
 }
 
 /* A record of getdents64(2), Linux's struct linux_dirent64. */
