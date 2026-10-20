@@ -25,6 +25,13 @@
 #
 # Usage: metal.sh <kernel> <image> [port]
 #
+# METAL_ACCEPT_SCRIPT, when set, names the acceptance script the suite runs
+# in place of tests/system/accept/metal_accept.sh, and installed_test.sh,
+# which the suite runs last, reads it too. The script must have
+# su_command.sh beside it and the tree's build and krffs three directories
+# up, as the one in the tree has; tests/proofs/metal-accept.json runs faulty
+# copies laid out so.
+#
 
 # The build tree and the emulator of the architecture
 # tests/system/suites.mk names.
@@ -49,6 +56,7 @@ if [ -z "$KERNEL" ] || [ -z "$IMAGE" ]; then
 fi
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
+ACCEPT_SCRIPT=${METAL_ACCEPT_SCRIPT:-$REPO/tests/system/accept/metal_accept.sh}
 KEY="$REPO/krffs/rach2_demo_ed25519"
 WORK="$OUT.metal.work"
 LOG="$OUT.metal.log"
@@ -368,7 +376,7 @@ if [ "$rc" -ne 7 ] || [ "$GOT" != "a 'quote' and a dollar \$" ]; then
 fi
 echo "metal-test: su preserves a quoted command and its nonzero status: OK"
 stick_before=$(shasum -a 256 "$STICK")
-UNNAMED="$(sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" 2>&1)" || true
+UNNAMED="$(sh "$ACCEPT_SCRIPT" 127.0.0.1 "$PORT" 2>&1)" || true
 if ! echo "$UNNAMED" | grep -q '^metal-accept: PASS' ||
     ! echo "$UNNAMED" | grep -q 'was not named by the owner and is not written' ||
     echo "$UNNAMED" | grep -q 'is the one written'; then
@@ -377,55 +385,21 @@ if ! echo "$UNNAMED" | grep -q '^metal-accept: PASS' ||
 fi
 [ "$stick_before" = "$(shasum -a 256 "$STICK")" ] || fail "the unnamed stick was changed"
 echo "metal-test: acceptance without a serial leaves the stick unchanged: OK"
-# Mutate only a private host script. The production reader has no override.
-# The copy lives under the images directory with this suite's name: a
-# directory made under build/tests changes that directory's time, which the
-# test image depends on, and a pooled suite would restage it.
-ACCEPT_ROOT=
-trap 'cleanup; rm -rf ${ACCEPT_ROOT:+"$ACCEPT_ROOT"}' EXIT
-ACCEPT_ROOT=$(mktemp -d "$OUT.accept.XXXXXX")
-ACCEPT_COPY="$ACCEPT_ROOT/tests/system/accept"
-mkdir -p "$ACCEPT_COPY"
-for directory in build krffs; do
-    ln -s "$REPO/$directory" "$ACCEPT_COPY/../../../$directory"
-done
-cp "$REPO/tests/system/accept/metal_accept.sh" "$ACCEPT_COPY/original.sh"
-cp "$REPO/tests/system/accept/su_command.sh" "$ACCEPT_COPY/su_command.sh"
-python3 - "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh" <<'PYMUTATE'
-from pathlib import Path
-import sys
-
-text = Path(sys.argv[1]).read_text()
-old = 'if ! run "umount $STICK_MOUNT"; then'
-new = 'if ! run "exec 9<$STICK_FILE; umount $STICK_MOUNT"; then'
-assert text.count(old) == 1
-Path(sys.argv[2]).write_text(text.replace(old, new))
-PYMUTATE
+# The stick's flushes are counted around the acceptance, which writes the
+# stick and must flush what it wrote before it unmounts.
 fat_before=$(ssh_run 'cat /proc/usb' | sed -n 's/^disk0 .*flushes \([0-9]*\).*/\1/p')
-fat_status=0
-RACH2_ACCEPT_FAT_IMAGE="$STICK@@1048576" \
-    sh "$ACCEPT_COPY/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
-    > "$WORK.busy-fat.log" 2>&1 || fat_status=$?
-fat_after=$(ssh_run 'cat /proc/usb' | sed -n 's/^disk0 .*flushes \([0-9]*\).*/\1/p')
-if [ "$fat_status" -ne 1 ] ||
-    ! grep -q 'stick: cached bytes match' "$WORK.busy-fat.log" ||
-    ! grep -q 'FAIL: stick: first unmount failed' "$WORK.busy-fat.log" ||
-    grep -Eq 'stick: (remount bytes match|host FAT bytes match)|^metal-accept: PASS' "$WORK.busy-fat.log"; then
-    cat "$WORK.busy-fat.log" >&2
-    fail "the FAT row accepted a busy unmount"
-fi
-case "$fat_before:$fat_after" in
-    *[!0-9:]*|:*|*:) fail "the failed-unmount row has no flush counts" ;;
-esac
-[ "$fat_after" -gt "$fat_before" ] || fail "the failed-unmount row did not flush writes"
-echo "metal-test: FAT acceptance rejects a busy unmount despite flushes ($fat_before to $fat_after): OK"
-cp "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh"
 accept_status=0
 RACH2_ACCEPT_SU=1 RACH2_ACCEPT_FAT_IMAGE="$STICK@@1048576" \
     RACH2_ACCEPT_USER=test RACH2_ACCEPT_KEY="$TEST_KEY" \
-    sh "$REPO/tests/system/accept/metal_accept.sh" 127.0.0.1 "$PORT" ACCEPT01 \
+    sh "$ACCEPT_SCRIPT" 127.0.0.1 "$PORT" ACCEPT01 \
     > "$ACCEPT_LOG" 2>&1 || accept_status=$?
 unset RACH2_ACCEPT_PASSWORD
+fat_after=$(ssh_run 'cat /proc/usb' | sed -n 's/^disk0 .*flushes \([0-9]*\).*/\1/p')
+case "$fat_before:$fat_after" in
+    *[!0-9:]*|:*|*:) fail "the acceptance has no flush counts" ;;
+esac
+[ "$fat_after" -gt "$fat_before" ] || fail "the acceptance did not flush the stick's writes"
+echo "metal-test: the acceptance flushed the stick's writes ($fat_before to $fat_after): OK"
 if [ "$accept_status" -ne 0 ] || ! grep -q '^metal-accept: PASS' "$ACCEPT_LOG"; then
     cat "$ACCEPT_LOG" >&2
     fail "the acceptance script did not pass against the rehearsal machine (status $accept_status)"
@@ -487,33 +461,6 @@ mbr_sum=$(shasum -a 256 "$WORK.mbr") || fail "hashing the host's MBR"
 mbr_sum=${mbr_sum%% *}
 grep -q "disk: the MBR hashes to $mbr_sum" "$ACCEPT_LOG" \
     || fail "the acceptance did not hash the same sector as the host"
-
-# shellcheck disable=SC2016 # Match the guest variable in the private source.
-sed 's@/bin/busybox dd if=/dev/disk0 of="\$f" bs=512 count=1@/bin/busybox dd if=/dev/disk0 of="$f" bs=512 count=0@' \
-    "$ACCEPT_COPY/original.sh" > "$ACCEPT_COPY/metal_accept.sh"
-cmp -s "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh" \
-    && fail "the empty-read mutation did not change the private script"
-short_status=0
-sh "$ACCEPT_COPY/metal_accept.sh" 127.0.0.1 "$PORT" \
-    > "$WORK.short-mbr.log" 2>&1 || short_status=$?
-if [ "$short_status" -ne 1 ] ||
-    ! grep -q 'FAIL: disk: the published whole-disk window did not supply one complete sector' "$WORK.short-mbr.log" ||
-    grep -q 'disk: the MBR hashes to ' "$WORK.short-mbr.log"; then
-    cat "$WORK.short-mbr.log" >&2
-    fail "the acceptance did not reject an empty MBR read"
-fi
-echo "metal-test: acceptance rejects a successful read of zero MBR bytes: OK"
-cp "$ACCEPT_COPY/original.sh" "$ACCEPT_COPY/metal_accept.sh"
-restored_status=0
-sh "$ACCEPT_COPY/metal_accept.sh" 127.0.0.1 "$PORT" \
-    > "$WORK.restored-mbr.log" 2>&1 || restored_status=$?
-if [ "$restored_status" -ne 0 ] ||
-    ! grep -q '^metal-accept: PASS' "$WORK.restored-mbr.log" ||
-    ! grep -q "disk: the MBR hashes to $mbr_sum" "$WORK.restored-mbr.log"; then
-    cat "$WORK.restored-mbr.log" >&2
-    fail "the acceptance did not pass after the MBR reader was restored"
-fi
-echo "metal-test: the restored MBR read matches the host's sector and acceptance passes: OK"
 
 ssh_run 'cat /dev/bootlog' > "$WORK.final-bootlog" \
     || fail_ssh "reading the live boot log after acceptance traffic"
