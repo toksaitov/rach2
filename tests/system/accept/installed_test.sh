@@ -9,7 +9,10 @@
 # with a GUID table for the `gpt` row. The `candidate` and `gpt` rows must
 # pass, and three rows must fail: a root on the wrong partition, a root
 # mounted read-only, and a boot from the fallback slot. ROW runs one row;
-# the default is all five.
+# the default is all five. METAL_ACCEPT_SCRIPT and METAL_BOOTCTL, when set,
+# name the acceptance script the rows are copied from and the bootctl the root
+# has, in place of the tree's; tests/proofs/installed.json runs faulty copies
+# so.
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -22,6 +25,8 @@ ARCH_BUILD=${ARCH_BUILD:-build}
 kernel=${1:-$ARCH_BUILD/rach2/kernel}
 harness=${2:-build/tests/system/harness}
 work=${3:-$ARCH_BUILD/images/metal-installed}
+accept=${METAL_ACCEPT_SCRIPT:-tests/system/accept/metal_accept.sh}
+bootctl=${METAL_BOOTCTL:-$ARCH_BUILD/utils/sbin/bootctl}
 mkdir -p "$ARCH_BUILD/images" "$work"
 work=$(CDPATH='' cd -- "$work" && pwd)
 echo "metal-installed: logs: $work"
@@ -31,7 +36,7 @@ mkdir -p "$tree/bin" "$tree/root" "$tree/tmp"
 chmod 1777 "$tree/tmp"
 cp "$ARCH_BUILD/vendor/busybox/busybox" "$tree/bin/busybox"
 cp "$ARCH_BUILD/vendor/busybox/busybox" "$tree/bin/sh"
-cp "$ARCH_BUILD/utils/sbin/bootctl" "$tree/bin/bootctl"
+cp "$bootctl" "$tree/bin/bootctl"
 
 cat > "$tree/rows.sh" <<'ROWS'
 #!/bin/sh
@@ -57,7 +62,7 @@ awk '
     /^note "scratch: / { section = 0; ends++ }
     section { print }
     END { if (starts != 3 || ends != 3 || section) exit 1 }
-' tests/system/accept/metal_accept.sh >> "$tree/rows.sh"
+' "$accept" >> "$tree/rows.sh"
 # shellcheck disable=SC2016 # The guest expands its failure count.
 printf '\n[ "$fails" -eq 0 ]\n' >> "$tree/rows.sh"
 sh -n "$tree/rows.sh"
@@ -81,7 +86,7 @@ E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$profile" \
 e2fsck -fn "$volume" > "$work/fsck.log" 2>&1
 rm -f "$work/bootctl.staged" "$work/rows.staged"
 debugfs -R "dump /bin/bootctl $work/bootctl.staged" "$volume" > "$work/staged.log" 2>&1
-cmp "$ARCH_BUILD/utils/sbin/bootctl" "$work/bootctl.staged"
+cmp "$bootctl" "$work/bootctl.staged"
 debugfs -R "dump /rows.sh $work/rows.staged" "$volume" >> "$work/staged.log" 2>&1
 cmp "$tree/rows.sh" "$work/rows.staged"
 cksum "$kernel" "$work/bootctl.staged" "$work/rows.staged" > "$work/artifacts"

@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "proof": "installed",
+  "summary": "the five rows of installed_test.sh on i686, the acceptance's rows that read the command line, the disk and the ext2 root, on the tree's metal_accept.sh and bootctl",
+  "tree": "shared",
+  "sources": ["tests/system/accept/metal_accept.sh", "utils/bootctl.c"],
+  "artifacts": ["${WORK}/bootctl", "${WORK}/metal_accept.sh"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "make -s -j4 rach2 build/tests/system/harness metal-installed-tools ARCH=i686 </dev/null && rm -f build/utils/sbin/bootctl && make -s -C utils ../build/utils/sbin/bootctl ARCH=i686 </dev/null && cp build/utils/sbin/bootctl ${WORK}/bootctl && cp tests/system/accept/metal_accept.sh ${WORK}/metal_accept.sh"],
+    "bound_s": 1800
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/rows && METAL_ACCEPT_SCRIPT=${WORK}/metal_accept.sh METAL_BOOTCTL=${WORK}/bootctl exec sh tests/system/accept/installed_test.sh build/rach2/kernel build/tests/system/harness ${WORK}/rows all"],
+    "bound_s": 900
+  },
+  "faults": [
+    {
+      "name": "partition",
+      "summary": "the acceptance takes a root mounted from the fourth partition for the installed one",
+      "edits": [
+        {"file": "tests/system/accept/metal_accept.sh", "find": "*\"/dev/disk0p3 / ext2 rw,relatime\"*)", "replace": "*\"/dev/disk0p\"[34]\" / ext2 rw,relatime\"*)"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["wrong-partition: wrong acceptance status"]
+      }
+    },
+    {
+      "name": "readonly",
+      "summary": "the acceptance takes a root mounted read-only for the installed one",
+      "edits": [
+        {"file": "tests/system/accept/metal_accept.sh", "find": "*\"/dev/disk0p3 / ext2 rw,relatime\"*)", "replace": "*\"/dev/disk0p3 / ext2 r\"[ow]\",relatime\"*)"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["readonly: missing root rejection"]
+      }
+    },
+    {
+      "name": "window",
+      "summary": "the acceptance fails a disk whose MBR it read through the whole-disk window",
+      "edits": [
+        {"file": "tests/system/accept/metal_accept.sh", "find": "note \"disk: the MBR hashes to $mbr\"", "replace": "bad \"disk: the MBR hashes to $mbr\""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["candidate: wrong acceptance status"]
+      }
+    },
+    {
+      "name": "gptid",
+      "summary": "the acceptance does not know a root named by the GUID table's disk GUID",
+      "edits": [
+        {"file": "tests/system/accept/metal_accept.sh", "find": "*' rach2.root=GPTID='*|", "replace": ""}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["gpt: wrong acceptance status"]
+      }
+    },
+    {
+      "name": "slot",
+      "summary": "bootctl reports a boot from the fallback slot as one from the candidate",
+      "edits": [
+        {"file": "utils/bootctl.c", "find": "printf(\"bootctl: booted: fallback\\n\");", "replace": "printf(\"bootctl: booted: candidate\\n\");"}
+      ],
+      "fails": {
+        "status": 1,
+        "lines": ["fallback: wrong acceptance status"]
+      }
+    }
+  ]
+}
