@@ -210,7 +210,7 @@ Deployment creates no account or key, changes no clone, deletes nothing, writes 
 
 ### The move from tests/run
 
-A temporary adapter runs the old suites under etude while the families convert. It keeps the preparation, the GNU and recovery inputs, the QEMU shims, the machine ledgers, the console relay, the cleanup and the evidence of failure. It does not call `make run-NAME`, which runs a suite without its locks, and it does not start the old scheduler inside etude.
+A temporary adapter runs the old suites under etude while the families convert. It keeps the preparation, the GNU and recovery inputs, the QEMU shims, the machine ledgers, the console relay, the cleanup and the evidence of failure. It calls `make run-NAME` only as `tests/run` does, with the tree's run lock, a port block and the host lock held, since the target alone runs a suite without its locks, and it does not start the old scheduler inside etude.
 
 Old and new runs share the host safely. Etude takes the existing lock files (`DIR/rach2-host.lock`, a write lock for `bigmem`) and the port blocks `/tmp/rach2-ports.N`, and connects them to its admission. While a machine enrolls, old runs that etude does not wrap finish before shared admission begins. An old checkout, as `bisect.yml` uses, runs through a wrapper outside its source tree. Setting `RACH2_PORT_OFFSET` skips the old lock, so the adapter sets it only once it owns the matching reservation; old suites get distinct port blocks, and native allocations avoid them.
 
