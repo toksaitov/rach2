@@ -11,8 +11,9 @@
 # the first runs, a service's output that wakes no wait, a keeper that does
 # not end its case when its controller is killed, a machine's memory
 # profile left out of the launcher's profile, a boot of a case whose
-# machines together need more memory than it reserves, and a boundary
-# machine that takes any QMP command must each be found.
+# machines together need more memory than it reserves, a boundary
+# machine that takes any QMP command, and a refused text at a boundary
+# console taken for a lost machine must each be found.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -64,6 +65,8 @@ faults = {
                    '        kp->controller = 0;\n        m.type = KEEP_GO;\n'),
     'qmp': ('    if (m->boundary && !boundary_command(execute, arguments)) {\n',
             '    if (m->boundary && !boundary_command(execute, arguments) && 0) {\n'),
+    'typed': ('        if (errno != EPERM)\n            return ETUDE_LOST;\n',
+              '        if (errno != EPERM || 1)\n            return ETUDE_LOST;\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -83,14 +86,14 @@ fault_file()
     esac
 }
 
-faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller memory share qmp'
+faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller memory share qmp typed'
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     for fault in $faults; do
         apply_fault "tools/etude/$(fault_file "$fault")" "$fault"
     done
-    echo 'etude-scenario-mutation: texts: all nineteen faults found once'
+    echo 'etude-scenario-mutation: texts: all twenty faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -189,5 +192,6 @@ prove controller 'kill-pair: [0-9]* of its processes are left'
 prove memory 'memory: no .assert refused pass.'
 prove share 'memory-pair: no .assert refused pass.'
 prove qmp 'memory-qmp: no .assert qmp-refused pass.'
+prove typed 'memory-qmp: no .assert type-refused pass.'
 restore
 run_phase restored 0

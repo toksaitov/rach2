@@ -33,15 +33,16 @@
  * ordinary one whose reservation covers the boundary machine alone has a boot
  * of either refused before QEMU starts; with both covered, the boundary machine
  * boots on the reservation left beside the other, answers QMP's queries and the
- * human monitor's `info`, and has every other QMP command refused. Under the
- * stand-in the machine's etude-guest runs a guest program whose report becomes
- * the scenario's, and an etude-guest killed in the middle of a run is a lost
- * end. This program is also the peer that a scenario runs as a service; two
- * machines at once reach it, a service ended unseen is a fault, and failing
- * rows at each stage end their own processes while a held row keeps its own.
- * With the real QEMU, a disk root written at the debug shell and powered off is
- * read back by the next boot, etude-guest runs the test image's /hello, and two
- * machines run /tcptest against the peer.
+ * human monitor's `info`, has every other QMP command refused, and has `help`
+ * and a second memory probe refused at its console. Under the stand-in the
+ * machine's etude-guest runs a guest program whose report becomes the
+ * scenario's, and an etude-guest killed in the middle of a run is a lost end.
+ * This program is also the peer that a scenario runs as a service; two machines
+ * at once reach it, a service ended unseen is a fault, and failing rows at each
+ * stage end their own processes while a held row keeps its own. With the real
+ * QEMU, a disk root written at the debug shell and powered off is read back by
+ * the next boot, etude-guest runs the test image's /hello, and two machines run
+ * /tcptest against the peer.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -876,7 +877,9 @@ static int scenario_noboot(struct etude_case *c, const char *row)
  * and a boot of either is refused before QEMU starts; in memory-share and
  * memory-qmp it reserves both, and the boundary machine boots. In memory-qmp
  * the boundary machine then answers a query and the human monitor's `info`,
- * and QMP's `object-add` and the human monitor's `migrate` are refused.
+ * and QMP's `object-add` and the human monitor's `migrate` are refused; its
+ * console accepts `exec /memprobe total` once, and `help` and a second probe
+ * are refused.
  */
 static int scenario_memory(struct etude_case *c, const char *row)
 {
@@ -911,6 +914,9 @@ static int scenario_memory(struct etude_case *c, const char *row)
                          &reply),
                ETUDE_REFUSED);
         free(reply);
+        expect(c, "type-refused", etude_type(m, "help\r"), ETUDE_REFUSED);
+        expect(c, "type-probe", etude_type(m, "exec /memprobe total\r"), ETUDE_OK);
+        expect(c, "type-again", etude_type(m, "exec /memprobe total\r"), ETUDE_REFUSED);
         return 0;
     }
     expect(c, "refused", st, ETUDE_REFUSED);
@@ -2323,7 +2329,9 @@ static const struct row stand_in_rows[] = {
      0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"memory-share", "disk", "boot:fixture", "admitted", NULL, 0, STEP_US, 0, 1, 0, 0, NULL, 0,
      NULL, 0},
-    {"memory-qmp", "disk", "boot:fixture", "admitted qmp-query qmp-info qmp-refused hmp-refused",
+    {"memory-qmp", "disk", "boot:fixture",
+     "admitted qmp-query qmp-info qmp-refused hmp-refused "
+     "type-refused type-probe type-again",
      NULL, 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"guest", "disk", "run:fixture", "guest-pass guest-exit guest-ran guest-lost guest-lost-end",
      NULL, 1, LOSS_US, 0, 1, 1, 0, NULL, 0, NULL, 0},

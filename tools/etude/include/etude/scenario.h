@@ -109,7 +109,11 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
 enum etude_status etude_console_wait(struct etude_case_machine *m, const char *text, uint64_t from,
                                      uint64_t *at);
 
-/** Write `text` to the machine's console input. */
+/**
+ * Write `text` to the machine's console input. A boundary machine's console
+ * takes `exec /memprobe total\r` once and `poweroff\r`, and other text
+ * returns ETUDE_REFUSED.
+ */
 enum etude_status etude_type(struct etude_case_machine *m, const char *text);
 
 /**

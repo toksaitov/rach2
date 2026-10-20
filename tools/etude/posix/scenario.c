@@ -1516,9 +1516,15 @@ enum etude_status etude_type(struct etude_case_machine *m, const char *text)
     }
     if (stop_asked)
         return ETUDE_STOPPED;
-    if (mres(m)->state == ETUDE_MACHINE_ENDED || mres(m)->console.closed ||
-        etude_machine_type(m->m, text, strlen(text)) != 0)
+    if (mres(m)->state == ETUDE_MACHINE_ENDED || mres(m)->console.closed)
         return ETUDE_LOST;
+    if (etude_machine_type(m->m, text, strlen(text)) != 0) {
+        if (errno != EPERM)
+            return ETUDE_LOST;
+        diag("machine %s: its boundary console does not take this text", m->decl->id);
+        m->c->faults++;
+        return ETUDE_REFUSED;
+    }
     return ETUDE_OK;
 }
 
