@@ -63,6 +63,13 @@ cp "$DISK.inner" "$REPO/build/tests/system/loopimg/inner.bin" || fail "the krffs
 sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
     "$DISK.krffs" 4 >/dev/null 2>&1 || fail "the krffs image"
 
+# The three images, kept where a native run's maps take them from
+# (tests/native/maps).
+mkdir -p "$REPO/build/tests/system/loopdev" || fail "the kept images' directory"
+for kept in fat ext2 krffs; do
+    cp "$DISK.$kept" "$REPO/build/tests/system/loopdev/$kept.img" || fail "keeping the $kept image"
+done
+
 # A second FAT32 image, for the rows that ask what a taken device and a
 # device that will not write answer.
 cp "$DISK.fat" "$DISK.fat2" || fail "the second image"
