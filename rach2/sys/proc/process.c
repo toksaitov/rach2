@@ -347,8 +347,8 @@ static process_t *proc_subreaper(uint32_t dead_pid)
  * A child left with a dead parent's pid would never be matched in `do_wait`,
  * and its frames, page directory and record would leak. Each child goes to
  * the nearest child subreaper above the dead parent (`proc_subreaper`), and
- * with none to init, or to the init of the child's PID namespace. A child
- * whose threads have all ended has no exit to come that would tell its new
+ * with none to the init of the dead parent's PID namespace. A child whose
+ * threads have all ended has no exit to come that would tell its new
  * parent, so that parent is sent SIGCHLD now and its wait woken. When the
  * system's init itself is ending, no other init is left to adopt the
  * children. The parent-death signals are posted after the adoption, so that
@@ -356,23 +356,26 @@ static process_t *proc_subreaper(uint32_t dead_pid)
  */
 void reparent_children(uint32_t dead_pid)
 {
-    process_t *system_init = NULL;
+    process_t *dead = get_process(dead_pid);
+    process_t *namespace_init = NULL;
     process_t *subreaper = proc_subreaper(dead_pid);
     process_t *p;
+    uint32_t reaper = dead != NULL ? ns_reaper(dead) : 0;
 
     if (init_pid != 0 && dead_pid != init_pid) {
-        system_init = get_process(init_pid);
+        namespace_init = get_process(init_pid);
+    }
+    if (reaper != 0 && reaper != dead_pid) {
+        namespace_init = get_process(reaper);
     }
     for (p = proc_list; p; p = p->next) {
-        process_t *init = system_init;
+        process_t *init = namespace_init;
 
         if (p->parent_pid != dead_pid) {
             continue;
         }
         if (subreaper != NULL) {
             init = subreaper;
-        } else if (ns_reaper(p) != 0 && ns_reaper(p) != dead_pid) {
-            init = get_process(ns_reaper(p));
         }
         if (init != NULL) {
             p->parent_pid = init->pid;

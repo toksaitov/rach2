@@ -5925,6 +5925,53 @@ end
 
 # Namespaces, which nsmusl checks.
 
+fault ns-orphan-child-reaper
+probe nsmusl
+file rach2/sys/proc/process.c
+expect NSMUSL FAIL (the outer init adopted the namespace init's sibling
+old
+    process_t *dead = get_process(dead_pid);
+    process_t *namespace_init = NULL;
+    process_t *subreaper = proc_subreaper(dead_pid);
+    process_t *p;
+    uint32_t reaper = dead != NULL ? ns_reaper(dead) : 0;
+
+    if (init_pid != 0 && dead_pid != init_pid) {
+        namespace_init = get_process(init_pid);
+    }
+    if (reaper != 0 && reaper != dead_pid) {
+        namespace_init = get_process(reaper);
+    }
+    for (p = proc_list; p; p = p->next) {
+        process_t *init = namespace_init;
+
+        if (p->parent_pid != dead_pid) {
+            continue;
+        }
+        if (subreaper != NULL) {
+            init = subreaper;
+        }
+new
+    process_t *system_init = NULL;
+    process_t *subreaper = proc_subreaper(dead_pid);
+    process_t *p;
+
+    if (init_pid != 0 && dead_pid != init_pid) {
+        system_init = get_process(init_pid);
+    }
+    for (p = proc_list; p; p = p->next) {
+        process_t *init = system_init;
+
+        if (p->parent_pid != dead_pid) {
+            continue;
+        }
+        if (subreaper != NULL) {
+            init = subreaper;
+        } else if (ns_reaper(p) != 0 && ns_reaper(p) != dead_pid) {
+            init = get_process(ns_reaper(p));
+        }
+end
+
 fault ns-map-own-lower
 probe nsmusl
 file rach2/sys/proc/ns.c

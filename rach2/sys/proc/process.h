@@ -480,9 +480,9 @@ void proc_thread_gone(process_t *p);
 /**
  * Give every child of the process `dead_pid` to the nearest ancestor of that
  * process that is a child subreaper (prctl's PR_SET_CHILD_SUBREAPER) and has
- * not ended, short of an init; with none, to init, or to the init of the
- * child's PID namespace when it is in one below the first (`ns_reaper`). Post
- * each child that has not ended the parent-death signal it asked prctl for.
+ * not ended, short of an init; with none, to the init of the ending
+ * process's PID namespace (`ns_reaper`). Post each child that has not ended
+ * the parent-death signal it asked prctl for.
  * A child that has already ended is reported to its new parent with SIGCHLD
  * and a wake of the parent's wait. No child goes to the system's init when
  * there is none (`init_pid` 0, a boot that runs the debug shell alone) or

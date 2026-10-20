@@ -11,7 +11,9 @@
  * fail with ESRCH; the link of its descriptor of a /proc file names it 1, and
  * its entry in a listing of /proc has the inode of /proc/1; and a name
  * relative to its descriptor of /proc/self/fd reaches its own descriptor. The
- * caller of unshare keeps its own pid. In a new network namespace a
+ * caller of unshare keeps its own pid. When it ends, its namespace's init
+ * adopts its children, including the init of a namespace below it and that
+ * init's sibling. In a new network namespace a
  * connection to the loopback address fails with ENETUNREACH. A mount made in
  * a new mount namespace is not seen outside it, and a new IPC namespace has
  * none of the first's System V objects.
@@ -247,6 +249,116 @@ static int proc_own_number(void)
 }
 
 /**
+ * Make two children in a new PID namespace, and send their outer pids to
+ * `report`. Each child waits for EOF on its pipe, then checks that its parent
+ * is outside its namespace. Returns 0 on success, 1 on a setup failure.
+ */
+static int make_pid_orphans(int report, int go[2][2])
+{
+    pid_t kids[2] = {0, 0};
+    int i, rc = 0;
+
+    if (unshare(CLONE_NEWPID) != 0) {
+        return fail("unshare for orphan adoption");
+    }
+    for (i = 0; i < 2; i++) {
+        kids[i] = fork();
+        if (kids[i] == 0) {
+            char c;
+
+            close(report);
+            close(go[0][1]);
+            close(go[1][1]);
+            close(go[1 - i][0]);
+            rc = read(go[i][0], &c, 1) != 0 || getppid() != 0;
+            close(go[i][0]);
+            _exit(rc ? fail("an adopted child's parent is outside its pid namespace") : 20 + i);
+        }
+        if (kids[i] < 0) {
+            rc = fail("fork for orphan adoption");
+            break;
+        }
+    }
+    if (!rc && write(report, kids, sizeof(kids)) != (ssize_t)sizeof(kids)) {
+        rc = fail("report orphan pids");
+    }
+    if (rc) {
+        for (i = 1; i >= 0; i--) {
+            if (kids[i] > 0) {
+                kill(kids[i], SIGKILL);
+                waitpid(kids[i], NULL, 0);
+            }
+        }
+    }
+    return rc;
+}
+
+/**
+ * As init, reap a parent that unshares its children's PID namespace. Each
+ * child must be waitable here before it is released, including the new
+ * namespace's init. Returns 0 on success, 1 on failure. All pipes
+ * are closed and known children are ended and reaped on either path.
+ */
+static int pid_orphans(void)
+{
+    int report[2] = {-1, -1}, go[2][2] = {{-1, -1}, {-1, -1}};
+    pid_t parent = -1, kids[2] = {0, 0};
+    int i, j, status, rc = 0;
+
+    if (pipe(report) != 0 || pipe(go[0]) != 0 || pipe(go[1]) != 0) {
+        rc = fail("pipes for orphan adoption");
+        goto out;
+    }
+    parent = fork();
+    if (parent == 0) {
+        close(report[0]);
+        _exit(make_pid_orphans(report[1], go));
+    }
+    close(report[1]);
+    report[1] = -1;
+    if (parent < 0 || read(report[0], kids, sizeof(kids)) != (ssize_t)sizeof(kids) ||
+        waitpid(parent, &status, 0) != parent || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        rc = fail("the parent of the pid namespace's orphans exited");
+        goto out;
+    }
+    parent = -1;
+    for (i = 1; i >= 0; i--) {
+        if (waitpid(kids[i], &status, WNOHANG) != 0) {
+            rc = fail(i == 0 ? "the outer init adopted the namespace's init"
+                             : "the outer init adopted the namespace init's sibling");
+        }
+        close(go[i][1]);
+        go[i][1] = -1;
+        if (waitpid(kids[i], &status, 0) != kids[i] || !WIFEXITED(status) ||
+            WEXITSTATUS(status) != 20 + i) {
+            rc = fail("the outer init reaped the pid namespace's orphan");
+        } else {
+            kids[i] = 0;
+        }
+    }
+out:
+    if (parent > 0) {
+        kill(parent, SIGKILL);
+        waitpid(parent, NULL, 0);
+    }
+    for (i = 1; i >= 0; i--) {
+        if (kids[i] > 0) {
+            kill(kids[i], SIGKILL);
+            waitpid(kids[i], NULL, 0);
+        }
+        for (j = 0; j < 2; j++) {
+            if (go[i][j] >= 0) {
+                close(go[i][j]);
+            }
+        }
+        if (report[i] >= 0) {
+            close(report[i]);
+        }
+    }
+    return rc;
+}
+
+/**
  * Check, as the first process of a new PID namespace, that it is pid 1 with
  * parent 0, that its child is 2, that its NSpid line has the one number, that
  * get_robust_list of pid 1 gives the head it set, that get_robust_list and
@@ -289,7 +401,7 @@ static int pid_first(void)
     if (kill(99, 0) != -1 || errno != ESRCH) {
         return fail("kill of a pid the namespace has not given is ESRCH");
     }
-    return proc_own_number() || own_fd_dir();
+    return proc_own_number() || own_fd_dir() || pid_orphans();
 }
 
 /**
