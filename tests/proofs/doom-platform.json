@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "proof": "doom-platform",
+  "summary": "doom_platform_hosttest.c with four faults in private copies of Doom's control paths in ports/doom/doomgeneric_rach2.c and ports/doom/src/i_system.c; the test includes them by paths relative to itself, so the build copies the test and ports/doom under the work directory",
+  "tree": "private",
+  "sources": [
+    "ports/doom/doomgeneric_rach2.c",
+    "ports/doom/src/i_system.c"
+  ],
+  "artifacts": [
+    "${WORK}/doom_platform_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -e; rm -rf ${WORK}/b; mkdir -p ${WORK}/b/ports ${WORK}/b/tests/host; cp -R ports/doom ${WORK}/b/ports/doom; cp ${SRC}/ports/doom/doomgeneric_rach2.c ${WORK}/b/ports/doom/doomgeneric_rach2.c; cp ${SRC}/ports/doom/src/i_system.c ${WORK}/b/ports/doom/src/i_system.c; cp tests/host/doom_platform_hosttest.c ${WORK}/b/tests/host/; ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat -I ${WORK}/b/ports/doom/src -DNORMALUNIX -DCMAP256 ${WORK}/b/tests/host/doom_platform_hosttest.c -o ${WORK}/doom_platform_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/doom_platform_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "doom-platform-hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "arguments",
+      "summary": "the command's arguments dropped",
+      "edits": [
+        {
+          "file": "ports/doom/doomgeneric_rach2.c",
+          "find": "    int doom_argc = (argc > 0 ? argc : 1) + 2;",
+          "replace": "    argc = 1;\n    int doom_argc = (argc > 0 ? argc : 1) + 2;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "argument count",
+          "doom-platform-hosttest: result:"
+        ]
+      }
+    },
+    {
+      "name": "shutdown",
+      "summary": "an exit that leaves the devices open",
+      "edits": [
+        {
+          "file": "ports/doom/doomgeneric_rach2.c",
+          "find": "    DG_Shutdown();",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "both devices closed once",
+          "doom-platform-hosttest: result:"
+        ]
+      }
+    },
+    {
+      "name": "exit",
+      "summary": "a quit that returns",
+      "edits": [
+        {
+          "file": "ports/doom/src/i_system.c",
+          "find": "#endif\n    exit(0);\n}",
+          "replace": "#endif\n}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "quit must exit",
+          "doom-platform-hosttest: result:"
+        ]
+      }
+    },
+    {
+      "name": "report",
+      "summary": "a report that names the zone asked for, not the one allocated",
+      "edits": [
+        {
+          "file": "ports/doom/src/i_system.c",
+          "find": "    DG_zone_mib = *size / (1024 * 1024);",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "report names allocated zone",
+          "doom-platform-hosttest: result:"
+        ]
+      }
+    }
+  ]
+}

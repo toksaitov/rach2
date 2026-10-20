@@ -9,7 +9,7 @@ kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_check.
 endothers|600|an init's end waits for the processes still ending|sh tests/host/endothers_check.sh
 chown|600|the set-id rules of a mounted chown|sh tests/host/chown_mutate.sh --check
 pagecache|600|the page cache with sys_sync's bounded wait|sh tests/host/pagecache_mutate.sh --check
-doom_libc|600|Doom C library on both architectures|sh tests/host/doom_libc_mutate.sh --check
+doom_libc|600|Doom C library on both architectures|sh tests/host/doom_libc_check.sh
 krffs_tools|600|krffs host tools' refusals, replace and edits|sh tests/host/krffs_tools_mutate.sh --check
 run_scripts|600|run scripts' command lines|sh tests/system/run_scripts_test.sh
 commit_msg|600|commit-msg hook's refusals|sh tests/system/commit_msg_test.sh

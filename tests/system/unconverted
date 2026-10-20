@@ -9,7 +9,6 @@ tests/dgramprobe.c: 1 sleep
 tests/dnstest.c: 1 skip
 tests/exitprobe.c: 2 sleep
 tests/fsbaseprobe.c: 1 sleep
-tests/host/account_mutate.sh: 1 sleep
 tests/host/ata_durable_mutate.sh: 1 sleep
 tests/host/ata_identify_mutate.sh: 1 sleep
 tests/host/ata_wait_mutate.sh: 1 sleep
@@ -20,7 +19,6 @@ tests/host/ext2_batch_mutate.sh: 1 sleep
 tests/host/fat_barriers_mutate.sh: 1 sleep
 tests/host/fat_synced_mutate.sh: 1 sleep
 tests/host/fat32_hosttest.c: 1 skip
-tests/host/ish_mutate.sh: 1 sleep
 tests/host/netif_hosttest.c: 1 sleep
 tests/host/pwauth_hosttest.c: 2 sleep
 tests/jobprobe.c: 1 sleep

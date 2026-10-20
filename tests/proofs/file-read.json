@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "proof": "file-read",
+  "summary": "file_read_hosttest.c with three faults, one each in private copies of utils/cp.c, cat.c and ls.c, that ignore a read error",
+  "tree": "private",
+  "sources": [
+    "utils/cp.c",
+    "utils/cat.c",
+    "utils/ls.c"
+  ],
+  "artifacts": [
+    "${WORK}/file_read_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all -I ${SRC}/utils tests/host/file_read_hosttest.c -o ${WORK}/file_read_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/file_read_hosttest"
+    ],
+    "bound_s": 10,
+    "fail_prefix": "file-read-hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "cp-ignored",
+      "summary": "the check of a read error in utils/cp.c replaced by if (0)",
+      "edits": [
+        {
+          "file": "utils/cp.c",
+          "find": "    if (n < 0) {",
+          "replace": "    if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "file-read-hosttest: fail: cp blocks 0 error 1"
+        ]
+      }
+    },
+    {
+      "name": "cat-ignored",
+      "summary": "the check of a read error in utils/cat.c replaced by if (0)",
+      "edits": [
+        {
+          "file": "utils/cat.c",
+          "find": "    if (n < 0) {",
+          "replace": "    if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "file-read-hosttest: fail: cat blocks 0 error 1"
+        ]
+      }
+    },
+    {
+      "name": "ls-ignored",
+      "summary": "the check of a read error in utils/ls.c replaced by if (0)",
+      "edits": [
+        {
+          "file": "utils/ls.c",
+          "find": "    if (errno != 0) {",
+          "replace": "    if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "file-read-hosttest: fail: ls blocks 0 error 1"
+        ]
+      }
+    }
+  ]
+}
