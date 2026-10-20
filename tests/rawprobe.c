@@ -36,13 +36,21 @@
  * suite's limit ends a run in which it never comes.
  *
  * Runs on the test image with QEMU's user network, where 10.0.2.2 is the
- * gateway and answers. Prints "RAWPROBE START", then "  FAIL: " and the row
- * for each failure, then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and
- * exits with the count of failures. Freestanding; direct system calls
- * (probe.h).
+ * gateway and answers. A native run (probe_args.h) gives the addresses of
+ * its own network: `gateway=A.B.C.D`, a router that answers echoes and sends
+ * time-exceeded for a hop limit of one, or else the address of
+ * `peer=A.B.C.D:PORT`; `far=A.B.C.D`, an address reached through it, in
+ * place of 8.8.8.8; and `empty=A.B.C.D`, an address on the subnet that
+ * nobody has, in place of 10.0.2.9. It gives `ids=OLD:NEW,...` for the
+ * ordinary user 1000, and `machine=native`, with which the probe leaves out
+ * the sends for the capture checker, which only the suite's capture reads,
+ * and prints a line that says they did not run. Prints "RAWPROBE START", then "  FAIL: " and the
+ * row for each failure, then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and exits with the count
+ * of failures. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -75,9 +83,13 @@ typedef unsigned char uint8_t;
 #define MSG_DONTWAIT 0x40
 
 /* The addresses of the network QEMU puts a guest on. */
-#define GATEWAY_IP 0x0A000202u /* 10.0.2.2, answers */
-#define OFFSUBNET  0x08080808u /* 8.8.8.8, reached through the gateway */
-#define UNRESOLVED 0x0A000209u /* 10.0.2.9, on the subnet, nothing there */
+#define QEMU_GATEWAY    0x0A000202u /* 10.0.2.2, answers */
+#define QEMU_OFFSUBNET  0x08080808u /* 8.8.8.8, reached through the gateway */
+#define QEMU_UNRESOLVED 0x0A000209u /* 10.0.2.9, on the subnet, nothing there */
+
+/* The addresses the rows use, in host byte order: QEMU's, or those the
+ * arguments give (`addresses`). */
+static uint32_t gateway_ip, offsubnet_ip, unresolved_ip;
 
 #define ICMP_ECHO_REPLY    0
 #define ICMP_ECHO_REQUEST  8
@@ -500,7 +512,7 @@ static void socket_pressure(unsigned long *args, int fd_a)
     }
 
     /* The raw socket this process opened before still receives. */
-    args[0] = GATEWAY_IP;
+    args[0] = gateway_ip;
     n = socketcall(SC_PING, args);
     check_n(n >= 0, "the machine can still reach the gateway", n);
     n = take_icmp(args, fd_a, frame_a, (int)sizeof(frame_a), ICMP_ECHO_REPLY);
@@ -536,6 +548,37 @@ static uint32_t drained(unsigned long *args, int fd)
     return icmp_in_msgs();
 }
 
+/** The IPv4 address written in dots at the start of `s`, in host byte order,
+ * or `fallback` when `s` is NULL or does not begin with one. */
+static uint32_t arg_ip(const char *s, uint32_t fallback)
+{
+    uint32_t ip = 0;
+    long part;
+    int i;
+
+    for (i = 0; s != 0 && i < 4; i++) {
+        part = probe_number(&s);
+        if (part < 0 || part > 255 || (i < 3 && *s++ != '.')) {
+            return fallback;
+        }
+        ip = (ip << 8) | (uint32_t)part;
+    }
+    return s != 0 ? ip : fallback;
+}
+
+/** Set the addresses the rows use from the arguments `gateway`, or else
+ * `peer`, `far` and `empty`, each QEMU's when it is not given. */
+static void addresses(void)
+{
+    gateway_ip = arg_ip(probe_arg("gateway", 0), arg_ip(probe_arg("peer", 0), QEMU_GATEWAY));
+    offsubnet_ip = arg_ip(probe_arg("far", 0), QEMU_OFFSUBNET);
+    unresolved_ip = arg_ip(probe_arg("empty", 0), QEMU_UNRESOLVED);
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe's entry: the rows in the order of the list above, then the
  * socket pressure. The queue row closes the second raw socket, so that one
@@ -543,18 +586,20 @@ static uint32_t drained(unsigned long *args, int fd)
  * queued; the replies to the sends for the capture checker are taken and
  * not read.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     unsigned long args[6];
     int fd_a, fd_b, i, n, m, pid, status, val;
     volatile int got_ttl;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    addresses();
     say("RAWPROBE START\n");
 
     /* A raw socket is root's, since it reads every ICMP datagram. */
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
-        if (syscall1(SYS_SETUID, 1000) != 0) {
+        if (syscall1(SYS_SETUID, probe_id(1000)) != 0) {
             sys_exit(2);
         }
         sys_exit(raw_socket(args) == -EPERM ? 0 : 3);
@@ -578,7 +623,7 @@ PROBE_START void _start(void)
 
         fd_r = raw_socket(args);
         check_n(fd_r >= 0, "a raw socket opens with no route configured", fd_r);
-        sockaddr_for(sa, OFFSUBNET, 0);
+        sockaddr_for(sa, offsubnet_ip, 0);
         for (i = 0; i < 8; i++) {
             icmp[i] = 0;
         }
@@ -596,7 +641,7 @@ PROBE_START void _start(void)
         args[2] = 0;
         udp_fd = socketcall(SC_SOCKET, args);
         check_n(udp_fd >= 0, "a datagram socket opens", udp_fd);
-        sockaddr_for(sa, OFFSUBNET, 9);
+        sockaddr_for(sa, offsubnet_ip, 9);
         args[0] = (uint32_t)udp_fd;
         args[1] = (unsigned long)icmp;
         args[2] = 4;
@@ -625,7 +670,7 @@ PROBE_START void _start(void)
     }
 
     /* One echo reply reaches both sockets and the kernel's own ping. */
-    args[0] = GATEWAY_IP;
+    args[0] = gateway_ip;
     /* The ping's result is its round-trip time in ticks, or a negated errno. */
     n = socketcall(SC_PING, args);
     check_n(n >= 0, "the kernel's own ping reached the gateway", n);
@@ -647,7 +692,9 @@ PROBE_START void _start(void)
         }
         check((frame_a[0] >> 4) == 4, "what arrived is an IPv4 datagram");
         check(frame_a[9] == IPPROTO_ICMP, "of the protocol the socket asked for");
-        check(frame_a[12] == 10 && frame_a[13] == 0 && frame_a[14] == 2 && frame_a[15] == 2,
+        check(frame_a[12] == (uint8_t)(gateway_ip >> 24) &&
+                  frame_a[13] == (uint8_t)(gateway_ip >> 16) &&
+                  frame_a[14] == (uint8_t)(gateway_ip >> 8) && frame_a[15] == (uint8_t)gateway_ip,
               "from the address that answered");
     }
 
@@ -680,7 +727,7 @@ PROBE_START void _start(void)
         check(socketcall(SC_GETSOCKOPT, args) == 0 && got_ttl == 1,
               "and reported back, so it is kept and not swallowed");
 
-        sockaddr_for(sa, OFFSUBNET, 33434);
+        sockaddr_for(sa, offsubnet_ip, 33434);
         args[0] = (uint32_t)udp_fd;
         args[1] = (unsigned long)icmp;
         args[2] = 4;
@@ -706,7 +753,7 @@ PROBE_START void _start(void)
     check(socketcall(SC_SETSOCKOPT, args) == -ENOPROTOOPT, "IP_HDRINCL is refused");
 
     /* A message past the MTU is refused by the send itself. */
-    sockaddr_for(sa, GATEWAY_IP, 0);
+    sockaddr_for(sa, gateway_ip, 0);
     args[0] = (uint32_t)fd_a;
     args[1] = (unsigned long)icmp;
     args[2] = 1501;
@@ -729,7 +776,7 @@ PROBE_START void _start(void)
         icmp[2] = (uint8_t)(csum >> 8);
         icmp[3] = (uint8_t)(csum & 0xff);
     }
-    sockaddr_for(sa, UNRESOLVED, 0);
+    sockaddr_for(sa, unresolved_ip, 0);
     args[0] = (uint32_t)fd_a;
     args[1] = (unsigned long)icmp;
     args[2] = 8;
@@ -760,7 +807,7 @@ PROBE_START void _start(void)
             csum = icmp_checksum(icmp, 8);
             icmp[2] = (uint8_t)(csum >> 8);
             icmp[3] = (uint8_t)(csum & 0xff);
-            sockaddr_for(sa, GATEWAY_IP, 0);
+            sockaddr_for(sa, gateway_ip, 0);
             args[0] = (uint32_t)fd_a;
             args[1] = (unsigned long)icmp;
             args[2] = 8;
@@ -782,7 +829,9 @@ PROBE_START void _start(void)
     }
 
     /* For the capture checker: hop limits 1 to 6 and a wrong checksum. */
-    {
+    if (probe_native()) {
+        say("rawprobe: the sends for the capture checker: not run: no capture reads them\n");
+    } else {
         int udp_fd, ttl;
 
         for (ttl = 1; ttl <= 3; ttl++) {
@@ -806,7 +855,7 @@ PROBE_START void _start(void)
             csum = icmp_checksum(icmp, 8);
             icmp[2] = (uint8_t)(csum >> 8);
             icmp[3] = (uint8_t)(csum & 0xff);
-            sockaddr_for(sa, GATEWAY_IP, 0);
+            sockaddr_for(sa, gateway_ip, 0);
             args[0] = (uint32_t)fd_a;
             args[1] = (unsigned long)icmp;
             args[2] = 8;
@@ -849,7 +898,7 @@ PROBE_START void _start(void)
             args[3] = (unsigned long)&val;
             args[4] = sizeof(int);
             check(socketcall(SC_SETSOCKOPT, args) == 0, "the datagram socket takes one");
-            sockaddr_for(sa, GATEWAY_IP, (uint16_t)(40000 + ttl));
+            sockaddr_for(sa, gateway_ip, (uint16_t)(40000 + ttl));
             args[0] = (uint32_t)udp_fd;
             args[1] = (unsigned long)icmp;
             args[2] = 4;

@@ -25,9 +25,20 @@
  * sends a datagram from outside, and "NETIFPROBE OK" with exit 0 on success;
  * a failure prints "NETIFPROBE FAIL: " with the reason and exits 1.
  * Freestanding; direct system calls (probe.h).
+ *
+ * Given `machine=native` (probe_args.h), on a machine that is already up and
+ * reached through its one interface, the probe makes the queries alone, of
+ * the interface `ifname=NAME` names, eth0 without it: it reads the index,
+ * the address, the mask, the broadcast address and the MTU, prints them, and
+ * requires the index and the name to read back from each other, the
+ * broadcast address to be the subnet's and the MTU 1500, where the test
+ * image's are fixed. It leaves out every change of address, flags and
+ * routes, which would move or cut the machine's connection, and prints a
+ * line that says they did not run.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -1029,16 +1040,178 @@ static void netif_main(void);
  * runs `second_down`, and any other command line `netif_main`. */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
+    const char *mode;
 
-    if (argc > 1 && argv[1][0] == 's') {
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1);
+    if (mode != 0 && mode[0] == 's') {
         second_down();
     }
     netif_main();
 }
 
 PROBE_SP_ENTRY;
+
+/** Write the decimal `v` to standard output. */
+static void say_num(uint32_t v)
+{
+    char buf[12];
+    int i = (int)sizeof(buf);
+
+    buf[--i] = 0;
+    do {
+        buf[--i] = (char)('0' + (v % 10u));
+        v /= 10u;
+    } while (v != 0 && i > 0);
+    say(&buf[i]);
+}
+
+/** Write `ip`, in host order, in dots to standard output. */
+static void say_ip(uint32_t ip)
+{
+    int shift;
+
+    for (shift = 24; shift >= 0; shift -= 8) {
+        say_num((ip >> shift) & 0xFFu);
+        if (shift > 0) {
+            say(".");
+        }
+    }
+}
+
+/**
+ * The refusals of the query descriptor `fd`: bind, connect, listen, read and
+ * write are EOPNOTSUPP, and a poll reports POLLERR at once.
+ */
+static void query_refusals(int fd)
+{
+    unsigned long args[6];
+    struct pollfd_probe pfd;
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)sa_listen;
+    args[2] = 16;
+    if (socketcall(SC_BIND, args) != -EOPNOTSUPP) {
+        fail("the query descriptor accepted a bind");
+    }
+    if (socketcall(SC_CONNECT, args) != -EOPNOTSUPP) {
+        fail("the query descriptor accepted a connect");
+    }
+    args[1] = 4;
+    if (socketcall(SC_LISTEN, args) != -EOPNOTSUPP) {
+        fail("the query descriptor accepted a listen");
+    }
+    if (sys_read(fd, ifr, 1) != -EOPNOTSUPP) {
+        fail("the query descriptor was read");
+    }
+    if (sys_write(fd, ifr, 1) != -EOPNOTSUPP) {
+        fail("the query descriptor was written");
+    }
+    pfd.fd = fd;
+    pfd.events = POLLIN | POLLOUT;
+    pfd.revents = 0;
+    if (sys_poll(&pfd, 1, 0) != 1 || !(pfd.revents & POLLERR)) {
+        fail("a poll of the query descriptor did not report at once that it is neither");
+    }
+}
+
+/**
+ * The queries of a native run, on the query descriptor `fd`, of the
+ * interface `ifname` names: what the machine says about itself, as
+ * `netif_main` asks it, with the index, the address, the mask and the
+ * broadcast address read and printed rather than required to be QEMU's.
+ * Ends the probe with NETIFPROBE OK, or fails it.
+ */
+static void native_queries(int fd)
+{
+    const char *name = probe_arg("ifname", "eth0");
+    uint32_t index, addr, mask, brd;
+    int k;
+
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFINDEX, ifr) != 0) {
+        fail("the interface did not report its index");
+    }
+    index = (uint32_t)ifr[16] | ((uint32_t)ifr[17] << 8) | ((uint32_t)ifr[18] << 16) |
+            ((uint32_t)ifr[19] << 24);
+    if (index == 0) {
+        fail("the interface reported index 0");
+    }
+    set_name(other_dev);
+    if (sys_ioctl(fd, SIOCGIFINDEX, ifr) != -ENODEV) {
+        fail("an interface this machine does not have was not refused");
+    }
+    set_name("");
+    for (k = 0; k < 4; k++) {
+        ifr[16 + k] = (uint8_t)(index >> (8 * k));
+    }
+    if (sys_ioctl(fd, SIOCGIFNAME, ifr) != 0) {
+        fail("the interface's name did not read back from its index");
+    }
+    for (k = 0; name[k] != 0 && ifr[k] == (uint8_t)name[k]; k++) {
+    }
+    if (name[k] != 0 || ifr[k] != 0) {
+        fail("the name that came back is not this machine's");
+    }
+    set_name("");
+    ifr[16] = 7;
+    if (sys_ioctl(fd, SIOCGIFNAME, ifr) != -ENODEV) {
+        fail("an index this machine does not have was not refused");
+    }
+
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFHWADDR, ifr) != 0) {
+        fail("the hardware address did not read");
+    }
+    if (ifr[16] != 1) {
+        fail("the hardware address is not reported as Ethernet");
+    }
+    if (ifr[18] == 0 && ifr[19] == 0 && ifr[20] == 0 && ifr[21] == 0 && ifr[22] == 0 &&
+        ifr[23] == 0) {
+        fail("the hardware address is all zeros");
+    }
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || (addr = ifr_addr()) == 0) {
+        fail("the address did not read back");
+    }
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || (mask = ifr_addr()) == 0) {
+        fail("the netmask did not read back");
+    }
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFBRDADDR, ifr) != 0 || (brd = ifr_addr()) != ((addr & mask) | ~mask)) {
+        fail("the broadcast address is not the subnet's");
+    }
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFMTU, ifr) != 0 || ifr[16] != 0xdc || ifr[17] != 0x05) {
+        fail("the MTU is not 1500");
+    }
+    set_name(name);
+    if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0) {
+        fail("the flags did not read");
+    }
+    if (!(ifr[16] & (IFF_UP | IFF_BROADCAST)) || !(ifr[17] & (IFF_MULTICAST >> 8)) ||
+        !(ifr[16] & IFF_RUNNING)) {
+        fail("an interface that is up and running did not say so");
+    }
+    say("netifprobe: ");
+    say(name);
+    say(": index ");
+    say_num(index);
+    say(", address ");
+    say_ip(addr);
+    say(", mask ");
+    say_ip(mask);
+    say(", broadcast ");
+    say_ip(brd);
+    say(", mtu 1500\n");
+
+    query_refusals(fd);
+    say("netifprobe: the changes of address, flags and routes: not run: they would move "
+        "the interface the machine is reached through\n");
+    say("NETIFPROBE OK\n");
+    sys_exit(0);
+}
 
 /**
  * The interface ioctls on a machine with one card, in order; exits with
@@ -1119,6 +1292,9 @@ static void netif_main(void)
     if (socketcall(SC_SOCKET, args) != -EPROTONOSUPPORT) {
         fail("a raw socket for a protocol this stack does not carry was not refused");
     }
+    if (probe_native()) {
+        native_queries(fd);
+    }
 
     /* What this machine says about itself. */
     set_name("eth0");
@@ -1190,31 +1366,7 @@ static void netif_main(void)
     }
 
     /* The query descriptor refuses everything but its ioctls. */
-    args[0] = (uint32_t)fd;
-    args[1] = (unsigned long)sa_listen;
-    args[2] = 16;
-    if (socketcall(SC_BIND, args) != -EOPNOTSUPP) {
-        fail("the query descriptor accepted a bind");
-    }
-    if (socketcall(SC_CONNECT, args) != -EOPNOTSUPP) {
-        fail("the query descriptor accepted a connect");
-    }
-    args[1] = 4;
-    if (socketcall(SC_LISTEN, args) != -EOPNOTSUPP) {
-        fail("the query descriptor accepted a listen");
-    }
-    if (sys_read(fd, ifr, 1) != -EOPNOTSUPP) {
-        fail("the query descriptor was read");
-    }
-    if (sys_write(fd, ifr, 1) != -EOPNOTSUPP) {
-        fail("the query descriptor was written");
-    }
-    pfd.fd = fd;
-    pfd.events = POLLIN | POLLOUT;
-    pfd.revents = 0;
-    if (sys_poll(&pfd, 1, 0) != 1 || !(pfd.revents & POLLERR)) {
-        fail("a poll of the query descriptor did not report at once that it is neither");
-    }
+    query_refusals(fd);
 
     /* A connection to this machine itself, open across the change. */
     args[0] = AF_INET;

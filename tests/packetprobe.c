@@ -11,11 +11,24 @@
  * answer is addressed to 255.255.255.255, which `ip_rx` drops, so receiving it
  * is exactly the case the socket exists for.
  *
+ * A native run (probe_args.h) gives the addresses of its own network in
+ * place of QEMU's: `gateway=A.B.C.D`, which answers a ping, in place of
+ * 10.0.2.2, and `peer=A.B.C.D:PORT`, whose address answers the probe's ARP
+ * request, in place of the name server 10.0.2.3; `ifname=NAME` in place of
+ * eth0; and `ids=OLD:NEW,...` for the ordinary user 1000. With
+ * `machine=native` the probe reads the interface's index and address from
+ * the machine in place of 1 and 10.0.2.15, and leaves out the discovers and
+ * their offers, which need a DHCP server on a network of their own, the
+ * receives that need a socket nothing else reaches, and the two comparisons
+ * of HeapUsed, which the machine's other processes move; it prints a line
+ * for each part that says it did not run.
+ *
  * Prints "PACKETPROBE OK" and exits 0 on success, or "PACKETPROBE FAIL: " and
  * the reason and exits 1.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -23,7 +36,9 @@ typedef unsigned char uint8_t;
 
 #define STDOUT_FILENO 1
 
+#define SIOCGIFADDR   0x8915
 #define SIOCGIFHWADDR 0x8927
+#define SIOCGIFINDEX  0x8933
 
 #define AF_INET     2
 #define AF_PACKET   17
@@ -292,6 +307,106 @@ static uint8_t discover[DHCP_LEN];
 static uint8_t sender[24];
 static uint8_t control[64];
 
+/* The interface and the addresses the rows use: QEMU's, or those a native
+ * run gives or reads (`interface`). Addresses are in host byte order. */
+static const char *if_name;
+static int if_index;
+static uint32_t self_ip, gateway_ip, asked_ip;
+
+/** Print that the part `what` did not run, for `why`. */
+static void not_run(const char *what, const char *why)
+{
+    say("packetprobe: ");
+    say(what);
+    say(": not run: ");
+    say(why);
+    say("\n");
+}
+
+/** The IPv4 address written in dots at the start of `s`, in host byte order,
+ * or `fallback` when `s` is NULL or does not begin with one. */
+static uint32_t arg_ip(const char *s, uint32_t fallback)
+{
+    uint32_t ip = 0;
+    long part;
+    int i;
+
+    for (i = 0; s != 0 && i < 4; i++) {
+        part = probe_number(&s);
+        if (part < 0 || part > 255 || (i < 3 && *s++ != '.')) {
+            return fallback;
+        }
+        ip = (ip << 8) | (uint32_t)part;
+    }
+    return s != 0 ? ip : fallback;
+}
+
+/** Fill the 40-byte ifreq `ifr` with zeros and the interface's name. */
+static void ifreq_for(unsigned char *ifr)
+{
+    unsigned int i;
+
+    for (i = 0; i < 40; i++) {
+        ifr[i] = 0;
+    }
+    for (i = 0; i < 15 && if_name[i] != '\0'; i++) {
+        ifr[i] = (unsigned char)if_name[i];
+    }
+}
+
+/**
+ * Set the interface and the addresses from the arguments. Given
+ * `machine=native`, read the interface's index and address from the machine
+ * through SIOCGIFINDEX and SIOCGIFADDR on the socket `fd`.
+ */
+static void interface(int fd)
+{
+    unsigned char ifr[40];
+
+    if_name = probe_arg("ifname", "eth0");
+    if_index = 1;
+    self_ip = 0x0A00020Fu; /* 10.0.2.15 */
+    gateway_ip = arg_ip(probe_arg("gateway", 0), 0x0A000202u);
+    asked_ip = arg_ip(probe_arg("peer", 0), 0x0A000203u);
+    if (!probe_native()) {
+        return;
+    }
+    ifreq_for(ifr);
+    if (sys_ioctl(fd, SIOCGIFINDEX, ifr) != 0) {
+        fail("the interface would not report its index");
+    }
+    if_index = (int)(ifr[16] | (ifr[17] << 8) | (ifr[18] << 16) | ((unsigned)ifr[19] << 24));
+    ifreq_for(ifr);
+    if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0) {
+        fail("the interface would not report its address");
+    }
+    self_ip =
+        ((uint32_t)ifr[20] << 24) | ((uint32_t)ifr[21] << 16) | ((uint32_t)ifr[22] << 8) | ifr[23];
+}
+
+/** Write `ip`, in host byte order, in dots and then a space, to `out`, which
+ * has room for 17 bytes, and end it with a NUL. */
+static void dotted(char *out, uint32_t ip)
+{
+    int i, k = 0, shift;
+
+    for (shift = 24; shift >= 0; shift -= 8) {
+        unsigned int b = (ip >> shift) & 0xFFu;
+        char d[3];
+        int n = 0;
+
+        do {
+            d[n++] = (char)('0' + b % 10u);
+            b /= 10u;
+        } while (b != 0);
+        for (i = n - 1; i >= 0; i--) {
+            out[k++] = d[i];
+        }
+        out[k++] = shift > 0 ? '.' : ' ';
+    }
+    out[k] = '\0';
+}
+
 /**
  * Open, bind and close four packet sockets in a row, and fail unless the
  * kernel heap is back where it started.
@@ -325,7 +440,7 @@ static void check_close_releases(void)
         sll = zero_sll;
         sll.sll_family = AF_PACKET;
         sll.sll_protocol = ETH_P_IP_BE;
-        sll.sll_ifindex = 1;
+        sll.sll_ifindex = if_index;
         args[0] = (uint32_t)fd;
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
@@ -333,15 +448,77 @@ static void check_close_releases(void)
         if (r != 0) {
             fail_n("a bind after an earlier socket closed was refused", r);
         }
-        if (probe_meminfo("HeapUsed:") <= opened) {
+        if (!probe_native() && probe_meminfo("HeapUsed:") <= opened) {
             fail("a bind took nothing from the heap, so the heap cannot show "
                  "whether a close frees the binding");
         }
         sys_close(fd);
     }
-    if (probe_meminfo("HeapUsed:") != before) {
+    if (probe_native()) {
+        not_run("the heap after four packet sockets bound and closed",
+                "the machine's other processes move HeapUsed");
+    } else if (probe_meminfo("HeapUsed:") != before) {
         fail("four packet sockets bound and closed left the heap other than it "
              "was, so a close kept its binding");
+    }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * The rows of a native run between the bind and the two protocols: the
+ * refusal of a destination that is not a MAC address, which sends nothing,
+ * and the refused bind that leaves the protocol as it was, on the socket
+ * `fd`. The discovers and what is received of them are left out.
+ */
+static void native_rows(int fd)
+{
+    unsigned long args[6];
+    struct sockaddr_ll_probe sll, back;
+    unsigned int i;
+    /* volatile: the kernel writes it through a pointer. */
+    volatile unsigned int backlen;
+
+    sll = zero_sll;
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = ETH_P_IP_BE;
+    sll.sll_ifindex = if_index;
+    sll.sll_hatype = 1;
+    sll.sll_halen = 4;
+    for (i = 0; i < 6; i++) {
+        sll.sll_addr[i] = 0xff;
+    }
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)frame;
+    args[2] = DHCP_LEN;
+    args[3] = 0;
+    args[4] = (unsigned long)&sll;
+    args[5] = sizeof(sll);
+    if (socketcall(SC_SENDTO, args) != -EINVAL) {
+        fail("a destination that is not a MAC address was not refused");
+    }
+    not_run("the three discovers and their offers", "they need a DHCP server of their own");
+
+    sll.sll_protocol = ETH_P_ARP_BE;
+    sll.sll_ifindex = 99; /* no such interface */
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)&sll;
+    args[2] = sizeof(sll);
+    if (socketcall(SC_BIND, args) != -ENODEV) {
+        fail("a bind to an interface that does not exist was not refused");
+    }
+    back = zero_sll;
+    backlen = sizeof(back);
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)&back;
+    args[2] = (unsigned long)&backlen;
+    if (socketcall(SC_GETSOCKNAME, args) != 0) {
+        fail("getsockname after the refused bind failed");
+    }
+    if (back.sll_protocol != ETH_P_IP_BE) {
+        fail("a refused bind changed the protocol the socket receives");
     }
 }
 
@@ -411,7 +588,7 @@ static void check_close_releases(void)
  * killed has an exit byte of zero, so its status is checked for a signal
  * first, and a crash is not read as the refusal.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     unsigned long args[6];
     struct sockaddr_ll_probe sll;
@@ -425,6 +602,8 @@ PROBE_START void _start(void)
     volatile unsigned int senderlen;
     uint16_t csum;
     unsigned int i;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
 
     /* What it refuses: a stream socket, IPv6, and PACKET_AUXDATA. */
     args[0] = AF_PACKET;
@@ -452,6 +631,7 @@ PROBE_START void _start(void)
     if (fd < 0) {
         fail("a packet socket did not open");
     }
+    interface(fd);
 
     r = 1;
     args[0] = (uint32_t)fd;
@@ -475,9 +655,13 @@ PROBE_START void _start(void)
     if (socketcall(SC_BIND, args) != -ENODEV) {
         fail("a bind to an interface that does not exist was not refused");
     }
-    sll.sll_ifindex = 1;
+    sll.sll_ifindex = if_index;
     if (socketcall(SC_BIND, args) != 0) {
         fail("a bind to the machine's interface failed");
+    }
+    if (probe_native()) {
+        native_rows(fd);
+        goto two_protocols;
     }
 
     /* What it sends: a DHCP discover, built whole and broadcast. */
@@ -779,6 +963,7 @@ PROBE_START void _start(void)
         }
     }
 
+two_protocols:
     sys_close(fd);
 
     /* An ARP and an IPv4 socket each see their own frames only. */
@@ -787,6 +972,7 @@ PROBE_START void _start(void)
         struct pollfd_probe pair[2];
         unsigned char ifr[40];
         unsigned char mac[6];
+        char gateway_text[17];
 
         args[0] = AF_PACKET;
         args[1] = SOCK_DGRAM;
@@ -800,7 +986,7 @@ PROBE_START void _start(void)
         }
         sll.sll_family = AF_PACKET;
         sll.sll_protocol = ETH_P_ARP_BE;
-        sll.sll_ifindex = 1;
+        sll.sll_ifindex = if_index;
         args[0] = (uint32_t)arp_fd;
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
@@ -809,13 +995,7 @@ PROBE_START void _start(void)
         }
 
         /* getsockname gives the address SIOCGIFHWADDR reports. */
-        for (i = 0; i < sizeof(ifr); i++) {
-            ifr[i] = 0;
-        }
-        ifr[0] = 'e';
-        ifr[1] = 't';
-        ifr[2] = 'h';
-        ifr[3] = '0';
+        ifreq_for(ifr);
         if (sys_ioctl(arp_fd, SIOCGIFHWADDR, ifr) != 0) {
             fail("the interface would not report its hardware address");
         }
@@ -839,7 +1019,7 @@ PROBE_START void _start(void)
         if (sll.sll_family != AF_PACKET || sll.sll_protocol != ETH_P_ARP_BE) {
             fail("getsockname did not report the family and protocol bound");
         }
-        if (sll.sll_ifindex != 1 || sll.sll_hatype != 1 || sll.sll_halen != 6) {
+        if (sll.sll_ifindex != if_index || sll.sll_hatype != 1 || sll.sll_halen != 6) {
             fail("getsockname did not report the interface it is bound to");
         }
         for (i = 0; i < 6; i++) {
@@ -860,7 +1040,7 @@ PROBE_START void _start(void)
         }
         sll.sll_family = AF_PACKET;
         sll.sll_protocol = ETH_P_IP_BE;
-        sll.sll_ifindex = 1;
+        sll.sll_ifindex = if_index;
         args[0] = (uint32_t)ip_fd;
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
@@ -880,15 +1060,10 @@ PROBE_START void _start(void)
         for (i = 0; i < 6; i++) {
             frame[8 + i] = mac[i]; /* sender hardware address */
         }
-        frame[14] = 10; /* sender protocol address: this machine */
-        frame[15] = 0;
-        frame[16] = 2;
-        frame[17] = 15;
-        /* It asks about the name server, 10.0.2.3, not the gateway. */
-        frame[24] = 10;
-        frame[25] = 0;
-        frame[26] = 2;
-        frame[27] = 3;
+        for (i = 0; i < 4; i++) {
+            frame[14 + i] = (uint8_t)(self_ip >> (24 - 8 * i));  /* sender protocol address */
+            frame[24 + i] = (uint8_t)(asked_ip >> (24 - 8 * i)); /* the address asked about */
+        }
         sll.sll_protocol = ETH_P_ARP_BE;
         sll.sll_hatype = 1;
         sll.sll_pkttype = 0;
@@ -907,7 +1082,7 @@ PROBE_START void _start(void)
         }
 
         /* The gateway's echo reply is IPv4 traffic for the other socket. */
-        args[0] = 0x0A000202u;
+        args[0] = gateway_ip;
         r = socketcall(SC_PING, args);
         if (r < 0) {
             fail_n("the gateway did not answer the ping whose reply the IPv4 socket waits for", r);
@@ -941,9 +1116,10 @@ PROBE_START void _start(void)
                     frame[4] != 6 || frame[5] != 4) {
                     fail("the ARP socket was given a frame that is not ARP");
                 }
-                /* A reply whose sender is 10.0.2.3 answers the request. */
-                if (frame[6] == 0 && frame[7] == 2 && frame[14] == 10 && frame[15] == 0 &&
-                    frame[16] == 2 && frame[17] == 3) {
+                /* A reply whose sender is the address asked about answers it. */
+                if (frame[6] == 0 && frame[7] == 2 && frame[14] == (uint8_t)(asked_ip >> 24) &&
+                    frame[15] == (uint8_t)(asked_ip >> 16) &&
+                    frame[16] == (uint8_t)(asked_ip >> 8) && frame[17] == (uint8_t)asked_ip) {
                     arp_replies++;
                 }
             }
@@ -970,7 +1146,8 @@ PROBE_START void _start(void)
         if (n <= 0) {
             fail("/proc/net/arp could not be read");
         }
-        if (!contains((const char *)frame, n, "10.0.2.2 ")) {
+        dotted(gateway_text, gateway_ip);
+        if (!contains((const char *)frame, n, gateway_text)) {
             fail("the address the machine resolved is not in its ARP cache, so "
                  "the packet socket took the frame away from the kernel");
         }
@@ -984,7 +1161,7 @@ PROBE_START void _start(void)
     /* An ordinary user is refused a packet socket. */
     pid = sys_fork();
     if (pid == 0) {
-        if (sys_setuid(1000) != 0) {
+        if (sys_setuid((int)probe_id(1000)) != 0) {
             sys_exit(2);
         }
         args[0] = AF_PACKET;

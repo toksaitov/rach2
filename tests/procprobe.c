@@ -36,9 +36,25 @@
  * Needs: the machine to itself. The rows over `/proc/net/tcp` count what the
  * whole machine has open, so a login over SSH, or anything else holding a
  * socket, fails them on its own presence.
+ *
+ * A native run (probe_args.h), on a machine that is already up, gives
+ * `ports=OLD:NEW,...` for the local ports 8080, 8081, 9000 to 9007 and 9100
+ * to 9107, `ids=OLD:NEW,...` for the uid 1000, and `ifname=NAME` for the
+ * interface in place of eth0, and runs the probe in a UTS namespace of its
+ * own, so that the host name it writes is its own. With `machine=native` the
+ * probe leaves out the rows of the whole machine's tables and counts, which
+ * the machine's services and its connections move: the line count of the
+ * full pool of listeners and the rows that read the last line of
+ * `/proc/net/tcp` as a whole row of the probe's, `procs_blocked` of 0, the
+ * idle and busy ticks, and the count of the lines of `/proc/mounts`; it finds
+ * its listener's row by its port rather than as the last, and the host bridge
+ * by its class rather than at 00:00.0; and it requires the interface's
+ * address in Linux's form without QEMU's prefix, and its PCI function on any
+ * bus. It prints a line for each row it leaves out.
  */
 
 #include "probe.h"
+#include "probe_args.h"
 
 #define STDOUT_FILENO 1
 
@@ -110,6 +126,46 @@ static void check(int cond, const char *msg)
         syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
     }
+}
+
+/** Check `cond` as `check` does, or, given `machine=native`, print that the
+ * row `msg` of the whole machine's state did not run. */
+static void check_machine(int cond, const char *msg)
+{
+    if (probe_native()) {
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  not run: ", 11);
+        syscall3(SYS_WRITE, STDOUT_FILENO, (long)msg, (int)strlen(msg));
+        puts(": the machine's other processes move it");
+        return;
+    }
+    check(cond, msg);
+}
+
+/** Put `port`, the local port a native run gives in place of `old`, in the
+ * sockaddr_in `sa`, in network order. */
+static void put_port(unsigned char *sa, int old)
+{
+    long port = probe_port(old);
+
+    sa[2] = (unsigned char)((port >> 8) & 0xff);
+    sa[3] = (unsigned char)(port & 0xff);
+}
+
+/** Write ":XXXX ", the port a native run gives in place of `old` as
+ * /proc/net/tcp and udp write it, four uppercase hexadecimal digits, to
+ * `out`, which has room for 7 bytes. */
+static void port_text(char *out, int old)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    long port = probe_port(old);
+    int i;
+
+    out[0] = ':';
+    for (i = 0; i < 4; i++) {
+        out[1 + i] = hex[(port >> (12 - 4 * i)) & 0xf];
+    }
+    out[5] = ' ';
+    out[6] = '\0';
 }
 
 /**
@@ -779,6 +835,55 @@ static void done(void)
     sys_exit(fails);
 }
 
+static int listing(const char *dir, char *out, int cap);
+
+/** `a`, `b` and `c` joined in the buffer `out` of `cap` bytes, cut to fit;
+ * returns `out`. */
+static char *join3(char *out, int cap, const char *a, const char *b, const char *c)
+{
+    const char *parts[3];
+    int k = 0, i, j;
+
+    parts[0] = a;
+    parts[1] = b;
+    parts[2] = c;
+    for (j = 0; j < 3; j++) {
+        for (i = 0; parts[j][i] != '\0' && k < cap - 1; i++) {
+            out[k++] = parts[j][i];
+        }
+    }
+    out[k] = '\0';
+    return out;
+}
+
+/** The PCI slot of the host bridge, 0000:00:00.0 where every machine of the
+ * suites has it; given `machine=native`, the first device of
+ * /sys/bus/pci/devices whose class is a host bridge's, or 0000:00:00.0 when
+ * none is. */
+static const char *host_bridge(void)
+{
+    static char slot[16] = "0000:00:00.0";
+    static char names[1024];
+    char path[64];
+    int i, k, n;
+
+    if (!probe_native() || listing("/sys/bus/pci/devices", names, (int)sizeof(names)) != 0) {
+        return slot;
+    }
+    for (i = 0; names[i] != '\0'; i = k + 1) {
+        for (k = i; names[k] != ' '; k++) {
+        }
+        names[k] = '\0';
+        n = slurp(join3(path, (int)sizeof(path), "/sys/bus/pci/devices/", names + i, "/uevent"),
+                  buf, (int)sizeof(buf));
+        if (k - i < (int)sizeof(slot) && contains(buf, n, "PCI_CLASS=60000\n")) {
+            join3(slot, (int)sizeof(slot), names + i, "", "");
+            break;
+        }
+    }
+    return slot;
+}
+
 /** /sys: the host bridge every machine here has at 00:00.0, its link in the
  * bus's list leading where Linux's does, and its uevent with the variables
  * lspci reads; the mount table listing /sys read-only; and mountinfo with
@@ -786,18 +891,24 @@ static void done(void)
 static void sys_rows(void)
 {
     static unsigned char st[144];
+    const char *slot = host_bridge();
     char link[64] = {0};
-    int n = syscall3(SYS_READLINK, (long)"/sys/bus/pci/devices/0000:00:00.0", (long)link,
-                     (int)sizeof(link) - 1);
+    char path[64];
+    char want[64];
+    int n = syscall3(SYS_READLINK,
+                     (long)join3(path, (int)sizeof(path), "/sys/bus/pci/devices/", slot, ""),
+                     (long)link, (int)sizeof(link) - 1);
 
     if (n > 0) {
         link[n] = '\0';
     }
-    check(n > 0 && same_str(link, "../../../devices/pci0000:00/0000:00:00.0"),
+    check(n > 0 && same_str(link, join3(want, (int)sizeof(want), "../../../devices/pci0000:00/",
+                                        slot, "")),
           "/sys/bus/pci/devices has the host bridge's link, to its directory");
-    n = slurp("/sys/bus/pci/devices/0000:00:00.0/uevent", buf, (int)sizeof(buf));
+    n = slurp(join3(path, (int)sizeof(path), "/sys/bus/pci/devices/", slot, "/uevent"), buf,
+              (int)sizeof(buf));
     check(contains(buf, n, "PCI_CLASS=60000\n") && contains(buf, n, "\nPCI_ID=") &&
-              contains(buf, n, "\nPCI_SLOT_NAME=0000:00:00.0\n"),
+              contains(buf, n, join3(want, (int)sizeof(want), "\nPCI_SLOT_NAME=", slot, "\n")),
           "and its uevent has the class, the IDs and the slot lspci reads");
     n = slurp("/proc/mounts", buf, (int)sizeof(buf));
     check(contains(buf, n, "\nsysfs /sys sysfs ro,"), "/proc/mounts lists /sys, read-only");
@@ -1039,6 +1150,52 @@ static void pid_dir_rows(void)
     }
 }
 
+/** The interface the rows of /sys/class/net read: `ifname`, or eth0. */
+static const char *ifname(void)
+{
+    return probe_arg("ifname", "eth0");
+}
+
+/** "/sys/class/net/NAME/`leaf`" for the interface `ifname` gives, in a
+ * buffer of its own that the next call overwrites; a name too long for it
+ * is cut. */
+static const char *class_path(const char *leaf)
+{
+    static char out[96];
+    static const char head[] = "/sys/class/net/";
+    const char *name = ifname();
+    int k = 0, i;
+
+    for (i = 0; head[i] != '\0'; i++) {
+        out[k++] = head[i];
+    }
+    for (i = 0; name[i] != '\0' && i < 16; i++) {
+        out[k++] = name[i];
+    }
+    out[k++] = '/';
+    for (i = 0; leaf[i] != '\0' && k < (int)sizeof(out) - 1; i++) {
+        out[k++] = leaf[i];
+    }
+    out[k] = '\0';
+    return out;
+}
+
+/** 1 if `b` begins with six pairs of lowercase hexadecimal digits joined by
+ * colons, as Linux writes a hardware address. */
+static int lowercase_mac(const char *b)
+{
+    int i;
+
+    for (i = 0; i < 17; i++) {
+        int digit = (b[i] >= '0' && b[i] <= '9') || (b[i] >= 'a' && b[i] <= 'f');
+
+        if (i % 3 == 2 ? b[i] != ':' : !digit) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /** /sys/class/net: the card's interface listed, its address in Linux's
  * lowercase form with QEMU's prefix, its MTU, a counter of its statistics,
  * and its device link leading to its PCI function. */
@@ -1046,21 +1203,33 @@ static void net_class_rows(void)
 {
     static char names[256];
     char link[64] = {0};
-    int n;
+    char listed[24];
+    int n, k;
 
+    for (k = 0; k < 16 && ifname()[k] != '\0'; k++) {
+        listed[k] = ifname()[k];
+    }
+    listed[k] = ' ';
+    listed[k + 1] = '\0';
     check(listing("/sys/class/net", names, (int)sizeof(names)) == 0 &&
-              contains(names, (int)sizeof(names), "eth0 "),
+              contains(names, (int)sizeof(names), listed),
           "/sys/class/net lists eth0");
-    n = slurp("/sys/class/net/eth0/address", buf, (int)sizeof(buf));
-    check(n == 18 && contains(buf, n, "52:54:00:") && buf[17] == '\n',
-          "and its address is lowercase, as Linux writes it");
-    n = slurp("/sys/class/net/eth0/mtu", buf, (int)sizeof(buf));
+    n = slurp(class_path("address"), buf, (int)sizeof(buf));
+    if (probe_native()) {
+        check(n == 18 && lowercase_mac(buf) && buf[17] == '\n',
+              "and its address is lowercase, as Linux writes it");
+    } else {
+        check(n == 18 && contains(buf, n, "52:54:00:") && buf[17] == '\n',
+              "and its address is lowercase, as Linux writes it");
+    }
+    n = slurp(class_path("mtu"), buf, (int)sizeof(buf));
     check(n == 5 && contains(buf, n, "1500\n"), "its MTU is Ethernet's");
-    n = slurp("/sys/class/net/eth0/statistics/rx_packets", buf, (int)sizeof(buf));
+    n = slurp(class_path("statistics/rx_packets"), buf, (int)sizeof(buf));
     check(n > 1 && buf[0] >= '0' && buf[0] <= '9', "its statistics count packets");
-    n = syscall3(SYS_READLINK, (long)"/sys/class/net/eth0/device", (long)link,
-                 (int)sizeof(link) - 1);
-    check(n > 0 && contains(link, n, "../../../devices/pci0000:00/0000:00:"),
+    n = syscall3(SYS_READLINK, (long)class_path("device"), (long)link, (int)sizeof(link) - 1);
+    check(n > 0 && contains(link, n,
+                            probe_native() ? "../../../devices/pci0000:00/0000:"
+                                           : "../../../devices/pci0000:00/0000:00:"),
           "and its device link leads to its PCI function");
 }
 
@@ -1188,8 +1357,7 @@ static void count_rows(void)
         sa[i] = 0;
     }
     sa[0] = AF_INET;
-    sa[2] = 0x1F; /* port 8081, big-endian, where nothing listens */
-    sa[3] = 0x91;
+    put_port(sa, 8081); /* where nothing listens */
     sa[4] = 127;
     sa[7] = 1;
     args[0] = (unsigned int)fd;
@@ -1217,6 +1385,7 @@ static void dgram_and_local_rows(void)
     unsigned long args[6];
     unsigned char sa[16];
     char st[8];
+    char port[7];
     int ufd, xfd, i, n;
 
     args[0] = AF_INET;
@@ -1227,15 +1396,15 @@ static void dgram_and_local_rows(void)
         sa[i] = 0;
     }
     sa[0] = AF_INET;
-    sa[2] = 0x1F; /* port 8081, big-endian */
-    sa[3] = 0x91;
+    put_port(sa, 8081);
     args[0] = (unsigned int)ufd;
     args[1] = (unsigned long)sa;
     args[2] = 16;
     check(ufd >= 0 && sock_call(SC_BIND, args) == 0, "a datagram socket opens and binds");
     n = slurp("/proc/net/udp", buf, (int)sizeof(buf));
     check(contains(buf, n, " inode ref pointer drops\n"), "/proc/net/udp carries its header");
-    check(line_field(buf, n, ":1F91 ", 3, st, (int)sizeof(st)) == 2 && st[0] == '0' && st[1] == '7',
+    port_text(port, 8081);
+    check(line_field(buf, n, port, 3, st, (int)sizeof(st)) == 2 && st[0] == '0' && st[1] == '7',
           "and the bound socket's row, with the state netstat reads as unconnected");
     syscall1(SYS_CLOSE, ufd);
 
@@ -1285,8 +1454,8 @@ static void sleeping_child_rows(const char *path)
     }
     check(n > 0 && i + 2 < n && buf[i + 2] == 'S', "a child asleep in pause is in the state S");
     n = slurp("/proc/stat", buf, (int)sizeof(buf));
-    check(uint_after(buf, n, "procs_blocked ") == 0,
-          "/proc/stat counts no process blocked while a child sleeps in pause");
+    check_machine(uint_after(buf, n, "procs_blocked ") == 0,
+                  "/proc/stat counts no process blocked while a child sleeps in pause");
 }
 
 /** /proc/sys/vm has the swap's weight and the overcommit policy at Linux's
@@ -1332,7 +1501,7 @@ static void pool_full_rows(void)
     if (filler_pid == 0) {
         for (i = 0; i < FILL_CHILD; i++) {
             int lfd = new_socket(args);
-            if (lfd < 0 || listen_on(lfd, 9000 + i, sa, args) != 0) {
+            if (lfd < 0 || listen_on(lfd, (int)probe_port(9000 + i), sa, args) != 0) {
                 sys_exit(31);
             }
         }
@@ -1342,17 +1511,18 @@ static void pool_full_rows(void)
     nap(500);
     for (i = 0; i < FILL_HERE; i++) {
         fds[i] = new_socket(args);
-        check(fds[i] >= 0 && listen_on(fds[i], 9100 + i, sa, args) == 0,
+        check(fds[i] >= 0 && listen_on(fds[i], (int)probe_port(9100 + i), sa, args) == 0,
               "a listening socket for the parent's half of the pool");
     }
 
     n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
     check(n > 0, "/proc/net/tcp reads with the pool full");
-    check(n < (int)sizeof(buf) - 1, "and the whole file fit in one read, so nothing was cut");
-    check(lines_in(buf, n) == MAX_TCP_ROWS + 1,
-          "a full pool prints a header and one row for every block");
-    check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
-          "and the last of them is a whole row");
+    check_machine(n < (int)sizeof(buf) - 1,
+                  "and the whole file fit in one read, so nothing was cut");
+    check_machine(lines_in(buf, n) == MAX_TCP_ROWS + 1,
+                  "a full pool prints a header and one row for every block");
+    check_machine(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+                  "and the last of them is a whole row");
 
     for (i = 0; i < FILL_HERE; i++) {
         syscall1(SYS_CLOSE, fds[i]);
@@ -1423,7 +1593,7 @@ static void connection_owner_rows(void)
     check(listener_pid >= 0, "fork for the listener");
     if (listener_pid == 0) {
         /* The child owns the listener, at a uid the parent lacks. */
-        if (syscall3(SYS_SETRESUID, 1000, 1000, 1000) != 0) {
+        if (syscall3(SYS_SETRESUID, probe_id(1000), probe_id(1000), probe_id(1000)) != 0) {
             sys_exit(21);
         }
         args[0] = AF_INET;
@@ -1437,8 +1607,7 @@ static void connection_owner_rows(void)
             sa[i] = 0;
         }
         sa[0] = AF_INET;
-        sa[2] = 0x1F;
-        sa[3] = 0x91; /* port 8081 */
+        put_port(sa, 8081);
         args[0] = (unsigned int)lfd;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -1463,8 +1632,7 @@ static void connection_owner_rows(void)
         sa[i] = 0;
     }
     sa[0] = AF_INET;
-    sa[2] = 0x1F;
-    sa[3] = 0x91;
+    put_port(sa, 8081);
     sa[4] = 127;
     sa[7] = 1; /* 127.0.0.1 */
     args[0] = (unsigned int)cfd;
@@ -1474,14 +1642,14 @@ static void connection_owner_rows(void)
 
     n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
     check(n > 0, "/proc/net/tcp reads with connections live");
-    count_row_owners(buf, n, 1000, &owner_rows, &root_rows);
+    count_row_owners(buf, n, (int)probe_id(1000), &owner_rows, &root_rows);
     check(owner_rows >= 2, "the listener and the connection it accepted both belong to the "
                            "account that listened, not to whoever was running");
     check(root_rows >= 1, "and root's own connecting socket belongs to root");
 
     /* The table comes back whole however many rows it has. */
-    check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
-          "a table with several rows still ends with a whole row");
+    check_machine(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+                  "a table with several rows still ends with a whole row");
 
     syscall1(SYS_CLOSE, cfd);
     /* A closing row keeps its inode after its socket is detached. */
@@ -1521,9 +1689,15 @@ static void mounts_rows(char *buf, int cap)
     int n = slurp("/proc/mounts", buf, cap);
 
     check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
-    check(lines_in(buf, n) == 6 &&
-              contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
-          "/proc/mounts names the root, /dev, /proc, /dev/shm, /sys and /dev/mqueue");
+    if (probe_native()) {
+        check(contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
+              "/proc/mounts names /dev/mqueue");
+        check_machine(1, "/proc/mounts has the six permanent mounts alone");
+    } else {
+        check(lines_in(buf, n) == 6 &&
+                  contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
+              "/proc/mounts names the root, /dev, /proc, /dev/shm, /sys and /dev/mqueue");
+    }
     check(ends_with(buf, n, " 0 0\n"), "/proc/mounts's last line is a whole fstab row");
     print_rootmount(buf, n);
 }
@@ -1579,12 +1753,13 @@ static void mounts_rows(char *buf, int cap)
  */
 void probe_main(unsigned long *sp)
 {
-    int argc = (int)sp[0];
-    char **argv = (char **)(sp + 1);
+    const char *mode;
     int n;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1);
     /* `procprobe mount`: the root's mount line and nothing else. */
-    if (argc > 1 && argv[1][0] == 'm') {
+    if (mode != 0 && mode[0] == 'm') {
         n = slurp("/proc/mounts", buf, (int)sizeof(buf));
         check(n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
         print_rootmount(buf, n);
@@ -1746,7 +1921,9 @@ void probe_main(unsigned long *sp)
     }
 
     /* Idle against busy, over two intervals of the same length. */
-    {
+    if (probe_native()) {
+        puts("  not run: the idle and busy ticks: the machine's other processes move them");
+    } else {
         int t0, i0, t1, i1, t2, i2;
         int b0, b1, b2;
         int idle_slept, busy_slept, idle_spun, busy_spun;
@@ -1811,6 +1988,9 @@ void probe_main(unsigned long *sp)
         char stbuf[KSTAT_SIZE] = {0}; /* fstat fills it through a long-cast pointer */
         char link[64];
         char fdpath[32];
+        char port[7];
+        char any[17];
+        int k;
 
         /* A socket's inode is its own and is not handed out twice. */
         {
@@ -1842,8 +2022,7 @@ void probe_main(unsigned long *sp)
             sa[i] = 0;
         }
         sa[0] = AF_INET;
-        sa[2] = 0x1F; /* port 8080, big-endian */
-        sa[3] = 0x90;
+        put_port(sa, 8080);
         args[0] = (unsigned int)sfd;
         args[1] = (unsigned long)sa;
         args[2] = 16;
@@ -1863,24 +2042,41 @@ void probe_main(unsigned long *sp)
         check(n > 0 && buf[n - 1] == '\n', "/proc/net/tcp ends with its newline");
         check(contains(buf, n, "inode\n"), "/proc/net/tcp carries its whole header");
         check(lines_in(buf, n) >= 2, "/proc/net/tcp lists the listening socket");
-        check(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
-              "/proc/net/tcp's last row runs past the inode, which netstat needs");
-        check(last_row_has_fields(buf, n),
-              "/proc/net/tcp's last row has an eight-digit retransmission count and the "
-              "stack's own fields with values");
-        /* The listener's row, local port 1F90, is the last. */
-        row_inode = last_row_inode(buf, n);
+        check_machine(ends_with(buf, n, "\n") && contains(buf, n, " 100 0 0 10 0 wnd="),
+                      "/proc/net/tcp's last row runs past the inode, which netstat needs");
+        check_machine(last_row_has_fields(buf, n),
+                      "/proc/net/tcp's last row has an eight-digit retransmission count and the "
+                      "stack's own fields with values");
+        port_text(port, 8080);
+        any[0] = ':';
+        any[1] = ' ';
+        for (k = 0; k < 8; k++) {
+            any[2 + k] = '0';
+        }
+        for (k = 0; k < 7; k++) {
+            any[10 + k] = port[k];
+        }
+        /* The listener's row, local port 1F90, is the last; a native run,
+         * which shares the table, finds it by its port. */
+        if (probe_native()) {
+            char inode[16];
+            int len = line_field(buf, n, any, 9, inode, (int)sizeof(inode));
+
+            row_inode = len > 0 ? first_uint(inode, len) : -1;
+        } else {
+            row_inode = last_row_inode(buf, n);
+        }
         check(row_inode > 1,
               "/proc/net/tcp names an inode past the first, so a constant cannot match");
         /* The state column is Linux's number: 0A for LISTEN. */
         {
             char st[8];
 
-            check(line_field(buf, n, ":1F90 ", 3, st, (int)sizeof(st)) == 2 && st[0] == '0' &&
+            check(line_field(buf, n, port, 3, st, (int)sizeof(st)) == 2 && st[0] == '0' &&
                       st[1] == 'A',
                   "the listening socket's row says 0A, the number netstat reads as LISTEN");
         }
-        check(contains(buf, n, ": 00000000:1F90 "),
+        check(contains(buf, n, any),
               "the listener, which takes its port on every address, is at 0.0.0.0");
 
         check(syscall3(SYS_FSTAT, sfd, (long)stbuf, 0) == 0, "fstat the socket");
