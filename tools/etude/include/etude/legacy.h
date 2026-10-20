@@ -187,10 +187,21 @@ struct etude_legacy_set_opts {
  * `o->width` admit. A failure of a member that `stops`, or of any member
  * with `o->stop_on_fail`, cancels what runs and what has not started.
  *
+ * A member with `cases` is run by the host cases of its manifest that run
+ * on `o->arch` or on none, each repetition of each a member of its own that
+ * keeps the suite's `serial` and `stops`. Their programs are goals of the
+ * preparation; each runs in the tree under the case's initial bounds, with
+ * a claim of the case's resources, and `o->casecheck` judges each attempt.
+ * A manifest that cannot be read, of another suite's family, with no case
+ * on the architecture, or with a case that is not a host case or needs
+ * input, ports, loop devices, host locks or a fixture other than scratch,
+ * is refused.
+ *
  * The history is one stream under `o->results`, with the plan of one item
- * for each member, the case `legacy.SUITE` of the family `legacy.SUITE`, a
- * step for the preparation, an attempt record for each suite started, and
- * the run record; its blobs go to the store. A suite's output is printed
+ * for each suite of the registry, the case `legacy.SUITE` of the family
+ * `legacy.SUITE`, and one for each repetition of each case, a step for the
+ * preparation, an attempt record for each member started, and the run
+ * record; its blobs go to the store. A suite's output is printed
  * whole when it ends, or as it comes when the set has one member, and the
  * output of the suites a stop interrupted is printed with what they wrote.
  * The status record, when asked for, gives the claims that wait and the

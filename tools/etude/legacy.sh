@@ -7,7 +7,7 @@
 # they do for tests/run; a run takes both from its record.
 #
 # Usage: sh tools/etude/legacy.sh prepare [-w WORK] [-o RECORD] [-s SECONDS]
-#                                    SUITE...
+#                                    [-b GOAL]... SUITE...
 #        sh tools/etude/legacy.sh check [-d] RECORD
 #        sh tools/etude/legacy.sh run [-w WORK] [-i IDLE] [-s SECONDS] RECORD
 #                                    SUITE
