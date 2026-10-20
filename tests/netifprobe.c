@@ -28,17 +28,19 @@
  *
  * Given `machine=native` (probe_args.h), on a machine that is already up and
  * reached through its one interface, the probe makes the queries alone, of
- * the interface `ifname=NAME` names, eth0 without it: it reads the index,
- * the address, the mask, the broadcast address and the MTU, prints them, and
- * requires the index and the name to read back from each other, the
- * broadcast address to be the subnet's and the MTU 1500, where the test
- * image's are fixed. It leaves out every change of address, flags and
- * routes, which would move or cut the machine's connection, and prints a
- * line that says they did not run.
+ * the interface `ifname=NAME` names, or else that of the default route
+ * (probe_netif.h): it reads the index, the address, the mask, the broadcast
+ * address and the MTU, prints them, and requires the index and the name to
+ * read back from each other, the address and the mask to be those that
+ * `addr=A.B.C.D/PREFIX` gives when it is given, the broadcast address to be
+ * the subnet's and the MTU 1500, where the test image's are fixed. It leaves
+ * out every change of address, flags and routes, which would move or cut the
+ * machine's connection.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_netif.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -1116,16 +1118,42 @@ static void query_refusals(int fd)
 }
 
 /**
- * The queries of a native run, on the query descriptor `fd`, of the
- * interface `ifname` names: what the machine says about itself, as
- * `netif_main` asks it, with the index, the address, the mask and the
- * broadcast address read and printed rather than required to be QEMU's.
- * Ends the probe with NETIFPROBE OK, or fails it.
+ * Fail unless `addr` and `mask`, in host order, are the address and the
+ * prefix of the argument `addr=A.B.C.D/PREFIX`, when it is given.
  */
-static void native_queries(int fd)
+static void check_declared(uint32_t addr, uint32_t mask)
 {
-    const char *name = probe_arg("ifname", "eth0");
-    uint32_t index, addr, mask, brd;
+    const char *s = probe_arg("addr", 0);
+    uint32_t want = 0;
+    long part = 0;
+    int i;
+
+    if (s == 0) {
+        return;
+    }
+    for (i = 0; i < 5 && part >= 0; i++) {
+        part = probe_number(&s);
+        if (i < 4) {
+            want = (want << 8) | ((uint32_t)part & 0xFFu);
+        }
+        if (i < 4 && *s++ != (i < 3 ? '.' : '/')) {
+            part = -1;
+        }
+    }
+    if (part < 0 || part > 32 || want != addr ||
+        mask != (part == 0 ? 0u : 0xFFFFFFFFu << (32 - part))) {
+        fail("the address or the mask is not the one addr= gives");
+    }
+}
+
+/**
+ * The index of the interface `name`, read on the query descriptor `fd`:
+ * not 0, its name read back from it, and a name and an index the machine
+ * lacks refused.
+ */
+static uint32_t native_index(int fd, const char *name)
+{
+    uint32_t index;
     int k;
 
     set_name(name);
@@ -1158,7 +1186,13 @@ static void native_queries(int fd)
     if (sys_ioctl(fd, SIOCGIFNAME, ifr) != -ENODEV) {
         fail("an index this machine does not have was not refused");
     }
+    return index;
+}
 
+/** The hardware address of the interface `name`, read on the query
+ * descriptor `fd`: Ethernet's, and not all zeros. */
+static void native_hwaddr(int fd, const char *name)
+{
     set_name(name);
     if (sys_ioctl(fd, SIOCGIFHWADDR, ifr) != 0) {
         fail("the hardware address did not read");
@@ -1170,6 +1204,21 @@ static void native_queries(int fd)
         ifr[23] == 0) {
         fail("the hardware address is all zeros");
     }
+}
+
+/**
+ * The queries of a native run, on the query descriptor `fd`, of the
+ * interface `probe_ifname` gives: what the machine says about itself, as
+ * `netif_main` asks it, with the index, the address, the mask and the
+ * broadcast address read and printed rather than required to be QEMU's.
+ * Ends the probe with NETIFPROBE OK, or fails it.
+ */
+static void native_queries(int fd)
+{
+    const char *name = probe_ifname();
+    uint32_t index = native_index(fd, name), addr, mask, brd;
+
+    native_hwaddr(fd, name);
     set_name(name);
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || (addr = ifr_addr()) == 0) {
         fail("the address did not read back");
@@ -1178,6 +1227,7 @@ static void native_queries(int fd)
     if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || (mask = ifr_addr()) == 0) {
         fail("the netmask did not read back");
     }
+    check_declared(addr, mask);
     set_name(name);
     if (sys_ioctl(fd, SIOCGIFBRDADDR, ifr) != 0 || (brd = ifr_addr()) != ((addr & mask) | ~mask)) {
         fail("the broadcast address is not the subnet's");
@@ -1207,8 +1257,6 @@ static void native_queries(int fd)
     say(", mtu 1500\n");
 
     query_refusals(fd);
-    say("netifprobe: the changes of address, flags and routes: not run: they would move "
-        "the interface the machine is reached through\n");
     say("NETIFPROBE OK\n");
     sys_exit(0);
 }

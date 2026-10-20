@@ -43,11 +43,10 @@
  * place of 8.8.8.8; and `empty=A.B.C.D`, an address on the subnet that
  * nobody has, in place of 10.0.2.9. It gives `ids=OLD:NEW,...` for the
  * ordinary user 1000, and `machine=native`, with which the probe leaves out
- * the sends for the capture checker, which only the suite's capture reads,
- * and prints a line that says they did not run. Prints "RAWPROBE START",
- * then "  FAIL: " and the row for each failure, then "RAWPROBE OK" and exits
- * 0, or "RAWPROBE FAIL" and exits with the count of failures. Freestanding;
- * direct system calls (probe.h).
+ * the sends for the capture checker, which only the suite's capture reads.
+ * Prints "RAWPROBE START", then "  FAIL: " and the row for each failure,
+ * then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and exits with the
+ * count of failures. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
@@ -567,13 +566,22 @@ static uint32_t arg_ip(const char *s, uint32_t fallback)
     return s != 0 ? ip : fallback;
 }
 
-/** Set the addresses the rows use from the arguments `gateway`, or else
- * `peer`, `far` and `empty`, each QEMU's when it is not given. */
-static void addresses(void)
+/** Keep the arguments of the initial stack `sp` (probe_args.h) and set the
+ * addresses the rows use from `gateway`, or else `peer`, `far` and `empty`,
+ * each QEMU's when it is not given. */
+static void addresses(unsigned long *sp)
 {
+    probe_args((int)sp[0], (char **)(sp + 1));
     gateway_ip = arg_ip(probe_arg("gateway", 0), arg_ip(probe_arg("peer", 0), QEMU_GATEWAY));
     offsubnet_ip = arg_ip(probe_arg("far", 0), QEMU_OFFSUBNET);
     unresolved_ip = arg_ip(probe_arg("empty", 0), QEMU_UNRESOLVED);
+}
+
+/** 1 when the IPv4 datagram `ip` comes from the gateway. */
+static int from_gateway(const uint8_t *ip)
+{
+    return ip[12] == (uint8_t)(gateway_ip >> 24) && ip[13] == (uint8_t)(gateway_ip >> 16) &&
+           ip[14] == (uint8_t)(gateway_ip >> 8) && ip[15] == (uint8_t)gateway_ip;
 }
 
 void probe_main(unsigned long *sp);
@@ -593,8 +601,7 @@ void probe_main(unsigned long *sp)
     int fd_a, fd_b, i, n, m, pid, status, val;
     volatile int got_ttl;
 
-    probe_args((int)sp[0], (char **)(sp + 1));
-    addresses();
+    addresses(sp);
     say("RAWPROBE START\n");
 
     /* A raw socket is root's, since it reads every ICMP datagram. */
@@ -693,10 +700,7 @@ void probe_main(unsigned long *sp)
         }
         check((frame_a[0] >> 4) == 4, "what arrived is an IPv4 datagram");
         check(frame_a[9] == IPPROTO_ICMP, "of the protocol the socket asked for");
-        check(frame_a[12] == (uint8_t)(gateway_ip >> 24) &&
-                  frame_a[13] == (uint8_t)(gateway_ip >> 16) &&
-                  frame_a[14] == (uint8_t)(gateway_ip >> 8) && frame_a[15] == (uint8_t)gateway_ip,
-              "from the address that answered");
+        check(from_gateway(frame_a), "from the address that answered");
     }
 
     /* A hop limit of one: the first router's time-exceeded reaches both. */
@@ -830,9 +834,7 @@ void probe_main(unsigned long *sp)
     }
 
     /* For the capture checker: hop limits 1 to 6 and a wrong checksum. */
-    if (probe_native()) {
-        say("rawprobe: the sends for the capture checker: not run: no capture reads them\n");
-    } else {
+    if (!probe_native()) {
         int udp_fd, ttl;
 
         for (ttl = 1; ttl <= 3; ttl++) {

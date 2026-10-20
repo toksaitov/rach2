@@ -33,11 +33,12 @@
  * EMSGSIZE, and on x86-64 a size past 32 bits too, whose low word would be a
  * size it takes.
  *
- * A native run (probe_args.h) gives the address that answers as the peer's,
- * `peer=ADDRESS:PORT`, whose port the probe does not use, and the address
- * nobody answers as `silent=ADDRESS`, in place of 10.0.2.2 and 10.0.2.99;
- * and with `machine=native` the probe measures its times by CLOCK_MONOTONIC
- * rather than the time of day, which the machine's NTP daemon may step.
+ * A native run (probe_args.h) gives the address that answers as
+ * `gateway=ADDRESS`, or else as the peer's, `peer=ADDRESS:PORT`, whose port
+ * the probe does not use, and the address nobody answers as
+ * `silent=ADDRESS`, in place of 10.0.2.2 and 10.0.2.99; and with
+ * `machine=native` the probe measures its times by CLOCK_MONOTONIC rather
+ * than the time of day, which the machine's NTP daemon may step.
  *
  * Prints "PINGTEST OK" and exits 0 when every test passed, which the suites
  * that run it match; otherwise exits 1. Freestanding; direct system calls
@@ -325,6 +326,24 @@ static int ping(uint32_t ip)
     return socketcall(SC_PING, args);
 }
 
+/** Print `head`, the address `ip` in dots, and `tail`. */
+static void print_test(const char *head, uint32_t ip, const char *tail)
+{
+    print(head);
+    print_ip(ip);
+    print(tail);
+}
+
+/** Keep the arguments of the initial stack `sp` (probe_args.h) and set the
+ * addresses from them: the gateway from `gateway`, else `peer`, else QEMU's,
+ * and the silent address from `silent`, else QEMU's. */
+static void addresses(unsigned long *sp)
+{
+    probe_args((int)sp[0], (char **)(sp + 1));
+    gateway_ip = arg_ip(probe_arg("gateway", 0), arg_ip(probe_arg("peer", 0), GATEWAY_IP));
+    silent_ip = arg_ip(probe_arg("silent", 0), UNREACHABLE_IP);
+}
+
 /** Test 1: three pings to the gateway all get replies. Prints the verdict
  * and returns 1 when the test passed. */
 static int gateway_replies(void)
@@ -402,16 +421,12 @@ void probe_main(unsigned long *sp)
 {
     int passed = 0, failed = 0, rtt;
 
-    probe_args((int)sp[0], (char **)(sp + 1));
-    gateway_ip = arg_ip(probe_arg("peer", 0), GATEWAY_IP);
-    silent_ip = arg_ip(probe_arg("silent", 0), UNREACHABLE_IP);
+    addresses(sp);
     puts("ICMP ping test starting...");
     puts("");
 
     /* Test 1: three pings to the gateway get replies. */
-    print("Test 1: ping ");
-    print_ip(gateway_ip);
-    print(" x3... ");
+    print_test("Test 1: ping ", gateway_ip, " x3... ");
     if (gateway_replies()) {
         passed++;
     } else {
@@ -419,9 +434,7 @@ void probe_main(unsigned long *sp)
     }
 
     /* Test 2: a ping to an address nobody answers fails. */
-    print("Test 2: ping ");
-    print_ip(silent_ip);
-    print(" times out... ");
+    print_test("Test 2: ping ", silent_ip, " times out... ");
     rtt = ping(silent_ip);
     if (rtt < 0) {
         puts("OK (timeout)");

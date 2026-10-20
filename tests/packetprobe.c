@@ -14,14 +14,16 @@
  * A native run (probe_args.h) gives the addresses of its own network in
  * place of QEMU's: `gateway=A.B.C.D`, which answers a ping, in place of
  * 10.0.2.2, and `peer=A.B.C.D:PORT`, whose address answers the probe's ARP
- * request, in place of the name server 10.0.2.3; `ifname=NAME` in place of
- * eth0; and `ids=OLD:NEW,...` for the ordinary user 1000. With
- * `machine=native` the probe reads the interface's index and address from
- * the machine in place of 1 and 10.0.2.15, and leaves out the discovers and
+ * request, in place of the name server 10.0.2.3; `ifname=NAME` and
+ * `addr=A.B.C.D/PREFIX`, the interface and its address; and
+ * `ids=OLD:NEW,...` for the ordinary user 1000. With `machine=native` the
+ * probe takes the interface of the default route when no `ifname` is given
+ * (probe_netif.h), reads its index, and its address when no `addr` is
+ * given, from the machine in place of 1 and 10.0.2.15, and leaves out the
+ * discovers and
  * their offers, which need a DHCP server on a network of their own, the
  * receives that need a socket nothing else reaches, and the two comparisons
- * of HeapUsed, which the machine's other processes move; it prints a line
- * for each part that says it did not run.
+ * of HeapUsed, which the machine's other processes move.
  *
  * Prints "PACKETPROBE OK" and exits 0 on success, or "PACKETPROBE FAIL: " and
  * the reason and exits 1.
@@ -29,6 +31,7 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_netif.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -313,16 +316,6 @@ static const char *if_name;
 static int if_index;
 static uint32_t self_ip, gateway_ip, asked_ip;
 
-/** Print that the part `what` did not run, for `why`. */
-static void not_run(const char *what, const char *why)
-{
-    say("packetprobe: ");
-    say(what);
-    say(": not run: ");
-    say(why);
-    say("\n");
-}
-
 /** The IPv4 address written in dots at the start of `s`, in host byte order,
  * or `fallback` when `s` is NULL or does not begin with one. */
 static uint32_t arg_ip(const char *s, uint32_t fallback)
@@ -356,14 +349,15 @@ static void ifreq_for(unsigned char *ifr)
 
 /**
  * Set the interface and the addresses from the arguments. Given
- * `machine=native`, read the interface's index and address from the machine
- * through SIOCGIFINDEX and SIOCGIFADDR on the socket `fd`.
+ * `machine=native`, read the interface's index from the machine through
+ * SIOCGIFINDEX on the socket `fd`, and its address through SIOCGIFADDR
+ * unless `addr=A.B.C.D/PREFIX` gives it.
  */
 static void interface(int fd)
 {
     unsigned char ifr[40];
 
-    if_name = probe_arg("ifname", "eth0");
+    if_name = probe_ifname();
     if_index = 1;
     self_ip = 0x0A00020Fu; /* 10.0.2.15 */
     gateway_ip = arg_ip(probe_arg("gateway", 0), 0x0A000202u);
@@ -380,8 +374,8 @@ static void interface(int fd)
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0) {
         fail("the interface would not report its address");
     }
-    self_ip =
-        ((uint32_t)ifr[20] << 24) | ((uint32_t)ifr[21] << 16) | ((uint32_t)ifr[22] << 8) | ifr[23];
+    self_ip = arg_ip(probe_arg("addr", 0), ((uint32_t)ifr[20] << 24) | ((uint32_t)ifr[21] << 16) |
+                                               ((uint32_t)ifr[22] << 8) | ifr[23]);
 }
 
 /** Write `ip`, in host byte order, in dots and then a space, to `out`, which
@@ -454,10 +448,7 @@ static void check_close_releases(void)
         }
         sys_close(fd);
     }
-    if (probe_native()) {
-        not_run("the heap after four packet sockets bound and closed",
-                "the machine's other processes move HeapUsed");
-    } else if (probe_meminfo("HeapUsed:") != before) {
+    if (!probe_native() && probe_meminfo("HeapUsed:") != before) {
         fail("four packet sockets bound and closed left the heap other than it "
              "was, so a close kept its binding");
     }
@@ -499,7 +490,6 @@ static void native_rows(int fd)
     if (socketcall(SC_SENDTO, args) != -EINVAL) {
         fail("a destination that is not a MAC address was not refused");
     }
-    not_run("the three discovers and their offers", "they need a DHCP server of their own");
 
     sll.sll_protocol = ETH_P_ARP_BE;
     sll.sll_ifindex = 99; /* no such interface */

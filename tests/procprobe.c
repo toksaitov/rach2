@@ -40,7 +40,8 @@
  * A native run (probe_args.h), on a machine that is already up, gives
  * `ports=OLD:NEW,...` for the local ports 8080, 8081, 9000 to 9007 and 9100
  * to 9107, `ids=OLD:NEW,...` for the uid 1000, and `ifname=NAME` for the
- * interface in place of eth0, and runs the probe in a UTS namespace of its
+ * interface in place of eth0, or the interface of the default route
+ * (probe_netif.h), and runs the probe in a UTS namespace of its
  * own, so that the host name it writes is its own. With `machine=native` the
  * probe leaves out the rows of the whole machine's tables and counts, which
  * the machine's services and its connections move: the line count of the
@@ -50,11 +51,12 @@
  * its listener's row by its port rather than as the last, and the host bridge
  * by its class rather than at 00:00.0; and it requires the interface's
  * address in Linux's form without QEMU's prefix, and its PCI function on any
- * bus. It prints a line for each row it leaves out.
+ * bus.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_netif.h"
 
 #define STDOUT_FILENO 1
 
@@ -128,17 +130,13 @@ static void check(int cond, const char *msg)
     }
 }
 
-/** Check `cond` as `check` does, or, given `machine=native`, print that the
- * row `msg` of the whole machine's state did not run. */
+/** Check `cond` as `check` does, unless given `machine=native`, since the
+ * row is of the whole machine's state. */
 static void check_machine(int cond, const char *msg)
 {
-    if (probe_native()) {
-        syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  not run: ", 11);
-        syscall3(SYS_WRITE, STDOUT_FILENO, (long)msg, (int)strlen(msg));
-        puts(": the machine's other processes move it");
-        return;
+    if (!probe_native()) {
+        check(cond, msg);
     }
-    check(cond, msg);
 }
 
 /** Put `port`, the local port a native run gives in place of `old`, in the
@@ -1150,10 +1148,10 @@ static void pid_dir_rows(void)
     }
 }
 
-/** The interface the rows of /sys/class/net read: `ifname`, or eth0. */
+/** The interface the rows of /sys/class/net read (probe_netif.h). */
 static const char *ifname(void)
 {
-    return probe_arg("ifname", "eth0");
+    return probe_ifname();
 }
 
 /** "/sys/class/net/NAME/`leaf`" for the interface `ifname` gives, in a
@@ -1692,7 +1690,6 @@ static void mounts_rows(char *buf, int cap)
     if (probe_native()) {
         check(contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
               "/proc/mounts names /dev/mqueue");
-        check_machine(1, "/proc/mounts has the six permanent mounts alone");
     } else {
         check(lines_in(buf, n) == 6 &&
                   contains(buf, n, "mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec"),
@@ -1921,9 +1918,7 @@ void probe_main(unsigned long *sp)
     }
 
     /* Idle against busy, over two intervals of the same length. */
-    if (probe_native()) {
-        puts("  not run: the idle and busy ticks: the machine's other processes move them");
-    } else {
+    if (!probe_native()) {
         int t0, i0, t1, i1, t2, i2;
         int b0, b1, b2;
         int idle_slept, busy_slept, idle_spun, busy_spun;
