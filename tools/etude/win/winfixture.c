@@ -5,15 +5,17 @@
  * the suspended start and the registration, the accounting of a tree of
  * processes, the end of a tree by its job and by the death of its
  * controller, output, arguments, paths, the environment, sockets and clocks.
- * Others run the executor of etude/exec.h, the ledger, and etude-tooling,
- * which must also be beside this program, with winstand.exe.
+ * Others run the executor of etude/exec.h, the ledger, the supervisor with
+ * both, and etude-tooling, which must also be beside this program, with
+ * winstand.exe.
  *
  * Usage: winfixture [NAME...] runs the fixtures named, or all of them, and
  * prints `winfixture: result: pass: NAME` or `winfixture: result: fail: NAME:
  * DETAIL` for each and a summary line last; it exits 0 when every one passed.
  * `winfixture controller` is the controller that the controller-death
- * fixture starts and kills. Each wait has a completion bound of BOUND
- * milliseconds, which no correct run comes near.
+ * fixture starts and kills, and `winfixture runtime-controller ID GAP` the
+ * one that the runtime-killed and runtime-cut fixtures start. Each wait has a
+ * completion bound of BOUND milliseconds, which no correct run comes near.
  */
 #include <fcntl.h>
 #include <io.h>
@@ -50,7 +52,7 @@ struct cap {
 };
 
 static struct etude_win_sup sup;
-static char self[MAX_PATH * 4];
+char fixture_path[MAX_PATH * 4];
 char scratch[MAX_PATH * 4];
 char target[sizeof scratch + 16];
 static const char *current;
@@ -690,7 +692,7 @@ static int fx_controller_death(void)
     int k;
     int r = 0;
 
-    err = start(self, argv, &cap, &c);
+    err = start(fixture_path, argv, &cap, &c);
     if (err == 0)
         err = wait_text(&cap, "controlled\n");
     if (err != 0)
@@ -1139,6 +1141,11 @@ static const struct {
     {"exec-sample", fx_exec_sample},
     {"exec-poll", fx_exec_poll},
     {"ledger", fx_ledger},
+    {"runtime-crash", fx_runtime_crash},
+    {"runtime-hang", fx_runtime_hang},
+    {"runtime-orphans", fx_runtime_orphans},
+    {"runtime-killed", fx_runtime_killed},
+    {"runtime-cut", fx_runtime_cut},
     {"tooling-made", fx_tooling_made},
     {"tooling-digest", fx_tooling_digest},
     {"tooling-provision", fx_tooling_provision},
@@ -1164,13 +1171,13 @@ static int locate(void)
     if (n == 0 || n >= sizeof w / sizeof w[0])
         return -1;
     u = etude_win_utf8(w);
-    if (u == NULL || strlen(u) >= sizeof self) {
+    if (u == NULL || strlen(u) >= sizeof fixture_path) {
         free(u);
         return -1;
     }
-    strcpy(self, u);
+    strcpy(fixture_path, u);
     free(u);
-    strcpy(scratch, self);
+    strcpy(scratch, fixture_path);
     slash = strrchr(scratch, '\\');
     if (slash == NULL)
         return -1;
@@ -1194,6 +1201,12 @@ int main(int argc, char **argv)
     }
     if (argc == 2 && strcmp(argv[1], "controller") == 0)
         return controller();
+    if (argc == 4 && strcmp(argv[1], "runtime-controller") == 0) {
+        if (runtime_controller(argv[2], argv[3]) == 0)
+            return 0;
+        fprintf(stderr, "winfixture: controller: %s\n", detail);
+        return 1;
+    }
     if (etude_win_sup_open(&sup) != 0) {
         fprintf(stderr, "winfixture: cannot open a completion port\n");
         return 2;

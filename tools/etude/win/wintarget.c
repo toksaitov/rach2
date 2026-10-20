@@ -2,7 +2,8 @@
  * wintarget.c: the program the fixtures of etude's Windows adapter start. Its
  * first argument chooses what it does: exit, crash, report its arguments,
  * directory, environment or job, use processor time or memory, start a tree
- * of its own copies, try to leave its job, or connect to a socket.
+ * of its own copies, leave children and grandchildren behind, try to leave
+ * its job, or connect to a socket.
  *
  * It writes its reports with WriteFile, so that the C library's text mode does
  * not turn a newline into two bytes, and it parses its arguments with the
@@ -401,6 +402,65 @@ static int do_orphan(int argc, wchar_t **argv)
     return 0;
 }
 
+/** parent EVENT: start a copy that hangs, set the inherited EVENT, and hang. */
+static int do_parent(int argc, wchar_t **argv)
+{
+    HANDLE ev = (HANDLE)(ULONG_PTR)wcstoull(argv[2], NULL, 10);
+
+    (void)argc;
+    if (spawn(L"hang", 0) == NULL || !SetEvent(ev))
+        return 3;
+    Sleep(INFINITE);
+    return 0;
+}
+
+/**
+ * family N END [GO]: start N copies that each start a copy that hangs, and
+ * once every grandchild runs, report the first copy in a `child` record, say
+ * `ready`, wait for the named event GO to be set when it is given, and END:
+ * `exit`, `hang` or `crash`.
+ */
+static int do_family(int argc, wchar_t **argv)
+{
+    SECURITY_ATTRIBUTES sa = {sizeof sa, NULL, TRUE};
+    HANDLE ev[MAX_CHILDREN];
+    HANDLE first = NULL;
+    HANDLE go;
+    HANDLE h;
+    wchar_t args[64];
+    int n = _wtoi(argv[2]);
+    int i;
+
+    if (n < 1 || n > MAX_CHILDREN)
+        return 3;
+    for (i = 0; i < n; i++) {
+        ev[i] = CreateEventW(&sa, TRUE, FALSE, NULL);
+        if (ev[i] == NULL)
+            return 3;
+        swprintf(args, sizeof args / sizeof args[0], L"parent %llu",
+                 (unsigned long long)(ULONG_PTR)ev[i]);
+        h = spawn(args, 0);
+        if (h == NULL)
+            return 3;
+        if (first == NULL)
+            first = h;
+    }
+    if (WaitForMultipleObjects((DWORD)n, ev, TRUE, INFINITE) >= WAIT_OBJECT_0 + (DWORD)n)
+        return 3;
+    say("@etude 1 child %lu\n", (unsigned long)GetProcessId(first));
+    say("ready\n");
+    if (argc > 4) {
+        go = OpenEventW(SYNCHRONIZE, FALSE, argv[4]);
+        if (go == NULL || WaitForSingleObject(go, INFINITE) != WAIT_OBJECT_0)
+            return 3;
+    }
+    if (wcscmp(argv[3], L"crash") == 0)
+        RaiseException(EXCEPTION_ACCESS_VIOLATION, 0, 0, NULL);
+    if (wcscmp(argv[3], L"hang") == 0)
+        Sleep(INFINITE);
+    return 0;
+}
+
 /** connect PORT TEXT: send TEXT to PORT on 127.0.0.1. */
 static int do_connect(int argc, wchar_t **argv)
 {
@@ -448,6 +508,8 @@ static const struct {
     {L"late", 1, do_late},
     {L"after", 2, do_after},
     {L"orphan", 0, do_orphan},
+    {L"parent", 1, do_parent},
+    {L"family", 2, do_family},
     {L"connect", 2, do_connect},
     {L"cat", 0, do_cat},
     {L"big", 1, do_big},

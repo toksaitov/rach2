@@ -30,7 +30,7 @@ src=$repo/tools/etude
 faults() {
     cat <<'EOF'
 resume-early|win/winexec.c|    refused = sp->registered != NULL && sp->registered(sp->ctx, c, &c->ident) != 0;|    ResumeThread(thread); refused = sp->registered != NULL && sp->registered(sp->ctx, c, &c->ident) != 0;|suspended-start
-no-kill-on-close|win/winexec.c|        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE \| JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;|        JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;|controller-death
+no-kill-on-close|win/winexec.c|        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE \| JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;|        JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;|controller-death runtime-killed
 breakaway-ok|win/winexec.c|        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE \| JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION;|        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE \| JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION \| JOB_OBJECT_LIMIT_BREAKAWAY_OK;|breakaway
 main-only-time|win/winexec.c|    u->user_us = (uint64_t)a.BasicInfo.TotalUserTime.QuadPart / 10u;|    { FILETIME f[4]; GetProcessTimes(c->process, \&f[0], \&f[1], \&f[2], \&f[3]); u->user_us = ((uint64_t)f[3].dwHighDateTime << 32 \| f[3].dwLowDateTime) / 10u; }|accounting
 stop-first-only|win/winexec.c|    if (!TerminateJobObject(c->job, ETUDE_WIN_STOP_STATUS))|    if (!TerminateProcess(c->process, ETUDE_WIN_STOP_STATUS))|stop
@@ -39,15 +39,17 @@ end-at-first-exit|win/winexec.c|    if (!c->main_ended \|\| !c->out.eof \|\| !c-
 quote-backslash|win/winfmt.c|            slashes = slashes * 2 + (*p == '"');|            slashes = slashes + (*p == '"');|arguments
 env-dup-case|win/winfmt.c|        if (namecmp(vars[i - 1], vars[i]) == 0)|        if (strcmp(vars[i - 1], vars[i]) == 0)|environment
 cancel-ignored|win/exec.c|    etude_win_stop(p->child);|    (void)p;|exec-attempts
-no-end-stop|win/exec.c|        etude_win_stop(c);|        (void)c;|exec-attempts
+no-end-stop|win/exec.c|        etude_win_stop(c);|        (void)c;|exec-attempts runtime-crash runtime-orphans
 refusal-ignored|win/exec.c|    return p->reg_error != 0;|    return 0;|exec-unrun
-child-unrecorded|win/exec.c|            if (p->child_reg != NULL \&\&|            if (0 \&\&|ledger
-verdict-on-windows|ledger.c|    if (strcmp(c->system, "win32") != 0 \&\& !verdict_confirmed(l, c->id)) {|    if (!verdict_confirmed(l, c->id)) {|ledger
+child-unrecorded|win/exec.c|            if (p->child_reg != NULL \&\&|            if (0 \&\&|ledger runtime-crash runtime-hang runtime-orphans runtime-killed runtime-cut
+verdict-on-windows|ledger.c|    if (strcmp(c->system, "win32") != 0 \&\& !verdict_confirmed(l, c->id)) {|    if (!verdict_confirmed(l, c->id)) {|ledger runtime-killed
 serial-per-supervisor|win/winexec.c|    s->serial = (unsigned long)InterlockedIncrement(\&started);|    s->serial++;|tooling-job
 sample-ended|win/exec.c|    if (p->child->main_ended \|\| WaitForSingleObject(p->child->process, 0) == WAIT_OBJECT_0)|    if (0)|exec-sample
 sample-no-time|win/exec.c|    *cpu_us = u.user_us + u.kernel_us;|    *cpu_us = 0;|exec-sample tooling-sample
 wait-zero-unserved|win/exec.c|        if (polled \&\& left == 0)|        if (left == 0 \&\& polled >= 0)|exec-poll
 poll-zero-unread|win/winexec.c|            slice = 0;|            return 0;|exec-poll
+unwatched|supervise.c|    if (a->phase == PHASE_RUN \&\& etude_watchdog_check(a->wd, now) != ETUDE_EXPIRY_NONE)|    if (0)|runtime-hang runtime-cut
+expiry-unsampled|supervise.c|    rc = a->proc != NULL ? etude_proc_sample(a->proc, \&cpu, \&rss) : -1;|    rc = -1;|runtime-hang
 path-case|tooling.c|#define name_cmp  _strnicmp|#define name_cmp  strncmp|tooling-made
 text-outputs|tooling.c|    if ((f = fopen(names, "wb")) == NULL)|    if ((f = fopen(names, "w")) == NULL)|tooling-job
 text-stdout|etude_tooling.c|    _setmode(_fileno(stdout), _O_BINARY);|    (void)0;|tooling-job
@@ -158,7 +160,8 @@ copy() {
     cp "$src"/win/winexec.h "$src"/win/winexec.c "$src"/win/winsys.c "$src"/win/winfmt.h \
         "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/noqemu.c "$src"/win/wintarget.c \
         "$src"/win/winfixture.h "$src"/win/winfixture.c "$src"/win/winexecfix.c \
-        "$src"/win/winledgerfix.c "$src"/win/wintoolfix.c "$src"/win/winstand.c "$e/win/"
+        "$src"/win/winledgerfix.c "$src"/win/winrunfix.c "$src"/win/wintoolfix.c \
+        "$src"/win/winstand.c "$e/win/"
 }
 
 # compile DIR FLAGS: build the programs in DIR/tools/etude/win. A Windows
@@ -170,7 +173,7 @@ compile() {
         history='../history.c ../history_json.c ../history_collect.c ../../../utils/sha256.c'
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I ../../../utils -o winfixture.exe winfixture.c winexecfix.c \
-            winledgerfix.c wintoolfix.c ../ledger.c ../watchdog.c ../supervise.c \
+            winledgerfix.c winrunfix.c wintoolfix.c ../ledger.c ../watchdog.c ../supervise.c \
             noqemu.c $executor ../../../utils/sha256.c -lws2_32
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
