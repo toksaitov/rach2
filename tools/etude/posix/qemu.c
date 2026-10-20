@@ -348,6 +348,8 @@ static void console_read(struct etude_machine *m, size_t limit)
             return;
         if (n <= 0) {
             close_fd(&m->console);
+            m->r.console.closed = 1;
+            m->changed = 1;
             return;
         }
         console_keep(m, buf, (size_t)n);
@@ -778,38 +780,75 @@ static int wait_for(uint64_t until, uint64_t now)
     return (int)((until - now + 999) / 1000);
 }
 
-struct etude_machine *etude_qemu_wait(struct etude_qemu *q, int timeout_ms)
+/** Note the end of `p` when it is a machine's QEMU, and give it back when it
+ * is not, or NULL for none. */
+static struct etude_proc *machine_proc(struct etude_qemu *q, struct etude_proc *p)
+{
+    struct etude_machine *m;
+
+    for (m = q->machines; p != NULL && m != NULL; m = m->next) {
+        if (m->proc == p) {
+            m->proc_done = 1;
+            return NULL;
+        }
+    }
+    return p;
+}
+
+struct etude_machine *etude_qemu_watch(struct etude_qemu *q, int timeout_ms, struct etude_watch *cw,
+                                       size_t cn, struct etude_proc **host)
 {
     uint64_t now, soonest,
         until = timeout_ms < 0 ? 0 : posix_now_us() + (uint64_t)timeout_ms * 1000u;
     struct etude_machine *m, *done;
     struct etude_watch *w;
     struct etude_proc *p;
-    int polled = 0;
-    size_t n;
+    int polled = 0, ready = 0;
+    size_t i, n;
 
+    if (host != NULL)
+        *host = NULL;
+    for (i = 0; i < cn; i++)
+        cw[i].revents = 0;
     for (;;) {
         done = take_finished(q);
-        if (done != NULL || take_changes(q) || unfinished(q) == 0)
+        if (done != NULL || take_changes(q) || ready || (host != NULL && *host != NULL) ||
+            (unfinished(q) == 0 && cn == 0))
             return done;
         now = posix_now_us();
         if (polled && timeout_ms >= 0 && now >= until)
             return NULL;
-        w = malloc((4 * unfinished(q) + 1) * sizeof(*w));
+        w = malloc((4 * unfinished(q) + cn + 1) * sizeof(*w));
         if (w == NULL)
             return NULL;
         n = watch_set(q, w, &soonest);
+        for (i = 0; i < cn; i++)
+            w[n + i] = cw[i];
         if (timeout_ms >= 0 && (soonest == 0 || until < soonest))
             soonest = until;
-        p = etude_exec_watch(q->ex, wait_for(soonest, now), w, n);
+        p = etude_exec_watch(q->ex, wait_for(soonest, now), w, n + cn);
+        for (i = 0; i < cn; i++) {
+            cw[i].revents = w[n + i].revents;
+            ready |= cw[i].revents != 0;
+        }
         free(w);
         polled = 1;
-        for (m = q->machines; p != NULL && m != NULL; m = m->next)
-            if (m->proc == p)
-                m->proc_done = 1;
+        p = machine_proc(q, p);
+        if (p != NULL && host != NULL)
+            *host = p;
         for (m = q->machines; m != NULL; m = m->next)
             machine_serve(m);
     }
+}
+
+struct etude_machine *etude_qemu_wait(struct etude_qemu *q, int timeout_ms)
+{
+    return etude_qemu_watch(q, timeout_ms, NULL, 0, NULL);
+}
+
+struct etude_exec *etude_qemu_exec(struct etude_qemu *q)
+{
+    return q->ex;
 }
 
 int etude_machine_type(struct etude_machine *m, const char *text, size_t n)

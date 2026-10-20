@@ -136,7 +136,8 @@ struct etude_machine_result {
                                     "query-kvm", or NULL */
     char reason[64];             /* the reason of QEMU's SHUTDOWN event, or "" */
     int by_guest;                /* the event's `guest` */
-    struct etude_output console; /* what the console wrote */
+    struct etude_output console; /* what the console wrote; `closed` once QEMU
+                                    closed it */
     int console_file_error;      /* the error that ended the writes to the
                                     console's file, or 0 */
     uint64_t end_console;        /* console bytes read when the end was seen */
@@ -173,6 +174,25 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
  * @return the machine that ended, each once, or NULL.
  */
 struct etude_machine *etude_qemu_wait(struct etude_qemu *q, int timeout_ms);
+
+/**
+ * Wait as etude_qemu_wait does, and also for one of the `n` descriptors of
+ * `w` to be ready, which sets its `revents`, and, when `host` is not NULL,
+ * for a host attempt of the caller's on the launcher's executor to finish,
+ * which is put in `*host`. Each call serves the machines at least once; with
+ * no machine running and no descriptor it returns at once.
+ *
+ * @return the machine that ended, each once, or NULL.
+ */
+struct etude_machine *etude_qemu_watch(struct etude_qemu *q, int timeout_ms, struct etude_watch *w,
+                                       size_t n, struct etude_proc **host);
+
+/**
+ * Give the launcher's executor, on which the caller may start host attempts
+ * of its own beside the machines. etude_qemu_watch serves them and gives
+ * each once it has finished; the caller frees it.
+ */
+struct etude_exec *etude_qemu_exec(struct etude_qemu *q);
 
 /**
  * Write `n` bytes to the machine's console input, after what was written
