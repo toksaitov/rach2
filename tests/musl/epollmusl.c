@@ -49,7 +49,9 @@
  * pseudoterminal is an edge of its master watched for output.
  *
  * Prints `EPOLLMUSL OK` and exits 0 on success, and prints
- * `EPOLLMUSL FAIL (detail)` and exits 1 otherwise.
+ * `EPOLLMUSL FAIL (detail)` and exits 1 otherwise. The TCP listener is on
+ * port 7470 of every address; given `ports=OLD:NEW,...`, as a native run
+ * gives it (tests/native/Readme.md), it is on the NEW of 7470 of 127.0.0.1.
  */
 
 #define _GNU_SOURCE
@@ -75,9 +77,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 /* The port of the TCP connection over the loopback, which no other probe
- * listens on. */
-#define EDGE_PORT 7470
+ * listens on, and the address its listener binds: every address, or
+ * 127.0.0.1 alone for a port of a native run's map. */
+#define EDGE_PORT ((uint16_t)probe_port(7470))
+#define EDGE_BIND (probe_arg("ports", NULL) != NULL ? INADDR_LOOPBACK : INADDR_ANY)
 
 /* The longest wait, in seconds, for another process to be seen asleep: a
  * bound that ends a wait the kernel never satisfies, far past a correct one. */
@@ -946,7 +952,7 @@ static int tcp_arrival(void)
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
     sa.sin_port = htons(EDGE_PORT);
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    sa.sin_addr.s_addr = htonl(EDGE_BIND);
     if (ep < 0 || ls < 0 || cs < 0 || bind(ls, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
         listen(ls, 1) != 0) {
         return fail("setup for a TCP listener on the loopback");
@@ -1259,8 +1265,9 @@ static int calls_keep_registers(void)
 }
 #endif
 
-int main(void)
+int main(int argc, char **argv)
 {
+    probe_args(argc, argv);
     if (calls_keep_registers() || counters() || sets() || hangup_no_events() || number_reused() ||
         added_while_waiting() || polled_after_edge() || polled_set_woken() || nested() ||
         in_turn() || failed_copy() || long_timeout() || pipe_each_write() || unix_kinds() ||

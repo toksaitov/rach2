@@ -12,6 +12,10 @@
  * No suite runs it; `tests/probe-helpers` lists it as a manual test. It prints
  * "SOCKFILLMUSL OK" and exits 0 on success, or prints "SOCKFILLMUSL FAIL
  * (detail)" and exits 1 at the first failure.
+ *
+ * The socket is bound to port 7000 of every address; given
+ * `ports=OLD:NEW,...`, as a native run gives it (tests/native/Readme.md), to
+ * the NEW of 7000 of 127.0.0.1.
  */
 
 #include <sys/socket.h>
@@ -23,11 +27,17 @@
 #include <string.h>
 #include <errno.h>
 
-int main(void)
+#include "../probe_args.h"
+
+int main(int argc, char **argv)
 {
     int s, one = 1, val;
     socklen_t len;
     struct sockaddr_in sa;
+    unsigned short port;
+
+    probe_args(argc, argv);
+    port = (unsigned short)probe_port(7000);
 
     s = socket(AF_INET, SOCK_STREAM, 0);
     if (s < 0) {
@@ -42,8 +52,8 @@ int main(void)
 
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
-    sa.sin_port = htons(7000);
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    sa.sin_port = htons(port);
+    sa.sin_addr.s_addr = htonl(probe_arg("ports", NULL) != NULL ? INADDR_LOOPBACK : INADDR_ANY);
     if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) != 0 || listen(s, 4) != 0) {
         printf("SOCKFILLMUSL FAIL (bind/listen)\n");
         return 1;
@@ -52,7 +62,7 @@ int main(void)
     /* bound port */
     memset(&sa, 0, sizeof(sa));
     len = sizeof(sa);
-    if (getsockname(s, (struct sockaddr *)&sa, &len) != 0 || ntohs(sa.sin_port) != 7000) {
+    if (getsockname(s, (struct sockaddr *)&sa, &len) != 0 || ntohs(sa.sin_port) != port) {
         printf("SOCKFILLMUSL FAIL (getsockname)\n");
         return 1;
     }

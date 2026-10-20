@@ -21,7 +21,10 @@
  * send after the shutdown is EPIPE.
  *
  * It prints "SOCKFLAGMUSL OK" and exits 0 on success, or prints
- * "SOCKFLAGMUSL FAIL (detail)" and exits 1 at the first failure.
+ * "SOCKFLAGMUSL FAIL (detail)" and exits 1 at the first failure. The
+ * listener is on port 7461 of every address; given `ports=OLD:NEW,...`, as a
+ * native run gives it (tests/native/Readme.md), it is on the NEW of 7461 of
+ * 127.0.0.1.
  */
 
 #define _GNU_SOURCE
@@ -38,13 +41,15 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
 /* The socketcall numbers of the calls; on x86-64, sc maps them to its calls. */
 #define SC_SOCKET  1
 #define SC_BIND    2
 #define SC_CONNECT 3
 #define SC_LISTEN  4
 #define SC_ACCEPT4 18
-#define PORT       7461
+#define PORT       ((unsigned short)probe_port(7461))
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
@@ -150,7 +155,7 @@ static int listener(void)
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
     sa.sin_port = htons(PORT);
-    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    sa.sin_addr.s_addr = htonl(probe_arg("ports", NULL) != NULL ? INADDR_LOOPBACK : INADDR_ANY);
     if (ls < 0 || sc(SC_BIND, ls, (long)&sa, sizeof(sa), 0) != 0 ||
         sc(SC_LISTEN, ls, 4, 0, 0) != 0) {
         return -1;
@@ -198,7 +203,7 @@ static int half_close(int ls)
     return 0;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     unsigned char opts[40];
     socklen_t len = sizeof(opts);
@@ -207,6 +212,8 @@ int main(void)
     int ds;
     int ls;
     int as;
+
+    probe_args(argc, argv);
 
     if (sc(SC_SOCKET, AF_INET, SOCK_STREAM | 0x10, 0, 0) != -1 || errno != EINVAL) {
         return fail("a type bit other than SOCK_CLOEXEC and SOCK_NONBLOCK was not EINVAL");
