@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "proof": "doom",
+  "summary": "the doom suite, whose rows run the game without its WAD and wait for its second report of frames, with three faults in the game's sources",
+  "tree": "shared",
+  "sources": [
+    "ports/doom/doomgeneric_rach2.c",
+    "ports/doom/src/d_iwad.c"
+  ],
+  "artifacts": [
+    "${WORK}/doom"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "test -f ports/doom/doom1.wad || { echo \"doom-proof: ports/doom/doom1.wad is absent; the suite needs the WAD\" >&2; exit 1; }; sh tests/proofs/guest.sh make ports/doom && sh tests/proofs/guest.sh copy ${WORK} ports/doom/doom"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/proofs/guest.sh",
+      "run",
+      "doom",
+      "doom-test: PASS"
+    ],
+    "bound_s": 1800
+  },
+  "faults": [
+    {
+      "name": "status",
+      "summary": "the platform's exit reports 0 whatever status it is given",
+      "edits": [
+        {
+          "file": "ports/doom/doomgeneric_rach2.c",
+          "find": "    _exit(status);\n",
+          "replace": "    _exit(0);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "without its WAD the game exited with status 0 and"
+        ]
+      }
+    },
+    {
+      "name": "crash",
+      "summary": "the engine's refusal of a missing IWAD taken out, so that the engine goes on with no IWAD and faults reading its absent name",
+      "edits": [
+        {
+          "file": "ports/doom/src/d_iwad.c",
+          "find": "            I_Error(\"IWAD file '%s' not found!\", iwadfile);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "and 0 not-found line(s); the engine"
+        ]
+      }
+    },
+    {
+      "name": "stall",
+      "summary": "the platform draws no frame after its first, so that the game runs on without progress and never prints its second report",
+      "edits": [
+        {
+          "file": "ports/doom/doomgeneric_rach2.c",
+          "find": "    if (fb_fd < 0) return;\n\n#ifdef CMAP256\n",
+          "replace": "    if (fb_fd < 0 || frames > 0) return;\n\n#ifdef CMAP256\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "the game printed 1 report(s) of its frames, the last counting 1 frames"
+        ]
+      }
+    }
+  ]
+}

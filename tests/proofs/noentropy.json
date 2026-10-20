@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "proof": "noentropy",
+  "summary": "the noentropy suite, whose steps require the random devices and getrandom to refuse while the generator is untrusted, with three faults in the kernel; a failing run is followed by one of every step, make told to go on past a failure",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/devfs.c",
+    "rach2/sys/syscall.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "RACH2_ARCH=${ARCH:-i686}\nREPO=$(pwd)\n. ./mk/arch.sh\nstatus=0\nsh tests/proofs/guest.sh run noentropy || status=$?\nif [ \"$status\" -ne 0 ]; then\n    echo 'noentropy-proof: every step, with make told to go on past a failure'\n    rm -f \"$ARCH_BUILD/images/noentropy-rng.log\" \"$ARCH_BUILD/images/noentropy-keygen.log\"\n    make -i run-noentropy \"ARCH=$RACH2_ARCH\" \"RACH2_QEMU=$ARCH_QEMU\" </dev/null 2>&1\n    cat \"$ARCH_BUILD/images/noentropy-rng.log\" \"$ARCH_BUILD/images/noentropy-keygen.log\" 2>/dev/null\nfi\nexit \"$status\""
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "urandom",
+      "summary": "the random devices answer a read while the generator is untrusted, which also lets dropbearkey make a key",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "static int32_t dev_rand_read(fd_entry_t *e, char __user *buf, uint32_t count)\n{\n    if (!krandom_is_trusted()) {\n",
+          "replace": "static int32_t dev_rand_read(fd_entry_t *e, char __user *buf, uint32_t count)\n{\n    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "HARNESS: saw 'RNGPROBE FAIL', which must not appear",
+          "RNGPROBE FAIL (urandom not fail-closed)",
+          "HARNESS: saw 'KEYGEN:MADE', which must not appear"
+        ]
+      }
+    },
+    {
+      "name": "random",
+      "summary": "/dev/random given the operations of /dev/zero",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "{\"random\", 1, 8, 0, 0666, &rand_ops}",
+          "replace": "{\"random\", 1, 8, 0, 0666, &zero_ops}"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "HARNESS: saw 'RNGPROBE FAIL', which must not appear",
+          "RNGPROBE FAIL (random not fail-closed)"
+        ]
+      }
+    },
+    {
+      "name": "insecure",
+      "summary": "getrandom refuses GRND_INSECURE while the generator is untrusted",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "if (!krandom_is_trusted() && !(flags & GRND_INSECURE)) {",
+          "replace": "if (!krandom_is_trusted()) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "HARNESS: saw 'RNGPROBE FAIL', which must not appear",
+          "RNGPROBE FAIL (GRND_INSECURE refused)"
+        ]
+      }
+    }
+  ]
+}

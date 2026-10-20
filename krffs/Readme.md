@@ -98,7 +98,7 @@ The images are written under `build/images/`, or `build/x86_64/images/` for x86-
 | `krffsvol-test` | the volume of `krffsmount` and `krffscheck` | three files, one in a directory |
 | `loopimg-test` | `loopdev`'s loop image, and the KRFFS partition of `metal`'s stick | two files |
 | `imagerace-tree` | the second image of `imagerace` | the programs of one directory |
-| `rng-proof`, `usbdisk-proof` | private images of `tests/system/rng_mutate.sh` and `usbdisk_mutate.sh` | one probe, which each script replaces with its own build in a copy of the same name |
+| `rng-proof`, `usbdisk-proof` | private images of `tests/proofs/rng.sh` and `tests/system/usbdisk_mutate.sh` | one probe, which each script replaces with its own build in a copy of the same name |
 
 ### Building an image
 

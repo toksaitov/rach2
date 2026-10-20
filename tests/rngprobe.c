@@ -3,7 +3,7 @@
  * none.
  *
  * First the kernel's `kcpu_id`, compiled into the probe from kcpu.c, must
- * give leaf 7, subleaf 0, as a direct cpuid does; tests/system/rng_mutate.sh
+ * give leaf 7, subleaf 0, as a direct cpuid does; tests/proofs/rng-probe.json
  * puts a fault there. Then the probe follows the boot's entropy source, the
  * branch `source` of its report. It asks getrandom() for bytes. If that
  * succeeds the source is trusted, and /dev/urandom must return bytes that
