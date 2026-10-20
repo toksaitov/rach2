@@ -33,6 +33,13 @@ ETUDE_HOST_SRC = tools/etude/posix/etude_host.c tools/etude/posix/exec.c \
                  tools/etude/posix/keeper.c tools/etude/posix/process.c \
                  tools/etude/capture.c
 
+# etude-tooling, the local Linux tooling machine, on Linux and macOS.
+ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
+                    tools/etude/posix/exec.c tools/etude/posix/keeper.c \
+                    tools/etude/posix/process.c tools/etude/capture.c \
+                    tools/etude/history.c tools/etude/history_json.c \
+                    tools/etude/history_collect.c utils/sha256.c
+
 # etude-load, the load fixture of shuffled and loaded repetitions on Linux
 # and macOS.
 ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c

@@ -25,6 +25,7 @@ space|600|disk admission requires a Windows reading|sh tests/system/space_test.s
 prereq|600|prereq.sh's reports, installs and recipe|sh tests/system/prereq_test.sh
 etude_version|600|etude's versions built once, reused and kept side by side|sh tests/system/etude_version_test.sh
 etude_deploy|600|etude deployed again and after a cut, changing no clone, key or running test|sh tests/system/etude_deploy_test.sh
+etude_tooling|600|etude's tooling machine made once, its jobs run and their boots recorded|sh tests/system/etude_tooling_test.sh
 agents_credentials|600|the agents' credential files and log scan|python3 -B tests/system/agents_credentials_test.py
 anthropic|600|Messages tool results and streamed replies|python3 -B tests/system/fakeapi/anthropic_test.py
 gemini|600|Gemini function responses and unordered steps|python3 -B tests/system/fakeapi/gemini_test.py

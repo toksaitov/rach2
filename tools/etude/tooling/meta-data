@@ -1,0 +1,4 @@
+# meta-data: the instance identity cloud-init's NoCloud source reads from the
+# tooling machine's seed volume.
+instance-id: etude-tooling
+local-hostname: etude-tooling

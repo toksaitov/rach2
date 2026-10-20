@@ -1,0 +1,6 @@
+# image: the Ubuntu cloud image the tooling machine is made from, which
+# etude-tooling downloads once and checks by its SHA-256. One line: the image's
+# architecture, its URL and its digest. A new image is a new line in place of
+# this one, from the SHA256SUMS of the same release directory; every machine
+# then makes its tooling machine again.
+amd64 https://cloud-images.ubuntu.com/releases/resolute/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img 8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2

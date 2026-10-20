@@ -1,0 +1,15 @@
+# etude-job.service: the tooling machine's job runner, started once at boot
+# when the job volume is there, which etude-tooling attaches with the virtio
+# serial number etude-job.
+[Unit]
+Description=etude's job runner
+Requires=dev-disk-by\x2did-virtio\x2detude\x2djob.device
+After=dev-disk-by\x2did-virtio\x2detude\x2djob.device local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/etude-job-runner
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

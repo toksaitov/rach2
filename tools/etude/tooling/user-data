@@ -1,0 +1,12 @@
+#cloud-config
+# user-data: what cloud-init does on the tooling machine's first boot, from
+# the seed volume etude-tooling makes. It creates no account, mounts the
+# seed volume and runs provision.sh from it, and powers the machine off once
+# that has ended, whether it succeeded or not.
+users: []
+ssh_pwauth: false
+runcmd:
+  - [sh, -c, 'mkdir -p /run/etude-seed && if mount -o ro LABEL=CIDATA /run/etude-seed; then sh /run/etude-seed/provision.sh /run/etude-seed; else echo "etude-tooling: provision: failed: the seed volume does not mount" > /dev/ttyS1; fi']
+power_state:
+  mode: poweroff
+  condition: true

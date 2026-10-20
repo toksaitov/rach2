@@ -476,6 +476,17 @@ $(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
 
+# etude's tooling machine (tools/etude/tooling.c), which runs on a host the
+# commands it lacks, built here so that `make` compiles it under the host
+# flags.
+ETUDETOOLING = build/tools/etude/etude-tooling
+$(ETUDETOOLING): $(ETUDE_TOOLING_SRC) tools/etude/include/etude/tooling.h \
+                 tools/etude/include/etude/exec.h tools/etude/include/etude/history.h \
+                 tools/etude/posix/posix.h tools/etude/capture.h tools/etude/history_json.h \
+                 utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+
 # etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
 # starts beside a case, built here so that `make` compiles it under the host
 # flags.
@@ -1213,7 +1224,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKEXFATFIXTURE) $(DEADLINE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(ETUDELOAD) $(ETUDEPROOF) \
+             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) \
              $(ETUDEHOST) $(ETUDEBRIDGE) $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)

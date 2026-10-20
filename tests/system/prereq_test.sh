@@ -15,8 +15,10 @@
 # placeholders; and the refusal of a malformed recipe. The last rows read the
 # real recipe with --list: every command of tests/registry, of the build's
 # tool check and of the style check is named on linux, macos and windows,
-# but for the Linux-only commands named below, and the Codex version is the
-# one the codexapi suite runs.
+# but for the Linux-only commands named below, which etude's tooling machine
+# must provide, with what the machine itself needs named on macos and
+# windows; and the Codex version of the linux recipe and of the tooling
+# machine is the one the codexapi suite runs.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored before the rows run again at the
@@ -49,11 +51,12 @@ export FIX
 
 # The Linux-only commands, which macos and windows do not install: unshare
 # and ip make the network namespaces of the codexapi suite, which runs Codex
-# in one, and exfatprogs has no Windows port. On those platforms a local
-# Linux machine supplies them (dev-log/62-etude/plan.md, "Host tools on
-# every machine").
+# in one, and exfatprogs has no Windows port. On those platforms etude's
+# tooling machine supplies them (tools/etude/tooling/tools), and the
+# commands it runs on the host are named in their recipes.
 linux_only_macos='unshare ip codex'
 linux_only_windows='unshare ip codex mkfs.exfat fsck.exfat'
+tooling_needs='qemu-system-x86_64 qemu-img curl mformat mmd mcopy'
 
 # Stand-ins: `id` answers as the account `fixuser`, uid 0 when FIX/root
 # exists; `sudo -n` succeeds when FIX/sudo exists and logs what it runs; and
@@ -358,6 +361,16 @@ coverage()
             windows) skip=$linux_only_windows ;;
             *) skip= ;;
         esac
+        for c in $skip; do
+            grep -qx -- "$c" "$repo/tools/etude/tooling/tools" ||
+                echo "coverage: the tooling machine does not provide $c, which $p lacks" >> "$work/why"
+        done
+        if [ -n "$skip" ]; then
+            for c in $tooling_needs; do
+                grep -qx -- "$c" "$work/have-$p" ||
+                    echo "coverage: $p lacks $c, which the tooling machine needs" >> "$work/why"
+            done
+        fi
         while read -r need; do
             case " $skip " in *" $need "*) continue ;; esac
             # An entry of choices is met by every command of one of them.
@@ -378,6 +391,8 @@ coverage()
     sh "$repo/tools/setup/prereq.sh" --list --platform linux |
         grep -q "	admin	npm install -g @openai/codex@$version\$" ||
         echo "coverage: linux does not install Codex $version, the codexapi suite's" >> "$work/why"
+    grep -qx "CODEX_VERSION=$version" "$repo/tools/etude/tooling/provision.sh" ||
+        echo "coverage: the tooling machine does not install Codex $version, the codexapi suite's" >> "$work/why"
     grep -o 'tools/setup/[a-z_]*\.sh' "$repo/tools/setup/prereqs" | sort -u | while read -r script; do
         [ -f "$repo/$script" ] || echo "coverage: the recipe runs $script, which is missing" >> "$work/why"
     done

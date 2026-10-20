@@ -1,0 +1,41 @@
+# tools: the commands the tooling machine provides to a host that lacks them,
+# one per line. provision.sh installs them and refuses a machine on which one
+# is not found. The first group are the commands only Linux has among the
+# platforms of tools/setup/prereqs: the network namespaces and Codex of the
+# codexapi and museapi suites, and exfatprogs. The rest are what the GNU
+# layer's build needs of its host (vendor/gnu/Readme.md, Building) and the
+# file-system checkers the suites run.
+unshare
+ip
+codex
+mkfs.exfat
+fsck.exfat
+cc
+c++
+make
+gawk
+bison
+flex
+m4
+perl
+python3
+makeinfo
+xz
+patch
+gzip
+bzip2
+tar
+curl
+wget
+chroot
+gpg
+gpgv
+ar
+git
+openssl
+mandoc
+mke2fs
+debugfs
+e2fsck
+mkfs.fat
+fsck.fat
