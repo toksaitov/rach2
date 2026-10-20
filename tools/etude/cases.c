@@ -422,16 +422,47 @@ static void rule_processor(const struct rule *r)
     }
 }
 
-/** A machine case's steps run on its machines, under identities of its own. */
+/** Returns 1 when `list`, an array, has the string `value`. */
+static int listed(const struct json *list, const char *value)
+{
+    size_t i;
+
+    for (i = 0; list != NULL && i < list->count; i++) {
+        if (list->item[i]->type == JSON_STRING && same(list->item[i]->string, value)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * A machine case's steps run on its machines, under identities of its own,
+ * and each of its services runs a tool of its requirements or an artifact
+ * that prepare lists.
+ */
 static void rule_steps(const struct rule *r)
 {
     const struct json *steps = json_member(r->c, "steps");
     const struct json *machines = json_member(r->c, "machines");
+    const struct json *services = json_member(r->c, "services");
+    const struct json *tools = json_member(json_member(r->c, "requirements"), "tools");
     const char *case_id = json_text(r->c, "case_id");
     size_t i;
 
     unique(r, steps, "step_id", "the step");
     unique(r, machines, "machine_id", "the machine");
+    unique(r, services, "service_id", "the service");
+    for (i = 0; services != NULL && i < services->count; i++) {
+        const char *program = json_text(services->item[i], "program");
+
+        if (program != NULL && !listed(tools, program) &&
+            !has_member(json_member(r->c, "prepare"), "name", program)) {
+            finding(r->file, services->item[i]->line,
+                    "%s: the service %s runs %s, which is neither a tool of its requirements nor "
+                    "an artifact that prepare lists",
+                    case_id, json_text(services->item[i], "service_id"), program);
+        }
+    }
     for (i = 0; steps != NULL && i < steps->count; i++) {
         const char *id = json_text(steps->item[i], "step_id");
         const char *machine = json_text(steps->item[i], "machine");

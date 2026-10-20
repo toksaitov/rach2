@@ -17,6 +17,10 @@ struct etude_case;
 /* One QEMU machine that the case booted and owns. */
 struct etude_case_machine;
 
+/* One run of a service of the case's, a host program that runs beside the
+ * machines across steps until the case stops it or it ends. */
+struct etude_case_service;
+
 /* What the library returns. A scenario that receives ETUDE_STOPPED returns
  * from etude_scenario at once; the executor ends what is left. */
 enum etude_status {
@@ -32,7 +36,8 @@ enum etude_status {
 struct etude_termination {
     enum etude_end end;
     int value;               /* the exit status or the signal; -1 when the end has none */
-    uint64_t console_offset; /* bytes of the console read when the end was seen */
+    uint64_t console_offset; /* bytes of the console read when the end was seen;
+                                of a service, of its standard output */
 };
 
 /**
@@ -138,6 +143,57 @@ enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_term
  */
 enum etude_status etude_host(struct etude_case *c, char *const argv[], const char *output,
                              struct etude_termination *end);
+
+/**
+ * Give local port `i` of the case's, counted from 0, which the plan reserved
+ * for this attempt alone, as the case's `resources.ports` declares.
+ *
+ * @return the port, or 0 when the case has no port `i`.
+ */
+unsigned etude_port(struct etude_case *c, unsigned i);
+
+/**
+ * Start service `service` of the manifest, with `args`, the arguments after
+ * its program, ended by NULL, and wait until its standard output has the
+ * manifest's `ready` text.
+ *
+ * The service runs beside the machines until etude_service_stop, its own
+ * end, or the attempt's cleanup, which collects the machines' diagnostics
+ * before it stops the services. Its standard output and error are kept as
+ * evidence `SERVICE.N.out` and `SERVICE.N.err`, N counting its starts from
+ * 1, once it has ended. A service that ends before the scenario has seen its
+ * end, by etude_service_end, etude_service_stop or a wait that it made
+ * ETUDE_LOST, is a fault of the attempt.
+ *
+ * @return ETUDE_OK with the service in `*s`; ETUDE_FAILED when it ended
+ *         before it was ready, with its end in `end`, or could not start,
+ *         with the end ETUDE_END_LOST; and
+ *         ETUDE_BOUND or ETUDE_STOPPED, after which the library has stopped
+ *         it. A service not of the manifest, one that runs already, and a
+ *         start outside a step are ETUDE_REFUSED.
+ */
+enum etude_status etude_service(struct etude_case *c, const char *service, char *const args[],
+                                struct etude_case_service **s, struct etude_termination *end);
+
+/**
+ * Wait for `text` on the service's standard output after byte `from`, and
+ * give in `at` the offset just past it; ETUDE_LOST once the service has
+ * ended without it.
+ */
+enum etude_status etude_service_wait(struct etude_case_service *s, const char *text, uint64_t from,
+                                     uint64_t *at);
+
+/** Wait for the service to end by itself, within the step's bound, and give
+ * how it ended. */
+enum etude_status etude_service_end(struct etude_case_service *s, struct etude_termination *end);
+
+/**
+ * Stop the service, its process group getting SIGTERM and SIGKILL after the
+ * grace period, and give how it ended: ETUDE_END_STOPPED, or its own end
+ * when it had ended before. It needs no step, and a stop signal does not
+ * interrupt it.
+ */
+enum etude_status etude_service_stop(struct etude_case_service *s, struct etude_termination *end);
 
 /**
  * Give the path of evidence `name` in the attempt's scratch directory, as

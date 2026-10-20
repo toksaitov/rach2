@@ -5,8 +5,8 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "run_id", "attempt_id", "manifest", "case_id", "architecture", "store",
-               "artifacts", "tools", "site", "steps", "cleanup_us", "scratch", "grace_us", "console_max_bytes",
-               "output_max_bytes", "resend_us"],
+               "artifacts", "tools", "site", "steps", "ports", "cleanup_us", "scratch", "grace_us",
+               "console_max_bytes", "output_max_bytes", "resend_us"],
   "properties": {
     "schema_version": {"const": 1},
     "run_id": {"$ref": "#/$defs/identity"},
@@ -40,6 +40,10 @@
       "type": "object",
       "propertyNames": {"$ref": "#/$defs/id"},
       "additionalProperties": {"$ref": "#/$defs/us"}
+    },
+    "ports": {
+      "type": "array", "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 1024, "maximum": 65535}
     },
     "cleanup_us": {"$ref": "#/$defs/us"},
     "scratch": {"$ref": "#/$defs/path"},

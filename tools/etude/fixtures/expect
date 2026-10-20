@@ -36,6 +36,8 @@
 1 manifest ./rules.json | unprepared: the program nothing-built is no artifact that prepare lists
 1 manifest ./rules.json | step-etude: the step etude.boot has an identity of the executor's
 1 manifest ./rules.json | step-machine: the step poweroff runs on elsewhere
+1 manifest ./rules.json | service-program: the service peer runs nothing-built, which is neither a tool
+1 manifest ./rules.json | service-twice: the service peer is declared twice
 1 manifest ./rules.json | bound-order: the case bound has its floor, initial value and ceiling out of order
 1 manifest ./rules.json | bound-gap: the gap bound reaches past the whole case's
 1 manifest ./rules.json | no-boot-stage: a case that boots Rach2 has a bound for its boot stage

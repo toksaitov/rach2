@@ -44,6 +44,7 @@
         "termination": {"$ref": "#/$defs/termination"},
         "steps": {"type": "array", "items": {"$ref": "#/$defs/step"}, "minItems": 1},
         "machines": {"type": "array", "items": {"$ref": "#/$defs/machine"}, "minItems": 1},
+        "services": {"type": "array", "items": {"$ref": "#/$defs/service"}},
         "progress": {"type": "array", "items": {"$ref": "#/$defs/witness"}},
         "bounds": {"$ref": "#/$defs/bounds"},
         "resources": {"$ref": "#/$defs/resources"},
@@ -54,7 +55,7 @@
       "allOf": [
         {"if": {"properties": {"domain": {"const": "machine"}}},
          "then": {"required": ["steps", "machines"], "properties": {"native": {"properties": {"plan": {"const": "none"}}}}},
-         "else": {"not": {"anyOf": [{"required": ["steps"]}, {"required": ["machines"]}]}}},
+         "else": {"not": {"anyOf": [{"required": ["steps"]}, {"required": ["machines"]}, {"required": ["services"]}]}}},
         {"if": {"properties": {"domain": {"const": "host"}}},
          "then": {"properties": {"native": {"properties": {"plan": {"const": "host"}}}}},
          "else": {"properties": {"native": {"properties": {"plan": {"enum": ["native", "none"]}}}, "architectures": {"type": "array"}}}},
@@ -197,6 +198,16 @@
         "console": {"enum": ["serial", "none"]},
         "helper": {"type": "boolean"},
         "qmp": {"type": "boolean"}
+      }
+    },
+    "service": {
+      "type": "object", "additionalProperties": false,
+      "required": ["service_id", "program", "ready", "does"],
+      "properties": {
+        "service_id": {"$ref": "#/$defs/id"},
+        "program": {"$ref": "#/$defs/name"},
+        "ready": {"$ref": "#/$defs/text"},
+        "does": {"$ref": "#/$defs/text"}
       }
     },
     "witness": {

@@ -2,8 +2,9 @@
  * scenario.c: libetude-case on POSIX systems, the library a machine scenario
  * links with. It reads the attempt's invocation and its case, reports the
  * scenario's assertions, boots the case's machines on the QEMU launcher with
- * private copies of their disks, runs host tools and etude-guest's attempts
- * beside them, bounds every wait by its step, and ends what it owns.
+ * private copies of their disks, runs host tools, services and etude-guest's
+ * attempts beside them, bounds every wait by its step, and ends what it owns
+ * after collecting its diagnostics.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -39,6 +40,9 @@ extern char **environ;
 /* The longest invocation, manifest or guest invocation the library reads. */
 #define DOCUMENT_MAX (4u * 1024 * 1024)
 
+/* The QMP commands whose replies are a machine's diagnostics. */
+#define CAPTURES 3
+
 /* An artifact of the case's `prepare`, with the digest the plan gave it. */
 struct artifact {
     const char *name;
@@ -71,6 +75,15 @@ struct machine_decl {
     struct etude_case_machine *now; /* its latest boot, or NULL */
 };
 
+/* A service of the manifest. */
+struct service_decl {
+    const char *id;
+    const char *program;            /* a tool's or an artifact's name */
+    const char *ready;              /* the text its standard output has once it serves */
+    unsigned starts;                /* the starts begun so far */
+    struct etude_case_service *now; /* its latest start, or NULL */
+};
+
 /* A declared assertion of the scenario's, and what it was given. */
 struct assertion {
     const char *id;
@@ -96,12 +109,25 @@ struct etude_case_machine {
     const char *options[OPTIONS_MAX + 1];
     struct etude_qemu_profile profile;
     struct etude_machine_spec spec;
+    unsigned boot;               /* the machine's boot, counted from 1 */
     struct etude_serial *serial; /* etude-guest's session, for a helper */
     size_t fed;                  /* console bytes fed to the session */
     int serial_closed;
     char line[ETUDE_REPORT_LINE_MAX + 1]; /* the guest's output line being read */
     size_t line_len;
     int line_long;
+    long capture[CAPTURES]; /* the ids of the diagnostics' QMP commands, or -1 */
+};
+
+struct etude_case_service {
+    struct etude_case *c;
+    struct etude_case_service *next;
+    struct service_decl *decl;
+    struct etude_proc *p;
+    unsigned n;   /* its start, counted from 1 */
+    int finished; /* the executor has ended it and its descendants */
+    int seen;     /* the scenario has seen its end */
+    int kept;     /* its output is kept as evidence */
 };
 
 struct etude_case {
@@ -117,6 +143,10 @@ struct etude_case {
     size_t step_count;
     struct machine_decl *decls;
     size_t decl_count;
+    struct service_decl *sdecls;
+    size_t sdecl_count;
+    unsigned *ports; /* the ports the plan reserved */
+    size_t port_count;
     struct assertion *asserts;
     size_t assert_count;
     const char *step_witness; /* the first witness of kind `step`, or NULL */
@@ -129,8 +159,10 @@ struct etude_case {
     unsigned records;    /* assert, notrun and branch records written */
     int faults;          /* misuse, failed assertions and lost work */
     int unconfirmed;     /* a process's cleanup could not be confirmed */
+    int unseen;          /* a service ended without the scenario seeing it */
     struct etude_qemu *q;
     struct etude_case_machine *machines;
+    struct etude_case_service *services;
     struct made *made;
     char path[4096]; /* the path etude_evidence gave last */
 };
@@ -416,6 +448,88 @@ static int load_steps(struct etude_case *c)
     return 0;
 }
 
+/** Say whether `name` is a tool of the case's requirements. */
+static int is_tool(const struct etude_case *c, const char *name)
+{
+    size_t i;
+
+    for (i = 0; name != NULL && i < c->tool_count; i++)
+        if (strcmp(c->tools[i].name, name) == 0)
+            return 1;
+    return 0;
+}
+
+/** Say whether `name` is an artifact of the case's `prepare`. */
+static int is_artifact(const struct etude_case *c, const char *name)
+{
+    size_t i;
+
+    for (i = 0; name != NULL && i < c->art_count; i++)
+        if (strcmp(c->arts[i].name, name) == 0)
+            return 1;
+    return 0;
+}
+
+/** Read the services, each of whose programs is a tool or an artifact. */
+static int load_services(struct etude_case *c)
+{
+    const struct eh_json *list = eh_json_get(c->kase, "services");
+    const struct eh_json *s;
+    size_t i = 0;
+
+    c->sdecl_count = jcount(list);
+    c->sdecls = calloc(c->sdecl_count + 1, sizeof(*c->sdecls));
+    if (c->sdecls == NULL)
+        return -1;
+    for (s = list != NULL ? list->child : NULL; s != NULL; s = s->next, i++) {
+        c->sdecls[i].id = jtext(s, "service_id");
+        c->sdecls[i].program = jtext(s, "program");
+        c->sdecls[i].ready = jtext(s, "ready");
+        if (!file_name(c->sdecls[i].id) || c->sdecls[i].ready == NULL ||
+            *c->sdecls[i].ready == '\0' ||
+            (!is_tool(c, c->sdecls[i].program) && !is_artifact(c, c->sdecls[i].program))) {
+            diag("service %lu of the case has no identity, no ready text, or a program that is "
+                 "neither a tool nor an artifact of the case's",
+                 (unsigned long)i);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/** Read the ports the plan reserved: as many as the case declares, each
+ * a port above 1023 that is given once. */
+static int load_ports(struct etude_case *c)
+{
+    const struct eh_json *list = eh_json_get(c->inv, "ports");
+    const struct eh_json *p;
+    size_t i = 0, j;
+
+    c->port_count = jcount(list);
+    c->ports = calloc(c->port_count + 1, sizeof(*c->ports));
+    if (c->ports == NULL)
+        return -1;
+    if (list == NULL || list->type != 'a' ||
+        c->port_count != jnum(eh_json_get(c->kase, "resources"), "ports")) {
+        diag("the invocation gives not the %llu ports the case declares",
+             (unsigned long long)jnum(eh_json_get(c->kase, "resources"), "ports"));
+        return -1;
+    }
+    for (p = list->child; p != NULL; p = p->next, i++) {
+        c->ports[i] =
+            p->type == 'n' && p->number > 1023 && p->number < 65536 ? (unsigned)p->number : 0;
+        for (j = 0; j < i; j++)
+            if (c->ports[j] == c->ports[i])
+                c->ports[i] = 0;
+        if (c->ports[i] == 0) {
+            diag("port %lu of the invocation is not a port above 1023 given once",
+                 (unsigned long)i);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /** Read the scenario's assertions and the first witness of kind `step`. */
 static int load_assertions(struct etude_case *c)
 {
@@ -517,7 +631,7 @@ static int load(struct etude_case *c, const char *path)
         return -1;
     }
     if (load_artifacts(c) != 0 || load_tools(c) != 0 || load_steps(c) != 0 ||
-        load_assertions(c) != 0 || load_site(c) != 0)
+        load_services(c) != 0 || load_ports(c) != 0 || load_assertions(c) != 0 || load_site(c) != 0)
         return -1;
     c->store = etude_store_open(store);
     if (c->store == NULL) {
@@ -941,10 +1055,26 @@ static int wait_ms(uint64_t until, uint64_t now)
 /* What a wait waits for: a predicate on the case's state. */
 typedef int (*done_fn)(void *arg);
 
+/** Note that host attempt `p` has finished: the foreground one `*host`, which
+ * is set to NULL, or a service's. */
+static void host_finished(struct etude_case *c, struct etude_proc *p, struct etude_proc **host)
+{
+    struct etude_case_service *s;
+
+    if (host != NULL && p == *host) {
+        *host = NULL;
+        return;
+    }
+    for (s = c->services; s != NULL; s = s->next)
+        if (s->p == p)
+            s->finished = 1;
+}
+
 /**
- * Serve the machines, the sessions and the host attempt `host` until `done`
- * says so, the step's bound runs out at `until`, or, when `stoppable`, a
- * stop is asked; `host` is set to NULL once that attempt has finished.
+ * Serve the machines, the sessions, the services and the host attempt
+ * `host` until `done` says so, the step's bound runs out at `until`, or, when
+ * `stoppable`, a stop is asked; `host` is set to NULL once that attempt has
+ * finished.
  */
 static enum etude_status serve_until(struct etude_case *c, done_fn done, void *arg,
                                      struct etude_proc **host, uint64_t until, int stoppable)
@@ -972,8 +1102,8 @@ static enum etude_status serve_until(struct etude_case *c, done_fn done, void *a
         if (w.revents != 0)
             while (read(stop_pipe[0], drain, sizeof(drain)) > 0) {
             }
-        if (finished != NULL && host != NULL && finished == *host)
-            *host = NULL;
+        if (finished != NULL)
+            host_finished(c, finished, host);
     }
 }
 
@@ -1226,7 +1356,7 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
         c->faults++;
         return st;
     }
-    d->boots++;
+    m->boot = ++d->boots;
     snprintf(m->attempt_id, sizeof(m->attempt_id), "%s.%s.%u", c->attempt_id, d->id, d->boots);
     snprintf(name, sizeof(name), "%s.%u.console", d->id, d->boots);
     console = etude_evidence(c, name);
@@ -1555,29 +1685,55 @@ static int host_done(void *arg)
     return *(struct etude_proc **)arg == NULL;
 }
 
+/** Give the path of the program `name`, a tool or an executable copy of an
+ * artifact of the case's, or NULL. */
+static const char *program_path(struct etude_case *c, const char *name)
+{
+    struct artifact *a;
+    size_t i;
+
+    for (i = 0; name != NULL && i < c->tool_count; i++)
+        if (strcmp(c->tools[i].name, name) == 0)
+            return c->tools[i].path;
+    a = find_artifact(c, name);
+    return a != NULL ? executable(c, a) : NULL;
+}
+
+/** Make the argument vector of `program` with `args` after it, ended by
+ * NULL; NULL when memory ran out. */
+static char **arguments(const char *program, char *const args[])
+{
+    char **v;
+    size_t i, n = 0;
+
+    while (args != NULL && args[n] != NULL)
+        n++;
+    v = calloc(n + 2, sizeof(*v));
+    if (v == NULL)
+        return NULL;
+    v[0] = (char *)program;
+    for (i = 0; i < n; i++)
+        v[i + 1] = args[i];
+    return v;
+}
+
 enum etude_status etude_host(struct etude_case *c, char *const argv[], const char *output,
                              struct etude_termination *end)
 {
     struct etude_exec_spec spec;
     struct etude_proc *p, *running;
     const struct etude_exec_result *r;
-    const struct artifact *a = NULL;
-    const char *program = NULL;
+    const char *program;
     enum etude_status st;
     char attempt[300], err_name[160];
     char **args;
-    size_t i, n;
 
     end->end = ETUDE_END_LOST;
     end->value = -1;
     end->console_offset = 0;
     if (stop_asked)
         return ETUDE_STOPPED;
-    for (i = 0; argv[0] != NULL && i < c->tool_count; i++)
-        if (strcmp(c->tools[i].name, argv[0]) == 0)
-            program = c->tools[i].path;
-    if (program == NULL && (a = find_artifact(c, argv[0])) != NULL)
-        program = executable(c, (struct artifact *)a);
+    program = program_path(c, argv[0]);
     if (c->cur < 0 || program == NULL || !file_name(output) ||
         (size_t)snprintf(err_name, sizeof(err_name), "%s.err", output) >= sizeof(err_name)) {
         diag("%s is no tool or artifact of the case, or no step runs",
@@ -1585,14 +1741,9 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
         c->faults++;
         return ETUDE_REFUSED;
     }
-    for (n = 0; argv[n] != NULL; n++) {
-    }
-    args = calloc(n + 1, sizeof(*args));
+    args = arguments(program, argv + 1);
     if (args == NULL)
         return ETUDE_FAILED;
-    args[0] = (char *)program;
-    for (i = 1; i < n; i++)
-        args[i] = argv[i];
     snprintf(attempt, sizeof(attempt), "%s.host.%s", c->attempt_id, output);
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = attempt;
@@ -1627,29 +1778,364 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     return st;
 }
 
+/* ---- Services. ---- */
+
+/** Find the service `id` of the manifest, or NULL. */
+static struct service_decl *find_service(struct etude_case *c, const char *id)
+{
+    size_t i;
+
+    for (i = 0; id != NULL && i < c->sdecl_count; i++)
+        if (strcmp(c->sdecls[i].id, id) == 0)
+            return &c->sdecls[i];
+    return NULL;
+}
+
+unsigned etude_port(struct etude_case *c, unsigned i)
+{
+    if (i >= c->port_count) {
+        diag("the case has no port %u", i);
+        c->faults++;
+        return 0;
+    }
+    return c->ports[i];
+}
+
+/** Say whether service `s` can write no more: it has finished, closed its
+ * standard output, or passed the bytes kept of it. */
+static int service_gone(const struct etude_case_service *s)
+{
+    const struct etude_exec_result *r = etude_proc_result(s->p);
+
+    return s->finished || r->out.closed || r->out.total > r->out.kept;
+}
+
+/* A wait for text on a service's standard output. */
+struct out_wait {
+    struct etude_case_service *s;
+    const char *text;
+    uint64_t from;
+    long at; /* the offset past the text once found, else -1 */
+};
+
+/** Say whether the text has appeared, or can no longer appear. */
+static int out_found(void *arg)
+{
+    struct out_wait *t = arg;
+    const struct etude_exec_result *r = etude_proc_result(t->s->p);
+    long at;
+
+    if (t->from < r->out.kept) {
+        at = find_text(r->out.data + t->from, r->out.kept - (size_t)t->from, t->text);
+        if (at >= 0) {
+            t->at = (long)t->from + at;
+            return 1;
+        }
+    }
+    return service_gone(t->s);
+}
+
+/** Say whether service `arg` has finished. */
+static int service_finished(void *arg)
+{
+    return ((const struct etude_case_service *)arg)->finished;
+}
+
+/** Keep the output of service `s`, once, and note a cleanup not confirmed. */
+static void keep_service(struct etude_case_service *s)
+{
+    struct etude_case *c = s->c;
+    const struct etude_exec_result *r = etude_proc_result(s->p);
+    char name[160];
+
+    if (s->kept)
+        return;
+    s->kept = 1;
+    snprintf(name, sizeof(name), "%s.%u.out", s->decl->id, s->n);
+    keep_evidence(c, name, r->out.data, r->out.kept);
+    snprintf(name, sizeof(name), "%s.%u.err", s->decl->id, s->n);
+    keep_evidence(c, name, r->err.data, r->err.kept);
+    if (!s->finished || r->cleanup != ETUDE_CLEANUP_CONFIRMED)
+        c->unconfirmed = 1;
+}
+
+/** Give the end of service `s`, which has finished, seen by the scenario. */
+static void service_end(struct etude_case_service *s, struct etude_termination *end)
+{
+    const struct etude_exec_result *r = etude_proc_result(s->p);
+
+    end->end = r->end;
+    end->value = r->value;
+    end->console_offset = r->out.total;
+    s->seen = 1;
+    keep_service(s);
+}
+
+/** Stop service `s` and wait until the executor has ended it. */
+static void service_halt(struct etude_case_service *s)
+{
+    if (!s->finished) {
+        etude_exec_cancel(s->p);
+        serve_until(s->c, service_finished, s, NULL, UINT64_MAX, 0);
+    }
+}
+
+enum etude_status etude_service(struct etude_case *c, const char *service, char *const args[],
+                                struct etude_case_service **sp, struct etude_termination *end)
+{
+    struct service_decl *d = find_service(c, service);
+    struct etude_exec_spec spec;
+    struct etude_case_service *s;
+    struct out_wait t;
+    enum etude_status st;
+    const char *program;
+    char attempt[400], **argv;
+
+    *sp = NULL;
+    end->end = ETUDE_END_LOST;
+    end->value = -1;
+    end->console_offset = 0;
+    if (stop_asked)
+        return ETUDE_STOPPED;
+    if (d == NULL || c->cur < 0 || (d->now != NULL && !d->now->finished)) {
+        diag("service %s is not one of the case's, runs already, or no step runs",
+             service != NULL ? service : "(null)");
+        c->faults++;
+        return ETUDE_REFUSED;
+    }
+    program = program_path(c, d->program);
+    if (program == NULL) {
+        diag("service %s: its program %s cannot be used", d->id, d->program);
+        c->faults++;
+        return ETUDE_REFUSED;
+    }
+    s = calloc(1, sizeof(*s));
+    argv = arguments(program, args);
+    if (s == NULL || argv == NULL) {
+        free(s);
+        free(argv);
+        return ETUDE_FAILED;
+    }
+    s->c = c;
+    s->decl = d;
+    s->n = d->starts + 1;
+    snprintf(attempt, sizeof(attempt), "%s.service.%s.%u", c->attempt_id, d->id, s->n);
+    memset(&spec, 0, sizeof(spec));
+    spec.attempt_id = attempt;
+    spec.argv = argv;
+    spec.envp = environ;
+    spec.cwd = c->scratch;
+    spec.output_max = (size_t)c->output_max;
+    spec.grace_us = c->grace_us;
+    if (etude_exec_start(etude_qemu_exec(c->q), &spec, &s->p) != 0) {
+        diag("service %s did not start: %s", d->id, strerror(errno));
+        free(argv);
+        free(s);
+        c->faults++;
+        return ETUDE_FAILED;
+    }
+    free(argv);
+    d->starts = s->n;
+    d->now = s;
+    s->next = c->services;
+    c->services = s;
+    memset(&t, 0, sizeof(t));
+    t.s = s;
+    t.text = d->ready;
+    t.at = -1;
+    st = serve_until(c, out_found, &t, NULL, step_deadline(c), 1);
+    if (st == ETUDE_OK && t.at >= 0) {
+        *sp = s;
+        return ETUDE_OK;
+    }
+    if (st == ETUDE_OK)
+        diag("service %s %s before it was ready", d->id,
+             s->finished ? "ended" : "closed or filled its output");
+    service_halt(s);
+    service_end(s, end);
+    return st == ETUDE_OK ? ETUDE_FAILED : st;
+}
+
+enum etude_status etude_service_wait(struct etude_case_service *s, const char *text, uint64_t from,
+                                     uint64_t *at)
+{
+    const struct etude_exec_result *r = etude_proc_result(s->p);
+    struct out_wait t;
+    enum etude_status st;
+
+    if (s->c->cur < 0 || text == NULL || *text == '\0') {
+        diag("service %s: no text to wait for, or no step", s->decl->id);
+        s->c->faults++;
+        return ETUDE_REFUSED;
+    }
+    memset(&t, 0, sizeof(t));
+    t.s = s;
+    t.text = text;
+    t.from = from;
+    t.at = -1;
+    st = serve_until(s->c, out_found, &t, NULL, step_deadline(s->c), 1);
+    if (st != ETUDE_OK)
+        return st;
+    if (t.at >= 0) {
+        *at = (uint64_t)t.at;
+        return ETUDE_OK;
+    }
+    if (r->out.total > r->out.kept) {
+        diag("service %s: its output passed the %llu bytes kept", s->decl->id,
+             (unsigned long long)s->c->output_max);
+        return ETUDE_FAILED;
+    }
+    s->seen = 1;
+    return ETUDE_LOST;
+}
+
+enum etude_status etude_service_end(struct etude_case_service *s, struct etude_termination *end)
+{
+    enum etude_status st;
+
+    end->end = ETUDE_END_LOST;
+    end->value = -1;
+    end->console_offset = 0;
+    if (s->c->cur < 0) {
+        s->c->faults++;
+        return ETUDE_REFUSED;
+    }
+    st = serve_until(s->c, service_finished, s, NULL, step_deadline(s->c), 1);
+    if (st != ETUDE_OK)
+        return st;
+    service_end(s, end);
+    return ETUDE_OK;
+}
+
+enum etude_status etude_service_stop(struct etude_case_service *s, struct etude_termination *end)
+{
+    service_halt(s);
+    service_end(s, end);
+    return ETUDE_OK;
+}
+
 /* ---- The attempt. ---- */
 
-/** Say whether every machine has ended. */
+/** Say whether every machine and service has ended. */
 static int all_ended(void *arg)
 {
     const struct etude_case *c = arg;
     const struct etude_case_machine *m;
+    const struct etude_case_service *s;
 
     for (m = c->machines; m != NULL; m = m->next)
         if (mres(m)->state != ETUDE_MACHINE_ENDED)
             return 0;
+    for (s = c->services; s != NULL; s = s->next)
+        if (!s->finished)
+            return 0;
     return 1;
 }
 
-/** End every machine within the cleanup's bound, and note how each was
- * cleaned up. */
-static void end_machines(struct etude_case *c)
+/* The QMP commands of a machine's diagnostics, and their arguments. */
+static const char *const capture_command[CAPTURES] = {"query-status", "query-cpus-fast",
+                                                      "human-monitor-command"};
+static const char *const capture_args[CAPTURES] = {NULL, NULL,
+                                                   "{\"command-line\": \"info registers -a\"}"};
+
+/** Say whether every command of the diagnostics has its reply, or never
+ * will. */
+static int captured(void *arg)
 {
-    struct etude_case_machine *m;
+    const struct etude_case *c = arg;
+    const struct etude_case_machine *m;
+    const char *reply;
+    int i;
 
     for (m = c->machines; m != NULL; m = m->next)
+        for (i = 0; i < CAPTURES; i++)
+            if (m->capture[i] >= 0 && etude_machine_reply(m->m, m->capture[i], &reply) == 0)
+                return 0;
+    return 1;
+}
+
+/** Keep the diagnostics of machine `m` as evidence `MACHINE.N.capture`, a
+ * line for each command: its reply, `no reply` or `not sent`. */
+static void keep_capture(struct etude_case_machine *m)
+{
+    const char *reply[CAPTURES];
+    char name[200], *text;
+    size_t size = 1, n = 0;
+    int i;
+
+    for (i = 0; i < CAPTURES; i++) {
+        reply[i] = m->capture[i] < 0 ? "not sent" : "no reply";
+        if (m->capture[i] >= 0 && etude_machine_reply(m->m, m->capture[i], &reply[i]) != 1)
+            reply[i] = "no reply";
+        size += strlen(capture_command[i]) + strlen(reply[i]) + 3;
+    }
+    text = malloc(size);
+    if (text == NULL)
+        return;
+    for (i = 0; i < CAPTURES; i++)
+        n += (size_t)snprintf(text + n, size - n, "%s: %s\n", capture_command[i], reply[i]);
+    snprintf(name, sizeof(name), "%s.%u.capture", m->decl->id, m->boot);
+    keep_evidence(m->c, name, text, n);
+    free(text);
+}
+
+/**
+ * Collect the diagnostics of every machine that runs with QMP, its status,
+ * its processors and its registers, waiting for the replies until `until`,
+ * and keep them.
+ */
+static void capture(struct etude_case *c, uint64_t until)
+{
+    struct etude_case_machine *m;
+    int i, any = 0;
+
+    for (m = c->machines; m != NULL; m = m->next) {
+        int running = m->decl->qmp && mres(m)->state == ETUDE_MACHINE_RUNNING;
+
+        for (i = 0; i < CAPTURES; i++)
+            m->capture[i] =
+                running ? etude_machine_qmp(m->m, capture_command[i], capture_args[i]) : -1;
+        any |= running;
+    }
+    if (!any)
+        return;
+    serve_until(c, captured, c, NULL, until, 0);
+    for (m = c->machines; m != NULL; m = m->next)
+        if (m->decl->qmp && (m->capture[0] >= 0 || mres(m)->state == ETUDE_MACHINE_RUNNING))
+            keep_capture(m);
+}
+
+/** Say whether service `s` ended by the signal of a stop, SIGTERM or
+ * SIGKILL, and not by itself. */
+static int stopped_by_signal(const struct etude_case_service *s)
+{
+    const struct etude_exec_result *r = etude_proc_result(s->p);
+
+    return r->exit_end == ETUDE_END_SIGNALED &&
+           (r->exit_value == SIGTERM || r->exit_value == SIGKILL);
+}
+
+/**
+ * End what the attempt owns within the cleanup's bound: after a failure or a
+ * stop, collect the machines' diagnostics first; then stop every service and
+ * machine still running, keep the services' output, and note how each was
+ * cleaned up. A service whose end the scenario did not see must end by the
+ * stop's signal; one that exited, or was killed by another signal, ended by
+ * itself while the case ran, which is a fault.
+ */
+static void end_all(struct etude_case *c, int failing)
+{
+    uint64_t until = posix_now_us() + c->cleanup_us, grace = posix_now_us() + c->grace_us;
+    struct etude_case_machine *m;
+    struct etude_case_service *s;
+
+    if (failing)
+        capture(c, grace < until ? grace : until);
+    for (s = c->services; s != NULL; s = s->next)
+        etude_exec_cancel(s->p);
+    for (m = c->machines; m != NULL; m = m->next)
         etude_machine_cancel(m->m);
-    serve_until(c, all_ended, c, NULL, posix_now_us() + c->cleanup_us, 0);
+    serve_until(c, all_ended, c, NULL, until, 0);
     for (m = c->machines; m != NULL; m = m->next) {
         const struct etude_machine_result *r = mres(m);
 
@@ -1657,15 +2143,23 @@ static void end_machines(struct etude_case *c)
             r->qemu->cleanup != ETUDE_CLEANUP_CONFIRMED)
             c->unconfirmed = 1;
     }
+    for (s = c->services; s != NULL; s = s->next) {
+        if (s->finished && !s->seen && !stopped_by_signal(s)) {
+            diag("service %s ended before the case stopped it", s->decl->id);
+            c->faults++;
+            c->unseen = 1;
+        }
+        keep_service(s);
+    }
 }
 
-/** Say whether the attempt may pass: every assertion of the scenario's was
- * reported once and held, and nothing was misused or lost. */
-static int passed(const struct etude_case *c, int rc)
+/** Say whether every assertion of the scenario's was reported once and
+ * held, and nothing was misused or lost. */
+static int held(const struct etude_case *c)
 {
     size_t i;
 
-    if (rc != 0 || c->faults > 0 || c->unconfirmed)
+    if (c->faults > 0)
         return 0;
     for (i = 0; i < c->assert_count; i++)
         if (c->asserts[i].reported != 1 || !c->asserts[i].held)
@@ -1687,6 +2181,7 @@ static void remove_made(struct etude_case *c)
 static void case_free(struct etude_case *c)
 {
     struct etude_case_machine *m;
+    struct etude_case_service *s;
     struct made *f;
     size_t i;
 
@@ -1695,6 +2190,10 @@ static void case_free(struct etude_case *c)
         if (m->serial != NULL)
             etude_serial_free(m->serial);
         free(m);
+    }
+    while ((s = c->services) != NULL) {
+        c->services = s->next;
+        free(s);
     }
     while ((f = c->made) != NULL) {
         c->made = f->next;
@@ -1710,6 +2209,8 @@ static void case_free(struct etude_case *c)
     free(c->tools);
     free(c->steps);
     free(c->decls);
+    free(c->sdecls);
+    free(c->ports);
     free(c->asserts);
     if (c->store != NULL)
         etude_store_close(c->store);
@@ -1739,13 +2240,13 @@ int etude_case_main(int argc, char **argv)
         end_step(&c);
         record("%s %u", ETUDE_REPORT_END, c.records);
     }
-    end_machines(&c);
-    if (passed(&c, rc || stopped))
+    end_all(&c, rc || stopped || !held(&c));
+    if (!rc && !stopped && held(&c) && !c.unconfirmed)
         remove_made(&c);
     else
         diag("kept: %s", c.scratch);
     etude_qemu_free(c.q);
-    rc = rc || stopped || c.unconfirmed;
+    rc = rc || stopped || c.unconfirmed || c.unseen;
     case_free(&c);
     return rc;
 }

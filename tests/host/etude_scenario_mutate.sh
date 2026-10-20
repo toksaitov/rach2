@@ -1,10 +1,15 @@
 #!/bin/sh
-# Prove etude_scenario_hosttest.c with faults in a private copy of
-# libetude-case: a private copy made again for each boot, a closed console
-# waited on as if it could still show the text, an exit without QEMU's event
-# taken for a shutdown, a step's bound never kept, a stop signal ignored, a
-# copy of an artifact that is no disk, a lost etude-guest session never
-# noticed and a damaged artifact taken must each be found.
+# Prove etude_scenario_hosttest.c with faults in private copies of
+# libetude-case, the QEMU launcher and the executor's keeper: a private copy
+# made again for each boot, a closed console waited on as if it could still
+# show the text, an exit without QEMU's event taken for a shutdown, a step's
+# bound never kept, a stop signal ignored, a copy of an artifact that is no
+# disk, a lost etude-guest session never noticed, a damaged artifact taken, a
+# service taken as ready before its text, a service that died unseen
+# accepted, no diagnostics before the stop, a stopped service's output not
+# kept, a fixed port in place of the plan's, a second machine refused while
+# the first runs, a service's output that wakes no wait, and a keeper that
+# does not end its case when its controller is killed must each be found.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -36,6 +41,20 @@ faults = {
                 '        if (r->console.total > m->fed) {\n'),
     'damaged': ('        if (etude_store_check(c->store, a->digest, NULL) != 0) {\n',
                 '        if (etude_store_check(c->store, a->digest, NULL) != 0 && 0) {\n'),
+    'ready': ('    if (st == ETUDE_OK && t.at >= 0) {\n        *sp = s;\n',
+              '    if (st == ETUDE_OK && (t.at >= 0 || 1)) {\n        *sp = s;\n'),
+    'unseen': ('        if (s->finished && !s->seen && !stopped_by_signal(s)) {\n',
+               '        if (s->finished && !s->seen && !stopped_by_signal(s) && 0) {\n'),
+    'capture': ('    if (failing)\n        capture(c, ', '    if (failing && 0)\n        capture(c, '),
+    'evidence': ('            c->unseen = 1;\n        }\n        keep_service(s);\n',
+                 '            c->unseen = 1;\n        }\n'),
+    'port': ('    return c->ports[i];\n', '    return 7777 + i;\n'),
+    'single': ('    if (d->now != NULL && mres(d->now)->state != ETUDE_MACHINE_ENDED) {\n',
+               '    if (c->machines != NULL && mres(c->machines)->state != ETUDE_MACHINE_ENDED) {\n'),
+    'wake': ('    r->output = r->p == NULL && !own && !r->ready && (soonest == 0 || posix_now_us() < soonest);\n',
+             '    r->output = r->p == NULL && !own && !r->ready && 0;\n'),
+    'controller': ('        kp->controller = 0;\n        m.type = KEEP_CANCEL;\n',
+                   '        kp->controller = 0;\n        m.type = KEEP_GO;\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -45,14 +64,24 @@ if not os.environ.get('RACH2_FAULT_TEXTS'):
 PY
 }
 
-faults='state gone event bound stop disk session damaged'
+# Give the source, under tools/etude, that `fault` goes into.
+fault_file()
+{
+    case $1 in
+    wake) echo posix/qemu.c ;;
+    controller) echo posix/keeper.c ;;
+    *) echo posix/scenario.c ;;
+    esac
+}
+
+faults='state gone event bound stop disk session damaged ready unseen capture evidence port single wake controller'
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
     for fault in $faults; do
-        apply_fault tools/etude/posix/scenario.c "$fault"
+        apply_fault "tools/etude/$(fault_file "$fault")" "$fault"
     done
-    echo 'etude-scenario-mutation: texts: all eight faults found once'
+    echo 'etude-scenario-mutation: texts: all sixteen faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -80,12 +109,13 @@ trap 'stopped=1; exit 130' INT
 trap 'stopped=1; exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-scenario-proof.XXXXXX")
 mkdir "$work/posix"
-cp tools/etude/serial.h tools/etude/history_json.h "$work/"
+cp tools/etude/serial.h tools/etude/history_json.h tools/etude/capture.h "$work/"
 
-# Copy the source the faults go into afresh.
+# Copy the sources the faults go into afresh.
 restore()
 {
-    cp tools/etude/posix/scenario.c "$work/posix/scenario.c"
+    cp tools/etude/posix/scenario.c tools/etude/posix/qemu.c tools/etude/posix/keeper.c \
+        "$work/posix/"
 }
 
 # Build and run the real host test against the private source under the
@@ -101,8 +131,8 @@ run_phase()
         -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude \
         -I tools/etude/posix -I tools/etude/guest -I utils tests/host/etude_scenario_hosttest.c \
         "$work/posix/scenario.c" tools/etude/posix/case_main.c tools/etude/serial.c \
-        tools/etude/posix/qemu.c tools/etude/qemu_profile.c tools/etude/posix/exec.c \
-        tools/etude/posix/keeper.c tools/etude/processor.c \
+        "$work/posix/qemu.c" tools/etude/qemu_profile.c tools/etude/posix/exec.c \
+        "$work/posix/keeper.c" tools/etude/processor.c \
         tools/etude/posix/process.c tools/etude/posix/store.c tools/etude/capture.c \
         tools/etude/history_json.c tools/etude/guest/guest.c tools/etude/guest/wire.c \
         utils/sha256.c -o "$work/$phase" >"$work/$phase.compile.log" 2>&1 || {
@@ -124,7 +154,7 @@ run_phase()
 prove()
 {
     restore
-    apply_fault "$work/posix/scenario.c" "$1"
+    apply_fault "$work/$(fault_file "$1")" "$1"
     run_phase "$1-mutated" 1 1
     grep -q "$2" "$work/$1-mutated.log"
 }
@@ -139,5 +169,13 @@ prove stop 'stop: the attempt did not end within'
 prove disk 'misuse: no .assert no-copy pass.'
 prove session 'guest: no .assert guest-lost pass.'
 prove damaged 'damaged: no .assert refused pass.'
+prove ready 'unready: no .assert early-failed pass.'
+prove unseen 'unseen: o->status == r->want_status'
+prove capture 'stop-pair: evidence beta.1.capture lacks'
+prove evidence 'stop-pair: evidence peer.1.out lacks'
+prove port 'no .assert service-ready pass.'
+prove single 'pair: no .assert beta-reached pass.'
+prove wake 'pair: the attempt did not end within'
+prove controller 'kill-pair: [0-9]* of its processes are left'
 restore
 run_phase restored 0

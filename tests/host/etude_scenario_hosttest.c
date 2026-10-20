@@ -31,13 +31,17 @@
  * failed accelerator and a damaged artifact are reported. Under the stand-in
  * the machine's etude-guest runs a guest program whose report becomes the
  * scenario's, and an etude-guest killed in the middle of a run is a lost
- * end. With the real QEMU, a disk root written at the debug shell and
- * powered off is read back by the next boot, and etude-guest runs the test
- * image's /hello.
+ * end. This program is also the peer that a scenario runs as a service; two
+ * machines at once reach it, a service ended unseen is a fault, and failing
+ * rows at each stage end their own processes while a held row keeps its
+ * own. With the real QEMU, a disk root written at the debug shell and
+ * powered off is read back by the next boot, etude-guest runs the test
+ * image's /hello, and two machines run /tcptest against the peer.
  */
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdint.h>
@@ -82,6 +86,14 @@ static int fails;
 #define STEP_US         60000000u
 #define REAL_US         120000000u
 
+/* The hold row's bound on the step in which the other rows fail beside it,
+ * and on its attempt; the bound in which a killed row's processes end; and
+ * the most processes of one row the test counts. */
+#define HOLD_US         240000000u
+#define HOLD_ATTEMPT_MS 300000
+#define GONE_MS         15000
+#define ROW_PROCS       64
+
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
 
@@ -110,10 +122,115 @@ static int file_has(const char *path, const char *text)
     return found;
 }
 
+/** Say `text` on standard output at once, as a line. */
+static void say(const char *text)
+{
+    printf("%s\n", text);
+    fflush(stdout);
+}
+
+/** Give a socket address of 127.0.0.1 and `port`. */
+static struct sockaddr_in loopback(long port)
+{
+    struct sockaddr_in a;
+
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons((unsigned short)port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    return a;
+}
+
+/* The connections a peer serves at once. */
+#define PEER_CONNS 8
+
+/**
+ * Be a peer on port `port` of 127.0.0.1, as `mode` says: `serve` sends each
+ * connection's bytes back and says each line it got and each connection that
+ * closed, `once` does so until its first connection closes and exits 0,
+ * `early` exits 3 before it serves, and `mute` serves nothing and never says
+ * that it is ready. A line `die` makes it exit 1 before it sends anything
+ * back.
+ */
+static int peer(const char *port, const char *mode)
+{
+    struct sockaddr_in a = loopback(strtol(port, NULL, 10));
+    struct pollfd p[PEER_CONNS + 1];
+    char line[PEER_CONNS][256], text[300];
+    size_t len[PEER_CONNS];
+    int l, one = 1, i, n, k;
+    ssize_t got;
+    char buf[512];
+
+    if (strcmp(mode, "early") == 0) {
+        say("peer: cannot serve: told to fail");
+        return 3;
+    }
+    if (strcmp(mode, "mute") == 0)
+        for (;;)
+            pause();
+    l = socket(AF_INET, SOCK_STREAM, 0);
+    if (l < 0 || setsockopt(l, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) != 0 ||
+        bind(l, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(l, PEER_CONNS) != 0) {
+        snprintf(text, sizeof(text), "peer: cannot serve: %s", strerror(errno));
+        say(text);
+        return 3;
+    }
+    snprintf(text, sizeof(text), "peer: listening on %s", port);
+    say(text);
+    for (i = 0; i <= PEER_CONNS; i++) {
+        p[i].fd = i == 0 ? l : -1;
+        p[i].events = POLLIN;
+    }
+    for (;;) {
+        if (poll(p, PEER_CONNS + 1, -1) < 0)
+            continue;
+        if (p[0].revents != 0)
+            for (i = 1; i <= PEER_CONNS; i++)
+                if (p[i].fd < 0) {
+                    p[i].fd = accept(l, NULL, NULL);
+                    len[i - 1] = 0;
+                    break;
+                }
+        for (i = 1; i <= PEER_CONNS; i++) {
+            if (p[i].fd < 0 || p[i].revents == 0)
+                continue;
+            got = read(p[i].fd, buf, sizeof(buf));
+            if (got <= 0) {
+                close(p[i].fd);
+                p[i].fd = -1;
+                say("peer: closed");
+                if (strcmp(mode, "once") == 0)
+                    return 0;
+                continue;
+            }
+            for (n = 0; n < got; n++) {
+                k = i - 1;
+                if (buf[n] != '\n') {
+                    if (len[k] + 1 < sizeof(line[k]))
+                        line[k][len[k]++] = buf[n];
+                    continue;
+                }
+                line[k][len[k]] = '\0';
+                len[k] = 0;
+                if (strcmp(line[k], "die") == 0) {
+                    say("peer: dying");
+                    return 1;
+                }
+                snprintf(text, sizeof(text), "peer: got %s", line[k]);
+                say(text);
+            }
+            if (write(p[i].fd, buf, (size_t)got) != got)
+                say("peer: a reply was cut short");
+        }
+    }
+}
+
 /**
  * Be the tool `argv[2]`: `scan FILE TEXT` exits 0 when FILE has TEXT;
- * `report CASE` reports one assertion of CASE as a guest program does; and
- * `killguest FILE` kills the etude-guest whose PID FILE has.
+ * `report CASE` reports one assertion of CASE as a guest program does;
+ * `killguest FILE` kills the etude-guest whose PID FILE has; and `peer PORT
+ * MODE MARK` is a service, MARK naming its row among the processes.
  */
 static int tool(int argc, char **argv)
 {
@@ -123,6 +240,8 @@ static int tool(int argc, char **argv)
 
     if (argc == 5 && strcmp(argv[2], "scan") == 0)
         return file_has(argv[3], argv[4]) ? 0 : 1;
+    if (argc == 6 && strcmp(argv[2], "peer") == 0)
+        return peer(argv[3], argv[4]);
     if (argc == 4 && strcmp(argv[2], "report") == 0) {
         printf("guest: running\n");
         printf("@etude 1 begin %s\n@etude 1 assert guest-ran pass\n@etude 1 end 1\n", argv[3]);
@@ -256,6 +375,10 @@ static void fake_qmp(int qmp, const char *line, const char *accel, const char *m
     else if (strcmp(name, "query-status") == 0)
         snprintf(text, sizeof(text),
                  "{\"return\": {\"status\": \"running\", \"running\": true}, \"id\": %ld}\r\n", id);
+    else if (strcmp(name, "query-cpus-fast") == 0)
+        snprintf(text, sizeof(text), "{\"return\": [{\"cpu-index\": 0}], \"id\": %ld}\r\n", id);
+    else if (strcmp(name, "human-monitor-command") == 0)
+        snprintf(text, sizeof(text), "{\"return\": \"EAX=00000000\\r\\n\", \"id\": %ld}\r\n", id);
     else if (strcmp(name, "qmp_capabilities") == 0 || strcmp(name, "cont") == 0 ||
              strcmp(name, "quit") == 0)
         snprintf(text, sizeof(text), "{\"return\": {}, \"id\": %ld}\r\n", id);
@@ -292,6 +415,34 @@ static void fake_disk(const char *disk, const char *text, char *out, size_t size
 }
 
 /**
+ * Send `TEXT` of `args`, `PORT TEXT`, as a line to the peer on that port of
+ * 127.0.0.1, as a guest reaches the host, and say on the console `con`
+ * whether the line came back.
+ */
+static void fake_peer(int con, const char *args)
+{
+    char *text, want[300], got[300], said[400];
+    struct sockaddr_in a = loopback(strtol(args, &text, 10));
+    size_t n = 0;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    snprintf(want, sizeof(want), "%s\n", *text == ' ' ? text + 1 : text);
+    if (fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
+        write(fd, want, strlen(want)) == (ssize_t)strlen(want))
+        while (n + 1 < sizeof(got) && read(fd, got + n, 1) == 1 && got[n++] != '\n') {
+        }
+    got[n] = '\0';
+    if (fd >= 0)
+        close(fd);
+    want[strlen(want) - 1] = '\0';
+    if (n > 0 && strncmp(got, want, strlen(want)) == 0)
+        snprintf(said, sizeof(said), "fake: peer echoed %s\r\n> ", want);
+    else
+        snprintf(said, sizeof(said), "fake: peer gone\r\n> ");
+    put(con, said);
+}
+
+/**
  * Run etude-guest on the console `con` in a child, as the debug shell's
  * `exec /etude-guest` does, with the stage directory ETUDE_FAKE_STAGE and
  * the resend interval of `line`; its PID goes to ETUDE_FAKE_GUEST_PID.
@@ -325,16 +476,58 @@ static pid_t fake_guest(int con, const char *line)
 }
 
 /**
+ * Act on the line that the console `con` typed: `write TEXT` and `read` the
+ * first disk, at `disk` or none at NULL, `poweroff`, `die`, `closecon`,
+ * `closeqmp`, `peer PORT TEXT` and `exec /etude-guest`. A console or QMP that
+ * it closes has its descriptor set to -1.
+ */
+static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *disk,
+                         const char *mode)
+{
+    char text[600], read_back[128];
+
+    if (strncmp(con->line, "write ", 6) == 0 && disk != NULL) {
+        fake_disk(disk, con->line + 6, NULL, 0);
+        put(con->fd, "fake: wrote\r\n> ");
+    } else if (strcmp(con->line, "read") == 0 && disk != NULL) {
+        fake_disk(disk, NULL, read_back, sizeof(read_back));
+        snprintf(text, sizeof(text), "fake: disk says %s\r\n> ", read_back);
+        put(con->fd, text);
+    } else if (strcmp(con->line, "poweroff") == 0) {
+        put(con->fd, "poweroff: powering off\r\n");
+        if (strcmp(mode, "lost") == 0)
+            _exit(0);
+        fake_shutdown(qmp->fd, 1, "guest-shutdown");
+        _exit(0);
+    } else if (strcmp(con->line, "die") == 0) {
+        put(con->fd, "fake: dying\r\n");
+        kill(getpid(), SIGKILL);
+    } else if (strcmp(con->line, "closecon") == 0) {
+        close(con->fd);
+        con->fd = -1;
+    } else if (strcmp(con->line, "closeqmp") == 0) {
+        put(con->fd, "fake: no qmp\r\n> ");
+        close(qmp->fd);
+        qmp->fd = -1;
+    } else if (strncmp(con->line, "peer ", 5) == 0) {
+        fake_peer(con->fd, con->line + 5);
+    } else if (strncmp(con->line, "exec /etude-guest", 17) == 0) {
+        fake_guest(con->fd, con->line);
+        close(con->fd);
+        con->fd = -1;
+    }
+}
+
+/**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: answer QMP's start, say that
  * the machine runs and the shell is ready, and act on what the console
- * types: `write TEXT` and `read` the first disk, `poweroff`, `die`,
- * `closecon`, `closeqmp` and `exec /etude-guest`.
+ * types, as fake_console does.
  */
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
     const char *accel = fake_arg(argc, argv, "-accel", "");
     const char *disk = fake_arg(argc, argv, "-drive", "file=");
-    char path[PATH_MAX], text[600], read_back[128];
+    char path[PATH_MAX];
     struct fake_in con, qmp;
     struct pollfd p[2];
     int ok = 1, r;
@@ -382,34 +575,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         }
         if (r == 0)
             continue;
-        if (strncmp(con.line, "write ", 6) == 0 && disk != NULL) {
-            fake_disk(disk, con.line + 6, NULL, 0);
-            put(con.fd, "fake: wrote\r\n> ");
-        } else if (strcmp(con.line, "read") == 0 && disk != NULL) {
-            fake_disk(disk, NULL, read_back, sizeof(read_back));
-            snprintf(text, sizeof(text), "fake: disk says %s\r\n> ", read_back);
-            put(con.fd, text);
-        } else if (strcmp(con.line, "poweroff") == 0) {
-            put(con.fd, "poweroff: powering off\r\n");
-            if (strcmp(mode, "lost") == 0)
-                _exit(0);
-            fake_shutdown(qmp.fd, 1, "guest-shutdown");
-            _exit(0);
-        } else if (strcmp(con.line, "die") == 0) {
-            put(con.fd, "fake: dying\r\n");
-            kill(getpid(), SIGKILL);
-        } else if (strcmp(con.line, "closecon") == 0) {
-            close(con.fd);
-            con.fd = -1;
-        } else if (strcmp(con.line, "closeqmp") == 0) {
-            put(con.fd, "fake: no qmp\r\n> ");
-            close(qmp.fd);
-            qmp.fd = -1;
-        } else if (strncmp(con.line, "exec /etude-guest", 17) == 0) {
-            fake_guest(con.fd, con.line);
-            close(con.fd);
-            con.fd = -1;
-        }
+        fake_console(&con, &qmp, disk, mode);
         if (con.fd < 0 && qmp.fd < 0)
             for (;;)
                 pause();
@@ -622,6 +788,266 @@ static int scenario_guest(struct etude_case *c, int real)
     return 0;
 }
 
+/* The arguments of a service's start: the tool `peer`, the case's first
+ * port, a mode, and the mark of the row. */
+struct peer_args {
+    char port[16], mark[96];
+    char *argv[6];
+};
+
+/** Make the arguments of the peer in `mode` on the case's first port. */
+static char *const *peer_args(struct etude_case *c, struct peer_args *a, const char *mode)
+{
+    snprintf(a->port, sizeof(a->port), "%u", etude_port(c, 0));
+    snprintf(a->mark, sizeof(a->mark), "mark=%s", getenv("ETUDE_TEST_ROW"));
+    a->argv[0] = "tool";
+    a->argv[1] = "peer";
+    a->argv[2] = a->port;
+    a->argv[3] = (char *)mode;
+    a->argv[4] = a->mark;
+    a->argv[5] = NULL;
+    return a->argv;
+}
+
+/** Boot `machine` in step `step` and wait for its shell; NULL when it does
+ * not come. */
+static struct etude_case_machine *boot_shell(struct etude_case *c, const char *step,
+                                             const char *machine)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    uint64_t at;
+
+    if (etude_step(c, step) != ETUDE_OK || etude_boot(c, machine, NULL, &m, &end) != ETUDE_OK ||
+        etude_console_wait(m, "> ", 0, &at) != ETUDE_OK)
+        return NULL;
+    return m;
+}
+
+/** Have machine `m` send `text` to the peer on `port`, and report assertion
+ * `id` by whether the peer's echo came back. */
+static void reach(struct etude_case *c, struct etude_case_machine *m, const char *port,
+                  const char *text, const char *id)
+{
+    char line[160];
+    uint64_t at;
+
+    snprintf(line, sizeof(line), "peer %s %s\n", port, text);
+    if (etude_type(m, line) != ETUDE_OK) {
+        etude_assert(c, id, 0, "the console is gone");
+        return;
+    }
+    snprintf(line, sizeof(line), "fake: peer echoed %s", text);
+    expect(c, id, etude_console_wait(m, line, 0, &at), ETUDE_OK);
+}
+
+/**
+ * Run the pair row: a service that both machines reach while they run at
+ * once, a loss of one that leaves the other running, and a service stopped
+ * and then started again to end by itself.
+ */
+static int scenario_pair(struct etude_case *c)
+{
+    struct etude_case_service *s, *again;
+    struct etude_case_machine *a, *b;
+    struct etude_termination end;
+    struct peer_args pa;
+    char *reply = NULL;
+    uint64_t at;
+
+    if (etude_step(c, "serve") != ETUDE_OK)
+        return 1;
+    expect(c, "service-ready", etude_service(c, "peer", peer_args(c, &pa, "serve"), &s, &end),
+           ETUDE_OK);
+    if (s == NULL)
+        return 1;
+    expect(c, "service-running", etude_service(c, "peer", pa.argv, &again, &end), ETUDE_REFUSED);
+    if ((a = boot_shell(c, "first", "alpha")) == NULL)
+        return 1;
+    reach(c, a, pa.port, "alpha", "alpha-reached");
+    expect(c, "service-saw", etude_service_wait(s, "peer: got alpha", 0, &at), ETUDE_OK);
+    if ((b = boot_shell(c, "second", "beta")) == NULL)
+        return 1;
+    reach(c, b, pa.port, "beta", "beta-reached");
+    expect(c, "both-run", etude_qmp(a, "query-status", NULL, &reply), ETUDE_OK);
+    free(reply);
+    etude_type(a, "die\n");
+    expect(c, "alpha-lost", etude_console_wait(a, "never printed", 0, &at), ETUDE_LOST);
+    reach(c, b, pa.port, "again", "beta-survives");
+    if (etude_step(c, "after") != ETUDE_OK)
+        return 1;
+    expect(c, "service-stopped", etude_service_stop(s, &end), ETUDE_OK);
+    etude_assert(c, "stopped-end", end.end == ETUDE_END_STOPPED, "not stopped");
+    expect(c, "once-ready", etude_service(c, "peer", peer_args(c, &pa, "once"), &s, &end),
+           ETUDE_OK);
+    if (s == NULL)
+        return 1;
+    reach(c, b, pa.port, "last", "once-reached");
+    expect(c, "once-ended", etude_service_end(s, &end), ETUDE_OK);
+    etude_assert(c, "once-exit", end.end == ETUDE_END_EXITED && end.value == 0, "another end");
+    expect(c, "gone-wait", etude_service_wait(s, "never printed", 0, &at), ETUDE_LOST);
+    return 0;
+}
+
+/** Run the unready row: a service that ends before it is ready, an
+ * undeclared one, and one that is never ready within its step. */
+static int scenario_unready(struct etude_case *c)
+{
+    struct etude_case_service *s;
+    struct etude_termination end;
+    struct peer_args pa;
+
+    if (etude_step(c, "early") != ETUDE_OK)
+        return 1;
+    expect(c, "early-failed", etude_service(c, "peer", peer_args(c, &pa, "early"), &s, &end),
+           ETUDE_FAILED);
+    etude_assert(c, "early-end", s == NULL && end.end == ETUDE_END_EXITED && end.value == 3,
+                 "another end");
+    expect(c, "undeclared", etude_service(c, "nothing", pa.argv, &s, &end), ETUDE_REFUSED);
+    etude_assert(c, "no-port", etude_port(c, 1) == 0, "a port the case lacks");
+    if (etude_step(c, "mute") != ETUDE_OK)
+        return 1;
+    expect(c, "mute-bounded", etude_service(c, "peer", peer_args(c, &pa, "mute"), &s, &end),
+           ETUDE_BOUND);
+    etude_assert(c, "mute-stopped", s == NULL && end.end == ETUDE_END_STOPPED, "not stopped");
+    return 0;
+}
+
+/** Start the peer in step `serve` and boot alpha in step `first`, and then
+ * beta in step `second` when `both`; 0, or 1 when a start failed. */
+static int serve_and_boot(struct etude_case *c, struct peer_args *pa, int both,
+                          struct etude_case_service **s, struct etude_case_machine **a,
+                          struct etude_case_machine **b)
+{
+    struct etude_termination end;
+
+    if (etude_step(c, "serve") != ETUDE_OK)
+        return 1;
+    expect(c, "service-ready", etude_service(c, "peer", peer_args(c, pa, "serve"), s, &end),
+           ETUDE_OK);
+    if (*s == NULL || (*a = boot_shell(c, "first", "alpha")) == NULL)
+        return 1;
+    if (both && (*b = boot_shell(c, "second", "beta")) == NULL)
+        return 1;
+    return 0;
+}
+
+/**
+ * Run the rows that fail beside a service and machines that run: an
+ * artifact whose object is damaged (`broken`), a wait past its step's bound
+ * (`bound-pair`), a stop or a kill during a wait (`stop-pair`, `kill-pair`),
+ * and a service that dies unseen (`unseen`).
+ */
+static int scenario_fail(struct etude_case *c, const char *row)
+{
+    char *broken[] = {"broken", NULL};
+    struct etude_case_service *s;
+    struct etude_case_machine *a, *b = NULL;
+    struct etude_termination end;
+    struct peer_args pa;
+    char line[64];
+    uint64_t at;
+
+    if (serve_and_boot(c, &pa, strcmp(row, "broken") != 0 && strcmp(row, "unseen") != 0, &s, &a,
+                       &b) != 0)
+        return 1;
+    if (strcmp(row, "broken") == 0) {
+        expect(c, "broken-refused", etude_host(c, broken, "broken", &end), ETUDE_REFUSED);
+        return 1;
+    }
+    if (strcmp(row, "unseen") == 0) {
+        snprintf(line, sizeof(line), "peer %s die\n", pa.port);
+        etude_type(a, line);
+        expect(c, "peer-gone", etude_console_wait(a, "fake: peer gone", 0, &at), ETUDE_OK);
+        return 0;
+    }
+    if (etude_step(c, "wait") != ETUDE_OK)
+        return 1;
+    if (strcmp(row, "bound-pair") == 0) {
+        expect(c, "bounded", etude_console_wait(b, "never printed", 0, &at), ETUDE_BOUND);
+        return 1;
+    }
+    etude_progress(c, "waiting", 0);
+    expect(c, "stopped", etude_console_wait(b, "never printed", 0, &at), ETUDE_STOPPED);
+    return 0;
+}
+
+/**
+ * Run the hold row, the case that must not notice the others: its service
+ * and both machines run while the other rows fail, and then still answer.
+ */
+static int scenario_hold(struct etude_case *c)
+{
+    struct etude_case_service *s;
+    struct etude_case_machine *a, *b;
+    struct etude_termination end;
+    struct peer_args pa;
+    uint64_t at;
+
+    if (serve_and_boot(c, &pa, 1, &s, &a, &b) != 0 || etude_step(c, "wait") != ETUDE_OK)
+        return 1;
+    etude_progress(c, "waiting", 0);
+    expect(c, "released", etude_service_wait(s, "peer: got done", 0, &at), ETUDE_OK);
+    reach(c, a, pa.port, "alpha", "alpha-alive");
+    reach(c, b, pa.port, "beta", "beta-alive");
+    expect(c, "service-stopped", etude_service_stop(s, &end), ETUDE_OK);
+    return 0;
+}
+
+/**
+ * Run the real peer row: two machines at once run the test image's tcptest
+ * against the service, which echoes, and both connections close.
+ */
+static int scenario_real_peer(struct etude_case *c)
+{
+    struct etude_case_machine *a, *b;
+    struct etude_case_service *s;
+    struct etude_termination end;
+    struct peer_args pa;
+    char line[64];
+    uint64_t at, aa, ba;
+
+    if (etude_step(c, "serve") != ETUDE_OK)
+        return 1;
+    expect(c, "service-ready", etude_service(c, "peer", peer_args(c, &pa, "serve"), &s, &end),
+           ETUDE_OK);
+    if (s == NULL || etude_step(c, "alpha") != ETUDE_OK ||
+        etude_boot(c, "alpha", NULL, &a, &end) != ETUDE_OK || etude_step(c, "beta") != ETUDE_OK ||
+        etude_boot(c, "beta", NULL, &b, &end) != ETUDE_OK)
+        return 1;
+    snprintf(line, sizeof(line), "exec /tcptest %s\r", pa.port);
+    aa = wait_for(c, a, "alpha-tcp", "\n> ", wait_for(c, a, "alpha-tcp", "Type 'help'", 0));
+    etude_type(a, line);
+    ba = wait_for(c, b, "beta-tcp", "\n> ", wait_for(c, b, "beta-tcp", "Type 'help'", 0));
+    etude_type(b, line);
+    expect(c, "alpha-tcp", etude_console_wait(a, "All TCP tests passed!", aa, &at), ETUDE_OK);
+    expect(c, "beta-tcp", etude_console_wait(b, "All TCP tests passed!", ba, &at), ETUDE_OK);
+    if (etude_service_wait(s, "peer: closed", 0, &at) == ETUDE_OK)
+        expect(c, "both-closed", etude_service_wait(s, "peer: closed", at, &at), ETUDE_OK);
+    else
+        etude_assert(c, "both-closed", 0, "no connection closed");
+    expect(c, "service-stopped", etude_service_stop(s, &end), ETUDE_OK);
+    return 0;
+}
+
+/** Run row `row` of a case with services, or give 1 for an unknown row. */
+static int scenario_services(struct etude_case *c, const char *row)
+{
+    if (strcmp(row, "pair") == 0)
+        return scenario_pair(c);
+    if (strcmp(row, "unready") == 0)
+        return scenario_unready(c);
+    if (strcmp(row, "broken") == 0 || strcmp(row, "bound-pair") == 0 ||
+        strcmp(row, "stop-pair") == 0 || strcmp(row, "kill-pair") == 0 ||
+        strcmp(row, "unseen") == 0)
+        return scenario_fail(c, row);
+    if (strcmp(row, "hold") == 0)
+        return scenario_hold(c);
+    if (strcmp(row, "real-peer") == 0)
+        return scenario_real_peer(c);
+    return 1;
+}
+
 int etude_scenario(struct etude_case *c)
 {
     const char *row = getenv("ETUDE_TEST_ROW");
@@ -643,7 +1069,7 @@ int etude_scenario(struct etude_case *c)
         return scenario_noboot(c, strcmp(row, "damaged") == 0);
     if (strcmp(row, "guest") == 0 || strcmp(row, "real-guest") == 0)
         return scenario_guest(c, row[0] == 'r');
-    return 1;
+    return scenario_services(c, row);
 }
 
 /* ---- The rows. ---- */
@@ -660,7 +1086,17 @@ struct row {
     int want_status;     /* the scenario's exit status */
     int want_end;        /* its report ends with `end` */
     int want_kept;       /* it keeps its scratch */
+    int pair;            /* the case has machines alpha and beta, the service
+                            peer and a port */
+    const char *odd;     /* a step whose bound is `odd_us`, or NULL */
+    uint64_t odd_us;
+    const char *evidence; /* `FILE=TEXT` pairs by `;`, which a kept scratch's
+                             evidence must have */
+    int stop_sig;         /* what a stop sends: SIGTERM when 0 */
 };
+
+/* The port of the row that runs, for its invocation and its peer. */
+static unsigned row_port;
 
 /** Put `path` in the store as an artifact, its digest in `sha`. */
 static int stored(struct etude_store *s, const char *path, char sha[65])
@@ -808,20 +1244,74 @@ static int write_manifest(const char *path, const struct row *r)
     return write_file(path, text, strlen(text));
 }
 
+/** Write row `r`'s case of two machines and a service to `path`: under the
+ * stand-in each machine has a disk of its own, and under the real QEMU each
+ * boots the test image with a network card. */
+static int write_pair_manifest(const char *path, const struct row *r)
+{
+    char steps[2048], asserts[4096], machines[2048], text[16384];
+    int real = r->mode == NULL;
+
+    json_list(steps, sizeof(steps), r->steps, 1);
+    json_list(asserts, sizeof(asserts), r->asserts, 0);
+    fix_format(
+        machines, sizeof(machines),
+        "[{\"machine_id\": \"alpha\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
+        "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
+        "\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": []}, \"console\": "
+        "\"serial\", \"qmp\": true, \"helper\": false}, {\"machine_id\": \"beta\", \"qemu\": "
+        "{\"kernel\": \"kernel\", \"initrd\": %s, \"disks\": %s, \"cpu\": \"max\", "
+        "\"processors\": 1, \"memory_bytes\": 134217728, \"firmware\": \"direct\", "
+        "\"devices\": %s, \"boot_options\": []}, \"console\": \"serial\", \"qmp\": true, "
+        "\"helper\": false}]",
+        real ? "\"initrd\"" : "null", real ? "[]" : "[\"disk\"]", real ? "[\"rtl8139\"]" : "[]",
+        real ? "\"initrd\"" : "null", real ? "[]" : "[\"disk2\"]", real ? "[\"rtl8139\"]" : "[]");
+    fix_format(
+        text, sizeof(text),
+        "{\"schema_version\": 1, \"family_id\": \"test.scenario\", \"summary\": \"rows\", "
+        "\"cases\": [{\"case_id\": \"test.scenario.%s\", \"behavior\": \"a row\", \"units\": "
+        "[\"none\"], \"domain\": \"machine\", \"architectures\": [\"i686\", \"x86_64\"], "
+        "\"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null}, "
+        "\"requirements\": {\"host_api\": \"c\", \"tools\": [], \"features\": {}}, "
+        "\"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\", "
+        "\"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}, "
+        "{\"fixture\": \"disk\", \"names\": [\"disk\", \"disk2\"]}], \"children\": \"none\", "
+        "\"cleanup\": \"the library\"}, \"steps\": %s, \"machines\": %s, \"services\": "
+        "[{\"service_id\": \"peer\", \"program\": \"scanner\", \"ready\": \"peer: listening\", "
+        "\"does\": \"echo what the machines send to the case's port\"}], \"assertions\": %s, "
+        "\"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": 0}, \"progress\": "
+        "[{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step ended\", "
+        "\"limit\": 8}, {\"witness_id\": \"waiting\", \"kind\": \"quiet\", \"means\": \"a "
+        "wait\", \"limit\": null, \"bound\": {\"floor_us\": 1, \"initial_us\": 2, "
+        "\"ceiling_us\": 3}}], \"bounds\": {\"case\": {\"floor_us\": 1, \"initial_us\": 2, "
+        "\"ceiling_us\": 3}, \"gap\": {\"floor_us\": 1, \"initial_us\": 2, \"ceiling_us\": 3}, "
+        "\"stages\": {}}, \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, "
+        "\"memory_bytes\": 268435456, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": 1, "
+        "\"loop_devices\": 0}, \"prepare\": [{\"name\": \"kernel\", \"node\": \"k\", "
+        "\"per_architecture\": true}, {\"name\": \"disk\", \"node\": \"d\", \"per_architecture\": "
+        "true}, {\"name\": \"disk2\", \"node\": \"d\", \"per_architecture\": true}, {\"name\": "
+        "\"initrd\", \"node\": \"i\", \"per_architecture\": true}, {\"name\": \"scanner\", "
+        "\"node\": \"s\", \"per_architecture\": false}, {\"name\": \"broken\", \"node\": \"b\", "
+        "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
+        "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
+        r->name, steps, machines, asserts);
+    return write_file(path, text, strlen(text));
+}
+
 /* Where a row runs QEMU, its store and the digests of its artifacts. */
 struct site {
     struct etude_store *store;
     char store_dir[PATH_MAX];
     char qemu_i686[PATH_MAX], qemu_x86_64[PATH_MAX];
     const char *arch;
-    char kernel[65], disk[65], initrd[65], scanner[65], inv[65], killer[65];
+    char kernel[65], disk[65], initrd[65], scanner[65], inv[65], killer[65], broken[65];
 };
 
 /** Write row `r`'s invocation to `path`, with the scratch `scratch`. */
 static int write_scenario(const char *path, const struct row *r, const struct site *s,
                           const char *manifest, const char *scratch)
 {
-    char steps[1024] = "", one[160], word[64], text[8192];
+    char steps[1024] = "", one[160], word[64], text[8192], ports[16] = "";
     const char *p = r->steps;
     size_t n;
 
@@ -831,22 +1321,26 @@ static int write_scenario(const char *path, const struct row *r, const struct si
         p += strcspn(p, " ");
         p += *p == ' ';
         fix_format(one, sizeof(one), "%s\"%s\": %llu", steps[0] != '\0' ? ", " : "", word,
-                   (unsigned long long)r->bound_us);
+                   (unsigned long long)(r->odd != NULL && strcmp(word, r->odd) == 0 ? r->odd_us
+                                                                                    : r->bound_us));
         strcat(steps, one);
     }
+    if (r->pair)
+        fix_format(ports, sizeof(ports), "%u", row_port);
     fix_format(text, sizeof(text),
                "{\"schema_version\": 1, \"run_id\": \"test-run\", \"attempt_id\": \"test-%s\", "
                "\"manifest\": \"%s\", \"case_id\": \"test.scenario.%s\", \"architecture\": "
                "\"%s\", \"store\": \"%s\", \"artifacts\": {\"kernel\": \"%s\", \"disk\": \"%s\", "
                "\"initrd\": \"%s\", \"scanner\": \"%s\", \"invocation\": \"%s\", \"killer\": "
-               "\"%s\"}, \"tools\": {}, \"site\": {\"accel\": \"tcg\", \"qemu_i686\": \"%s\", "
-               "\"qemu_x86_64\": \"%s\", \"ovmf_i686\": null, \"ovmf_x86_64\": null}, "
-               "\"steps\": {%s}, \"cleanup_us\": 30000000, \"scratch\": \"%s\", \"grace_us\": "
-               "%u, \"console_max_bytes\": 16777216, \"output_max_bytes\": 1048576, "
+               "\"%s\", \"disk2\": \"%s\", \"broken\": \"%s\"}, \"tools\": {}, \"site\": "
+               "{\"accel\": \"tcg\", \"qemu_i686\": \"%s\", \"qemu_x86_64\": \"%s\", "
+               "\"ovmf_i686\": null, \"ovmf_x86_64\": null}, \"steps\": {%s}, \"ports\": [%s], "
+               "\"cleanup_us\": 30000000, \"scratch\": \"%s\", \"grace_us\": %u, "
+               "\"console_max_bytes\": 16777216, \"output_max_bytes\": 1048576, "
                "\"resend_us\": 200000}",
                r->name, manifest, r->name, s->arch, s->store_dir, s->kernel, s->disk, s->initrd,
-               s->scanner, s->inv, s->killer, s->qemu_i686, s->qemu_x86_64, steps, scratch,
-               r->mode != NULL ? 300000u : 5000000u);
+               s->scanner, s->inv, s->killer, s->disk, s->broken, s->qemu_i686, s->qemu_x86_64,
+               steps, ports, scratch, r->mode != NULL ? 300000u : 5000000u);
     return write_file(path, text, strlen(text));
 }
 
@@ -867,31 +1361,43 @@ static uint64_t now_ms(void)
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
-/**
- * Run the scenario of row `r` with invocation `inv` and the environment
- * `env`, read its output, and, when `stop_at` is not NULL, send it SIGTERM
- * once its output has `stop_at`. Past the completion bound it is killed.
- */
-static void attempt(const struct row *r, const char *inv, char **env, const char *stop_at,
-                    struct outcome *o)
-{
-    char err[PATH_MAX], *argv[] = {self, (char *)inv, NULL};
-    int limit = r->mode != NULL ? FAKE_ATTEMPT_MS : REAL_ATTEMPT_MS;
-    uint64_t bound = now_ms() + (uint64_t)limit;
-    int out[2], fd, st, stopped = 0;
-    struct pollfd p;
-    ssize_t n;
+/* One attempt that runs: its process, the pipe of its output, and the time
+ * past which it is killed. */
+struct attempt {
+    const struct row *r;
     pid_t pid;
-    FILE *f;
+    int fd;
+    int limit;
+    uint64_t bound;
+    int stopped;
+    char err[PATH_MAX];
+    struct outcome *o;
+};
 
+/**
+ * Start the scenario of row `r` with invocation `inv` and the environment
+ * `env`, its completion bound `limit` milliseconds from now.
+ */
+static void attempt_start(struct attempt *a, const struct row *r, const char *inv, char **env,
+                          int limit, struct outcome *o)
+{
+    char *argv[] = {self, (char *)inv, NULL};
+    int out[2], fd;
+
+    memset(a, 0, sizeof(*a));
     memset(o, 0, sizeof(*o));
+    a->r = r;
+    a->o = o;
+    a->fd = -1;
+    a->limit = limit;
+    a->bound = now_ms() + (uint64_t)limit;
     o->status = -1;
-    fix_format(err, sizeof(err), "%s/%s.err", fix_dir(), r->name);
+    fix_format(a->err, sizeof(a->err), "%s/%s.err", fix_dir(), r->name);
     if (pipe(out) != 0)
         return;
-    pid = fork();
-    if (pid == 0) {
-        fd = open(err, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    a->pid = fork();
+    if (a->pid == 0) {
+        fd = open(a->err, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         dup2(out[1], 1);
         dup2(fd, 2);
         close(out[0]);
@@ -901,42 +1407,73 @@ static void attempt(const struct row *r, const char *inv, char **env, const char
         _exit(127);
     }
     close(out[1]);
-    for (;;) {
-        p.fd = out[0];
+    a->fd = out[0];
+}
+
+/**
+ * Read the attempt's output until it has `want`, which gives 1, or ends or
+ * passes `until` milliseconds, 0 for its completion bound, which gives 0;
+ * when `stop_at` is not NULL, send the row's stop signal once the output has
+ * it. Past the completion bound the attempt is killed.
+ */
+static int attempt_read(struct attempt *a, const char *want, const char *stop_at, uint64_t until)
+{
+    struct outcome *o = a->o;
+    struct pollfd p;
+    ssize_t n;
+
+    while (a->fd >= 0) {
+        if (want != NULL && strstr(o->out, want) != NULL)
+            return 1;
+        if (until != 0 && now_ms() > until)
+            return 0;
+        p.fd = a->fd;
         p.events = POLLIN;
-        if (now_ms() > bound) {
-            printf("etude-scenario-test: fail: %s: the attempt did not end within %d ms\n", r->name,
-                   limit);
+        if (now_ms() > a->bound) {
+            printf("etude-scenario-test: fail: %s: the attempt did not end within %d ms\n",
+                   a->r->name, a->limit);
             fails++;
-            kill(pid, SIGKILL);
+            kill(a->pid, SIGKILL);
             break;
         }
         if (poll(&p, 1, 1000) <= 0)
             continue;
-        n = read(out[0], o->out + o->len, sizeof(o->out) - 1 - o->len);
+        n = read(a->fd, o->out + o->len, sizeof(o->out) - 1 - o->len);
         if (n <= 0)
             break;
         o->len += (size_t)n;
         o->out[o->len] = '\0';
-        if (stop_at != NULL && !stopped && strstr(o->out, stop_at) != NULL) {
-            stopped = 1;
-            kill(pid, SIGTERM);
+        if (stop_at != NULL && !a->stopped && strstr(o->out, stop_at) != NULL) {
+            a->stopped = 1;
+            kill(a->pid, a->r->stop_sig != 0 ? a->r->stop_sig : SIGTERM);
         }
     }
-    close(out[0]);
-    if (waitpid(pid, &st, 0) == pid && WIFEXITED(st))
-        o->status = WEXITSTATUS(st);
-    f = fopen(err, "r");
-    if (f != NULL) {
-        char line[512];
+    return 0;
+}
 
-        while (fgets(line, sizeof(line), f) != NULL) {
-            o->kept |= strncmp(line, "etude-case: kept: ", 18) == 0;
-            if (fails > 0 || getenv("ETUDE_TEST_VERBOSE") != NULL)
-                printf("    %s: stderr: %s", r->name, line);
-        }
-        fclose(f);
+/** Read the attempt's output to its end, reap it, and read its stderr. */
+static void attempt_end(struct attempt *a, const char *stop_at)
+{
+    struct outcome *o = a->o;
+    char line[512];
+    FILE *f;
+    int st;
+
+    attempt_read(a, NULL, stop_at, 0);
+    if (a->fd >= 0)
+        close(a->fd);
+    a->fd = -1;
+    if (a->pid > 0 && waitpid(a->pid, &st, 0) == a->pid && WIFEXITED(st))
+        o->status = WEXITSTATUS(st);
+    f = fopen(a->err, "r");
+    if (f == NULL)
+        return;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        o->kept |= strncmp(line, "etude-case: kept: ", 18) == 0;
+        if (fails > 0 || getenv("ETUDE_TEST_VERBOSE") != NULL)
+            printf("    %s: stderr: %s", a->r->name, line);
     }
+    fclose(f);
 }
 
 /** Say whether the output `o` has the record `rec`, a line of its own. */
@@ -946,6 +1483,31 @@ static int has_record(const struct outcome *o, const char *rec)
 
     snprintf(line, sizeof(line), "@etude 1 %s\n", rec);
     return strstr(o->out, line) != NULL;
+}
+
+/** Check that each `FILE=TEXT` of row `r`'s evidence is in the evidence of
+ * its kept scratch `scratch`. */
+static void judge_evidence(const struct row *r, const char *scratch)
+{
+    char pair[256], path[PATH_MAX], *eq;
+    const char *p = r->evidence;
+    size_t n;
+
+    while (p != NULL && *p != '\0') {
+        n = strcspn(p, ";");
+        snprintf(pair, sizeof(pair), "%.*s", (int)n, p);
+        p += n + (p[n] == ';');
+        eq = strchr(pair, '=');
+        if (eq == NULL)
+            continue;
+        *eq = '\0';
+        fix_format(path, sizeof(path), "%s/evidence/%s", scratch, pair);
+        if (!file_has(path, eq + 1)) {
+            printf("etude-scenario-test: fail: %s: evidence %s lacks `%s`\n", r->name, pair,
+                   eq + 1);
+            fails++;
+        }
+    }
 }
 
 /** Check outcome `o` of row `r`: each assertion passed, the end record and
@@ -975,6 +1537,8 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
     CHECK(o->kept == r->want_kept, r->name);
     snprintf(copies, sizeof(copies), "%s/copies", scratch);
     CHECK((stat(copies, &st) == 0) == (r->want_kept && r->disk != NULL), r->name);
+    if (r->want_kept)
+        judge_evidence(r, scratch);
     if (fails > 0 || getenv("ETUDE_TEST_VERBOSE") != NULL)
         printf("    %s: stdout:\n%s", r->name, o->out);
 }
@@ -1009,31 +1573,255 @@ static char **row_env(const struct row *r, char *bufs[6])
     return env;
 }
 
-/** Run row `r` on site `s`, and judge it; `stop_at` as attempt() takes it. */
-static void run_row(const struct row *r, const struct site *s, const char *stop_at)
+/** Give a port of 127.0.0.1 that nothing uses now, or 0. */
+static unsigned free_port(void)
 {
-    char manifest[PATH_MAX], inv[PATH_MAX], scratch[PATH_MAX], *bufs[6];
-    char **env = row_env(r, bufs);
-    struct outcome *o = malloc(sizeof(*o));
-    int i;
+    struct sockaddr_in a = loopback(0);
+    socklen_t len = sizeof(a);
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    unsigned port = 0;
 
-    if (o == NULL)
+    if (fd >= 0 && bind(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
+        getsockname(fd, (struct sockaddr *)&a, &len) == 0)
+        port = ntohs(a.sin_port);
+    if (fd >= 0)
+        close(fd);
+    return port;
+}
+
+/* A row that runs, with what its files and its judgement need. */
+struct row_run {
+    const struct row *r;
+    struct attempt a;
+    struct outcome *o;
+    unsigned port;
+    char scratch[PATH_MAX];
+    char *bufs[6];
+    char **env;
+    int started;
+};
+
+/** Write row `r`'s files on site `s` and start its attempt in `rr`. */
+static void row_start(struct row_run *rr, const struct row *r, const struct site *s, int limit)
+{
+    char manifest[PATH_MAX], inv[PATH_MAX];
+
+    memset(rr, 0, sizeof(*rr));
+    rr->r = r;
+    rr->env = row_env(r, rr->bufs);
+    rr->o = malloc(sizeof(*rr->o));
+    if (rr->o == NULL)
         exit(1);
+    rr->port = row_port = r->pair ? free_port() : 0;
     fix_format(manifest, sizeof(manifest), "%s/%s.manifest.json", fix_dir(), r->name);
     fix_format(inv, sizeof(inv), "%s/%s.invocation.json", fix_dir(), r->name);
-    fix_format(scratch, sizeof(scratch), "%s/%s.scratch", fix_dir(), r->name);
-    if (mkdir(scratch, 0700) != 0 || write_manifest(manifest, r) != 0 ||
-        write_scenario(inv, r, s, manifest, scratch) != 0) {
+    fix_format(rr->scratch, sizeof(rr->scratch), "%s/%s.scratch", fix_dir(), r->name);
+    if ((r->pair && row_port == 0) || mkdir(rr->scratch, 0700) != 0 ||
+        (r->pair ? write_pair_manifest(manifest, r) : write_manifest(manifest, r)) != 0 ||
+        write_scenario(inv, r, s, manifest, rr->scratch) != 0) {
         printf("etude-scenario-test: fail: %s: its files cannot be written\n", r->name);
         fails++;
-    } else {
-        attempt(r, inv, env, stop_at, o);
-        judge(r, o, scratch);
+        return;
+    }
+    if (limit == 0)
+        limit = r->mode != NULL ? FAKE_ATTEMPT_MS : REAL_ATTEMPT_MS;
+    attempt_start(&rr->a, r, inv, rr->env, limit, rr->o);
+    rr->started = 1;
+}
+
+/** Finish the row of `rr`, judge it unless `judged` is 0, and free it. */
+static void row_finish(struct row_run *rr, const char *stop_at, int judged)
+{
+    int i;
+
+    if (rr->started) {
+        attempt_end(&rr->a, stop_at);
+        if (judged)
+            judge(rr->r, rr->o, rr->scratch);
     }
     for (i = 0; i < 6; i++)
-        free(bufs[i]);
-    free(env);
-    free(o);
+        free(rr->bufs[i]);
+    free(rr->env);
+    free(rr->o);
+}
+
+/** Run row `r` on site `s`, and judge it; `stop_at` as attempt_read() takes
+ * it. */
+static void run_row(const struct row *r, const struct site *s, const char *stop_at)
+{
+    struct row_run rr;
+
+    row_start(&rr, r, s, 0);
+    row_finish(&rr, stop_at, 1);
+}
+
+/** Order two PIDs for qsort. */
+static int pid_order(const void *a, const void *b)
+{
+    long x = *(const long *)a, y = *(const long *)b;
+
+    return x < y ? -1 : x > y;
+}
+
+/**
+ * Put in `pids`, sorted, the processes of row `name` that run, found by the
+ * marks in their arguments: the scenario and its keepers by its invocation,
+ * the stand-ins for QEMU by the copies of its scratch, and its services by
+ * their mark; give their count, or -1 when ps cannot be read.
+ */
+static int row_procs(const char *name, long pids[ROW_PROCS])
+{
+    char line[8192], inv[160], scratch[160], mark[160];
+    FILE *f = popen("ps -ww -eo pid=,args=", "r");
+    int n = 0;
+
+    if (f == NULL)
+        return -1;
+    snprintf(inv, sizeof(inv), "/%s.invocation.json", name);
+    snprintf(scratch, sizeof(scratch), "/%s.scratch/", name);
+    snprintf(mark, sizeof(mark), " mark=%s\n", name);
+    while (fgets(line, sizeof(line), f) != NULL)
+        if ((strstr(line, inv) != NULL || strstr(line, scratch) != NULL ||
+             strstr(line, mark) != NULL) &&
+            n < ROW_PROCS)
+            pids[n++] = strtol(line, NULL, 10);
+    if (pclose(f) != 0)
+        return -1;
+    qsort(pids, (size_t)n, sizeof(pids[0]), pid_order);
+    return n;
+}
+
+/**
+ * Require that every process of row `name` has ended within GONE_MS, and
+ * kill those left, so that a failure leaves nothing running.
+ */
+static void row_gone(const char *name)
+{
+    uint64_t until = now_ms() + GONE_MS;
+    long pids[ROW_PROCS];
+    int n, i;
+
+    while ((n = row_procs(name, pids)) > 0 && now_ms() < until)
+        poll(NULL, 0, 100);
+    if (n == 0)
+        return;
+    printf("etude-scenario-test: fail: %s: %d of its processes are left\n", name, n);
+    fails++;
+    for (i = 0; i < n; i++)
+        kill((pid_t)pids[i], SIGKILL);
+}
+
+/** Send `text` as a line to the peer on `port`, as a machine would. */
+static int tell_peer(unsigned port, const char *text)
+{
+    struct sockaddr_in a = loopback((long)port);
+    char buf[64];
+    int fd = socket(AF_INET, SOCK_STREAM, 0), ok;
+
+    ok = fd >= 0 && connect(fd, (struct sockaddr *)&a, sizeof(a)) == 0 &&
+         write(fd, text, strlen(text)) == (ssize_t)strlen(text) && read(fd, buf, sizeof(buf)) > 0;
+    if (fd >= 0)
+        close(fd);
+    return ok ? 0 : -1;
+}
+
+/* The rows of a service and two machines. */
+static const struct row pair_row[] = {
+    {"pair", "disk", "serve first:alpha second:beta after",
+     "service-ready service-running alpha-reached service-saw beta-reached both-run alpha-lost "
+     "beta-survives service-stopped stopped-end once-ready once-reached once-ended once-exit "
+     "gone-wait",
+     "disk", 0, STEP_US, 0, 1, 1, 1, NULL, 0, NULL, 0},
+};
+
+/* The row that runs while the others fail. */
+static const struct row hold_row[] = {
+    {"hold", "disk", "serve first:alpha second:beta wait",
+     "service-ready released alpha-alive beta-alive service-stopped", "disk", 0, STEP_US, 0, 1, 0,
+     1, "wait", HOLD_US, NULL, 0},
+};
+
+/* The rows that fail beside the hold row, at a stage each: a service never
+ * ready, a damaged artifact, a step's bound, a stop, and a service that
+ * dies unseen. */
+static const struct row fail_rows[] = {
+    {"unready", "disk", "early mute",
+     "early-failed early-end undeclared no-port mute-bounded mute-stopped", NULL, 0, STEP_US, 0, 1,
+     1, 1, "mute", SHORT_US, "peer.1.out=peer: cannot serve", 0},
+    {"broken", "disk", "serve first:alpha", "service-ready broken-refused", "disk", 0, STEP_US, 1,
+     0, 1, 1, NULL, 0,
+     "peer.1.out=peer: listening;alpha.1.capture=query-status: {\"return\": {\"status\": "
+     "\"running\"",
+     0},
+    {"bound-pair", "disk", "serve first:alpha second:beta wait", "service-ready bounded", "disk", 0,
+     STEP_US, 1, 0, 1, 1, "wait", SHORT_US,
+     "alpha.1.capture=query-cpus-fast: {\"return\": [{\"cpu-index\": "
+     "0}];beta.1.capture=EAX=00000000",
+     0},
+    {"stop-pair", "disk", "serve first:alpha second:beta wait", "service-ready stopped", "disk", 0,
+     STEP_US, 1, 0, 1, 1, NULL, 0,
+     "peer.1.out=peer: listening;beta.1.capture=query-status: {\"return\": {\"status\": "
+     "\"running\"",
+     SIGTERM},
+    {"unseen", "disk", "serve first:alpha", "service-ready peer-gone", "disk", 0, STEP_US, 1, 1, 1,
+     1, NULL, 0, "peer.1.out=peer: dying", 0},
+};
+
+/* The row killed during its wait, whose keepers must end what it ran. */
+static const struct row kill_row[] = {
+    {"kill-pair", "disk", "serve first:alpha second:beta wait", "service-ready stopped", "disk", 0,
+     STEP_US, -1, 0, 0, 1, NULL, 0, NULL, SIGKILL},
+};
+
+/* What stops a row during its wait. */
+#define WAITING "@etude 1 progress waiting 0\n"
+
+/**
+ * Run the hold row, and while its service and machines run, each failing
+ * row and the killed one: each must end every process of its own, and leave
+ * the hold row's processes as they were, which then still answer.
+ */
+static void test_isolation(const struct site *s)
+{
+    long before[ROW_PROCS], after[ROW_PROCS];
+    struct row_run hold, killed;
+    int nb, na;
+    size_t i;
+
+    row_start(&hold, hold_row, s, HOLD_ATTEMPT_MS);
+    if (!hold.started ||
+        !attempt_read(&hold.a, WAITING, NULL, now_ms() + (uint64_t)FAKE_ATTEMPT_MS)) {
+        printf("etude-scenario-test: fail: hold: its service and machines did not start\n");
+        fails++;
+        if (hold.started)
+            kill(hold.a.pid, SIGKILL);
+        row_finish(&hold, NULL, 1);
+        row_gone("hold");
+        return;
+    }
+    nb = row_procs("hold", before);
+    CHECK(nb >= 6, "hold: its scenario, keepers, service and machines run");
+    for (i = 0; i <= sizeof(fail_rows) / sizeof(fail_rows[0]); i++) {
+        const struct row *r =
+            i < sizeof(fail_rows) / sizeof(fail_rows[0]) ? &fail_rows[i] : kill_row;
+
+        if (r == kill_row) {
+            row_start(&killed, r, s, 0);
+            row_finish(&killed, WAITING, 0);
+            CHECK(killed.a.stopped, "kill-pair: killed during its wait");
+        } else {
+            run_row(r, s, r->stop_sig != 0 ? WAITING : NULL);
+        }
+        row_gone(r->name);
+        na = row_procs("hold", after);
+        if (na != nb || memcmp(before, after, (size_t)nb * sizeof(before[0])) != 0) {
+            printf("etude-scenario-test: fail: %s: the hold row's processes changed\n", r->name);
+            fails++;
+        }
+    }
+    CHECK(tell_peer(hold.port, "done\n") == 0, "hold: its peer answers");
+    row_finish(&hold, NULL, 1);
+    row_gone("hold");
 }
 
 /** Say whether a process of the stand-ins' or etude-guest's is left. */
@@ -1063,6 +1851,21 @@ static int copy_file(const char *from, const char *to, mode_t mode)
     return ok && chmod(to, mode) == 0 ? 0 : -1;
 }
 
+/** Damage the object of digest `sha` in store `s`: its first byte. */
+static int damage(struct etude_store *st, const char *sha)
+{
+    char path[PATH_MAX];
+    int fd;
+
+    if (etude_store_path(st, sha, path, sizeof(path)) != 0 || chmod(path, 0644) != 0)
+        return -1;
+    fd = open(path, O_WRONLY);
+    if (fd < 0 || write(fd, "A", 1) != 1)
+        return -1;
+    close(fd);
+    return 0;
+}
+
 /**
  * Store the stand-in rows' artifacts: a kernel, a disk and a RAM image
  * that the stand-in reads or writes, this program as the scanner, and the
@@ -1082,6 +1885,7 @@ static int stand_in_site(struct site *s)
     if (s->store == NULL || size < 0 || write_file(fix_path("kernel"), "a kernel\n", 9) != 0 ||
         write_file(fix_path("disk"), "disk: ", 6) != 0 ||
         write_file(fix_path("initrd"), "ram\n", 4) != 0 ||
+        write_file(fix_path("broken"), "a broken artifact\n", 18) != 0 ||
         copy_file(self, fix_path("etude-scenario-hosttest"), 0755) != 0)
         return -1;
     snprintf(args, sizeof(args), "\"tool\", \"report\", \"test.scenario.guest\"");
@@ -1095,7 +1899,8 @@ static int stand_in_site(struct site *s)
     return stored(s->store, fix_path("kernel"), s->kernel) ||
            stored(s->store, fix_path("disk"), s->disk) ||
            stored(s->store, fix_path("initrd"), s->initrd) || stored(s->store, self, s->scanner) ||
-           stored(s->store, inv, s->inv) || stored(s->store, kill_inv, s->killer);
+           stored(s->store, inv, s->inv) || stored(s->store, kill_inv, s->killer) ||
+           stored(s->store, fix_path("broken"), s->broken) || damage(s->store, s->broken);
 }
 
 /**
@@ -1195,62 +2000,62 @@ static int real_site(struct site *s)
     if (s->store == NULL || write_invocation(inv, "test.scenario.real-guest", "3333333333333333",
                                              "hello", sha, size, "") != 0)
         return -1;
+    snprintf(s->broken, sizeof(s->broken), "%s", sha);
     return stored(s->store, kernel, s->kernel) || stored(s->store, disk, s->disk) ||
            stored(s->store, initrd, s->initrd) || stored(s->store, self, s->scanner) ||
            stored(s->store, inv, s->inv) || stored(s->store, inv, s->killer);
 }
 
-/** Damage the object of digest `sha` in store `s`: its first byte. */
-static int damage(struct etude_store *st, const char *sha)
-{
-    char path[PATH_MAX];
-    int fd;
-
-    if (etude_store_path(st, sha, path, sizeof(path)) != 0 || chmod(path, 0644) != 0)
-        return -1;
-    fd = open(path, O_WRONLY);
-    if (fd < 0 || write(fd, "A", 1) != 1)
-        return -1;
-    close(fd);
-    return 0;
-}
-
 /* The stand-in rows: name, mode, steps, assertions, disk, helper, step
- * bound, exit status, end record, kept scratch. */
+ * bound, exit status, end record, kept scratch, and the fields of a row of
+ * two machines and a service. */
 static const struct row stand_in_rows[] = {
     {"reboot", "disk", "write:fixture check readback:fixture",
      "qmp-status qmp-reply qmp-error stopped shutdown host-ran host-sees same-copy readback "
      "second-stop",
-     "disk", 0, STEP_US, 0, 1, 0},
-    {"lost", "lost", "lose:fixture", "lost-wait ended not-shutdown", "disk", 0, LOSS_US, 0, 1, 0},
-    {"die", "die", "lose:fixture", "lost-wait ended not-shutdown", "disk", 0, LOSS_US, 0, 1, 0},
-    {"closecon", "disk", "lose:fixture", "lost-wait not-shutdown", "disk", 0, LOSS_US, 0, 1, 0},
-    {"closeqmp", "disk", "lose:fixture", "lost-wait not-shutdown", "disk", 0, LOSS_US, 0, 1, 0},
-    {"bound", "disk", "wait:fixture", "bounded after-bound", "disk", 0, SHORT_US, 0, 1, 0},
+     "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
+    {"lost", "lost", "lose:fixture", "lost-wait ended not-shutdown", "disk", 0, LOSS_US, 0, 1, 0, 0,
+     NULL, 0, NULL, 0},
+    {"die", "die", "lose:fixture", "lost-wait ended not-shutdown", "disk", 0, LOSS_US, 0, 1, 0, 0,
+     NULL, 0, NULL, 0},
+    {"closecon", "disk", "lose:fixture", "lost-wait not-shutdown", "disk", 0, LOSS_US, 0, 1, 0, 0,
+     NULL, 0, NULL, 0},
+    {"closeqmp", "disk", "lose:fixture", "lost-wait not-shutdown", "disk", 0, LOSS_US, 0, 1, 0, 0,
+     NULL, 0, NULL, 0},
+    {"bound", "disk", "wait:fixture", "bounded after-bound", "disk", 0, SHORT_US, 0, 1, 0, 0, NULL,
+     0, NULL, 0},
     {"misuse", "disk", "host boot:fixture",
      "no-step no-artifact no-copy host-step other-machine no-tool step-back machine-step "
      "other-disk running no-qmp",
-     "disk", 0, STEP_US, 0, 1, 1},
-    {"wrong", "wrong", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 0},
+     "disk", 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
+    {"wrong", "wrong", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 0, 0, NULL, 0,
+     NULL, 0},
     {"guest", "disk", "run:fixture", "guest-pass guest-exit guest-ran guest-lost guest-lost-end",
-     NULL, 1, LOSS_US, 0, 1, 1},
+     NULL, 1, LOSS_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
 };
 
 /* The stop row, which keeps its copy and gives no end record. */
-static const struct row stop_row = {
-    "stop", "disk", "wait:fixture after:fixture", "stopped still-stopped", "disk", 0, STEP_US, 1,
-    0,      1};
+static const struct row stop_row[] = {
+    {"stop", "disk", "wait:fixture after:fixture", "stopped still-stopped", "disk", 0, STEP_US, 1,
+     0, 1, 0, NULL, 0, NULL, 0},
+};
 
 /* The damaged row, run on a store whose kernel is damaged. */
-static const struct row damaged_row = {
-    "damaged", "disk", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 1};
+static const struct row damaged_row[] = {
+    {"damaged", "disk", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 1, 0, NULL, 0,
+     NULL, 0},
+};
 
 /* The real rows. */
 static const struct row real_rows[] = {
     {"real-reboot", NULL, "write:fixture check readback:fixture",
      "stopped shutdown host-ran host-sees same-copy readback second-stop", "disk", 0, REAL_US, 0, 1,
-     0},
-    {"real-guest", NULL, "run:fixture", "guest-pass guest-exit", NULL, 1, REAL_US, 0, 1, 0},
+     0, 0, NULL, 0, NULL, 0},
+    {"real-guest", NULL, "run:fixture", "guest-pass guest-exit", NULL, 1, REAL_US, 0, 1, 0, 0, NULL,
+     0, NULL, 0},
+    {"real-peer", NULL, "serve alpha:alpha beta:beta",
+     "service-ready alpha-tcp beta-tcp both-closed service-stopped", NULL, 0, REAL_US, 0, 1, 0, 1,
+     NULL, 0, NULL, 0},
 };
 
 /** Run the stand-in rows, the stop row and the damaged row. */
@@ -1267,10 +2072,12 @@ static void test_stand_in(void)
     }
     for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
         run_row(&stand_in_rows[i], &s, NULL);
-    run_row(&stop_row, &s, "@etude 1 progress waiting 0\n");
+    run_row(stop_row, &s, WAITING);
+    run_row(pair_row, &s, NULL);
+    test_isolation(&s);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the disk artifact is unchanged");
     CHECK(damage(s.store, s.kernel) == 0, "damaged");
-    run_row(&damaged_row, &s, NULL);
+    run_row(damaged_row, &s, NULL);
     CHECK(!machines_left(), "every stand-in QEMU and etude-guest has ended");
     etude_store_close(s.store);
 }
