@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-"""Check Messages result rejection and streamed content reconstruction."""
+"""Check Messages result rejection and streamed content reconstruction.
+
+Each test that fails is named on a line of its own; tests/proofs/anthropic.json
+runs the tests against a copy of proto_anthropic.py with a fault in it.
+"""
 
 import copy
 import json
+import os
+import sys
 import unittest
 
-import fakeapi
-import proto_anthropic as protocol
+# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
+# and the protocol modules, that holds a proof's copies with faults in them.
+if os.environ.get("FAKEAPI_MODULES"):
+    sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
+import fakeapi  # noqa: E402
+import proto_anthropic as protocol  # noqa: E402
 
 
 class MessagesTest(unittest.TestCase):
@@ -96,4 +106,8 @@ class MessagesTest(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    result = unittest.main(exit=False).result
+    for kind, cases in (("failed", result.failures), ("raised an error", result.errors)):
+        for case, _ in cases:
+            print(f"anthropic-test: fail: {case.id().rsplit('.', 1)[1]}: {kind}", file=sys.stderr)
+    sys.exit(not result.wasSuccessful())

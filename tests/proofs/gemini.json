@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "proof": "gemini",
+  "summary": "gemini_test.py against private copies of proto_gemini.py with its result check taken out and of fakeapi.py with an unordered fault; gemini-agy.json runs Antigravity CLI against the first",
+  "tree": "private",
+  "sources": [
+    "tests/system/fakeapi/proto_gemini.py",
+    "tests/system/fakeapi/fakeapi.py"
+  ],
+  "artifacts": [
+    "${WORK}/modules/proto_gemini.py",
+    "${WORK}/modules/fakeapi.py"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "mkdir -p ${WORK}/modules && cd ${SRC}/tests/system/fakeapi && exec cp proto_gemini.py fakeapi.py ${WORK}/modules/"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "FAKEAPI_MODULES=${WORK}/modules",
+      "python3",
+      "-B",
+      "tests/system/fakeapi/gemini_test.py"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "gemini-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "result",
+      "summary": "the result check weakened, which the protocol test must catch with one failure",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/proto_gemini.py",
+          "find": "if actual is None or any(text not in actual for text in expected.get(\"contains\", [])) or \\\n                (\"equals\" in expected and actual != expected[\"equals\"]):",
+          "replace": "if False:"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "gemini-test: fail: test_results: failed"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "unordered",
+      "summary": "unordered steps no longer played before the next ordered one",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "return ordered[:1] + [i for i in left if self.steps[i].get(\"unordered\")]",
+          "replace": "return ordered[:1]"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "gemini-test: fail: test_unordered: failed"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

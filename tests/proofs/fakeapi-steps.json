@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "proof": "fakeapi-steps",
+  "summary": "fakeapi_test.py against private copies of the fake API server, each fault failing its own test and no other",
+  "tree": "private",
+  "sources": [
+    "tests/system/fakeapi/fakeapi.py"
+  ],
+  "artifacts": [
+    "${WORK}/modules/fakeapi.py"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "mkdir -p ${WORK}/modules && cd ${SRC}/tests/system/fakeapi && exec cp fakeapi.py ${WORK}/modules/"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "FAKEAPI_MODULES=${WORK}/modules",
+      "python3",
+      "-B",
+      "tests/system/fakeapi/fakeapi_test.py"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "fakeapi-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "repeat",
+      "summary": "a repeated step used up by the first request that plays it",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "                    if not step.get(\"repeat\"):\n",
+          "replace": "                    if True:\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "fakeapi-test: fail: test_repeat:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "logged",
+      "summary": "a connection that ends in a WebSocket exchange only logged",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "            if peer.socket is not None and not (peer.finished or peer.failed):\n",
+          "replace": "            if False:\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "fakeapi-test: fail: test_reset:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "upgrade",
+      "summary": "the exchange begun only after its upgrade is sent",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "        self.socket = WebSocket(self)\n        self.wfile.write(head(101, headers))\n",
+          "replace": "        self.wfile.write(head(101, headers))\n        self.socket = WebSocket(self)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "fakeapi-test: fail: test_reset:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "hold",
+      "summary": "a held step that answers without waiting for its release",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "            self.hold.wait_for(lambda: self.released)\n",
+          "replace": "            pass\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "fakeapi-test: fail: test_hold:"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

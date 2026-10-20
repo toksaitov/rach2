@@ -2,48 +2,26 @@
 """Check how the fake API server chooses the step a request plays, and when
 a WebSocket exchange has played it.
 
-Usage: fakeapi_test.py [--mutate | --texts]
+Usage: fakeapi_test.py
 
-With no argument it runs the tests, as `tests/run host` does. --mutate runs
-them against a private copy of fakeapi.py for each fault in FAULTS, and
-requires each copy to fail its fault's test and no other: in one a repeated
-step is used up by the first request that plays it, in another a
-connection that ends in a WebSocket exchange is only logged, in the third
-the exchange begins only after its upgrade is sent, and in the fourth a
-held step answers without waiting for its release. It then runs
-them against fakeapi.py as it is, which must pass; nothing in the tree
-changes. --texts checks that each fault's text is once in fakeapi.py.
+It runs the tests, as `tests/run host` does, and names each test that fails
+on a line of its own. tests/proofs/fakeapi-steps.json runs them against
+copies of fakeapi.py with faults in them.
 """
 
 import io
 import os
 import struct
-from pathlib import Path
 import sys
 import tempfile
 import threading
-import types
 import unittest
 
-import fakeapi
-
-HERE = Path(__file__).resolve().parent
-FAULTS = [
-    ("test_repeat",
-     '                    if not step.get("repeat"):\n',
-     '                    if True:\n'),
-    ("test_reset",
-     '            if peer.socket is not None and not (peer.finished or peer.failed):\n',
-     '            if False:\n'),
-    ("test_reset",
-     '        self.socket = WebSocket(self)\n'
-     '        self.wfile.write(head(101, headers))\n',
-     '        self.wfile.write(head(101, headers))\n'
-     '        self.socket = WebSocket(self)\n'),
-    ("test_hold",
-     '            self.hold.wait_for(lambda: self.released)\n',
-     '            pass\n'),
-]
+# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
+# and the protocol modules, that holds a proof's copies with faults in them.
+if os.environ.get("FAKEAPI_MODULES"):
+    sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
+import fakeapi  # noqa: E402
 
 
 def request(path):
@@ -216,42 +194,9 @@ class HoldTest(unittest.TestCase):
             server.record_file.close()
 
 
-def run(module):
-    """Run the tests with MODULE as fakeapi; return the result."""
-    global fakeapi
-    original = fakeapi
-    try:
-        fakeapi = module
-        suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(case)
-                                   for case in (StepTest, WebSocketTest, HoldTest))
-        return unittest.TextTestRunner(stream=io.StringIO()).run(suite)
-    finally:
-        fakeapi = original
-
-
-def mutate():
-    """Require each fault to fail its test alone, and the source to pass."""
-    source = (HERE / "fakeapi.py").read_text()
-    for test, old, new in FAULTS:
-        module = types.ModuleType("mutated_fakeapi")
-        module.__file__ = str(HERE / "fakeapi.py")
-        exec(compile(source.replace(old, new), module.__file__, "exec"), module.__dict__)
-        result = run(module)
-        failed = [t.id().rsplit(".", 1)[1] for t, _ in result.failures + result.errors]
-        if failed != [test]:
-            sys.exit(f"fakeapi-test: fail: the fault for {test} failed {failed or 'no test'}")
-        print(f"fakeapi-test: result: the fault for {test} was caught")
-    if not run(fakeapi).wasSuccessful():
-        sys.exit("fakeapi-test: fail: the unchanged server did not pass")
-    print("fakeapi-test: pass: the unchanged server passed")
-
-
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--texts"]:
-        source = (HERE / "fakeapi.py").read_text()
-        if any(source.count(old) != 1 for _, old, _ in FAULTS):
-            sys.exit("fakeapi-test: fail: a fault's text is not once in fakeapi.py")
-    elif sys.argv[1:] == ["--mutate"]:
-        mutate()
-    else:
-        unittest.main()
+    result = unittest.main(exit=False).result
+    for kind, cases in (("failed", result.failures), ("raised an error", result.errors)):
+        for case, _ in cases:
+            print(f"fakeapi-test: fail: {case.id().rsplit('.', 1)[1]}: {kind}", file=sys.stderr)
+    sys.exit(not result.wasSuccessful())

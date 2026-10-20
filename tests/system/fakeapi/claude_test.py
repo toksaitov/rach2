@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """Run Claude Code against the scripted Messages server in a disposable home.
 
-Usage: claude_test.py BINARY [--mutate]
+Usage: claude_test.py BINARY
        claude_test.py prepare WORK
        claude_test.py client BINARY WORK URL CA
        claude_test.py verify WORK RECORD
-       claude_test.py --texts
 
 The prepare, client and verify commands are also the parts a guest suite
 uses, with claude-session.json unchanged; the agents suite's rows use
 render and verify through tests/system/agents/claude_session_verify.py.
 WORK is an absolute path. The caller of those commands removes it. The
 Linux proof removes its work on success or a signal, and prints its
-evidence directory on failure.
+evidence directory on failure. tests/proofs/anthropic-claude.json runs the
+proof with a copy of proto_anthropic.py whose result check is taken out.
 """
 
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
@@ -27,15 +26,16 @@ import subprocess
 import sys
 import tempfile
 import threading
-import unittest
 
-import fakeapi
-import proto_anthropic
+# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
+# and the protocol modules, that holds a proof's copies with faults in them.
+if os.environ.get("FAKEAPI_MODULES"):
+    sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
+import fakeapi  # noqa: E402
+import proto_anthropic  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 DIGEST = "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de"
-FAULT = 'if actual is None or any(text not in actual for text in expected.get("contains", [])) or \\\n                ("equals" in expected and actual != expected["equals"]):'
-REPLACEMENT = 'if False:'
 
 
 def command(args, cwd, env=None):
@@ -154,7 +154,7 @@ def verify(work, record):
             raise ValueError("the recorded exchange failed: " + reason)
 
 
-def exchange(binary, work, wrong=False, module=None):
+def exchange(binary, work, wrong=False):
     """Play one real client session; require wrong results to be refused."""
     prepare(work)
     if wrong:
@@ -168,8 +168,6 @@ def exchange(binary, work, wrong=False, module=None):
     context.load_cert_chain(ca / "server.pem", ca / "server.key")
     record = work / "record.jsonl"
     server = fakeapi.Server(json.loads((work / "script.json").read_text()), str(record), context)
-    if module:
-        server.module = lambda step: module
     listener = fakeapi.Listener(("127.0.0.1", 0), fakeapi.Connection)
     listener.fake = server
     thread = threading.Thread(target=listener.serve_forever, daemon=True)
@@ -195,46 +193,13 @@ def exchange(binary, work, wrong=False, module=None):
         print("anthropic-test: result: file, commit and all tool results passed", flush=True)
 
 
-def texts():
-    """Check that the mutation still matches its source once."""
-    source = (HERE / "proto_anthropic.py").read_text()
-    if source.count(FAULT) != 1:
-        raise ValueError("the wrong-result mutation is not once in proto_anthropic.py")
-    return source
-
-
-def proof(binary, mutate):
-    """Prove the exchange, its refusal check and optionally its mutation."""
+def proof(binary):
+    """Prove the exchange and its refusal check."""
     work = Path(tempfile.mkdtemp(prefix="rach2-anthropic."))
     keep = False
     try:
         exchange(binary, work / "fixed")
         exchange(binary, work / "wrong", wrong=True)
-        if mutate:
-            import types
-            module = types.ModuleType("mutated_anthropic")
-            exec(compile(texts().replace(FAULT, REPLACEMENT), str(HERE / "proto_anthropic.py"),
-                         "exec"), module.__dict__)
-            import anthropic_test
-            original = anthropic_test.protocol
-            try:
-                anthropic_test.protocol = module
-                suite = unittest.defaultTestLoader.loadTestsFromModule(anthropic_test)
-                result = unittest.TextTestRunner(stream=io.StringIO()).run(suite)
-                if result.wasSuccessful() or len(result.failures) != 1 or result.errors:
-                    raise ValueError("the protocol test did not catch the result mutation")
-            finally:
-                anthropic_test.protocol = original
-            print("anthropic-test: result: protocol test caught the mutation", flush=True)
-            try:
-                exchange(binary, work / "mutated", wrong=True, module=module)
-            except ValueError as error:
-                if str(error) != "a wrong tool result was accepted":
-                    raise
-                print("anthropic-test: result: wrong-result mutation caught", flush=True)
-            else:
-                raise ValueError("the mutation did not fail its check")
-            exchange(binary, work / "restored")
     except Exception:
         keep = True
         print(f"anthropic-test: evidence: {work}", file=sys.stderr)
@@ -246,9 +211,6 @@ def proof(binary, mutate):
 
 def main(args):
     """Dispatch the Linux proof or a part shared with the guest suite."""
-    if args == ["--texts"]:
-        texts()
-        return
     if args[0] == "prepare":
         prepare(Path(args[1]))
     elif args[0] == "client":
@@ -261,7 +223,7 @@ def main(args):
                 "unshare", "--user", "--map-current-user", "--keep-caps", "--net",
                 "sh", "-ec", 'ip link set lo up; exec "$@"', "sh", sys.executable,
                 "-B", str(Path(__file__).resolve()), *args, "--offline-child"])
-        proof(args[0], "--mutate" in args[1:])
+        proof(args[0])
 
 
 if __name__ == "__main__":

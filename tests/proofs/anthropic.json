@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "proof": "anthropic",
+  "summary": "anthropic_test.py against a private copy of proto_anthropic.py with its tool-result check taken out; anthropic-claude.json runs Claude Code against it",
+  "tree": "private",
+  "sources": [
+    "tests/system/fakeapi/proto_anthropic.py"
+  ],
+  "artifacts": [
+    "${WORK}/modules/proto_anthropic.py"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "mkdir -p ${WORK}/modules && cd ${SRC}/tests/system/fakeapi && exec cp proto_anthropic.py ${WORK}/modules/"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "FAKEAPI_MODULES=${WORK}/modules",
+      "python3",
+      "-B",
+      "tests/system/fakeapi/anthropic_test.py"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "anthropic-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "result",
+      "summary": "the tool-result check weakened, which the protocol test must catch with one failure",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/proto_anthropic.py",
+          "find": "if actual is None or any(text not in actual for text in expected.get(\"contains\", [])) or \\\n                (\"equals\" in expected and actual != expected[\"equals\"]):",
+          "replace": "if False:"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "anthropic-test: fail: test_results: failed"
+        ],
+        "only": true
+      }
+    }
+  ]
+}
