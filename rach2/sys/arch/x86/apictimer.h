@@ -30,11 +30,11 @@ void apic_lint_init(const struct acpi_info *a);
 
 /**
  * Measure this processor's timer over 20 ms of the reference counter
- * (refclock.h), or of the 8254 through `k_udelay` when there is none, with
- * interrupts off and the timer masked, and leave the timer stopped: its
- * counts in one tick at `hz` ticks a second, and the reference's name, or
- * "pit", in `*against`. 0 when the reference stopped, the timer did not
- * count, or `hz` is 0.
+ * (refclock.h), or, when there is none, over three waits of 20 ms on the
+ * 8254 (`pit_wait_counts`), taking the lowest rate, with interrupts off and
+ * the timer masked, and leave the timer stopped: its counts in one tick at
+ * `hz` ticks a second, and the reference's name, or "pit", in `*against`.
+ * 0 when the reference stopped, the timer did not count, or `hz` is 0.
  */
 uint32_t apic_timer_calibrate(uint32_t hz, const char **against);
 

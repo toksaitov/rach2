@@ -30,13 +30,6 @@
 #include "../../lib/kirq.h"
 #include "pit.h"
 
-/* The 8254's input frequency. Where the counter wraps is `pit_reload`, which
- * init_pit publishes, so that the divisor is computed in one place. */
-#define PIT_HZ 1193182u
-
-/* Counts per second as read back, which is twice the input clock in mode 3. */
-#define PIT_COUNTS_PER_SEC (2u * PIT_HZ)
-
 /*
  * The longest single wait this measures in one pass. The bound comes from
  * the arithmetic: `usec * PIT_COUNTS_PER_SEC` must stay inside 32 bits, and
@@ -86,24 +79,18 @@ static uint16_t pit_count(void)
 }
 
 /**
- * Wait `usec` microseconds, which must be at most `PIT_WINDOW_USEC`.
- *
  * The counter descends, so the elapsed count between two samples is the drop;
  * when the counter has reloaded since the last sample the drop is taken around
  * the reload value instead. Sampling faster than the counter moves is
  * harmless, since a zero drop adds nothing. A counter that does not move for
- * PIT_STALL_SAMPLES samples ends the wait.
+ * PIT_STALL_SAMPLES samples ends the wait, which then returns 0.
  */
-static void udelay_window(uint32_t usec)
+uint32_t pit_wait_counts(uint32_t counts)
 {
-    uint32_t want = (usec * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
     uint32_t seen = 0, still = 0;
     uint16_t prev = pit_count();
 
-    if (want == 0) {
-        want = 1;
-    }
-    while (seen < want) {
+    while (seen < counts) {
         uint16_t now = pit_count();
         uint32_t step;
 
@@ -117,9 +104,18 @@ static void udelay_window(uint32_t usec)
         prev = now;
         still = step == 0 ? still + 1u : 0u;
         if (still >= PIT_STALL_SAMPLES) {
-            return;
+            return 0;
         }
     }
+    return seen;
+}
+
+/** Wait `usec` microseconds, which must be at most `PIT_WINDOW_USEC`. */
+static void udelay_window(uint32_t usec)
+{
+    uint32_t want = (usec * PIT_COUNTS_PER_SEC + 999999u) / 1000000u;
+
+    (void)pit_wait_counts(want == 0 ? 1u : want);
 }
 
 /** A wait longer than `PIT_WINDOW_USEC` is a run of windows and a last

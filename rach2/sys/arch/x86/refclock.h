@@ -53,8 +53,9 @@ void refclock_wait_us(uint32_t usec);
  * the table's again. */
 void refclock_set_registers(volatile uint32_t *regs);
 
-/** `a` times `b` divided by `c`, through a 64-bit product, for a quotient
- * the caller knows fits in 32 bits. */
+/** `a` times `b` divided by `c`, through a 64-bit product, or 0xFFFFFFFF
+ * when the quotient does not fit in 32 bits, as when a measurement's
+ * processor was stopped for longer than its reference can count. */
 uint32_t refclock_scale(uint32_t a, uint32_t b, uint32_t c);
 
 #endif /* _REFCLOCK_H_ */

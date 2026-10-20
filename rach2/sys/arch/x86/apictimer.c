@@ -14,13 +14,23 @@
 #include "refclock.h"
 
 #include "../../lib/kirq.h"
-#include "../../udelay.h"
 
 #define CALIBRATE_US 20000u
 
 /* A reference that has not counted 20 ms after this many reads has
  * stopped. */
 #define CALIBRATE_READS 10000000u
+
+/* The reads of the reference on either side of a read of the timer, a few
+ * microseconds apart on time, are taken again when they are further apart
+ * than this: the processor was stopped between them. */
+#define SAMPLE_CLOSE_US 50u
+#define SAMPLE_TRIES    16u
+
+/* The 8254's measurements of the timer, of which the least is taken: a
+ * processor stopped during one can only make it count too few of the 8254's
+ * counts (pit_wait_counts). */
+#define PIT_WINDOWS 3u
 
 /* The tick rate `apic_timer_start` was given, which the counter's
  * arithmetic divides a second by. */
@@ -51,45 +61,96 @@ void apic_lint_init(const struct acpi_info *a)
     lapic_set_lint(1, entry[1]);
 }
 
+/**
+ * Read the timer between two reads of the reference, and return its count
+ * with the reference midway between the two in `*ref`. The pair taken is
+ * the first within SAMPLE_CLOSE_US of each other, or the closest of
+ * SAMPLE_TRIES, so that a processor stopped between the reads of the
+ * reference and of the timer cannot put one a stop's length from the other.
+ */
+static uint32_t apic_sample(uint32_t *ref)
+{
+    uint32_t close = refclock_scale(SAMPLE_CLOSE_US, refclock_hz(), 1000000u);
+    uint32_t best = 0, count = 0, before, now, gap, i;
+
+    for (i = 0; i < SAMPLE_TRIES && (i == 0 || best > close); i++) {
+        before = refclock_read();
+        now = lapic_timer_current();
+        gap = (refclock_read() - before) & refclock_mask();
+        if (i == 0 || gap < best) {
+            best = gap;
+            count = now;
+            *ref = (before + gap / 2u) & refclock_mask();
+        }
+    }
+    return count;
+}
+
+/** The timer's counts a second, measured over 20 ms of the reference, or 0
+ * when the reference stopped or the timer did not count. */
+static uint32_t apic_against_ref(void)
+{
+    uint32_t want = refclock_scale(CALIBRATE_US, refclock_hz(), 1000000u);
+    uint32_t c0, c1, r0 = 0, r1 = 0, ref, spins;
+
+    c0 = apic_sample(&r0);
+    for (spins = 0; spins < CALIBRATE_READS; spins++) {
+        if (((refclock_read() - r0) & refclock_mask()) >= want) {
+            break;
+        }
+    }
+    c1 = apic_sample(&r1);
+    ref = (r1 - r0) & refclock_mask();
+    if (ref < want || c1 >= c0) {
+        return 0;
+    }
+    return refclock_scale(c0 - c1, refclock_hz(), ref);
+}
+
+/** The timer's fewest counts a second in PIT_WINDOWS measured waits of
+ * 20 ms on the 8254, or 0 when it or the 8254 did not count. */
+static uint32_t apic_against_pit(void)
+{
+    uint32_t c0, c1, seen, rate, least = 0, i;
+
+    for (i = 0; i < PIT_WINDOWS; i++) {
+        c0 = lapic_timer_current();
+        seen = pit_wait_counts(PIT_COUNTS_PER_SEC / (1000000u / CALIBRATE_US));
+        c1 = lapic_timer_current();
+        if (seen != 0 && c1 < c0) {
+            rate = refclock_scale(c0 - c1, PIT_COUNTS_PER_SEC, seen);
+            if (least == 0 || rate < least) {
+                least = rate;
+            }
+        }
+    }
+    return least;
+}
+
+/**
+ * The reference's reads are taken in pairs around the timer's at each end
+ * (`apic_sample`), and the 8254's waits are measured and repeated
+ * (`apic_against_pit`), so that a processor stopped during the measurement,
+ * as a hypervisor stops one, cannot change the result by more than a few
+ * microseconds in 20 ms, so long as one of the 8254's waits had no stop. A
+ * stop longer than the reference's wrap, 4.7 s for a 24-bit PM timer, is
+ * not seen. A rate past 32 bits is no measurement.
+ */
 uint32_t apic_timer_calibrate(uint32_t hz, const char **against)
 {
-    uint32_t flags, c0, c1, r0, r1 = 0, ref, spins, want = 0;
+    uint32_t flags, rate;
     const char *name = refclock_name();
 
     *against = name ? name : "pit";
-    flags = kirq_save();
-    lapic_timer_set(APIC_TIMER_VECTOR, 0, 1, 0xFFFFFFFFu);
-    if (name) {
-        want = refclock_scale(CALIBRATE_US, refclock_hz(), 1000000u);
-        r0 = refclock_read();
-        c0 = lapic_timer_current();
-        for (spins = 0; spins < CALIBRATE_READS; spins++) {
-            r1 = refclock_read();
-            if (((r1 - r0) & refclock_mask()) >= want) {
-                break;
-            }
-        }
-        c1 = lapic_timer_current();
-        ref = (r1 - r0) & refclock_mask();
-    } else {
-        c0 = lapic_timer_current();
-        k_udelay(CALIBRATE_US);
-        c1 = lapic_timer_current();
-        ref = 0;
-    }
-    lapic_timer_stop();
-    kirq_restore(flags);
-    if (c1 >= c0 || hz == 0) {
+    if (hz == 0) {
         return 0;
     }
-    if (name) {
-        if (ref < want) {
-            return 0; /* the reference stopped */
-        }
-        /* The timer's counts a second, then a tick's. */
-        return refclock_scale(c0 - c1, refclock_hz(), ref) / hz;
-    }
-    return refclock_scale(c0 - c1, 1000000u / hz, CALIBRATE_US);
+    flags = kirq_save();
+    lapic_timer_set(APIC_TIMER_VECTOR, 0, 1, 0xFFFFFFFFu);
+    rate = name ? apic_against_ref() : apic_against_pit();
+    lapic_timer_stop();
+    kirq_restore(flags);
+    return rate == 0xFFFFFFFFu ? 0 : rate / hz;
 }
 
 void apic_timer_start(uint32_t counts, uint32_t hz)

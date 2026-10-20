@@ -109,12 +109,12 @@ uint32_t timer_tick_clock(void);
 int timer_clock_check(void);
 
 /**
- * Measure the processor's time-stamp counter against the 8254, with
- * interrupts off for 20 ms, on a machine with neither the HPET nor the PM
- * timer whose counter runs at one rate whatever the processor's clock does
- * (on a PC, what `cpuid` leaf 0x80000007 says), so that it can be the
- * reference from the next tick on. Returns its counts in one tick, and 0
- * when it is not measured.
+ * Measure the processor's time-stamp counter against the 8254, the lowest
+ * rate of three waits of 20 ms with interrupts off, on a machine with
+ * neither the HPET nor the PM timer whose counter runs at one rate whatever
+ * the processor's clock does (on a PC, what `cpuid` leaf 0x80000007 says),
+ * so that it can be the reference from the next tick on. Returns its counts
+ * in one tick, and 0 when it is not measured.
  */
 uint32_t timer_calibrate(void);
 

@@ -197,6 +197,28 @@ void arch_relax(void)
     CHECK(0);
 }
 
+/* No row measures the time-stamp counter, which timercal_hosttest.c does;
+ * a call of these fails the test. */
+void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
+{
+    (void)leaf;
+    *a = *b = *c = *d = 0;
+    CHECK(0);
+}
+
+uint32_t pit_wait_counts(uint32_t counts)
+{
+    (void)counts;
+    CHECK(0);
+    return 0;
+}
+
+void host_tsc_read(uint32_t *lo, uint32_t *hi)
+{
+    *lo = *hi = 0;
+    CHECK(0);
+}
+
 /**
  * Literal answers exercise the same latch and real-time path as file writes.
  * A pending wrap must count once, including at the end of a second; dropping

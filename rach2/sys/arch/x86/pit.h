@@ -72,6 +72,20 @@ uint32_t pit_phase_ns(void);
 /** Channel 0's period, two sweeps of its counter, in microseconds. */
 uint32_t pit_period_us(void);
 
+/* Channel 0's counts a second as it is read in mode 3, where the count
+ * falls by two at each tick of the 1.193182 MHz input clock. */
+#define PIT_COUNTS_PER_SEC (2u * 1193182u)
+
+/**
+ * Sample channel 0 until its count has fallen by `counts` at least, and
+ * return the counts it fell from the first sample to the last, which a
+ * measurement divides by PIT_COUNTS_PER_SEC. A sweep of the counter that
+ * passes between two samples, as when the processor is stopped, is not
+ * seen, so the counts returned are never more than the time that passed and
+ * may be less. 0 when the counter stops. Defined in udelay.c.
+ */
+uint32_t pit_wait_counts(uint32_t counts);
+
 /*
  * The wait `k_udelay` makes instead of counting channel 0, or NULL to count
  * it: set by the platform on a machine with no 8254, where it is the HPET's

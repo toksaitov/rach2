@@ -62,12 +62,17 @@ static struct acpi_gas pm;
 
 uint32_t refclock_scale(uint32_t a, uint32_t b, uint32_t c)
 {
-#if defined(__x86_64__) || defined(RACH2_HOSTTEST)
-    return (uint32_t)((uint64_t)a * b / c);
-#else
     uint64_t product = (uint64_t)a * b;
+#if !defined(__x86_64__) && !defined(RACH2_HOSTTEST)
     uint32_t q, r;
+#endif
 
+    if ((uint32_t)(product >> 32) >= c) {
+        return 0xFFFFFFFFu;
+    }
+#if defined(__x86_64__) || defined(RACH2_HOSTTEST)
+    return (uint32_t)(product / c);
+#else
     /* `divl` divides edx:eax, where a division in C would call libgcc. */
     __asm__("divl %4"
             : "=a"(q), "=d"(r)

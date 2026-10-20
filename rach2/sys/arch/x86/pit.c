@@ -12,7 +12,6 @@
 #include "../arch.h"
 #include "../../lib/kirq.h"
 #include "../../lib/spinlock.h"
-#include "../../udelay.h"
 
 uint32_t pit_reload = 1193182 / 100;
 
@@ -177,14 +176,23 @@ static volatile uint32_t ref_us_base;
 /* The TSC's counts in a tick, from `timer_calibrate`; 0 for none. */
 static uint32_t tsc_per_tick;
 
-/** The time-stamp counter's halves into `*lo` and `*hi`; 0 in a host
- * test. */
+/* The waits on the 8254 that `timer_calibrate` measures the TSC over, and
+ * the 8254's counts in each, 20 ms. */
+#define TSC_WINDOWS     3u
+#define TSC_WAIT_COUNTS (PIT_COUNTS_PER_SEC / 50u)
+
+#ifdef RACH2_HOSTTEST
+void host_tsc_read(uint32_t *lo, uint32_t *hi);
+#endif
+
+/** The time-stamp counter's halves into `*lo` and `*hi`, from the model's
+ * `host_tsc_read` in a host test. */
 static void tsc_read(uint32_t *lo, uint32_t *hi)
 {
 #ifndef RACH2_HOSTTEST
     __asm__ __volatile__("rdtsc" : "=a"(*lo), "=d"(*hi));
 #else
-    *lo = *hi = 0;
+    host_tsc_read(lo, hi);
 #endif
 }
 
@@ -290,13 +298,19 @@ static int ref_start(void)
     return 1;
 }
 
+/**
+ * The TSC's fewest counts in a tick of TSC_WINDOWS waits of 20 ms on the
+ * 8254, each measured in the 8254's counts (`pit_wait_counts`). A stop of
+ * the processor during a wait can hide sweeps of the 8254's counter, which
+ * makes the TSC's counts too many for the wait and never too few. The
+ * TSC's difference is taken in 64 bits, so that a long one is not taken
+ * for a short one.
+ */
 uint32_t timer_calibrate(void)
 {
-    uint32_t a, b, c, d, lo0, hi0, lo1, hi1, flags;
+    uint32_t a, b, c, d, lo0, hi0, lo1, hi1, flags, seen, counts, least = 0, i;
+    uint64_t gone;
 
-#ifdef RACH2_HOSTTEST
-    return 0; /* a host has its own clocks */
-#endif
     if (ref_kind != REF_NONE || refclock_name() || tsc_per_tick) {
         return tsc_per_tick;
     }
@@ -309,12 +323,25 @@ uint32_t timer_calibrate(void)
         return 0; /* no invariant TSC: its rate follows the processor's */
     }
     flags = kirq_save();
-    tsc_read(&lo0, &hi0);
-    k_udelay(20000);
-    tsc_read(&lo1, &hi1);
+    for (i = 0; i < TSC_WINDOWS; i++) {
+        tsc_read(&lo0, &hi0);
+        seen = pit_wait_counts(TSC_WAIT_COUNTS);
+        tsc_read(&lo1, &hi1);
+        gone = (((uint64_t)hi1 << 32) | lo1) - (((uint64_t)hi0 << 32) | lo0);
+        if (seen == 0 || (gone >> 32) != 0) {
+            continue; /* 20 ms is under 2^32 counts below a 200 GHz clock */
+        }
+        /* A quarter of the counts a second, then a quarter of a tick's. */
+        counts = refclock_scale((uint32_t)gone, PIT_COUNTS_PER_SEC / 4u, seen);
+        if (counts != 0xFFFFFFFFu) {
+            counts /= TICKS_PER_SECOND / 4u;
+            if (least == 0 || counts < least) {
+                least = counts;
+            }
+        }
+    }
     kirq_restore(flags);
-    /* 20 ms is two ticks, and under 2^32 counts below a 200 GHz clock. */
-    tsc_per_tick = (lo1 - lo0) / 2u;
+    tsc_per_tick = least;
     return tsc_per_tick;
 }
 
