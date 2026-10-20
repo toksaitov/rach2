@@ -22,7 +22,8 @@
  * another run, preparation another run did or the run's record leaves out,
  * an exemption that does not hold, and limits that are not the policy's;
  * it charges work outside the run's interval, and one-time setup that was
- * not the first. A recorded budget that is not the judgement's is told.
+ * not the first. An unevaluated budget accepts the computed verdict,
+ * while a different charge, setup time or evaluated verdict is told.
  */
 #include <errno.h>
 #include <signal.h>
@@ -1358,6 +1359,66 @@ static void test_program(void)
           "program");
 }
 
+/**
+ * An unevaluated budget accepts the checker's verdict, but still has to
+ * account for the charge and setup time. The command's status follows
+ * its judgement, including an overrun, an exemption and incomplete work.
+ */
+static void test_unjudged(void)
+{
+    static const struct {
+        int end, summarized, charged, once, exemption;
+        const char *recorded;
+        enum etude_budget_verdict verdict;
+        int agrees, status;
+    } rows[] = {{40, 3, 40, 0, 0, "unknown", ETUDE_BUDGET_PASS, 1, 0},
+                {700, 3, 700, 0, 0, "unknown", ETUDE_BUDGET_FAILURE, 1, 1},
+                {40, 3, 40, 0, 1, "unknown", ETUDE_BUDGET_EXEMPT, 1, 0},
+                {40, 2, 40, 0, 0, "unknown", ETUDE_BUDGET_UNKNOWN, 1, 1},
+                {40, 3, 30, 0, 0, "unknown", ETUDE_BUDGET_PASS, 0, 1},
+                {40, 3, 40, 1, 0, "unknown", ETUDE_BUDGET_PASS, 0, 1},
+                {40, 3, 40, 0, 0, "failure", ETUDE_BUDGET_PASS, 0, 1}};
+    size_t i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        struct run r = CI_RUN("unjudged", "2026-10-01T01:00:00.000000Z");
+        struct etude_budget_judgement j;
+        struct cmp_history h;
+        const char *out = fix_path("unjudged.out"), *path;
+        char result[100], id[40];
+        char *args[] = {
+            "history_budget", "check", (char *)fix_path("policy.json"), id, "--", NULL, NULL};
+
+        snprintf(id, sizeof(id), "unjudged%zu", i);
+        r.id = id;
+        r.end = rows[i].end;
+        r.summarized = rows[i].summarized;
+        r.charged = rows[i].charged;
+        r.once = rows[i].once;
+        r.exemption = rows[i].exemption;
+        r.purpose = r.exemption ? "phase_first_run" : "ci";
+        r.verdict = rows[i].recorded;
+        path = write_run(&r);
+        CHECK(path != NULL, "unjudged");
+        if (path == NULL) {
+            return;
+        }
+        args[5] = (char *)path;
+        if (cmp_load(&h, HISTORY, args + 5, 1) != 0) {
+            CHECK(0, "unjudged");
+            return;
+        }
+        CHECK(judge(&h, r.id, 0, &j) == 0, "unjudged");
+        CHECK(j.report.verdict == rows[i].verdict && j.agrees == rows[i].agrees, "unjudged");
+        etude_budget_report_free(&j.report);
+        cmp_free(&h);
+        snprintf(result, sizeof(result), "history_budget: result: %s",
+                 etude_budget_verdict_name(rows[i].verdict));
+        CHECK(program(args, out) == rows[i].status && contains(out, result), "unjudged");
+        CHECK(contains(out, "the run records another budget") == !rows[i].agrees, "unjudged");
+    }
+}
+
 int main(void)
 {
     char err[1200];
@@ -1390,6 +1451,7 @@ int main(void)
     test_hidden();
     test_one_time();
     test_program();
+    test_unjudged();
     etude_budget_policy_free(&policy);
     json_free(manifest);
     alarm(0);

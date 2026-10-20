@@ -79,7 +79,7 @@ struct etude_budget_judgement {
     const char *plan_id;
     int charged_known; /* the charged time has a value */
     uint64_t charged_us, one_time_us;
-    int agrees;      /* the run's recorded budget is this judgement's */
+    int agrees;      /* the recorded budget agrees; unknown is unevaluated */
     char error[600]; /* why the records cannot be judged, when that is so */
 };
 

@@ -1658,8 +1658,9 @@ static void value_text(int64_t value, char out[32])
 
 /**
  * Say whether the run's recorded budget is the judgement's: the same
- * verdict, and, when the judgement has a charge, the same charge and
- * one-time setup. A line of kind `record` says how it differs.
+ * verdict or an unevaluated verdict (`unknown`), and, when the judgement
+ * has a charge, the same charge and one-time setup. A line of kind
+ * `record` says how it differs.
  */
 static int agrees(const struct run_view *v, struct etude_budget_judgement *j)
 {
@@ -1668,7 +1669,7 @@ static int agrees(const struct run_view *v, struct etude_budget_judgement *j)
     int64_t once = number_of(eh_json_get(b, "one_time_setup_us"), "value");
     const char *verdict = cmp_text(b, "verdict");
     char x[32], y[32];
-    int ok = same(verdict, verdict_names[j->report.verdict]);
+    int ok = same(verdict, "unknown") || same(verdict, verdict_names[j->report.verdict]);
 
     if (j->charged_known) {
         ok = ok && charged == (int64_t)j->charged_us && once == (int64_t)j->one_time_us;
@@ -1692,7 +1693,7 @@ static int agrees(const struct run_view *v, struct etude_budget_judgement *j)
  * all its preparation is on its record, and what the run charged. With the
  * `n` case manifests of its selection, each node a planned case prepares
  * must have a preparation step of the run. `j->agrees` says whether the
- * budget the run records is this judgement's.
+ * budget the run records agrees, accepting `unknown` as unevaluated.
  *
  * @return 0 with the judgement in `j`; -1 with the reason in `j->error`
  *         when the run cannot be judged or memory ran out.

@@ -1022,8 +1022,8 @@ static void test_budget(void)
     if (j.report.verdict != ETUDE_BUDGET_PASS)
         printf("etude-repeat-test: budget of race-good:\n%s",
                j.report.lines.data != NULL ? j.report.lines.data : "");
-    CHECK(j.report.verdict == ETUDE_BUDGET_PASS && j.report.failed == 0 && j.charged_known &&
-              j.cls == ETUDE_BUDGET_FOCUSED,
+    CHECK(j.report.verdict == ETUDE_BUDGET_PASS && j.agrees && j.report.failed == 0 &&
+              j.charged_known && j.cls == ETUDE_BUDGET_FOCUSED,
           "budget");
     etude_budget_report_free(&j.report);
     cmp_free(&h);

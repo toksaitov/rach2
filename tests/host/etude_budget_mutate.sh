@@ -46,6 +46,7 @@ early-hidden|budget.c|    if ((uint64_t)start < v->lo) {|    if (0) {|hidden-ear
 one-time-again|budget.c|    } else if (before != NULL) {|    } else if (0) {|one-time-again
 one-time-overlap|budget.c|    } else if ((uint64_t)end > v->work_start) {|    } else if (0) {|one-time-overlap
 error-bound|budget.c|        if (j->report.failed == 0 && v->error_us > l->ceiling_us - j->charged_us) {|        if (0) {|ceiling
+record-unknown|budget.c|    int ok = same(verdict, "unknown") \|\| same(verdict, verdict_names[j->report.verdict]);|    int ok = same(verdict, verdict_names[j->report.verdict]);|unjudged
 record-charge|budget.c|        ok = ok && charged == (int64_t)j->charged_us && once == (int64_t)j->one_time_us;|        ok = ok && 1;|hidden-early one-time-again
 notes-ignored|budget.c|    for (i = 0; i < h->note_count; i++) {|    for (i = 0; i < 0; i++) {|unobserved
 status-agrees|budget_run.c|    status = print_report(&j.report, j.agrees);|    status = print_report(&j.report, 1);|program
