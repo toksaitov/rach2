@@ -35,6 +35,9 @@ int etude_guest_main(int argc, char **argv);
 
 static int failures;
 static char work[512];
+/* The scratch directory by its resolved path, with no symbolic link and no
+ * doubled slash, which is how etude-guest gives a workspace to a program. */
+static char resolved[PATH_CAP];
 /* This program, by an absolute path. */
 static char self[PATH_CAP];
 static pid_t guest = -1;
@@ -703,7 +706,7 @@ static void check_pass_fail_repeat(void)
     snprintf(expected, sizeof(expected),
              "@etude 1 begin host.etude.guest\na b|%s/state/a/00000000000000a1/work|%s/state/a/"
              "00000000000000a1/work\n@etude 1 end 0\n",
-             work, work);
+             resolved, resolved);
     CHECK(strcmp(e.out, expected) == 0, "the program's output comes back whole, in its workspace");
     CHECK(strcmp(e.kind, "exited") == 0 && strcmp(e.value, "0") == 0, "a pass exits 0");
     CHECK(strcmp(e.cleaned, "confirmed") == 0, "a pass is cleaned");
@@ -1068,7 +1071,7 @@ static void check_fixtures(void)
     snprintf(expected, sizeof(expected),
              "%s/state/a/000000000000fa01/work/args|a b ids=1000:314159001,5:314159005 "
              "ports=7470:%d peer=10.0.2.2:7 gateway=10.0.2.2\n",
-             work, port);
+             resolved, port);
     CHECK(strcmp(e.out, expected) == 0,
           "the program is given its ids, ports and peer, and its absolute path");
     snprintf(expected, sizeof(expected), "%s/state/a", work);
@@ -1246,6 +1249,10 @@ int main(int argc, char **argv)
     if (!mkdtemp(work)) {
         *work = '\0';
         perror("mkdtemp");
+        return 2;
+    }
+    if (!realpath(work, resolved)) {
+        perror(work);
         return 2;
     }
     check_pass_fail_repeat();
