@@ -76,7 +76,7 @@ tcc|qemu|full
 make|qemu|full
 smp|qemu|full||512
 clock|qemu,python3|full||256|x86_64
-host|-|full
+host|qemu|full||384
 noentropy|qemu|full
 shutdown|qemu|full
 fatwrite|qemu,mformat,mcopy,mdir,python3|core

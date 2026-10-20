@@ -152,6 +152,30 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
  */
 struct etude_proc *etude_exec_wait(struct etude_exec *ex, int timeout_ms);
 
+/* A descriptor of the caller's that etude_exec_watch waits on beside the
+ * attempts' own: a file descriptor or a socket on POSIX systems. */
+struct etude_watch {
+    int fd;
+    int events;  /* ETUDE_WATCH_IN, ETUDE_WATCH_OUT or both */
+    int revents; /* what was found ready, with ETUDE_WATCH_END for a
+                    closed or failed descriptor */
+};
+
+#define ETUDE_WATCH_IN  1
+#define ETUDE_WATCH_OUT 2
+#define ETUDE_WATCH_END 4
+
+/**
+ * Wait as etude_exec_wait does, and also for one of the `n` descriptors of
+ * `w` to be ready, which sets its `revents` and returns NULL.
+ *
+ * Each call serves the attempts at least once, so that a `timeout_ms` of 0
+ * reads what is ready and returns at once. Only the POSIX executor has it,
+ * for the QEMU launcher, which does not yet run on Windows.
+ */
+struct etude_proc *etude_exec_watch(struct etude_exec *ex, int timeout_ms, struct etude_watch *w,
+                                    size_t n);
+
 /**
  * Cancel an attempt: its process group and the descendants it reported get
  * SIGTERM and SIGCONT, and SIGKILL after the grace period. Its end becomes

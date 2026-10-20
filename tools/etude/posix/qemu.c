@@ -1,0 +1,804 @@
+/*
+ * qemu.c: the QEMU launcher on POSIX systems. Each machine has a private
+ * directory with two listening Unix sockets, to which QEMU connects as a
+ * client: its serial console and its QMP monitor. QEMU runs as an attempt of
+ * the launcher's host executor, stopped until QMP has confirmed the
+ * accelerator, and the end of the machine is told from QMP's events and the
+ * end of QEMU's process.
+ */
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#include "../capture.h"
+#include "../history_json.h"
+#include "etude/qemu.h"
+#include "posix.h"
+
+/* The longest QMP line kept; a longer one is counted and skipped. */
+#define QMP_LINE_MAX 65536
+
+/* The bytes kept of QEMU's own standard output and error. */
+#define QEMU_OUTPUT_MAX 65536
+
+/* The most console bytes one pass of the loop reads of a machine. */
+#define CONSOLE_PASS_MAX 65536
+
+/* The bytes kept for QEMU's command line. */
+#define QEMU_LINE_BYTES 16384
+
+/* Where QMP is in the launcher's start of the machine. */
+enum qmp_state {
+    QMP_GREETING, /* waiting for QEMU's greeting */
+    QMP_CAPS,     /* qmp_capabilities sent */
+    QMP_ACCEL,    /* query-accelerators sent */
+    QMP_KVM,      /* query-kvm sent, for a QEMU without query-accelerators */
+    QMP_CONT,     /* cont sent */
+    QMP_READY,    /* the machine runs */
+    QMP_QUIT,     /* quit sent */
+    QMP_GONE      /* the connection is closed or unusable */
+};
+
+/* The ids of the launcher's QMP commands, which their replies repeat. */
+enum { ID_CAPS = 1, ID_ACCEL, ID_KVM, ID_CONT, ID_QUIT };
+
+struct etude_machine {
+    struct etude_qemu *q;
+    struct etude_machine *next;
+    char *attempt_id;
+    enum etude_accel accel;
+    char dir[sizeof(((struct sockaddr_un *)0)->sun_path) - 2]; /* with room
+                                                                  for "/c" */
+    char console_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    char qmp_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    int console_listen, qmp_listen; /* -1 once QEMU has connected */
+    int console, qmp;               /* QEMU's connections; -1 once closed */
+    int console_file;
+    struct etude_proc *proc;
+    int proc_done; /* the executor has finished QEMU's attempt */
+    enum qmp_state qmp_state;
+    char *line; /* a QMP line being read */
+    size_t line_len;
+    int line_long;
+    char *input; /* console input not yet written */
+    size_t input_len;
+    size_t console_max;
+    uint64_t grace_us;
+    uint64_t kill_at; /* when the executor cancels QEMU; 0 for not due */
+    int cancelled;    /* the caller stopped the machine before its end */
+    int accel_wrong;  /* QMP reported another accelerator in use */
+    int qmp_lost;     /* QMP answered what the launcher cannot use */
+    int shutdown;     /* QMP reported SHUTDOWN */
+    int changed;      /* new console bytes or a new state since the last wait */
+    int finished, returned;
+    char accel_seen[16];
+    struct etude_machine_result r;
+};
+
+struct etude_qemu {
+    struct etude_exec *ex;
+    struct etude_machine *machines;
+};
+
+struct etude_qemu *etude_qemu_new(void)
+{
+    struct etude_qemu *q = calloc(1, sizeof(*q));
+
+    if (q == NULL)
+        return NULL;
+    q->ex = etude_exec_new();
+    if (q->ex == NULL) {
+        free(q);
+        return NULL;
+    }
+    return q;
+}
+
+/** Close descriptor `*fd` if it is open, and mark it closed. */
+static void close_fd(int *fd)
+{
+    if (*fd >= 0)
+        close(*fd);
+    *fd = -1;
+}
+
+/** Make descriptor `fd` nonblocking and closed on exec. */
+static void fd_flags(int fd)
+{
+    fcntl(fd, F_SETFD, FD_CLOEXEC);
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+}
+
+/** Listen on a new Unix socket at `path`, for one connection. */
+static int listen_at(const char *path)
+{
+    struct sockaddr_un a;
+    int fd, e;
+
+    memset(&a, 0, sizeof(a));
+    a.sun_family = AF_UNIX;
+    if (strlen(path) >= sizeof(a.sun_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    strcpy(a.sun_path, path);
+    fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+    fd_flags(fd);
+    if (bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 || listen(fd, 1) != 0) {
+        e = errno;
+        close(fd);
+        errno = e;
+        return -1;
+    }
+    return fd;
+}
+
+/** Remove the machine's sockets and its directory, and close what is open. */
+static void machine_close(struct etude_machine *m)
+{
+    close_fd(&m->console_listen);
+    close_fd(&m->qmp_listen);
+    close_fd(&m->console);
+    close_fd(&m->qmp);
+    close_fd(&m->console_file);
+    if (m->dir[0] != '\0') {
+        unlink(m->console_path);
+        unlink(m->qmp_path);
+        rmdir(m->dir);
+        m->dir[0] = '\0';
+    }
+}
+
+/** Free a machine and what it holds. */
+static void machine_release(struct etude_machine *m)
+{
+    machine_close(m);
+    if (m->proc != NULL)
+        etude_proc_free(m->proc);
+    capture_free(&m->r.console);
+    free(m->attempt_id);
+    free(m->line);
+    free(m->input);
+    free(m);
+}
+
+/** Make the machine's private directory and the paths of its sockets. */
+static int machine_dir(struct etude_machine *m)
+{
+    const char *tmp = getenv("TMPDIR");
+
+    if (tmp == NULL || tmp[0] != '/')
+        tmp = "/tmp";
+    if ((size_t)snprintf(m->dir, sizeof(m->dir), "%s/etude-qemu.XXXXXX", tmp) >= sizeof(m->dir)) {
+        m->dir[0] = '\0';
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    if (mkdtemp(m->dir) == NULL) {
+        m->dir[0] = '\0';
+        return -1;
+    }
+    snprintf(m->console_path, sizeof(m->console_path), "%s/c", m->dir);
+    snprintf(m->qmp_path, sizeof(m->qmp_path), "%s/q", m->dir);
+    return 0;
+}
+
+/** Make a machine with nothing open, for `spec`. */
+static struct etude_machine *machine_new(const struct etude_machine_spec *spec)
+{
+    struct etude_machine *m = calloc(1, sizeof(*m));
+
+    if (m == NULL)
+        return NULL;
+    m->console_listen = m->qmp_listen = m->console = m->qmp = m->console_file = -1;
+    m->accel = spec->site->accel;
+    m->console_max = spec->console_max;
+    m->grace_us = spec->grace_us;
+    m->attempt_id = malloc(strlen(spec->attempt_id) + 1);
+    m->line = malloc(QMP_LINE_MAX + 1);
+    if (m->attempt_id == NULL || m->line == NULL ||
+        capture_init(&m->r.console, spec->console_max) != 0) {
+        free(m->attempt_id);
+        free(m->line);
+        free(m);
+        return NULL;
+    }
+    strcpy(m->attempt_id, spec->attempt_id);
+    m->r.attempt_id = m->attempt_id;
+    m->r.state = ETUDE_MACHINE_STARTING;
+    m->r.end = ETUDE_END_LOST;
+    m->r.started_us = posix_now_us();
+    return m;
+}
+
+int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec,
+                     struct etude_machine **mp)
+{
+    struct etude_machine *m = machine_new(spec);
+    struct etude_exec_spec es;
+    struct etude_qemu_line line;
+    char *argv[ETUDE_QEMU_ARGS_MAX], *buf = NULL;
+    int e;
+
+    if (m == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    if (machine_dir(m) != 0)
+        goto fail;
+    buf = malloc(QEMU_LINE_BYTES);
+    if (buf == NULL) {
+        errno = ENOMEM;
+        goto fail;
+    }
+    line.argv = argv;
+    line.max = ETUDE_QEMU_ARGS_MAX;
+    line.buf = buf;
+    line.size = QEMU_LINE_BYTES;
+    e = etude_qemu_argv(spec->profile, spec->site, m->console_path, m->qmp_path, &line);
+    if (e != 0) {
+        errno = e;
+        goto fail;
+    }
+    if ((m->console_listen = listen_at(m->console_path)) < 0 ||
+        (m->qmp_listen = listen_at(m->qmp_path)) < 0)
+        goto fail;
+    if (spec->console_path != NULL &&
+        (m->console_file =
+             open(spec->console_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644)) < 0)
+        goto fail;
+    memset(&es, 0, sizeof(es));
+    es.attempt_id = spec->attempt_id;
+    es.argv = argv;
+    es.envp = spec->envp;
+    es.output_max = QEMU_OUTPUT_MAX;
+    es.grace_us = spec->grace_us;
+    es.reg = spec->reg;
+    es.reg_ctx = spec->reg_ctx;
+    if (etude_exec_start(q->ex, &es, &m->proc) != 0) {
+        m->proc = NULL;
+        goto fail;
+    }
+    free(buf);
+    m->r.qemu = etude_proc_result(m->proc);
+    m->q = q;
+    m->next = q->machines;
+    q->machines = m;
+    *mp = m;
+    return 0;
+fail:
+    e = errno;
+    free(buf);
+    if (m->console_file >= 0)
+        unlink(spec->console_path);
+    machine_release(m);
+    errno = e;
+    return -1;
+}
+
+/** Keep `n` console bytes in memory and in the console's file. */
+static void console_keep(struct etude_machine *m, const char *buf, size_t n)
+{
+    ssize_t w;
+    size_t done = 0;
+
+    capture_add(&m->r.console, m->console_max, buf, n);
+    m->changed = 1;
+    while (m->console_file >= 0 && done < n) {
+        w = write(m->console_file, buf + done, n - done);
+        if (w < 0 && errno == EINTR)
+            continue;
+        if (w <= 0) {
+            m->r.console_file_error = w < 0 ? errno : EIO;
+            close_fd(&m->console_file);
+            return;
+        }
+        done += (size_t)w;
+    }
+}
+
+/**
+ * Read what the console has written, until it would wait or ends, or after
+ * `limit` bytes, so that a console that never pauses leaves the other
+ * machines served; 0 sets no limit.
+ */
+static void console_read(struct etude_machine *m, size_t limit)
+{
+    char buf[4096];
+    size_t total = 0;
+    ssize_t n;
+
+    while (m->console >= 0 && (limit == 0 || total < limit)) {
+        n = read(m->console, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
+        if (n <= 0) {
+            close_fd(&m->console);
+            return;
+        }
+        console_keep(m, buf, (size_t)n);
+        total += (size_t)n;
+    }
+}
+
+/** Send QMP command `json`; a failed or short write makes QMP unusable. */
+static void qmp_send(struct etude_machine *m, const char *json, enum qmp_state next)
+{
+    size_t len = strlen(json);
+    ssize_t n;
+
+    if (m->qmp < 0)
+        return;
+    do {
+        n = write(m->qmp, json, len);
+    } while (n < 0 && errno == EINTR);
+    if (n != (ssize_t)len) {
+        m->qmp_state = QMP_GONE;
+        m->qmp_lost = 1;
+        return;
+    }
+    m->qmp_state = next;
+}
+
+/** Ask QEMU to quit, and arm the kill that follows if it does not. */
+static void machine_quit(struct etude_machine *m)
+{
+    if (m->qmp_state >= QMP_ACCEL && m->qmp_state <= QMP_READY)
+        qmp_send(m, "{\"execute\":\"quit\",\"id\":5}\n", QMP_QUIT);
+    if (m->qmp_state == QMP_QUIT) {
+        m->kill_at = posix_now_us() + m->grace_us;
+    } else {
+        m->kill_at = 0;
+        etude_exec_cancel(m->proc);
+    }
+}
+
+/**
+ * Take the accelerator QMP reported in use, `name`, or for a QEMU that
+ * reports only KVM, whether KVM is in use; start the machine when it is the
+ * one asked for, and quit QEMU otherwise.
+ */
+static void accel_seen(struct etude_machine *m, const char *name, const char *method)
+{
+    snprintf(m->accel_seen, sizeof(m->accel_seen), "%s", name);
+    m->r.accel = m->accel_seen;
+    m->r.method = method;
+    m->changed = 1;
+    if (strcmp(name, etude_accel_name(m->accel)) == 0) {
+        qmp_send(m, "{\"execute\":\"cont\",\"id\":4}\n", QMP_CONT);
+    } else {
+        m->accel_wrong = 1;
+        machine_quit(m);
+    }
+}
+
+/** Give up on a QMP that answered what the launcher cannot use. */
+static void qmp_unusable(struct etude_machine *m)
+{
+    m->qmp_lost = 1;
+    machine_quit(m);
+}
+
+/**
+ * Take query-accelerators' reply, `ret`, or for a QEMU without the command,
+ * its error, `cls`, and ask query-kvm.
+ */
+static void accel_reply(struct etude_machine *m, const struct eh_json *ret,
+                        const struct eh_json *cls)
+{
+    const struct eh_json *v = eh_json_get(ret, "enabled");
+
+    if (v != NULL && v->type == 's')
+        accel_seen(m, v->string, "query-accelerators");
+    else if (ret == NULL && cls != NULL && cls->type == 's' &&
+             strcmp(cls->string, "CommandNotFound") == 0)
+        qmp_send(m, "{\"execute\":\"query-kvm\",\"id\":3}\n", QMP_KVM);
+    else
+        qmp_unusable(m);
+}
+
+/** Take query-kvm's reply, `ret`, which says only whether KVM is in use. */
+static void kvm_reply(struct etude_machine *m, const struct eh_json *ret)
+{
+    const struct eh_json *v = eh_json_get(ret, "enabled");
+
+    if (v == NULL || (v->type != 't' && v->type != 'f'))
+        qmp_unusable(m);
+    else if (v->type == 't')
+        accel_seen(m, "kvm", "query-kvm");
+    else if (m->accel == ETUDE_ACCEL_KVM)
+        accel_seen(m, "not kvm", "query-kvm");
+    else
+        accel_seen(m, etude_accel_name(m->accel), "query-kvm");
+}
+
+/** Act on the reply to the launcher's command `id`. */
+static void qmp_reply(struct etude_machine *m, long id, const struct eh_json *ret,
+                      const struct eh_json *error)
+{
+    if (m->qmp_state == QMP_CAPS && id == ID_CAPS && ret != NULL) {
+        qmp_send(m, "{\"execute\":\"query-accelerators\",\"id\":2}\n", QMP_ACCEL);
+    } else if (m->qmp_state == QMP_ACCEL && id == ID_ACCEL) {
+        accel_reply(m, ret, eh_json_get(error, "class"));
+    } else if (m->qmp_state == QMP_KVM && id == ID_KVM && ret != NULL) {
+        kvm_reply(m, ret);
+    } else if (m->qmp_state == QMP_CONT && id == ID_CONT && ret != NULL) {
+        m->qmp_state = QMP_READY;
+        m->r.state = ETUDE_MACHINE_RUNNING;
+        m->r.running_us = posix_now_us();
+        m->changed = 1;
+    } else if (id != ID_QUIT && m->qmp_state != QMP_QUIT) {
+        qmp_unusable(m);
+    }
+}
+
+/**
+ * Act on QMP's event `ev`: only SHUTDOWN tells the launcher anything. The
+ * console is read first, so that the offset of the end counts every byte
+ * QEMU wrote before it sent the event.
+ */
+static void qmp_event(struct etude_machine *m, const struct eh_json *ev)
+{
+    const struct eh_json *name = eh_json_get(ev, "event");
+    const struct eh_json *data = eh_json_get(ev, "data");
+    const struct eh_json *reason = eh_json_get(data, "reason");
+    const struct eh_json *guest = eh_json_get(data, "guest");
+
+    if (name == NULL || name->type != 's' || strcmp(name->string, "SHUTDOWN") != 0 || m->shutdown)
+        return;
+    m->shutdown = 1;
+    m->changed = 1;
+    console_read(m, 0);
+    m->r.end_console = m->r.console.total;
+    m->r.ended_us = posix_now_us();
+    m->r.by_guest = guest != NULL && guest->type == 't';
+    if (reason != NULL && reason->type == 's')
+        snprintf(m->r.reason, sizeof(m->r.reason), "%s", reason->string);
+}
+
+/** Act on one whole line of QMP's. */
+static void qmp_line(struct etude_machine *m, char *text)
+{
+    struct eh_json *j;
+    const struct eh_json *id;
+    size_t len = strlen(text);
+
+    if (len > 0 && text[len - 1] == '\r')
+        text[len - 1] = '\0';
+    if (text[0] == '\0')
+        return;
+    j = eh_json_parse(text);
+    if (j == NULL || j->type != 'o') {
+        m->r.qmp_bad++;
+        eh_json_free(j);
+        return;
+    }
+    if (eh_json_get(j, "QMP") != NULL) {
+        if (m->qmp_state == QMP_GREETING)
+            qmp_send(m, "{\"execute\":\"qmp_capabilities\",\"id\":1}\n", QMP_CAPS);
+    } else if (eh_json_get(j, "event") != NULL) {
+        qmp_event(m, j);
+    } else if (eh_json_get(j, "return") != NULL || eh_json_get(j, "error") != NULL) {
+        id = eh_json_get(j, "id");
+        qmp_reply(m, id != NULL && id->type == 'n' ? (long)id->number : -1,
+                  eh_json_get(j, "return"), eh_json_get(j, "error"));
+    } else {
+        m->r.qmp_bad++;
+    }
+    eh_json_free(j);
+}
+
+/** Read what QMP has sent, a line at a time, until it would wait or ends. */
+static void qmp_read(struct etude_machine *m)
+{
+    char buf[4096];
+    ssize_t n, i;
+
+    while (m->qmp >= 0) {
+        n = read(m->qmp, buf, sizeof(buf));
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
+        if (n <= 0) {
+            close_fd(&m->qmp);
+            if (m->qmp_state != QMP_QUIT)
+                m->qmp_state = QMP_GONE;
+            return;
+        }
+        for (i = 0; i < n; i++) {
+            if (buf[i] != '\n') {
+                if (m->line_len < QMP_LINE_MAX)
+                    m->line[m->line_len++] = buf[i];
+                else
+                    m->line_long = 1;
+                continue;
+            }
+            m->line[m->line_len] = '\0';
+            if (m->line_long)
+                m->r.qmp_bad++;
+            else
+                qmp_line(m, m->line);
+            m->line_len = 0;
+            m->line_long = 0;
+        }
+    }
+}
+
+/** Write what the console's input still has, as far as the socket takes. */
+static void console_write(struct etude_machine *m)
+{
+    ssize_t n;
+
+    while (m->console >= 0 && m->input_len > 0) {
+        n = write(m->console, m->input, m->input_len);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0)
+            return;
+        memmove(m->input, m->input + n, m->input_len - (size_t)n);
+        m->input_len -= (size_t)n;
+    }
+}
+
+/** Take QEMU's connection to listening socket `*listener`, and remove it. */
+static void take_connection(int *listener, int *conn, const char *path)
+{
+    int fd;
+
+    if (*listener < 0)
+        return;
+    fd = accept(*listener, NULL, NULL);
+    if (fd < 0)
+        return;
+    fd_flags(fd);
+    *conn = fd;
+    close_fd(listener);
+    unlink(path);
+}
+
+/** Give the end of a machine whose QEMU has ended. */
+static enum etude_end machine_end(const struct etude_machine *m)
+{
+    const struct etude_exec_result *qemu = m->r.qemu;
+
+    if (m->accel_wrong)
+        return ETUDE_END_ACCEL_FAILED;
+    if (m->cancelled)
+        return ETUDE_END_STOPPED;
+    if (m->shutdown && m->r.by_guest) {
+        if (strcmp(m->r.reason, "guest-shutdown") == 0)
+            return ETUDE_END_SHUTDOWN;
+        if (strcmp(m->r.reason, "guest-reset") == 0)
+            return ETUDE_END_RESET;
+        if (strcmp(m->r.reason, "guest-panic") == 0)
+            return ETUDE_END_PANIC;
+    }
+    if (m->shutdown)
+        return ETUDE_END_QEMU_EXITED;
+    if (m->qmp_lost || qemu->end == ETUDE_END_LOST)
+        return ETUDE_END_LOST;
+    if (m->r.state == ETUDE_MACHINE_STARTING && etude_qemu_accel_refused(qemu->err.data, m->accel))
+        return ETUDE_END_ACCEL_FAILED;
+    return ETUDE_END_QEMU_EXITED;
+}
+
+/**
+ * Serve one machine: take QEMU's connections, read the console and QMP,
+ * write the console's input, cancel QEMU when its quit is overdue, and
+ * finish the machine once QEMU has ended.
+ */
+static void machine_serve(struct etude_machine *m)
+{
+    if (m->finished)
+        return;
+    take_connection(&m->console_listen, &m->console, m->console_path);
+    take_connection(&m->qmp_listen, &m->qmp, m->qmp_path);
+    console_read(m, CONSOLE_PASS_MAX);
+    console_write(m);
+    qmp_read(m);
+    if (m->kill_at != 0 && posix_now_us() >= m->kill_at && !m->proc_done) {
+        m->kill_at = 0;
+        etude_exec_cancel(m->proc);
+    }
+    if (!m->proc_done)
+        return;
+    console_read(m, 0);
+    qmp_read(m);
+    m->r.end = machine_end(m);
+    if (!m->shutdown || m->r.end == ETUDE_END_STOPPED || m->r.end == ETUDE_END_ACCEL_FAILED) {
+        m->r.end_console = m->r.console.total;
+        m->r.ended_us = posix_now_us();
+    }
+    m->r.state = ETUDE_MACHINE_ENDED;
+    machine_close(m);
+    m->finished = 1;
+    m->changed = 1;
+}
+
+/** Give a finished machine not yet returned, marking it returned. */
+static struct etude_machine *take_finished(struct etude_qemu *q)
+{
+    struct etude_machine *m;
+
+    for (m = q->machines; m != NULL; m = m->next) {
+        if (m->finished && !m->returned) {
+            m->returned = 1;
+            return m;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Fill `w` with the descriptors of every unfinished machine, and give their
+ * count and in `*soonest` the earliest kill that is due, or 0.
+ */
+static size_t watch_set(struct etude_qemu *q, struct etude_watch *w, uint64_t *soonest)
+{
+    struct etude_machine *m;
+    size_t n = 0;
+
+    *soonest = 0;
+    for (m = q->machines; m != NULL; m = m->next) {
+        if (m->finished)
+            continue;
+        if (m->kill_at != 0 && (*soonest == 0 || m->kill_at < *soonest))
+            *soonest = m->kill_at;
+        if (m->console_listen >= 0) {
+            w[n].fd = m->console_listen;
+            w[n++].events = ETUDE_WATCH_IN;
+        }
+        if (m->qmp_listen >= 0) {
+            w[n].fd = m->qmp_listen;
+            w[n++].events = ETUDE_WATCH_IN;
+        }
+        if (m->console >= 0) {
+            w[n].fd = m->console;
+            w[n++].events = ETUDE_WATCH_IN | (m->input_len > 0 ? ETUDE_WATCH_OUT : 0);
+        }
+        if (m->qmp >= 0) {
+            w[n].fd = m->qmp;
+            w[n++].events = ETUDE_WATCH_IN;
+        }
+    }
+    return n;
+}
+
+/** Count the machines that have not finished. */
+static size_t unfinished(const struct etude_qemu *q)
+{
+    const struct etude_machine *m;
+    size_t n = 0;
+
+    for (m = q->machines; m != NULL; m = m->next)
+        n += !m->finished;
+    return n;
+}
+
+/** Say whether any machine changed since the last wait, and clear the marks. */
+static int take_changes(struct etude_qemu *q)
+{
+    struct etude_machine *m;
+    int changed = 0;
+
+    for (m = q->machines; m != NULL; m = m->next) {
+        changed |= m->changed;
+        m->changed = 0;
+    }
+    return changed;
+}
+
+/** Give the milliseconds to wait from `now` until `until`, or -1 at 0. */
+static int wait_for(uint64_t until, uint64_t now)
+{
+    if (until == 0)
+        return -1;
+    if (until <= now)
+        return 0;
+    if (until - now > 60000000u)
+        return 60000;
+    return (int)((until - now + 999) / 1000);
+}
+
+struct etude_machine *etude_qemu_wait(struct etude_qemu *q, int timeout_ms)
+{
+    uint64_t now, soonest,
+        until = timeout_ms < 0 ? 0 : posix_now_us() + (uint64_t)timeout_ms * 1000u;
+    struct etude_machine *m, *done;
+    struct etude_watch *w;
+    struct etude_proc *p;
+    int polled = 0;
+    size_t n;
+
+    for (;;) {
+        done = take_finished(q);
+        if (done != NULL || take_changes(q) || unfinished(q) == 0)
+            return done;
+        now = posix_now_us();
+        if (polled && timeout_ms >= 0 && now >= until)
+            return NULL;
+        w = malloc((4 * unfinished(q) + 1) * sizeof(*w));
+        if (w == NULL)
+            return NULL;
+        n = watch_set(q, w, &soonest);
+        if (timeout_ms >= 0 && (soonest == 0 || until < soonest))
+            soonest = until;
+        p = etude_exec_watch(q->ex, wait_for(soonest, now), w, n);
+        free(w);
+        polled = 1;
+        for (m = q->machines; p != NULL && m != NULL; m = m->next)
+            if (m->proc == p)
+                m->proc_done = 1;
+        for (m = q->machines; m != NULL; m = m->next)
+            machine_serve(m);
+    }
+}
+
+int etude_machine_type(struct etude_machine *m, const char *text, size_t n)
+{
+    char *grown;
+
+    if (m->finished || (m->console < 0 && m->console_listen < 0)) {
+        errno = EPIPE;
+        return -1;
+    }
+    grown = realloc(m->input, m->input_len + n + 1);
+    if (grown == NULL)
+        return -1;
+    m->input = grown;
+    memcpy(m->input + m->input_len, text, n);
+    m->input_len += n;
+    console_write(m);
+    return 0;
+}
+
+void etude_machine_cancel(struct etude_machine *m)
+{
+    if (m->finished || m->cancelled || m->shutdown || m->proc_done)
+        return;
+    m->cancelled = 1;
+    machine_quit(m);
+}
+
+const struct etude_machine_result *etude_machine_result(const struct etude_machine *m)
+{
+    return &m->r;
+}
+
+void etude_machine_free(struct etude_machine *m)
+{
+    struct etude_machine **mp;
+
+    for (mp = &m->q->machines; *mp != NULL; mp = &(*mp)->next) {
+        if (*mp == m) {
+            *mp = m->next;
+            break;
+        }
+    }
+    machine_release(m);
+}
+
+void etude_qemu_free(struct etude_qemu *q)
+{
+    struct etude_machine *m;
+
+    for (m = q->machines; m != NULL; m = m->next)
+        etude_machine_cancel(m);
+    while (unfinished(q) > 0)
+        etude_qemu_wait(q, -1);
+    while (q->machines != NULL)
+        etude_machine_free(q->machines);
+    etude_exec_free(q->ex);
+    free(q);
+}

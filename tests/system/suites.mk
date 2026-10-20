@@ -2092,15 +2092,19 @@ run-style:
 # musl crypt in its host-deps, and that source exists only once the tarball is
 # extracted.
 # `tests/run host`: the host tests, kernel code compiled and run natively
-# under the sanitizers, and the fuzz corpora replayed through their harnesses.
+# under the sanitizers, etude's QEMU launcher booting the kernel, and the fuzz
+# corpora replayed through their harnesses.
 # The e2fsprogs stamp is a dependency because two host tests compile the port's
 # own `unix_io.c` out of the extracted tree: without it they build against
 # whatever that tree last held, or fail to build at all in a fresh checkout.
 # The KRFFS stager is one because mkext2_overlay_test.sh makes its volumes
-# with tools/image/mkext2.sh, which stages each manifest with it.
-run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) build/krffs/stageimage.krffs
+# with tools/image/mkext2.sh, which stages each manifest with it. The kernel
+# and the test image of ARCH are because etude_qemu_hosttest boots them under
+# QEMU through etude's launcher.
+run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) build/krffs/stageimage.krffs rach2 \
+          test-image
 	@sh tests/system/machine_measure_test.sh
-	@./tests/system/suites/host.sh
+	@ARCH=$(ARCH) ./tests/system/suites/host.sh
 
 # `tests/run runner`: the harness's selftest, then the runner's own, tests/run
 # driven against a registry and a makefile of its own in a temporary

@@ -462,28 +462,63 @@ static size_t unfinished(const struct etude_exec *ex)
     return n;
 }
 
+/**
+ * Copy into `w` what poll found of the caller's descriptors, at `fds`.
+ *
+ * @return the count of them that are ready.
+ */
+static size_t watch_found(struct etude_watch *w, const struct pollfd *fds, size_t n)
+{
+    size_t i, ready = 0;
+
+    for (i = 0; i < n; i++) {
+        w[i].revents = ((fds[i].revents & POLLIN) ? ETUDE_WATCH_IN : 0) |
+                       ((fds[i].revents & POLLOUT) ? ETUDE_WATCH_OUT : 0) |
+                       ((fds[i].revents & (POLLHUP | POLLERR | POLLNVAL)) ? ETUDE_WATCH_END : 0);
+        ready += w[i].revents != 0;
+    }
+    return ready;
+}
+
 struct etude_proc *etude_exec_wait(struct etude_exec *ex, int timeout_ms)
+{
+    return etude_exec_watch(ex, timeout_ms, NULL, 0);
+}
+
+struct etude_proc *etude_exec_watch(struct etude_exec *ex, int timeout_ms, struct etude_watch *w,
+                                    size_t nw)
 {
     uint64_t until = timeout_ms < 0 ? 0 : posix_now_us() + (uint64_t)timeout_ms * 1000u;
     struct etude_proc *done;
     struct pollfd *fds;
     uint64_t soonest;
-    size_t n, output = 0;
+    size_t i, n, output = 0, ready = 0;
+    int polled = 0;
 
+    for (i = 0; i < nw; i++)
+        w[i].revents = 0;
     for (;;) {
         done = take_finished(ex);
-        if (done != NULL || unfinished(ex) == 0 || output)
+        if (done != NULL || output || ready || (unfinished(ex) == 0 && nw == 0))
             return done;
-        if (timeout_ms >= 0 && posix_now_us() >= until)
+        if (polled && timeout_ms >= 0 && posix_now_us() >= until)
             return NULL;
-        fds = malloc(3 * unfinished(ex) * sizeof(*fds));
+        fds = malloc((3 * unfinished(ex) + nw + 1) * sizeof(*fds));
         if (fds == NULL)
             return NULL;
         n = poll_set(ex, fds, &soonest);
+        for (i = 0; i < nw; i++) {
+            fds[n + i].fd = w[i].fd;
+            fds[n + i].events = (short)(((w[i].events & ETUDE_WATCH_IN) ? POLLIN : 0) |
+                                        ((w[i].events & ETUDE_WATCH_OUT) ? POLLOUT : 0));
+            fds[n + i].revents = 0;
+        }
         if (timeout_ms >= 0 && (soonest == 0 || until < soonest))
             soonest = until;
-        poll(fds, (nfds_t)n, poll_timeout(soonest));
+        if (poll(fds, (nfds_t)(n + nw), poll_timeout(soonest)) > 0)
+            ready = watch_found(w, fds + n, nw);
         free(fds);
+        polled = 1;
         output = serve(ex);
     }
 }

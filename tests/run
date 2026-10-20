@@ -1142,8 +1142,8 @@ host_lock() { # host_lock NAME...
 # The block of host ports the run's machines forward, claimed last, after
 # every check that can refuse the run and after the tree is taken, and only
 # when a suite named boots a machine: one whose tools name QEMU. `inventory`,
-# a refused command and a set of suites that boot nothing, such as `style`,
-# `host` and `runner`, claim nothing. Every tree on the host, in every
+# a refused command and a set of suites that boot nothing, such as `style`
+# and `runner`, claim nothing. Every tree on the host, in every
 # account, claims a block from the same lock files in /tmp, so two trees
 # never forward the same port; the helper holds the lock through exec for as
 # long as this process lives and sets RACH2_PORT_OFFSET, which
@@ -1187,7 +1187,8 @@ fi
 # Both emulators have a shim, qemu-system-i386 and qemu-system-x86_64, so a
 # machine of either architecture, and the x86-64 machines an i686 suite boots
 # for UEFI, are in the ledger and on the accelerator alike; each shim also
-# gives its machine RACH2_CPUS processors.
+# gives its machine RACH2_CPUS processors. RACH2_QEMU_SHIMS names their
+# directory, for a test that must give the real QEMU an accelerator itself.
 for qemu in qemu-system-i386 qemu-system-x86_64; do
     real=$(command -v "$qemu" 2>/dev/null || true)
     [ -n "$real" ] || continue
@@ -1202,7 +1203,7 @@ QEMU
     chmod +x "$WORK/bin/$qemu"
 done
 export RACH2_QEMU_ACCEL
-[ ! -d "$WORK/bin" ] || { PATH="$WORK/bin:$PATH"; export PATH; }
+[ ! -d "$WORK/bin" ] || { PATH="$WORK/bin:$PATH"; RACH2_QEMU_SHIMS=$WORK/bin; export PATH RACH2_QEMU_SHIMS; }
 
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
