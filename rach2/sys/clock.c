@@ -11,6 +11,7 @@
 
 #include "arch/arch.h"
 #include "lib/kirq.h"
+#include "lib/spinlock.h"
 #include "proc/smp.h"
 
 /* The uptime the timer handler keeps (kernel.c). */
@@ -129,6 +130,8 @@ static int64_t rtc_step_seconds;
 static int32_t rtc_step_nanoseconds;
 static int64_t rtc_last_seconds;
 static int64_t rtc_last_nanoseconds;
+/* Protect the clock's step and real-time floor across processors. */
+static struct spinlock rtc_realtime_lock;
 
 void rtc_anchor(int64_t seconds, uint32_t uptime)
 {
@@ -195,13 +198,18 @@ int rtc_is_anchored(void)
  */
 int64_t rtc_boot_epoch(void)
 {
-    if (!rtc_anchored) {
-        return rtc_step_seconds;
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+    int64_t seconds = rtc_step_seconds;
+
+    if (rtc_anchored) {
+        seconds += rtc_anchor_seconds - (int64_t)rtc_anchor_uptime;
     }
-    return rtc_anchor_seconds - (int64_t)rtc_anchor_uptime + rtc_step_seconds;
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+    return seconds;
 }
 
-/** Add the clock's step to a time the anchor keeps. */
+/** Add the clock's step to a time the anchor keeps, with the real-time lock
+ * held. */
 static void rtc_add_step(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds += rtc_step_seconds;
@@ -279,7 +287,7 @@ static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
 
     rtc_kept_time(seconds, nanoseconds);
     rtc_add_step(seconds, nanoseconds);
@@ -290,12 +298,13 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     }
     rtc_last_seconds = *seconds;
     rtc_last_nanoseconds = *nanoseconds;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
 /* The last reading of time since boot, which no later one is earlier than. */
 static int64_t rtc_mono_seconds;
 static int64_t rtc_mono_nanoseconds;
+static struct spinlock rtc_mono_lock;
 
 /** The floor is `rtc_realtime`'s, for the same reasons, kept apart from it
  * since setting the clock moves that one and not this. */
@@ -307,6 +316,7 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     rtc_since_boot(&uptime, &ticks, &phase_ns);
     *seconds = uptime;
     *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
+    spin_lock(&rtc_mono_lock);
     if (*seconds < rtc_mono_seconds ||
         (*seconds == rtc_mono_seconds && *nanoseconds < rtc_mono_nanoseconds)) {
         *seconds = rtc_mono_seconds;
@@ -314,19 +324,20 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     }
     rtc_mono_seconds = *seconds;
     rtc_mono_nanoseconds = *nanoseconds;
+    spin_unlock(&rtc_mono_lock);
     kirq_restore(flags);
 }
 
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
     uint32_t uptime, ticks, total;
 
     tick_now(&uptime, &ticks, &total);
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
                          nanoseconds);
     rtc_add_step(seconds, nanoseconds);
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
 /**
@@ -341,7 +352,7 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
 {
     int64_t kept_seconds;
     int64_t kept_nanoseconds;
-    uint32_t flags = kirq_save();
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
 
     rtc_kept_time(&kept_seconds, &kept_nanoseconds);
     while (kept_nanoseconds >= 1000000000) {
@@ -356,5 +367,5 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
     }
     rtc_last_seconds = seconds;
     rtc_last_nanoseconds = nanoseconds;
-    kirq_restore(flags);
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
