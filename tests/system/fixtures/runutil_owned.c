@@ -71,7 +71,8 @@ static void worker(const char *path, unsigned int limit, int seconds, int term_e
  * `runutil_owned CASE PIDFILE` starts a worker in the place CASE names and
  * returns once its PID file is written.
  *
- * `sentinel` is a worker itself, for 300 seconds. Otherwise a child becomes
+ * `sentinel` is a worker itself, for 1800 seconds, longer than the cases of
+ * every phase of `--mutate` take together. Otherwise a child becomes
  * the worker: in a group of its own for `group` and `recorded`, in this
  * process's group for `ingroup`, `draining` and `stubborn`, and in a session
  * of its own for the rest, where for `session` the child that made the
@@ -91,7 +92,7 @@ int main(int argc, char **argv)
     if (argc != 3)
         return 125;
     if (!strcmp(argv[1], "sentinel"))
-        worker(argv[2], 300, 0, 0);
+        worker(argv[2], 1800, 0, 0);
     pid = fork();
     if (pid < 0)
         return 125;
