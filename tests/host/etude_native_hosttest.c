@@ -28,9 +28,10 @@
  * its etude-guest still running the build, must be taken over by the next
  * connection's etude-guest, which ends the first and reports the build
  * stopped; and an etude-guest killed during the build must leave the build's
- * end recorded as lost. In every row the cleanup is confirmed where the
- * etude-guest that ran the build recorded it, and no process of the case,
- * of etude-guest or of the transport is left once etude-native has ended.
+ * end recorded as lost, with its cleanup confirmed by the next etude-guest
+ * once the build's processes have ended. In every row the cleanup is
+ * confirmed, and no process of the case, of etude-guest or of the transport
+ * is left once etude-native has ended.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -548,6 +549,8 @@ static void check_kill(const struct outcome *o)
     CHECK(o->status == 4 && says(o, "result: incomplete: case tccbuild.loop") &&
               says(o, ": its end was lost with its etude-guest;") && says(o, "reconnections 1"),
           "a build whose etude-guest was killed has its end recorded as lost");
+    CHECK(says(o, "cleanup confirmed, reconnections 1"),
+          "the next etude-guest confirms the cleanup once the build's processes have ended");
 }
 
 static void test_rows(void)

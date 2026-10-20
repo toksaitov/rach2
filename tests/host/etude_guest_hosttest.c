@@ -922,7 +922,8 @@ static void check_interruptions(void)
 }
 
 /** A killed etude-guest records no end: the next one kills the attempt and
- * settles it as lost, its sizes and usage unknown. */
+ * settles it as lost, its sizes and usage unknown, and its cleanup confirmed
+ * once the attempt's processes have ended. */
 static void check_orphan(void)
 {
     struct got g;
@@ -943,6 +944,8 @@ static void check_orphan(void)
     hello(ETUDE_FRAME_STDIO_MAX);
     send_cmd(ETUDE_CMD_STATUS, new_cmd(c2), "00000000000000d4", (char *)NULL);
     CHECK(expect(&g, ETUDE_EV_STATE, 5000) == 0, "status answers for an orphaned attempt");
+    CHECK(strcmp(g.field[2], "cleaned") == 0,
+          "an orphaned attempt whose processes have ended is cleaned");
     CHECK(expect(&g, ETUDE_EV_EXIT, 5000) == 0 && g.nfields == 4 &&
               strcmp(g.field[2], "lost") == 0 && unknown(g.field + 3, 1),
           "an orphaned attempt's end is lost");
@@ -953,7 +956,8 @@ static void check_orphan(void)
           "an orphaned attempt's streams are unknown");
     CHECK(expect(&g, ETUDE_EV_USAGE, 5000) == 0 && g.nfields == 6 && unknown(g.field + 2, 4),
           "an orphaned attempt's usage is unknown");
-    CHECK(expect(&g, ETUDE_EV_CLEANED, 5000) == 0, "and its cleanup follows");
+    CHECK(expect(&g, ETUDE_EV_CLEANED, 5000) == 0 && strcmp(g.field[2], "confirmed") == 0,
+          "an orphaned attempt's cleanup is confirmed once its processes have ended");
     CHECK(all_gone(open_end, 2000), "the next etude-guest ends an orphaned attempt's processes");
     bye(0);
 }

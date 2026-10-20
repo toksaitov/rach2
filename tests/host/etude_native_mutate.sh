@@ -9,11 +9,12 @@
 # tree's sources are not changed. The faults: etude-guest gives its alive
 # frame over standard I/O no SEQ of the connection's (seq), opens a session
 # without its lock (lock), waits for the lock without ending the etude-guest
-# that holds it (supersede), and settles a killed etude-guest's attempt
-# without adding its end to the run's record (settle); the controller does
-# not say that it cancelled the attempt (cancelled); and etude-native takes
-# an attempt stopped by a lost connection as stopped at its deadline
-# (reconnect) and keeps a passing build's workspace (remove).
+# that holds it (supersede), settles a killed etude-guest's attempt without
+# adding its end to the run's record (settle), and judges the attempt's
+# group at once after SIGKILL (immediate); the controller does not say that
+# it cancelled the attempt (cancelled); and etude-native takes an attempt
+# stopped by a lost connection as stopped at its deadline (reconnect) and
+# keeps a passing build's workspace (remove).
 #
 # Usage: sh tests/host/etude_native_mutate.sh [--texts]
 set -eu
@@ -36,6 +37,9 @@ faults = {
     'lock': ('        if (lock_session() < 0) {', '        if (0 && lock_session() < 0) {'),
     'supersede': ('            kill((pid_t)pid, SIGTERM);\n', ''),
     'settle': ('            cmd_append(cmd, p + 1);\n', ''),
+    'immediate': ('    gone = child <= 0 || group_ended((pid_t)child, killed ? SETTLE_US : 0);\n',
+                  '    gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);\n'
+                  '    (void)killed;\n    (void)group_ended;\n'),
     'cancelled': ('    c->res->cancelled = 1;\n', ''),
     'reconnect': ('        if (res->reconnects > 0) {', '        if (0) {'),
     'remove': ('    if (code == EXIT_PASS && !o->keep) {', '    if (0) {'),
@@ -54,6 +58,7 @@ faults='seq|tools/etude/guest/guest.c|a build that passes passes with its output
 lock|tools/etude/guest/guest.c|a connection held open on the machine'"'"'s side is taken over by the next
 supersede|tools/etude/guest/guest.c|a connection held open on the machine'"'"'s side is taken over by the next
 settle|tools/etude/guest/guest.c|a build whose etude-guest was killed has its end recorded as lost
+immediate|tools/etude/guest/guest.c|the next etude-guest confirms the cleanup once the build'"'"'s processes have ended
 cancelled|tools/etude/posix/remote.c|a build cancelled at the controller'"'"'s deadline is cancelled
 reconnect|tools/etude/posix/etude_native.c|a build whose connection is cut is reported stopped after a new connection
 remove|tools/etude/posix/etude_native.c|a passing build'"'"'s workspace is removed'
@@ -143,4 +148,4 @@ while IFS='|' read -r name file check; do
     cp "$file" "$work/tree/$file"
 done < "$work/faults"
 run_phase restored 0
-echo 'etude-native-mutation: result: pass: seven faults caught and the copy restored'
+echo 'etude-native-mutation: result: pass: eight faults caught and the copy restored'

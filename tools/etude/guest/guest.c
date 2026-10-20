@@ -56,6 +56,10 @@
  * when its grace period is shorter. */
 #define DRAIN_US 2000000
 
+/* How long the processes of an orphaned attempt may take to end once they
+ * are killed, before its cleanup is recorded as unconfirmed. */
+#define SETTLE_US 2000000
+
 /* The methods of usage's measurements: the processor time and the largest
  * resident size that wait4 gives for the child and the descendants it
  * reaped, each a lower bound of the attempt's. */
@@ -1966,11 +1970,72 @@ static void do_cancel(const struct wire_frame *f, const char *text)
 }
 
 /**
+ * Whether each process left in group `pgid` is a zombie, as /proc shows:
+ * one that has ended and waits only for its parent to reap it, perhaps this
+ * process as the boot's init. Without /proc, or when /proc shows no process
+ * of the group, the group has ended only when kill(2) finds none in it.
+ */
+static int only_zombies(pid_t pgid)
+{
+    static char buf[1024];
+    char path[64];
+    struct dirent *e;
+    const char *p;
+    size_t n;
+    long group;
+    char state;
+    int zombies = 0;
+    int live = 0;
+    DIR *d = opendir("/proc");
+
+    if (!d)
+        return 0;
+    while (!live && (e = readdir(d)) != NULL) {
+        n = strlen(e->d_name);
+        if (n == 0 || n > 20 || strspn(e->d_name, "0123456789") != n)
+            continue;
+        snprintf(path, sizeof(path), "/proc/%.20s/stat", e->d_name);
+        /* After the command's ')' come the state, parent and group. */
+        if (read_file(path, buf, sizeof(buf)) <= 0 || !(p = strrchr(buf, ')')) ||
+            sscanf(p + 1, " %c %*d %ld", &state, &group) != 2 || group != (long)pgid)
+            continue;
+        if (state == 'Z' || state == 'X')
+            zombies++;
+        else
+            live = 1;
+    }
+    closedir(d);
+    return !live && (zombies > 0 || (kill(-pgid, 0) < 0 && errno == ESRCH));
+}
+
+/**
+ * Whether process group `pgid` ends within `bound_us` microseconds: kill(2)
+ * finds no process in it, or each one left is a zombie. It is looked at
+ * every 10 ms until it has ended or the bound has passed.
+ */
+static int group_ended(pid_t pgid, int64_t bound_us)
+{
+    int64_t until = now_us() + bound_us;
+    struct timespec ts;
+
+    for (;;) {
+        if ((kill(-pgid, 0) < 0 && errno == ESRCH) || only_zombies(pgid))
+            return 1;
+        if (now_us() >= until)
+            return 0;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 10000000;
+        nanosleep(&ts, NULL);
+    }
+}
+
+/**
  * Settle the record of an attempt whose owner is gone without writing its
  * end, as when an etude-guest was killed: its child, when it is still the
  * process the record names, is killed with its group, and the attempt is
  * recorded as lost, since neither its end nor its output's sizes were seen.
- * `record` is given the settled record's text.
+ * Its cleanup is confirmed once the group has ended, which a killed group
+ * is given SETTLE_US to do. `record` is given the settled record's text.
  *
  * @return 1 when the record was settled, 0 when it needed nothing.
  */
@@ -1986,6 +2051,7 @@ static int settle_orphan(const char *token, char *record)
     char finals[5 * LINE_CAP];
     char path[PATH_CAP];
     char text[4096];
+    int killed;
     int gone;
 
     if (sscanf(record, "cmd %23s\nsession %16s\nowner %ld %llu\nchild %ld %llu", cmd, sess, &owner,
@@ -1995,9 +2061,9 @@ static int settle_orphan(const char *token, char *record)
     if (!p || (strncmp(p + 7, "running", 7) != 0 && strncmp(p + 7, "preparing", 9) != 0) ||
         same_process((pid_t)owner, owner_start))
         return 0;
-    if (child > 0 && same_process((pid_t)child, child_start))
-        kill(-(pid_t)child, SIGKILL);
-    gone = child <= 0 || (kill(-(pid_t)child, 0) < 0 && errno == ESRCH);
+    killed =
+        child > 0 && same_process((pid_t)child, child_start) && kill(-(pid_t)child, SIGKILL) == 0;
+    gone = child <= 0 || group_ended((pid_t)child, killed ? SETTLE_US : 0);
     if (path_of(path, "%s/a/%s", opt.state, token) < 0 || fixture_settle(path) < 0)
         gone = 0;
     snprintf(finals, sizeof(finals),
