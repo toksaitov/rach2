@@ -104,6 +104,7 @@ static void nap(long ms)
 
     req.tv_sec = 0;
     req.tv_nsec = ms * 1000000L;
+    /* interval: naps between looks; the parent's are the sleep tested */
     syscall2(SYS_NANOSLEEP, (long)&req, 0);
 }
 
