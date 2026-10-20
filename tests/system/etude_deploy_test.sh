@@ -237,6 +237,8 @@ case $(uname -s) in
         accels=tcg
         [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ] || accels='kvm tcg' ;;
 esac
+windows_memory=$(sed -n 's/^MemTotal: *\([0-9][0-9]*\) kB$/\1/p' /proc/meminfo 2>/dev/null)
+if [ -n "$windows_memory" ]; then windows_memory=$((windows_memory * 1024)); else windows_memory=-; fi
 
 # fault NAME: put fault NAME into the private copy, or the original for
 # `none`, and fail when a fault leaves the copy unchanged.
@@ -335,7 +337,7 @@ incomplete()
     esac
 }
 
-# record FILE LEDGER [HOST PLATFORM QEMU ACCELERATORS]: require FILE to be
+# record FILE LEDGER [HOST PLATFORM QEMU ACCELERATORS MEMORY]: require FILE to be
 # the record of version key in dir with the ledger LEDGER, of this machine
 # unless the rest is given.
 record()
@@ -345,7 +347,7 @@ record()
         echo "host ${3:-$(uname -n)}"
         echo "platform ${4:-$platform}"
         echo "cpus $cpus"
-        echo "memory_bytes $memory"
+        echo "memory_bytes ${7:-$memory}"
         echo "qemu ${5:-QEMU emulator version 9.9.9 (fixture)}"
         echo "accelerators ${6:-$accels}"
         echo 'admission etude-ledger 1'
@@ -618,7 +620,7 @@ row()
                 *) why "$dir is not a build of the cache"; return 1 ;;
             esac
             record "$FIX/appdata/etude-state/machine" "$FIX/appdata/etude-state/ledger" winbox \
-                'windows x86_64' 'QEMU emulator version 9.9.8 (windows fixture)' 'whpx tcg' ;;
+                'windows x86_64' 'QEMU emulator version 9.9.8 (windows fixture)' 'whpx tcg' "$windows_memory" ;;
     esac
 }
 

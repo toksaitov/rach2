@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -244,11 +245,12 @@ static struct etude_machine *machine_new(const struct etude_machine_spec *spec)
     return m;
 }
 
-/** Check a boundary boot's admitted capacity and the size of its artifacts. */
+/** Check a boundary boot's capacity, disabled core files and artifact sizes. */
 static int boundary_check(const struct etude_machine_spec *spec, int *boundary)
 {
     struct etude_qemu_memory memory;
     struct stat st;
+    struct rlimit core;
     int e = etude_qemu_memory(spec->profile, &memory);
 
     if (e != 0) {
@@ -260,6 +262,12 @@ static int boundary_check(const struct etude_machine_spec *spec, int *boundary)
         return 0;
     if (spec->memory_reserved_bytes < memory.resident_bytes + memory.overhead_bytes) {
         errno = ENOMEM;
+        return -1;
+    }
+    if (getrlimit(RLIMIT_CORE, &core) != 0)
+        return -1;
+    if (core.rlim_cur != 0) {
+        errno = ENOTSUP;
         return -1;
     }
     if (spec->profile->kernel == NULL) {

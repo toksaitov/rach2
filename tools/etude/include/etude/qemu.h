@@ -194,7 +194,8 @@ void etude_qemu_free(struct etude_qemu *q);
  * @return 0 with the machine in `*m`, or -1 with errno set: an error of the
  *         profile as etude_qemu_argv gives it, of the system, or of the
  *         executor's start; ENOMEM for a boundary boot without its whole
- *         reservation, EFBIG for a kernel over 64 MiB or RAM image over
+ *         reservation, ENOTSUP when core files are enabled, EFBIG for a
+ *         kernel over 64 MiB or RAM image over
  *         256 MiB. Nothing of the machine is left.
  */
 int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec,

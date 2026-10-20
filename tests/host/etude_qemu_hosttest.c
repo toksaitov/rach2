@@ -44,6 +44,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/resource.h>
 #include <sys/un.h>
 #include <dirent.h>
 #include <time.h>
@@ -949,6 +950,7 @@ static void test_memory(void)
     struct etude_qemu_profile p;
     struct etude_qemu_site site = {ETUDE_ACCEL_TCG, self, self, NULL, NULL, 1};
     struct etude_machine_spec spec;
+    struct rlimit core, changed;
     struct etude_machine *m = NULL;
     struct etude_qemu *q = etude_qemu_new();
     char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
@@ -977,7 +979,11 @@ static void test_memory(void)
     CHECK(make(&p, &site, argv, buf, sizeof buf) == 0, "boundary argv");
     for (i = 0; argv[i] != NULL; i++) {
         backend |= strcmp(argv[i], "memory-backend-ram,id=etude-ram,size=77309411328B,"
-                                   "prealloc=off,merge=off,dump=off") == 0;
+                                   "prealloc=off,merge=off"
+#if !defined(__APPLE__)
+                                   ",dump=off"
+#endif
+                          ) == 0;
         size |= strcmp(argv[i], "-m") == 0 && argv[i + 1] != NULL &&
                 strcmp(argv[i + 1], "77309411328B") == 0;
     }
@@ -993,6 +999,20 @@ static void test_memory(void)
     errno = 0;
     CHECK(etude_qemu_start(q, &spec, &m) != 0 && errno == ENOMEM && m == NULL,
           "unsafe boundary allocation refused before execution");
+    CHECK(getrlimit(RLIMIT_CORE, &core) == 0, "read the core-file limit");
+    if (core.rlim_max > 0) {
+        changed = core;
+        changed.rlim_cur = 1;
+        CHECK(setrlimit(RLIMIT_CORE, &changed) == 0, "enable core files in the test");
+        spec.memory_reserved_bytes++;
+        errno = 0;
+        CHECK(etude_qemu_start(q, &spec, &m) != 0 && errno == ENOTSUP && m == NULL,
+              "boundary core files refused before execution");
+        CHECK(setrlimit(RLIMIT_CORE, &core) == 0, "restore the core-file limit");
+    } else {
+        printf("etude_qemu_hosttest: not run: refusal of enabled core files: "
+               "the hard limit already disables them\n");
+    }
     p.memory_bytes = UINT64_C(8) << 30;
     CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "lazy 8 GiB workload refused");
     p.memory_bytes = ETUDE_BIGMEM_CONFIGURED;
@@ -1026,6 +1046,8 @@ int main(int argc, char **argv)
         return 1;
     if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
         test_real(1);
+    } else if (argc == 2 && strcmp(argv[1], "--memory") == 0) {
+        test_memory();
     } else {
         test_argv();
         test_memory();

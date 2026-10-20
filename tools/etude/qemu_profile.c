@@ -261,8 +261,12 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "%s", number);
     if (p->memory_profile != NULL && strcmp(p->memory_profile, "bigmem-boundary-v1") == 0) {
         add(&l, 0, "-object");
+#if defined(__APPLE__)
+        add(&l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off", number);
+#else
         add(&l, 0, "memory-backend-ram,id=etude-ram,size=%s,prealloc=off,merge=off,dump=off",
             number);
+#endif
         add(&l, 0, "-machine");
         add(&l, 0, "memory-backend=etude-ram");
         add(&l, 0, "-overcommit");
