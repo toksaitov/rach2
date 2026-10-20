@@ -114,12 +114,12 @@ case mvtest.krffs root:krffs -- mvtest
 case netifprobe -- netifprobe machine=native
 # machine=native leaves out the two comparisons of HeapUsed.
 case ofdprobe stage:native/hello.txt -- ofdprobe machine=native
-case ownprobe root:krffs stage:native/hello.txt ids:1000,2000,3000,4000 -- ownprobe
+case ownprobe root:krffs ids:1000,2000,3000,4000 -- ownprobe
 # machine=native leaves out the three discovers and their offers and the two
 # comparisons of HeapUsed.
 case packetprobe peer:network ids:1000 -- packetprobe machine=native
 case pathcanon root:krffs -- pathcanon
-case permprobe root:krffs stage:native/hello.txt ids:1000 -- permprobe
+case permprobe root:krffs ids:1000 -- permprobe
 # machine=native measures the times by CLOCK_MONOTONIC; it leaves out no
 # check.
 case pingtest alone peer:network -- pingtest machine=native
@@ -144,18 +144,18 @@ case rawprobe peer:network ids:1000 -- rawprobe machine=native
 case rebootprobe ids:1000 -- rebootprobe
 case rmtest -- rmtest
 case rngprobe -- rngprobe
-case searchprobe root:krffs stage:hello ids:1000 -- searchprobe
+case searchprobe root:krffs ids:1000 -- searchprobe
 case shelltest stage:hello -- shelltest hello=./hello
 # machine=native leaves out the two checks of sleeps_interrupted.
 case sigprobe -- sigprobe machine=native
 case sockettest -- sockettest
 # machine=native leaves out the checks that the stamps never go back.
-case stattest root:krffs stage:native/hello.txt -- stattest machine=native
+case stattest root:krffs -- stattest machine=native
 case stdintest pty:stdintest.in -- stdintest
 case stickyprobe root:krffs ids:1000,1001 -- stickyprobe
 case stressprobe volume:krffs:krffs48 -- stressprobe dir=vol0
-case sudoprobe root:krffs stage:suidhelper ids:1000,1001 -- sudoprobe
-case suidprobe root:krffs stage:suidhelper ids:1000,5 -- suidprobe
+case sudoprobe root:krffs ids:1000,1001 -- sudoprobe
+case suidprobe root:krffs ids:1000,5 -- suidprobe
 case tcptest peer:echo -- tcptest closed=9
 case timeprobe -- timeprobe
 case touchtest -- touchtest

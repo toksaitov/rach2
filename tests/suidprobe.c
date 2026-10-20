@@ -25,11 +25,9 @@
  * put there first.
  *
  * An argument `ids=OLD:NEW,...` gives the ids that stand for 1000 and 5 in a
- * native run (probe_args.h); the probe passes the argument on to each
- * helper. Without it the ids are 1000 and 5. A native run also gives
- * `root=PATH`, since it runs the probe in a private root that has the staged
- * `/suidhelper` alone; the probe then makes the four copies itself, with the
- * modes the manifest gives them and the owners the ids map.
+ * native run (probe_args.h), which runs the probe in a private copy of the
+ * test image's root whose owners are mapped the same way; the probe passes
+ * the argument on to each helper. Without it the ids are 1000 and 5.
  */
 
 #include "probe.h"
@@ -120,37 +118,6 @@ static int run_helper(const char *path, const char *arg)
     return WEXITSTATUS(status);
 }
 
-/** Copy /suidhelper to `name` and give the copy the owner `uid`, the group
- * `gid` and the mode `mode`, in that order, since chown clears the set-id
- * bits; any step that fails fails the probe. */
-static void make_copy(const char *name, long uid, long gid, u32 mode)
-{
-    static char buf[4096];
-    int in = syscall3(SYS_OPEN, (long)"/suidhelper", 0, 0);
-    int out = syscall3(SYS_CREAT, (long)name, 0700, 0);
-    int n = 0;
-
-    while (in >= 0 && out >= 0 && (n = syscall3(SYS_READ, in, (long)buf, (int)sizeof(buf))) > 0 &&
-           syscall3(SYS_WRITE, out, (long)buf, n) == n) {
-    }
-    syscall1(SYS_CLOSE, in);
-    syscall1(SYS_CLOSE, out);
-    if (in < 0 || out < 0 || n != 0 || syscall3(SYS_CHOWN, (long)name, uid, gid) != 0 ||
-        syscall2(SYS_CHMOD, (long)name, (long)mode) != 0) {
-        fail("make the set-id copies of /suidhelper");
-    }
-}
-
-/** Make the four copies of /suidhelper that the manifest stages beside it,
- * for a native run's private root, which has the helper alone. */
-static void make_copies(void)
-{
-    make_copy("/suidhelper.suid", 0, 0, 04755u);
-    make_copy("/suidhelper.u5", probe_id(5), 0, 04755u);
-    make_copy("/suidhelper.sgid", 0, probe_id(5), 02755u);
-    make_copy("/suidhelper.nox", 0, 0, 04644u);
-}
-
 /** The 32-bit mode field of the stat of `path`; a stat that fails fails the
  * probe. */
 static u32 stat_mode(const char *path)
@@ -174,9 +141,6 @@ void probe_main(unsigned long *sp)
     int rc;
 
     probe_args((int)sp[0], (char **)(sp + 1));
-    if (probe_arg("root", 0) != 0) {
-        make_copies();
-    }
 
     /* stat reports all of 07777, the setuid bit with the permission bits. */
     if ((stat_mode("/suidhelper.suid") & 07777u) != 04755u) {
