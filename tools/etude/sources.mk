@@ -69,3 +69,8 @@ ETUDE_BRIDGE_SRC = tools/etude/posix/etude_bridge.c tools/etude/posix/bridge.c \
                    tools/etude/ledger.c tools/etude/posix/exec.c \
                    tools/etude/posix/keeper.c tools/etude/posix/process.c \
                    tools/etude/capture.c utils/sha256.c
+
+# etude-ledger, which lists a ledger's claims and drops one whose processes a
+# person has found ended.
+ETUDE_LEDGER_SRC = tools/etude/posix/etude_ledger.c tools/etude/ledger.c \
+                   tools/etude/posix/process.c utils/sha256.c

@@ -494,6 +494,14 @@ $(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
 
+# The listing of a ledger's claims, and the drop of one whose processes a
+# person has found ended (tools/etude/posix/etude_ledger.c).
+ETUDELEDGER = build/tools/etude/etude-ledger
+$(ETUDELEDGER): $(ETUDE_LEDGER_SRC) tools/etude/include/etude/ledger.h \
+                tools/etude/include/etude/exec.h tools/etude/posix/posix.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
+
 # etude's tooling machine (tools/etude/tooling.c), which runs on a host the
 # commands it lacks, built here so that `make` compiles it under the host
 # flags.
@@ -1243,8 +1251,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEREMOTE) \
-             $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) $(PECHECK) \
-             $(ETUDESERIAL)
+             $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) $(ETUDELEDGER) \
+             $(PECHECK) $(ETUDESERIAL)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
