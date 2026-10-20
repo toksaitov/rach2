@@ -1,7 +1,8 @@
 /*
- * judge.c: casecheck's judgement of a program's report records, its check
- * of an attempt's results document against the case, and the results
- * document it writes for an attempt from the report and the program's end.
+ * judge.c: casecheck's judgement of the report records of a program or a
+ * machine scenario, its check of an attempt's results document against the
+ * case, and the results document it writes for an attempt from the report
+ * and the program's end.
  *
  * All follow the Readme's Report records and Results: an assertion that
  * nothing reported is missing, one the program could not evaluate is not
@@ -452,6 +453,16 @@ static void judge_progress(struct judging *j, const struct rec *r, size_t at)
     }
 }
 
+/**
+ * Returns 1 when the declared assertion `a` is given in report records: a
+ * program's, or a machine scenario's, which libetude-case writes as a
+ * program's report.
+ */
+static int reportable(const struct json *a)
+{
+    return same(json_text(a, "source"), "program") || same(json_text(a, "source"), "scenario");
+}
+
 /** Judges an assert or notrun record against the declared assertions. */
 static void judge_assertion(struct judging *j, const struct rec *r, size_t at)
 {
@@ -462,7 +473,7 @@ static void judge_assertion(struct judging *j, const struct rec *r, size_t at)
         report_error(j, r->line, "%s is not an assertion of the case", r->id);
         return;
     }
-    if (!same(json_text(a, "source"), "program")) {
+    if (!reportable(a)) {
         report_error(j, r->line, "%s is not the program's to report; its source is %s", r->id,
                      json_text(a, "source"));
         return;
@@ -598,7 +609,7 @@ static void judge_required(struct judging *j)
         const struct rec *r;
         int outcome;
 
-        if (!same(json_text(a, "source"), "program")) {
+        if (!reportable(a)) {
             continue;
         }
         outcome = program_outcome(j, a, &r);
@@ -626,7 +637,7 @@ static enum attempt print_outcomes(const struct judging *j)
         const struct rec *r;
         int outcome;
 
-        if (!same(json_text(a, "source"), "program") || (outcome = program_outcome(j, a, &r)) < 0) {
+        if (!reportable(a) || (outcome = program_outcome(j, a, &r)) < 0) {
             continue;
         }
         if (outcome == OUTCOME_PASS || outcome == OUTCOME_MISSING) {
@@ -1098,7 +1109,7 @@ static void check_report(const struct checking *k)
         finding(k->file, k->line, "a complete report has no errors");
     }
     if (uses == same(state, "not_used")) {
-        finding(k->file, k->line, "the report is %s, but the case %s assertions of its program",
+        finding(k->file, k->line, "the report is %s, but the case %s assertions of its report",
                 state, uses ? "has" : "has no");
     }
     if (etude_report >= 0 && etude_report != report_verdict(state)) {
@@ -1448,8 +1459,8 @@ static int console_fault(const struct judging *j, int panics, char *out, size_t 
  * Returns the outcome of the declared assertion `a`, with its detail in
  * `*detail`, or -1 when the attempt does not require it. An assertion of
  * the executor passes when the console has its record and fails when it has
- * not; without the console it is missing, as one of a scenario is, since
- * only an executor's console and a scenario's calls give them.
+ * not; without the console it is missing, since only an executor's console
+ * gives it.
  */
 static int declared_outcome(const struct judging *j, const struct json *a, const char **detail)
 {
@@ -1471,10 +1482,6 @@ static int declared_outcome(const struct judging *j, const struct json *a, const
     }
     if (same(json_text(a, "source"), "executor")) {
         *detail = "casecheck attempt was given no console";
-        return OUTCOME_MISSING;
-    }
-    if (same(json_text(a, "source"), "scenario")) {
-        *detail = "casecheck attempt does not read a scenario's calls";
         return OUTCOME_MISSING;
     }
     if (g >= 0 && j->decided[g] == NULL) {

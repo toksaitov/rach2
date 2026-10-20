@@ -1,0 +1,16 @@
+scenario: booting fixture
+@etude 1 begin machine.shutdown.poweroff
+@etude 1 assert stopped pass
+@etude 1 assert poweroff-status pass
+@etude 1 assert clean-unmount pass
+@etude 1 assert no-halt-fallback pass
+@etude 1 assert said-poweroff pass
+@etude 1 assert not-restart pass
+@etude 1 progress stage 1
+@etude 1 progress fsck 0
+@etude 1 assert fsck-clean pass
+@etude 1 progress fsck 1
+@etude 1 progress stage 2
+@etude 1 assert marker-survives pass
+@etude 1 progress stage 3
+@etude 1 end 8

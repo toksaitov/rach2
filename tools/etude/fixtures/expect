@@ -135,6 +135,7 @@
 1 report ./judge.json fixture.judge.counter i686 qemu ./report-limit.out | the witness blocks passes its limit with 5 units
 1 report ./judge.json fixture.judge.counter i686 qemu ./report-witness.out | the witness pages is not the case's
 1 report ./judge.json fixture.judge.counter i686 qemu ./report-child.out | a child record from a case whose children are none
+0 report ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-scenario.out | assert marker-survives pass
 
 # A results document gives each assertion the attempt requires, once, and an
 # outcome that follows from them.
@@ -152,6 +153,7 @@
 1 results ./results-branch.jsonl ../schemas/case.guest.example.json | the group source appears 0 times, not once
 1 results ./results-twice.jsonl ../schemas/case.guest.example.json | enosys-unimplemented appears 2 times
 1 results ./results-missing.jsonl ./rules.json | guest.default.errnoprobe is no case of the manifests given
+1 results ./results-scenario.jsonl ../schemas/case.machine.example.json | the report is not_used, but the case has assertions of its report
 
 # An attempt's results document, judged from its report and its end: 0 for a
 # pass, 1 for a failure, 3 for an incomplete attempt. The command prints a
@@ -206,9 +208,10 @@
 0 manifest ./console-case.json
 3 attempt -k ./console-panic.txt ./console-case.json fixture.console.panic i686 qemu ./report-absent.out run-1 attempt-1 item-1 stopped | {"assertion_id":"etude.kernel","source":"executor","outcome":"pass","detail":null}
 1 attempt -k ./console-fault.txt ./console-case.json fixture.console.panic i686 qemu ./report-absent.out run-1 attempt-1 item-1 stopped | "detail":"the console has <2>[1.31] vm: fault: in kernel mode at 0x00000004 (err 0x0), pc 0xC0101234"
-3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"not_used","records":0,"errors":[]}
-3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"stopped","source":"scenario","outcome":"missing","detail":"casecheck attempt does not read a scenario's calls"}
-2 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./attempt-machine.out run-1 attempt-1 item-1 exited 0 | declares no assertion of its program
+3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"absent","records":0,"errors":[]}
+3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"stopped","source":"scenario","outcome":"missing","detail":"nothing reported it"}
+3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-scenario.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"marker-survives","source":"scenario","outcome":"pass","detail":null}
+1 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./attempt-machine.out run-1 attempt-1 item-1 exited 0 | "errors":["stopped was never reported"
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 256 | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled -1 | the end signaled takes a value of 0 to 255

@@ -137,12 +137,15 @@ const struct json *group_of(const struct json *c, const char *assertion_id,
 }
 
 /**
- * Returns 1 when some declared assertion of the case is the program's to
- * report.
+ * Returns 1 when some declared assertion of the case is given in report
+ * records: the program's, or a machine scenario's, whose report
+ * libetude-case writes on the scenario's standard output as a program's.
  */
 int program_reports(const struct json *c)
 {
-    return has_member(json_member(c, "assertions"), "source", "program");
+    const struct json *list = json_member(c, "assertions");
+
+    return has_member(list, "source", "program") || has_member(list, "source", "scenario");
 }
 
 /* ---- the rules ---- */
