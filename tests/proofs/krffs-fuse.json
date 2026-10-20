@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "proof": "krffs-fuse",
+  "summary": "krffs_fuse_hosttest.c, the FUSE driver over an image file, with faults in private copies of the FUSE driver and the KRFFS library; the test is compiled with a fuse.h that stops the build, so that it uses its own stub",
+  "tree": "private",
+  "sources": [
+    "krffs/krffs.c",
+    "krffs/krffs_allocator.c",
+    "krffs/krffs_fuse_operations.c",
+    "krffs/krffs_node.c",
+    "krffs/stageimage.krffs.c"
+  ],
+  "artifacts": [
+    "${WORK}/krffs_fuse_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} krffs tests/host\nmkdir \"$t/no-fuse\"\nprintf '#error \"krffs-fuse-test: test stub was not selected\"\\n' > \"$t/no-fuse/fuse.h\"\ntest=tests/host/krffs_fuse_hosttest.c\ndeps=$(sed -n 's/^.*host-deps: *//p' \"$test\" | tr '\\n' ' ')\nextra=$(sed -n 's/^.*host-cflags: *//p' \"$test\" | tr '\\n' ' ')\ncd \"$t\"\nexec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -fsanitize=address,undefined -fno-sanitize-recover=all -g -O1 -Wno-empty-body -ffreestanding -I krffs -I tests/host/compat -DFIXDIR='\"${WORK}/fixtures\"' $extra -Wno-error -I no-fuse -o ${WORK}/krffs_fuse_hosttest \"$test\" $deps"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "rm -rf ${WORK}/fixtures\nmkdir ${WORK}/fixtures\nexec ${WORK}/krffs_fuse_hosttest"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "krffs-fuse-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "ring",
+      "summary": "a mount that does not check the node ring before FUSE starts",
+      "edits": [
+        {
+          "file": "krffs/krffs.c",
+          "find": "if (!valid_node_ring(&file_system))",
+          "replace": "if (0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: oversized root rejected before fuse",
+          "krffs-fuse-test: fail: zero node size rejected before fuse"
+        ]
+      }
+    },
+    {
+      "name": "parent",
+      "summary": "a child found by its name without its directory",
+      "edits": [
+        {
+          "file": "krffs/krffs_node.c",
+          "find": "node->type == KRFFS_Reserved_Node && node->parent_id == directory_id &&",
+          "replace": "node->type == KRFFS_Reserved_Node &&"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: staged file of the same name at the root reads"
+        ]
+      }
+    },
+    {
+      "name": "moved",
+      "summary": "a node moved by its growth that loses its directory",
+      "edits": [
+        {
+          "file": "krffs/krffs_allocator.c",
+          "find": "node->parent_id = original_node->parent_id;",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: moved file keeps its directory"
+        ]
+      }
+    },
+    {
+      "name": "rename",
+      "summary": "a rename that leaves the node in its old directory",
+      "edits": [
+        {
+          "file": "krffs/krffs_fuse_operations.c",
+          "find": "node->parent_id = krffs_get_directory_id(KRFFS_File_System, new_directory);",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: rename across directories"
+        ]
+      }
+    },
+    {
+      "name": "mkdir-id",
+      "summary": "a mkdir without its refusal of a taken directory id",
+      "edits": [
+        {
+          "file": "krffs/krffs_fuse_operations.c",
+          "find": "directory_id_taken(directory, name)",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: mkdir refuses a taken directory id"
+        ]
+      }
+    },
+    {
+      "name": "owner",
+      "summary": "a node made with no FUSE request that keeps the free node's owner",
+      "edits": [
+        {
+          "file": "krffs/krffs_fuse_operations.c",
+          "find": "node->uid = geteuid();",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: no request gives the driver's owner"
+        ]
+      }
+    },
+    {
+      "name": "statfs",
+      "summary": "free blocks counted rounding up",
+      "edits": [
+        {
+          "file": "krffs/krffs_fuse_operations.c",
+          "find": "(fsblkcnt_t)(total_free_space / StatFS_Block_Size)",
+          "replace": "(fsblkcnt_t)((total_free_space - 1) / StatFS_Block_Size + 1)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: free blocks rounded down",
+          "krffs-fuse-test: fail: full image has no free block"
+        ]
+      }
+    },
+    {
+      "name": "same-name",
+      "summary": "a rename to the same name that frees the node",
+      "edits": [
+        {
+          "file": "krffs/krffs_fuse_operations.c",
+          "find": "if (result == 0 && target && target != node) {",
+          "replace": "if (result == 0 && target) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: rename to the same name keeps the file"
+        ]
+      }
+    },
+    {
+      "name": "staged-id",
+      "summary": "a staged file given a directory's mixed id in place of its name's hash",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (is_dir_node(node)) {",
+          "replace": "if (1) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-fuse-test: fail: staged file has the hash of its name as its id"
+        ]
+      }
+    }
+  ]
+}

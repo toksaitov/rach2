@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "proof": "krffs-inode",
+  "summary": "the inode numbers KRFFS gives and the root gives to the old and the wide stat calls: krffs_hosttest.c's rows, then tests/host/fixtures/krffs_stat.c over the stat functions extracted unchanged from private copies of syscall_fs.c and vfs.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/fs/krffs.c",
+    "rach2/sys/syscall_fs.c"
+  ],
+  "artifacts": [
+    "${WORK}/krffs_stat"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} rach2/sys tests/host\ncd \"$t\"\ns=rach2/sys\nf=tests/host/fixtures\npython3 $f/extract.py $f/krffs_stat_types.inc -f $s/arch/i686/uabi.h 'struct linux_stat' 'struct user_stat' -f $s/fs/vfs.h 'struct vfs_stat' -f $s/arch/i686/uabi.h '#define STAT_SET_INO' -f $s/syscall_fs.c 'struct kstat'\npython3 $f/extract.py $f/krffs_stat_funcs.inc -f $s/syscall_fs.c path_names_dir stat64_put stat64_node_times stat64_root_times krffs_fill_stat64 stat_times_from_stat64 stat_node_times stat_root_times do_stat64 old_stat_put do_old_stat -f $s/fs/vfs.c kfs_getattr\nexec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -I $s -I $s/lib -I $s/proc -o ${WORK}/krffs_stat $f/krffs_stat.c $s/lib/kstring.c $s/lib/kctypes.c"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "${WORK}/krffs_stat"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "krffs_hosttest: FAIL: "
+  },
+  "faults": [
+    {
+      "name": "orphan",
+      "summary": "an open unlinked file's inode number mixed from its name",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffs.c",
+          "find": "return krffs_mix_hash(node->parent_id, node->id);",
+          "replace": "return krffs_mix_id(node->parent_id, (const char *)node->name);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs_hosttest: FAIL: open unlinked siblings keep distinct unchanged inode numbers"
+        ]
+      }
+    },
+    {
+      "name": "root-node",
+      "summary": "a root node that krffs_node_ino does not number 1",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffs.c",
+          "find": "    if (node->type == KRFFS_ROOT_NODE) {\n        return 1;\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs_hosttest: FAIL: root inode is 1"
+        ]
+      }
+    },
+    {
+      "name": "root-old",
+      "summary": "a root that answers inode 0 to the old stat call",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        kst.st_ino = 1;\n        kst.st_blksize = 4096;\n        stat_root_times",
+          "replace": "        kst.st_ino = 0;\n        kst.st_blksize = 4096;\n        stat_root_times"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs_hosttest: FAIL: root old stat inode is 1"
+        ]
+      }
+    },
+    {
+      "name": "root-wide",
+      "summary": "a root that answers inode 0 to the wide stat call",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            kst.st_ino = 1;\n",
+          "replace": "            kst.st_ino = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs_hosttest: FAIL: root stat64 inode is 1"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "proof": "krffsmount",
+  "summary": "krffsmount_hosttest.c, mounted KRFFS, with faults in a private copy of rach2/sys/fs/krffsmount.c",
+  "tree": "private",
+  "sources": [
+    "rach2/sys/fs/krffsmount.c"
+  ],
+  "artifacts": [
+    "${WORK}/krffsmount_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} rach2/sys tests/host\ncd \"$t\"\ns=rach2/sys\nexec ${CC:-cc} -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding -Wall -Wextra -Werror -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast -fsanitize=address,undefined -fno-sanitize-recover=all -I $s -I $s/lib -I $s/proc tests/host/krffsmount_hosttest.c $s/fs/fd.c $s/fs/lock.c $s/lib/kstring.c $s/lib/kctypes.c -o ${WORK}/krffsmount_hosttest"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "${WORK}/krffsmount_hosttest"
+    ],
+    "bound_s": 120,
+    "fail_prefix": "krffsmount-hosttest: fail: "
+  },
+  "faults": [
+    {
+      "name": "read-identity",
+      "summary": "a read that resolves its node before it takes the lock",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    vfs_ns_lock(mnt);\n    at = follow_moves(handle);\n",
+          "replace": "    vfs_ns_lock(mnt);\n"
+        },
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    struct krffs_volume *vol = vol_of(mnt);\n    uint64_t at;\n    int got;\n",
+          "replace": "    struct krffs_volume *vol = vol_of(mnt);\n    uint64_t at = follow_moves(handle);\n    int got;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: waiting read follows two moves despite offset reuse"
+        ]
+      }
+    },
+    {
+      "name": "write-identity",
+      "summary": "a write that resolves its node before it takes the lock",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    }\n    at = follow_moves(handle);\n",
+          "replace": "    }\n"
+        },
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    struct krffs_volume *vol = vol_of(mnt);\n    uint64_t at;\n    uint64_t was;\n",
+          "replace": "    struct krffs_volume *vol = vol_of(mnt);\n    uint64_t at = follow_moves(handle);\n    uint64_t was;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: second relocation updates target length"
+        ]
+      }
+    },
+    {
+      "name": "truncate-identity",
+      "summary": "a truncate that resolves its node before it waits to write",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "        uint64_t was = follow_moves(handle);\n",
+          "replace": "        uint64_t was = before;\n"
+        },
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "{\n    struct krffs_volume *vol = vol_of(mnt);\n    int rc = begin_write(mnt);\n",
+          "replace": "{\n    struct krffs_volume *vol = vol_of(mnt);\n    uint64_t before = follow_moves(handle);\n    int rc = begin_write(mnt);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: second relocation updates target length"
+        ]
+      }
+    },
+    {
+      "name": "write-repoint",
+      "summary": "a moving write that repoints the descriptions from the handle, not the resolved offset",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "vfs_repoint(mnt, handle_of(was), handle_of(at));",
+          "replace": "vfs_repoint(mnt, handle, handle_of(at));"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: every description repointed from resolved offset"
+        ]
+      }
+    },
+    {
+      "name": "truncate-repoint",
+      "summary": "a moving truncate that repoints the descriptions from the handle, not the resolved offset",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "vfs_repoint(mnt, handle_of(was), handle_of(now));",
+          "replace": "vfs_repoint(mnt, handle, handle_of(now));"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: every description repointed from resolved offset"
+        ]
+      }
+    },
+    {
+      "name": "write-failure",
+      "summary": "a write that fails after its move and repoints no description",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "if (at != KRFFS_NO_NODE && at != was) {",
+          "replace": "if (written >= 0 && at != KRFFS_NO_NODE && at != was) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: failed relocation repoints every description"
+        ]
+      }
+    },
+    {
+      "name": "truncate-failure",
+      "summary": "a truncate that fails after its move and repoints no description",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "if (now != KRFFS_NO_NODE && now != was) {",
+          "replace": "if (rc == 0 && now != KRFFS_NO_NODE && now != was) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: failed relocation repoints every description"
+        ]
+      }
+    },
+    {
+      "name": "flush",
+      "summary": "a sync that sets the clean flag before the earlier data reaches the medium",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    if (block_flush(vol->dev) != 0) {\n        return -EIO;\n    }\n    if (krffs_set_dirty(&vol->fs, 0) != 0)",
+          "replace": "    if (krffs_set_dirty(&vol->fs, 0) != 0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: earlier data reaches medium before clean flag"
+        ]
+      }
+    },
+    {
+      "name": "readonly",
+      "summary": "a sync of a read-only mount that reports no pending write failure",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    (void)handle;\n    vfs_ns_lock(mnt);",
+          "replace": "    (void)handle;\n    if (begin_write(mnt) != 0) {\n        return 0;\n    }"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: read-only sync reports pending write failure"
+        ]
+      }
+    },
+    {
+      "name": "directory",
+      "summary": "a directory read by the offset of its handle, not by its moves",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "dir = follow_moves(handle);",
+          "replace": "dir = offset_of(mnt, handle);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: directory read resolves its open handle"
+        ]
+      }
+    },
+    {
+      "name": "clean-flush",
+      "summary": "a mount left writable after its clean flag failed to flush",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    if (krffs_set_dirty(&vol->fs, 0) != 0) {\n        mnt->flags |= VFS_MS_RDONLY;",
+          "replace": "    if (krffs_set_dirty(&vol->fs, 0) != 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: write after failed clean-flag flush is refused"
+        ]
+      }
+    },
+    {
+      "name": "pin",
+      "summary": "a pinned node recorded at the wrong offset",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "        o->offset = at;\n        o->next = vol->opens;\n        vol->opens = o;\n    }\n    o->pins++;",
+          "replace": "        o->offset = at + 1;\n        o->next = vol->opens;\n        vol->opens = o;\n    }\n    o->pins++;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: pinned node keeps its offset"
+        ]
+      }
+    },
+    {
+      "name": "taken-errno",
+      "summary": "a creation refused for a taken directory id that answers EIO, not EINVAL",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "    if (rc == KRFFS_ETAKEN) {\n        return -EINVAL;\n    }\n    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;",
+          "replace": "    return rc == KRFFS_ENOSPACE ? -ENOSPC : -EIO;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: a directory whose identifier another directory has is EINVAL"
+        ]
+      }
+    },
+    {
+      "name": "cwd-by-offset",
+      "summary": "an rmdir that looks for a working directory by the node's offset",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "pr->fs->cwd_node == handle_of(at)) {",
+          "replace": "pr->fs->cwd_node == (void *)(uintptr_t)at) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: an rmdir of a process's working directory is EBUSY"
+        ]
+      }
+    },
+    {
+      "name": "setattr-store",
+      "summary": "a chown that ignores the failed store of its owner",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/krffsmount.c",
+          "find": "        rc |= krffs_set_owner_at(&vol->fs,",
+          "replace": "        krffs_set_owner_at(&vol->fs,"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffsmount-hosttest: fail: a chown the block boundary refuses is EIO"
+        ]
+      }
+    }
+  ]
+}

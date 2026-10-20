@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "proof": "krffs-tools",
+  "summary": "the KRFFS host tools' rows of tests/host/krffs_tools_test.sh, with the tools built from private copies of the stager, fsviz.krffs, defrag.krffs, edfs.krffs, mkimage.sh and krffs_platform.c, which every tool links",
+  "tree": "private",
+  "sources": [
+    "krffs/defrag.krffs.c",
+    "krffs/edfs.krffs.c",
+    "krffs/fsviz.krffs.c",
+    "krffs/krffs_platform.c",
+    "krffs/mkimage.sh",
+    "krffs/stageimage.krffs.c"
+  ],
+  "artifacts": [
+    "${WORK}/tools/bin/mkfs.krffs",
+    "${WORK}/tools/bin/fsck.krffs",
+    "${WORK}/tools/bin/stageimage.krffs",
+    "${WORK}/tools/bin/fsviz.krffs",
+    "${WORK}/tools/bin/defrag.krffs",
+    "${WORK}/tools/bin/edfs.krffs",
+    "${WORK}/tools/tree/krffs/mkimage.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "set -eu\nt=${WORK}/tree\nsh tests/proofs/tree.sh \"$t\" ${SRC} krffs\nexec sh tests/host/krffs_tools_test.sh --build \"$t\" ${WORK}/tools"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "tests/host/krffs_tools_test.sh",
+      "${WORK}/tools"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "krffs-tools: result: fail: "
+  },
+  "faults": [
+    {
+      "name": "doubled-slash",
+      "summary": "a stager that takes a path with a doubled slash",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "strstr(path, \"//\") != NULL || ",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-doubled-slash:"
+        ]
+      }
+    },
+    {
+      "name": "synthetic-dir",
+      "summary": "a stager that stages a directory under /proc",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "strncmp(path, \"/proc/\", 6) == 0",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-synthetic-dir:"
+        ]
+      }
+    },
+    {
+      "name": "synthetic",
+      "summary": "a stager that stages a file under /dev",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "strncmp(path, \"/dev/\", 5) == 0",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-synthetic:"
+        ]
+      }
+    },
+    {
+      "name": "twice",
+      "summary": "a stager that stages a path twice into an image",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (krffs_find_child(file_system, dir_id, name) != NULL) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-twice:"
+        ]
+      }
+    },
+    {
+      "name": "tree-twice",
+      "summary": "a stager that stages a path twice into the ext2 builder's tree",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (fd < 0 && errno == EEXIST) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-tree-twice:"
+        ]
+      }
+    },
+    {
+      "name": "through-file",
+      "summary": "a stager that makes a directory under a file",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (!is_dir_node(existing)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-through-file:"
+        ]
+      }
+    },
+    {
+      "name": "full",
+      "summary": "a stager that fails without its message when no node fits a file",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (!node) {",
+          "replace": "if (!node) { return NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-full:"
+        ]
+      }
+    },
+    {
+      "name": "dir-id",
+      "summary": "a stager that takes a directory line whose id another directory has",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (!dir_id_free(file_system, parent_id, name, path)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-dir-id:"
+        ]
+      }
+    },
+    {
+      "name": "dir-id-implicit",
+      "summary": "a stager that makes a file's directory whose id another directory has",
+      "edits": [
+        {
+          "file": "krffs/stageimage.krffs.c",
+          "find": "if (!dir_id_free(file_system, parent, p, here)) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: stager-dir-id-implicit:"
+        ]
+      }
+    },
+    {
+      "name": "replace",
+      "summary": "an image builder that stages into the image itself, not a temporary",
+      "edits": [
+        {
+          "file": "krffs/mkimage.sh",
+          "find": "TMP=\"$OUT.new.$$\"",
+          "replace": "TMP=\"$OUT\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: replace-keeps-image:"
+        ]
+      }
+    },
+    {
+      "name": "fsviz",
+      "summary": "a visualiser that draws a reserved node as free",
+      "edits": [
+        {
+          "file": "krffs/fsviz.krffs.c",
+          "find": "\"[# %*s: \"",
+          "replace": "\"[- %*s: \""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: fsviz-ribbon:"
+        ]
+      }
+    },
+    {
+      "name": "defrag",
+      "summary": "a defragmenter that closes no hole",
+      "edits": [
+        {
+          "file": "krffs/defrag.krffs.c",
+          "find": "if (free_node) {",
+          "replace": "if (0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: defrag-compacts:"
+        ]
+      }
+    },
+    {
+      "name": "defrag-region",
+      "summary": "a defragmenter that checks the whole file, not its region",
+      "edits": [
+        {
+          "file": "krffs/defrag.krffs.c",
+          "find": "argv[2] = \"--offset\";",
+          "replace": "argv[2] = NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: defrag-region:"
+        ]
+      }
+    },
+    {
+      "name": "sync",
+      "summary": "a sync of a moved node from an address inside a page",
+      "edits": [
+        {
+          "file": "krffs/krffs_platform.c",
+          "find": "& ~(page_size - 1);",
+          "replace": "& ~(page_size - page_size);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: defrag-compacts:"
+        ]
+      }
+    },
+    {
+      "name": "edfs",
+      "summary": "a node editor that does not write the magic it is given",
+      "edits": [
+        {
+          "file": "krffs/edfs.krffs.c",
+          "find": "node->magic = magic;",
+          "replace": "(void)magic;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "krffs-tools: result: fail: edfs-magic:"
+        ]
+      }
+    }
+  ]
+}
