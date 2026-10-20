@@ -1634,6 +1634,22 @@ static void report_hang(const char *name, double idle, const char *recent, size_
     machine_states(who, ledger);
 }
 
+/** Append `child`, the group of the command `supervise` started, to the
+ * group ledger `groups`. Returns 0, or -1 after saying why on standard
+ * error. */
+static int note_group(const char *groups, pid_t child)
+{
+    FILE *fp = fopen(groups, "a");
+
+    if (!fp) {
+        perror("runutil: group ledger");
+        return -1;
+    }
+    fprintf(fp, "%ld\n", (long)child);
+    fclose(fp);
+    return 0;
+}
+
 /**
  * The `watch` and `suite` modes: run `cmd` as the leader of a new process
  * group, copy its output to standard output, and stop it as hung when it has
@@ -1683,7 +1699,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     int progressfd = STDERR_FILENO;
     const char *progress = getenv("RACH2_PROGRESS_FD");
     pid_t child;
-    char *console, buf[8192];
+    char *console, *groups, buf[8192];
     struct recent_output recent;
     double started = now(), active = started, report = started;
     double period = idle < 20 ? (idle < 2 ? 1 : idle / 2) : 10;
@@ -1696,15 +1712,19 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     if (progress && !strcmp(progress, "3") && fcntl(3, F_GETFD) >= 0)
         progressfd = 3;
     console = malloc(len);
-    if (!console || pipe(pipes) != 0) {
+    groups = malloc(len);
+    if (!console || !groups || pipe(pipes) != 0) {
         perror("runutil: pipe or allocation");
         free(console);
+        free(groups);
         return 2;
     }
     snprintf(console, len, "%s.console", ledger);
+    snprintf(groups, len, "%s.groups", ledger);
     if (suite && open_liveness(life, &token) != 0) {
         perror("runutil: liveness pipe");
         free(console);
+        free(groups);
         return 2;
     }
     memset(&sa, 0, sizeof(sa));
@@ -1718,6 +1738,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
     if (child < 0) {
         perror("runutil: fork");
         free(console);
+        free(groups);
         return 2;
     }
     if (child == 0) {
@@ -1736,22 +1757,9 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         close(life[1]);
     close(pipes[1]);
     fcntl(pipes[0], F_SETFL, O_NONBLOCK);
-    {
-        char *groups = malloc(len);
-        FILE *fp;
-        if (!groups)
-            return 2;
-        snprintf(groups, len, "%s.groups", ledger);
-        fp = fopen(groups, "a");
-        if (fp) {
-            fprintf(fp, "%ld\n", (long)child);
-            fclose(fp);
-        } else {
-            perror("runutil: group ledger");
-            interrupted = SIGTERM;
-        }
-        free(groups);
-    }
+    if (note_group(groups, child) != 0)
+        interrupted = SIGTERM;
+    free(groups);
     while (!done || !eof) {
         struct pollfd pfd;
         ssize_t n;
