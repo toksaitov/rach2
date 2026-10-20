@@ -1484,11 +1484,13 @@ static void refuse_contradictory_boot_line(void)
  */
 void panic_init_died(uint32_t pid)
 {
+    arch_irq_disable();
+    sched_disable();
+    smp_stop_others();
     klog(KLOG_CRIT, "panic",
          "init (pid %d) exited; halting "
          "(boot rach2.rescue for the debug shell)\n",
          (int)pid);
-    sched_disable();
     for (;;) {
         arch_stop();
     }

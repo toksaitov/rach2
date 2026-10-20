@@ -99,12 +99,12 @@ fsck_says_dirty() {
     return 1
 }
 
-# look_halted NAME: ask the monitor for the registers of every processor and
-# the machine's status, and fail phase NAME unless the machine is running and
-# every processor is halted with its interrupts off, which is what
-# `power_stop` leaves: a processor that `hlt` stopped, and that no interrupt
-# can start again. The monitor's input is opened for reading and writing, so
-# that the write does not wait for a reader when QEMU has ended.
+# look_halted NAME [CPUS]: read every processor's registers and the machine's
+# status. Fail unless the machine is running and every processor is halted
+# with interrupts off, as `power_stop` and `panic_init_died` leave it. When
+# CPUS is given, require that many register records. The monitor's input is
+# opened for reading and writing, so the write does not wait for a reader
+# when QEMU has ended.
 look_halted() {
     LOOKS=$((LOOKS + 1))
     exec 7<> "$MONITOR.in"
@@ -136,6 +136,9 @@ look_halted() {
     rm -f "$MONLOG.cpus"
     if [ "$cpus" -eq 0 ]; then
         fail "$1: the monitor gave the registers of no processor"
+    fi
+    if [ "$#" -gt 1 ] && [ "$cpus" -ne "$2" ]; then
+        fail "$1: the monitor gave $cpus processors, expected $2"
     fi
 }
 
@@ -266,6 +269,7 @@ trap 'cleanup; exit 129' HUP
 fail() {
     cleanup_boot
     echo "shutdown-test: FAIL: $1" >&2
+    cat "$LOG" "$MONLOG" >&2
     exit 1
 }
 
@@ -387,5 +391,26 @@ if ! fsck_says_dirty; then
     fail "the image is not dirty, so the refused halt stopped the machine anyway"
 fi
 echo "shutdown-test: an unprivileged bare halt is refused: OK"
+
+# A fatal signal to the real init must stop every processor, including those
+# running its children. The online count precedes the signal; the panic line
+# precedes the monitor query. No reset or power-off may replace the halt.
+fresh_image
+EXTRA_QEMU="-smp 4"
+start_boot ':'
+if ! wait_token "smp: processors: 4 online of 4" 90; then
+    fail "the init-death boot did not start four processors"
+fi
+# shellcheck disable=SC2016 # the guest shell expands its parent's pid
+drive_type 'kill -KILL $PPID'
+if ! wait_token "init (pid 1) exited; halting" 90; then
+    fail "killing init did not report its fatal exit"
+fi
+look_halted "init death stops all four processors" 4
+cleanup_boot
+if ! fsck_says_dirty; then
+    fail "init death cleared the dirty flag without an orderly shutdown"
+fi
+echo "shutdown-test: init death stops all four processors: OK"
 
 echo "shutdown-test: PASS"
