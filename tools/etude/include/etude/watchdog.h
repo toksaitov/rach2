@@ -150,6 +150,9 @@ uint64_t etude_watchdog_deadline(const struct etude_watchdog *w);
 /** Give the bound that etude_watchdog_check reports, or the one now due. */
 uint64_t etude_watchdog_bound(const struct etude_watchdog *w);
 
+/** Give which bound etude_watchdog_check reports, or which is now due. */
+enum etude_expiry etude_watchdog_due(const struct etude_watchdog *w);
+
 /** Give what the watchdog has seen so far. */
 const struct etude_progress *etude_watchdog_progress(const struct etude_watchdog *w);
 

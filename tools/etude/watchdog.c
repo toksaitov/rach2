@@ -337,6 +337,17 @@ uint64_t etude_watchdog_bound(const struct etude_watchdog *w)
     return bound;
 }
 
+enum etude_expiry etude_watchdog_due(const struct etude_watchdog *w)
+{
+    enum etude_expiry e;
+    uint64_t bound;
+
+    if (w->expiry != ETUDE_EXPIRY_NONE)
+        return w->expiry;
+    next_deadline(w, &e, &bound);
+    return e;
+}
+
 const struct etude_progress *etude_watchdog_progress(const struct etude_watchdog *w)
 {
     return &w->p;
