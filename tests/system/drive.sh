@@ -6,9 +6,9 @@
 # typed once the output it answers has arrived, and a step that waits does so
 # under a bound and fails with the log's tail when the bound passes. Every
 # wait is for fresh output: a cursor, the byte position in the log of the
-# last match or the last typed line, is where the next search starts, so a
-# token the machine printed earlier, or the console's echo of a line just
-# typed, never satisfies a later step.
+# last match or of the first line typed after it, is where the next search
+# starts, so a token the machine printed earlier never satisfies a later
+# step, and the answer to each of two lines typed back to back is found.
 #
 # The feeder holds the fifo open while the machine lives and types the lines
 # dropped into spool files, one per line and numbered, taken in order and
@@ -35,6 +35,8 @@ DRIVE_FIFO=${DRIVE_FIFO:-}
 DRIVE_POS=0
 DRIVE_FPID=""
 DRIVE_SEQ=0
+# 1 when a line has been typed since the last wait began.
+DRIVE_TYPED=0
 DRIVE_POLL=${DRIVE_POLL:-0.2}
 # Every bound is elapsed seconds. Callers apply `scaled` once, if wanted;
 # the driver never applies a factor, including in its compatibility aliases.
@@ -62,6 +64,7 @@ drive_feed() {
     rm -f "$DRIVE_FIFO".type.*
     DRIVE_POS=0
     DRIVE_SEQ=0
+    DRIVE_TYPED=0
     (
         while kill -0 "$1" 2>/dev/null; do
             for f in "$DRIVE_FIFO".type.[0-9]*; do
@@ -88,17 +91,20 @@ drive_stop() {
     return 0
 }
 
-# drive_type LINE: type LINE and a newline. The cursor moves to the log's end
-# first, before the line is published, so nothing printed before it was typed,
-# the prompt it answers included, can satisfy the step that waits for its
-# answer, and an answer that comes at once is not skipped. The status is 1 when
-# the feeder is gone.
+# drive_type LINE: type LINE and a newline. The first line typed after a wait
+# moves the cursor to the log's end before the line is published, so nothing
+# printed before it was typed, the prompt it answers included, can satisfy the
+# step that waits for its answer, and an answer that comes at once is not
+# skipped. A line typed after another with no wait between leaves the cursor
+# where it is, since the earlier line's answer may already be in the log. The
+# status is 1 when the feeder is gone.
 drive_type() {
     if [ -z "$DRIVE_FPID" ] || ! kill -0 "$DRIVE_FPID" 2>/dev/null; then
         echo "drive: the feeder is gone; nothing types at the machine" >&2
         return 1
     fi
-    DRIVE_POS=$(drive_size)
+    [ "$DRIVE_TYPED" = 1 ] || DRIVE_POS=$(drive_size)
+    DRIVE_TYPED=1
     DRIVE_SEQ=$((DRIVE_SEQ + 1))
     printf '%s\n' "$1" > "$DRIVE_FIFO.type.new"
     mv "$DRIVE_FIFO.type.new" "$(printf '%s.type.%06d' "$DRIVE_FIFO" "$DRIVE_SEQ")"
@@ -126,6 +132,7 @@ drive_expect() {
 
 # drive_expect_raw PATTERN SECS: the wait of drive_expect and drive_prompt.
 drive_expect_raw() {
+    DRIVE_TYPED=0
     deadline=$(( $(drive_now) + $2 ))
     while :; do
         found=$(tail -c +"$((DRIVE_POS + 1))" "$DRIVE_LOG" 2>/dev/null |

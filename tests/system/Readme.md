@@ -100,7 +100,7 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 
 `clockload.py`, the `clock` suite's driver, starts QEMU itself with its console on the driver's pipes, notes the host's time at each line the machine prints, and stops and continues QEMU with SIGSTOP and SIGCONT.
 
-A suite that starts QEMU itself with `-serial stdio < FIFO > LOG` sources `drive.sh`: `drive_feed` holds the FIFO open, `drive_type` types a line once the output it answers has arrived, `drive_expect` and `drive_prompt` wait for fresh output after the last match or typed line, `drive_sent` waits until the typed lines are in the machine's input, and `drive_login` logs in. A suite that must know that a machine has stopped for good, after a halt or a refusal to boot, sources `monitor.sh` and starts QEMU with `-monitor pipe:PATH`: `monitor_wait_halted` waits until QEMU's monitor finds every processor halted with its interrupts off, after which the machine prints nothing more.
+A suite that starts QEMU itself with `-serial stdio < FIFO > LOG` sources `drive.sh`: `drive_feed` holds the FIFO open, `drive_type` types a line once the output it answers has arrived, `drive_expect` and `drive_prompt` wait for fresh output after the last match or the first line typed since it, `drive_sent` waits until the typed lines are in the machine's input, and `drive_login` logs in. A suite that must know that a machine has stopped for good, after a halt or a refusal to boot, sources `monitor.sh` and starts QEMU with `-monitor pipe:PATH`: `monitor_wait_halted` waits until QEMU's monitor finds every processor halted with its interrupts off, after which the machine prints nothing more.
 
 ### Checkers and fixtures
 

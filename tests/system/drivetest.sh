@@ -137,6 +137,19 @@ drive_type 'echo MARK""ER'
 drive_expect 'MARKER' 10 && drive_expect 'MARKER' 10; rc=$?
 check "two lines typed back to back are both typed, in order" 0 "$rc"
 drive_prompt 5 > /dev/null 2>&1
+# The first line's answer is in the log before the second line is typed, as
+# it is when the feeder wakes between two calls of drive_type.
+answers=$(tr -d '\r' < "$WORK/log" | grep -cx 'MARKER')
+drive_type 'echo MARK""ER'
+t0=$(date +%s)
+while [ "$(tr -d '\r' < "$WORK/log" | grep -cx 'MARKER')" -le "$answers" ] &&
+        [ $(( $(date +%s) - t0 )) -lt 10 ]; do
+    sleep 0.1
+done
+drive_type 'echo MARK""ER'
+drive_expect 'MARKER' 10 && drive_expect 'MARKER' 10; rc=$?
+check "a line answered before the next is typed has its answer found after both" 0 "$rc"
+drive_prompt 5 > /dev/null 2>&1
 t0=$(date +%s)
 drive_type 'printf x > /tmp/a'
 drive_prompt 10; rc=$?
