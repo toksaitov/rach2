@@ -1,4 +1,9 @@
-/* Check executable write exclusion, its lifetime, and the ELF interpreter. */
+/* Check executable write exclusion, its lifetime, and the ELF interpreter.
+ *
+ * The copy that ends by exec runs /musl/statushelper, or the path that
+ * `helper=PATH` gives, as a native run's private root has the helper at /
+ * (tests/native/Readme.md); the copies are passed the same argument. Other
+ * NAME=VALUE arguments, such as `root=PATH`, are ignored. */
 #define _GNU_SOURCE
 #include <elf.h>
 #include <errno.h>
@@ -12,6 +17,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "../probe_args.h"
+
+/* The helper's path that `helper=PATH` gives, or null for /musl/statushelper. */
+static const char *helper;
 static char work[256];
 static pid_t children[8];
 static int nchildren;
@@ -80,16 +89,17 @@ static void copy(const char *from, const char *to)
 static pid_t start(const char *path, int forked, int *control)
 {
     int ready[2], hold[2];
-    char a[24], b[24];
+    char a[24], b[24], given[300];
     pid_t pid, running;
 
     check(pipe(ready) == 0 && pipe(hold) == 0, "pipes");
     snprintf(a, sizeof(a), "%d", ready[1]);
     snprintf(b, sizeof(b), "%d", hold[0]);
+    snprintf(given, sizeof(given), "helper=%s", helper ? helper : "");
     pid = fork();
     check(pid >= 0, "fork");
     if (pid == 0) {
-        char *args[] = {(char *)path, forked ? "fork" : "hold", a, b, NULL};
+        char *args[] = {(char *)path, forked ? "fork" : "hold", a, b, helper ? given : NULL, NULL};
         close(ready[0]);
         close(hold[1]);
         execv(path, args);
@@ -245,7 +255,7 @@ static void child_mode(char **argv)
     }
     close(atoi(argv[3]));
     if (command == 'x') {
-        char *args[] = {"/musl/statushelper", "0", NULL};
+        char *args[] = {(char *)(helper ? helper : "/musl/statushelper"), "0", NULL};
         execv(args[0], args);
         _exit(116);
     }
@@ -326,10 +336,12 @@ static void filesystem(int tmpfs)
 /** Run the exclusion rows on the boot root and a tmpfs. */
 int main(int argc, char **argv)
 {
-    if (argc == 2) {
+    probe_args(argc, argv);
+    helper = probe_arg("helper", NULL);
+    if (probe_words() == 1) {
         return 117;
     }
-    if (argc == 4) {
+    if (probe_words() == 3) {
         child_mode(argv);
         return 0;
     }

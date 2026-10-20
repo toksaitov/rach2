@@ -984,29 +984,32 @@ static int adjusts(void)
 
 /**
  * Check the extended attribute calls, which no file system here stores, and
- * the advice calls, which change nothing but check their descriptor.
- * Returns 0, or 1 after the failure is printed.
+ * the advice calls, which change nothing but check their descriptor, on
+ * /bin/sh, or on this program's own file when it was started by an absolute
+ * path, as in a native run's root, which has no /bin/sh. Returns 0, or 1
+ * after the failure is printed.
  */
 static int advises(void)
 {
     char v[16];
     int p[2];
-    int fd = open("/bin/sh", O_RDONLY);
+    const char *file = probe_self("/bin/sh");
+    int fd = open(file, O_RDONLY);
 
     if (fd < 0 || pipe(p) != 0) {
-        return fail("/bin/sh and a pipe");
+        return fail("a regular file and a pipe");
     }
-    if (listxattr("/bin/sh", v, sizeof v) != 0 || flistxattr(fd, v, sizeof v) != 0) {
-        return fail("listxattr of /bin/sh was not an empty list");
+    if (listxattr(file, v, sizeof v) != 0 || flistxattr(fd, v, sizeof v) != 0) {
+        return fail("listxattr of a regular file was not an empty list");
     }
-    if (getxattr("/bin/sh", "user.x", v, sizeof v) != -1 || errno != EOPNOTSUPP) {
-        return fail("getxattr of /bin/sh was not EOPNOTSUPP");
+    if (getxattr(file, "user.x", v, sizeof v) != -1 || errno != EOPNOTSUPP) {
+        return fail("getxattr of a regular file was not EOPNOTSUPP");
     }
     if (lsetxattr("/nonexistent", "user.x", "1", 1, 0) != -1 || errno != ENOENT) {
         return fail("lsetxattr of a missing file was not ENOENT");
     }
     if (readahead(fd, 0, 4096) != 0 || posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL) != 0) {
-        return fail("readahead and posix_fadvise of /bin/sh did not return 0");
+        return fail("readahead and posix_fadvise of a regular file did not return 0");
     }
     if (posix_fadvise(p[0], 0, 0, POSIX_FADV_NORMAL) != ESPIPE) {
         return fail("posix_fadvise of a pipe was not ESPIPE");

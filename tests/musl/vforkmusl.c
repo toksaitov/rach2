@@ -13,7 +13,9 @@
  * store of the error the parent then reads. system and popen run a command.
  *
  * The program runs itself as the program the child becomes, with the
- * arguments `wait FD`. It prints "VFORKMUSL OK" and exits 0 on success, or
+ * arguments `wait FD`, by the path /musl/vforkmusl or, when it was started by
+ * an absolute path, as a native run starts it (tests/native/Readme.md), by
+ * that path. It prints "VFORKMUSL OK" and exits 0 on success, or
  * prints "VFORKMUSL FAIL (detail: errno N)" and exits 1 at the first failure.
  */
 
@@ -28,7 +30,11 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-static const char *const SELF = "/musl/vforkmusl";
+#include "../probe_args.h"
+
+/* The path this program execs itself by: /musl/vforkmusl, or the absolute
+ * path it was started by. */
+static const char *self = "/musl/vforkmusl";
 
 /* A word a child that shares the parent's memory stores before its exec. */
 static volatile int word;
@@ -63,7 +69,7 @@ static int run_waiter(void *arg)
 {
     (void)arg;
     word = 42;
-    execl(SELF, "vforkmusl", "wait", msg_arg, (char *)0);
+    execl(self, "vforkmusl", "wait", msg_arg, (char *)0);
     _exit(127);
 }
 
@@ -104,6 +110,8 @@ int main(int argc, char **argv)
     if (argc == 3 && strcmp(argv[1], "wait") == 0) {
         return wait_for_parent(atoi(argv[2]));
     }
+    probe_args(argc, argv);
+    self = probe_self(self);
     if (pipe(msg) != 0) {
         return fail("the pipe the child's program waits on");
     }
