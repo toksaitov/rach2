@@ -459,8 +459,11 @@ static int keeper_launch(struct keeper *kp)
         keeper_send(a->ev, KEEP_EXEC, errno, 0, 0);
         return -1;
     }
-    if (kp->pid == 0)
+    if (kp->pid == 0) {
+        close(go[1]);
+        close(status[0]);
         case_child(a, go[0], status[1]);
+    }
     posix_untrack_runner();
     kp->alive = 1;
     close(go[0]);

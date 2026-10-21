@@ -20,10 +20,11 @@
  * unconfirmed, and processor time of an orphan must be a lower bound; on
  * Linux and Rach2, without it, the keeper must end and count both. A build
  * for Rach2 defines __rach2__, as etude's recipe there does. A refused
- * registration and a
- * failed exec must leave nothing running, a killed keeper must give a lost
- * end, and a controller that ends must have its case ended by the keeper. A
- * case that holds memory and has used processor time must be sampled with
+ * registration and a failed exec must leave nothing running. A keeper killed
+ * during registration must leave its held child ended by EOF; one killed
+ * after exec must give a lost end. A controller that ends must have its case
+ * ended by the keeper. A case that holds memory and has used processor time
+ * must be sampled with
  * both while it runs on Linux and Rach2, and with neither elsewhere, and not
  * once it has ended.
  */
@@ -37,7 +38,12 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
+
+#if defined(__linux__) || defined(__rach2__)
+#include <sys/prctl.h>
+#endif
 
 #if defined(__linux__)
 #include <sys/syscall.h>
@@ -795,6 +801,92 @@ static void test_unrun(struct etude_exec *ex)
           "no program");
 }
 
+/** Record a held case, kill its keeper, and refuse the registration. */
+static int kill_at_registration(void *ctx, const char *attempt_id, const struct etude_pid *keeper,
+                                const struct etude_pid *process)
+{
+    record(ctx, attempt_id, keeper, process);
+    CHECK(kill((pid_t)keeper->pid, SIGKILL) == 0, "held keeper killed");
+    return EIO;
+}
+
+/** Give the monotonic time in milliseconds for a completion bound. */
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
+
+/**
+ * Kill the keeper before it releases the held child. The child must end on
+ * EOF without executing the program. Reap it here where subreapers exist;
+ * otherwise the host's init reaps it. A failure ends the child explicitly.
+ */
+static void test_held_keeper(struct etude_exec *ex)
+{
+    struct want w = {"mark", "held", NULL, LONG_GRACE, 0, EXITED, 0, EXITED, 0, CONFIRMED};
+    const struct registration *reg;
+    struct etude_exec_spec s;
+    struct etude_proc *p = NULL;
+    struct etude_pid id;
+    struct attempt a;
+    struct stat st;
+    struct timespec pause = {0, 1000000};
+    uint64_t until;
+    int gone = 0;
+#if defined(__linux__) || defined(__rach2__)
+    int subreaper = 0, status = 0;
+    pid_t reaped;
+
+    CHECK(prctl(PR_GET_CHILD_SUBREAPER, &subreaper, 0, 0, 0) == 0, "held adoption");
+    CHECK(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0, "held adoption");
+#endif
+
+    memset(&a, 0, sizeof(a));
+    a.w = w;
+    a.w.arg = fix_path("held-mark");
+    spec_for(&s, &a, 0);
+    s.reg = kill_at_registration;
+    CHECK(etude_exec_start(ex, &s, &p) == -1 && errno == EIO && p == NULL, "held start");
+    reg = registered(a.attempt_id);
+    CHECK(reg != NULL && reg->held != 0, "held registration");
+    if (reg != NULL) {
+        until = now_ms() + 5000;
+        do {
+#if defined(__linux__) || defined(__rach2__)
+            reaped = waitpid((pid_t)reg->process, &status, WNOHANG);
+            gone = reaped == (pid_t)reg->process;
+            if (reaped < 0 && errno != EINTR)
+                break;
+#else
+            gone = etude_process_state(reg->process, &id) == 0;
+#endif
+            if (!gone) {
+                /* interval: the child is checked every 1 ms */
+                nanosleep(&pause, NULL);
+            }
+        } while (!gone && now_ms() < until);
+        CHECK(gone, "held child EOF");
+#if defined(__linux__) || defined(__rach2__)
+        if (gone)
+            CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 127, "held child exit");
+#endif
+        if (!gone) {
+            kill((pid_t)reg->process, SIGKILL);
+            while (waitpid((pid_t)reg->process, NULL, 0) < 0 && errno == EINTR) {
+            }
+        }
+        CHECK(etude_process_state(reg->process, &id) == 0, "held child gone");
+        CHECK(etude_process_state(reg->keeper, &id) == 0, "held keeper gone");
+    }
+    CHECK(stat(a.w.arg, &st) != 0 && errno == ENOENT, "held program unrun");
+#if defined(__linux__) || defined(__rach2__)
+    CHECK(prctl(PR_SET_CHILD_SUBREAPER, subreaper, 0, 0, 0) == 0, "held adoption restored");
+#endif
+}
+
 /**
  * Sample a case that holds memory and has used processor time, and sample it
  * again once it has been cancelled and has finished. /proc counts processor
@@ -922,6 +1014,7 @@ int main(int argc, char **argv)
     test_posix_only(ex);
     test_reaper(ex);
     test_unrun(ex);
+    test_held_keeper(ex);
     test_sample(ex);
     test_lost_keeper(ex);
     test_controller_gone();

@@ -41,3 +41,4 @@ tests/host/etude_native_hosttest.c: a process or a group is looked at again ever
 tests/host/etude_legacyrun_hosttest.c: a FIFO is looked at again every 50 ms
 tests/host/etude_legacyset_hosttest.c: a set is looked at again every 50 ms
 tests/host/etude_legacyset_hosttest.c: the record is read again every 50 ms
+tests/host/etude_exec_hosttest.c: the child is checked every 1 ms
