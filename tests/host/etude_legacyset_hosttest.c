@@ -489,7 +489,8 @@ static const struct {
 /* The form of a guest case of a fixture manifest: the tree's rngprobe on
  * the test image, under the processor profile `cpu`, with its boot stage
  * bounded in milliseconds and its kernel built as a node, which casecheck
- * accepts. */
+ * accepts. It reserves a port and a loop device for its native run, which
+ * the driver allows a guest case whose profile forwards no port. */
 static const char guest_form[] =
     "{\"case_id\": \"%s\", \"behavior\": \"The random devices give bytes from a trusted source "
     "or refuse to read without one\",\n"
@@ -533,14 +534,15 @@ static const char guest_form[] =
     "300000000}}},\n"
     " \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
     "268435456,\n"
-    "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 0, \"loop_devices\": 0},\n"
+    "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 1, \"loop_devices\": 1},\n"
     " \"prepare\": [{\"name\": \"rngprobe\", \"node\": \"guest/rngprobe\", \"per_architecture\": "
     "true},\n"
     "  {\"name\": \"kernel\", \"node\": \"%s\", \"per_architecture\": true},\n"
     "  {\"name\": \"etude-guest\", \"node\": \"guest/etude-guest\", \"per_architecture\": true},\n"
     "  {\"name\": \"test-image\", \"node\": \"guest/test.krffs\", \"per_architecture\": true}],\n"
     " \"timing\": [], \"native\": {\"plan\": \"native\", \"fixtures\": [{\"fixture\": "
-    "\"workspace\"}]}}";
+    "\"workspace\"},\n"
+    "  {\"fixture\": \"ports\", \"count\": 1}, {\"fixture\": \"volume\", \"type\": \"krffs\"}]}}";
 
 /* A guest case of a fixture manifest, which guest_text writes. */
 struct gcase {
@@ -571,7 +573,10 @@ static const struct {
     {"init", "\"role\": \"ordinary\"", "\"role\": \"init\""},
     {"ovmf", "\"firmware\": \"direct\"", "\"firmware\": \"ovmf\""},
     {"end", "\"end\": \"exited\", \"value\": 0", "\"end\": \"shutdown\", \"value\": null"},
-    {"disk", "\"disks\": []", "\"disks\": [\"etude-guest\"]"}};
+    {"disk", "\"disks\": []", "\"disks\": [\"etude-guest\"]"},
+    {"forwards", "\"devices\": [\"rtl8139\"]",
+     "\"devices\": [{\"model\": \"rtl8139\", \"forwards\": [{\"protocol\": \"tcp\", "
+     "\"port\": 0, \"guest_port\": 22}]}]"}};
 
 /* The script of the recipes. `meet SELF OTHER` waits two seconds at most
  * for the other suite to be present, and notes whether it met it and its
@@ -2045,6 +2050,9 @@ static void test_cases_refused(void)
          "exits"},
         {"badguest", "cases/badguest/disk.json",
          "fixture.badguest.one: the disk etude-guest is in no disk fixture"},
+        {"badguest", "cases/badguest/forwards.json",
+         "fixture.badguest.one: the case needs loop devices or host locks, which the set driver "
+         "does not give"},
         {"good", "cases/good/good.json", "a suite run by its cases needs casecheck's path"}};
     static struct etude_legacy_member m[sizeof(rows) / sizeof(rows[0])];
     static struct run r[sizeof(rows) / sizeof(rows[0])];

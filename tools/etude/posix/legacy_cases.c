@@ -181,12 +181,41 @@ static const char *runs_on(const struct json *c, const char *arch)
     return NULL;
 }
 
+/** Say whether a card of guest case `c`'s profile forwards a local port. */
+static int forwards_ports(const struct json *c)
+{
+    const struct json *devices = typed(
+        typed(typed(c, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT), "devices", JSON_ARRAY);
+    const struct json *f;
+    size_t i;
+
+    for (i = 0; devices != NULL && i < devices->count; i++) {
+        f = typed(devices->item[i], "forwards", JSON_ARRAY);
+        if (f != NULL && f->count > 0)
+            return 1;
+    }
+    return 0;
+}
+
+/** Say whether case `k` takes its local ports and loop devices only in a
+ * native run, which the driver does not make: a guest case whose profile
+ * forwards no port. */
+static int native_only(const struct legacy_case *k)
+{
+    return k->guest && !forwards_ports(k->json);
+}
+
 /** Take the local ports of case `k`, whose resources are `r`, which the
- * driver gives a machine case alone; 0, or -1 after a refusal. */
+ * driver gives a machine case alone, and a case `native_only` none; 0, or
+ * -1 after a refusal. */
 static int ports_of(struct legacy_manifest *m, struct legacy_case *k, const struct json *r)
 {
     long long n = count_of(r, "ports");
 
+    if (native_only(k)) {
+        k->ports = 0;
+        return 0;
+    }
     if (n < 0 || n > LEGACY_PORTS || (n > 0 && !k->machine))
         return refuse(m,
                       "%s: the case needs local ports, which the set driver gives a machine "
@@ -220,7 +249,7 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     if (in->type != JSON_NULL)
         return refuse(m, "%s: the case reads standard input, which the set driver does not give",
                       k->case_id);
-    if (count_of(r, "loop_devices") != 0 || locks->count != 0)
+    if (locks->count != 0 || (count_of(r, "loop_devices") != 0 && !native_only(k)))
         return refuse(m,
                       "%s: the case needs loop devices or host locks, which the set driver "
                       "does not give",
