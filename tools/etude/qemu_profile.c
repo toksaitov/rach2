@@ -419,8 +419,15 @@ static int station(const char *s, uint64_t *value)
 /** Say whether device `d` gives an option that only a network card can have. */
 static int card_options(const struct etude_qemu_device *d)
 {
-    return d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
+    return d->hub || d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
            d->mac != NULL || d->forward_count != 0 || d->restricted || d->guest_forward_count != 0;
+}
+
+/** Say whether card `d` gives an option that only a user network takes. */
+static int user_options(const struct etude_qemu_device *d)
+{
+    return d->net != NULL || d->host != NULL || d->dhcpstart != NULL || d->dns != NULL ||
+           d->forward_count != 0 || d->guest_forward_count != 0 || d->restricted;
 }
 
 int etude_qemu_devices_check(const struct etude_qemu_device *devices)
@@ -441,6 +448,8 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices)
                 return EINVAL;
             continue;
         }
+        if (d->hub && user_options(d))
+            return EINVAL;
         if (network_check(d) != 0)
             return EINVAL;
         if (d->mac == NULL) {
@@ -486,7 +495,7 @@ int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *addr
     uint32_t net = UINT32_C(0x0a000200), mask = UINT32_C(0xffffff00), a, dhcp;
     const char *end;
 
-    if (address == NULL || ipv4(address, &a, &end) != 0 || *end != '\0' ||
+    if (d->hub || address == NULL || ipv4(address, &a, &end) != 0 || *end != '\0' ||
         (d->net != NULL && subnet(d->net, &net, &mask) != 0))
         return 0;
     dhcp = address_or(d->dhcpstart, net | (UINT32_C(0x020f) & ~mask));
@@ -785,15 +794,16 @@ static void add_network(struct line *l, const struct etude_qemu_profile *p,
 }
 
 /**
- * Attach device `d` of profile `p`; `*nics` counts the cards already on user
- * networks, and a card's network is recorded when `p` has a capture of it.
+ * Attach device `d` of profile `p`; `*nics` counts the cards before it. A
+ * card's network is its user network, or with `hub` a port of hub `*nics`,
+ * which no other card shares, and it is recorded when `p` has a capture of it.
  */
 static void add_device(struct line *l, const struct etude_qemu_profile *p,
                        const struct etude_qemu_device *d, unsigned *nics)
 {
     const char *const members[] = {"id", d->id, "bus", d->bus, "port", d->port, "drive", d->drive};
     const struct etude_qemu_capture *c;
-    char id[16];
+    char id[16], hub[16];
     size_t i;
 
     if (strcmp(d->model, "vga") == 0) {
@@ -803,7 +813,13 @@ static void add_device(struct line *l, const struct etude_qemu_profile *p,
     }
     if (etude_qemu_nic(d->model)) {
         snprintf(id, sizeof(id), "net%u", *nics);
-        add_network(l, p, d, id);
+        if (d->hub) {
+            snprintf(hub, sizeof(hub), "%u", *nics);
+            add(l, 0, "-netdev");
+            add(l, 0, "hubport,id=%s,hubid=%s", id, hub);
+        } else {
+            add_network(l, p, d, id);
+        }
         add(l, 0, "-device");
         add(l, 0, "%s,netdev=%s", d->model, id);
         if (d->mac != NULL)

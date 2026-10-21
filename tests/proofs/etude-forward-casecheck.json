@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-forward-casecheck",
-  "summary": "casecheck refuses the forwards and guest forwards of a machine's cards that the QEMU launcher would refuse, and the forwards, guest forwards and restriction of a guest case's cards",
+  "summary": "casecheck refuses the forwards and guest forwards of a machine's cards that the QEMU launcher would refuse, the forwards, guest forwards and restriction of a guest case's cards, and the options of a user network on a card on a hub",
   "tree": "private",
   "sources": [
     "tools/etude/cases.c"
@@ -246,6 +246,41 @@
         "status": 1,
         "lines": [
           "0 manifest ./networks-ok.json"
+        ]
+      }
+    },
+    {
+      "name": "hub-unread",
+      "summary": "a card's hub is not read, so a card on a hub is taken with a user network's options",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "d->hub = hub != NULL && hub->integer != 0;",
+          "replace": "d->hub = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.network.invalid.bad-hub:",
+          "with the text: fixture.network.invalid.bad-hub-machine:"
+        ]
+      }
+    },
+    {
+      "name": "hub-restriction-unread",
+      "summary": "a card's restriction is not read, so a card on a hub is taken with the restriction",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "d->restricted = restricted != NULL && restricted->integer != 0;",
+          "replace": "d->restricted = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "with the text: fixture.network.invalid.bad-hub-machine:"
         ]
       }
     }

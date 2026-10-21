@@ -144,6 +144,7 @@
         "dns": {"type": "string"},
         "mac": {"type": "string"},
         "restrict": {"type": "boolean"},
+        "hub": {"type": "boolean"},
         "forwards": {"type": "array", "items": {"$ref": "#/$defs/forward"}},
         "guest_forwards": {"type": "array", "items": {"$ref": "#/$defs/guest_forward"}}
       }

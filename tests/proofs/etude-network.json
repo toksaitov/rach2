@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-network",
-  "summary": "card network options reach QEMU and invalid addresses are refused",
+  "summary": "card network options and hubs reach QEMU, and invalid addresses and options are refused",
   "tree": "private",
   "sources": [
     "tools/etude/qemu_profile.c"
@@ -90,6 +90,59 @@
         "status": 1,
         "lines": [
           "duplicate station address"
+        ]
+      }
+    },
+    {
+      "name": "hub-user",
+      "summary": "a card on a hub given a user network",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "\"hubport,id=%s,hubid=%s\", id, hub",
+          "replace": "\"user,id=%s\", id"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "cards on hubs of their own: the command line is"
+        ]
+      }
+    },
+    {
+      "name": "hub-options-taken",
+      "summary": "a card on a hub taken with options of a user network",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "d->hub && user_options(d)",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a hub card with a network: ",
+          "a hub card with the restriction: ",
+          "a hub card with a forward: "
+        ]
+      }
+    },
+    {
+      "name": "hub-elsewhere",
+      "summary": "a hub taken on a device that is no network card",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "return d->hub || ",
+          "replace": "return "
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a hub on a device that is no network card: "
         ]
       }
     }

@@ -216,7 +216,7 @@ static int make_disk(struct legacy_guest *g, size_t i, const struct json *d)
  * why in `g->why`. */
 static int make_devices(struct legacy_guest *g, const struct json *q)
 {
-    const struct json *list = json_member(q, "devices"), *d, *restrict_, *props;
+    const struct json *list = json_member(q, "devices"), *d, *restrict_, *hub, *props;
     struct etude_qemu_device *v;
     size_t i, j, k = 0;
 
@@ -253,6 +253,8 @@ static int make_devices(struct legacy_guest *g, const struct json *q)
         v->mac = json_text(d, "mac");
         restrict_ = json_member(d, "restrict");
         v->restricted = restrict_ != NULL && restrict_->integer;
+        hub = json_member(d, "hub");
+        v->hub = hub != NULL && hub->integer;
     }
     return 0;
 }

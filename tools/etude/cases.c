@@ -386,10 +386,15 @@ static void rule_artifacts(const struct rule *r)
 
 /**
  * Fills `d` with the model and the network options of device `v` of a
- * profile, a name or a card object.
+ * profile, a name or a card object: its addresses, its hub, its restriction,
+ * and how many forwards and guest forwards it has, whose list is not copied.
  */
 static void card_of(const struct json *v, struct etude_qemu_device *d)
 {
+    const struct json *hub = json_member(v, "hub"), *restricted = json_member(v, "restrict");
+    const struct json *forwards = json_member(v, "forwards");
+    const struct json *guest_forwards = json_member(v, "guest_forwards");
+
     memset(d, 0, sizeof(*d));
     d->model = v->type == JSON_STRING ? v->string : json_text(v, "model");
     d->net = json_text(v, "net");
@@ -397,6 +402,10 @@ static void card_of(const struct json *v, struct etude_qemu_device *d)
     d->dhcpstart = json_text(v, "dhcpstart");
     d->dns = json_text(v, "dns");
     d->mac = json_text(v, "mac");
+    d->hub = hub != NULL && hub->integer != 0;
+    d->restricted = restricted != NULL && restricted->integer != 0;
+    d->forward_count = forwards != NULL ? forwards->count : 0;
+    d->guest_forward_count = guest_forwards != NULL ? guest_forwards->count : 0;
 }
 
 /** Check the network options of one QEMU profile with the launcher's rules. */

@@ -47,6 +47,14 @@
  * counts bigmem.sh requires and keep QEMU's resident peak within the
  * reservation.
  *
+ * The network rows check the networks and station addresses of two cards and
+ * of cards on hubs of their own beside a card on a user network, each hub
+ * card on the hub of its own index with its station address and its capture.
+ * They refuse malformed and foreign addresses, bad and duplicate station
+ * addresses, a card on a hub with an option of a user network, the
+ * restriction, a forward or a guest forward, and a hub on a device that is no
+ * network card. With `--network` the program runs only these rows.
+ *
  * The forward rows check the user network of each network card as text: the
  * forwards of the case's local ports by TCP and by UDP, a card without
  * forwards, and a card's network options before its forwards. They refuse a
@@ -2022,6 +2030,76 @@ static void test_card(void)
           "a guest forward from outside the card's network");
 }
 
+/**
+ * Check cards on hubs of their own beside a card on a user network: each hub
+ * card's `-netdev` is a port of the hub of its own index, with its station
+ * address and its capture as on a user network. A hub card with an option of
+ * a user network, and a hub on a device that is no network card, are refused,
+ * each taken once the hub is removed, and a hub card has no address of a
+ * guest forward.
+ */
+static void test_hubs(void)
+{
+    static const unsigned ports[] = {40001};
+    static const char *const relay[] = {"/r/relay", NULL};
+    static const char *const want =
+        "-netdev user,id=net0,net=10.0.3.0/24 -device rtl8139,netdev=net0 "
+        "-netdev hubport,id=net1,hubid=1 -device e1000,netdev=net1,mac=52:54:00:12:34:60 "
+        "-object filter-dump,id=net1-dump,netdev=net1,file=/w/hub.pcap "
+        "-netdev hubport,id=net2,hubid=2 -device rtl8139,netdev=net2 -chardev";
+    static const struct etude_qemu_capture captures[] = {{1, "/w/hub.pcap"}, {0, NULL}};
+    struct etude_qemu_site site = {ETUDE_ACCEL_TCG, "/q/i686", "/q/x86_64", NULL, NULL, 0};
+    struct etude_qemu_forward fw = {0, 0, 22};
+    struct etude_qemu_guest_forward gf = {"10.0.2.100", 443, 0, relay};
+    struct etude_qemu_device devices[] = {{.model = "rtl8139", .net = "10.0.3.0/24"},
+                                          {.model = "e1000", .mac = "52:54:00:12:34:60", .hub = 1},
+                                          {.model = "rtl8139", .hub = 1},
+                                          {0}};
+    struct etude_qemu_device *d = &devices[1];
+    struct etude_qemu_profile p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    memset(&p, 0, sizeof(p));
+    p.architecture = "i686";
+    p.kernel = "/k/kernel";
+    p.cpu = "max";
+    p.processors = 1;
+    p.memory_bytes = 128u << 20;
+    p.firmware = ETUDE_FIRMWARE_DIRECT;
+    p.devices = devices;
+    p.ports = ports;
+    p.port_count = 1;
+    p.captures = captures;
+    has(&p, &site, want, "cards on hubs of their own");
+#define HUB_REFUSED(change, undo, row)                                                     \
+    do {                                                                                   \
+        change;                                                                            \
+        d->hub = 0;                                                                        \
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, row " taken without the hub"); \
+        d->hub = 1;                                                                        \
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, row);                     \
+        undo;                                                                              \
+    } while (0)
+    HUB_REFUSED(d->net = "10.0.4.0/24", d->net = NULL, "a hub card with a network");
+    HUB_REFUSED(d->host = "10.0.2.2", d->host = NULL, "a hub card with a host address");
+    HUB_REFUSED(d->dhcpstart = "10.0.2.20", d->dhcpstart = NULL, "a hub card with a DHCP address");
+    HUB_REFUSED(d->dns = "10.0.2.3", d->dns = NULL, "a hub card with a name server address");
+    HUB_REFUSED(d->restricted = 1, d->restricted = 0, "a hub card with the restriction");
+    HUB_REFUSED((d->forwards = &fw, d->forward_count = 1),
+                (d->forwards = NULL, d->forward_count = 0), "a hub card with a forward");
+    HUB_REFUSED((d->guest_forwards = &gf, d->guest_forward_count = 1),
+                (d->guest_forwards = NULL, d->guest_forward_count = 0),
+                "a hub card with a guest forward");
+    HUB_REFUSED((d->model = "virtio-rng-pci", d->mac = NULL),
+                (d->model = "e1000", d->mac = "52:54:00:12:34:60"),
+                "a hub on a device that is no network card");
+#undef HUB_REFUSED
+    CHECK(make(&p, &site, argv, buf, sizeof(buf)) == 0, "the hub cards are taken again");
+    CHECK(!etude_qemu_guest_address(d, "10.0.2.100"), "an address of a guest forward on a hub");
+    d->hub = 0;
+    CHECK(etude_qemu_guest_address(d, "10.0.2.100"), "that address on the user network");
+}
+
 /** Give the command line of `argv` as one line, its arguments separated by
  * spaces, in the `size` bytes of `line`. */
 static const char *joined(char *const *argv, char *line, size_t size)
@@ -2308,6 +2386,7 @@ static int test_alone(const char *opt)
     } else if (strcmp(opt, "--network") == 0) {
         test_network_argv();
         test_network_refused();
+        test_hubs();
     } else if (strcmp(opt, "--capture") == 0) {
         test_captures();
     } else if (strcmp(opt, "--audio") == 0) {
@@ -2350,6 +2429,7 @@ int main(int argc, char **argv)
         test_argv();
         test_network_argv();
         test_network_refused();
+        test_hubs();
         test_forwards();
         test_guest_addresses();
         test_guest_forwards();

@@ -322,7 +322,8 @@
 1 manifest ./memory.json | ordinary-short: memory_bytes does not reserve QEMU memory and overhead
 1 manifest ./memory.json | pair-short: memory_bytes does not reserve QEMU memory and overhead
 
-# Card objects use the same network rules in guest and machine profiles.
+# Card objects use the same network rules in guest and machine profiles, and
+# a card on a hub, which either may have, takes no option of a user network.
 0 manifest ./network-valid.json
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-net: invalid QEMU network options or duplicate station address
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-host: invalid QEMU network options or duplicate station address
@@ -331,6 +332,8 @@
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-mac: invalid QEMU network options or duplicate station address
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-duplicate: invalid QEMU network options or duplicate station address
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-machine: invalid QEMU network options or duplicate station address
+1 manifest ./network-invalid.json | fixture.network.invalid.bad-hub: invalid QEMU network options or duplicate station address
+1 manifest ./network-invalid.json | fixture.network.invalid.bad-hub-machine: invalid QEMU network options or duplicate station address
 
 # A profile's disks are of the forms the launcher attaches, and attaches
 # together, each given once; an empty disk is no artifact and has one size;

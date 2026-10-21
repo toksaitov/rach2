@@ -56,7 +56,8 @@ struct etude_qemu_guest_forward {
 /*
  * A device of a profile: `-device MODEL` with the members given. The network
  * members are a card's alone, for rtl8139 and e1000, and NULL leaves QEMU's
- * default.
+ * default. A card is on a user network of its own, or with `hub` on a hub of
+ * its own, where nothing answers it.
  */
 struct etude_qemu_device {
     const char *model;             /* QEMU's name of it; NULL ends a list */
@@ -78,13 +79,16 @@ struct etude_qemu_device {
     /* `guest_forward_count` guest forwards */
     const struct etude_qemu_guest_forward *guest_forwards;
     size_t guest_forward_count;
+    int hub; /* a hub port of its own in place of the user network, with no
+                network options, restriction or forwards */
 };
 
 /**
  * Check device models and network options, including IPv4 subnet membership,
  * unicast station addresses and duplicate explicit or default addresses.
- * Network options, the restriction, forwards and guest forwards are valid
- * only for rtl8139 and e1000.
+ * Network options, the restriction, forwards, guest forwards and `hub` are
+ * valid only for rtl8139 and e1000, and a card with `hub` has no network
+ * option but its station address, no restriction and no forwards.
  *
  * @return 0, or EINVAL for an invalid device list; NULL is an empty list.
  */
@@ -95,8 +99,8 @@ int etude_qemu_devices_check(const struct etude_qemu_device *devices);
  * network of card `d`: a dotted decimal address of the network that is not
  * the network's own, its broadcast address, the host's, its name server's or
  * one of the sixteen that DHCP gives from `dhcpstart`, each as the card gives
- * it or as QEMU's default for the network. A card whose network options
- * etude_qemu_devices_check refuses has no such address.
+ * it or as QEMU's default for the network. A card on a hub, and one whose
+ * network options etude_qemu_devices_check refuses, has no such address.
  */
 int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *address);
 
