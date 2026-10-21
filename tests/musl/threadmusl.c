@@ -38,7 +38,11 @@
  * display belongs to the process, whichever thread opened it.
  *
  * It prints "THREADMUSL OK" and exits 0 on success, or prints "THREADMUSL
- * FAIL (detail: errno N)" and exits 1 at the first failure.
+ * FAIL (detail: errno N)" and exits 1 at the first failure. It writes etude's
+ * report records (../probe_report.h) for the case ETUDE_CASE names, an
+ * assertion for each check `checks` lists, with the branch `framebuffer`
+ * absent given `machine=native` and present otherwise; a failure leaves the
+ * checks after it not run. Given `row=framebuffer`, it writes none.
  *
  * Needs: the console as stdin, in canonical mode, as a boot of the default
  * suite has it; the framebuffer's row reads it.
@@ -74,6 +78,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define THREADS 4
 #define ROUNDS  10000
@@ -107,10 +112,204 @@ static volatile pid_t ids[THREADS];
 static volatile int handled_by;
 static volatile int spare_blocked;
 
-/** Report one failed check with errno and return 1, the failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    PTHREAD_CREATE,
+    THREAD_IDS,
+    COUNT_IDS,
+    COND_CREATE,
+    COND_ASLEEP,
+    COND_VALUE,
+    KILL_CREATE,
+    KILL_THREAD,
+    TASK_TWO,
+    LINKS_FOUR,
+    TASK_DIR,
+    NO_TASK_DIR,
+    DIR_LINK,
+    RELATIVE,
+    FD_LINK,
+    OTHER_PROCESS,
+    NO_PROCESS,
+    SPIN_THREAD,
+    BUSY_TIME,
+    SLEEPING_TIME,
+    PROCESS_TIME,
+    OPENED,
+    CLOSED,
+    EXEC_FAILED,
+    DIR_UMASK,
+    PROC_EXE,
+    PIPE_READER,
+    READER_ASLEEP,
+    CLOSED_READ,
+    NUMBER_FREE,
+    MASK_WAKE,
+    MASK_ASLEEP,
+    MASK_TAKEN,
+    STATUS_PAGE,
+    WAIT_CREATE,
+    WAIT_ASLEEP,
+    WAIT_EFAULT,
+    ZOMBIE,
+    TCP_SETUP,
+    TCP_RECV_SETUP,
+    TCP_RECV_ASLEEP,
+    TCP_RECV_UNMAP,
+    TCP_RECV_EFAULT,
+    TCP_RECV_QUEUED,
+    TCP_FILL,
+    TCP_SEND_SETUP,
+    TCP_SEND_ASLEEP,
+    TCP_SEND_UNMAP,
+    TCP_SEND_EFAULT,
+    TCP_SEND_NOTHING,
+    UDP_SETUP,
+    UDP_RECV_SETUP,
+    UDP_RECV_ASLEEP,
+    UDP_RECV_UNMAP,
+    UDP_EFAULT,
+    UDP_QUEUED,
+    FB_THREAD,
+    FB_CONSOLE,
+    FB_OPEN,
+    FB_PALETTE,
+    FB_PIXEL,
+    FB_SCANCODES,
+    FB_CLOSE,
+    FB_GIVEN_BACK,
+    SIGNAL_PENDING,
+    SIGNAL_CREATE,
+    SIGNAL_TAKEN,
+    FORK_ONE_THREAD,
+    LINKS_THREE,
+    THREAD_EXEC,
+    TWO_PIPES,
+    TWO_EXECS,
+    ROBUST_INIT,
+    ROBUST_CHILD,
+    ROBUST_OWNERDEAD,
+    EXIT_ALL,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"pthread-create", "pthread_create"},
+    {"thread-ids", "a thread's id or its thread-local variable"},
+    {"count-ids", "the count under the mutex, or the ids"},
+    {"cond-create", "pthread_create for the condition"},
+    {"cond-asleep", "the receiver was never seen asleep in pthread_cond_wait"},
+    {"cond-value", "the condition variable"},
+    {"kill-create", "pthread_create for pthread_kill"},
+    {"kill-thread", "pthread_kill ran the handler in the wrong thread"},
+    {"task-two", "/proc/self/task did not list two threads"},
+    {"links-four", "/proc/self/task of two threads did not have four links"},
+    {"task-dir", "a thread's directory"},
+    {"no-task-dir", "a thread's directory lists a task directory"},
+    {"dir-link", "the link of a thread's directory"},
+    {"relative", "a name relative to a thread's directory"},
+    {"fd-link", "a thread's descriptor link"},
+    {"other-process", "a thread under another process's task directory"},
+    {"no-process", "a task path under no process"},
+    {"spin-thread", "the thread that spins"},
+    {"busy-time", "a busy thread's own time"},
+    {"sleeping-time", "a sleeping thread's time in its task stat"},
+    {"process-time", "the process's time in its stat"},
+    {"opened", "a descriptor a thread opened"},
+    {"closed", "a descriptor a thread closed"},
+    {"exec-failed", "a descriptor a thread opened after its execve failed"},
+    {"dir-umask", "the directory and umask a thread changed"},
+    {"proc-exe", "/proc/self/exe"},
+    {"pipe-reader", "the pipe and its reader"},
+    {"reader-asleep", "the reader was never seen asleep in its read"},
+    {"closed-read", "a read on a descriptor another thread closed"},
+    {"number-free", "the number of a descriptor closed under a read"},
+    {"mask-wake", "a signal a handler's mask blocked did not wake the other thread"},
+    {"mask-asleep", "the two threads were not seen asleep in sigsuspend"},
+    {"mask-taken", "the two signals were not taken by the two threads"},
+    {"status-page", "the status page and the pipe"},
+    {"wait-create", "pthread_create for the wait"},
+    {"wait-asleep", "the wait was never seen asleep before its status page went"},
+    {"wait-efault", "a wait whose status page went while it slept did not fail with EFAULT"},
+    {"zombie", "the zombie a failed wait left was not reaped with its status"},
+    {"tcp-setup", "setup for a TCP connection over the loopback"},
+    {"tcp-recv-setup", "setup for a socket call whose buffer goes"},
+    {"tcp-recv-asleep", "a socket call was never seen asleep before its buffer went"},
+    {"tcp-recv-unmap", "munmap of a sleeping socket call's buffer"},
+    {"tcp-recv-efault", "a TCP receive whose buffer went while it slept did not fail with EFAULT"},
+    {"tcp-recv-queued", "the byte a failed TCP receive woke for was not left queued"},
+    {"tcp-fill", "setup: filling a TCP connection's send buffer"},
+    {"tcp-send-setup", "setup for a socket call whose buffer goes"},
+    {"tcp-send-asleep", "a socket call was never seen asleep before its buffer went"},
+    {"tcp-send-unmap", "munmap of a sleeping socket call's buffer"},
+    {"tcp-send-efault", "a TCP send whose buffer went while it slept did not fail with EFAULT"},
+    {"tcp-send-nothing", "a TCP send that failed with EFAULT queued bytes"},
+    {"udp-setup", "setup for a UDP socket on the loopback"},
+    {"udp-recv-setup", "setup for a socket call whose buffer goes"},
+    {"udp-recv-asleep", "a socket call was never seen asleep before its buffer went"},
+    {"udp-recv-unmap", "munmap of a sleeping socket call's buffer"},
+    {"udp-efault", "a UDP receive whose buffer went while it slept did not fail with EFAULT"},
+    {"udp-queued", "the datagram a failed UDP receive woke for was not left queued"},
+    {"fb-thread", "a thread for the framebuffer"},
+    {"fb-console", "the console's queue of lines could not be emptied"},
+    {"fb-open", "a thread's open of the framebuffer"},
+    {"fb-palette", "a thread's palette on the framebuffer it opened"},
+    {"fb-pixel", "a thread's pixel on the framebuffer it opened"},
+    {"fb-scancodes", "a thread that owns the framebuffer reads raw scancodes"},
+    {"fb-close", "a thread's close of the framebuffer"},
+    {"fb-given-back", "the display a thread's close gave back"},
+    {"signal-pending", "a process signal all threads block was not pending with no handler run"},
+    {"signal-create", "pthread_create for the process signal"},
+    {"signal-taken", "a process signal did not reach the thread that has it unblocked"},
+    {"fork-one-thread", "a child forked by a thread did not have one thread"},
+    {"links-three", "/proc/self/task of one thread did not have three links"},
+    {"thread-exec", "execve from a thread"},
+    {"two-pipes", "the pipes of the two execs"},
+    {"two-execs", "two execs at once"},
+    {"robust-init", "the robust mutex"},
+    {"robust-child", "the child whose thread locked a robust mutex and called execve"},
+    {"robust-ownerdead", "a robust mutex a thread held into its execve"},
+    {"exit-all", "exit from a thread did not end the process"},
+};
+
+/** In the process that began the report, report the branch of the group
+ * `framebuffer`, every check of it before `check` as held, `check` as failed
+ * with its text, those after it as not run, and the report's end; with
+ * `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("THREADMUSL FAIL (%s: errno %d)\n", what, errno);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    report_branch("framebuffer", probe_native() ? "absent" : "present");
+    for (i = 0; i < CHECKS; i++) {
+        if (probe_native() && i >= FB_THREAD && i <= FB_GIVEN_BACK) {
+            continue;
+        }
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check`, with errno, and return 1, the probe's
+ * failure status. */
+static int fail(int check)
+{
+    printf("THREADMUSL FAIL (%s: errno %d)\n", checks[check].text, errno);
+    report_at(check);
+
     return 1;
 }
 
@@ -228,13 +427,13 @@ static int process_signal_row(void)
     pthread_sigmask(SIG_BLOCK, &block, NULL);
     kill(getpid(), SIGUSR1);
     if (sigpending(&pending) != 0 || sigismember(&pending, SIGUSR1) != 1 || handled_by != 0) {
-        return fail("a process signal all threads block was not pending with no handler run");
+        return fail(SIGNAL_PENDING);
     }
     if (pthread_create(&w, NULL, wait_signal, NULL) != 0) {
-        return fail("pthread_create for the process signal");
+        return fail(SIGNAL_CREATE);
     }
     if (pthread_join(w, NULL) != 0 || handled_by == 0 || handled_by == tid()) {
-        return fail("a process signal did not reach the thread that has it unblocked");
+        return fail(SIGNAL_TAKEN);
     }
     pthread_sigmask(SIG_UNBLOCK, &block, NULL);
     return 0;
@@ -313,20 +512,20 @@ static int task_paths(pid_t t)
     snprintf(dir, sizeof(dir), "/proc/%d/task/%d", (int)getpid(), (int)t);
     d = opendir(dir);
     if (!d) {
-        return fail("a thread's directory");
+        return fail(TASK_DIR);
     }
     while ((e = readdir(d)) != NULL) {
         task |= strcmp(e->d_name, "task") == 0;
     }
     closedir(d);
     if (task) {
-        return fail("a thread's directory lists a task directory");
+        return fail(NO_TASK_DIR);
     }
     dirfd = open(dir, O_RDONLY | O_DIRECTORY);
     snprintf(path, sizeof(path), "/proc/self/fd/%d", dirfd);
     n = readlink(path, link, sizeof(link) - 1);
     if (dirfd < 0 || n <= 0 || (link[n] = '\0', strcmp(link, dir) != 0)) {
-        return fail("the link of a thread's directory");
+        return fail(DIR_LINK);
     }
     fd = openat(dirfd, "stat", O_RDONLY);
     close(dirfd);
@@ -335,11 +534,11 @@ static int task_paths(pid_t t)
         close(fd);
     }
     if (n <= 0 || (link[n] = '\0', strtol(link, NULL, 10) != (long)t)) {
-        return fail("a name relative to a thread's directory");
+        return fail(RELATIVE);
     }
     snprintf(path, sizeof(path), "%s/fd/0", dir);
     if (lstat(path, &st) != 0 || !S_ISLNK(st.st_mode)) {
-        return fail("a thread's descriptor link");
+        return fail(FD_LINK);
     }
     other = fork();
     if (other == 0) {
@@ -357,11 +556,11 @@ static int task_paths(pid_t t)
         waitpid(other, NULL, 0);
     }
     if (other < 0 || fd != -1 || err != ENOENT) {
-        return fail("a thread under another process's task directory");
+        return fail(OTHER_PROCESS);
     }
     snprintf(path, sizeof(path), "/proc/999999/task/%d/status", (int)t);
     if (open(path, O_RDONLY) != -1 || errno != ENOENT) {
-        return fail("a task path under no process");
+        return fail(NO_PROCESS);
     }
     return 0;
 }
@@ -442,17 +641,17 @@ static int thread_times(pid_t t)
     snprintf(first, sizeof(first), "/proc/self/task/%d/stat", (int)tid());
     rested = stat_ticks(other);
     if (pthread_create(&s, NULL, spin_main, NULL) != 0 || pthread_join(s, NULL) != 0) {
-        return fail("the thread that spins");
+        return fail(SPIN_THREAD);
     }
     if (spun_from < 0 || spun_to < spun_from + 5) {
-        return fail("a busy thread's own time");
+        return fail(BUSY_TIME);
     }
     if (rested < 0 || stat_ticks(other) - rested >= spun_to - spun_from) {
-        return fail("a sleeping thread's time in its task stat");
+        return fail(SLEEPING_TIME);
     }
     own = stat_ticks(first);
     if (own < 0 || stat_ticks("/proc/self/stat") < own + (spun_to - spun_from)) {
-        return fail("the process's time in its stat");
+        return fail(PROCESS_TIME);
     }
     return 0;
 }
@@ -588,17 +787,17 @@ static int condition_row(void)
     void *result;
 
     if (pthread_create(&r, NULL, receive, NULL) != 0) {
-        return fail("pthread_create for the condition");
+        return fail(COND_CREATE);
     }
     if (!thread_asleep(&receiver_tid)) {
-        return fail("the receiver was never seen asleep in pthread_cond_wait");
+        return fail(COND_ASLEEP);
     }
     pthread_mutex_lock(&lock);
     handed = 5;
     pthread_cond_signal(&ready);
     pthread_mutex_unlock(&lock);
     if (pthread_join(r, &result) != 0 || (long)result != 5) {
-        return fail("the condition variable");
+        return fail(COND_VALUE);
     }
     return 0;
 }
@@ -618,42 +817,42 @@ static int sharing(void)
 
     if (pthread_create(&t, NULL, open_file, NULL) != 0 || pthread_join(t, NULL) != 0 ||
         shared_fd < 0 || write(shared_fd, "x", 1) != 1) {
-        return fail("a descriptor a thread opened");
+        return fail(OPENED);
     }
     if (pthread_create(&t, NULL, close_file, NULL) != 0 || pthread_join(t, &result) != 0 ||
         result != 0 || fcntl(shared_fd, F_GETFD) != -1 || errno != EBADF) {
-        return fail("a descriptor a thread closed");
+        return fail(CLOSED);
     }
     shared_fd = -1;
     if (pthread_create(&t, NULL, exec_missing, NULL) != 0 || pthread_join(t, &result) != 0 ||
         (long)result != 1 || shared_fd < 0 || write(shared_fd, "x", 1) != 1 ||
         close(shared_fd) != 0) {
-        return fail("a descriptor a thread opened after its execve failed");
+        return fail(EXEC_FAILED);
     }
     if (pthread_create(&t, NULL, change_dir, NULL) != 0 || pthread_join(t, &result) != 0 ||
         result != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/tmp") != 0 || umask(022) != 077 ||
         chdir("/") != 0) {
-        return fail("the directory and umask a thread changed");
+        return fail(DIR_UMASK);
     }
     n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (n <= 0 || (exe[n] = '\0', strcmp(exe, probe_self("/musl/threadmusl")) != 0)) {
-        return fail("/proc/self/exe");
+        return fail(PROC_EXE);
     }
 
     if (pipe(pipe_fds) != 0 || pthread_create(&t, NULL, read_pipe, NULL) != 0) {
-        return fail("the pipe and its reader");
+        return fail(PIPE_READER);
     }
     if (!thread_asleep(&reader_tid)) {
-        return fail("the reader was never seen asleep in its read");
+        return fail(READER_ASLEEP);
     }
     if (close(pipe_fds[0]) != 0 || write(pipe_fds[1], "x", 1) != 1 ||
         pthread_join(t, &result) != 0 || (long)result != 1) {
-        return fail("a read on a descriptor another thread closed");
+        return fail(CLOSED_READ);
     }
     i = pipe_fds[0];
     close(pipe_fds[1]);
     if (pipe(pipe_fds) != 0 || pipe_fds[0] != i) {
-        return fail("the number of a descriptor closed under a read");
+        return fail(NUMBER_FREE);
     }
     close(pipe_fds[0]);
     close(pipe_fds[1]);
@@ -862,15 +1061,15 @@ static int handler_mask_row(void)
             say_threads(pid);
             kill(pid, SIGKILL);
             waitpid(pid, &status, 0);
-            return fail("a signal a handler's mask blocked did not wake the other thread");
+            return fail(MASK_WAKE);
         }
         usleep(10000);
     }
     if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
-        return fail("the two threads were not seen asleep in sigsuspend");
+        return fail(MASK_ASLEEP);
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the two signals were not taken by the two threads");
+        return fail(MASK_TAKEN);
     }
     return 0;
 }
@@ -914,24 +1113,24 @@ static int lost_status_row(void)
 
     status_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (status_page == MAP_FAILED || pipe(p) != 0) {
-        return fail("the status page and the pipe");
+        return fail(STATUS_PAGE);
     }
     child = fork();
     if (child == 0) {
         _exit(read(p[0], &c, 1) == 1 ? 7 : 1);
     }
     if (pthread_create(&t, NULL, wait_unmapped, &child) != 0) {
-        return fail("pthread_create for the wait");
+        return fail(WAIT_CREATE);
     }
     if (!thread_asleep(&waiter_tid)) {
-        return fail("the wait was never seen asleep before its status page went");
+        return fail(WAIT_ASLEEP);
     }
     if (munmap(status_page, 4096) != 0 || write(p[1], "x", 1) != 1 ||
         pthread_join(t, &result) != 0 || (long)result != EFAULT) {
-        return fail("a wait whose status page went while it slept did not fail with EFAULT");
+        return fail(WAIT_EFAULT);
     }
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
-        return fail("the zombie a failed wait left was not reaped with its status");
+        return fail(ZOMBIE);
     }
     close(p[0]);
     close(p[1]);
@@ -974,22 +1173,23 @@ static void *send_lost(void *arg)
 
 /**
  * Start `body` on the socket `*fd` with its buffer in a page of its own,
- * wait until the thread is seen asleep, and unmap the page. Returns 0, or 1
- * after the failure is printed. A thread never seen asleep keeps its page,
- * since its call may not have begun, and is left for the exit to end.
+ * wait until the thread is seen asleep, and unmap the page, as the checks
+ * `check`, `check + 1` and `check + 2`. Returns 0, or 1 after the failure is
+ * printed. A thread never seen asleep keeps its page, since its call may not
+ * have begun, and is left for the exit to end.
  */
-static int lost_buffer_call(pthread_t *t, void *(*body)(void *), int *fd)
+static int lost_buffer_call(pthread_t *t, void *(*body)(void *), int *fd, int check)
 {
     lost_tid = 0;
     lost_page = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (lost_page == MAP_FAILED || pthread_create(t, NULL, body, fd) != 0) {
-        return fail("setup for a socket call whose buffer goes");
+        return fail(check);
     }
     if (!thread_asleep(&lost_tid)) {
-        return fail("a socket call was never seen asleep before its buffer went");
+        return fail(check + 1);
     }
     if (munmap(lost_page, 4096) != 0) {
-        return fail("munmap of a sleeping socket call's buffer");
+        return fail(check + 2);
     }
     return 0;
 }
@@ -1027,34 +1227,34 @@ static int lost_tcp_rows(void)
     if (ls < 0 || cs < 0 || bind(ls, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
         listen(ls, 1) != 0 || connect(cs, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
         (as = accept(ls, NULL, NULL)) < 0) {
-        return fail("setup for a TCP connection over the loopback");
+        return fail(TCP_SETUP);
     }
-    if (lost_buffer_call(&t, recv_lost, &cs) != 0) {
+    if (lost_buffer_call(&t, recv_lost, &cs, TCP_RECV_SETUP) != 0) {
         return 1;
     }
     if (write(as, "x", 1) != 1 || !failed_efault(t)) {
-        return fail("a TCP receive whose buffer went while it slept did not fail with EFAULT");
+        return fail(TCP_RECV_EFAULT);
     }
     if (recv(cs, &c, 1, 0) != 1 || c != 'x') {
-        return fail("the byte a failed TCP receive woke for was not left queued");
+        return fail(TCP_RECV_QUEUED);
     }
     while ((n = send(cs, chunk, sizeof(chunk), MSG_DONTWAIT)) > 0 && queued < 4L << 20) {
         queued += n;
     }
     if (n != -1 || errno != EAGAIN) {
-        return fail("setup: filling a TCP connection's send buffer");
+        return fail(TCP_FILL);
     }
-    if (lost_buffer_call(&t, send_lost, &cs) != 0) {
+    if (lost_buffer_call(&t, send_lost, &cs, TCP_SEND_SETUP) != 0) {
         return 1;
     }
     while (got < queued && (n = read(as, chunk, sizeof(chunk))) > 0) {
         got += n;
     }
     if (!failed_efault(t)) {
-        return fail("a TCP send whose buffer went while it slept did not fail with EFAULT");
+        return fail(TCP_SEND_EFAULT);
     }
     if (got != queued || recv(as, chunk, 1, MSG_DONTWAIT) != -1 || errno != EAGAIN) {
-        return fail("a TCP send that failed with EFAULT queued bytes");
+        return fail(TCP_SEND_NOTHING);
     }
     close(as);
     close(cs);
@@ -1080,16 +1280,16 @@ static int lost_udp_row(void)
     sa.sin_port = htons(LOST_UDP_PORT);
     sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (us < 0 || bind(us, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
-        return fail("setup for a UDP socket on the loopback");
+        return fail(UDP_SETUP);
     }
-    if (lost_buffer_call(&t, recv_lost, &us) != 0) {
+    if (lost_buffer_call(&t, recv_lost, &us, UDP_RECV_SETUP) != 0) {
         return 1;
     }
     if (sendto(us, "y", 1, 0, (struct sockaddr *)&sa, sizeof(sa)) != 1 || !failed_efault(t)) {
-        return fail("a UDP receive whose buffer went while it slept did not fail with EFAULT");
+        return fail(UDP_EFAULT);
     }
     if (recv(us, &c, 1, MSG_DONTWAIT) != 1 || c != 'y') {
-        return fail("the datagram a failed UDP receive woke for was not left queued");
+        return fail(UDP_QUEUED);
     }
     close(us);
     return 0;
@@ -1167,23 +1367,17 @@ static void *use_framebuffer(void *arg)
  */
 static int framebuffer_row(void)
 {
-    static const char *const steps[] = {"the console's queue of lines could not be emptied",
-                                        "a thread's open of the framebuffer",
-                                        "a thread's palette on the framebuffer it opened",
-                                        "a thread's pixel on the framebuffer it opened",
-                                        "a thread that owns the framebuffer reads raw scancodes",
-                                        "a thread's close of the framebuffer"};
     pthread_t t;
     void *result;
     pid_t child;
     int status;
 
     if (pthread_create(&t, NULL, use_framebuffer, NULL) != 0 || pthread_join(t, &result) != 0) {
-        return fail("a thread for the framebuffer");
+        return fail(FB_THREAD);
     }
     if ((long)result != 0) {
         errno = fb_errno;
-        return fail(steps[(long)result - 1]);
+        return fail(FB_CONSOLE + (int)(long)result - 1);
     }
     child = fork();
     if (child == 0) {
@@ -1193,7 +1387,7 @@ static int framebuffer_row(void)
     }
     if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("the display a thread's close gave back");
+        return fail(FB_GIVEN_BACK);
     }
     return 0;
 }
@@ -1224,7 +1418,8 @@ static int framebuffer_alone(void)
     int fd = open("/dev/console", O_RDWR);
 
     if (fd < 0 || dup2(fd, 0) != 0) {
-        return fail("the console as standard input");
+        printf("THREADMUSL FAIL (the console as standard input: errno %d)\n", errno);
+        return 1;
     }
     if (fd != 0) {
         close(fd);
@@ -1320,7 +1515,7 @@ static int robust_exec(void)
         pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED) != 0 ||
         pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST) != 0 ||
         pthread_mutex_init(robust, &attr) != 0) {
-        return fail("the robust mutex");
+        return fail(ROBUST_INIT);
     }
     pid = fork();
     if (pid == 0) {
@@ -1332,14 +1527,14 @@ static int robust_exec(void)
         _exit(4);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
-        return fail("the child whose thread locked a robust mutex and called execve");
+        return fail(ROBUST_CHILD);
     }
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 5;
     rc = pthread_mutex_timedlock(robust, &deadline);
     if (rc != EOWNERDEAD) {
         errno = rc;
-        return fail("a robust mutex a thread held into its execve");
+        return fail(ROBUST_OWNERDEAD);
     }
     pthread_mutex_consistent(robust);
     pthread_mutex_unlock(robust);
@@ -1364,7 +1559,7 @@ static int two_execs(void)
     char c;
 
     if (pipe(go) != 0 || pipe(tid_pipe) != 0) {
-        return fail("the pipes of the two execs");
+        return fail(TWO_PIPES);
     }
     pid = fork();
     if (pid == 0) {
@@ -1394,7 +1589,7 @@ static int two_execs(void)
     close(go[1]);
     close(tid_pipe[0]);
     close(tid_pipe[1]);
-    return ok ? 0 : fail("two execs at once");
+    return ok ? 0 : fail(TWO_EXECS);
 }
 
 /**
@@ -1417,7 +1612,7 @@ static int thread_exec_row(void)
         _exit(1);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
-        return fail("execve from a thread");
+        return fail(THREAD_EXEC);
     }
     return 0;
 }
@@ -1433,19 +1628,20 @@ int main(int argc, char **argv)
     if (strcmp(probe_arg("row", ""), "framebuffer") == 0) {
         return framebuffer_alone();
     }
+    report_begin(report_case(environ, "guest.default.threadmusl"));
     mine = 1;
     for (i = 0; i < THREADS; i++) {
         if (pthread_create(&t[i], NULL, count, (void *)(long)i) != 0) {
-            return fail("pthread_create");
+            return fail(PTHREAD_CREATE);
         }
     }
     for (i = 0; i < THREADS; i++) {
         if (pthread_join(t[i], &result) != 0 || (long)result != 1) {
-            return fail("a thread's id or its thread-local variable");
+            return fail(THREAD_IDS);
         }
     }
     if (counter != THREADS * ROUNDS || mine != 1 || ids[0] == ids[1]) {
-        return fail("the count under the mutex, or the ids");
+        return fail(COUNT_IDS);
     }
 
     if (condition_row() != 0) {
@@ -1454,20 +1650,20 @@ int main(int argc, char **argv)
 
     signal(SIGUSR1, on_usr1);
     if (pthread_create(&spare, NULL, spare_main, NULL) != 0) {
-        return fail("pthread_create for pthread_kill");
+        return fail(KILL_CREATE);
     }
     pthread_kill(spare, SIGUSR1);
     while (!spare_blocked) {
         sched_yield();
     }
     if (handled_by == tid()) {
-        return fail("pthread_kill ran the handler in the wrong thread");
+        return fail(KILL_THREAD);
     }
     if (count_tasks() != 2) {
-        return fail("/proc/self/task did not list two threads");
+        return fail(TASK_TWO);
     }
     if (task_links() != 4) {
-        return fail("/proc/self/task of two threads did not have four links");
+        return fail(LINKS_FOUR);
     }
     if (task_paths((pid_t)handled_by) != 0 || thread_times((pid_t)handled_by) != 0 ||
         later_rows() != 0) {
@@ -1483,10 +1679,10 @@ int main(int argc, char **argv)
         _exit(count_tasks() != 1 ? 1 : task_links() != 3 ? 2 : 0);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) == 1) {
-        return fail("a child forked by a thread did not have one thread");
+        return fail(FORK_ONE_THREAD);
     }
     if (WEXITSTATUS(status) != 0) {
-        return fail("/proc/self/task of one thread did not have three links");
+        return fail(LINKS_THREE);
     }
 
     if (thread_exec_row() != 0 || two_execs() != 0 || robust_exec() != 0) {
@@ -1504,8 +1700,9 @@ int main(int argc, char **argv)
         }
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 8) {
-        return fail("exit from a thread did not end the process");
+        return fail(EXIT_ALL);
     }
+    report_at(CHECKS);
     printf("THREADMUSL OK\n");
     return 0;
 }

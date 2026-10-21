@@ -49,7 +49,10 @@
  * pseudoterminal is an edge of its master watched for output.
  *
  * Prints `EPOLLMUSL OK` and exits 0 on success, and prints
- * `EPOLLMUSL FAIL (detail)` and exits 1 otherwise. The TCP listener is on
+ * `EPOLLMUSL FAIL (detail: errno N)` and exits 1 otherwise. Writes etude's
+ * report records (../probe_report.h) for the case ETUDE_CASE names, an
+ * assertion for each check `checks` lists; a failure leaves the checks after
+ * it not run. The TCP listener is on
  * port 7470 of every address; given `ports=OLD:NEW,...`, as a native run
  * gives it (tests/native/Readme.md), it is on the NEW of 7470 of 127.0.0.1.
  */
@@ -78,6 +81,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The port of the TCP connection over the loopback, which no other probe
  * listens on, and the address its listener binds: every address, or
@@ -92,10 +96,262 @@
 /* The SIGALRMs delivered; an alarm ends a wait that nothing else did. */
 static volatile sig_atomic_t alarms;
 
-/** Report one failed check with errno and return 1, the failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    EVENTFD_REGS,
+    PIPE_REGS,
+    EVENTFD,
+    READ_ZERO_EAGAIN,
+    READ_ZERO_BYTES,
+    ZERO_NOT_READABLE,
+    EVENTFD_WRITE,
+    COUNTER_WHOLE,
+    COUNTER_EMPTY,
+    ALL_ONES,
+    SEMAPHORE_ONE,
+    SEMAPHORE_EMPTY,
+    SETUP,
+    CTL_ADD,
+    ADD_EEXIST,
+    FILE_EPERM,
+    EMPTY_PIPE,
+    LEVEL_DATA,
+    LEVEL_AGAIN,
+    EDGE_ONCE,
+    EDGE_AGAIN,
+    ONESHOT_ONCE,
+    ONESHOT_REARM,
+    CTL_DEL,
+    CLOSED_SETUP,
+    CLOSED_DROPPED,
+    WAKE_SETUP,
+    WAKE_REAPED,
+    WAKE_ASLEEP,
+    WAKE_WRITE,
+    WAKE_WOKEN,
+    WAKE_EVENT,
+    HANGUP_SETUP,
+    NO_EVENTS_QUIET,
+    NO_EVENTS_HANGUP,
+    REUSED_SETUP,
+    REUSED_QUIET,
+    REUSED_ADD,
+    ADDED_SETUP,
+    ADDED_ASLEEP,
+    ADDED_CHILD,
+    ADDED_WOKEN,
+    EDGE_POLL_SETUP,
+    EDGE_POLL_QUIET,
+    POLL_SETUP,
+    POLL_ASLEEP,
+    POLL_CHILD,
+    POLL_WOKEN,
+    NESTED_SETUP,
+    CHAIN_EMPTY,
+    CYCLE_ELOOP,
+    NESTED_WAKE_SETUP,
+    NESTED_ASLEEP,
+    NESTED_CHILD,
+    NESTED_WOKEN,
+    TURN_SETUP,
+    IN_TURN,
+    COPY_SETUP,
+    COPY_EFAULT,
+    COPY_AGAIN,
+    PWAIT2_SETUP,
+    PWAIT2_LONG,
+    PWAIT2_NEGATIVE,
+    PIPE_EDGE_SETUP,
+    PIPE_EDGE_EACH,
+    UNIX_OUT_SETUP,
+    UNIX_IN_SETUP,
+    UNIX_OUT_QUIET,
+    UNIX_IN_EACH,
+    SHUTDOWN_SETUP,
+    SHUTDOWN_EDGE,
+    OWN_ROOM_SETUP,
+    OWN_ROOM_QUIET,
+    ACCEPT_SETUP,
+    ACCEPT_ONE,
+    ACCEPT_QUIET,
+    UDP_SETUP,
+    UDP_ARRIVES,
+    UDP_QUIET,
+    TCP_LISTEN,
+    TCP_CONNECT,
+    TCP_WATCH,
+    TCP_ARRIVES,
+    TCP_QUIET,
+    PTY_SETUP,
+    PTY_ROOM,
+    PTY_FULL,
+    PTY_VINTR,
+    PTY_EDGE,
+    SIX_SETUP,
+    FIVE_OUTER,
+    SIXTH_BELOW,
+    FIVE_REACH,
+    FIVE_INNER,
+    SIXTH_ABOVE,
+    TWO_PATHS_SETUP,
+    TWO_PATHS_ELOOP,
+    FORKED_SETUP,
+    FORKED_FORK,
+    FORKED_CHILD,
+    FORKED_BELOW,
+    FORKED_ABOVE,
+    FORKED_WAIT,
+    FORKED_KEPT,
+    CHECKS
+};
+
+/* The register eventfd and pipe must leave as it was, named in their checks. */
+#if defined __x86_64__
+#define CALLER_REG "RSI"
+#else
+#define CALLER_REG "ECX"
+#endif
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"eventfd-regs", "eventfd changed the caller's " CALLER_REG},
+    {"pipe-regs", "pipe changed the caller's " CALLER_REG},
+    {"eventfd", "eventfd"},
+    {"read-zero-eagain", "a nonblocking read of zero was not EAGAIN"},
+    {"read-zero-bytes", "a read of zero bytes was not EINVAL"},
+    {"zero-not-readable", "a zero counter polled readable"},
+    {"eventfd-write", "eventfd write"},
+    {"counter-whole", "the counter did not come back whole"},
+    {"counter-empty", "a read did not leave the counter empty"},
+    {"all-ones", "a write of all ones was not EINVAL"},
+    {"semaphore-one", "EFD_SEMAPHORE did not take one at a time"},
+    {"semaphore-empty", "three reads with EFD_SEMAPHORE did not empty a counter of 3"},
+    {"setup", "setup"},
+    {"ctl-add", "EPOLL_CTL_ADD"},
+    {"add-eexist", "a second add was not EEXIST"},
+    {"file-eperm", "a regular file was not EPERM"},
+    {"empty-pipe", "an empty pipe was reported"},
+    {"level-data", "level-triggered data, or the data word"},
+    {"level-again", "level-triggered data was not reported again"},
+    {"edge-once", "edge-triggered data was reported twice"},
+    {"edge-again", "an edge after the data went and came back"},
+    {"oneshot-once", "EPOLLONESHOT reported twice"},
+    {"oneshot-rearm", "EPOLL_CTL_MOD did not rearm EPOLLONESHOT"},
+    {"ctl-del", "EPOLL_CTL_DEL"},
+    {"closed-setup", "setup for a closed descriptor"},
+    {"closed-dropped", "a closed descriptor was reported"},
+    {"wake-setup", "setup for the child's wake"},
+    {"wake-reaped", "the child that writes"},
+    {"wake-asleep", "the parent was never seen asleep in epoll_wait"},
+    {"wake-write", "the child's write"},
+    {"wake-woken", "the child's write did not wake the wait"},
+    {"wake-event", "the wait the child's write ended"},
+    {"hangup-setup", "setup for a registration of no events"},
+    {"no-events-quiet", "a registration of no events was reported"},
+    {"no-events-hangup", "a registration of no events was not told of the hangup"},
+    {"reused-setup", "setup for a reused number"},
+    {"reused-quiet", "a closed eventfd's registration reported the one after it"},
+    {"reused-add", "the eventfd at a closed one's number could not be added"},
+    {"added-setup", "setup for an add during a wait"},
+    {"added-asleep", "the parent was never seen asleep in epoll_wait"},
+    {"added-child", "the child that added the pipe"},
+    {"added-woken", "a pipe added during a wait did not wake it"},
+    {"edge-poll-setup", "setup for a poll after an edge"},
+    {"edge-poll-quiet", "a set with its edge reported polled readable"},
+    {"poll-setup", "setup for a poll of a set"},
+    {"poll-asleep", "the parent was never seen asleep in poll"},
+    {"poll-child", "the writing child"},
+    {"poll-woken", "a write to a pipe in a set did not wake a poll of the set"},
+    {"nested-setup", "setup for sets inside sets"},
+    {"chain-empty", "a chain of sets over an empty pipe"},
+    {"cycle-eloop", "a cycle of sets was not ELOOP"},
+    {"nested-wake-setup", "setup for sets inside sets"},
+    {"nested-asleep", "the parent was never seen asleep in epoll_wait"},
+    {"nested-child", "the writing child"},
+    {"nested-woken", "a write to a pipe two sets deep did not wake the outer set"},
+    {"turn-setup", "setup for waits in turn"},
+    {"in-turn", "two waits for one event reported the same descriptor"},
+    {"copy-setup", "setup for a failed copy"},
+    {"copy-efault", "a wait into a read-only buffer was not EFAULT"},
+    {"copy-again", "a one-shot event a failed copy took was not reported again"},
+    {"pwait2-setup", "setup for epoll_pwait2"},
+    {"pwait2-long", "epoll_pwait2 of 2^31 seconds with a descriptor ready"},
+    {"pwait2-negative", "epoll_pwait2 of negative seconds was not EINVAL"},
+    {"pipe-edge-setup", "setup for writes to a pipe watched edge-triggered"},
+    {"pipe-edge-each", "a write to a pipe with data in it was not an edge"},
+    {"unix-out-setup", "setup for an AF_UNIX end watched for output"},
+    {"unix-in-setup", "setup for an AF_UNIX end watched for input"},
+    {"unix-out-quiet", "a byte sent to an AF_UNIX end watched for output alone was reported"},
+    {"unix-in-each", "a second byte sent to an AF_UNIX end watched for input was not reported"},
+    {"shutdown-setup", "setup for a shutdown of an AF_UNIX end"},
+    {"shutdown-edge", "a shutdown of an AF_UNIX end was not an edge of its registration"},
+    {"own-room-setup", "setup for an AF_UNIX end with its queue full"},
+    {"own-room-quiet", "room made in an AF_UNIX end's own queue was reported as room to write"},
+    {"accept-setup", "setup for a listener with two connections queued"},
+    {"accept-one", "setup for an accept that leaves a connection queued"},
+    {"accept-quiet", "an accept that left a connection queued was reported as a new one"},
+    {"udp-setup", "setup for a datagram socket watched for output"},
+    {"udp-arrives", "setup: a datagram sent over the loopback did not arrive"},
+    {"udp-quiet", "a datagram that came to a socket watched for output alone was reported"},
+    {"tcp-listen", "setup for a TCP listener on the loopback"},
+    {"tcp-connect", "setup for a TCP connection over the loopback"},
+    {"tcp-watch", "setup for a TCP connection watched for output"},
+    {"tcp-arrives", "setup: data sent over a TCP connection did not arrive"},
+    {"tcp-quiet", "data that came to a TCP connection watched for output alone was reported"},
+    {"pty-setup", "setup for a pseudoterminal's room"},
+    {"pty-room", "a pseudoterminal master with room was not reported for output"},
+    {"pty-full", "a pseudoterminal master was not filled to EAGAIN"},
+    {"pty-vintr", "a VINTR written to a full pseudoterminal master was not taken"},
+    {"pty-edge", "room a VINTR made in a pseudoterminal was not an edge of its master"},
+    {"six-setup", "setup for six sets"},
+    {"five-outer", "an add that nests five sets, the outermost first, was refused"},
+    {"sixth-below", "a sixth set added below five, the outermost first, was not ELOOP"},
+    {"five-reach", "a write to a pipe in the fifth of five nested sets did not reach the first"},
+    {"five-inner", "an add that nests five sets, the innermost first, was refused"},
+    {"sixth-above", "a sixth set added above five, the innermost first, was not ELOOP"},
+    {"two-paths-setup", "setup for a set held by two paths"},
+    {"two-paths-eloop", "a set nested five below another by the longer of two paths was not ELOOP"},
+    {"forked-setup", "setup for a child's nested sets"},
+    {"forked-fork", "fork for a child's nested sets"},
+    {"forked-child", "the child of the nested sets"},
+    {"forked-below", "a child's add under five sets, one number closed, was not ELOOP"},
+    {"forked-above", "a child's add of five sets under a sixth, one number closed, was not ELOOP"},
+    {"forked-wait", "a child's wait on the nested sets"},
+    {"forked-kept", "a child's close and wait took the parent's registration of a set"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("EPOLLMUSL FAIL (%s: errno %d)\n", what, errno);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check`, with errno, and return 1, the probe's
+ * failure status. */
+static int fail(int check)
+{
+    printf("EPOLLMUSL FAIL (%s: errno %d)\n", checks[check].text, errno);
+    report_at(check);
+
     return 1;
 }
 
@@ -279,40 +535,40 @@ static int counters(void)
     int i;
 
     if (e < 0 || s < 0) {
-        return fail("eventfd");
+        return fail(EVENTFD);
     }
     if (read(e, &v, sizeof(v)) != -1 || errno != EAGAIN) {
-        return fail("a nonblocking read of zero was not EAGAIN");
+        return fail(READ_ZERO_EAGAIN);
     }
     if (read(e, &v, 0) != -1 || errno != EINVAL) {
-        return fail("a read of zero bytes was not EINVAL");
+        return fail(READ_ZERO_BYTES);
     }
     pfd.fd = e;
     pfd.events = POLLIN;
     if (poll(&pfd, 1, 0) != 0) {
-        return fail("a zero counter polled readable");
+        return fail(ZERO_NOT_READABLE);
     }
     v = 2;
     if (write(e, &v, sizeof(v)) != 8 || write(e, &v, sizeof(v)) != 8) {
-        return fail("eventfd write");
+        return fail(EVENTFD_WRITE);
     }
     if (poll(&pfd, 1, 0) != 1 || read(e, &v, sizeof(v)) != 8 || v != 4) {
-        return fail("the counter did not come back whole");
+        return fail(COUNTER_WHOLE);
     }
     if (read(e, &v, sizeof(v)) != -1 || errno != EAGAIN) {
-        return fail("a read did not leave the counter empty");
+        return fail(COUNTER_EMPTY);
     }
     v = 0xFFFFFFFFFFFFFFFFull;
     if (write(e, &v, sizeof(v)) != -1 || errno != EINVAL) {
-        return fail("a write of all ones was not EINVAL");
+        return fail(ALL_ONES);
     }
     for (i = 0; i < 3; i++) {
         if (read(s, &v, sizeof(v)) != 8 || v != 1) {
-            return fail("EFD_SEMAPHORE did not take one at a time");
+            return fail(SEMAPHORE_ONE);
         }
     }
     if (read(s, &v, sizeof(v)) != -1 || errno != EAGAIN) {
-        return fail("three reads with EFD_SEMAPHORE did not empty a counter of 3");
+        return fail(SEMAPHORE_EMPTY);
     }
     close(e);
     close(s);
@@ -342,81 +598,78 @@ static int sets(void)
     char buf[4];
 
     if (ep < 0 || pipe(p) != 0 || pipe(q) != 0) {
-        return fail("setup");
+        return fail(SETUP);
     }
     memset(&ev, 0, sizeof(ev));
     ev.events = EPOLLIN;
     ev.data.u64 = 0x1122334455667788ull;
     if (epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
-        return fail("EPOLL_CTL_ADD");
+        return fail(CTL_ADD);
     }
     if (epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != -1 || errno != EEXIST) {
-        return fail("a second add was not EEXIST");
+        return fail(ADD_EEXIST);
     }
     if (file >= 0 && (epoll_ctl(ep, EPOLL_CTL_ADD, file, &ev) != -1 || errno != EPERM)) {
-        return fail("a regular file was not EPERM");
+        return fail(FILE_EPERM);
     }
     if (wait_one(ep, 50, &out) != 0) {
-        return fail("an empty pipe was reported");
+        return fail(EMPTY_PIPE);
     }
     if (write(p[1], "ab", 2) != 2 || wait_one(ep, 1000, &out) != 1 ||
         out.data.u64 != 0x1122334455667788ull || !(out.events & EPOLLIN)) {
-        return fail("level-triggered data, or the data word");
+        return fail(LEVEL_DATA);
     }
     if (wait_one(ep, 0, &out) != 1) {
-        return fail("level-triggered data was not reported again");
+        return fail(LEVEL_AGAIN);
     }
 
     ev.events = EPOLLIN | EPOLLET;
     if (epoll_ctl(ep, EPOLL_CTL_MOD, p[0], &ev) != 0 || wait_one(ep, 0, &out) != 1 ||
         wait_one(ep, 0, &out) != 0) {
-        return fail("edge-triggered data was reported twice");
+        return fail(EDGE_ONCE);
     }
     if (read(p[0], buf, 2) != 2 || write(p[1], "c", 1) != 1 || wait_one(ep, 0, &out) != 1) {
-        return fail("an edge after the data went and came back");
+        return fail(EDGE_AGAIN);
     }
     (void)read(p[0], buf, 1);
 
     ev.events = EPOLLIN | EPOLLONESHOT;
     if (epoll_ctl(ep, EPOLL_CTL_MOD, p[0], &ev) != 0 || write(p[1], "d", 1) != 1 ||
         wait_one(ep, 0, &out) != 1 || wait_one(ep, 0, &out) != 0) {
-        return fail("EPOLLONESHOT reported twice");
+        return fail(ONESHOT_ONCE);
     }
     if (epoll_ctl(ep, EPOLL_CTL_MOD, p[0], &ev) != 0 || wait_one(ep, 0, &out) != 1) {
-        return fail("EPOLL_CTL_MOD did not rearm EPOLLONESHOT");
+        return fail(ONESHOT_REARM);
     }
     if (epoll_ctl(ep, EPOLL_CTL_DEL, p[0], NULL) != 0 || wait_one(ep, 0, &out) != 0) {
-        return fail("EPOLL_CTL_DEL");
+        return fail(CTL_DEL);
     }
     (void)read(p[0], buf, 1);
 
     ev.events = EPOLLIN;
     if (epoll_ctl(ep, EPOLL_CTL_ADD, q[0], &ev) != 0 || write(q[1], "e", 1) != 1) {
-        return fail("setup for a closed descriptor");
+        return fail(CLOSED_SETUP);
     }
     close(q[0]);
     if (wait_one(ep, 0, &out) != 0) {
-        return fail("a closed descriptor was reported");
+        return fail(CLOSED_DROPPED);
     }
 
     ev.events = EPOLLIN;
     ev.data.u32 = 7;
     if (epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
-        return fail("setup for the child's wake");
+        return fail(WAKE_SETUP);
     }
     if (wake_start(&w, p[1], -1, -1) != 0) {
-        return fail("setup for the child's wake");
+        return fail(WAKE_SETUP);
     }
     n = wait_one(ep, -1, &out);
     rc = wake_end(&w);
     if (rc != 0) {
-        return fail(rc < 0    ? "the child that writes"
-                    : rc == 2 ? "the parent was never seen asleep in epoll_wait"
-                              : "the child's write");
+        return fail(rc < 0 ? WAKE_REAPED : rc == 2 ? WAKE_ASLEEP : WAKE_WRITE);
     }
     if (n != 1 || out.data.u32 != 7 || alarms) {
-        return fail(alarms ? "the child's write did not wake the wait"
-                           : "the wait the child's write ended");
+        return fail(alarms ? WAKE_WOKEN : WAKE_EVENT);
     }
     close(p[0]);
     close(p[1]);
@@ -442,16 +695,15 @@ static int added_while_waiting(void)
     int p[2], n, rc;
 
     if (ep < 0 || pipe(p) != 0 || wake_start(&w, p[1], ep, p[0]) != 0) {
-        return fail("setup for an add during a wait");
+        return fail(ADDED_SETUP);
     }
     n = wait_one(ep, -1, &out);
     rc = wake_end(&w);
     if (rc != 0) {
-        return fail(rc == 2 ? "the parent was never seen asleep in epoll_wait"
-                            : "the child that added the pipe");
+        return fail(rc == 2 ? ADDED_ASLEEP : ADDED_CHILD);
     }
     if (n != 1 || out.data.u32 != (uint32_t)p[0] || alarms) {
-        return fail("a pipe added during a wait did not wake it");
+        return fail(ADDED_WOKEN);
     }
     close(p[0]);
     close(p[1]);
@@ -475,13 +727,13 @@ static int polled_after_edge(void)
     ev.events = EPOLLIN | EPOLLET;
     if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
         write(p[1], "e", 1) != 1 || wait_one(ep, 0, &out) != 1) {
-        return fail("setup for a poll after an edge");
+        return fail(EDGE_POLL_SETUP);
     }
     pfd.fd = ep;
     pfd.events = POLLIN;
     pfd.revents = 0;
     if (wait_one(ep, 0, &out) != 0 || poll(&pfd, 1, 0) != 0) {
-        return fail("a set with its edge reported polled readable");
+        return fail(EDGE_POLL_QUIET);
     }
     close(p[0]);
     close(p[1]);
@@ -508,27 +760,26 @@ static int nested(void)
     ev.events = EPOLLIN;
     if (a < 0 || b < 0 || c < 0 || pipe(p) != 0 || epoll_ctl(a, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
         epoll_ctl(b, EPOLL_CTL_ADD, a, &ev) != 0) {
-        return fail("setup for sets inside sets");
+        return fail(NESTED_SETUP);
     }
     ev.data.u32 = 9;
     if (epoll_ctl(c, EPOLL_CTL_ADD, b, &ev) != 0 || wait_one(c, 0, &out) != 0) {
-        return fail("a chain of sets over an empty pipe");
+        return fail(CHAIN_EMPTY);
     }
     if (epoll_ctl(a, EPOLL_CTL_ADD, c, &ev) != -1 || errno != ELOOP ||
         epoll_ctl(a, EPOLL_CTL_ADD, b, &ev) != -1 || errno != ELOOP) {
-        return fail("a cycle of sets was not ELOOP");
+        return fail(CYCLE_ELOOP);
     }
     if (wake_start(&w, p[1], -1, -1) != 0) {
-        return fail("setup for sets inside sets");
+        return fail(NESTED_WAKE_SETUP);
     }
     n = wait_one(c, -1, &out);
     rc = wake_end(&w);
     if (rc != 0) {
-        return fail(rc == 2 ? "the parent was never seen asleep in epoll_wait"
-                            : "the writing child");
+        return fail(rc == 2 ? NESTED_ASLEEP : NESTED_CHILD);
     }
     if (n != 1 || out.data.u32 != 9 || alarms || wait_one(c, 0, &out) != 1) {
-        return fail("a write to a pipe two sets deep did not wake the outer set");
+        return fail(NESTED_WOKEN);
     }
     close(p[0]);
     close(p[1]);
@@ -554,7 +805,7 @@ static int polled_set_woken(void)
     ev.events = EPOLLIN;
     if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
         wake_start(&w, p[1], -1, -1) != 0) {
-        return fail("setup for a poll of a set");
+        return fail(POLL_SETUP);
     }
     pfd.fd = ep;
     pfd.events = POLLIN;
@@ -562,10 +813,10 @@ static int polled_set_woken(void)
     n = poll(&pfd, 1, -1);
     rc = wake_end(&w);
     if (rc != 0) {
-        return fail(rc == 2 ? "the parent was never seen asleep in poll" : "the writing child");
+        return fail(rc == 2 ? POLL_ASLEEP : POLL_CHILD);
     }
     if (n != 1 || !(pfd.revents & POLLIN) || alarms) {
-        return fail("a write to a pipe in a set did not wake a poll of the set");
+        return fail(POLL_WOKEN);
     }
     close(p[0]);
     close(p[1]);
@@ -588,15 +839,15 @@ static int in_turn(void)
     ev.events = EPOLLOUT;
     ev.data.u32 = 1;
     if (ep < 0 || a < 0 || b < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, a, &ev) != 0) {
-        return fail("setup for waits in turn");
+        return fail(TURN_SETUP);
     }
     ev.data.u32 = 2;
     if (epoll_ctl(ep, EPOLL_CTL_ADD, b, &ev) != 0) {
-        return fail("setup for waits in turn");
+        return fail(TURN_SETUP);
     }
     if (wait_one(ep, 0, &first) != 1 || wait_one(ep, 0, &second) != 1 ||
         first.data.u32 == second.data.u32) {
-        return fail("two waits for one event reported the same descriptor");
+        return fail(IN_TURN);
     }
     close(a);
     close(b);
@@ -621,13 +872,13 @@ static int failed_copy(void)
     ev.events = EPOLLIN | EPOLLONESHOT;
     if (ro == MAP_FAILED || ep < 0 || e < 0 || write(e, &v, sizeof(v)) != 8 ||
         epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
-        return fail("setup for a failed copy");
+        return fail(COPY_SETUP);
     }
     if (epoll_wait(ep, (struct epoll_event *)ro, 1, 0) != -1 || errno != EFAULT) {
-        return fail("a wait into a read-only buffer was not EFAULT");
+        return fail(COPY_EFAULT);
     }
     if (wait_one(ep, 0, &out) != 1) {
-        return fail("a one-shot event a failed copy took was not reported again");
+        return fail(COPY_AGAIN);
     }
     munmap(ro, 4096);
     close(e);
@@ -647,14 +898,14 @@ static int hangup_no_events(void)
 
     memset(&ev, 0, sizeof(ev));
     if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0) {
-        return fail("setup for a registration of no events");
+        return fail(HANGUP_SETUP);
     }
     if (wait_one(ep, 0, &out) != 0) {
-        return fail("a registration of no events was reported");
+        return fail(NO_EVENTS_QUIET);
     }
     close(p[1]);
     if (wait_one(ep, 0, &out) != 1 || !(out.events & EPOLLHUP)) {
-        return fail("a registration of no events was not told of the hangup");
+        return fail(NO_EVENTS_HANGUP);
     }
     close(p[0]);
     close(ep);
@@ -678,17 +929,17 @@ static int number_reused(void)
     ev.events = EPOLLIN;
     ev.data.u32 = 1;
     if (ep < 0 || e < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
-        return fail("setup for a reused number");
+        return fail(REUSED_SETUP);
     }
     close(e);
     again = eventfd(1, 0);
     if (again < 0 || wait_one(ep, 0, &out) != 0) {
-        return fail("a closed eventfd's registration reported the one after it");
+        return fail(REUSED_QUIET);
     }
     ev.data.u32 = 2;
     if (epoll_ctl(ep, EPOLL_CTL_ADD, again, &ev) != 0 || wait_one(ep, 0, &out) != 1 ||
         out.data.u32 != 2) {
-        return fail("the eventfd at a closed one's number could not be added");
+        return fail(REUSED_ADD);
     }
     close(again);
     close(ep);
@@ -712,14 +963,14 @@ static int long_timeout(void)
     ev.events = EPOLLIN;
     if (ep < 0 || e < 0 || write(e, &v, sizeof(v)) != 8 ||
         epoll_ctl(ep, EPOLL_CTL_ADD, e, &ev) != 0) {
-        return fail("setup for epoll_pwait2");
+        return fail(PWAIT2_SETUP);
     }
     if (syscall(441, ep, &out, 1, ts, NULL, 8) != 1) {
-        return fail("epoll_pwait2 of 2^31 seconds with a descriptor ready");
+        return fail(PWAIT2_LONG);
     }
     ts[0] = -1;
     if (syscall(441, ep, &out, 1, ts, NULL, 8) != -1 || errno != EINVAL) {
-        return fail("epoll_pwait2 of negative seconds was not EINVAL");
+        return fail(PWAIT2_NEGATIVE);
     }
     close(e);
     close(ep);
@@ -743,18 +994,18 @@ static int unix_kinds(void)
     ev.events = EPOLLOUT | EPOLLET;
     if (ep < 0 || ein < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
         epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &ev) != 0 || wait_one(ep, 0, &out) != 1) {
-        return fail("setup for an AF_UNIX end watched for output");
+        return fail(UNIX_OUT_SETUP);
     }
     ev.events = EPOLLIN | EPOLLET;
     if (epoll_ctl(ein, EPOLL_CTL_ADD, sv[0], &ev) != 0 || write(sv[1], "a", 1) != 1 ||
         wait_one(ein, 0, &out) != 1) {
-        return fail("setup for an AF_UNIX end watched for input");
+        return fail(UNIX_IN_SETUP);
     }
     if (wait_one(ep, 0, &out) != 0) {
-        return fail("a byte sent to an AF_UNIX end watched for output alone was reported");
+        return fail(UNIX_OUT_QUIET);
     }
     if (write(sv[1], "b", 1) != 1 || wait_one(ein, 0, &out) != 1) {
-        return fail("a second byte sent to an AF_UNIX end watched for input was not reported");
+        return fail(UNIX_IN_EACH);
     }
     close(sv[0]);
     close(sv[1]);
@@ -778,10 +1029,10 @@ static int pipe_each_write(void)
     ev.events = EPOLLIN | EPOLLET;
     if (ep < 0 || pipe(p) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, p[0], &ev) != 0 ||
         write(p[1], "a", 1) != 1 || wait_one(ep, 0, &out) != 1 || wait_one(ep, 0, &out) != 0) {
-        return fail("setup for writes to a pipe watched edge-triggered");
+        return fail(PIPE_EDGE_SETUP);
     }
     if (write(p[1], "b", 1) != 1 || wait_one(ep, 0, &out) != 1) {
-        return fail("a write to a pipe with data in it was not an edge");
+        return fail(PIPE_EDGE_EACH);
     }
     close(p[0]);
     close(p[1]);
@@ -805,10 +1056,10 @@ static int unix_shutdown_edge(void)
     if (ep < 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
         epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &ev) != 0 || wait_one(ep, 0, &out) != 1 ||
         wait_one(ep, 0, &out) != 0) {
-        return fail("setup for a shutdown of an AF_UNIX end");
+        return fail(SHUTDOWN_SETUP);
     }
     if (shutdown(sv[0], SHUT_WR) != 0 || wait_one(ep, 0, &out) != 1) {
-        return fail("a shutdown of an AF_UNIX end was not an edge of its registration");
+        return fail(SHUTDOWN_EDGE);
     }
     close(sv[0]);
     close(sv[1]);
@@ -830,7 +1081,7 @@ static int unix_own_room(void)
     int sv[2];
 
     if (ep < 0 || socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) != 0) {
-        return fail("setup for an AF_UNIX end with its queue full");
+        return fail(OWN_ROOM_SETUP);
     }
     memset(buf, 'f', sizeof(buf));
     while (write(sv[1], buf, sizeof(buf)) > 0) {
@@ -839,10 +1090,10 @@ static int unix_own_room(void)
     ev.events = EPOLLOUT | EPOLLET;
     if (errno != EAGAIN || epoll_ctl(ep, EPOLL_CTL_ADD, sv[0], &ev) != 0 ||
         wait_one(ep, 0, &out) != 1) {
-        return fail("setup for an AF_UNIX end with its queue full");
+        return fail(OWN_ROOM_SETUP);
     }
     if (read(sv[0], buf, 1) != 1 || wait_one(ep, 0, &out) != 0) {
-        return fail("room made in an AF_UNIX end's own queue was reported as room to write");
+        return fail(OWN_ROOM_QUIET);
     }
     close(sv[0]);
     close(sv[1]);
@@ -876,14 +1127,14 @@ static int unix_accept_edge(void)
         listen(ls, 4) != 0 || connect(c1, (struct sockaddr *)&a, alen) != 0 ||
         connect(c2, (struct sockaddr *)&a, alen) != 0 ||
         epoll_ctl(ep, EPOLL_CTL_ADD, ls, &ev) != 0 || wait_one(ep, 0, &out) != 1) {
-        return fail("setup for a listener with two connections queued");
+        return fail(ACCEPT_SETUP);
     }
     as = accept(ls, NULL, NULL);
     if (as < 0) {
-        return fail("setup for an accept that leaves a connection queued");
+        return fail(ACCEPT_ONE);
     }
     if (wait_one(ep, 0, &out) != 0) {
-        return fail("an accept that left a connection queued was reported as a new one");
+        return fail(ACCEPT_QUIET);
     }
     close(as);
     close(c1);
@@ -916,17 +1167,17 @@ static int udp_arrival(void)
     if (ep < 0 || rx < 0 || tx < 0 || bind(rx, (struct sockaddr *)&me, sizeof(me)) != 0 ||
         getsockname(rx, (struct sockaddr *)&me, &len) != 0 ||
         epoll_ctl(ep, EPOLL_CTL_ADD, rx, &ev) != 0 || wait_one(ep, 0, &out) != 1) {
-        return fail("setup for a datagram socket watched for output");
+        return fail(UDP_SETUP);
     }
     pfd.fd = rx;
     pfd.events = POLLIN;
     pfd.revents = 0;
     if (sendto(tx, "u", 1, 0, (struct sockaddr *)&me, sizeof(me)) != 1 ||
         poll(&pfd, 1, 5000) != 1) {
-        return fail("setup: a datagram sent over the loopback did not arrive");
+        return fail(UDP_ARRIVES);
     }
     if (wait_one(ep, 0, &out) != 0) {
-        return fail("a datagram that came to a socket watched for output alone was reported");
+        return fail(UDP_QUIET);
     }
     close(tx);
     close(rx);
@@ -955,26 +1206,26 @@ static int tcp_arrival(void)
     sa.sin_addr.s_addr = htonl(EDGE_BIND);
     if (ep < 0 || ls < 0 || cs < 0 || bind(ls, (struct sockaddr *)&sa, sizeof(sa)) != 0 ||
         listen(ls, 1) != 0) {
-        return fail("setup for a TCP listener on the loopback");
+        return fail(TCP_LISTEN);
     }
     sa.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     if (connect(cs, (struct sockaddr *)&sa, sizeof(sa)) != 0) {
-        return fail("setup for a TCP connection over the loopback");
+        return fail(TCP_CONNECT);
     }
     as = accept(ls, NULL, NULL);
     memset(&ev, 0, sizeof(ev));
     ev.events = EPOLLOUT | EPOLLET;
     if (as < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, cs, &ev) != 0 || wait_one(ep, 0, &out) != 1) {
-        return fail("setup for a TCP connection watched for output");
+        return fail(TCP_WATCH);
     }
     pfd.fd = cs;
     pfd.events = POLLIN;
     pfd.revents = 0;
     if (write(as, "t", 1) != 1 || poll(&pfd, 1, 5000) != 1) {
-        return fail("setup: data sent over a TCP connection did not arrive");
+        return fail(TCP_ARRIVES);
     }
     if (wait_one(ep, 0, &out) != 0) {
-        return fail("data that came to a TCP connection watched for output alone was reported");
+        return fail(TCP_QUIET);
     }
     close(as);
     close(cs);
@@ -1005,7 +1256,7 @@ static int pty_signal_room(void)
     if (master < 0 || ep < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
         (name = ptsname(master)) == NULL || (slave = open(name, O_RDWR | O_NOCTTY)) < 0 ||
         tcgetattr(slave, &tio) != 0) {
-        return fail("setup for a pseudoterminal's room");
+        return fail(PTY_SETUP);
     }
     tio.c_lflag |= ISIG;
     tio.c_lflag &= ~(tcflag_t)(ECHO | ICANON);
@@ -1013,21 +1264,21 @@ static int pty_signal_room(void)
     memset(&ev, 0, sizeof(ev));
     ev.events = EPOLLOUT | EPOLLET;
     if (tcsetattr(slave, TCSANOW, &tio) != 0 || epoll_ctl(ep, EPOLL_CTL_ADD, master, &ev) != 0) {
-        return fail("setup for a pseudoterminal's room");
+        return fail(PTY_SETUP);
     }
     if (wait_one(ep, 0, &out) != 1) {
-        return fail("a pseudoterminal master with room was not reported for output");
+        return fail(PTY_ROOM);
     }
     for (i = 0; i < 65536 && write(master, "x", 1) == 1; i++) {
     }
     if (i == 65536 || errno != EAGAIN) {
-        return fail("a pseudoterminal master was not filled to EAGAIN");
+        return fail(PTY_FULL);
     }
     if (write(master, "\003", 1) != 1) {
-        return fail("a VINTR written to a full pseudoterminal master was not taken");
+        return fail(PTY_VINTR);
     }
     if (wait_one(ep, 0, &out) != 1 || !(out.events & EPOLLOUT)) {
-        return fail("room a VINTR made in a pseudoterminal was not an edge of its master");
+        return fail(PTY_EDGE);
     }
     signal(SIGINT, was);
     close(slave);
@@ -1056,30 +1307,30 @@ static int nested_six(void)
         e[i] = epoll_create1(0);
         f[i] = epoll_create1(0);
         if (e[i] < 0 || f[i] < 0) {
-            return fail("setup for six sets");
+            return fail(SIX_SETUP);
         }
     }
     if (pipe(p) != 0 || epoll_ctl(e[4], EPOLL_CTL_ADD, p[0], &ev) != 0) {
-        return fail("setup for six sets");
+        return fail(SIX_SETUP);
     }
     for (i = 0; i < 4; i++) {
         if (epoll_ctl(e[i], EPOLL_CTL_ADD, e[i + 1], &ev) != 0) {
-            return fail("an add that nests five sets, the outermost first, was refused");
+            return fail(FIVE_OUTER);
         }
     }
     if (epoll_ctl(e[4], EPOLL_CTL_ADD, e[5], &ev) != -1 || errno != ELOOP) {
-        return fail("a sixth set added below five, the outermost first, was not ELOOP");
+        return fail(SIXTH_BELOW);
     }
     if (write(p[1], "n", 1) != 1 || wait_one(e[0], 0, &out) != 1) {
-        return fail("a write to a pipe in the fifth of five nested sets did not reach the first");
+        return fail(FIVE_REACH);
     }
     for (i = 4; i > 0; i--) {
         if (epoll_ctl(f[i], EPOLL_CTL_ADD, f[i + 1], &ev) != 0) {
-            return fail("an add that nests five sets, the innermost first, was refused");
+            return fail(FIVE_INNER);
         }
     }
     if (epoll_ctl(f[0], EPOLL_CTL_ADD, f[1], &ev) != -1 || errno != ELOOP) {
-        return fail("a sixth set added above five, the innermost first, was not ELOOP");
+        return fail(SIXTH_ABOVE);
     }
     for (i = 0; i < 6; i++) {
         close(e[i]);
@@ -1113,10 +1364,10 @@ static int nested_two_paths(void)
         epoll_ctl(p, EPOLL_CTL_ADD, q, &ev) != 0 || epoll_ctl(x, EPOLL_CTL_ADD, p, &ev) != 0 ||
         epoll_ctl(a, EPOLL_CTL_ADD, x, &ev) != 0 || epoll_ctl(in, EPOLL_CTL_ADD, a, &ev) != 0 ||
         epoll_ctl(in, EPOLL_CTL_ADD, x, &ev) != 0) {
-        return fail("setup for a set held by two paths");
+        return fail(TWO_PATHS_SETUP);
     }
     if (epoll_ctl(e, EPOLL_CTL_ADD, in, &ev) != -1 || errno != ELOOP) {
-        return fail("a set nested five below another by the longer of two paths was not ELOOP");
+        return fail(TWO_PATHS_ELOOP);
     }
     close(q);
     close(p);
@@ -1152,16 +1403,16 @@ static int nested_forked(void)
     }
     if (sixth < 0 || above < 0 || s[0] < 0 || s[1] < 0 || s[2] < 0 || s[3] < 0 || s[4] < 0 ||
         pipe(p) != 0 || epoll_ctl(s[4], EPOLL_CTL_ADD, p[0], &ev) != 0) {
-        return fail("setup for a child's nested sets");
+        return fail(FORKED_SETUP);
     }
     for (i = 0; i < 4; i++) {
         if (epoll_ctl(s[i], EPOLL_CTL_ADD, s[i + 1], &ev) != 0) {
-            return fail("setup for a child's nested sets");
+            return fail(FORKED_SETUP);
         }
     }
     pid = fork();
     if (pid < 0) {
-        return fail("fork for a child's nested sets");
+        return fail(FORKED_FORK);
     }
     if (pid == 0) {
         close(s[1]);
@@ -1174,19 +1425,19 @@ static int nested_forked(void)
         _exit(epoll_wait(s[0], &out, 1, 0) < 0 ? 3 : 0);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) > 3) {
-        return fail("the child of the nested sets");
+        return fail(FORKED_CHILD);
     }
     if (WEXITSTATUS(status) == 1) {
-        return fail("a child's add under five sets, one number closed, was not ELOOP");
+        return fail(FORKED_BELOW);
     }
     if (WEXITSTATUS(status) == 2) {
-        return fail("a child's add of five sets under a sixth, one number closed, was not ELOOP");
+        return fail(FORKED_ABOVE);
     }
     if (WEXITSTATUS(status) == 3) {
-        return fail("a child's wait on the nested sets");
+        return fail(FORKED_WAIT);
     }
     if (write(p[1], "f", 1) != 1 || wait_one(s[0], 0, &out) != 1) {
-        return fail("a child's close and wait took the parent's registration of a set");
+        return fail(FORKED_KEPT);
     }
     for (i = 0; i < 5; i++) {
         close(s[i]);
@@ -1217,7 +1468,7 @@ static int calls_keep_registers(void)
                          : "0"(284L), "D"(0L), "1"(0x5A5A5A5A5A5A5A5AUL)
                          : "rcx", "r11", "memory");
     if (r < 0 || si != 0x5A5A5A5A5A5A5A5AUL) {
-        return fail("eventfd changed the caller's RSI");
+        return fail(EVENTFD_REGS);
     }
     close((int)r);
     __asm__ __volatile__("syscall"
@@ -1225,7 +1476,7 @@ static int calls_keep_registers(void)
                          : "0"(22L), "D"(fds), "1"(0x5A5A5A5A5A5A5A5AUL)
                          : "rcx", "r11", "memory");
     if (r != 0 || si != 0x5A5A5A5A5A5A5A5AUL) {
-        return fail("pipe changed the caller's RSI");
+        return fail(PIPE_REGS);
     }
     close(fds[0]);
     close(fds[1]);
@@ -1249,7 +1500,7 @@ static int calls_keep_registers(void)
                          : "0"(323), "b"(0), "1"(0x5A5A5A5Au)
                          : "memory");
     if (r < 0 || c != 0x5A5A5A5Au) {
-        return fail("eventfd changed the caller's ECX");
+        return fail(EVENTFD_REGS);
     }
     close(r);
     __asm__ __volatile__("int $0x80"
@@ -1257,7 +1508,7 @@ static int calls_keep_registers(void)
                          : "0"(42), "b"(fds), "1"(0x5A5A5A5Au)
                          : "memory");
     if (r != 0 || c != 0x5A5A5A5Au) {
-        return fail("pipe changed the caller's ECX");
+        return fail(PIPE_REGS);
     }
     close(fds[0]);
     close(fds[1]);
@@ -1268,6 +1519,7 @@ static int calls_keep_registers(void)
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.epollmusl"));
     if (calls_keep_registers() || counters() || sets() || hangup_no_events() || number_reused() ||
         added_while_waiting() || polled_after_edge() || polled_set_woken() || nested() ||
         in_turn() || failed_copy() || long_timeout() || pipe_each_write() || unix_kinds() ||
@@ -1276,6 +1528,7 @@ int main(int argc, char **argv)
         nested_forked()) {
         return 1;
     }
+    report_at(CHECKS);
     printf("EPOLLMUSL OK\n");
     return 0;
 }
