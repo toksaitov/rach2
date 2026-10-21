@@ -420,6 +420,28 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_T
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(GRUB_TEST_DISK)
 	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
+# The disk of the grub case, tests/cases/machine.grub.json: the GRUB disk
+# around the kernel, on an MBR, with the grub-test root. The recipe first
+# requires grub-test.manifest, less its comments and its two core lines, to
+# be os-real.manifest, so that the case's preparation stops on a root that
+# has drifted from os-real before any machine boots it; a host case of the
+# family would report the drift only after the disk had been made from it.
+GRUB_CASE_DISK = $(ARCH_CASE_DIR)/grub/grub.disk
+$(GRUB_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(GRUB_TEST_EXT2) \
+                   krffs/manifests/grub-test.manifest krffs/manifests/os-real.manifest \
+                   $(DISK_TOOLS) $(GRUB_FILES) | rach2 krffs $(MANIFEST_PARTS_os_real)
+	@mkdir -p $(@D)
+	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
+	    krffs/manifests/grub-test.manifest > $@.manifest
+	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest | diff - $@.manifest || \
+	    { echo "grub: grub-test.manifest differs from os-real.manifest beyond its two cores" >&2; \
+	      rm -f $@.manifest; exit 1; }
+	rm -f $@.manifest
+	RACH2_DISK_TABLE=mbr \
+	RACH2_DISK_EXT2_MB=48 \
+	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
+	RACH2_DISK_RECOVERY_MB=8 \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
 # disk holding nothing, booted by the firmware, its root found as disk 1. It
 # is the case of tests/cases/machine.bootorder.json, which etude runs, and has
