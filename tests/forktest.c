@@ -1,9 +1,15 @@
 /**
  * forktest: fork a child that exits with a known status, and check that the
  * parent's waitpid returns the child's pid and reads that status back.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, with the assertions `fork`, `waitpid`, that it returned the
+ * child's pid, and `exit-status`. Freestanding; direct system calls
+ * (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -89,17 +95,26 @@ static void print_num(int n)
     }
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
- * The probe: the parent forks a child that exits with `CHILD_EXIT_STATUS`,
- * then waits and checks that `WIFEXITED` and `WEXITSTATUS` report that
- * status. It exits 0 when they do and 1 otherwise.
+ * The probe, which `_start` calls with the initial stack: the parent forks
+ * a child that exits with `CHILD_EXIT_STATUS`, then waits and checks that
+ * `WIFEXITED` and `WEXITSTATUS` report that status. It exits 0 when they do
+ * and 1 otherwise.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int pid;
     int status;
     int child_pid;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.forktest"));
+    report_plan("fork");
+    report_plan("waitpid");
+    report_plan("exit-status");
     puts("Fork test starting...");
 
     print("Calling fork()... ");
@@ -107,6 +122,7 @@ PROBE_START void _start(void)
 
     if (pid < 0) {
         puts("FAILED");
+        report_stop("fork failed");
         sys_exit(1);
     }
 
@@ -118,6 +134,7 @@ PROBE_START void _start(void)
         sys_exit(CHILD_EXIT_STATUS);
     }
 
+    report_held();
     print("OK (parent, child PID=");
     print_num(pid);
     puts(")");
@@ -129,9 +146,11 @@ PROBE_START void _start(void)
         print("FAILED (returned ");
         print_num(child_pid);
         puts(", not the child)");
+        report_stop("waitpid did not return the child's pid");
         sys_exit(1);
     }
     puts("OK");
+    report_held();
 
     print("Parent: waitpid returned PID=");
     print_num(child_pid);
@@ -140,9 +159,12 @@ PROBE_START void _start(void)
     puts("");
 
     if (WIFEXITED(status) && WEXITSTATUS(status) == CHILD_EXIT_STATUS) {
+        report_held();
+        report_end();
         puts("All fork/waitpid syscalls passed!");
         sys_exit(0);
     } else {
+        report_stop("the child did not exit with status 42");
         print("FAILED: Expected exit status ");
         print_num(CHILD_EXIT_STATUS);
         print(", got ");

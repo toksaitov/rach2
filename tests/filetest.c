@@ -1,9 +1,16 @@
 /**
  * filetest: open hello.txt in the working directory, read it, print its
  * contents and close it, with the system calls made directly (probe.h).
+ *
+ * The argument `hello=PATH` (probe_args.h) names another file in its place,
+ * such as the image's `/hello.txt` for a run outside `/`. Writes etude's
+ * report records (probe_report.h) for the case ETUDE_CASE names, with the
+ * assertions `open`, `read` and `close`, one for each call.
  */
 
 #include "probe.h"
+#include "probe_args.h"
+#include "probe_report.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
@@ -65,32 +72,46 @@ static void print(const char *s)
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
-/** The probe: it exits 0 when the open, the read and the close succeed, and
- * 1 at the first that fails. The read takes at most 255 bytes. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, which `_start` calls with the initial stack: it exits 0 when
+ * the open, the read and the close succeed, and 1 at the first that fails.
+ * The read takes at most 255 bytes. */
+void probe_main(unsigned long *sp)
 {
     char buf[256];
     int fd;
     int n;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.filetest"));
+    report_plan("open");
+    report_plan("read");
+    report_plan("close");
     print("Opening hello.txt... ");
 
-    fd = sys_open("hello.txt", O_RDONLY);
+    fd = sys_open(probe_arg("hello", "hello.txt"), O_RDONLY);
     if (fd < 0) {
         puts("FAILED");
+        report_stop("the open of the file failed");
         sys_exit(1);
     }
     puts("OK");
+    report_held();
 
     print("Reading file... ");
     n = sys_read(fd, buf, sizeof(buf) - 1);
     if (n < 0) {
         puts("FAILED");
+        report_stop("the read of the file failed");
         sys_close(fd);
         sys_exit(1);
     }
     buf[n] = '\0';
     puts("OK");
+    report_held();
 
     print("Content: ");
     puts(buf);
@@ -98,9 +119,12 @@ PROBE_START void _start(void)
     print("Closing file... ");
     if (sys_close(fd) < 0) {
         puts("FAILED");
+        report_stop("the close of the file failed");
         sys_exit(1);
     }
     puts("OK");
+    report_held();
+    report_end();
 
     puts("All file syscalls passed!");
     sys_exit(0);

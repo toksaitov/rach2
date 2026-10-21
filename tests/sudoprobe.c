@@ -11,7 +11,10 @@
  *
  * A student's own sudo is held to the same probe as the reference. Prints
  * "SUDOPROBE OK" and exits 0 on success, or "SUDOPROBE FAIL: " and the step
- * and exits 1. Freestanding; direct system calls (probe.h).
+ * and exits 1. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, with the assertions `permitted`, the listed uid's run of
+ * the helper as root, and `refused`, the unlisted uid's refusal.
+ * Freestanding; direct system calls (probe.h).
  *
  * Needs the test image's sudo arrangement: the staged `sudo` with its policy
  * file and the accounts it names. A run on an installed machine needs them
@@ -26,6 +29,7 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -56,9 +60,11 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/** Print "SUDOPROBE FAIL: `step`" and exit 1. */
+/** Print "SUDOPROBE FAIL: `step`", end the report at the assertion that
+ * `step` fails, and exit 1. */
 static void fail(const char *step)
 {
+    report_stop(step);
     puts_("SUDOPROBE FAIL: ");
     puts_(step);
     puts_("\n");
@@ -134,6 +140,9 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.sudoprobe"));
+    report_plan("permitted");
+    report_plan("refused");
     if (probe_id(1000) != 1000) {
         write_sudoers(probe_id(1000));
     }
@@ -142,11 +151,14 @@ void probe_main(unsigned long *sp)
     if (run_sudo(probe_id(1000)) != 0) {
         fail("permitted uid did not reach root through sudo");
     }
+    report_held();
 
     /* A uid absent from sudoers: sudo's own exit 1, before any exec. */
     if (run_sudo(probe_id(1001)) != 1) {
         fail("unlisted uid was not refused");
     }
+    report_held();
+    report_end();
 
     puts_("SUDOPROBE OK\n");
     syscall1(SYS_EXIT, 0);

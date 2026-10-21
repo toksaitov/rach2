@@ -9,10 +9,14 @@
  * A child whose copy fork made writable would survive and exit 0, which this
  * probe reports as a failure.
  *
- * Prints "FORKRO OK". Freestanding; direct system calls (probe.h).
+ * Prints "FORKRO OK". Writes etude's report records (probe_report.h) for
+ * the case ETUDE_CASE names, with the assertions `zero-read`, the mapping
+ * and its read of zero, and `child-segv`, the child's death by SIGSEGV.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -77,29 +81,43 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** Map a page PROT_READ, read it, fork, and require the child's write to
- * the page to kill it with SIGSEGV; exit 1 on any failure. */
-PROBE_START void _start(void)
+ * the page to kill it with SIGSEGV; exit 1 on any failure. `_start` calls
+ * it with the initial stack. */
+void probe_main(unsigned long *sp)
 {
-    long p = mmap_anon(PAGE, PROT_READ);
-    volatile unsigned char *ro = (volatile unsigned char *)p;
+    long p;
+    volatile unsigned char *ro;
     int pid, status;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.forkro"));
+    report_plan("zero-read");
+    report_plan("child-segv");
+    p = mmap_anon(PAGE, PROT_READ);
+    ro = (volatile unsigned char *)p;
     if (sys_failed(p)) {
         puts("forkro: ERROR mmap PROT_READ failed");
+        report_stop("mmap PROT_READ failed");
         sys_exit(1);
     }
 
     if (ro[0] != 0) {
         puts("forkro: ERROR read-only page did not read zero");
+        report_stop("read-only page did not read zero");
         sys_exit(1);
     }
+    report_held();
 
     puts("forkro: forking; child will write the read-only page");
 
     pid = sys_fork();
     if (pid < 0) {
         puts("forkro: ERROR fork failed");
+        report_stop("fork failed");
         sys_exit(1);
     }
 
@@ -111,13 +129,17 @@ PROBE_START void _start(void)
 
     if (sys_waitpid(pid, &status, 0) != pid) {
         puts("forkro: ERROR waitpid failed");
+        report_stop("waitpid failed");
         sys_exit(1);
     }
 
     if (WIFSIGNALED(status) && WTERMSIG(status) == SIGSEGV) {
+        report_held();
+        report_end();
         puts("FORKRO OK");
         sys_exit(0);
     }
+    report_stop("child was not killed by SIGSEGV on the read-only write");
     puts("forkro: FAIL child was not killed by SIGSEGV on the read-only write");
     sys_exit(1);
 }

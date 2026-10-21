@@ -13,12 +13,18 @@
  * leaves out the bound, since on a running machine other processes move
  * the free memory by more than SLACK.
  *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, with the assertions `fork-reap`, that every fork and wait of the
+ * warm-up and the cycles succeeded, and `free-memory`, the two reads of
+ * sysinfo and the bound, which is not run under `machine=native`.
+ *
  * Prints "FORKLEAK OK" and exits 0, or "FORKLEAK FAIL: " with the reason and
  * exits 1. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -95,9 +101,23 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/** Print "FORKLEAK FAIL: `why`" and exit 1. */
-static void fail(const char *why)
+/* The assertions not yet reported, which a failure ends; NULL once
+ * reported. */
+static const char *unreported[2] = {"fork-reap", "free-memory"};
+
+/** Print "FORKLEAK FAIL: `why`", report the assertion `unreported[at]`
+ * failed for `why` and the other one not run, and exit 1. */
+static void fail(int at, const char *why)
 {
+    int i;
+
+    report_fail(unreported[at], why);
+    for (i = 0; i < 2; i++) {
+        if (i != at && unreported[i] != 0) {
+            report_notrun(unreported[i], "an earlier check failed");
+        }
+    }
+    report_end();
     sys_write(STDOUT_FILENO, "FORKLEAK FAIL: ", 15);
     puts(why);
     sys_exit(1);
@@ -110,13 +130,13 @@ static void churn(void)
 
     pid = sys_fork();
     if (pid < 0) {
-        fail("fork ran out of memory: the pool is leaking");
+        fail(0, "fork ran out of memory: the pool is leaking");
     }
     if (pid == 0) {
         sys_exit(0);
     }
     if (sys_waitpid(pid, &status, 0) != pid) {
-        fail("waitpid");
+        fail(0, "waitpid");
     }
 }
 
@@ -133,29 +153,38 @@ void probe_main(unsigned long *sp)
     int i;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.forkleak"));
     /* What the first forks take for good is taken before the count. */
     for (i = 0; i < WARMUP; i++) {
         churn();
     }
 
     if (sys_sysinfo(&si) != 0) {
-        fail("sysinfo");
+        fail(1, "sysinfo");
     }
     base_free = si.freeram;
 
     for (i = 0; i < CYCLES; i++) {
         churn();
     }
+    report_pass(unreported[0]);
+    unreported[0] = 0;
 
     if (sys_sysinfo(&si) != 0) {
-        fail("sysinfo");
+        fail(1, "sysinfo");
     }
     end_free = si.freeram;
 
     if (!probe_native() && base_free > end_free && base_free - end_free > SLACK) {
-        fail("free memory fell across fork churn: a per-fork resource leaks");
+        fail(1, "free memory fell across fork churn: a per-fork resource leaks");
     }
 
+    if (probe_native()) {
+        report_notrun(unreported[1], "machine=native leaves out the bound on free memory");
+    } else {
+        report_pass(unreported[1]);
+    }
+    report_end();
     puts("FORKLEAK OK");
     sys_exit(0);
 }

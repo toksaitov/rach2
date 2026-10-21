@@ -22,13 +22,17 @@
  * without it the uid is 1000.
  *
  * Prints "REBOOTPROBE OK" at the end, which also shows that nothing here
- * stopped the machine.
+ * stopped the machine. Writes etude's report records (probe_report.h) for
+ * the case ETUDE_CASE names, with the assertions `accepted`, the four calls
+ * that return 0, `einval`, the five that return -EINVAL, and `eperm`, the
+ * unprivileged child's refused power-off.
  *
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 
@@ -156,6 +160,7 @@ static void expect(const char *what, int got, int want)
     print_num(want);
     puts("");
     failures++;
+    report_miss(what);
 }
 
 void probe_main(unsigned long *sp);
@@ -173,19 +178,23 @@ void probe_main(unsigned long *sp)
     int child, status = 0;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.rebootprobe"));
     puts("reboot(2) probe starting...");
 
+    report_part("accepted");
     expect("disable-cad with the usual magic", sys_reboot(MAGIC1, MAGIC2, CMD_CAD_OFF), 0);
     expect("disable-cad with alternate magic a", sys_reboot(MAGIC1, MAGIC2A, CMD_CAD_OFF), 0);
     expect("disable-cad with alternate magic b", sys_reboot(MAGIC1, MAGIC2B, CMD_CAD_OFF), 0);
     expect("disable-cad with alternate magic c", sys_reboot(MAGIC1, MAGIC2C, CMD_CAD_OFF), 0);
 
+    report_part("einval");
     expect("enable-cad", sys_reboot(MAGIC1, MAGIC2, CMD_CAD_ON), WANT_EINVAL);
     expect("kexec", sys_reboot(MAGIC1, MAGIC2, CMD_KEXEC), WANT_EINVAL);
     expect("no first magic", sys_reboot(0, MAGIC2, CMD_CAD_OFF), WANT_EINVAL);
     expect("no second magic", sys_reboot(MAGIC1, 0, CMD_CAD_OFF), WANT_EINVAL);
     expect("wrong second magic", sys_reboot(MAGIC1, MAGIC2 + 1, CMD_CAD_OFF), WANT_EINVAL);
 
+    report_part("eperm");
     child = sys_fork();
     if (child == 0) {
         if (sys_setuid(PROBE_UID) != 0 || sys_geteuid() != PROBE_UID) {
@@ -198,20 +207,26 @@ void probe_main(unsigned long *sp)
     }
     if (child < 0) {
         puts("REBOOTPROBE FAIL: fork");
+        report_miss("fork");
         failures++;
     } else if (sys_waitpid(child, &status, 0) != child) {
         puts("REBOOTPROBE FAIL: waitpid");
+        report_miss("waitpid");
         failures++;
     } else if ((status & 0x7f) != 0) {
         puts("REBOOTPROBE FAIL: the unprivileged child did not exit normally");
+        report_miss("the unprivileged child did not exit normally");
         failures++;
     } else if (((status >> 8) & 0xff) == 2) {
         puts("REBOOTPROBE FAIL: the child could not drop privilege, so it asked nothing");
+        report_miss("the child could not drop privilege, so it asked nothing");
         failures++;
     } else if (((status >> 8) & 0xff) != 0) {
         puts("REBOOTPROBE FAIL: an unprivileged power-off was not refused with EPERM");
+        report_miss("an unprivileged power-off was not refused with EPERM");
         failures++;
     }
+    report_finish();
 
     if (failures == 0) {
         puts("REBOOTPROBE OK");

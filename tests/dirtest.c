@@ -7,10 +7,14 @@
  * fails with ENOTDIR.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
- * otherwise. Freestanding; direct system calls (probe.h).
+ * otherwise. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each test: `getcwd`, `chdir-dot`,
+ * `chdir-root`, `chdir-dotdot`, `getcwd-root`, `missing` and `enotdir`.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -68,22 +72,45 @@ static void print(const char *s)
     sys_write(STDOUT_FILENO, s, strlen(s));
 }
 
+/* The counts of the tests that passed and failed. */
+static int passed, failed;
+
+/** The test of the assertion `id`, printed as `label`: a chdir to `path`,
+ * which must succeed; `why` is the failure's detail. */
+static void chdir_row(const char *id, const char *label, const char *path, const char *why)
+{
+    report_part(id);
+    print(label);
+    if (sys_chdir(path) == 0) {
+        puts("OK");
+        passed++;
+    } else {
+        puts("FAILED");
+        report_miss(why);
+        failed++;
+    }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
- * The probe's entry: the getcwd and chdir tests in order, then the count of
- * each verdict, as one digit each.
+ * The probe, which `_start` calls with the initial stack: the getcwd and
+ * chdir tests in order, then the count of each verdict, as one digit each.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     char cwdbuf[64];
     int cwd;
     int result;
-    int passed = 0;
-    int failed = 0;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.dirtest"));
     puts("Directory syscall test starting...");
     puts("");
 
     /* Test 1: getcwd initial value */
+    report_part("getcwd");
     print("Test 1: getcwd()... ");
     cwd = sys_getcwd(cwdbuf, sizeof(cwdbuf));
     if (cwd > 0 && cwdbuf[0] == '/') {
@@ -93,43 +120,21 @@ PROBE_START void _start(void)
         passed++;
     } else {
         puts("FAILED");
+        report_miss("getcwd did not give an absolute path");
         failed++;
     }
 
     /* Test 2: chdir("."), which stays in the current directory. */
-    print("Test 2: chdir(\".\")... ");
-    result = sys_chdir(".");
-    if (result == 0) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED");
-        failed++;
-    }
+    chdir_row("chdir-dot", "Test 2: chdir(\".\")... ", ".", "chdir(\".\") failed");
 
     /* Test 3: chdir("/"). */
-    print("Test 3: chdir(\"/\")... ");
-    result = sys_chdir("/");
-    if (result == 0) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED");
-        failed++;
-    }
+    chdir_row("chdir-root", "Test 3: chdir(\"/\")... ", "/", "chdir(\"/\") failed");
 
     /* Test 4: chdir(".."): the root's parent is the root. */
-    print("Test 4: chdir(\"..\")... ");
-    result = sys_chdir("..");
-    if (result == 0) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED");
-        failed++;
-    }
+    chdir_row("chdir-dotdot", "Test 4: chdir(\"..\")... ", "..", "chdir(\"..\") failed");
 
     /* Test 5: getcwd after chdir operations */
+    report_part("getcwd-root");
     print("Test 5: getcwd() after chdir... ");
     cwd = sys_getcwd(cwdbuf, sizeof(cwdbuf));
     if (cwd > 0 && cwdbuf[0] == '/' && cwdbuf[1] == '\0') {
@@ -137,10 +142,12 @@ PROBE_START void _start(void)
         passed++;
     } else {
         puts("FAILED");
+        report_miss("getcwd after the chdirs did not give \"/\"");
         failed++;
     }
 
     /* Test 6: chdir to a name that does not exist fails. */
+    report_part("missing");
     print("Test 6: chdir(\"nonexistent\")... ");
     result = sys_chdir("nonexistent");
     if (result < 0) {
@@ -148,10 +155,12 @@ PROBE_START void _start(void)
         passed++;
     } else {
         puts("FAILED (should have failed)");
+        report_miss("chdir(\"nonexistent\") succeeded");
         failed++;
     }
 
     /* Test 7: chdir to hello.txt, a file, fails. */
+    report_part("enotdir");
     print("Test 7: chdir(\"hello.txt\")... ");
     result = sys_chdir("hello.txt");
     if (result == -ENOTDIR) {
@@ -159,8 +168,10 @@ PROBE_START void _start(void)
         passed++;
     } else {
         puts("FAILED (not ENOTDIR)");
+        report_miss("chdir(\"hello.txt\") did not fail with ENOTDIR");
         failed++;
     }
+    report_finish();
 
     puts("");
     print("Results: ");

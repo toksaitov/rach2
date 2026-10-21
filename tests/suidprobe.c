@@ -17,7 +17,10 @@
  *
  * The manifest stages the helper; this probe only drives it. Prints
  * "SUIDPROBE OK" and exits 0 on success, or "SUIDPROBE FAIL: " and the step
- * and exits 1. Freestanding; direct system calls (probe.h).
+ * and exits 1. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, with an assertion for the staged mode, `stat-mode`, and
+ * one for each exec: `setuid-root`, `setuid-owner`, `setgid`, `plain` and
+ * `no-exec`. Freestanding; direct system calls (probe.h).
  *
  * Needs the set-id fixtures the test image stages at its root, `/suidhelper`
  * and the `.suid`, `.u5`, `.sgid` and `.nox` copies beside it. They are not
@@ -32,6 +35,7 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -62,9 +66,11 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/** Print "SUIDPROBE FAIL: `step`" and exit 1. */
+/** Print "SUIDPROBE FAIL: `step`", end the report at the assertion that
+ * `step` fails, and exit 1. */
 static void fail(const char *step)
 {
+    report_stop(step);
     puts_("SUIDPROBE FAIL: ");
     puts_(step);
     puts_("\n");
@@ -141,41 +147,55 @@ void probe_main(unsigned long *sp)
     int rc;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.suidprobe"));
+    report_plan("stat-mode");
+    report_plan("setuid-root");
+    report_plan("setuid-owner");
+    report_plan("setgid");
+    report_plan("plain");
+    report_plan("no-exec");
 
     /* stat reports all of 07777, the setuid bit with the permission bits. */
     if ((stat_mode("/suidhelper.suid") & 07777u) != 04755u) {
         fail("stat did not report the setuid bit");
     }
+    report_held();
 
     /* The setuid-root exec: 1000 in, root out, the gids untouched. */
     rc = run_helper("/suidhelper.suid", "suid");
     if (rc != 0) {
         fail("setuid-root exec did not grant root (see helper step in the code)");
     }
+    report_held();
 
     /* A setuid exec owned by a non-root uid grants that owner's identity. */
     rc = run_helper("/suidhelper.u5", "suid5");
     if (rc != 0) {
         fail("setuid exec to a non-root owner (see helper step)");
     }
+    report_held();
 
     /* A setgid exec moves the gids alone; the uids stay put. */
     rc = run_helper("/suidhelper.sgid", "sgid");
     if (rc != 0) {
         fail("setgid exec did not move the gid (see helper step)");
     }
+    report_held();
 
     /* The ordinary exec: no bit, no change; AT_SECURE stays 0. */
     rc = run_helper("/suidhelper", "plain");
     if (rc != 0) {
         fail("plain exec changed a credential");
     }
+    report_held();
 
     /* The setuid bit without an execute bit: the exec is EACCES. */
     rc = run_helper("/suidhelper.nox", "suid");
     if (rc != 128 + EACCES) {
         fail("setuid without execute bit was not denied");
     }
+    report_held();
+    report_end();
 
     puts_("SUIDPROBE OK\n");
     syscall1(SYS_EXIT, 0);

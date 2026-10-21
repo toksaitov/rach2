@@ -3,9 +3,17 @@
  * dup2, writes through stdout, then reads the file back and checks the
  * content. It also covers dup2(fd, fd) and the refusal of invalid
  * descriptors.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, with the assertions `identity`, `redirect` (the file put on
+ * descriptor 1 takes the write), `restore` (dup2(2, 1)), `content` (the file
+ * reads back the bytes), `bad-oldfd` and `bad-newfd`. A failure that ends
+ * the tests leaves the assertions after it not run. Freestanding; direct
+ * system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
@@ -14,6 +22,8 @@
 #define O_RDONLY 0
 #define O_WRONLY 1
 #define O_RDWR   2
+
+#define F_DUPFD 0
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -55,6 +65,12 @@ static int sys_unlink(const char *path)
 static int sys_dup2(int oldfd, int newfd)
 {
     return syscall2(SYS_DUP2, (long)oldfd, (long)newfd);
+}
+
+/** The fcntl call: a result of `cmd`, or a negated errno. */
+static int sys_fcntl(int fd, int cmd, long arg)
+{
+    return syscall3(SYS_FCNTL, (long)fd, (long)cmd, arg);
 }
 
 /** End the process with `status`; it does not return. */
@@ -124,24 +140,38 @@ static void print_num_stderr(int n)
 static const char *test_file = "dup2test.tmp";
 static const char *test_content = "Hello from dup2!";
 
-/**
- * The probe. It runs the dup2 tests in order: the identity dup2(fd, fd),
- * redirecting stdout onto a file and reading the bytes back, and the failure
- * cases for an invalid oldfd and an invalid newfd. Stdout is put back on the
- * console from stderr after the write. Exits 0 when all pass and 1
- * otherwise.
- */
-PROBE_START void _start(void)
+/* The counts of the tests that passed and failed, and a copy of the
+ * descriptor 1 the probe started with, above those the tests use. */
+static int passed, failed, saved_stdout;
+
+/* The assertions in order, and the index of the next to begin. */
+static const char *const rows[] = {"identity", "redirect",  "restore",
+                                   "content",  "bad-oldfd", "bad-newfd"};
+static unsigned int next_row;
+
+/** Begin the part of the next assertion. */
+static void begin_row(void)
 {
-    char buf[128];
-    int fd, n, result;
-    int passed = 0;
-    int failed = 0;
+    report_part(rows[next_row++]);
+}
 
-    puts_stderr("Dup2 syscall test starting...");
-    puts_stderr("");
+/** End the open part and the report after a failure that ended the tests:
+ * the assertions not yet begun are not run. */
+static void report_rest(void)
+{
+    report_part_end();
+    while (next_row < sizeof(rows) / sizeof(rows[0])) {
+        report_notrun(rows[next_row++], "an earlier check failed");
+    }
+    report_end();
+}
 
-    /* Test 1: dup2(fd, fd) returns fd */
+/** Test 1: dup2(1, 1) returns 1. */
+static void identity_row(void)
+{
+    int result;
+
+    begin_row();
     print_stderr("Test 1: dup2(1, 1) should return 1... ");
     result = sys_dup2(STDOUT_FILENO, STDOUT_FILENO);
     if (result == STDOUT_FILENO) {
@@ -151,10 +181,25 @@ PROBE_START void _start(void)
         print_stderr("FAILED (returned ");
         print_num_stderr(result);
         puts_stderr(")");
+        report_miss("dup2(1, 1) did not return 1");
         failed++;
     }
+}
 
-    /* Test 2: Create file and redirect stdout to it */
+/**
+ * Test 2: put a created file on descriptor 1, write through it, and put
+ * descriptor 1 back from descriptor 2; 0 when the file was not created or
+ * not put on descriptor 1, and 1 otherwise.
+ *
+ * No record is written while descriptor 1 is the file. Descriptor 1 is then
+ * put back from the copy the probe kept, which is standard output under
+ * etude where descriptor 2 is not, before the next part begins.
+ */
+static int redirect_rows(void)
+{
+    int fd, n, result, restored;
+
+    begin_row();
     puts_stderr("");
     print_stderr("Test 2: redirect stdout to file...\n");
 
@@ -164,8 +209,9 @@ PROBE_START void _start(void)
     fd = sys_creat(test_file, 0644);
     if (fd < 0) {
         puts_stderr("FAILED");
+        report_miss("creat of dup2test.tmp failed");
         failed++;
-        goto cleanup;
+        return 0;
     }
     print_stderr("OK (fd=");
     print_num_stderr(fd);
@@ -179,9 +225,11 @@ PROBE_START void _start(void)
         print_stderr("FAILED (returned ");
         print_num_stderr(result);
         puts_stderr(")");
+        report_miss("dup2 of the file onto descriptor 1 failed");
         failed++;
         sys_close(fd);
-        goto cleanup;
+        sys_dup2(saved_stdout, STDOUT_FILENO);
+        return 0;
     }
     puts_stderr("OK");
 
@@ -194,6 +242,7 @@ PROBE_START void _start(void)
         print_stderr("FAILED (wrote ");
         print_num_stderr(n);
         puts_stderr(" bytes)");
+        report_miss("the write through descriptor 1 fell short");
         failed++;
     }
 
@@ -203,14 +252,29 @@ PROBE_START void _start(void)
     /* fd 2 is still the console, so its copy puts fd 1 back on it. */
     print_stderr("  Restoring stdout from stderr... ");
     result = sys_dup2(STDERR_FILENO, STDOUT_FILENO);
-    if (result == STDOUT_FILENO) {
+    restored = result == STDOUT_FILENO;
+    if (restored) {
         puts_stderr("OK");
     } else {
         puts_stderr("FAILED");
         failed++;
     }
+    sys_dup2(saved_stdout, STDOUT_FILENO);
+    begin_row();
+    if (!restored) {
+        report_miss("dup2(2, 1) did not return 1");
+    }
+    return 1;
+}
 
-    /* Test 3: Read back the file and verify content */
+/** Test 3: the file reads back the bytes written through descriptor 1; 0
+ * when it did not open or read, and 1 otherwise. */
+static int content_row(void)
+{
+    char buf[128];
+    int fd, n;
+
+    begin_row();
     puts_stderr("");
     print_stderr("Test 3: verify file content...\n");
 
@@ -220,8 +284,9 @@ PROBE_START void _start(void)
     fd = sys_open(test_file, O_RDONLY);
     if (fd < 0) {
         puts_stderr("FAILED");
+        report_miss("open of dup2test.tmp failed");
         failed++;
-        goto cleanup;
+        return 0;
     }
     print_stderr("OK (fd=");
     print_num_stderr(fd);
@@ -231,9 +296,10 @@ PROBE_START void _start(void)
     n = sys_read(fd, buf, sizeof(buf) - 1);
     if (n < 0) {
         puts_stderr("FAILED");
+        report_miss("read of dup2test.tmp failed");
         sys_close(fd);
         failed++;
-        goto cleanup;
+        return 0;
     }
     buf[n] = '\0';
     print_stderr("OK (");
@@ -250,11 +316,20 @@ PROBE_START void _start(void)
         passed++;
     } else {
         puts_stderr("FAILED (content mismatch)");
+        report_miss("the file did not read back the bytes written");
         failed++;
     }
     sys_close(fd);
+    return 1;
+}
+
+/** Tests 4 and 5: dup2 refuses an invalid old and new descriptor. */
+static void invalid_rows(void)
+{
+    int result;
 
     /* Test 4: dup2 with an invalid oldfd fails */
+    begin_row();
     puts_stderr("");
     print_stderr("Test 4: dup2(99, 5) with invalid oldfd... ");
     result = sys_dup2(99, 5);
@@ -265,10 +340,12 @@ PROBE_START void _start(void)
         print_stderr("FAILED (should have failed, got ");
         print_num_stderr(result);
         puts_stderr(")");
+        report_miss("dup2(99, 5) succeeded");
         failed++;
     }
 
     /* Test 5: dup2 onto a number past the table's limit of 1024 fails */
+    begin_row();
     print_stderr("Test 5: dup2(1, 2000) with invalid newfd... ");
     result = sys_dup2(STDOUT_FILENO, 2000);
     if (result < 0) {
@@ -278,10 +355,38 @@ PROBE_START void _start(void)
         print_stderr("FAILED (should have failed, got ");
         print_num_stderr(result);
         puts_stderr(")");
+        report_miss("dup2(1, 2000) succeeded");
         failed++;
     }
+}
 
-cleanup:
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * The probe, which `_start` calls with the initial stack. It runs the dup2
+ * tests in order: the identity dup2(fd, fd), redirecting stdout onto a file
+ * and reading the bytes back, and the failure cases for an invalid oldfd
+ * and an invalid newfd. Stdout is put back on the console from stderr after
+ * the write. Exits 0 when all pass and 1 otherwise.
+ */
+void probe_main(unsigned long *sp)
+{
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.dup2test"));
+    saved_stdout = sys_fcntl(STDOUT_FILENO, F_DUPFD, 64);
+    puts_stderr("Dup2 syscall test starting...");
+    puts_stderr("");
+
+    identity_row();
+    if (redirect_rows() && content_row()) {
+        invalid_rows();
+        report_finish();
+    } else {
+        report_rest();
+    }
+    sys_close(saved_stdout);
+
     puts_stderr("");
     print_stderr("Cleanup: unlinking ");
     print_stderr(test_file);
