@@ -76,8 +76,13 @@ jobs:
       fail-fast: false
       matrix:
         arch: [i686, x86_64]
+    # Each architecture takes at most 6 of the testing host's 24 processors,
+    # so that the workers' checks are admitted beside the two core runs.
     env:
       ARCH: ${{ matrix.arch }}
+      JOBS: 6
+      MAKEFLAGS: -j6
+      RACH2_WORKERS: 6
     steps:
       - name: Check out the commit
         uses: actions/checkout@v5
