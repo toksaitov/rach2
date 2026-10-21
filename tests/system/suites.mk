@@ -1252,22 +1252,19 @@ DISKS_DISK1 = $(IMAGES_DIR)/disks-test-1.disk
 run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/disks.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
 # `tests/run parts`: four tables on four AHCI disks (an MBR with logical
-# partitions, a GPT, a GPT read from its backup, a blank disk), the nodes
-# as the tables number them, the table read again, a 5 TiB disk's numbers
-# past 32 bits in /sys/block and /proc/partitions, and the root chosen by
-# identity: found when the disks are swapped, refused when two disks have it.
-# Then the recovery kernel's `disk write` on five GPT disks, the two above,
-# one whose primary header is zeroed and two with no protective MBR, and on
-# an MBR disk whose partition reaches the last sector, each of which must be
-# refused and left as it was, since the sector it writes is a backup header or
-# a partition's; and on an MBR disk whose last sector no partition holds,
-# which must take the round-trip (tests/system/gpt_write_refusal.sh).
-PARTS_DIR = $(IMAGES_DIR)/parts
-run-parts: rach2 rach2-recovery tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) $(HARNESS)
-	sh tests/system/suites/parts.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(MKGPT) \
-	    $(OS_SIMPLE_EXT2) $(PARTS_DIR)
-	sh tests/system/gpt_write_refusal.sh $(RECOVERY_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKGPT) \
-	    $(PARTS_DIR)/gpt-write
+# partitions, a GPT, a GPT read from its backup, a blank disk), the nodes as
+# the tables number them, the table read again, a 5 TiB disk's numbers past
+# 32 bits in /sys/block and /proc/partitions, and the root chosen by identity:
+# found when the disks are swapped, refused when two disks have it. Then the
+# recovery kernel's `disk write` on five GPT disks (both headers whole, the
+# primary's checksum broken, the primary's sector zeroed, and two with no
+# protective MBR, one of them without its primary header too) and on an MBR
+# disk whose partition reaches the last sector, each of which must be refused
+# and left as it was, since the sector it writes is a backup header or a
+# partition's; and on an MBR disk whose last sector no partition holds, which
+# must take the round-trip. They are the cases of
+# tests/cases/machine.parts.json, which etude runs, each arrangement a boot of
+# its own, and have no target here.
 # The disks of the partition cases, tests/cases/machine.parts.json, which
 # parts_disks.sh makes. The MBR disk with logical partitions around a KRFFS
 # of disk-test.manifest, and the GUID disk with os-simple's ext2 root with
