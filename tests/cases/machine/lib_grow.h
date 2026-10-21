@@ -52,6 +52,34 @@ int grow_run(struct drive *d, const char *fmt, ...);
 int grow_console_has(const struct drive *d, const char *text);
 
 /**
+ * Report assertion `id` as etude_assert does, counting it when it failed,
+ * so that grow_clean knows whether the scenario's evidence is wanted.
+ */
+void grow_assert(struct etude_case *c, const char *id, int held, const char *detail);
+
+/**
+ * Note file `path`, which the scenario or a host program it ran wrote among
+ * the evidence and libetude-case does not know of, for grow_clean.
+ */
+void grow_made(const char *path);
+
+/**
+ * Remove the files grow_made noted when every assertion grow_assert reported
+ * held, as libetude-case removes its own evidence after a pass; keep them
+ * otherwise. A scenario calls it last.
+ */
+void grow_clean(void);
+
+/**
+ * Copy the path of the evidence `name` into `buf`, since etude_evidence
+ * gives every path in one buffer, which its next call overwrites.
+ *
+ * @return `buf`, or NULL when the name is no file name or the path does not
+ *         fit.
+ */
+char *grow_evidence(struct etude_case *c, const char *name, char *buf, size_t size);
+
+/**
  * Copy `len` bytes of file `from`, from byte `off`, to a new file `to`.
  *
  * @return 0, or -1 when either file cannot be used or `from` is shorter.

@@ -152,8 +152,9 @@ static int fsck_clean(struct drive *d)
 int etude_scenario(struct etude_case *c)
 {
     static const char *const one_disks[] = {"one", NULL}, *const two_disks[] = {"two", NULL};
-    const char *base = etude_artifact(c, "base"), *one, *head = etude_evidence(c, "head.vol");
-    char why[300], last_text[32] = "", *image, *text = NULL, *out = NULL;
+    const char *base = etude_artifact(c, "base"), *one;
+    char why[300], last_text[32] = "", head[1024], map[1024], measures[1024], *image, *text = NULL;
+    char *out = NULL;
     unsigned long long last = 0;
     int set_ok, grown, clean, st, lines, distinct, ok;
     uint32_t itable = 0;
@@ -162,9 +163,15 @@ int etude_scenario(struct etude_case *c)
 
     if (etude_step(c, "set") != ETUDE_OK)
         return 1;
+    if (grow_evidence(c, "head.vol", head, sizeof(head)) == NULL ||
+        grow_evidence(c, "one.map", map, sizeof(map)) == NULL ||
+        grow_evidence(c, "one.text", measures, sizeof(measures)) == NULL)
+        return 1;
+    grow_made(head);
+    grow_made(measures);
     image = read_file(etude_artifact(c, "image"), &len);
-    etude_assert(c, "measured-image", image != NULL && has_bytes(image, len, "growroot: measure:"),
-                 "the recovery image has no grow measurements");
+    grow_assert(c, "measured-image", image != NULL && has_bytes(image, len, "growroot: measure:"),
+                "the recovery image has no grow measurements");
     free(image);
     set_ok = grow_copy_range(base, (uint64_t)START * 512, HEAD_BYTES, head) == 0;
     if (set_ok) {
@@ -199,13 +206,13 @@ int etude_scenario(struct etude_case *c)
         return 1;
     snprintf(why, sizeof(why), "growroot --measure ended with status %d without saying %s", st,
              grown_line);
-    etude_assert(c, "grown", grown, st < 0 ? d.why : why);
-    etude_assert(
+    grow_assert(c, "grown", grown, st < 0 ? d.why : why);
+    grow_assert(
         c, "entry",
         grow_console_has(&d, "growroot: entry: /dev/disk0p1 from 2097152 to 33552384 sectors"),
         "growroot's record of the entry is not of 2097152 sectors grown to 33552384");
-    etude_assert(c, "clean", clean,
-                 d.failed ? d.why : "e2fsck -fn found the grown volume not clean");
+    grow_assert(c, "clean", clean,
+                d.failed ? d.why : "e2fsck -fn found the grown volume not clean");
 
     if (etude_step(c, "writes") != ETUDE_OK)
         return 1;
@@ -214,9 +221,8 @@ int etude_scenario(struct etude_case *c)
         ok = 0;
     } else {
         char *const map_argv[] = {"qemu-img", "map", "--output=json", (char *)one, NULL};
-        char *const cover_argv[] = {
-            "growset",    "--lba",    "2048", "--map", (char *)etude_evidence(c, "one.map"),
-            (char *)head, "33552384", NULL};
+        char *const cover_argv[] = {"growset", "--lba", "2048",     "--map",
+                                    map,       head,    "33552384", NULL};
 
         ok = drive_host(c, map_argv, "one.map") == 0;
         snprintf(why, sizeof(why), "qemu-img map of the overlay failed");
@@ -230,19 +236,19 @@ int etude_scenario(struct etude_case *c)
             text = NULL;
         }
     }
-    etude_assert(c, "inside-set", ok, why);
+    grow_assert(c, "inside-set", ok, why);
     text = drive_console(&d);
-    ok = text != NULL && grow_write_text(etude_evidence(c, "one.text"), text) == 0;
+    ok = text != NULL && grow_write_text(measures, text) == 0;
     free(text);
     text = NULL;
     if (ok) {
-        char *const argv[] = {"awk", "-f", (char *)etude_artifact(c, "grow_measure"),
-                              (char *)etude_evidence(c, "one.text"), NULL};
+        char *const argv[] = {"awk", "-f", (char *)etude_artifact(c, "grow_measure"), measures,
+                              NULL};
 
         ok = drive_host(c, argv, "measures.txt") == 0;
     }
-    etude_assert(c, "measures", ok,
-                 "growroot's phase measures do not match the wrapper's counters or show no work");
+    grow_assert(c, "measures", ok,
+                "growroot's phase measures do not match the wrapper's counters or show no work");
 
     if (etude_step(c, "end") != ETUDE_OK)
         return 1;
@@ -267,8 +273,8 @@ int etude_scenario(struct etude_case *c)
     free(text);
     text = NULL;
     snprintf(why, sizeof(why), "%d checksums of 32768 bytes, %d distinct", lines, distinct);
-    etude_assert(c, "end-file", ok && lines == 2 && distinct == 1, ok ? why : d.why);
-    etude_assert(c, "end-clean", clean, d.failed ? d.why : "e2fsck -fn found the volume not clean");
+    grow_assert(c, "end-file", ok && lines == 2 && distinct == 1, ok ? why : d.why);
+    grow_assert(c, "end-clean", clean, d.failed ? d.why : "e2fsck -fn found the volume not clean");
 
     if (etude_step(c, "descriptor") != ETUDE_OK)
         return 1;
@@ -281,6 +287,7 @@ int etude_scenario(struct etude_case *c)
         snprintf(count, sizeof(count), "count=%" PRIu64, DESC / 512 + 1);
         snprintf(in, sizeof(in), "if=%s", one);
         snprintf(of, sizeof(of), "of=%s", etude_evidence(c, "desc.raw"));
+        grow_made(of + 3);
         len = 0;
         bytes = drive_host(c, argv, "desc.out") == 0
                     ? (unsigned char *)read_file(etude_evidence(c, "desc.raw"), &len)
@@ -292,7 +299,7 @@ int etude_scenario(struct etude_case *c)
     }
     snprintf(why, sizeof(why), "the first added group's inode table is at block %" PRIu32, itable);
     ok = itable >= ADDED * GROUP_BLOCKS && itable < (ADDED + 1) * GROUP_BLOCKS;
-    etude_assert(c, "descriptor", ok, why);
+    grow_assert(c, "descriptor", ok, why);
 
     if (etude_step(c, "stopped") != ETUDE_OK)
         return 1;
@@ -316,7 +323,7 @@ int etude_scenario(struct etude_case *c)
              "the stopped grow did not end with status 1 after resize2fs said Aborting "
              "due to I/O to block %" PRIu32 ", or left resize2fs running",
              itable);
-    etude_assert(c, "stopped", ok, d.failed ? d.why : why);
+    grow_assert(c, "stopped", ok, d.failed ? d.why : why);
     st = grow_shell(&d, "RESIZE", &out, "/sbin/resize2fs /dev/disk0p1");
     ok = st == 1 && out != NULL && strstr(out, "Please run 'e2fsck -f /dev/disk0p1' first") != NULL;
     free(out);
@@ -329,22 +336,23 @@ int etude_scenario(struct etude_case *c)
     drive_stop(&d);
     if (drive_halted())
         return 1;
-    etude_assert(c, "stopped-report",
-                 grow_console_has(&d, "growroot: /dev/disk0p1: resize2fs status -1"),
-                 "growroot did not report the stopped resizer's status -1");
-    etude_assert(
+    grow_assert(c, "stopped-report",
+                grow_console_has(&d, "growroot: /dev/disk0p1: resize2fs status -1"),
+                "growroot did not report the stopped resizer's status -1");
+    grow_assert(
         c, "refused", ok,
         d.failed ? d.why
                  : "resize2fs alone did not refuse the volume with status 1, asking for e2fsck -f");
     snprintf(why, sizeof(why), "growroot run again ended with status %d without saying %s", st,
              grown_line);
-    etude_assert(c, "finished", grown, d.failed ? d.why : why);
-    etude_assert(
+    grow_assert(c, "finished", grown, d.failed ? d.why : why);
+    grow_assert(
         c, "rerun-entry",
         grow_console_has(
             &d, "growroot: entry: /dev/disk0p1 already fills the 33552384 sectors after it"),
         "growroot run again did not find the entry already at the disk's end");
-    etude_assert(c, "finished-clean", clean,
-                 d.failed ? d.why : "e2fsck -fn found the volume not clean");
+    grow_assert(c, "finished-clean", clean,
+                d.failed ? d.why : "e2fsck -fn found the volume not clean");
+    grow_clean();
     return 0;
 }
