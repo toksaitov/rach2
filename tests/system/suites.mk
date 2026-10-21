@@ -765,13 +765,10 @@ run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFI
 	sh tests/system/suites/fatwrite.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
 
-# `tests/run loopdev`: a file system in a file, through a loop device: a FAT32
-# image and an ext2 image on a FAT32 volume, each mounted, written and read
-# back, and everything an attachment refuses.
-LOOPDEV_DISK = $(IMAGES_DIR)/loopdev-test.disk
-run-loopdev: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
-	sh tests/system/suites/loopdev.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
-	    $(LOOPDEV_DISK)
+# `tests/run loopdev`: a file system in a file, through a loop device: a FAT32,
+# an ext2 and a KRFFS image on a FAT32 volume, each mounted, written and read
+# back, and everything an attachment refuses. They are the cases of
+# tests/cases/machine.loopdev.json, which etude runs, and have no target here.
 # The artifacts of the loop device cases beyond the kernel and the test
 # image, which loopdev_disks.sh makes: the FAT32, ext2 and KRFFS images in
 # build/tests/system/loopdev, where the native cases take them from
