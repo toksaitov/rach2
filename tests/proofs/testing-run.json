@@ -85,6 +85,43 @@
         ],
         "only": true
       }
+    },
+    {
+      "name": "missing",
+      "summary": "the wait probe ended by `cat` of a result file the run has not written yet, which fails, so that the probe's output is lost",
+      "edits": [
+        {
+          "file": "tools/dev/testing.sh",
+          "find": "cat /home/testing/%s.out 2>/dev/null || :\\n' \\\n",
+          "replace": "cat /home/testing/%s.out 2>/dev/null\\n' \\\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "testing-run-test: failed: wait first:",
+          "testing-run-test: failed: wait stalled:"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "unanswered",
+      "summary": "a probe the host did not answer taken for a run that ended",
+      "edits": [
+        {
+          "file": "tools/dev/testing.sh",
+          "find": "            if [ \"$status\" -ne 0 ]; then\n                echo \"testing: $name: the host did not answer",
+          "replace": "            if false; then\n                echo \"testing: $name: the host did not answer"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "testing-run-test: failed: wait unreachable:"
+        ],
+        "only": true
+      }
     }
   ]
 }

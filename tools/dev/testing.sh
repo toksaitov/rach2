@@ -68,7 +68,10 @@
 # step stuck, or 100 minutes gone, which is before the two hours a background
 # command of an agent may last. It prints the new lines and the reason, so
 # that the caller reads each result when it lands and waits again with the
-# new count.
+# new count. The probe it sends ends with a command that succeeds, whether
+# or not NAME.out exists yet, so a status other than 0 means that ssh or the
+# copy's shell failed; `wait` then exits 1 and says so, since it cannot tell
+# whether the run has ended.
 #
 # The host is reached as `ssh testing`. Its ssh server is Windows's OpenSSH,
 # whose default shell, `C:\msys64\sshd_default_shell.cmd`, is a batch file
@@ -388,8 +391,13 @@ case "${1:-}" in
         esac
         end=$(( $(date +%s) + 6000 ))
         while :; do
-            out=$(printf 'pgrep -f /home/testing/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find /home/testing/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat /home/testing/%s.out 2>/dev/null\n' \
-                "$name" "$name" "$name" "$name" | "$0" sh 2>/dev/null) || out=
+            status=0
+            out=$(printf 'pgrep -f /home/testing/%s.sh > /dev/null || pgrep -f "sh %s.sh" > /dev/null && echo RUNNING; find /home/testing/%s -type f -mmin -15 2>/dev/null | head -1 | grep -q . && echo FRESH; cat /home/testing/%s.out 2>/dev/null || :\n' \
+                "$name" "$name" "$name" "$name" | "$0" sh 2>/dev/null) || status=$?
+            if [ "$status" -ne 0 ]; then
+                echo "testing: $name: the host did not answer, status $status; its run may still go on" >&2
+                exit 1
+            fi
             lines=$(printf '%s\n' "$out" | grep -c "^$name: " || true)
             new=$(printf '%s\n' "$out" | grep "^$name: " | tail -n +$((seen + 1)) || true)
             case "$out" in

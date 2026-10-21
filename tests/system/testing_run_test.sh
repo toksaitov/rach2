@@ -1,6 +1,7 @@
 #!/bin/sh
 # testing_run_test.sh: check that `testing.sh run` delivers its command intact,
-# and that a copy synced from a git worktree is a repository of its own.
+# that a copy synced from a git worktree is a repository of its own, and that
+# `testing.sh wait` reports a run as it is on the host.
 # TESTING_SH names the testing.sh to copy, by default the tree's;
 # tests/proofs/testing-run.json runs the rows against copies with faults in
 # them.
@@ -23,9 +24,17 @@ cp "${TESTING_SH:-$repo/tools/dev/testing.sh}" "$script"
 # keeps the lock until its input ends. It refuses any other command line that
 # is longer than cmd.exe's limit of 8191 characters or has a double quote, `%`
 # or `!`, which cmd.exe reads as its own, and gives the rest to a shell to
-# parse, as the batch file gives it to MSYS's.
+# parse, as the batch file gives it to MSYS's. The terminal of `testing.sh sh`
+# runs its command with its input, in which the host's `/home/testing/` is the
+# directory HOSTHOME names, or exits 255 when the file `unreachable` is beside
+# that directory.
 cat > "$work/bin/ssh" <<'EOF'
 #!/bin/sh
+if [ "$1 $2" = '-t testing' ]; then
+    [ ! -e "$HOSTHOME/../unreachable" ] || exit 255
+    sed "s|/home/testing/|$HOSTHOME/|g" | bash -c "$3"
+    exit
+fi
 [ "$1 $3" = '-o testing' ] || exit 255
 [ "${#4}" -le 8191 ] ||
     { echo "ssh fixture: cmd.exe refuses a line of ${#4} characters" >&2; exit 255; }
@@ -37,7 +46,10 @@ exec bash -c "$4"
 EOF
 cat > "$work/bin/wsl.exe" <<'EOF'
 #!/bin/sh
-[ "$1" = -e ] || { echo "wsl.exe fixture: unsupported: $*" >&2; exit 2; }
+case $1 in
+    -e|--) ;;
+    *) echo "wsl.exe fixture: unsupported: $*" >&2; exit 2 ;;
+esac
 shift
 exec "$@"
 EOF
@@ -68,11 +80,12 @@ EOF
 } > "$work/bin/rsync"
 chmod +x "$work/bin/ssh" "$work/bin/wsl.exe" "$work/bin/rsync"
 HOME=$work/home
+HOSTHOME=$work/host/home
 PATH=$work/bin:$PATH
 RACH2_TESTING_COPY=$work/copy
 GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.com
 GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.com
-export HOME PATH RACH2_TESTING_COPY
+export HOME HOSTHOME PATH RACH2_TESTING_COPY
 export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
 
@@ -127,6 +140,52 @@ HEAD:second"
     fi
 }
 
+# The run that `wait` watches has a name no other process on the host has in
+# its command line. The sleep fixture stands for the minute between the
+# passes of `wait`: in it, the run writes its first result line.
+run=testingwait$$
+mkdir -p "$work/waitbin" "$HOSTHOME"
+{
+    echo '#!/bin/sh'
+    echo "echo '$run: first' >> \"\$HOSTHOME/$run.out\""
+} > "$work/waitbin/sleep"
+chmod +x "$work/waitbin/sleep"
+
+# waitrow NAME STATUS EXPECTED RUNNING FRESH OUT [SEEN]: set up the run on
+# the fixture's host, running when RUNNING is 1, with a file under its work
+# directory changed in the last 15 minutes when FRESH is 1, and with the
+# result file OUT holds, none when OUT is `-`; then require `testing.sh wait`
+# with SEEN to exit with status STATUS and print EXPECTED.
+waitrow()
+{
+    name=$1 status=$2 expected=$3 running=$4 fresh=$5 results=$6
+    shift 6
+    rm -rf "${HOSTHOME:?}/$run" "$HOSTHOME/$run.out" "$HOSTHOME/$run.sh"
+    pid=
+    if [ "$running" -eq 1 ]; then
+        printf 'while :; do sleep 1; done\n' > "$HOSTHOME/$run.sh"
+        sh "$HOSTHOME/$run.sh" &
+        pid=$!
+    fi
+    if [ "$fresh" -eq 1 ]; then
+        mkdir "$HOSTHOME/$run"
+        : > "$HOSTHOME/$run/log"
+    fi
+    [ "$results" = - ] || printf '%s\n' "$results" > "$HOSTHOME/$run.out"
+    result=0
+    PATH=$work/waitbin:$PATH sh "$script" wait "$run" "$@" \
+        > "$work/out" 2> "$work/err" || result=$?
+    if [ -n "$pid" ]; then
+        kill "$pid" 2>/dev/null || :
+        wait "$pid" 2>/dev/null || :
+    fi
+    if [ "$result" -ne "$status" ] || [ "$(cat "$work/out")" != "$expected" ]; then
+        echo "testing-run-test: failed: $name: status $result" >&2
+        awk '{ print "testing-run-test:   " $0 }' "$work/out" "$work/err" >&2
+        return 1
+    fi
+}
+
 # rows: run each command and report every row that fails.
 rows()
 {
@@ -147,8 +206,18 @@ a\\b" '' "printf '%s\\n' \"it's\" 'say \"hi\"' '(x)' 'a\\b' | tr -d '()'" ||
     row status 7 '' '' '(exit 7)' || failed=1
     row long 0 9000 '' "echo $long | awk '{ print length(\$0) }'" || failed=1
     worktree || failed=1
+    waitrow 'wait first' 0 "$run: first
+testing: $run: running, 1 lines" 1 1 - || failed=1
+    waitrow 'wait stalled' 0 "testing: $run: stalled, nothing under\
+ /home/testing/$run changed for 15 minutes, 0 lines" 1 0 - || failed=1
+    waitrow 'wait ended' 0 "$run: two
+testing: $run: ended, 2 lines" 0 0 "$run: one
+$run: two" 1 || failed=1
+    : > "$work/host/unreachable"
+    waitrow 'wait unreachable' 1 '' 1 1 "$run: one" || failed=1
+    rm -f "$work/host/unreachable"
     return "$failed"
 }
 long=$(printf '%9000s' '' | tr ' ' x)
 rows || exit 1
-echo 'testing-run-test: result: pass: 9 rows'
+echo 'testing-run-test: result: pass: 13 rows'
