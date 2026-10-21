@@ -1040,6 +1040,16 @@ $(REHEARSE_DIR)/base.raw: $(INSTALLER_DISK) tests/cases/machine/rehearse_fixture
 	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_DIR)
 $(REHEARSE_FILES): $(REHEARSE_DIR)/base.raw
 	@test -f $@
+# The recovery RAM image of a tree with no key, which the installer's case
+# puts on an installed disk's recovery partition, so that the key the install
+# placed there is the only one its recovery system can take: the recovery
+# manifest with the key's line taken out, staged as the image is.
+$(CASE_IMAGES)/recovery-keyless.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach2-recovery.manifest
+	@mkdir -p $(@D)
+	sed '/^optional-file .* \/root\/\.ssh\/authorized_keys /d' \
+	    krffs/manifests/rach2-recovery.manifest > $@.manifest
+	! grep -q '^optional-file.*authorized_keys' $@.manifest
+	$(MKIMAGE) $@.manifest $@ 4
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.
