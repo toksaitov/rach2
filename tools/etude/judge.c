@@ -33,6 +33,10 @@
 static const char *const OUTCOMES[] = {"pass", "fail", "not_run", "missing"};
 static const char *const ATTEMPTS[] = {"pass", "failure", "incomplete"};
 
+/* The ends a machine record may give a boot. */
+static const char *const MACHINE_ENDS[] = {"panic",       "halted",       "reset",   "shutdown",
+                                           "qemu_exited", "accel_failed", "stopped", "lost"};
+
 enum verb {
     VERB_BEGIN,
     VERB_ASSERT,
@@ -40,15 +44,16 @@ enum verb {
     VERB_BRANCH,
     VERB_PROGRESS,
     VERB_CHILD,
-    VERB_END
+    VERB_END,
+    VERB_MACHINE
 };
 
 /* One record of a report, as parsed. */
 struct rec {
     enum verb verb;
     int line;
-    char id[132];     /* the case, assertion, group or witness */
-    char alt[132];    /* a branch's alternative */
+    char id[132];     /* the case, assertion, group, witness or boot */
+    char alt[132];    /* a branch's alternative, or a boot's end */
     char text[256];   /* a failure's detail or a skip's reason */
     long long number; /* progress units, a child's PID or the end's count */
     int failed;       /* an assert record of a failure */
@@ -208,6 +213,45 @@ static int parse_assert(char *p, struct rec *r)
     return 0;
 }
 
+/** Returns 1 when `end` is an end that a machine record may give. */
+static int machine_end(const char *end)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof MACHINE_ENDS / sizeof MACHINE_ENDS[0]; i++) {
+        if (same(end, MACHINE_ENDS[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Returns the length of the machine's identity in `name`, a boot
+ * `MACHINE.N` with N counted from 1, when `name` is one, and 0 when not.
+ */
+static size_t boot_id_len(const char *name)
+{
+    const char *dot = strrchr(name, '.');
+    const char *d;
+
+    if (dot == NULL || dot == name || dot[1] < '1' || dot[1] > '9' || strlen(dot + 1) > 9) {
+        return 0;
+    }
+    for (d = dot + 1; *d != '\0'; d++) {
+        if (*d < '0' || *d > '9') {
+            return 0;
+        }
+    }
+    return (size_t)(dot - name);
+}
+
+/** Returns 1 when `name` is a boot, `MACHINE.N`. */
+static int is_boot(const char *name)
+{
+    return boot_id_len(name) > 0;
+}
+
 /** Parses the fields after the verb of the record `r`; returns 0 or -1. */
 static int parse_fields(char *p, struct rec *r)
 {
@@ -228,6 +272,11 @@ static int parse_fields(char *p, struct rec *r)
                        *p == '\0'
                    ? 0
                    : -1;
+    case VERB_MACHINE:
+        return take_id(&p, r->id, sizeof r->id) == 0 && is_boot(r->id) &&
+                       take_id(&p, r->alt, sizeof r->alt) == 0 && machine_end(r->alt) && *p == '\0'
+                   ? 0
+                   : -1;
     case VERB_PROGRESS:
         if (take_id(&p, r->id, sizeof r->id) != 0) {
             return -1;
@@ -243,7 +292,7 @@ static int parse_fields(char *p, struct rec *r)
 static int parse_record(char *line, struct rec *r)
 {
     static const char *const verbs[] = {"begin",    "assert", "notrun", "branch",
-                                        "progress", "child",  "end"};
+                                        "progress", "child",  "end",    "machine"};
     char *p = line;
     const char *verb = field(&p);
     size_t i;
@@ -320,6 +369,58 @@ static const struct json *declared(const struct json *c, const char *id)
         }
     }
     return NULL;
+}
+
+/**
+ * Returns the machine of the case `c` that `name` is a boot of, or NULL for
+ * none. `name` is a boot, `MACHINE.N`, or the file of its console,
+ * `DIR/MACHINE.N.console`.
+ */
+static const struct json *boot_machine(const struct json *c, const char *name)
+{
+    const struct json *machines = json_member(c, "machines");
+    const char *base = strrchr(name, '/') != NULL ? strrchr(name, '/') + 1 : name;
+    char boot[160];
+    size_t len = strlen(base), i, n;
+
+    if (len > 8 && strcmp(base + len - 8, ".console") == 0) {
+        len -= 8;
+    }
+    if (len >= sizeof boot) {
+        return NULL;
+    }
+    memcpy(boot, base, len);
+    boot[len] = '\0';
+    n = boot_id_len(boot);
+    for (i = 0; n > 0 && machines != NULL && i < machines->count; i++) {
+        const char *id = json_text(machines->item[i], "machine_id");
+
+        if (id != NULL && strlen(id) == n && strncmp(id, boot, n) == 0) {
+            return machines->item[i];
+        }
+    }
+    return NULL;
+}
+
+/** Judges a machine record against the case's machines and earlier records. */
+static void judge_machine(struct judging *j, const struct rec *r, size_t at)
+{
+    size_t i;
+
+    if (!same(json_text(j->c, "domain"), "machine")) {
+        report_error(j, r->line, "a machine record from a case that is not a machine case");
+        return;
+    }
+    if (boot_machine(j->c, r->id) == NULL) {
+        report_error(j, r->line, "%s is the boot of no machine of the case", r->id);
+        return;
+    }
+    for (i = 0; i < at; i++) {
+        if (j->rec[i].verb == VERB_MACHINE && same(j->rec[i].id, r->id)) {
+            report_error(j, r->line, "the end of %s is reported twice", r->id);
+            return;
+        }
+    }
 }
 
 /** Returns the index of the group `id` of the case, or -1. */
@@ -538,6 +639,9 @@ static void judge_records(struct judging *j)
                 report_error(j, r->line, "a child record from a case whose children are %s",
                              children);
             }
+            break;
+        case VERB_MACHINE:
+            judge_machine(j, r, i);
             break;
         case VERB_END:
             j->has_end = 1;
@@ -996,6 +1100,24 @@ static int kernel_read(const struct json *c, const char *placement)
 }
 
 /**
+ * Returns 1 when an attempt of the case `c` placed `placement` has
+ * `etude.fault`: a machine case under QEMU, one of whose machines declares
+ * the fault it ends in.
+ */
+static int fault_judged(const struct json *c, const char *placement)
+{
+    const struct json *machines = json_member(c, "machines");
+    size_t i;
+
+    for (i = 0; same(placement, "qemu") && machines != NULL && i < machines->count; i++) {
+        if (json_member(machines->item[i], "fault") != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Returns the source the results must give for `id`, or NULL when the
  * attempt does not require it.
  */
@@ -1015,6 +1137,9 @@ static const char *required_source(const struct checking *k, const char *id)
     }
     if (same(id, "etude.kernel")) {
         return kernel_read(k->c, placement) ? "executor" : NULL;
+    }
+    if (same(id, "etude.fault")) {
+        return fault_judged(k->c, placement) ? "executor" : NULL;
     }
     if (a == NULL) {
         return NULL;
@@ -1043,7 +1168,8 @@ static int undecided(const struct checking *k, const char *id)
  */
 static void check_assertions(const struct checking *k)
 {
-    static const char *const executor[] = {"etude.termination", "etude.report", "etude.kernel"};
+    static const char *const executor[] = {"etude.termination", "etude.report", "etude.kernel",
+                                           "etude.fault"};
     const struct json *given = json_member(k->doc, "assertions");
     const struct json *list = json_member(k->c, "assertions");
     size_t i, e;
@@ -1061,7 +1187,7 @@ static void check_assertions(const struct checking *k)
             finding(k->file, k->line, "%s is in a group nothing decided, so it is missing", id);
         }
     }
-    for (i = 0; i < list->count + 3; i++) {
+    for (i = 0; i < list->count + sizeof executor / sizeof executor[0]; i++) {
         const char *id =
             i < list->count ? json_text(list->item[i], "assertion_id") : executor[i - list->count];
         size_t times = 0;
@@ -1180,6 +1306,66 @@ static void check_termination(const struct checking *k)
 }
 
 /**
+ * Checks the boots the results give and etude.fault against them. Only a
+ * machine case's results give boots, each of one of its machines, once; and
+ * etude.fault passes only when each machine that declares a fault has a
+ * boot given, and every boot of it ended as the fault's end. The scenario's
+ * end, in `termination`, does not enter.
+ */
+static void check_machines(const struct checking *k)
+{
+    const struct json *boots = json_member(k->doc, "machines");
+    const struct json *machines = json_member(k->c, "machines");
+    int fault = given_outcome(k, "etude.fault");
+    size_t i, e, m;
+
+    if (boots == NULL) {
+        if (fault >= 0) {
+            finding(k->file, k->line, "etude.fault is given, and the results give no machines");
+        }
+        return;
+    }
+    if (!same(json_text(k->c, "domain"), "machine")) {
+        finding(k->file, k->line, "the results give machines, and %s is not a machine case",
+                json_text(k->c, "case_id"));
+        return;
+    }
+    for (i = 0; i < boots->count; i++) {
+        const char *boot = json_text(boots->item[i], "boot");
+
+        if (boot_machine(k->c, boot) == NULL) {
+            finding(k->file, k->line, "%s is the boot of no machine of the case", boot);
+        }
+        for (e = 0; e < i; e++) {
+            if (same(boot, json_text(boots->item[e], "boot"))) {
+                finding(k->file, k->line, "the boot %s is given twice", boot);
+            }
+        }
+    }
+    for (m = 0; fault == OUTCOME_PASS && m < machines->count; m++) {
+        const char *want = json_text(json_member(machines->item[m], "fault"), "end");
+        const char *id = json_text(machines->item[m], "machine_id");
+        size_t seen = 0;
+
+        for (i = 0; want != NULL && i < boots->count; i++) {
+            const char *end = json_text(boots->item[i], "end");
+
+            if (boot_machine(k->c, json_text(boots->item[i], "boot")) != machines->item[m]) {
+                continue;
+            }
+            seen++;
+            if (!same(end, want)) {
+                finding(k->file, k->line, "etude.fault passes, and %s ended %s, where %s ends %s",
+                        json_text(boots->item[i], "boot"), end, id, want);
+            }
+        }
+        if (want != NULL && seen == 0) {
+            finding(k->file, k->line, "etude.fault passes, and no boot of %s is given", id);
+        }
+    }
+}
+
+/**
  * Returns the attempt's outcome, and in `why` the first assertion that decides
  * it.
  */
@@ -1248,6 +1434,7 @@ static int examine(const struct cases *set, struct checking *k, char *why, size_
     check_assertions(k);
     check_report(k);
     check_termination(k);
+    check_machines(k);
     return (int)derive(k, why, n);
 }
 
@@ -1455,20 +1642,7 @@ static int console_has(const struct judging *j, const char *s)
  */
 static const char *machine_critical(const struct json *c, const char *path)
 {
-    const struct json *machines = json_member(c, "machines");
-    const char *base = strrchr(path, '/') != NULL ? strrchr(path, '/') + 1 : path;
-    const char *dot = strchr(base, '.');
-    const char *id;
-    size_t i;
-
-    for (i = 0; dot != NULL && machines != NULL && i < machines->count; i++) {
-        id = json_text(machines->item[i], "machine_id");
-        if (id != NULL && strlen(id) == (size_t)(dot - base) &&
-            strncmp(id, base, strlen(id)) == 0) {
-            return json_text(machines->item[i], "critical");
-        }
-    }
-    return NULL;
+    return json_text(boot_machine(c, path), "critical");
 }
 
 /** Returns 1 when the `n` bytes at `s` have the text `t`, and 0 when not. */
@@ -1485,16 +1659,232 @@ static int line_has(const char *s, size_t n, const char *t)
 }
 
 /**
+ * Returns the end that a machine record of `j` gives the boot `boot`, the
+ * first when there are several, or NULL when none gives it one.
+ */
+static const char *reported_end(const struct judging *j, const char *boot)
+{
+    size_t i;
+
+    for (i = 0; i < j->n; i++) {
+        if (j->rec[i].verb == VERB_MACHINE && same(j->rec[i].id, boot)) {
+            return j->rec[i].alt;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Writes into `out` the boot whose console is the file `path`,
+ * `DIR/MACHINE.N.console`, and returns `out`: an empty text when `path` is
+ * no such file.
+ */
+static const char *console_boot(const char *path, char *out, size_t size)
+{
+    const char *base = strrchr(path, '/') != NULL ? strrchr(path, '/') + 1 : path;
+    size_t len = strlen(base);
+
+    out[0] = '\0';
+    if (len > 8 && len - 8 < size && strcmp(base + len - 8, ".console") == 0) {
+        memcpy(out, base, len - 8);
+        out[len - 8] = '\0';
+    }
+    return out;
+}
+
+/** Returns the index among the consoles of `j` of the boot `boot`'s, or -1. */
+static int console_of(const struct judging *j, const char *boot)
+{
+    char name[160];
+    int k;
+
+    for (k = 0; k < j->nconsoles; k++) {
+        if (same(console_boot(j->console_file[k], name, sizeof name), boot)) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+/**
+ * Returns the fault that the machine of the console `k` of `j` declares,
+ * when a machine record gives the console's boot the fault's end, and NULL
+ * otherwise. The critical records of a fault are passed by only on the
+ * declared machine, and only on a boot that the scenario saw end in it.
+ */
+static const struct json *observed_fault(const struct judging *j, int k)
+{
+    const struct json *fault = json_member(boot_machine(j->c, j->console_file[k]), "fault");
+    char boot[160];
+
+    console_boot(j->console_file[k], boot, sizeof boot);
+    return fault != NULL && same(reported_end(j, boot), json_text(fault, "end")) ? fault : NULL;
+}
+
+/** Returns 1 when the `n` bytes at `s` have one of the records of `fault`. */
+static int fault_record(const struct json *fault, const char *s, size_t n)
+{
+    const struct json *records = json_member(fault, "records");
+    size_t i;
+
+    for (i = 0; records != NULL && i < records->count; i++) {
+        if (line_has(s, n, records->item[i]->string)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Finds the first record at the kernel's level 2 of the `len` bytes at `c`
+ * that begins at or after byte `from`: a line that begins `<2>[`. Gives its
+ * first byte in `*start` and the byte past its text in `*end`, and returns
+ * 1; returns 0 when there is none.
+ */
+static int next_critical(const char *c, size_t len, size_t from, size_t *start, size_t *end)
+{
+    size_t i;
+
+    for (i = from; i + 4 <= len; i++) {
+        if ((i == 0 || c[i - 1] == '\n') && memcmp(c + i, "<2>[", 4) == 0) {
+            for (*end = i; *end < len && c[*end] != '\r' && c[*end] != '\n'; ++*end) {
+            }
+            *start = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Returns 1 when the `n` bytes at `s`, a critical record, are a panic's. */
+static int panic_record(const char *s, size_t n)
+{
+    const char *close = memchr(s, ']', n);
+
+    return close != NULL && (size_t)(s + n - close) >= 9 && memcmp(close, "] panic: ", 9) == 0;
+}
+
+/**
+ * Checks that the console `k` of `j`, of the boot `boot`, shows the fault
+ * `fault`: for the end `panic`, a record of the kernel's panic; and each of
+ * the fault's records in a critical record, in the order given, each after
+ * the one before. Returns 1 when it does, and 0 with what it lacks in `out`.
+ */
+static int fault_shown(const struct judging *j, int k, const struct json *fault, const char *boot,
+                       char *out, size_t size)
+{
+    const struct json *records = json_member(fault, "records");
+    const char *c = j->console[k];
+    size_t len = j->console_len[k], at = 0, start, end, r;
+    int panicked = 0;
+
+    while (next_critical(c, len, at, &start, &end)) {
+        panicked |= panic_record(c + start, end - start);
+        at = end;
+    }
+    if (same(json_text(fault, "end"), "panic") && !panicked) {
+        snprintf(out, size, "the console of %s has no record of the kernel's panic", boot);
+        return 0;
+    }
+    at = 0;
+    for (r = 0; records != NULL && r < records->count; r++) {
+        const char *text = records->item[r]->string;
+        int found = 0;
+
+        while (!found && next_critical(c, len, at, &start, &end)) {
+            found = line_has(c + start, end - start, text);
+            at = end;
+        }
+        if (!found) {
+            snprintf(out, size,
+                     "the console of %s has no critical record of %s after those before it", boot,
+                     text);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * Returns the outcome of etude.fault for the report in `state`, with its
+ * detail in `out`. Each machine that declares a fault must have a boot that
+ * a machine record gives an end; each boot of it so given must have ended
+ * in the fault's end, and its console must show the fault. The scenario's
+ * own end does not enter, so a scenario that exited 0 has not by that shown
+ * a panic. A boot that ended otherwise, a console without the fault's
+ * records, and a complete report with no boot of the machine fail it; a
+ * boot whose end was not observed, a boot whose console was not given, and
+ * a report that did not finish leave it missing.
+ */
+static int fault_outcome(const struct judging *j, const char *state, char *out, size_t size)
+{
+    const struct json *machines = json_member(j->c, "machines");
+    int outcome = OUTCOME_PASS;
+    char missing[256] = "";
+    size_t m, i, boots;
+    int k;
+
+    for (m = 0; machines != NULL && m < machines->count; m++) {
+        const struct json *fault = json_member(machines->item[m], "fault");
+        const char *want = json_text(fault, "end");
+        const char *id = json_text(machines->item[m], "machine_id");
+
+        if (fault == NULL) {
+            continue;
+        }
+        for (i = 0, boots = 0; i < j->n; i++) {
+            const struct rec *r = &j->rec[i];
+
+            if (r->verb != VERB_MACHINE || boot_machine(j->c, r->id) != machines->item[m]) {
+                continue;
+            }
+            boots++;
+            if (same(r->alt, "stopped") || same(r->alt, "lost")) {
+                snprintf(missing, sizeof missing, "the end of %s was not observed", r->id);
+            } else if (!same(r->alt, want)) {
+                snprintf(out, size, "%s ended %s, where the case expects %s", r->id, r->alt, want);
+                return OUTCOME_FAIL;
+            } else if ((k = console_of(j, r->id)) < 0) {
+                snprintf(missing, sizeof missing, "casecheck attempt was given no console of %s",
+                         r->id);
+            } else if (!fault_shown(j, k, fault, r->id, out, size)) {
+                return OUTCOME_FAIL;
+            } else {
+                continue;
+            }
+            outcome = OUTCOME_MISSING;
+        }
+        if (boots == 0 && same(state, "complete")) {
+            snprintf(out, size, "no boot of %s was reported to end, where the case expects %s", id,
+                     want);
+            return OUTCOME_FAIL;
+        }
+        if (boots == 0) {
+            snprintf(missing, sizeof missing,
+                     "no boot of %s was reported to end, and the report is %s", id, state);
+            outcome = OUTCOME_MISSING;
+        }
+    }
+    if (outcome != OUTCOME_PASS) {
+        snprintf(out, size, "%s", missing);
+    }
+    return outcome;
+}
+
+/**
  * Copies into `out` the first record of a console of `j`, in the order
  * given, at the kernel's level 2, KLOG_CRIT, which only a panic and a fault
  * of the kernel use: a line that begins `<2>[`. A line with the text that
  * the console's machine declares as `critical` is passed by, and with
- * `panics` set, so is a record of the subsystem `panic`. Returns 1 when
- * there is one, and 0 when not.
+ * `panics` set, so is a record of the subsystem `panic`. On the console of
+ * a boot that a machine record gives the end of its machine's fault, a line
+ * with one of the fault's records is passed by as well. Returns 1 when there
+ * is one, and 0 when not.
  */
 static int console_fault(const struct judging *j, int panics, char *out, size_t size)
 {
     const char *c, *close, *allowed;
+    const struct json *fault;
     size_t i, end, len;
     int k;
 
@@ -1502,6 +1892,7 @@ static int console_fault(const struct judging *j, int panics, char *out, size_t 
         c = j->console[k];
         len = j->console_len[k];
         allowed = machine_critical(j->c, j->console_file[k]);
+        fault = observed_fault(j, k);
         for (i = 0; i + 4 <= len; i++) {
             if ((i > 0 && c[i - 1] != '\n') || memcmp(c + i, "<2>[", 4) != 0) {
                 continue;
@@ -1514,6 +1905,9 @@ static int console_fault(const struct judging *j, int panics, char *out, size_t 
                 continue;
             }
             if (allowed != NULL && line_has(c + i, end - i, allowed)) {
+                continue;
+            }
+            if (fault != NULL && fault_record(fault, c + i, end - i)) {
                 continue;
             }
             snprintf(out, size, "the console has %.*s", (int)(end - i), c + i);
@@ -1576,7 +1970,7 @@ static void put_assertions(struct jbuf *b, const struct judging *j, const struct
                            const char *placement, const char *state)
 {
     const struct json *list = json_member(j->c, "assertions");
-    char why[200], seen[64], fault[256];
+    char why[200], seen[64], fault[512];
     const char *detail;
     size_t i;
     int outcome;
@@ -1602,6 +1996,11 @@ static void put_assertions(struct jbuf *b, const struct judging *j, const struct
     } else if (kernel_read(j->c, placement)) {
         put_assertion(b, "etude.kernel", "executor", OUTCOME_MISSING,
                       "casecheck attempt was given no console and does not read the kernel's log");
+    }
+    if (fault_judged(j->c, placement)) {
+        outcome = fault_outcome(j, state, fault, sizeof fault);
+        put_assertion(b, "etude.fault", "executor", outcome,
+                      outcome == OUTCOME_PASS ? NULL : fault);
     }
     if (program_reports(j->c)) {
         outcome = report_verdict(state);
@@ -1630,6 +2029,32 @@ static void put_undeclared(struct jbuf *b, const struct judging *j)
         if ((r->verb == VERB_ASSERT || r->verb == VERB_NOTRUN) && declared(j->c, r->id) == NULL) {
             put_assertion(b, r->id, NULL, outcome, outcome == OUTCOME_PASS ? NULL : r->text);
         }
+    }
+    jbuf_puts(b, "]");
+}
+
+/**
+ * Appends the boots of a machine case whose ends its machine records give,
+ * each once, with the end the first record gives it.
+ */
+static void put_machines(struct jbuf *b, const struct judging *j)
+{
+    size_t i;
+
+    jbuf_puts(b, "[");
+    for (i = 0; i < j->n; i++) {
+        const struct rec *r = &j->rec[i];
+
+        if (r->verb != VERB_MACHINE || boot_machine(j->c, r->id) == NULL ||
+            reported_end(j, r->id) != r->alt) {
+            continue;
+        }
+        put_comma(b);
+        jbuf_puts(b, "{\"boot\":");
+        put_text(b, r->id);
+        jbuf_puts(b, ",\"end\":");
+        put_text(b, r->alt);
+        jbuf_puts(b, "}");
     }
     jbuf_puts(b, "]");
 }
@@ -1717,6 +2142,10 @@ static void write_document(struct jbuf *b, const struct judging *j, const struct
     put_text(b, q->arg[3]);
     jbuf_puts(b, ",\"termination\":");
     put_termination(b, j, e, q->arg[3]);
+    if (same(json_text(j->c, "domain"), "machine")) {
+        jbuf_puts(b, ",\"machines\":");
+        put_machines(b, j);
+    }
     snprintf(records, sizeof records, "%lu", (unsigned long)counted(j));
     jbuf_puts(b, ",\"report\":{\"state\":");
     put_text(b, state);

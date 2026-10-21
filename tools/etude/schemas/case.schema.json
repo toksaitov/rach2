@@ -287,7 +287,15 @@
         "console": {"enum": ["serial", "none"]},
         "helper": {"type": "boolean"},
         "qmp": {"type": "boolean"},
-        "critical": {"$ref": "#/$defs/text"}
+        "critical": {"$ref": "#/$defs/text"},
+        "fault": {
+          "type": "object", "additionalProperties": false,
+          "required": ["end", "records"],
+          "properties": {
+            "end": {"enum": ["panic", "halted"]},
+            "records": {"type": "array", "items": {"$ref": "#/$defs/text"}}
+          }
+        }
       }
     },
     "service": {

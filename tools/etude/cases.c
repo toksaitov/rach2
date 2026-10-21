@@ -1029,6 +1029,47 @@ static void inside(const struct rule *r, const struct json *b, const struct json
     }
 }
 
+/**
+ * A machine that declares a fault has what shows the fault: a serial console
+ * for a panic or for records, and QMP for a halt; and its case has an
+ * assertion of its scenario's, whose report gives the boot's end.
+ */
+static void rule_faults(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i;
+
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        const struct json *m = machines->item[i];
+        const struct json *fault = json_member(m, "fault");
+        const char *end = json_text(fault, "end");
+        const char *id = json_text(m, "machine_id");
+
+        if (fault == NULL) {
+            continue;
+        }
+        if ((same(end, "panic") || json_member(fault, "records")->count > 0) &&
+            !same(json_text(m, "console"), "serial")) {
+            finding(r->file, fault->line,
+                    "%s: the machine %s ends in a fault whose records only a serial console "
+                    "shows",
+                    case_id, id);
+        }
+        if (same(end, "halted") && json_member(m, "qmp")->integer == 0) {
+            finding(r->file, fault->line,
+                    "%s: the machine %s ends halted, which only its QMP monitor shows", case_id,
+                    id);
+        }
+        if (!program_reports(r->c)) {
+            finding(r->file, fault->line,
+                    "%s: the machine %s ends in a fault, and no assertion of the case is its "
+                    "scenario's, whose report gives a boot's end",
+                    case_id, id);
+        }
+    }
+}
+
 /** A bound lies between its floor and ceiling, and inside the whole case's. */
 static void rule_bounds(const struct rule *r)
 {
@@ -1385,6 +1426,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_captures(&r);
     rule_steps(&r);
     rule_networks(&r);
+    rule_faults(&r);
     rule_bounds(&r);
     rule_progress(&r);
     rule_resources(&r);

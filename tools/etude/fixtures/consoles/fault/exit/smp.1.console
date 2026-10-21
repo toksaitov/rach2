@@ -1,0 +1,5 @@
+Rach2 kernel booting
+<6>[    0.010000] smp: 2 processors running
+Type 'help' for available commands.
+> nmi
+>

@@ -1,0 +1,7 @@
+Rach2 kernel booting
+<6>[    0.010000] smp: 2 processors running
+Type 'help' for available commands.
+> nmi
+<2>[    1.100000] isr: kernel exception: page fault (vector 14, err 0x0, eip 0xc0105678)
+<2>[    1.200000] isr: hardware fault: non-maskable interrupt (vector 2, pc 0xc0101234)
+<2>[    1.200100] panic: stopped: the machine reported a fault

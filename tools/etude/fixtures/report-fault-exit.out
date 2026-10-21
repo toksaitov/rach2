@@ -1,0 +1,4 @@
+@etude 1 begin fixture.fault.nmi
+@etude 1 assert said-nmi fail the console has no hardware fault
+@etude 1 progress stage 1
+@etude 1 end 1

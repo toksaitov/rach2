@@ -25,6 +25,17 @@
         "detail": {"oneOf": [{"$ref": "#/$defs/text"}, {"type": "null"}]}
       }
     },
+    "machines": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["boot", "end"],
+        "properties": {
+          "boot": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]*(\\.[a-z0-9][a-z0-9_-]*)*\\.[1-9][0-9]{0,8}$", "maxLength": 139},
+          "end": {"enum": ["panic", "halted", "reset", "shutdown", "qemu_exited", "accel_failed", "stopped", "lost"]}
+        }
+      }
+    },
     "report": {
       "type": "object", "additionalProperties": false,
       "required": ["state", "records", "errors"],

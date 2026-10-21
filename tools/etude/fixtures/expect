@@ -220,6 +220,39 @@
 2 attempt -k ./consoles/vm.1.console -k ./consoles/absent.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | cannot read
 2 attempt -k ./consoles/vm.1.console ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | -k gives a QEMU machine's console, and fixture.attempt.scan is placed host
 2 report -k ./consoles/vm.1.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out | -k is an option of attempt
+# A machine that declares a fault: the scenario's machine record gives its
+# boot's end, the results keep that end beside the scenario's own exit, and
+# etude.fault passes only for the declared end with the fault's records on
+# that boot's console. Those records pass etude.kernel there and nowhere
+# else; another critical record still fails it. A record that the boot
+# panicked without the kernel's panic on the console, even where another
+# critical record has the panic's text, an exit of the scenario with no end
+# of the boot, and a reset fail etude.fault.
+0 manifest ./fault.json
+0 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | "termination":{"end":"exited","value":0,"observed_by":"host_process","detail":null},"machines":[{"boot":"smp.1","end":"panic"}]
+0 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"pass","detail":null},{"assertion_id":"etude.fault","source":"executor","outcome":"pass","detail":null}
+1 attempt -k ./consoles/fault/unrelated/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"fail","detail":"the console has <2>[    1.100000] isr: kernel exception: page fault (vector 14, err 0x0, eip 0xc0105678)"},{"assertion_id":"etude.fault","source":"executor","outcome":"pass","detail":null}
+1 attempt -k ./consoles/fault/nopanic/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"fail","detail":"the console of smp.1 has no record of the kernel's panic"}
+1 attempt -k ./consoles/fault/token/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"fail","detail":"the console of smp.1 has no record of the kernel's panic"}
+1 attempt -k ./consoles/fault/exit/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-exit.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"fail","detail":"no boot of smp was reported to end, where the case expects panic"}
+1 attempt -k ./consoles/fault/exit/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-exit.out run-1 attempt-1 item-1 exited 0 | "termination":{"end":"exited","value":0,"observed_by":"host_process","detail":null},"machines":[]
+1 attempt -k ./consoles/fault/reset/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-reset.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"fail","detail":"smp.1 ended reset, where the case expects panic"}
+1 attempt -k ./consoles/fault/reset/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-reset.out run-1 attempt-1 item-1 exited 0 | "machines":[{"boot":"smp.1","end":"reset"}]
+1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-truncated.out run-1 attempt-1 item-1 stopped | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"no boot of smp was reported to end, and the report is truncated"}
+1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-truncated.out run-1 attempt-1 item-1 stopped | "detail":"the console has <2>[    1.200000] isr: hardware fault: non-maskable interrupt (vector 2, pc 0xc0101234)"
+3 attempt ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console of smp.1"}
+1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-bad.out run-1 attempt-1 item-1 exited 0 | "errors":["line 6: the record \"@etude 1 machine\" does not parse","line 4: vm.1 is the boot of no machine of the case","line 5: the end of smp.1 is reported twice"]
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fault-guest.out run-1 attempt-1 item-1 exited 0 | "errors":["line 9: a machine record from a case that is not a machine case"]
+1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fault-guest.out run-1 attempt-1 item-1 exited 0 | !"machines"
+1 results ./results-fault.jsonl ./fault.json | etude.fault passes, and smp.1 ended reset, where smp ends panic
+1 results ./results-fault.jsonl ./fault.json | results-fault.jsonl:3: etude.fault is given, and the results give no machines
+1 results ./results-fault.jsonl ./fault.json | results-fault.jsonl:4: etude.fault appears 0 times
+1 results ./results-fault.jsonl ./fault.json | vm.1 is the boot of no machine of the case
+1 results ./results-fault.jsonl ./fault.json | the boot smp.1 is given twice
+1 results ./results-fault.jsonl ./fault.json | !results-fault.jsonl:1: etude
+1 manifest ./fault-rules.json | no-console: the machine smp ends in a fault whose records only a serial console shows
+1 manifest ./fault-rules.json | halt-no-qmp: the machine smp ends halted, which only its QMP monitor shows
+1 manifest ./fault-rules.json | no-report: the machine smp ends in a fault, and no assertion of the case is its scenario's
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 256 | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled -1 | the end signaled takes a value of 0 to 255

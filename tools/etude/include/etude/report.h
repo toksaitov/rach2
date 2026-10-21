@@ -21,6 +21,10 @@
  *                                      at a quiet witness's present UNITS,
  *                                      its work begins
  *   @etude 1 child PID                 a process that may outlive the program
+ *   @etude 1 machine BOOT END          a machine scenario's alone: the boot
+ *                                      BOOT, MACHINE.N, ended as END, such
+ *                                      as panic, halted or reset; at most
+ *                                      one for each boot
  *   @etude 1 end COUNT                 last; COUNT assert, notrun and branch
  *                                      records came before it
  *
@@ -37,6 +41,7 @@
 #define ETUDE_REPORT_PROGRESS "progress"
 #define ETUDE_REPORT_CHILD    "child"
 #define ETUDE_REPORT_END      "end"
+#define ETUDE_REPORT_MACHINE  "machine"
 
 #define ETUDE_REPORT_PASS "pass"
 #define ETUDE_REPORT_FAIL "fail"
