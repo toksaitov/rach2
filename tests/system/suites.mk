@@ -563,6 +563,21 @@ run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs c
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(DRILL_DISK)
 	sh tests/system/suites/drill.sh $(DRILL_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT) $(RECOVERY_IMAGE)
+# The disk of the drill's cases, tests/cases/machine.drill.json, made as
+# the old drill disk is made.
+DRILL_CASE_DISK = $(ARCH_CASE_DIR)/drill/drill.disk
+$(DRILL_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-embed.cfg $(KERNEL) \
+                    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_SIMPLE_EXT2) $(DISK_TOOLS) $(GRUB_FILES)
+	@mkdir -p $(@D)
+	RACH2_DISK_TABLE=mbr \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=16 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
+	RACH2_DISK_APPEND="rach2.diskdiag" \
+	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run persist`: fsync durability across a reboot. Builds a disk holding
 # persistprobe, boots it twice against the same image: the first boot writes and
 # fsyncs /persist.txt, the second reads it back. The second boot passes only if
