@@ -13,11 +13,17 @@
  * probe is about. A child whose open fails exits with the error's number, so
  * that the kernel's exit record says why. Needs a writable working
  * directory. Prints "ZOMBIEPROBE OK" after every child is reaped, or
- * "ZOMBIEPROBE FAIL: " and the step and exits 1. Freestanding; direct system
- * calls (probe.h).
+ * "ZOMBIEPROBE FAIL: " and the step and exits 1. Writes etude's report
+ * records (probe_report.h) for the case ETUDE_CASE names: `writer`, that the
+ * writer was forked, and an assertion for each check of a round, which holds
+ * when it held in every round: `pipe`, `fork`, `ready` (the victim filled and
+ * unlinked its files), `kill`, `reap` and `sigkill`. A failed check stops
+ * the rounds, so the other checks of a round are then not run.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define SEEK_SET 0
 
@@ -49,14 +55,39 @@ static int wpid; /* the writer, stopped on a failure so the shell returns */
 static int vpid; /* the current victim, killed and reaped on a failure */
 static const char *names[HOLDERS] = {"zp0", "zp1", "zp2", "zp3", "zp4", "zp5"};
 
-/** Print "ZOMBIEPROBE FAIL: `what`", kill and reap the children, and exit 1. */
-static void fail(const char *what)
+/* The checks: the writer's fork, then those each round makes. */
+enum { WRITER, PIPE, FORK, READY, KILL, REAP, DIED, CHECKS };
+
+static const char *const check_ids[CHECKS] = {"writer", "pipe", "fork",   "ready",
+                                              "kill",   "reap", "sigkill"};
+
+/** Report the check `check` failed with `what`, and the checks still to be
+ * reported not run, and end the report. */
+static void report_failed(int check, const char *what)
+{
+    int i;
+
+    for (i = WRITER; i < CHECKS; i++) {
+        if (i == check) {
+            report_fail(check_ids[i], what);
+        } else if (i != WRITER || check == WRITER) {
+            report_notrun(check_ids[i], check == WRITER ? "the writer was not started"
+                                                        : "the rounds stopped at another check");
+        }
+    }
+    report_end();
+}
+
+/** Print "ZOMBIEPROBE FAIL: `what`", report the check `check` failed with
+ * it, kill and reap the children, and exit 1. */
+static void fail(int check, const char *what)
 {
     int status = 0, i;
 
     print("ZOMBIEPROBE FAIL: ");
     print(what);
     print("\n");
+    report_failed(check, what);
     if (vpid > 0) {
         syscall2(SYS_KILL, vpid, SIGKILL);
         syscall3(SYS_WAITPID, vpid, (long)&status, 0);
@@ -134,29 +165,37 @@ static void writer(void)
     }
 }
 
-/** The probe's entry: the writer, then ROUNDS victims killed and reaped. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe's entry: the writer, then ROUNDS victims killed and reaped.
+ * `_start` calls it with the initial stack, whose environment gives the
+ * case's identity. */
+void probe_main(unsigned long *sp)
 {
-    int status, round, ready[2];
+    int status, round, ready[2], i;
     char ch;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.zombieprobe"));
     wpid = syscall1(SYS_FORK, 0);
     if (wpid < 0) {
-        fail("fork the writer");
+        fail(WRITER, "fork the writer");
     }
     if (wpid == 0) {
         writer();
     }
+    report_pass(check_ids[WRITER]);
 
     for (round = 0; round < ROUNDS; round++) {
         ready[0] = -1;
         ready[1] = -1;
         if (syscall1(SYS_PIPE, (long)ready) != 0) {
-            fail("pipe for the victim's readiness");
+            fail(PIPE, "pipe for the victim's readiness");
         }
         vpid = syscall1(SYS_FORK, 0);
         if (vpid < 0) {
-            fail("fork the victim");
+            fail(FORK, "fork the victim");
         }
         if (vpid == 0) {
             syscall1(SYS_CLOSE, ready[0]);
@@ -164,19 +203,19 @@ PROBE_START void _start(void)
         }
         syscall1(SYS_CLOSE, ready[1]);
         if (syscall3(SYS_READ, ready[0], (long)&ch, 1) != 1 || ch != 'r') {
-            fail("the victim did not fill and unlink its files");
+            fail(READY, "the victim did not fill and unlink its files");
         }
         syscall1(SYS_CLOSE, ready[0]);
         if (syscall2(SYS_KILL, vpid, SIGKILL) != 0) {
-            fail("kill the victim");
+            fail(KILL, "kill the victim");
         }
         status = 0;
         if (syscall3(SYS_WAITPID, vpid, (long)&status, 0) != vpid) {
-            fail("reap the victim");
+            fail(REAP, "reap the victim");
         }
         vpid = 0;
         if (status != SIGKILL) {
-            fail("the victim did not die by SIGKILL");
+            fail(DIED, "the victim did not die by SIGKILL");
         }
     }
 
@@ -185,6 +224,10 @@ PROBE_START void _start(void)
     syscall3(SYS_WAITPID, wpid, (long)&status, 0);
     syscall1(SYS_UNLINK, (long)"zpw");
 
+    for (i = PIPE; i < CHECKS; i++) {
+        report_pass(check_ids[i]);
+    }
+    report_end();
     print("ZOMBIEPROBE OK\n");
     syscall1(SYS_EXIT, 0);
 }

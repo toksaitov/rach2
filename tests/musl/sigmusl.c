@@ -22,6 +22,11 @@
  * abort, and the signal encoding of the wait status. A "SIGMUSL FAIL" line
  * names the step that failed, and the program exits 1. It is linked
  * statically against the ported musl; see `tests/musl/build.sh`.
+ *
+ * Writes etude's report records (../probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, in `check_ids`; a failure leaves the
+ * checks after it not run. A handler that ends the program fails `ucontext`
+ * and leaves the two checks of the siginfo before it not run.
  */
 
 #define _GNU_SOURCE
@@ -31,6 +36,8 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <ucontext.h>
+
+#include "../probe_report.h"
 
 /*
  * The saved registers a handler checks, by each architecture's index into
@@ -49,6 +56,24 @@
 #define SP_NAME "esp"
 #define USER_CS 0x1B
 #endif
+
+/* The checks, one assertion each, in the order the program makes them. */
+#define CHECKS 14
+
+static const char *const check_ids[CHECKS] = {"sigaction",
+                                              "raise",
+                                              "handler-ran",
+                                              "block",
+                                              "held-while-blocked",
+                                              "unblock",
+                                              "delivered-on-unblock",
+                                              "fork",
+                                              "waitpid",
+                                              "sigabrt",
+                                              "siginfo-sigaction",
+                                              "siginfo-delivery",
+                                              "siginfo-code",
+                                              "ucontext"};
 
 /* What the handlers saw; context_cs is the low 16 bits of the saved CS. */
 static volatile sig_atomic_t handler_ran;
@@ -84,6 +109,10 @@ static void context_fail(void)
     if (n > 0) {
         (void)write(1, line, (size_t)n < sizeof(line) ? (size_t)n : sizeof(line) - 1);
     }
+    report_notrun("siginfo-delivery", "the handler ended the program");
+    report_notrun("siginfo-code", "the handler ended the program");
+    report_fail("ucontext", "the context lacks the user code selector, stack pointer or FP state");
+    report_end();
     _exit(1);
 }
 
@@ -123,26 +152,45 @@ static int run_context(void)
     sa.sa_flags = SA_SIGINFO;
     if (sigaction(SIGUSR1, &sa, NULL) != 0) {
         printf("SIGMUSL FAIL: sigaction siginfo\n");
+        report_stop("sigaction siginfo");
         return 1;
     }
+    report_held();
     handler_ran = 0;
     handler_sig = 0;
     if (raise(SIGUSR1) != 0 || handler_ran != 1 || handler_sig != SIGUSR1 ||
         info_signo != SIGUSR1) {
         printf("SIGMUSL FAIL: siginfo delivery\n");
+        report_stop("siginfo delivery");
         return 1;
     }
+    report_held();
     /* raise() is tkill on the caller, so the siginfo says SI_TKILL (-6). */
     if (info_code != -6 || info_pid != getpid()) {
         printf("SIGMUSL FAIL: siginfo code=%d pid=%d\n", (int)info_code, (int)info_pid);
+        report_stop("the siginfo code is not SI_TKILL or its pid not the sender's");
         return 1;
     }
+    report_held();
     if (context_cs != USER_CS || context_esp == 0 || context_fpregs == 0 || context_mask_has_usr1) {
         printf("SIGMUSL FAIL: ucontext cs=0x%lx " SP_NAME "=0x%lx fpregs=0x%lx usr1-masked=%d\n",
                context_cs, context_esp, context_fpregs, context_mask_has_usr1);
+        report_stop("the ucontext selector, stack pointer, FP state or mask is wrong");
         return 1;
     }
+    report_held();
     return 0;
+}
+
+/** Begin the report of the case ETUDE_CASE names, and plan its checks. */
+static void begin_report(void)
+{
+    int i;
+
+    report_begin(report_case(environ, "guest.default.sigmusl"));
+    for (i = 0; i < CHECKS; i++) {
+        report_plan(check_ids[i]);
+    }
 }
 
 /** Check delivery, masking, termination and the full context argument. */
@@ -153,74 +201,97 @@ int main(void)
     pid_t pid;
     int status = 0;
 
+    begin_report();
+
     /* Handler runs on a raised signal, and control resumes after it. */
     sa.sa_handler = usr1_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;
     if (sigaction(SIGUSR1, &sa, NULL) != 0) {
         printf("SIGMUSL FAIL: sigaction\n");
+        report_stop("sigaction");
         return 1;
     }
+    report_held();
 
     handler_ran = 0;
     handler_sig = 0;
     if (raise(SIGUSR1) != 0) {
         printf("SIGMUSL FAIL: raise\n");
+        report_stop("raise");
         return 1;
     }
+    report_held();
     if (handler_ran != 1 || handler_sig != SIGUSR1) {
         printf("SIGMUSL FAIL: handler did not run (ran=%d sig=%d)\n", (int)handler_ran,
                (int)handler_sig);
+        report_stop("handler did not run");
         return 1;
     }
+    report_held();
 
     /* Blocked signal stays pending until unblocked. */
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
     if (sigprocmask(SIG_BLOCK, &mask, NULL) != 0) {
         printf("SIGMUSL FAIL: sigprocmask block\n");
+        report_stop("sigprocmask block");
         return 1;
     }
+    report_held();
     handler_ran = 0;
     handler_sig = 0;
     raise(SIGUSR1);
     if (handler_ran != 0) {
         printf("SIGMUSL FAIL: blocked signal delivered\n");
+        report_stop("blocked signal delivered");
         return 1;
     }
+    report_held();
     if (sigprocmask(SIG_UNBLOCK, &mask, NULL) != 0) {
         printf("SIGMUSL FAIL: sigprocmask unblock\n");
+        report_stop("sigprocmask unblock");
         return 1;
     }
+    report_held();
     if (handler_ran != 1 || handler_sig != SIGUSR1) {
         printf("SIGMUSL FAIL: pending signal not delivered on unblock (ran=%d sig=%d)\n",
                (int)handler_ran, (int)handler_sig);
+        report_stop("pending signal not delivered on unblock");
         return 1;
     }
+    report_held();
 
     /* Default action terminates: an abort()ing child is killed by SIGABRT. */
     pid = fork();
     if (pid < 0) {
         printf("SIGMUSL FAIL: fork\n");
+        report_stop("fork");
         return 1;
     }
     if (pid == 0) {
         abort();
         _exit(0); /* not reached */
     }
+    report_held();
 
     if (waitpid(pid, &status, 0) != pid) {
         printf("SIGMUSL FAIL: waitpid\n");
+        report_stop("waitpid");
         return 1;
     }
+    report_held();
     if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT) {
         printf("SIGMUSL FAIL: child not killed by SIGABRT (status=0x%x)\n", status);
+        report_stop("child not killed by SIGABRT");
         return 1;
     }
+    report_held();
 
     if (run_context() != 0) {
         return 1;
     }
+    report_end();
     printf("SIGMUSL OK (handler ran for sig %d, child killed by SIGABRT %d, context %u bytes)\n",
            handler_sig, SIGABRT, (unsigned)sizeof(ucontext_t));
     return 0;

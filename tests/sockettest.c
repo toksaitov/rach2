@@ -7,9 +7,15 @@
  * so a leaked reference shows as a socket still counted, and a double free
  * as one gone too soon or a kernel fault. It exits 0 when the four tests
  * pass and 1 otherwise.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names: `sockstat`, that the count can be read, and an assertion for each
+ * test, `create-close`, `dup2-share`, `fork-share` and `exit-release`, which
+ * are not run when the count cannot be read.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 
@@ -215,23 +221,53 @@ static int exit_release(void)
     return verdict(1, -1);
 }
 
-/** The probe: the four tests in order, each printed OK or FAILED. */
-PROBE_START void _start(void)
+/** Report the test `id`: held when `ok`, or failed with `why`; return `ok`. */
+static int report_test(const char *id, int ok, const char *why)
+{
+    if (ok) {
+        report_pass(id);
+    } else {
+        report_fail(id, why);
+    }
+    return ok;
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe: the four tests in order, each printed OK or FAILED. `_start`
+ * calls it with the initial stack, whose environment gives the case's
+ * identity. */
+void probe_main(unsigned long *sp)
 {
     int passed, failed;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.sockettest"));
     puts("Socket lifecycle test starting...");
     puts("");
 
     base = udp_inuse();
     if (base == 0xFFFFFFFFu) {
         puts("FAILED: /proc/net/sockstat has no UDP count");
+        report_plan("sockstat");
+        report_plan("create-close");
+        report_plan("dup2-share");
+        report_plan("fork-share");
+        report_plan("exit-release");
+        report_stop("/proc/net/sockstat has no UDP count");
         sys_exit(1);
     }
-    passed = create_close();
-    passed += dup2_share();
-    passed += fork_share();
-    passed += exit_release();
+    report_pass("sockstat");
+    passed = report_test("create-close", create_close(),
+                         "a socket was not counted while open or after its close");
+    passed += report_test("dup2-share", dup2_share(),
+                          "the dup2 copy did not keep the socket, or the closes did not free it");
+    passed += report_test("fork-share", fork_share(),
+                          "the socket shared by fork was not freed once by the two closes");
+    passed += report_test("exit-release", exit_release(),
+                          "a child's exit without a close left its socket counted");
+    report_end();
     failed = 4 - passed;
 
     puts("");

@@ -15,9 +15,15 @@
  * It prints "TIMEPROBE OK" and exits 0 when all pass, and "TIMEPROBE FAIL"
  * with the count of failed checks as its status otherwise. It divides
  * nothing wider than a long, since the probes link without libgcc.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, in `part_ids`, the two reads of the
+ * clock and the two draws of getrandom one assertion each; an assertion
+ * fails with its first failed check.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -60,13 +66,38 @@ static void puts(const char *s)
 
 static int fails = 0;
 
-/** Count a failure and print `msg` when `cond` is false. */
-static void check(int cond, const char *msg)
+/* The assertions, one for each check or pair of checks made the same way,
+ * and the first failed check of each, or NULL. */
+enum {
+    CLOCK_GETTIME,
+    MONOTONIC,
+    NSEC_RANGE,
+    GETRANDOM_COUNT,
+    GETRANDOM_DIFFER,
+    FORK,
+    NANOSLEEP,
+    SLEEP_LENGTH,
+    YIELD,
+    REAP,
+    PARTS
+};
+
+static const char *const part_ids[PARTS] = {
+    "clock-gettime", "monotonic", "nsec-range",   "getrandom-count", "getrandom-differ",
+    "fork",          "nanosleep", "sleep-length", "yield",           "reap"};
+static const char *part_why[PARTS];
+
+/** Count a failure of the assertion `part` and print `msg` when `cond` is
+ * false; the first such `msg` of the assertion is the one reported. */
+static void check(int part, int cond, const char *msg)
 {
     if (!cond) {
         fails++;
         syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
+        if (part_why[part] == 0) {
+            part_why[part] = msg;
+        }
     }
 }
 
@@ -171,6 +202,10 @@ static int elapsed_ms(const struct timespec *a, const struct timespec *b)
     return (int)((b->tv_sec - a->tv_sec) * 1000 + (b->tv_nsec - a->tv_nsec) / 1000000);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
  * The probe: the three checks in order, each counted by `check`.
  *
@@ -180,40 +215,49 @@ static int elapsed_ms(const struct timespec *a, const struct timespec *b)
  * The sleep of 150 ms is fifteen ticks; two reads of a clock that moves in
  * ticks can straddle two of them, so the bound is 130. How far the sleep
  * overshot depends on the machine, and the probe does not judge it.
+ *
+ * `_start` calls it with the initial stack, whose environment gives the
+ * case's identity.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     struct timespec t0, t1, before, after;
     unsigned char r1[16], r2[16];
     int i, differ, pid, status, slept_ms;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.timeprobe"));
+
     /* 1. CLOCK_MONOTONIC does not run backwards. */
-    check(syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&t0) == 0, "clock_gettime t0");
-    check(syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&t1) == 0, "clock_gettime t1");
-    check(t1.tv_sec > t0.tv_sec || (t1.tv_sec == t0.tv_sec && t1.tv_nsec >= t0.tv_nsec),
+    check(CLOCK_GETTIME, syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&t0) == 0,
+          "clock_gettime t0");
+    check(CLOCK_GETTIME, syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&t1) == 0,
+          "clock_gettime t1");
+    check(MONOTONIC, t1.tv_sec > t0.tv_sec || (t1.tv_sec == t0.tv_sec && t1.tv_nsec >= t0.tv_nsec),
           "monotonic clock does not go backwards");
-    check(t0.tv_nsec >= 0 && t0.tv_nsec < 1000000000, "tv_nsec in range");
+    check(NSEC_RANGE, t0.tv_nsec >= 0 && t0.tv_nsec < 1000000000, "tv_nsec in range");
 
     /* 2. getrandom returns the count and bytes that differ. */
     for (i = 0; i < 16; i++) {
         r1[i] = 0;
         r2[i] = 0;
     }
-    check(syscall3(SYS_GETRANDOM, (long)r1, 16, 0) == 16, "getrandom r1 returns 16");
-    check(syscall3(SYS_GETRANDOM, (long)r2, 16, 0) == 16, "getrandom r2 returns 16");
+    check(GETRANDOM_COUNT, syscall3(SYS_GETRANDOM, (long)r1, 16, 0) == 16,
+          "getrandom r1 returns 16");
+    check(GETRANDOM_COUNT, syscall3(SYS_GETRANDOM, (long)r2, 16, 0) == 16,
+          "getrandom r2 returns 16");
     differ = 0;
     for (i = 0; i < 16; i++) {
         if (r1[i] != r2[i]) {
             differ = 1;
         }
     }
-    check(differ, "two getrandom draws differ");
+    check(GETRANDOM_DIFFER, differ, "two getrandom draws differ");
 
     /* 3. nanosleep waits about N and yields to the child. */
     syscall1(SYS_UNLINK, (long)MARKER);
 
     pid = syscall1(SYS_FORK, 0);
-    check(pid >= 0, "fork");
+    check(FORK, pid >= 0, "fork");
     if (pid == 0) {
         mark_when_asleep((int)syscall0(SYS_GETPPID));
     }
@@ -224,16 +268,26 @@ PROBE_START void _start(void)
         req.tv_nsec = 150000000; /* 150 ms */
 
         syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&before);
-        check(syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "nanosleep 150ms");
+        check(NANOSLEEP, syscall2(SYS_NANOSLEEP, (long)&req, 0) == 0, "nanosleep 150ms");
         syscall2(SYS_CLOCK_GETTIME, CLOCK_MONOTONIC, (long)&after);
     }
 
     slept_ms = elapsed_ms(&before, &after);
-    check(slept_ms >= 130, "nanosleep waited at least ~150ms");
+    check(SLEEP_LENGTH, slept_ms >= 130, "nanosleep waited at least ~150ms");
 
-    check(pid > 0 && child_marked(pid), "child made progress during the sleep (nanosleep yields)");
-    check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap child");
+    check(YIELD, pid > 0 && child_marked(pid),
+          "child made progress during the sleep (nanosleep yields)");
+    check(REAP, syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap child");
     syscall1(SYS_UNLINK, (long)MARKER);
+
+    for (i = 0; i < PARTS; i++) {
+        if (part_why[i] != 0) {
+            report_fail(part_ids[i], part_why[i]);
+        } else {
+            report_pass(part_ids[i]);
+        }
+    }
+    report_end();
 
     if (fails == 0) {
         puts("TIMEPROBE OK");
