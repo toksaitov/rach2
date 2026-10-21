@@ -631,7 +631,7 @@ tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the orde
 tests/ptyprobe.c:_start lines 142 a probe, one sequence of steps in the order the log records them
 
 tests/rawprobe.c:probe_main complexity 30 a probe, one sequence of steps in the order the log records them
-tests/rawprobe.c:probe_main lines 352 a probe, one sequence of steps in the order the log records them
+tests/rawprobe.c:probe_main lines 370 a probe, one sequence of steps in the order the log records them
 
 tests/rmtest.c:_start lines 138 a probe, one sequence of steps in the order the log records them
 

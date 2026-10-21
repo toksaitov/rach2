@@ -17,7 +17,8 @@
  * with `report_held`, and calls `report_stop` before it exits at a failure:
  * that assertion fails, those after it are not run, and the report ends.
  * Only the process that began the report writes these records; a forked
- * child that stops writes none.
+ * child that stops writes none. A probe that goes on past a failed check
+ * reports that assertion with `report_missed` and continues.
  *
  * The records are written beside the probe's own lines, such as "RNGPROBE
  * OK", which tests/run's suites read and etude does not.
@@ -170,6 +171,13 @@ static __inline__ void report_plan(const char *id)
 static __inline__ void report_held(void)
 {
     report_pass(report_path[report_path_at++]);
+}
+
+/** Report that the path's next assertion did not hold, with `why`, in a
+ * probe that goes on past a failed check. */
+static __inline__ void report_missed(const char *why)
+{
+    report_fail(report_path[report_path_at++], why);
 }
 
 /** In the process that began the report, report that the path's next

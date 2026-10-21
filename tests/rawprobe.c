@@ -47,10 +47,18 @@
  * Prints "RAWPROBE START", then "  FAIL: " and the row for each failure,
  * then "RAWPROBE OK" and exits 0, or "RAWPROBE FAIL" and exits with the
  * count of failures. Freestanding; direct system calls (probe.h).
+ *
+ * Beside its own lines it writes etude's report records (probe_report.h),
+ * one assertion for each row, failed by the first of its checks that does
+ * not hold. The case is the one ETUDE_CASE names, or else
+ * machine.raw.rawprobe, or machine.raw.static on a boot with no gateway;
+ * their scenario runs the probe at the debug shell. The branch of the group
+ * `capture` says whether the sends for the capture checker were made.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -178,11 +186,17 @@ static void say_int(int v)
 /* The rows that have failed, which is the exit status. */
 static int fails = 0;
 
+/* The first check of the current row that failed, or NULL while each held. */
+static const char *row_why;
+
 /** Unless `cond`, count a failed row and print "  FAIL: `msg`". */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
+        if (row_why == 0) {
+            row_why = msg;
+        }
         say("  FAIL: ");
         say(msg);
         say("\n");
@@ -194,12 +208,39 @@ static void check_n(int cond, const char *msg, int n)
 {
     if (!cond) {
         fails++;
+        if (row_why == 0) {
+            row_why = msg;
+        }
         say("  FAIL: ");
         say(msg);
         say(" (");
         say_int(n);
         say(")\n");
     }
+}
+
+/** Report the path's next assertion, the row just checked: held when each of
+ * its checks held, and otherwise failed, naming the first that did not. */
+static void row_end(void)
+{
+    static const char lead[] = "this did not hold: ";
+    char why[ETUDE_REPORT_LINE_MAX];
+    int n = 0, k = 0;
+
+    if (row_why == 0) {
+        report_held();
+        return;
+    }
+    while (lead[n] != '\0') {
+        why[n] = lead[n];
+        n++;
+    }
+    while (row_why[k] != '\0' && n < (int)sizeof(why) - 1) {
+        why[n++] = row_why[k++];
+    }
+    why[n] = '\0';
+    report_missed(why);
+    row_why = 0;
 }
 
 /** The 16-bit one's complement checksum an ICMP message carries. */
@@ -584,6 +625,37 @@ static int from_gateway(const uint8_t *ip)
            ip[14] == (uint8_t)(gateway_ip >> 8) && ip[15] == (uint8_t)gateway_ip;
 }
 
+/**
+ * Begin the report of the boot's path and plan its assertions, a row each:
+ * the two refusals, then with no route (`routeless`) the two sends off the
+ * subnet, and otherwise the rows of the list above, with the branch that
+ * says whether the sends for the capture checker are among them. `envp` is
+ * the probe's environment.
+ */
+static void plan_rows(char **envp, int routeless)
+{
+    report_begin(report_case(envp, routeless ? "machine.raw.static" : "machine.raw.rawprobe"));
+    report_plan("unprivileged-refused");
+    report_plan("protocol-refused");
+    if (routeless) {
+        report_plan("raw-unreachable");
+        report_plan("dgram-unreachable");
+        return;
+    }
+    report_plan("echo-both");
+    report_plan("ttl-exceeded");
+    report_plan("hdrincl-refused");
+    report_plan("mtu-refused");
+    report_plan("unresolved-accepted");
+    report_plan("queue-eight");
+    if (!probe_native()) {
+        report_plan("wire-sends");
+    }
+    report_plan("more-sockets");
+    report_plan("socket-pressure");
+    report_branch("capture", probe_native() ? "left-out" : "sent");
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -598,11 +670,13 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     unsigned long args[6];
-    int fd_a, fd_b, i, n, m, pid, status, val;
+    int fd_a, fd_b, i, n, m, pid, status, val, routeless;
     volatile int got_ttl;
 
     addresses(sp);
     say("RAWPROBE START\n");
+    routeless = booted_without_a_route();
+    plan_rows((char **)(sp + 2 + sp[0]), routeless);
 
     /* A raw socket is root's, since it reads every ICMP datagram. */
     pid = syscall1(SYS_FORK, 0);
@@ -617,6 +691,7 @@ void probe_main(unsigned long *sp)
     syscall3(SYS_WAITPID, pid, (long)&status, 0);
     check((status & 0x7f) == 0, "the unprivileged case did not die on a signal");
     check(((status >> 8) & 0xff) == 0, "an ordinary user was refused a raw socket");
+    row_end();
 
     /* A protocol with no path through this stack is refused. */
     args[0] = AF_INET;
@@ -624,9 +699,10 @@ void probe_main(unsigned long *sp)
     args[2] = IPPROTO_TCP;
     check(socketcall(SC_SOCKET, args) == -EPROTONOSUPPORT,
           "a raw socket for a protocol with no path here was refused");
+    row_end();
 
     /* An address and no gateway: no route off the subnet, and no more rows. */
-    if (booted_without_a_route()) {
+    if (routeless) {
         int fd_r, udp_fd;
 
         fd_r = raw_socket(args);
@@ -643,6 +719,7 @@ void probe_main(unsigned long *sp)
         args[4] = (unsigned long)sa;
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == -ENETUNREACH, "a raw send with no route says so");
+        row_end();
 
         args[0] = AF_INET;
         args[1] = SOCK_DGRAM;
@@ -658,6 +735,8 @@ void probe_main(unsigned long *sp)
         args[5] = 16;
         check(socketcall(SC_SENDTO, args) == -ENETUNREACH,
               "and so does a datagram send, which is the same route");
+        row_end();
+        report_end();
         sys_close(udp_fd);
         sys_close(fd_r);
         if (fails == 0) {
@@ -673,6 +752,7 @@ void probe_main(unsigned long *sp)
     check_n(fd_a >= 0, "the first raw socket opens", fd_a);
     check_n(fd_b >= 0, "the second raw socket opens", fd_b);
     if (fd_a < 0 || fd_b < 0) {
+        report_stop(row_why);
         say("RAWPROBE FAIL\n");
         sys_exit(1);
     }
@@ -702,6 +782,7 @@ void probe_main(unsigned long *sp)
         check(frame_a[9] == IPPROTO_ICMP, "of the protocol the socket asked for");
         check(from_gateway(frame_a), "from the address that answered");
     }
+    row_end();
 
     /* A hop limit of one: the first router's time-exceeded reaches both. */
     {
@@ -747,6 +828,7 @@ void probe_main(unsigned long *sp)
         check(m > 0, "and the other socket was told as well");
         sys_close(udp_fd);
     }
+    row_end();
 
     /* IP_HDRINCL is refused, not accepted and ignored. */
     val = 1;
@@ -756,6 +838,7 @@ void probe_main(unsigned long *sp)
     args[3] = (unsigned long)&val;
     args[4] = sizeof(int);
     check(socketcall(SC_SETSOCKOPT, args) == -ENOPROTOOPT, "IP_HDRINCL is refused");
+    row_end();
 
     /* A message past the MTU is refused by the send itself. */
     sockaddr_for(sa, gateway_ip, 0);
@@ -766,6 +849,7 @@ void probe_main(unsigned long *sp)
     args[4] = (unsigned long)sa;
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == -EMSGSIZE, "a message past the MTU is refused");
+    row_end();
 
     /* A send to a neighbour whose address is not resolved is accepted. */
     for (i = 0; i < 8; i++) {
@@ -789,6 +873,7 @@ void probe_main(unsigned long *sp)
     args[4] = (unsigned long)sa;
     args[5] = 16;
     check(socketcall(SC_SENDTO, args) == 8, "a send to an unresolved neighbour is not an error");
+    row_end();
 
     /* Nine replies to a queue eight deep: eight are kept. */
     {
@@ -832,6 +917,7 @@ void probe_main(unsigned long *sp)
         }
         check_n(got == 8, "a queue eight deep keeps eight and no more", got);
     }
+    row_end();
 
     /* For the capture checker: hop limits 1 to 6 and a wrong checksum. */
     if (!probe_native()) {
@@ -922,6 +1008,7 @@ void probe_main(unsigned long *sp)
         args[3] = (unsigned long)&val;
         args[4] = sizeof(int);
         socketcall(SC_SETSOCKOPT, args);
+        row_end();
     }
 
     /* Eight more raw sockets open at once beside `fd_a`, each from the heap. */
@@ -938,8 +1025,11 @@ void probe_main(unsigned long *sp)
             }
         }
     }
+    row_end();
 
     socket_pressure(args, fd_a);
+    row_end();
+    report_end();
 
     sys_close(fd_a);
 
