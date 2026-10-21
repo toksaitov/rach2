@@ -6,6 +6,10 @@
  * The first failed row ends the program, failing its file system's
  * assertion with the row and errno.
  *
+ * The program makes itself a child subreaper, so that the image a forked
+ * copy leaves behind becomes its child to wait for, whether or not it runs
+ * as init.
+ *
  * The copy that ends by exec runs /musl/statushelper, or the path that
  * `helper=PATH` gives, as a native run's private root has the helper at /
  * (tests/native/Readme.md); the copies are passed the same argument. Other
@@ -19,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -364,6 +369,7 @@ int main(int argc, char **argv)
     report_begin(report_case(environ, "guest.textbusy.exclusion"));
     report_plan("krffs");
     report_plan("tmpfs");
+    check(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0, "subreaper");
     filesystem(0);
     report_held();
     filesystem(1);

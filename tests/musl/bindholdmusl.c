@@ -7,7 +7,11 @@
  * the case ETUDE_CASE names, is written only once the rows have ended: a
  * record written while they run would grow etude-guest's copy of the output
  * on the same file system. The first failed check ends the program, failing
- * its row with the check and errno. */
+ * its row with the check and errno.
+ *
+ * The program makes itself a child subreaper, so that the image a forked
+ * copy leaves behind becomes its child to wait for, whether or not it runs
+ * as init. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -15,8 +19,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mount.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statfs.h>
@@ -418,6 +423,7 @@ int main(int argc, char **argv)
     signal(SIGINT, interrupted);
     signal(SIGHUP, interrupted);
     signal(SIGPIPE, interrupted);
+    check(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0, "subreaper");
     snprintf(work, sizeof(work), "%s/rach2-bindhold.XXXXXX",
              getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
     check(mkdtemp(work) != NULL, "scratch");
