@@ -39,11 +39,14 @@
  * above.
  *
  * Prints "LIMITPROBE OK" and exits 0, or "LIMITPROBE FAIL: " and the reason
- * and exits 1.
+ * and exits 1. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check `checks` lists; a failure
+ * leaves the checks after it not run. `limitprobe show` writes none.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define RLIMIT_FSIZE  1
 #define RLIMIT_NPROC  6
@@ -119,12 +122,88 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-/** Print "LIMITPROBE FAIL: " and `why`, and exit 1. */
-static void fail(const char *why)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    NOFILE_TABLE,
+    AS_UNLIMITED,
+    NOFILE_EIGHT,
+    AS_EIGHT,
+    HARD_LIMIT,
+    SANDBOX,
+    FSIZE,
+    ZOMBIE,
+    INHERIT_SET,
+    INHERIT,
+    RAISE_BACK,
+    PIPES,
+    FAMILY_FORK,
+    NPROC_FOUR,
+    OTHERS,
+    SETUID_COUNTS,
+    FAMILY_EXIT,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"nofile-table", "the descriptor limit is not the table's"},
+    {"as-unlimited", "the address-space limit is not unlimited"},
+    {"nofile-eight", "eight descriptors: the ninth open is EMFILE and the exec sees eight"},
+    {"as-eight", "eight megabytes: a larger mapping is ENOMEM and the break stays"},
+    {"hard-limit", "the hard limit: a user lowers, root raises"},
+    {"sandbox", "select and poll under the limits of 0 of OpenSSH's sandbox"},
+    {"fsize", "a file limit of 4096: a write is cut to it and the next is EFBIG"},
+    {"zombie", "a zombie's limits: root reads and sets them, a user is EPERM"},
+    {"inherit-set", "setting the limit a child inherits"},
+    {"inherit", "a child forked under a limit of 200 reads 200"},
+    {"raise-back", "raising the limit back as root"},
+    {"pipes", "the report pipes"},
+    {"family-fork", "fork of the family"},
+    {"nproc-four", "four processes of one user: three forks and a fourth refused with EAGAIN"},
+    {"others", "another user forks beside the limited one"},
+    {"setuid-counts", "a process that became the limited user counts against it"},
+    {"family-exit", "four processes of one user: three forks and a fourth refused with EAGAIN"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with `why`, those after it as not run, and the
+ * report's end; with `check` CHECKS, every check held. */
+static void report_at(int check, const char *why)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Print "LIMITPROBE FAIL: " and `why`, report that the check `check` failed
+ * with it, and exit 1. */
+static void fail_as(int check, const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"LIMITPROBE FAIL: ", 17);
     puts(why);
+    report_at(check, why);
     sys_exit(1);
+}
+
+/** Fail the check `check` with its text, as `fail_as` does. */
+static void fail(int check)
+{
+    fail_as(check, checks[check].text);
 }
 
 /** Read the caller's limit `resource` into `rl`: 0, or a negated errno. */
@@ -161,20 +240,20 @@ static int wait_status(int pid)
     return (status >> 8) & 0xff;
 }
 
-/** Run `body` in a child that exits with its answer, and fail with `what`
- * unless the answer is `want`. */
-static void child_must(int (*body)(void), int want, const char *what)
+/** Run `body` in a child that exits with its answer, and fail the check
+ * `check` unless the answer is `want`. */
+static void child_must(int (*body)(void), int want, int check)
 {
     int pid = syscall1(SYS_FORK, 0);
 
     if (pid < 0) {
-        fail("fork of a child");
+        fail_as(check, "fork of a child");
     }
     if (pid == 0) {
         sys_exit(body());
     }
     if (wait_status(pid) != want) {
-        fail(what);
+        fail(check);
     }
 }
 
@@ -488,41 +567,41 @@ void probe_main(unsigned long *sp)
     if (probe_word(1) != 0 && probe_word(1)[0] == 's') {
         run_show();
     }
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.limitprobe"));
     hello_path = probe_arg("hello", "/hello");
     scratch_path = probe_arg("scratch", "/tmp/limitprobe.f");
     self_path = probe_self("/limitprobe");
     id_1000 = probe_id(1000);
     id_1001 = probe_id(1001);
     if (get_limit(RLIMIT_NOFILE, &rl) != 0 || rl.cur_lo != 1024 || rl.max_lo != 1024) {
-        fail("the descriptor limit is not the table's");
+        fail(NOFILE_TABLE);
     }
     if (get_limit(RLIMIT_AS, &rl) != 0 || rl.cur_lo != 0xFFFFFFFFu || rl.cur_hi != 0xFFFFFFFFu) {
-        fail("the address-space limit is not unlimited");
+        fail(AS_UNLIMITED);
     }
-    child_must(body_nofile, 0,
-               "eight descriptors: the ninth open is EMFILE and the exec sees eight");
-    child_must(body_as, 0, "eight megabytes: a larger mapping is ENOMEM and the break stays");
-    child_must(body_hard, 0, "the hard limit: a user lowers, root raises");
-    child_must(body_sandbox, 0, "select and poll under the limits of 0 of OpenSSH's sandbox");
-    child_must(body_fsize, 0, "a file limit of 4096: a write is cut to it and the next is EFBIG");
-    child_must(body_zombie, 0, "a zombie's limits: root reads and sets them, a user is EPERM");
+    child_must(body_nofile, 0, NOFILE_EIGHT);
+    child_must(body_as, 0, AS_EIGHT);
+    child_must(body_hard, 0, HARD_LIMIT);
+    child_must(body_sandbox, 0, SANDBOX);
+    child_must(body_fsize, 0, FSIZE);
+    child_must(body_zombie, 0, ZOMBIE);
     if (set_limit(RLIMIT_NOFILE, 200, 200) != 0) {
-        fail("setting the limit a child inherits");
+        fail(INHERIT_SET);
     }
-    child_must(body_inherit, 0, "a child forked under a limit of 200 reads 200");
+    child_must(body_inherit, 0, INHERIT);
     if (set_limit(RLIMIT_NOFILE, 200, 1024) != 0 || set_limit(RLIMIT_NOFILE, 1024, 1024) != 0) {
-        fail("raising the limit back as root");
+        fail(RAISE_BACK);
     }
     fds[0] = fds[1] = -1;
     if (syscall1(SYS_PIPE, (long)fds) != 0 || syscall1(SYS_PIPE, (long)release) != 0) {
-        fail("the report pipes");
+        fail(PIPES);
     }
     report_fd = fds[1];
     release_r = release[0];
     release_w = release[1];
     family = syscall1(SYS_FORK, 0);
     if (family < 0) {
-        fail("fork of the family");
+        fail(FAMILY_FORK);
     }
     if (family == 0) {
         sys_exit(body_nproc());
@@ -530,15 +609,16 @@ void probe_main(unsigned long *sp)
     /* A family that dies unheard is then end of input on the read below. */
     syscall1(SYS_CLOSE, fds[1]);
     if (syscall3(SYS_READ, fds[0], (long)&byte, 1) != 1 || byte != 's') {
-        fail("four processes of one user: three forks and a fourth refused with EAGAIN");
+        fail(NPROC_FOUR);
     }
-    child_must(body_others, 0, "another user forks beside the limited one");
-    child_must(body_setuid, 0, "a process that became the limited user counts against it");
+    child_must(body_others, 0, OTHERS);
+    child_must(body_setuid, 0, SETUID_COUNTS);
     syscall1(SYS_CLOSE, release_w);
     others = wait_status(family);
     if (others != 0) {
-        fail("four processes of one user: three forks and a fourth refused with EAGAIN");
+        fail(FAMILY_EXIT);
     }
+    report_at(CHECKS, 0);
     puts("LIMITPROBE OK");
     sys_exit(0);
 }
