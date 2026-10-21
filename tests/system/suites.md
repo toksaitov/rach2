@@ -86,7 +86,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `diskpolicy` (full tier; needs qemu; 128 MiB): the read-only kernel does not write the disk, shown on the bytes rather than on a return value.
 * `console` (core tier; needs qemu; 128 MiB): the two probes that read from the console, which the shared probe boot cannot run because they block until something is typed.
 * `fpu` (core tier; needs qemu; 128 MiB): the floating-point state of a process is its own, by each path the kernel saves it with: XSAVE under QEMU's `max`, FXSAVE under `rach2.noxsave` and on `qemu64`, where `xsaveprobe` must find OSXSAVE clear and no NT_X86_XSTATE, and the x87 state alone by `fnsave` under `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64 processor has FXSR.
-* `socket` (core tier; needs qemu; 128 MiB): the guest opening connections of its own, checked by a host that answers (see tests/system/suites/socket.sh).
+* `socket` (core tier; needs qemu; 128 MiB): the guest opening connections of its own, checked by a host that answers (see tests/cases/machine.socket.json).
 * `bootorder` (full tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the GRUB disk on the second AHCI port behind a disk holding nothing, booted by the firmware, its root found as disk 1.
 * `reset` (core tier; needs qemu; 128 MiB): each reset mechanism on its own.
 * `netconsole-e1000` (full tier; needs qemu; 128 MiB): the netconsole suite on the e1000 card, the cases of tests/cases/machine.netconsole-e1000.json.

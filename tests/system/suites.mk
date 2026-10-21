@@ -88,20 +88,17 @@ AGENTSACCEPT_API_PORT := $(call port,2304)
 SEALED_PORT     := $(call port,2297)
 DRILL_PORT      := $(call port,2298)
 PROCFILES_PORT  := $(call port,2299)
-SOCKET_PORT     := $(call port,7777)
 ifeq ($(NIC),e1000)
 NIC_TAG          = -e1000
 DHCP_SSH_PORT   := $(call port,2324)
 DHCP_TWO_PORT_A := $(call port,2326)
 DHCP_TWO_PORT_B := $(call port,2328)
-DGRAM_PORT      := $(call port,15898)
 NETIF_PORT      := $(call port,15899)
 else
 NIC_TAG          =
 DHCP_SSH_PORT   := $(call port,2224)
 DHCP_TWO_PORT_A := $(call port,2226)
 DHCP_TWO_PORT_B := $(call port,2228)
-DGRAM_PORT      := $(call port,15998)
 NETIF_PORT      := $(call port,15999)
 endif
 NIC             ?= rtl8139
@@ -434,10 +431,8 @@ run-diskfull: rach2 tests krffs test-image $(HARNESS)
 	    --timeout 180 --ok "DISKFULL OK" --never "DISKFULL FAIL" \
 	    "expect=Type 'help'" "send=exec /diskfull" "expect=DISKFULL"
 # `tests/run socket`: the guest opening connections of its own, checked by a
-# host that answers (see tests/system/suites/socket.sh).
-run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER) $(RUNUTIL)
-	sh tests/system/suites/socket.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
-	    $(HARNESS) $(HOSTPEER) $(SOCKET_PORT)
+# host that answers (see tests/cases/machine.socket.json). They are the cases
+# of that manifest, which etude runs, and have no target here.
 # `tests/run disk`: the disk-backed page-cache integrity check. It is the case
 # of tests/cases/guest.disk.json, which etude runs, and has no target here:
 # blockprobe on a KRFFS root that rach2.fsdisk mounts from a disk on IDE.
@@ -873,20 +868,8 @@ endif
 .PHONY: netif-card netif-stack
 # `tests/run dgram`: a connected datagram socket and the permission to
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
-# Its own target because it broadcasts, and a probe in the suite must not put a
-# frame on the wire that the other probes did not ask for.
-DGRAM_PCAP = $(IMAGES_DIR)/dgram$(NIC_TAG).pcap
-run-dgram: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
-	@rm -f $(DGRAM_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0,hostfwd=udp::$(DGRAM_PORT)-:7502" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=dg0,netdev=net0,file=$(DGRAM_PCAP) \
-	    --timeout 180 --ok "DGRAMPROBE OK" \
-	    "expect=Type 'help'" "send=exec /dgramprobe" \
-	    "expect=DGRAMPROBE OUTSIDE" "udp=$(DGRAM_PORT):outsider" "expect=DGRAMPROBE OK"
-	$(PCAPCHECK) bcast $(DGRAM_PCAP) --port 7500 --dst-ip 255.255.255.255
+# Its case is in tests/cases/machine.dgram.json, which etude runs, and has no
+# target here.
 # `tests/run dhcp`: the machine taking an address it was not told, with both of
 # its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own
 # `dhcpc`, which its `netup` runs. A boot that is to take a lease has
@@ -1939,9 +1922,9 @@ run-drive: $(HARNESS)
 run-netif-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-netif
 
-# `tests/run dgram-e1000`: the dgram suite on the e1000 card.
-run-dgram-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-dgram
+# `tests/run dgram-e1000`: the dgram suite on the e1000 card. Its case is in
+# tests/cases/machine.dgram-e1000.json, which etude runs, and has no target
+# here.
 
 # `tests/run netconsole-e1000`: the netconsole suite on the e1000 card, the
 # cases of tests/cases/machine.netconsole-e1000.json.
