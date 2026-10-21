@@ -1246,11 +1246,8 @@ AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
 # `tests/run disks`: two disks of different sizes on one AHCI controller,
 # both in /proc/disk with their ports and sizes, both with nodes, a
 # partition of each mounted and written, and the second disk's file found
-# on the second disk by the host.
-DISKS_DISK0 = $(IMAGES_DIR)/disks-test-0.disk
-DISKS_DISK1 = $(IMAGES_DIR)/disks-test-1.disk
-run-disks: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/disks.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(DISKS_DISK0) $(DISKS_DISK1)
+# on the second disk by the host. It is the case of
+# tests/cases/machine.disks.json, which etude runs, and has no target here.
 # The disks of its case, which the case's preparation names: on port 0 a
 # 64 MiB disk with one KRFFS partition of the disk suites' manifest, which
 # holds guest programs and so is made for each architecture, and on port 1 a
