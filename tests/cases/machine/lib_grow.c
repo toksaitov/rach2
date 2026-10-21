@@ -434,21 +434,28 @@ static const char *boot_why(const struct drive *d, const char *what, int status,
 /**
  * Check SHA256SUMS of the saved files, `sums`, as the host does before it
  * lets the grow go on: each line a digest of 64 hexadecimal digits and the
- * name of a file `save` writes.
+ * name of a file `save` writes, and nothing else, an empty line included.
  *
  * @return 1 when every line is such, 0 otherwise.
  */
 static int sums_form(const char *sums, char *why, size_t wsize)
 {
-    char hex[80], file[64];
+    char text[256], hex[80], file[64], extra[2];
     const char *line, *eol;
+    size_t n;
     int lines = 0, i;
 
     for (line = sums; line != NULL && *line != '\0'; line = eol != NULL ? eol + 1 : NULL) {
         eol = strchr(line, '\n');
-        if (sscanf(line, "%79s %63s", hex, file) != 2 || strlen(hex) != 64 ||
+        n = eol != NULL ? (size_t)(eol - line) : strlen(line);
+        if (n >= sizeof(text))
+            n = 0;
+        memcpy(text, line, n);
+        text[n] = '\0';
+        if (sscanf(text, "%79s %63s %1s", hex, file, extra) != 2 || strlen(hex) != 64 ||
             strspn(hex, "0123456789abcdef") != 64) {
-            snprintf(why, wsize, "a saved checksum is not 64 hexadecimal digits: %.80s", line);
+            snprintf(why, wsize, "a saved checksum is not 64 hexadecimal digits and a name: %.80s",
+                     line);
             return 0;
         }
         for (i = 0; i < 4 && strcmp(file, saved_files[i]) != 0; i++)
@@ -517,11 +524,11 @@ static int sums_hold(struct etude_case *c, const char *sums, char *why, size_t s
  * disk's boot partition, or two of one sector, which growboot has found
  * consecutive, on a GUID table's, of 1024 bytes.
  *
- * @return the sector, or -1.
+ * @return the sector, or -1 when no line or more than one names it.
  */
 static long env_sector(const char *status)
 {
-    char f[16][64];
+    char f[16][64], *p;
     const char *line, *eol;
     long sector = -1;
     int n;
@@ -535,8 +542,11 @@ static long env_sector(const char *status)
             continue;
         if (strcmp(f[9], "1") != 0 && !(strcmp(f[9], "2") == 0 && strcmp(f[6], "2") == 0))
             continue;
-        f[5][strcspn(f[5], ",")] = '\0';
-        if (f[5][0] == '\0' || strspn(f[5], "0123456789") != strlen(f[5]))
+        for (n = 0, p = f[5]; *p != '\0'; p++)
+            if (*p != ',')
+                f[5][n++] = *p;
+        f[5][n] = '\0';
+        if (sector != -1 || f[5][0] == '\0' || strspn(f[5], "0123456789") != strlen(f[5]))
             return -1;
         sector = atol(f[5]);
     }
@@ -555,8 +565,7 @@ static void note_saved(struct etude_case *c)
     }
 }
 
-/** Report each of the assertions `ids`, ended by NULL, failed with `why`. */
-static void fail_all(struct etude_case *c, const char *const ids[], const char *why)
+void grow_fail_all(struct etude_case *c, const char *const ids[], const char *why)
 {
     for (; *ids != NULL; ids++)
         grow_assert(c, *ids, 0, why);
@@ -564,6 +573,8 @@ static void fail_all(struct etude_case *c, const char *const ids[], const char *
 
 int grow_machine(struct etude_case *c)
 {
+    static const char *const from_saved[] = {"save-unchanged", "sums-form", "host-copy",
+                                             "boot-copy", NULL};
     static const char *const after_save[] = {"grown",       "small-seed", "measured",
                                              "grow-writes", "restored",   "restore-writes",
                                              "env-found",   "bytes",      NULL};
@@ -606,8 +617,11 @@ int grow_machine(struct etude_case *c)
     if (grow_evidence(c, "plan-seed.ext2", seed, sizeof(seed)) == NULL ||
         grow_evidence(c, "plan-", plan, sizeof(plan)) == NULL ||
         grow_evidence(c, "plan-grow-tools.tar", tools, sizeof(tools)) == NULL ||
-        grow_evidence(c, "saved-", saved, sizeof(saved)) == NULL)
+        grow_evidence(c, "saved-", saved, sizeof(saved)) == NULL) {
+        grow_fail_all(c, from_saved, "the evidence's paths are too long");
+        grow_fail_all(c, after_save, "the evidence's paths are too long");
         return 1;
+    }
     grow_made(seed);
     grow_made(tools);
     note_saved(c);
@@ -663,7 +677,8 @@ int grow_machine(struct etude_case *c)
     grow_assert(c, "boot-copy", ok, "the saved boot.img is not the target's 64 MiB boot partition");
     if (!form_ok) {
         free(sums);
-        fail_all(c, after_save, "the saved checksums are not valid, so the grow did not start");
+        grow_fail_all(c, after_save,
+                      "the saved checksums are not valid, so the grow did not start");
         grow_clean();
         return 0;
     }

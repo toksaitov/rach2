@@ -357,8 +357,12 @@ case_boot() {
         broken "the native programs do not build; see $W/cc.log" $_ids
         return
     fi
-    "$W/mkfatfixture" "$W/boot.cluster8" --cluster8 > "$W/fat.log" 2>&1
-    "$W/mkfatfixture" "$W/boot.cluster1" >> "$W/fat.log" 2>&1
+    # shellcheck disable=SC2086
+    if ! "$W/mkfatfixture" "$W/boot.cluster8" --cluster8 > "$W/fat.log" 2>&1 ||
+        ! "$W/mkfatfixture" "$W/boot.cluster1" >> "$W/fat.log" 2>&1; then
+        broken "the FAT fixtures are not made; see $W/fat.log" $_ids
+        return
+    fi
     # Pad the independent fixtures to the machine helper's whole boot extent.
     for _fat in "$W/boot.cluster8" "$W/boot.cluster1"; do
         dd if=/dev/null of="$_fat" bs=1048576 seek=64 2>> "$W/fat.log"

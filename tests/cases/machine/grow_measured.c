@@ -152,6 +152,10 @@ static int fsck_clean(struct drive *d)
 int etude_scenario(struct etude_case *c)
 {
     static const char *const one_disks[] = {"one", NULL}, *const two_disks[] = {"two", NULL};
+    static const char *const every[] = {
+        "measured-image", "grown",       "entry",          "clean",   "inside-set",     "measures",
+        "end-file",       "end-clean",   "descriptor",     "stopped", "stopped-report", "refused",
+        "finished",       "rerun-entry", "finished-clean", NULL};
     const char *base = etude_artifact(c, "base"), *one;
     char why[300], last_text[32] = "", head[1024], map[1024], measures[1024], *image, *text = NULL;
     char *out = NULL;
@@ -165,8 +169,10 @@ int etude_scenario(struct etude_case *c)
         return 1;
     if (grow_evidence(c, "head.vol", head, sizeof(head)) == NULL ||
         grow_evidence(c, "one.map", map, sizeof(map)) == NULL ||
-        grow_evidence(c, "one.text", measures, sizeof(measures)) == NULL)
+        grow_evidence(c, "one.text", measures, sizeof(measures)) == NULL) {
+        grow_fail_all(c, every, "the evidence's paths are too long");
         return 1;
+    }
     grow_made(head);
     grow_made(measures);
     image = read_file(etude_artifact(c, "image"), &len);

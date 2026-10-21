@@ -57,6 +57,9 @@ int grow_console_has(const struct drive *d, const char *text);
  */
 void grow_assert(struct etude_case *c, const char *id, int held, const char *detail);
 
+/** Report each of the assertions `ids`, ended by NULL, failed with `why`. */
+void grow_fail_all(struct etude_case *c, const char *const ids[], const char *why);
+
 /**
  * Note file `path`, which the scenario or a host program it ran wrote among
  * the evidence and libetude-case does not know of, for grow_clean.
