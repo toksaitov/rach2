@@ -8,9 +8,9 @@
  * "All errno checks passed!" and exits 0 only if every check matches.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
- * names, an assertion for each errno: `enosys`, `enoent`, `ebadf` and
- * `efault`, each failed with the first of its calls that returned another
- * result.
+ * names, an assertion for each call: `enosys-unimplemented`,
+ * `enosys-out-of-range`, `enoent-open`, `ebadf-close`, `ebadf-read` and
+ * `efault-writev`, each failed with what the call returned.
  *
  * Freestanding; direct system calls (probe.h), so the test sees the raw -errno
  * the kernel returns (a libc caller would negate it into a positive errno).
@@ -92,9 +92,11 @@ static int fails;
  * Check that syscall result `got` equals the expected negative errno, at the
  * result's whole width: an error the kernel zero-extended on x86-64, such as
  * 0x00000000ffffffda for -ENOSYS, is a success to musl and must fail here.
+ * The check is the part whose assertion is `id`, and `label` names the call.
  */
-static void expect(long got, int want_errno, const char *label)
+static void expect(long got, int want_errno, const char *label, const char *id)
 {
+    report_part(id);
     if (got != -(long)want_errno) {
         puts_("FAIL: ");
         puts_(label);
@@ -127,19 +129,17 @@ void probe_main(unsigned long *sp)
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.errnoprobe"));
     puts_("errnoprobe: starting\n");
 
-    report_part("enosys");
-    expect(syscall3(NR_UNIMPL, 0, 0, 0), ENOSYS, "unimpl(" NR_UNIMPL_TEXT ")");
-    expect(syscall3(909, 0, 0, 0), ENOSYS, "outofrange(909)");
+    expect(syscall3(NR_UNIMPL, 0, 0, 0), ENOSYS, "unimpl(" NR_UNIMPL_TEXT ")",
+           "enosys-unimplemented");
+    expect(syscall3(909, 0, 0, 0), ENOSYS, "outofrange(909)", "enosys-out-of-range");
 
-    report_part("enoent");
-    expect(syscall3(SYS_OPEN, (long)missing, 0, 0), ENOENT, "open(missing)");
+    expect(syscall3(SYS_OPEN, (long)missing, 0, 0), ENOENT, "open(missing)", "enoent-open");
 
-    report_part("ebadf");
-    expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)");
-    expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
+    expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)", "ebadf-close");
+    expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)",
+           "ebadf-read");
 
-    report_part("efault");
-    expect(syscall3(SYS_WRITEV, STDOUT, -4096L, 1), EFAULT, "writev(bad iov)");
+    expect(syscall3(SYS_WRITEV, STDOUT, -4096L, 1), EFAULT, "writev(bad iov)", "efault-writev");
     report_finish();
 
     if (fails == 0) {
