@@ -504,14 +504,6 @@ build/tests/cases/machine/%: tests/cases/machine/%.c $(CASE_LIB) \
 build/tests/cases/machine/%: tests/cases/machine/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
-# The demo key and password that the installer's cases log in with, as
-# artifacts, since a case's preparation names each by its node in the build.
-build/tests/cases/machine/demo_key: krffs/rach2_demo_ed25519
-	@mkdir -p $(@D)
-	cp $< $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
-build/tests/cases/machine/demo_password: krffs/shadow
-	@mkdir -p $(@D)
-	cp krffs/rach2_demo_password $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
 
 # Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
 # tests/system/fakeapi/fetch_muse.sh downloads it once into

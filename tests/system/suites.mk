@@ -1050,8 +1050,8 @@ $(CASE_IMAGES)/recovery-keyless.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach2-r
 	    krffs/manifests/rach2-recovery.manifest > $@.manifest
 	! grep -q '^optional-file.*authorized_keys' $@.manifest
 	$(MKIMAGE) $@.manifest $@ 4
-# The files of the tree that the installer-repair cases read
-# (tests/cases/machine.installer-repair.json), copied into the build, since a
+# The files of the tree that the installer and installer-repair cases read
+# (tests/cases/machine.installer*.json), copied into the build, since a
 # case's preparation names its artifacts by a node of the build tree: the demo
 # password and root's demo key, which the images built here take, and GRUB's
 # EFI image, which a disk the update converts must carry.
