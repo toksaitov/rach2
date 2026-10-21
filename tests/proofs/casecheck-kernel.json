@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "proof": "casecheck-kernel",
+  "summary": "casecheck's self-test against a private copy of judge.c, whose attempt judges a machine case's report, its end and its consoles",
+  "tree": "private",
+  "sources": [
+    "tools/etude/judge.c"
+  ],
+  "artifacts": [
+    "${WORK}/casecheck"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I tools/etude -I tools/etude/include -I utils tools/etude/casecheck.c tools/etude/cases.c tools/etude/digest.c ${SRC}/tools/etude/judge.c tools/etude/json.c tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c tools/etude/verdict.c tools/etude/history.c tools/etude/history_json.c utils/sha256.c -o ${WORK}/casecheck"
+    ],
+    "bound_s": 300
+  },
+  "test": {
+    "argv": [
+      "${WORK}/casecheck",
+      "--selftest",
+      "tools/etude/fixtures"
+    ],
+    "bound_s": 120,
+    "fail_prefix": "casecheck selftest: line "
+  },
+  "faults": [
+    {
+      "name": "allowed",
+      "summary": "the critical record a machine declares fails etude.kernel",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "            if (allowed != NULL && line_has(c + i, end - i, allowed)) {\n",
+          "replace": "            if (allowed != NULL && line_has(c + i, 0, allowed)) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "0 attempt -k ./consoles/vm.1.console -k ./consoles/vm.2.console ./machine.json fixture.machine.crash"
+        ]
+      }
+    },
+    {
+      "name": "panic",
+      "summary": "a panic's record passes etude.kernel when the case does not end in a panic",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "            if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&\n",
+          "replace": "            if ((panics || 1) && close != NULL && (size_t)(c + end - close) >= 9 &&\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "1 attempt -k ./consoles/vm.1.console -k ./consoles/vm.3.console ./machine.json fixture.machine.crash"
+        ]
+      }
+    },
+    {
+      "name": "noconsole",
+      "summary": "an attempt given no console passes etude.kernel",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "    } else if (kernel_read(j->c, placement)) {\n        put_assertion(b, \"etude.kernel\", \"executor\", OUTCOME_MISSING,\n",
+          "replace": "    } else if (kernel_read(j->c, placement)) {\n        put_assertion(b, \"etude.kernel\", \"executor\", OUTCOME_PASS,\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "3 attempt ./machine.json fixture.machine.crash"
+        ]
+      }
+    },
+    {
+      "name": "first",
+      "summary": "etude.kernel judges the first console alone",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "    for (k = 0; k < j->nconsoles; k++) {\n        c = j->console[k];\n        len = j->console_len[k];\n",
+          "replace": "    for (k = 0; k < 1 && k < j->nconsoles; k++) {\n        c = j->console[k];\n        len = j->console_len[k];\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "1 attempt -k ./consoles/vm.1.console -k ./consoles/vm.3.console ./machine.json fixture.machine.crash"
+        ]
+      }
+    },
+    {
+      "name": "observer",
+      "summary": "a machine case's end is taken as etude-guest's",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "same(placement, \"host\") || same(json_text(j->c, \"domain\"), \"machine\")",
+          "replace": "same(placement, \"host\")"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "\"observed_by\":\"host_process\""
+        ]
+      }
+    },
+    {
+      "name": "scenario",
+      "summary": "a scenario's report records are not taken for its assertions",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "    return same(json_text(a, \"source\"), \"program\") || same(json_text(a, \"source\"), \"scenario\");",
+          "replace": "    return same(json_text(a, \"source\"), \"program\");"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "./report-scenario.out"
+        ]
+      }
+    }
+  ]
+}
