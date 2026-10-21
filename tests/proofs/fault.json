@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "proof": "fault",
+  "summary": "the cases of tests/run fault under etude, against a kernel that ends a program's bad access with SIGBUS, and one that takes a user program's access to the page cache's window for the kernel's own",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/mm/paging.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 tests && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run fault </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "sigbus",
+      "summary": "a user program's bad access is ended with SIGBUS, not SIGSEGV",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/paging.c",
+          "find": "        signal_force(current_proc, SIGSEGV, &info);\n",
+          "replace": "        signal_force(current_proc, SIGBUS, &info);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: fault: FAIL",
+          "etude.termination failed: signaled 7, where the case expects signaled 11"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "user-window",
+      "summary": "a user program's access to the page cache's window is taken for a fault of the kernel's own",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/paging.c",
+          "find": "    if (!user_mode && fault_address >= PCWIN_BASE &&\n",
+          "replace": "    if (fault_address >= PCWIN_BASE &&\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: fault: FAIL",
+          "killed failed: the console has no such record"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

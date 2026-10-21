@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "proof": "queue",
+  "summary": "the cases of tests/run queue under etude, against an AHCI driver that never takes the controller's messages, one that counts no drained command, and one that refuses every queued flush, after which the volume is no longer writable",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/block/ahci.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 tests && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run queue </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "polled",
+      "summary": "the AHCI driver stays polled, with no vector for the controller's messages",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "    if (!ahci_base || ahci_ndisks == 0 || kcmdline_has(\"rach2.ahcipoll\")) {\n",
+          "replace": "    if (1) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: queue: FAIL",
+          "assert interrupts fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "drains",
+      "summary": "the AHCI driver counts no command it drains by polling",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "    if (d->active) {\n        block_count_drain();\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: queue: FAIL",
+          "assert drained fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "flush",
+      "summary": "the AHCI driver refuses every queued flush with EIO",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "    r->flags |= BLOCK_REQ_FLUSH;\n    return ahci_submit(device, r);\n",
+          "replace": "    r->flags |= BLOCK_REQ_FLUSH;\n    return -EIO;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: queue: FAIL",
+          "assert writable fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

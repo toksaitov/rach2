@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "proof": "diskfull",
+  "summary": "the case of tests/run diskfull under etude, against a KRFFS root that answers a write it has no space for with EIO",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/vfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 tests && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run diskfull </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "eio",
+      "summary": "a write the KRFFS root has no space for is refused with EIO, not ENOSPC",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "    if (written == KRFFS_ENOSPACE) {\n        return -ENOSPC;\n    }\n",
+          "replace": "    if (written == KRFFS_ENOSPACE) {\n        return -EIO;\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: diskfull: FAIL",
+          "assert enospc fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}
