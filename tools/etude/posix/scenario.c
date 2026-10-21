@@ -149,6 +149,7 @@ struct etude_case_machine {
     size_t line_len;
     int line_long;
     long capture[CAPTURES]; /* the ids of the diagnostics' QMP commands, or -1 */
+    int ended;              /* a machine record has given this boot's end */
 };
 
 struct etude_case_service {
@@ -1343,8 +1344,46 @@ static uint64_t step_deadline(const struct etude_case *c)
 
 /* ---- Machines. ---- */
 
-/** Fill `end` from what the launcher observed of a machine that ended. */
-static void machine_end(const struct etude_case_machine *m, struct etude_termination *end)
+/** Give the name a machine record gives the end `end` of a machine, or
+ * NULL for an end of a process. */
+static const char *end_name(enum etude_end end)
+{
+    switch (end) {
+    case ETUDE_END_PANIC:
+        return "panic";
+    case ETUDE_END_HALTED:
+        return "halted";
+    case ETUDE_END_RESET:
+        return "reset";
+    case ETUDE_END_SHUTDOWN:
+        return "shutdown";
+    case ETUDE_END_QEMU_EXITED:
+        return "qemu_exited";
+    case ETUDE_END_ACCEL_FAILED:
+        return "accel_failed";
+    case ETUDE_END_STOPPED:
+        return "stopped";
+    case ETUDE_END_LOST:
+        return "lost";
+    default:
+        return NULL;
+    }
+}
+
+/** Write the machine record of boot `m`'s end `end`, the first one alone. */
+static void record_end(struct etude_case_machine *m, enum etude_end end)
+{
+    const char *name = end_name(end);
+
+    if (m->ended || name == NULL)
+        return;
+    m->ended = 1;
+    record("%s %s.%u %s", ETUDE_REPORT_MACHINE, m->decl->id, m->boot, name);
+}
+
+/** Fill `end` from what the launcher observed of a machine that ended, and
+ * record it as the boot's end. */
+static void machine_end(struct etude_case_machine *m, struct etude_termination *end)
 {
     const struct etude_machine_result *r = mres(m);
 
@@ -1354,6 +1393,7 @@ static void machine_end(const struct etude_case_machine *m, struct etude_termina
     if (r->end == ETUDE_END_QEMU_EXITED && r->qemu != NULL &&
         (r->qemu->exit_end == ETUDE_END_EXITED || r->qemu->exit_end == ETUDE_END_SIGNALED))
         end->value = r->qemu->exit_value;
+    record_end(m, end->end);
 }
 
 /** Say whether machine `arg` runs or has ended. */
@@ -2107,6 +2147,88 @@ enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_term
         return st;
     machine_end(m, end);
     return end->end == ETUDE_END_LOST ? ETUDE_LOST : ETUDE_OK;
+}
+
+/** Say whether the console bytes read from boot `m` have a record of the
+ * kernel's panic: a line that begins `<2>[` whose subsystem is `panic`. */
+static int console_panicked(const struct etude_case_machine *m)
+{
+    const struct etude_machine_result *r = mres(m);
+    const char *c = r->console.data, *close;
+    size_t n = r->console.kept, i, end;
+
+    for (i = 0; c != NULL && i + 4 <= n; i++) {
+        if ((i > 0 && c[i - 1] != '\n') || memcmp(c + i, "<2>[", 4) != 0)
+            continue;
+        for (end = i; end < n && c[end] != '\r' && c[end] != '\n'; end++)
+            ;
+        close = memchr(c + i, ']', end - i);
+        if (close != NULL && (size_t)(c + end - close) >= 9 && memcmp(close, "] panic: ", 9) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/**
+ * Say whether `text`, the human monitor's `info registers -a`, shows each of
+ * `processors` processors halted with interrupts off: one section from
+ * `CPU#` for each, whose flags register, EFL or RFL, has IF, bit 9, clear,
+ * and which says HLT=1.
+ */
+static int all_halted(const char *text, unsigned processors)
+{
+    const char *p = text, *next, *flags, *hlt;
+    unsigned seen = 0;
+
+    while ((p = strstr(p, "CPU#")) != NULL) {
+        next = strstr(p + 4, "CPU#");
+        flags = strstr(p, "FL=");
+        hlt = strstr(p, "HLT=");
+        if (flags == NULL || hlt == NULL || (next != NULL && (flags > next || hlt > next)))
+            return 0;
+        if ((strtoul(flags + 3, NULL, 16) & 0x200) != 0 || hlt[4] != '1')
+            return 0;
+        seen++;
+        p += 4;
+    }
+    return seen > 0 && seen == processors;
+}
+
+enum etude_status etude_fault(struct etude_case_machine *m, enum etude_end end)
+{
+    const struct eh_json *ret;
+    struct eh_json *j;
+    enum etude_status st;
+    char *reply = NULL;
+    int shown;
+
+    if (m->ended || (end != ETUDE_END_PANIC && end != ETUDE_END_HALTED) ||
+        (end == ETUDE_END_PANIC && !m->decl->console)) {
+        diag("machine %s: boot %u: no fault of this kind to record", m->decl->id, m->boot);
+        m->c->faults++;
+        return ETUDE_REFUSED;
+    }
+    if (end == ETUDE_END_PANIC) {
+        shown = console_panicked(m);
+    } else {
+        st = etude_qmp(m, "human-monitor-command", "{\"command-line\": \"info registers -a\"}",
+                       &reply);
+        if (st != ETUDE_OK) {
+            free(reply);
+            return st;
+        }
+        j = eh_json_parse(reply);
+        ret = eh_json_get(j, "return");
+        shown = ret != NULL && ret->type == 's' && all_halted(ret->string, m->profile.processors);
+        eh_json_free(j);
+        free(reply);
+    }
+    if (!shown) {
+        diag("machine %s: boot %u does not show the fault", m->decl->id, m->boot);
+        return ETUDE_FAILED;
+    }
+    record_end(m, end);
+    return ETUDE_OK;
 }
 
 /* ---- etude-guest's attempts. ---- */

@@ -173,8 +173,30 @@ enum etude_status etude_guest(struct etude_case_machine *m, const char *name,
  * one is ETUDE_END_QEMU_EXITED, with its exit status or signal; a machine
  * whose QEMU or QMP the launcher lost ends ETUDE_END_LOST, and the wait
  * returns ETUDE_LOST.
+ *
+ * The end it observes, as the one etude_boot observes of a machine that ends
+ * while it starts, is written in the report as the record
+ * `machine MACHINE.N END`, unless etude_fault wrote that boot's end before.
  */
 enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_termination *end);
+
+/**
+ * Record that boot `m` ended in the fault `end` while its QEMU may still run,
+ * as the kernel's panic stops every processor without an event of QEMU's.
+ * ETUDE_END_PANIC needs a record of the kernel's panic, a line that begins
+ * `<2>[` and whose subsystem is `panic`, in the console bytes the library
+ * has read, so a scenario waits for the panic's text first.
+ * ETUDE_END_HALTED needs QMP's `info registers -a` to show each of the
+ * profile's processors halted with interrupts off. A fault shown is written
+ * in the report as `machine MACHINE.N END`, which `etude.fault` judges
+ * against the console; the boot is still ended by the step.
+ *
+ * @return ETUDE_OK when the fault is shown and recorded; ETUDE_FAILED, with
+ *         nothing recorded, when it is not; ETUDE_REFUSED for another end, a
+ *         boot whose end is recorded already, a panic of a machine without a
+ *         console, or a halt of one without QMP; and as etude_qmp otherwise.
+ */
+enum etude_status etude_fault(struct etude_case_machine *m, enum etude_end end);
 
 /**
  * Give the WAV path of this boot, or NULL when its profile selects no audio.

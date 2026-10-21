@@ -30,7 +30,11 @@
  * controller, whose stand-in QEMU requires those arguments. A machine that says
  * it powers off and ends without QEMU's event, one killed by a signal, one
  * whose console closes and one whose QMP closes are each told apart from a
- * shutdown, and a wait on each ends at once with the loss. A wait past its
+ * shutdown, and a wait on each ends at once with the loss. The end a wait
+ * observes is the boot's machine record in the report. On a machine of two
+ * processors, etude_fault finds a panic after an NMI on the console and a halt
+ * without a record in the registers, each only once it has happened, and
+ * records it as the boot's end, which no later end replaces. A wait past its
  * step's bound ends at the bound; a stop signal ends the scenario's wait, its
  * machine and its report, and keeps its copies; a scenario that asks for what
  * its manifest does not declare is refused; a failed accelerator, a damaged
@@ -65,7 +69,8 @@
  * connection at the forwarded TCP port and has bound the forwarded UDP port,
  * /tcptest reaches the peer through the guest forward and is refused it at the
  * gateway, and the kernel finds the size of the media row's empty disk. With
- * ETUDE_TEST_FORWARD set the program runs the two forward rows alone.
+ * ETUDE_TEST_FORWARD set the program runs the two forward rows alone, and with
+ * ETUDE_TEST_FAULT_ONLY set the reboot row and the fault row alone.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -572,10 +577,31 @@ static void fake_shutdown(int qmp, int guest, const char *reason)
     put(qmp, text);
 }
 
+/* The stand-in's processors, and how many of them, from the first, its
+ * console's `nmi`, `stop` or `stop one` has halted with interrupts off. */
+static unsigned fake_cpus = 1;
+static unsigned fake_halted;
+
+/** Put in `text` the human monitor's `info registers -a` of the stand-in's
+ * processors, escaped for a JSON string, as QEMU gives it for i686: a section
+ * from `CPU#` for each, with HLT=1 and the flags' IF set unless it halted. */
+static void fake_registers(char *text, size_t size)
+{
+    size_t n = 0;
+    unsigned i;
+
+    text[0] = '\0';
+    for (i = 0; i < fake_cpus && n < size; i++)
+        n += (size_t)snprintf(text + n, size - n,
+                              "CPU#%u\\r\\nEAX=00000000\\r\\nEIP=00101000 EFL=%s [-------] "
+                              "CPL=0 II=0 A20=1 SMM=0 HLT=1\\r\\n",
+                              i, i < fake_halted ? "00000002" : "00000202");
+}
+
 /** Answer one QMP line of the launcher's or the scenario's; exit at quit. */
 static void fake_qmp(int qmp, const char *line, const char *accel, const char *mode)
 {
-    char name[64], text[256];
+    char name[64], text[1024], regs[768];
     long id = fake_command(line, name, sizeof(name));
 
     if (strcmp(name, "query-accelerators") == 0)
@@ -589,10 +615,11 @@ static void fake_qmp(int qmp, const char *line, const char *accel, const char *m
                  "{\"return\": {\"status\": \"running\", \"running\": true}, \"id\": %ld}\r\n", id);
     else if (strcmp(name, "query-cpus-fast") == 0)
         snprintf(text, sizeof(text), "{\"return\": [{\"cpu-index\": 0}], \"id\": %ld}\r\n", id);
-    else if (strcmp(name, "human-monitor-command") == 0)
-        snprintf(text, sizeof(text), "{\"return\": \"EAX=00000000\\r\\n\", \"id\": %ld}\r\n", id);
-    else if (strcmp(name, "qmp_capabilities") == 0 || strcmp(name, "cont") == 0 ||
-             strcmp(name, "quit") == 0)
+    else if (strcmp(name, "human-monitor-command") == 0) {
+        fake_registers(regs, sizeof(regs));
+        snprintf(text, sizeof(text), "{\"return\": \"%s\", \"id\": %ld}\r\n", regs, id);
+    } else if (strcmp(name, "qmp_capabilities") == 0 || strcmp(name, "cont") == 0 ||
+               strcmp(name, "quit") == 0)
         snprintf(text, sizeof(text), "{\"return\": {}, \"id\": %ld}\r\n", id);
     else
         snprintf(text, sizeof(text),
@@ -689,9 +716,11 @@ static pid_t fake_guest(int con, const char *line)
 
 /**
  * Act on the line that the console `con` typed: `write TEXT` and `read` the
- * first disk, at `disk` or none at NULL, `poweroff`, `die`, `closecon`,
- * `closeqmp`, `peer PORT TEXT` and `exec /etude-guest`. A console or QMP that
- * it closes has its descriptor set to -1.
+ * first disk, at `disk` or none at NULL, `poweroff`, `nmi`, which prints the
+ * kernel's records of an NMI and its panic and halts the processors, `stop`,
+ * which halts them without a record, `stop one`, which halts the first,
+ * `die`, `closecon`, `closeqmp`, `peer PORT TEXT` and `exec /etude-guest`.
+ * A console or QMP that it closes has its descriptor set to -1.
  */
 static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *disk,
                          const char *mode)
@@ -711,6 +740,14 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
             _exit(0);
         fake_shutdown(qmp->fd, 1, "guest-shutdown");
         _exit(0);
+    } else if (strcmp(con->line, "nmi") == 0) {
+        put(con->fd, "<2>[    1.000000] isr: hardware fault: non-maskable interrupt (vector 2, "
+                     "pc 0x00101000)\r\n<2>[    1.000000] panic: stopped: the machine reported "
+                     "a fault\r\n");
+        fake_halted = fake_cpus;
+    } else if (strcmp(con->line, "stop") == 0 || strcmp(con->line, "stop one") == 0) {
+        put(con->fd, "fake: halted\r\n");
+        fake_halted = con->line[4] == '\0' ? fake_cpus : 1;
     } else if (strcmp(con->line, "die") == 0) {
         put(con->fd, "fake: dying\r\n");
         kill(getpid(), SIGKILL);
@@ -841,6 +878,8 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         return r;
     if (accel == NULL)
         return 125;
+    if (fake_arg(argc, argv, "-smp", "") != NULL)
+        fake_cpus = (unsigned)atoi(fake_arg(argc, argv, "-smp", ""));
     if (disk != NULL) {
         snprintf(path, sizeof(path), "%s", disk);
         if (strchr(path, ',') != NULL)
@@ -1737,6 +1776,45 @@ static int scenario_services(struct etude_case *c, const char *row)
     return 1;
 }
 
+/**
+ * Run the fault row on two processors: the first boot panics after an NMI,
+ * which etude_fault finds on the console and not before it, and powers off
+ * after; the second halts without a record, which etude_fault finds in the
+ * registers once both processors have halted and not before. Each boot's
+ * end is recorded once, and no other end, a second fault or a later
+ * shutdown, replaces it.
+ */
+static int scenario_fault(struct etude_case *c)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    uint64_t at;
+
+    if (etude_step(c, "panic") != ETUDE_OK || etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+        return 1;
+    at = wait_for(c, m, "fault-panic", "> ", wait_for(c, m, "fault-panic", "Type 'help'", 0));
+    expect(c, "early-panic", etude_fault(m, ETUDE_END_PANIC), ETUDE_FAILED);
+    expect(c, "early-halt", etude_fault(m, ETUDE_END_HALTED), ETUDE_FAILED);
+    etude_type(m, "nmi\n");
+    wait_for(c, m, "fault-panic", "panic: stopped", at);
+    expect(c, "fault-panic", etude_fault(m, ETUDE_END_PANIC), ETUDE_OK);
+    expect(c, "fault-once", etude_fault(m, ETUDE_END_HALTED), ETUDE_REFUSED);
+    etude_type(m, "poweroff\n");
+    expect(c, "fault-ended", etude_wait_end(m, &end), ETUDE_OK);
+    if (etude_step(c, "halt") != ETUDE_OK || etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+        return 1;
+    at = wait_for(c, m, "fault-halt", "> ", wait_for(c, m, "fault-halt", "Type 'help'", 0));
+    expect(c, "not-reset", etude_fault(m, ETUDE_END_RESET), ETUDE_REFUSED);
+    etude_type(m, "stop one\n");
+    at = wait_for(c, m, "fault-halt", "fake: halted", at);
+    expect(c, "half-halted", etude_fault(m, ETUDE_END_HALTED), ETUDE_FAILED);
+    etude_type(m, "stop\n");
+    wait_for(c, m, "fault-halt", "fake: halted", at);
+    expect(c, "halt-no-panic", etude_fault(m, ETUDE_END_PANIC), ETUDE_FAILED);
+    expect(c, "fault-halt", etude_fault(m, ETUDE_END_HALTED), ETUDE_OK);
+    return 0;
+}
+
 /** Say whether `row` is one of the rows that scenario_reboot runs. */
 static int reboot_row(const char *row)
 {
@@ -1761,6 +1839,8 @@ int etude_scenario(struct etude_case *c)
         return scenario_overlay(c);
     if (strcmp(row, "bound") == 0)
         return scenario_bound(c);
+    if (strcmp(row, "fault") == 0)
+        return scenario_fault(c);
     if (strcmp(row, "stop") == 0)
         return scenario_stop(c);
     if (strcmp(row, "misuse") == 0)
@@ -2041,10 +2121,11 @@ static int write_manifest(const char *path, const struct row *r)
         fix_format(
             machine, sizeof(machine),
             "{\"machine_id\": \"fixture\", \"qemu\": {\"kernel\": \"kernel\", \"initrd\": %s, "
-            "\"disks\": %s, \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728, "
+            "\"disks\": %s, \"cpu\": \"max\", \"processors\": %d, \"memory_bytes\": 134217728, "
             "%s\"firmware\": \"direct\", \"devices\": %s, \"boot_options\": %s%s}, \"console\": "
             "\"serial\", \"qmp\": %s, \"helper\": %s}",
             r->helper || media(r) ? "\"initrd\"" : "null", row_disks(r),
+            strcmp(r->name, "fault") == 0 ? 2 : 1,
             strcmp(r->name, "memory") == 0       ? "\"memory_profile\": \"bigmem-boundary-v1\", "
             : strncmp(r->name, "audio-", 6) == 0 ? "\"audio\": \"hda\", "
                                                  : "",
@@ -2473,12 +2554,13 @@ static void judge_left(const struct row *r, const char *scratch)
 }
 
 /** Check outcome `o` of row `r`: each assertion passed, the end record and
- * the exit status are as the row says, and the scratch is kept or not, with
+ * the exit status are as the row says, the machine records of the reboot and
+ * fault rows give each boot's end once, and the scratch is kept or not, with
  * the consoles in either case. */
 static void judge(const struct row *r, const struct outcome *o, const char *scratch)
 {
     char word[64], rec[160], copies[4352];
-    const char *p = r->asserts;
+    const char *p = r->asserts, *first;
     struct stat st;
     size_t n;
 
@@ -2495,6 +2577,17 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
         }
     }
     CHECK(strstr(o->out, " fail ") == NULL, r->name);
+    if (strcmp(r->name, "reboot") == 0)
+        CHECK(has_record(o, "machine fixture.1 shutdown") &&
+                  has_record(o, "machine fixture.2 shutdown"),
+              r->name);
+    if (strcmp(r->name, "fault") == 0) {
+        first = strstr(o->out, "@etude 1 machine fixture.1 ");
+        CHECK(has_record(o, "machine fixture.2 halted"), r->name);
+        CHECK(first != NULL && first == strstr(o->out, "@etude 1 machine fixture.1 panic\n") &&
+                  strstr(first + 1, "@etude 1 machine fixture.1 ") == NULL,
+              r->name);
+    }
     CHECK((strstr(o->out, "@etude 1 end ") != NULL) == r->want_end, r->name);
     CHECK(o->status == r->want_status, r->name);
     CHECK(o->kept == r->want_kept, r->name);
@@ -3095,6 +3188,14 @@ static const struct row stand_in_rows[] = {
      0, NULL, 0},
 };
 
+/* The fault row, whose scenario's refusals keep its scratch. */
+static const struct row fault_row[] = {
+    {"fault", "disk", "panic:fixture halt:fixture",
+     "early-panic early-halt fault-panic fault-once fault-ended not-reset half-halted "
+     "halt-no-panic fault-halt",
+     NULL, 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
+};
+
 /* The stop row, which keeps its copy and gives no end record. */
 static const struct row stop_row[] = {
     {"stop", "disk", "wait:fixture after:fixture", "stopped still-stopped", "disk", 0, STEP_US, 1,
@@ -3137,8 +3238,9 @@ static const struct row forward_rows[] = {
 
 /** Run the audio rows and the capture rows, unless ETUDE_TEST_CAPTURE_ONLY or
  * ETUDE_TEST_AUDIO_ONLY asks for one kind alone, and then the stand-in rows,
- * the stop row, the forward row and the damaged row; or the forward row alone
- * when `forward_only` is set. */
+ * the fault row, the stop row, the forward row and the damaged row; or the
+ * forward row alone when `forward_only` is set, or the reboot row and the
+ * fault row alone when ETUDE_TEST_FAULT_ONLY is. */
 static void test_stand_in(int forward_only)
 {
     struct site s;
@@ -3148,6 +3250,13 @@ static void test_stand_in(int forward_only)
     if (stand_in_site(&s) != 0) {
         printf("etude-scenario-test: fail: the stand-in rows' artifacts cannot be made\n");
         fails++;
+        return;
+    }
+    if (!forward_only && getenv("ETUDE_TEST_FAULT_ONLY") != NULL) {
+        run_row(&stand_in_rows[0], &s, NULL);
+        run_row(fault_row, &s, NULL);
+        CHECK(!machines_left(), "every stand-in QEMU has ended");
+        etude_store_close(s.store);
         return;
     }
     if (!forward_only) {
@@ -3163,6 +3272,7 @@ static void test_stand_in(int forward_only)
         }
         for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
             run_row(&stand_in_rows[i], &s, NULL);
+        run_row(fault_row, &s, NULL);
         run_row(stop_row, &s, WAITING);
         run_row(pair_row, &s, NULL);
         test_isolation(&s);
@@ -3222,6 +3332,7 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
     forward_only = getenv("ETUDE_TEST_FORWARD") != NULL && *getenv("ETUDE_TEST_FORWARD") != '\0';
     test_stand_in(forward_only);
     if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL && getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL &&
+        getenv("ETUDE_TEST_FAULT_ONLY") == NULL &&
         (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
         test_real(forward_only);
     if (fails != 0)
