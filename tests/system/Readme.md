@@ -164,6 +164,7 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `krffscheck.json`: the `krffscheck` cases, against an `fsck.krffs` that calls an image with the dirty flag clean under `--strict`, and one that refuses a free node whose data length is larger than the node.
 * `subset.json`: the `subset` cases, against a kernel that starts the audio probe after `rach2.noaudio` left it out, one that ignores `rach2.nousb`, one that leaves the mouse out on every boot, and a `bootlogprobe` that asks syslog(2) for none of the ring.
 * `diskpolicy.json`: the `diskpolicy` cases, against a read-only policy that allows every command, and a `check_diskpolicy.sh` that takes either banner for the one asked and never looks for the other.
+* `diskdiag.json`: the `diskdiag` case, against a `/proc/disk` that gives one sector fewer than the disk has, a raw read of `/dev/disk0` that starts one sector past the one asked, and an ordinary kernel whose `/dev/disk0` passes a write to the driver.
 * `diskrate.json`: the `diskrate` cases, against an exFAT driver that walks every cluster chain from its start, an AHCI driver that finishes a write without its flush, and a pipe that copies one byte fewer than a large read reports.
 * `agents-accept.json`: the `agentsaccept` suite's resized terminal, with Claude Code alone, against a kernel whose pseudo-terminal master sends no `SIGWINCH` when the window size is set.
 * `ntpd.json`: the `gnu` suite's ntpd row, against a configuration that names no server and an SNTP server that answers with the host's own time.

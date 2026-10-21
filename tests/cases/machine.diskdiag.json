@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.diskdiag",
+  "summary": "The read-only kernel's disk diagnostic, reached over SSH with nothing typed at the console, reports a drive and hands out its sectors without writing a byte, and reports a missing drive; the program is tests/cases/machine/diskdiag_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.diskdiag.read",
+      "behavior": "a boot of the read-write kernel mounts the disk and changes it; the read-only kernel's diagnostic, over SSH once init has started the server, reports the drive, its size and its table in /proc/disk, gives each sector the disk has, issues no command its allowlist refuses and leaves its copy of the disk byte for byte; and with no drive it says that none answered",
+      "units": ["diskdiag", "rach2/sys/block/diskcmd.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"sectors": "0, 2048 and the last"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "diskdiag_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["rw-disk", "ro-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the two copies of the disk and the copy of the demo key, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "control", "stage": "execute", "machine": "control",
+         "does": "boot the read-write kernel on a copy of the disk to its debug shell, end it with QMP's quit, and compare the copy with the disk"},
+        {"step_id": "diagnostic", "stage": "execute", "machine": "diagnostic",
+         "does": "boot the read-only kernel on another copy of the disk on AHCI, wait for init to start the SSH server, read /proc/disk and three sectors over SSH, try a write, end it with QMP's quit, and compare the copy with the disk"},
+        {"step_id": "absent", "stage": "execute", "machine": "absent",
+         "does": "boot the read-only kernel with no drive to its debug shell and end it with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "control",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "rw-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk", "rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "diagnostic",
+         "qemu": {"kernel": "metal-kernel", "initrd": "metal-image", "disks": [{"name": "ro-disk", "bus": "ahci"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "rtl8139", "net": "192.168.90.0/24", "host": "192.168.90.2", "dhcpstart": "192.168.90.15",
+                               "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": ["rach2.ip=192.168.90.15/24", "rach2.gateway=192.168.90.2", "rach2.disk=ahci", "rach2.diskdiag"]},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "absent",
+         "qemu": {"kernel": "metal-kernel", "initrd": "metal-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.diskdiag", "rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "control-mounted", "checks": "the read-write kernel says krffs: mounted: before its debug shell greets", "source": "scenario"},
+        {"assertion_id": "control-changed", "checks": "the read-write boot leaves its copy different from the disk, since the mount sets the dirty flag; without it the diagnostic's comparison could not find a write", "source": "scenario"},
+        {"assertion_id": "answers", "checks": "after init says it started the SSH server, the machine runs a command for root by the demo key, tried again only while ssh fails", "source": "scenario"},
+        {"assertion_id": "proc-disk", "checks": "/proc/disk says state present, driver ahci, policy read-only, mounted 0 and mbr-signature ok, each a line of its own", "source": "scenario"},
+        {"assertion_id": "sectors", "checks": "/proc/disk gives the disk's size in sectors, the host's size of the disk over 512, so that a wrong IDENTIFY cannot agree with a number written into the test", "source": "scenario"},
+        {"assertion_id": "model", "checks": "/proc/disk has a model line", "source": "scenario"},
+        {"assertion_id": "sector-first", "checks": "sector 0 read through /dev/disk0 has the SHA-256 of the disk's sector 0 on the host", "source": "scenario"},
+        {"assertion_id": "sector-partition", "checks": "sector 2048, the partition's first, read through /dev/disk0 has the SHA-256 of the disk's sector 2048 on the host", "source": "scenario"},
+        {"assertion_id": "sector-last", "checks": "the disk's last sector read through /dev/disk0 has the SHA-256 of that sector on the host", "source": "scenario"},
+        {"assertion_id": "no-refusal", "checks": "a write to /dev/disk0 is refused above the driver: the kernel never says refused: command", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "the diagnostic boot leaves its copy byte for byte the disk", "source": "scenario"},
+        {"assertion_id": "absent", "checks": "with no drive the kernel says diskdiag: absent: no disk answered", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1200000000},
+        "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 240000000, "ceiling_us": 600000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 805306368, "disk_bytes": 134217728,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true},
+        {"name": "metal-image", "node": "images/rach2-metal.krffs", "per_architecture": true},
+        {"name": "rw-disk", "node": "images/etude-disk.disk", "per_architecture": true},
+        {"name": "ro-disk", "node": "images/etude-disk.disk", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "diskdiag_scenario", "node": "tests/cases/machine/diskdiag_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the proof that the diagnostic writes nothing is the disk's bytes after the boot, read off a copy the host compares, and the absent drive needs a machine with none"}
+    }
+  ]
+}

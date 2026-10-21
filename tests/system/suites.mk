@@ -78,7 +78,6 @@ ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
 # without tests/run has no offset and forwards the table's numbers.
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
 port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
-DISKDIAG_PORT   := $(call port,2225)
 GNU_PORT        := $(call port,2296)
 FAKEAPI_PORT    := $(call port,2300)
 AGENTS_PORT     := $(call port,2301)
@@ -1183,14 +1182,12 @@ endif
 # boots the kernel and the test image with the ones before it left out, so
 # that each must still restart the machine.
 # `tests/run diskdiag`: a disk read without being mounted and without being
-# written. Three boots of one freshly built image: the ordinary kernel mounting
-# it, which must change it (otherwise the comparisons below prove nothing); the
-# read-only kernel reading it over SSH with nothing typed at the console, where
-# every sector hashed on the machine must equal the same offset hashed here; and
-# the same kernel with no drive at all.
-run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUNUTIL)
-	sh tests/system/suites/diskdiag.sh $(BOOT_KERNEL) $(METAL_KERNEL) $(METAL_IMAGE) \
-	    $(DISKDIAG_PORT)
+# written. It is the case of tests/cases/machine.diskdiag.json, which etude
+# runs, and has no target here: the ordinary kernel mounting a copy of the
+# disk, which must change it; the read-only kernel reading another copy over
+# SSH with nothing typed at the console, where every sector hashed on the
+# machine must equal the same sector hashed on the host; and the same kernel
+# with no drive at all.
 # `tests/run subset`: each optional device probe left out, and proved left
 # out. They are the cases of tests/cases/guest.subset.json, which etude runs,
 # and have no target here.
