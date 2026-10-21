@@ -724,9 +724,11 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 # The network scenarios share netcase.c, and so do the scenarios of the GRUB
-# disks, which log in and type at the console as they do.
+# disks and the development tools' scenario, which log in and type at the
+# console as they do.
 NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
                 build/tests/cases/machine/metal_scenario build/tests/cases/machine/netconsole_scenario \
+                build/tests/cases/machine/devtools_scenario \
                 build/tests/cases/machine/dhcp_scenario \
                 build/tests/cases/machine/menu_scenario \
                 build/tests/cases/machine/drill_scenario \

@@ -196,6 +196,8 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `audio.json`: the `audio` cases, against an HDA stream that raises no interrupt at the end of a buffer, so that the notes come from the timer's service alone, and an SB16 that plays stereo as mono.
 * `mount.json`: the `mount` cases, against a request whose deadline counts from its caller's wait for a slot, a late answer to a quarantined request that never frees its slot, and a raw writer that opens a mounted range.
 * `selfbuild.json`: the `selfbuild` and `selfbuild-ext2` cases, against a kernel whose greeting has the time of its compile, a `getcpu` that reports processor 4096 only when TinyCC compiled the kernel, and an `echo` that prints a stray byte only when TinyCC compiled it.
+* `tcc.json`: the `tcc` case, against a kernel without unlink(2), which only the trace of missing system calls shows, and a tcc whose `-run` refusal gives no reason.
+* `make.json`: the `make` case, against a utimensat that leaves a file's modification time as it was, and boots whose real time starts at the same second every time.
 * `sigcontext.json`: `musl/sigmusl`'s signal frame rows, on i686 alone, with FXSR and with `rach2.nofxsr`, against a `sigframe.c` that does not fill the ucontext.
 * `stackoverrun-i686.json` and `stackoverrun-x86-64.json`: the `memory` suite's two stack-overrun cases, against a mapped stack guard, a mapped boot stack guard, and a double fault without a stack of its own (a task gate on i686, the interrupt stack on x86-64).
 * `usb-latency-guest.json`: the `usb` suite's two wake-to-dispatch rows, against a kernel without preemption after a device interrupt and one without the service point in a large random read.

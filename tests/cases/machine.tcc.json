@@ -1,0 +1,302 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.tcc",
+  "summary": "The installed system compiling a C program on itself with tcc, refusing the output kinds it cannot run with their reasons, building this project's own programs, and asking the kernel for no system call it lacks",
+  "cases": [
+    {
+      "case_id": "machine.tcc.compile",
+      "behavior": "The installed system, as the test account at the console, compiles a C program with tcc and runs it; refuses -run, -shared, a link without -static and a raw-image link, each with its reason and with no output left; compiles an object; builds this project's cat, which agrees with BusyBox's over a 21 KB binary file and over two files; links ping from two sources; and the kernel's trace of missing system calls names none that tcc asked for",
+      "units": [
+        "tcc"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "memory_mib": 128,
+          "account": "test",
+          "input_kib": 21
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "devtools_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "tcc-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy and its evidence, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot a copy of the os-real disk with the trace of missing system calls on, and log in at the console as the test account"
+        },
+        {
+          "step_id": "compile",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "write /tmp/hello.c with printf, compile it with tcc -static and run it"
+        },
+        {
+          "step_id": "refuse",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "ask tcc for -run, -shared, a link without -static and a raw-image link, printing each status and what tcc said, and look for their outputs"
+        },
+        {
+          "step_id": "object",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "compile /tmp/hello.c to an object with tcc -c"
+        },
+        {
+          "step_id": "tool",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "compile /src/utils/cat.c, and compare it with BusyBox's cat over 21 KB of /bin/tcc and over two files"
+        },
+        {
+          "step_id": "units",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "link ping from /src/utils/ping.c and /src/utils/resolv.c in one command"
+        },
+        {
+          "step_id": "end",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "sync, end the machine with QMP's quit, and read the trace on the whole console"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "tcc-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk",
+              "rach2.trace=enosys"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "login",
+          "checks": "the test account logs in at the console with its password and reaches the shell's prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "built",
+          "checks": "tcc -static builds /tmp/hello from /tmp/hello.c",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ran",
+          "checks": "the program the machine compiled runs and prints COMPILEDHERE",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "run-refused",
+          "checks": "tcc -run exits with status 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "run-reason",
+          "checks": "tcc -run says that code it runs from memory cannot reach the C library",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "shared-refused",
+          "checks": "tcc -shared exits with status 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "shared-reason",
+          "checks": "tcc -shared says that -shared is not available",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dynamic-refused",
+          "checks": "a link without -static exits with status 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dynamic-reason",
+          "checks": "a link without -static says that a program must be linked with -static",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "raw-refused",
+          "checks": "a link with -Wl,-oformat=binary exits with status 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "raw-reason",
+          "checks": "a link with -Wl,-oformat=binary says that a program must be an ELF",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-leftovers",
+          "checks": "none of the four refused compiles left its output file, which the guest checks",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "object",
+          "checks": "tcc -c makes an object, which is not refused",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tool-built",
+          "checks": "tcc -static builds this project's cat from /src/utils/cat.c",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "input-made",
+          "checks": "the 21 KB input of the comparison is made from /bin/tcc",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "same-bytes",
+          "checks": "the cat the machine built writes the same bytes as BusyBox's cat over the 21 KB input, which cmp in the guest judges",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "both-files",
+          "checks": "the cat the machine built writes the same bytes as BusyBox's cat over two files, which cmp in the guest judges",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "two-units",
+          "checks": "tcc -static links ping from two sources in one command",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "finished",
+          "checks": "sync returns and the shell comes back after the last line",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-enosys",
+          "checks": "no line of the kernel's trace on the whole console says that a call tcc asked for is not implemented",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 7
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "tcc-disk",
+          "node": "images/tcc-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "test-password",
+          "node": "tests/cases/credentials/rach2_test_password",
+          "per_architecture": false
+        },
+        {
+          "name": "devtools_scenario",
+          "node": "tests/cases/machine/devtools_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case boots the installed system with rach2.trace=enosys on the kernel's command line, whose records of missing system calls judge the compiler"
+      }
+    }
+  ]
+}

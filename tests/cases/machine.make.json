@@ -1,0 +1,306 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.make",
+  "summary": "The installed system building a program on itself with make, rebuilding only what changed, and keeping the times make orders by across a reboot",
+  "cases": [
+    {
+      "case_id": "machine.make.rebuild",
+      "behavior": "The installed system, as the test account at the console, builds a program of two sources and a shared header with make and tcc, finds it up to date, rebuilds exactly what a changed source or header needs, fails without the command line's compiler and names the makefile's, cleans with a file named clean present and builds this project's cat with make; after a reboot of the same disk the object's time is the one recorded, nothing rebuilds, and a source changed after the reboot rebuilds into the new program",
+      "units": [
+        "make"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "memory_mib": 128,
+          "account": "test",
+          "boots": 2
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "devtools_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "make-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy and its evidence, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot a copy of the os-real disk and log in at the console as the test account"
+        },
+        {
+          "step_id": "build",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "write the project in /tmp/demo, define age, build it with make CC=tcc and run the program"
+        },
+        {
+          "step_id": "rebuild",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "make with nothing changed, after a changed source, straight after the rebuild, after a touched header, without the override, and clean with a file named clean present"
+        },
+        {
+          "step_id": "util",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "build /src/utils/cat.c with make and compare it with BusyBox's cat"
+        },
+        {
+          "step_id": "stamp",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "build again, age the files, record the object's time, sync, and end the machine with QMP's quit"
+        },
+        {
+          "step_id": "reboot",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the same copy of the disk again and log in at the console as the test account"
+        },
+        {
+          "step_id": "after",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "read the object's time, make with nothing changed, change a source, make, run the program, sync and end the machine"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "make-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "login",
+          "checks": "the test account logs in at the console with its password on the first boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first-build",
+          "checks": "make CC=tcc builds the program from scratch with status 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first-ran",
+          "checks": "the program prints ANSWER 42",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "idle-1",
+          "checks": "a make with nothing changed exits 0, runs no tcc and reports the program up to date",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "one-source",
+          "checks": "after lib.c changes, make exits 0, compiles lib.c once and main.c never, and links the program once",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "one-ran",
+          "checks": "the relinked program prints ANSWER 63",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "idle-2",
+          "checks": "a make straight after that rebuild exits 0, runs no tcc and reports the program up to date",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "header",
+          "checks": "after demo.h is touched, make exits 0 and compiles both lib.c and main.c",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-override",
+          "checks": "a make without CC on the command line, whose makefile names a compiler that does not exist, exits with a status other than 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "named-compiler",
+          "checks": "that make names /no/such/compiler in what it printed",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "phony-clean",
+          "checks": "make clean with a file named clean present exits 0 and leaves neither prog nor main.o",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "util-built",
+          "checks": "make CC=tcc builds this project's cat from /src/utils/cat.c with status 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "util-same",
+          "checks": "the cat make built writes the same bytes as BusyBox's cat, which cmp in the guest judges",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stamped",
+          "checks": "the object's recorded modification time is a number other than 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first-done",
+          "checks": "sync returns and the shell comes back at the end of the first boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "relogin",
+          "checks": "the test account logs in at the console with its password after the reboot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kept",
+          "checks": "after the reboot, the object's modification time is the one recorded before it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reboot-idle",
+          "checks": "a make after the reboot with nothing touched exits 0 and runs no tcc",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reboot-change",
+          "checks": "after lib.c changes after the reboot, make exits 0 and compiles lib.c once",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reboot-ran",
+          "checks": "the program rebuilt after the reboot prints ANSWER 84",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "second-done",
+          "checks": "sync returns and the shell comes back at the end of the second boot",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 7
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 3600000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "make-disk",
+          "node": "images/make-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "test-password",
+          "node": "tests/cases/credentials/rach2_test_password",
+          "per_architecture": false
+        },
+        {
+          "name": "devtools_scenario",
+          "node": "tests/cases/machine/devtools_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case reboots the installed system's disk and judges the times the file system kept and the clock across the reboot"
+      }
+    }
+  ]
+}

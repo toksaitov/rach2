@@ -1163,6 +1163,13 @@ run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+# The disks of the tcc and make cases (tests/cases/machine.tcc.json and
+# tests/cases/machine.make.json), each a disk of os-real, which its case
+# boots as a private copy.
+$(IMAGES_DIR)/tcc-test.disk $(IMAGES_DIR)/make-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest \
+                             $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) \
+                             | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
 # `tests/run clock`: the guest's monotonic and real clocks keeping the host's
 # time within 250 ms, including reference uncertainty, across thirty stops of
 # the machine's QEMU, once under the site's accelerator (see
