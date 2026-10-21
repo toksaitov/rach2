@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bigmem",
+  "summary": "An x86-64 machine's memory past 4 GiB: all of 8 GiB counted and managed, 5 GiB of a process's pages written and read back, and 72 GiB without 1 GiB pages counted to the direct map's 64 GiB",
+  "cases": [
+    {
+      "case_id": "machine.bigmem.size-8192",
+      "behavior": "Booted in 8192 MiB, more than QEMU's PC puts below 4 GiB, the kernel counts all of it usable and none unreachable, and /proc/meminfo's MemTotal is the memory it manages",
+      "units": ["memory", "memprobe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"memory_mib": 8192, "holes_kib": 513, "unreachable_kib": 0}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the test image in 8192 MiB to the debug shell, read the memory report and run memprobe total"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "report", "checks": "the kernel prints memory: usable, unreachable, reserved and managed, four numbers of KiB", "source": "scenario"},
+        {"assertion_id": "map", "checks": "usable and unreachable together are the KiB of the ranges the kernel's memory: map lines call available", "source": "scenario"},
+        {"assertion_id": "size", "checks": "usable and unreachable with QEMU's fixed holes, 513 KiB, are the 8192 MiB the machine was given", "source": "scenario"},
+        {"assertion_id": "managed", "checks": "managed, counted from the frame table, is usable less reserved, short by less than the 32 KiB of the ranges' partial frames", "source": "scenario"},
+        {"assertion_id": "reachable", "checks": "none of the 8192 MiB is unreachable, so that usable and the holes are the whole machine", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "memprobe total returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "memtotal", "checks": "memprobe total prints MEMPROBE MemTotal, never MEMPROBE FAIL, and the MemTotal is the managed count", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 8724152320, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "memory_scenario", "node": "tests/cases/machine/memory_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case gives the machine an exact size of memory, and so a memory map of its own"}
+    },
+    {
+      "case_id": "machine.bigmem.memprobe-8192",
+      "behavior": "In 8192 MiB a process maps 5120 MiB, more than lies below 4 GiB, writes each page a pattern of its own index and reads every one back, forks over the mapping, execs an image that finds its pages zeroed, and frees it",
+      "units": ["memory", "memprobe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"memory_mib": 8192, "mapped_mib": 5120}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image in 8192 MiB, run memprobe 5120 from the debug shell and wait for the shell"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "exit", "checks": "memprobe 5120 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "said-ok", "checks": "memprobe says MEMPROBE OK and never MEMPROBE FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 2400000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3000000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 8724152320, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "memory_scenario", "node": "tests/cases/machine/memory_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the probe needs memory past 4 GiB in a machine of exactly 8192 MiB"}
+    },
+    {
+      "case_id": "machine.bigmem.boundary-73728",
+      "behavior": "Booted in 73728 MiB on a processor without 1 GiB pages, whose direct map ends at 64 GiB, the kernel counts the 63 GiB below that boundary less the holes usable and the 9 GiB past it unreachable, and reaches the debug shell through 2 MiB pages",
+      "units": ["memory", "memprobe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"memory_mib": 73728, "holes_kib": 513, "usable_plus_holes_kib": 66060288, "unreachable_kib": 9437184, "resident_mib": 2048, "reserved_mib": 4096}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"pdpe1gb": "absent"}},
+      "execution": {"program": "memory_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "accounting", "stage": "execute", "machine": "boundary", "does": "boot the test image in 73728 MiB without 1 GiB pages to the debug shell, read the memory report, run exec /memprobe total once and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "boundary", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max-nopdpe1gb", "processors": 1, "memory_bytes": 77309411328, "memory_profile": "bigmem-boundary-v1", "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the boot reaches the debug shell through 2 MiB page tables", "source": "scenario"},
+        {"assertion_id": "report", "checks": "the kernel prints memory: usable, unreachable, reserved and managed, four numbers of KiB", "source": "scenario"},
+        {"assertion_id": "usable", "checks": "usable and QEMU's fixed holes, 513 KiB, are the 63 GiB below 64 GiB", "source": "scenario"},
+        {"assertion_id": "unreachable", "checks": "exactly the 9 GiB past the 64 GiB of the direct map, 9437184 KiB, is unreachable", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "memprobe total returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "memtotal", "checks": "memprobe total prints MEMPROBE MemTotal and never MEMPROBE FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "the accounting step has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 4294967296, "disk_bytes": 16777216, "guest_memory": {"configured_bytes": 77309411328, "resident_bytes": 2147483648, "backing": "lazy"}, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "memory_scenario", "node": "tests/cases/machine/memory_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the exact memory map of 72 GiB and the processor without 1 GiB pages are QEMU's"}
+    }
+  ]
+}

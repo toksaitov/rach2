@@ -246,9 +246,10 @@ prepare-tools:
 # `tests/run bigmem`: all of an x86-64 machine's eight gigabytes is counted,
 # and a program's pages fill memory past what lies below 4 GiB and read back
 # as written; without 1 GiB pages, 72 GiB is counted to the direct map's
-# 64 GiB (see tests/system/suites/bigmem.sh).
-run-bigmem: rach2 tests krffs test-image $(HARNESS)
-	sh tests/system/suites/bigmem.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS)
+# 64 GiB. They are the machine cases of tests/cases/machine.bigmem.json,
+# which etude runs, and have no target here. The 72 GiB case boots only where
+# the site's policy has the line `boundary_lazy bigmem-boundary-v1`, and
+# elsewhere ends incomplete before its machine starts.
 # `tests/run memory`: the kernel's account of physical memory at five sizes,
 # memprobe and frame allocations failed at the two ends of the range, the
 # string routines swept, a machine of 8 MiB refused and kernel stacks run

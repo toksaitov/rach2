@@ -1,13 +1,15 @@
 /*
- * memory_scenario.c: the scenario of machine.memory, the kernel's account of
- * physical memory. Cases `size-MIB` boot the test image with MIB MiB and
- * check the four numbers of the memory report against the map the kernel
- * printed and the size QEMU gave; `memprobe-MIB` and `framefail-MIB` run
- * memprobe at the two ends of the range, the second with every frame
- * allocation of a fork and an exec failed in turn; `strings` sweeps the
- * kernel's copy, fill and move routines; `refused` boots the recovery kernel
- * in 8 MiB, which it must refuse by name; and `stackoverrun-fork` and
- * `stackoverrun-boot` run a kernel stack out.
+ * memory_scenario.c: the scenario of machine.memory and machine.bigmem, the
+ * kernel's account of physical memory. Cases `size-MIB` boot the test image
+ * with MIB MiB and check the four numbers of the memory report against the
+ * map the kernel printed and the size QEMU gave, and bigmem's `size-8192`
+ * compares memprobe's MemTotal with them too; `memprobe-MIB` and
+ * `framefail-MIB` run memprobe at the two ends of the range and past 4 GiB,
+ * `framefail` with every frame allocation of a fork and an exec failed in
+ * turn; `boundary-73728` boots 72 GiB without 1 GiB pages, past the direct
+ * map's 64 GiB; `strings` sweeps the kernel's copy, fill and move routines;
+ * `refused` boots the recovery kernel in 8 MiB, which it must refuse by name;
+ * and `stackoverrun-fork` and `stackoverrun-boot` run a kernel stack out.
  */
 #include <inttypes.h>
 #include <stdio.h>
@@ -64,47 +66,135 @@ static uint64_t available_kib(const char *w)
     return sum;
 }
 
+/* The four numbers of the kernel's memory report, in KiB. */
+struct report {
+    uint64_t usable, unreachable, reserved, managed;
+};
+
+/**
+ * Read the memory report, `memory: usable N KiB, unreachable N KiB, reserved
+ * N KiB, managed N KiB`, from console text `w` into `r`: assertion `report`.
+ * @return 1 when it has the four numbers.
+ */
+static int report(struct lc *l, const char *w, struct report *r)
+{
+    const char *line = strstr(w, "memory: usable ");
+    int four = line != NULL && kib(line, "usable", &r->usable) &&
+               kib(line, "unreachable", &r->unreachable) && kib(line, "reserved", &r->reserved) &&
+               kib(line, "managed", &r->managed);
+
+    lc_assert(l, "report", four, "the kernel gave no report of four numbers");
+    return four;
+}
+
+/**
+ * Run `exec /memprobe total` at the debug shell of machine `machine`, `m`,
+ * read to `*at`: assertion `exit`, and `memtotal`, which holds when memprobe
+ * prints `MEMPROBE MemTotal N kB` and never `MEMPROBE FAIL`, and N is
+ * `*managed` when that is not NULL.
+ */
+static void memtotal(struct lc *l, struct etude_case_machine *m, const char *machine, uint64_t *at,
+                     const uint64_t *managed)
+{
+    const char *p;
+    uint64_t total = 0;
+    char why[160] = "", *w;
+    int said;
+
+    if ((w = lc_run(l, m, machine, "exec /memprobe total\r", at, "exit")) == NULL)
+        return;
+    p = strstr(w, "MEMPROBE MemTotal ");
+    said = p != NULL && sscanf(p + strlen("MEMPROBE MemTotal "), "%" SCNu64 " kB", &total) == 1 &&
+           strstr(w, "MEMPROBE FAIL") == NULL;
+    if (!said)
+        snprintf(why, sizeof(why), "memprobe printed no MemTotal, or said MEMPROBE FAIL");
+    else if (managed != NULL)
+        snprintf(why, sizeof(why), "MemTotal %" PRIu64 " kB is not the %" PRIu64 " KiB managed",
+                 total, *managed);
+    lc_assert(l, "memtotal", said && (managed == NULL || total == *managed), why);
+    free(w);
+}
+
 /**
  * Run case `size-MIB`: boot with `mib` MiB and check the report of the
  * console `w` read to the shell: assertions `report`, `map`, `size` and
- * `managed`.
+ * `managed`. With `whole` set, as bigmem's case is, also `reachable`, that
+ * none of the memory is unreachable, and `exit` and `memtotal`, that
+ * memprobe's MemTotal is the managed count.
  */
-static void size(struct lc *l, uint64_t mib)
+static void size(struct lc *l, uint64_t mib, int whole)
 {
     struct etude_case_machine *m;
-    uint64_t at, usable, unreachable, reserved, managed, map;
-    const char *line;
+    struct report r;
+    uint64_t at, map;
     char why[200], *w;
     int four;
 
     if ((m = lc_shell(l, "boot", "fixture", &at)) == NULL ||
         (w = lc_console(l, "fixture", 0, at)) == NULL)
         return;
-    line = strstr(w, "memory: usable ");
-    four = line != NULL && kib(line, "usable", &usable) && kib(line, "unreachable", &unreachable) &&
-           kib(line, "reserved", &reserved) && kib(line, "managed", &managed);
-    lc_assert(l, "report", four, "the kernel gave no report of four numbers");
+    four = report(l, w, &r);
     if (four) {
         map = available_kib(w);
         snprintf(why, sizeof(why),
                  "usable %" PRIu64 " and unreachable %" PRIu64 " KiB are not the map's %" PRIu64
                  " KiB",
-                 usable, unreachable, map);
-        lc_assert(l, "map", usable + unreachable == map, why);
+                 r.usable, r.unreachable, map);
+        lc_assert(l, "map", r.usable + r.unreachable == map, why);
         snprintf(why, sizeof(why),
                  "usable %" PRIu64 ", unreachable %" PRIu64 " and the holes are not %" PRIu64
                  " KiB",
-                 usable, unreachable, mib * 1024);
-        lc_assert(l, "size", usable + unreachable + HOLES_KIB == mib * 1024, why);
+                 r.usable, r.unreachable, mib * 1024);
+        lc_assert(l, "size", r.usable + r.unreachable + HOLES_KIB == mib * 1024, why);
         snprintf(why, sizeof(why),
                  "managed %" PRIu64 " KiB is not usable %" PRIu64 " less reserved %" PRIu64,
-                 managed, usable, reserved);
+                 r.managed, r.usable, r.reserved);
         lc_assert(l, "managed",
-                  usable >= reserved && managed <= usable - reserved &&
-                      managed + PARTIAL_KIB > usable - reserved,
+                  r.usable >= r.reserved && r.managed <= r.usable - r.reserved &&
+                      r.managed + PARTIAL_KIB > r.usable - r.reserved,
                   why);
+        if (whole) {
+            snprintf(why, sizeof(why), "%" PRIu64 " KiB of %" PRIu64 " MiB is unreachable",
+                     r.unreachable, mib);
+            lc_assert(l, "reachable", r.unreachable == 0, why);
+        }
     }
     free(w);
+    if (whole && four)
+        memtotal(l, m, "fixture", &at, &r.managed);
+    lc_quit(l, m, NULL);
+}
+
+/**
+ * Run case `boundary-73728`: boot 72 GiB on a processor without 1 GiB
+ * pages, whose direct map ends at 64 GiB. QEMU puts 3 GiB below 4 GiB and
+ * 69 GiB above, so the report must count the 63 GiB below 64 GiB, less the
+ * holes, usable and the 9 GiB past it unreachable, and the boot must reach
+ * the shell through 2 MiB pages. Assertions `shell`, `report`, `usable`,
+ * `unreachable`, `exit` and `memtotal`. The machine's console takes `exec
+ * /memprobe total` once, and QMP's quit ends it.
+ */
+static void boundary(struct lc *l)
+{
+    static const uint64_t gib_kib = UINT64_C(1) << 20;
+    struct etude_case_machine *m;
+    struct report r;
+    uint64_t at = 0;
+    char why[160], *w;
+
+    if (!lc_step(l, "accounting") || (m = lc_boot(l, "boundary")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", &at, "shell") || !lc_wait(l, m, "\n> ", &at, NULL) ||
+        (w = lc_console(l, "boundary", 0, at)) == NULL)
+        return;
+    if (report(l, w, &r)) {
+        snprintf(why, sizeof(why), "usable %" PRIu64 " KiB and the holes are not 63 GiB", r.usable);
+        lc_assert(l, "usable", r.usable + HOLES_KIB == 63 * gib_kib, why);
+        snprintf(why, sizeof(why), "%" PRIu64 " KiB is unreachable, not the 9 GiB past 64 GiB",
+                 r.unreachable);
+        lc_assert(l, "unreachable", r.unreachable == 9 * gib_kib, why);
+    }
+    free(w);
+    memtotal(l, m, "boundary", &at, NULL);
     lc_quit(l, m, NULL);
 }
 
@@ -238,17 +328,32 @@ static void stackoverrun(struct lc *l)
 int etude_scenario(struct etude_case *c)
 {
     static const char *const size_ids[] = {"report", "map", "size", "managed", NULL};
+    static const char *const whole_ids[] = {"report",    "map",  "size",     "managed",
+                                            "reachable", "exit", "memtotal", NULL};
+    static const char *const boundary_ids[] = {"shell", "report",   "usable", "unreachable",
+                                               "exit",  "memtotal", NULL};
     static const char *const memprobe_ids[] = {"exit", "said-ok", NULL};
     static const char *const framefail_ids[] = {"exit", "said-ok", "failed-on-purpose", NULL};
     static const char *const strings_ids[] = {"swept", "never-wrong", NULL};
     static const char *const refused_ids[] = {"refused", "no-fault", NULL};
     static const char *const overrun_ids[] = {"descended", "panicked", "named", "no-shell", NULL};
-    const char *name = case_name(c);
+    const char *id = etude_case_id(c), *name = case_name(c);
     struct lc l;
 
-    if (strncmp(name, "size-", 5) == 0) {
+    if (strcmp(id, "machine.bigmem.size-8192") == 0) {
+        lc_begin(&l, c, whole_ids);
+        size(&l, 8192, 1);
+    } else if (strcmp(id, "machine.bigmem.memprobe-8192") == 0) {
+        lc_begin(&l, c, memprobe_ids);
+        memprobe(&l, "5120", 0);
+    } else if (strcmp(id, "machine.bigmem.boundary-73728") == 0) {
+        lc_begin(&l, c, boundary_ids);
+        boundary(&l);
+    } else if (strncmp(id, "machine.memory.", 15) != 0) {
+        return 1;
+    } else if (strncmp(name, "size-", 5) == 0) {
         lc_begin(&l, c, size_ids);
-        size(&l, strtoull(name + 5, NULL, 10));
+        size(&l, strtoull(name + 5, NULL, 10), 0);
     } else if (strcmp(name, "memprobe-64") == 0 || strcmp(name, "memprobe-4096") == 0) {
         lc_begin(&l, c, memprobe_ids);
         memprobe(&l, strcmp(name, "memprobe-64") == 0 ? "24" : "1024", 0);

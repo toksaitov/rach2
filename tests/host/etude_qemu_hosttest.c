@@ -44,8 +44,8 @@
  * enabled it, and refuse a boundary start one byte short of its reservation
  * before anything runs. With `--boundary` and ARCH=x86_64 the program runs
  * only the 72 GiB boundary boot in the real QEMU, which must report the
- * counts bigmem.sh requires and keep QEMU's resident peak within the
- * reservation.
+ * counts the case machine.bigmem.boundary-73728 requires and keep QEMU's
+ * resident peak within the reservation.
  *
  * The network rows check the networks and station addresses of two cards and
  * of cards on hubs of their own beside a card on a user network, each hub
@@ -784,7 +784,8 @@ static void test_refused_starts(void)
     CHECK(!left_in(fix_dir(), "etude-qemu."), "a refused start removed its directory");
 }
 
-/** Check the same boundary counts as bigmem.sh and record QEMU's peak. */
+/** Check the boundary counts of machine.bigmem.boundary-73728 and record
+ * QEMU's peak. */
 static void boundary_result(const struct row *r)
 {
     const struct etude_machine_result *res = etude_machine_result(r->m);
