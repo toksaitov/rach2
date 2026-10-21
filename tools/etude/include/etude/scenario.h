@@ -258,8 +258,9 @@ enum etude_status etude_service_stop(struct etude_case_service *s, struct etude_
  * Give the path of evidence `name` in the attempt's scratch directory, as
  * etude_host writes it, whether or not it exists yet.
  *
- * @return the path, owned by the library, or NULL for a name that is not a
- *         file name.
+ * @return the path, in a buffer of the library's that its next call may
+ *         overwrite, so a caller that keeps the path copies it; or NULL for
+ *         a name that is not a file name.
  */
 const char *etude_evidence(struct etude_case *c, const char *name);
 
