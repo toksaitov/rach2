@@ -23,7 +23,11 @@
  * its mappings, since malloc's failure alone does not say why.
  *
  * Prints `VMAMUSL OK` and exits 0 on success, and prints
- * `VMAMUSL FAIL (detail)` and exits 1 otherwise.
+ * `VMAMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check: `mappings` (every page was granted), `readback` (each holds
+ * what was written to it), `unmap` (each is given back) and `small-blocks`
+ * (malloc reaches the floor); a failure leaves the checks after it not run.
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -31,6 +35,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
+
+#include "../probe_report.h"
 
 /* The pages the first half maps: past the 16 entries the array starts with,
  * so the array must grow, and far under `VMA_LIMIT`, so a region the kernel
@@ -42,10 +48,12 @@
 #define SMALL_BLOCK 1024
 #define SMALL_FLOOR (8 * 1024 * 1024)
 
-/** Report one failed check and return 1, the probe's failure status. */
+/** Report one failed check, which fails the step under way and ends the
+ * report, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("VMAMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -55,6 +63,12 @@ int main(void)
     char *maps[WANTED];
     int taken = 0;
     int i;
+
+    report_begin(report_case(environ, "guest.default.vmamusl"));
+    report_plan("mappings");
+    report_plan("readback");
+    report_plan("unmap");
+    report_plan("small-blocks");
 
     for (i = 0; i < WANTED; i++) {
         maps[i] = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -77,6 +91,7 @@ int main(void)
 
         return fail(detail);
     }
+    report_held();
 
     for (i = 0; i < taken; i++) {
         if (maps[i][0] != (char)(i & 0xff) || maps[i][1] != (char)((i >> 8) & 0xff) ||
@@ -84,11 +99,13 @@ int main(void)
             return fail("a mapping does not hold what was written into it");
         }
     }
+    report_held();
     for (i = 0; i < taken; i++) {
         if (munmap(maps[i], 4096) != 0) {
             return fail("a mapping could not be given back");
         }
     }
+    report_held();
 
     {
         void *head = 0;
@@ -121,6 +138,8 @@ int main(void)
             return fail(detail);
         }
     }
+    report_held();
+    report_end();
 
     printf("VMAMUSL OK\n");
 

@@ -5,13 +5,22 @@
  * (probe_args.h), which a native run gives for the copy staged in its
  * workspace; the parent waits and requires an exit status of 0. Prints "All
  * exec syscalls passed!" and exits 0 when it is, and exits 1 otherwise.
- * Freestanding; direct system calls (probe.h).
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each step: `fork`, `wait` (waitpid returns the
+ * child) and `exit-zero` (the program ran and exited 0); a failure leaves the
+ * steps after it not run. The child execs the program with its standard
+ * output on the probe's standard error, since the program writes report
+ * records of its own, which must not enter this report. Freestanding; direct
+ * system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
+#define STDERR_FILENO 2
 
 /** write(2). */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -119,6 +128,10 @@ void probe_main(unsigned long *sp)
     char *const envp[] = {(char *)0};
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.shelltest"));
+    report_plan("fork");
+    report_plan("wait");
+    report_plan("exit-zero");
     program = probe_arg("hello", "/hello");
     argv[0] = (char *)program;
     argv[1] = (char *)0;
@@ -130,6 +143,7 @@ void probe_main(unsigned long *sp)
 
     if (pid < 0) {
         puts("FAILED (fork returned -1)");
+        report_stop("fork failed");
         sys_exit(1);
     }
 
@@ -139,6 +153,7 @@ void probe_main(unsigned long *sp)
         print(program);
         print("\")... ");
 
+        syscall2(SYS_DUP2, STDERR_FILENO, STDOUT_FILENO);
         exec_result = sys_execve(program, argv, envp);
 
         print("FAILED (exec returned ");
@@ -147,6 +162,7 @@ void probe_main(unsigned long *sp)
         sys_exit(1);
     }
 
+    report_held();
     print("OK (parent, child PID=");
     print_num(pid);
     puts(")");
@@ -156,9 +172,11 @@ void probe_main(unsigned long *sp)
 
     if (child_pid < 0) {
         puts("FAILED (waitpid returned -1)");
+        report_stop("waitpid failed");
         sys_exit(1);
     }
     puts("OK");
+    report_held();
 
     print("Parent: Child PID=");
     print_num(child_pid);
@@ -167,12 +185,15 @@ void probe_main(unsigned long *sp)
     puts("");
 
     if (status == 0) {
+        report_held();
+        report_end();
         puts("All exec syscalls passed!");
         sys_exit(0);
     } else {
         print("Note: hello exited with non-zero status ");
         print_num(status);
         puts(" (may indicate exec issue)");
+        report_stop("the program did not exit with status 0");
         sys_exit(1);
     }
 }

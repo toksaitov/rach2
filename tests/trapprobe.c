@@ -10,11 +10,14 @@
  * faulting instruction would fault again without end. The probe reaps each
  * child and checks that the wait status has the expected signal.
  *
- * Prints "TRAPPROBE OK" and exits 0. Freestanding; direct system calls
- * (probe.h).
+ * Prints "TRAPPROBE OK" and exits 0. Writes etude's report records
+ * (probe_report.h) for the case ETUDE_CASE names, an assertion for each
+ * fault, `ud-sigill` and `de-sigfpe`; a failure of the first leaves the
+ * second not run. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -107,18 +110,31 @@ static int faulted_with(void (*fault)(void), int expect_signo)
     return (status & 0x7f) == expect_signo;
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** Check #UD and then #DE; exit 1 or 2 for the first whose child did not
- * die of the expected signal. */
-PROBE_START void _start(void)
+ * die of the expected signal. `_start` calls it with the initial stack, whose
+ * environment gives the case's identity. */
+void probe_main(unsigned long *sp)
 {
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.trapprobe"));
+    report_plan("ud-sigill");
+    report_plan("de-sigfpe");
     if (!faulted_with(raise_invalid_opcode, SIGILL)) {
         puts("trapprobe: #UD was not contained as SIGILL");
+        report_stop("the ud2 child did not die of SIGILL");
         sys_exit(1);
     }
+    report_held();
     if (!faulted_with(raise_divide_error, SIGFPE)) {
         puts("trapprobe: #DE was not contained as SIGFPE");
+        report_stop("the divide child did not die of SIGFPE");
         sys_exit(2);
     }
+    report_held();
+    report_end();
 
     puts("TRAPPROBE OK");
     sys_exit(0);

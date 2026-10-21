@@ -13,10 +13,15 @@
  * process's frames would fail that half while passing the first.
  *
  * Prints "OOMPROBE OK (...)" and exits 0, or "OOMPROBE FAIL: " with the
- * reason and exits 1. Freestanding; direct system calls (probe.h).
+ * reason and exits 1. Writes etude's report records (probe_report.h) for
+ * the case ETUDE_CASE names, an assertion for each check: `fork`, `reap`,
+ * `sigkill` (the child was killed by SIGKILL), `map` (the parent's mapping
+ * after it) and `readback` (each page of it reads back); a failure leaves the
+ * checks after it not run. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -125,55 +130,78 @@ static void eat_memory(void)
     sys_exit(4);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** The probe's entry: the child runs out of frames, then the parent maps
- * and touches SPAN bytes of its own. */
-PROBE_START void _start(void)
+ * and touches SPAN bytes of its own. `_start` calls it with the initial
+ * stack, whose environment gives the case's identity. */
+void probe_main(unsigned long *sp)
 {
     int pid, status;
     char *m;
     unsigned int p;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.oomprobe"));
+    report_plan("fork");
+    report_plan("reap");
+    report_plan("sigkill");
+    report_plan("map");
+    report_plan("readback");
     pid = sys_fork();
     if (pid == 0) {
         eat_memory();
     }
     if (pid < 0) {
         puts("OOMPROBE FAIL: the child could not be started");
+        report_stop("the child could not be started");
         sys_exit(1);
     }
+    report_held();
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid) {
         puts("OOMPROBE FAIL: the child could not be reaped");
+        report_stop("the child could not be reaped");
         sys_exit(1);
     }
+    report_held();
     if (WIFEXITED(status)) {
         print("OOMPROBE FAIL: the child exited ");
         print_num((int)((status >> 8) & 0xFF));
         puts(" (3 the mapping was refused, 4 the memory never ran out)");
+        report_stop("the child exited where it should have been killed");
         sys_exit(1);
     }
     if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         print("OOMPROBE FAIL: the child died of signal ");
         print_num((int)WTERMSIG(status));
         puts(", not SIGKILL");
+        report_stop("the child died of a signal other than SIGKILL");
         sys_exit(1);
     }
+    report_held();
 
     /* The frames came back with the child. */
     m = (char *)sys_mmap(SPAN);
     if ((size_t)m > (size_t)-4096) {
         puts("OOMPROBE FAIL: no mapping after the child died");
+        report_stop("no mapping after the child died");
         sys_exit(1);
     }
+    report_held();
     for (p = 0; p < SPAN; p += PAGE) {
         m[p] = 'x';
     }
     for (p = 0; p < SPAN; p += PAGE) {
         if (m[p] != 'x') {
             puts("OOMPROBE FAIL: a page written after the child did not read back");
+            report_stop("a page written after the child did not read back");
             sys_exit(1);
         }
     }
 
+    report_held();
+    report_end();
     puts("OOMPROBE OK (the child was killed with SIGKILL and its frames came back)");
     sys_exit(0);
 }

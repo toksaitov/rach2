@@ -14,11 +14,18 @@
  * own; without it they are relative to `/`, the test image's KRFFS root.
  *
  * Prints "DIRGROW OK" and exits 0, or "DIRGROW FAIL: " with the reason and
- * exits 1. Freestanding; direct system calls (probe.h).
+ * exits 1. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each step: `setup` (the directory and
+ * the two files, written), `grow` (the growing write), `in-dir` (f resolves
+ * under dg), `head-bytes` (f keeps its first bytes), `not-root` (no f in the
+ * directory of the files) and `cleanup` (the directory is removed); a
+ * failure leaves the steps after it not run. Freestanding; direct system
+ * calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -71,11 +78,13 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"\n", 1);
 }
 
-/** Print "DIRGROW FAIL: `why`" and exit 1. */
+/** Print "DIRGROW FAIL: `why`", fail the step under way with `why`, and
+ * exit 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"DIRGROW FAIL: ", 14);
     puts(why);
+    report_stop(why);
     sys_exit(1);
 }
 
@@ -94,6 +103,13 @@ void probe_main(unsigned long *sp)
     char buf[4];
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.dirgrow"));
+    report_plan("setup");
+    report_plan("grow");
+    report_plan("in-dir");
+    report_plan("head-bytes");
+    report_plan("not-root");
+    report_plan("cleanup");
     if (syscall1(SYS_CHDIR, (long)probe_arg("dir", "/")) != 0) {
         fail("chdir to the directory of the files");
     }
@@ -118,6 +134,7 @@ void probe_main(unsigned long *sp)
     if (syscall3(SYS_WRITE, fd_g, (long)"GG", 2) != 2) {
         fail("write /dg/g");
     }
+    report_held();
 
     /* Grow f past its slack: with g adjacent, this relocates f. */
     for (i = 0; i < GROW; i++) {
@@ -126,6 +143,7 @@ void probe_main(unsigned long *sp)
     if (syscall3(SYS_WRITE, fd_f, (long)big, GROW) != GROW) {
         fail("grow /dg/f");
     }
+    report_held();
 
     syscall2(SYS_CLOSE, fd_f, 0);
     syscall2(SYS_CLOSE, fd_g, 0);
@@ -135,20 +153,25 @@ void probe_main(unsigned long *sp)
     if (fd < 0) {
         fail("/dg/f vanished from its directory after a relocating grow");
     }
+    report_held();
     if (syscall3(SYS_READ, fd, (long)buf, 2) != 2 || buf[0] != 'F' || buf[1] != 'F') {
         fail("/dg/f lost its head bytes across the relocation");
     }
     syscall2(SYS_CLOSE, fd, 0);
+    report_held();
 
     /* And not at the root as /f. */
     fd = syscall3(SYS_OPEN, (long)"f", O_RDONLY, 0);
     if (fd >= 0) {
         fail("the relocated file leaked to the root as /f");
     }
+    report_held();
 
     if (cleanup() != 0) {
         fail("remove fixture directory");
     }
+    report_held();
+    report_end();
     puts("DIRGROW OK");
     sys_exit(0);
 }
