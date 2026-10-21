@@ -18,14 +18,16 @@
 # but for the Linux-only commands named below, which etude's tooling machine
 # must provide, with what the machine itself needs named on macos and
 # windows; and the Codex version of the linux recipe and of the tooling
-# machine is the one the codexapi cases run.
+# machine is the one the codexapi cases run. The OVMF rows run each POSIX
+# platform's real probe with missing, directory, unreadable and readable
+# overrides, and with a readable pair found beside a directory of PATH.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored before the rows run again at the
 # end. --texts puts each fault into the copy and requires only that it
 # changes the file, and runs no row.
 #
-# Usage: sh tests/system/prereq_test.sh [--mutate | --texts]
+# Usage: sh tests/system/prereq_test.sh [--mutate | --texts | --ovmf]
 #
 set -u
 
@@ -33,7 +35,8 @@ case ${1:-} in
     '') mode=check ;;
     --mutate) mode=mutate ;;
     --texts) mode=texts ;;
-    *) echo 'prereq-test: usage: prereq_test.sh [--mutate | --texts]' >&2; exit 2 ;;
+    --ovmf) mode=ovmf ;;
+    *) echo 'prereq-test: usage: prereq_test.sh [--mutate | --texts | --ovmf]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
@@ -45,7 +48,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-prereq-test.XXXXXX") || exit 1
 tree=$work/tree
 copy=$tree/tools/setup/prereq.sh
 mkdir -p "$tree/tools/setup" "$work/bin" || exit 1
-cp "$repo/tools/setup/e2fsprogs_path.sh" "$tree/tools/setup/" || exit 1
+cp "$repo/tools/setup/e2fsprogs_path.sh" "$repo/tools/setup/ovmf_path.sh" \
+    "$tree/tools/setup/" || exit 1
 FIX=$work/fix
 export FIX
 
@@ -324,9 +328,57 @@ row()
             printf 'platform macos\nneed x\nprobe y\nuser z\n' > "$work/bad"
             sh "$copy" --recipe "$work/bad" --platform linux > "$work/out" 2>&1
             [ "$?" = 2 ] && grep -q 'no platform linux' "$work/out" ;;
+        ovmf-linux) ovmf linux ;;
+        ovmf-macos) ovmf macos ;;
         coverage) coverage ;;
         *) return 1 ;;
     esac
+}
+
+# ovmf PLATFORM: run the real OVMF stanza against private firmware files.
+# PREREQ_RECIPE_SOURCE selects the recipe artifact made by the proof driver.
+ovmf()
+{
+    state
+    printf 'platform %s\n' "$1" > "$work/ovmf-recipe"
+    awk -v want="$1" '
+        /^platform / { platform = $2; selected = 0 }
+        /^need / { selected = platform == want && $0 == "need OVMF" }
+        selected { print }
+    ' "${PREREQ_RECIPE_SOURCE:-$repo/tools/setup/prereqs}" >> "$work/ovmf-recipe" || return 1
+    mkdir -p "$FIX/firmware/bin" "$FIX/firmware/share/qemu" || return 1
+    code=$FIX/firmware/share/qemu/edk2-x86_64-code.fd
+    : > "$code"
+    : > "$FIX/firmware/share/qemu/edk2-i386-vars.fd"
+    : > "$FIX/unreadable"
+    chmod 000 "$FIX/unreadable" || return 1
+    for image in missing directory unreadable readable discovered; do
+        expected=1
+        case $image in
+            missing) override=$FIX/missing ;;
+            directory) override=$FIX/firmware ;;
+            unreadable)
+                if [ -r "$FIX/unreadable" ]; then
+                    echo 'prereq-test: not run: unreadable OVMF override: account can read mode 000 files' >&2
+                    continue
+                fi
+                override=$FIX/unreadable ;;
+            readable) override=$code; expected=0 ;;
+            discovered) override=; expected=0 ;;
+        esac
+        PATH="$work/bin:$FIX/firmware/bin:$PATH" RACH2_OVMF_CODE=$override RACH2_OVMF_VARS='' \
+            sh "$copy" --recipe "$work/ovmf-recipe" --platform "$1" > "$work/out" 2>&1
+        status=$?
+        if [ "$expected" = 0 ]; then
+            result='  [PASS]     OVMF'
+        else
+            result='  [MISSING]  OVMF'
+        fi
+        if [ "$status" != "$expected" ] || ! grep -qxF "$result" "$work/out"; then
+            { echo "ovmf: $1 $image: status $status, wanted $expected"; cat "$work/out"; } > "$work/why"
+            return 1
+        fi
+    done
 }
 
 # names PLATFORM: the names the real recipe needs on PLATFORM.
@@ -400,7 +452,8 @@ coverage()
     [ ! -s "$work/why" ]
 }
 
-rows='linux-present linux-report linux-root linux-install linux-sudo windows-report windows-install windows-elevated malformed coverage'
+rows='linux-present linux-report linux-root linux-install linux-sudo windows-report windows-install windows-elevated malformed coverage ovmf-linux ovmf-macos'
+[ "$mode" != ovmf ] || rows='ovmf-linux ovmf-macos'
 
 # rows: run every row against the copy, print `prereq-test: failed: NAME`
 # for each that fails, and fail when any did.
@@ -450,4 +503,4 @@ if [ "$mode" = mutate ]; then
     rows >&2 || exit 1
     echo 'prereq-test: result: pass: five faults caught and restored'
 fi
-echo 'prereq-test: result: pass: 10 rows'
+echo "prereq-test: result: pass: $(echo "$rows" | wc -w | tr -d ' ') rows"

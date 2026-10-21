@@ -89,7 +89,7 @@ probe qemu-img --version
 admin apt-get install -y qemu-utils
 
 need OVMF
-probe . tools/setup/ovmf_path.sh && [ -n "$OVMF_CODE" ]
+probe . tools/setup/ovmf_path.sh && [ -f "$OVMF_CODE" ] && [ -r "$OVMF_CODE" ]
 admin apt-get install -y ovmf
 
 # KVM runs the guests on the processor. Under WSL the device exists only
@@ -187,7 +187,7 @@ probe @TOOL@ --version
 user brew install qemu
 
 need OVMF
-probe . tools/setup/ovmf_path.sh && [ -n "$OVMF_CODE" ]
+probe . tools/setup/ovmf_path.sh && [ -f "$OVMF_CODE" ] && [ -r "$OVMF_CODE" ]
 user brew install qemu
 
 # Homebrew never links e2fsprogs; e2fsprogs_path.sh finds its keg.

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "proof": "prereq-ovmf",
+  "summary": "OVMF prerequisite probes require a readable regular code image",
+  "tree": "private",
+  "sources": [
+    "tools/setup/prereqs"
+  ],
+  "artifacts": [
+    "${WORK}/prereqs"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/tools/setup/prereqs",
+      "${WORK}/prereqs"
+    ],
+    "bound_s": 30
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "PREREQ_RECIPE_SOURCE=${WORK}/prereqs exec sh tests/system/prereq_test.sh --ovmf"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "prereq-test: failed: "
+  },
+  "faults": [
+    {
+      "name": "linux-nonempty",
+      "summary": "linux accepts a nonempty path without checking the file",
+      "edits": [
+        {
+          "file": "tools/setup/prereqs",
+          "find": "need OVMF\nprobe . tools/setup/ovmf_path.sh && [ -f \"$OVMF_CODE\" ] && [ -r \"$OVMF_CODE\" ]\nadmin apt-get install -y ovmf",
+          "replace": "need OVMF\nprobe . tools/setup/ovmf_path.sh && [ -n \"$OVMF_CODE\" ]\nadmin apt-get install -y ovmf"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "prereq-test: failed: ovmf-linux"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "macos-nonempty",
+      "summary": "macos accepts a nonempty path without checking the file",
+      "edits": [
+        {
+          "file": "tools/setup/prereqs",
+          "find": "need OVMF\nprobe . tools/setup/ovmf_path.sh && [ -f \"$OVMF_CODE\" ] && [ -r \"$OVMF_CODE\" ]\nuser brew install qemu",
+          "replace": "need OVMF\nprobe . tools/setup/ovmf_path.sh && [ -n \"$OVMF_CODE\" ]\nuser brew install qemu"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "prereq-test: failed: ovmf-macos"
+        ],
+        "only": true
+      }
+    }
+  ]
+}
