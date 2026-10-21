@@ -2,8 +2,10 @@
  * Minimal ELF probe: prints "Hello from ELF!" and exits.
  *
  * Exercises the ELF loader and the write and exit syscalls. Writes etude's
- * report records (probe_report.h) for the case ETUDE_CASE names, with one
- * assertion, `write`: the write of the line returned its length.
+ * report records (probe_report.h) for its own case, guest.default.hello, with
+ * one assertion, `write`: the write of the line returned its length. Other
+ * cases and tests run it as a plain program, so unless ETUDE_CASE names its
+ * case it writes no records.
  * Freestanding; direct system calls (probe.h).
  */
 
@@ -44,6 +46,16 @@ static int puts(const char *s)
     return (sys_write(STDOUT_FILENO, s, n) == n) & (sys_write(STDOUT_FILENO, "\n", 1) == 1);
 }
 
+/** Say whether the strings `a` and `b` are the same. */
+static int same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -54,7 +66,14 @@ PROBE_SP_ENTRY;
  */
 void probe_main(unsigned long *sp)
 {
-    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.hello"));
+    static const char own[] = "guest.default.hello";
+    const char *id = report_case((char **)(sp + 1) + sp[0] + 1, own);
+
+    if (id == own || !same(id, own)) {
+        puts("Hello from ELF!");
+        sys_exit(0);
+    }
+    report_begin(id);
     if (puts("Hello from ELF!")) {
         report_pass("write");
     } else {
