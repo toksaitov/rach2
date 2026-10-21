@@ -1,6 +1,7 @@
 /*
- * legacy_cases.h: the host cases of a manifest as the set driver runs them,
- * and the judge of one attempt of such a case, `casecheck attempt`.
+ * legacy_cases.h: the host and guest cases of a manifest as the set driver
+ * runs them, and the judge of one attempt of such a case, `casecheck
+ * attempt`.
  */
 #ifndef ETUDE_LEGACY_CASES_H
 #define ETUDE_LEGACY_CASES_H
@@ -23,21 +24,29 @@ struct legacy_case {
     long long reps;   /* the workload's repetitions */
     int seeded;       /* the workload's seed is not null */
     long long seed;
-    int scratch;  /* its isolation has the `scratch` fixture */
-    char **goals; /* its prepare artifacts as make goals of the tree,
-                     `build/NODE` or `build/x86_64/NODE`, from malloc */
+    int scratch;        /* its isolation has the `scratch` fixture */
+    int guest;          /* it is of the domain `guest`, placed under QEMU */
+    char **goals;       /* its prepare artifacts as make goals of the tree,
+                           `build/NODE` or `build/x86_64/NODE`, from malloc */
+    const char **names; /* each goal's artifact name, beside `goals` */
     size_t ngoals;
     size_t program;    /* the index of the goal its program names */
     const char **args; /* the workload's arguments */
     size_t nargs;
     uint64_t case_us, gap_us; /* the initial bounds of the case and the gap */
+    /* A guest case's initial bound of each stage the manifest bounds, by
+     * enum etude_stage; 0 for one bounded by the case alone. */
+    uint64_t stage_us[ETUDE_WATCH_STAGES];
+    const struct json *qemu; /* a guest case's QEMU profile, or NULL */
     struct etude_witness_bound *witnesses;
     size_t nwitnesses;
+    /* The claim: the case's processor and disk, and its memory, which for a
+     * guest case is what etude_qemu_memory reserves for its machine. */
     uint64_t cpu_millis, memory_bytes, disk_bytes;
     struct jbuf workload, inventory, profile; /* the canonical documents */
 };
 
-/* A manifest of host cases, as one suite of a set names it. */
+/* A manifest of cases, as one suite of a set names it. */
 struct legacy_manifest {
     char *path; /* as the driver reads it, from malloc */
     struct json *doc;
@@ -52,11 +61,16 @@ struct legacy_manifest {
  * absolute, for suite `suite` on `arch` (i686 or x86_64).
  *
  * The last part of its family's identity must be the suite's name, at least
- * one case must run on `arch`, and each that does must be a host case whose
- * program is an artifact of its `prepare`, with no standard input, ports,
- * loop devices or host locks, and no fixture but `scratch`. The schema's
- * other rules are the caller's to check. The caller frees `m` with
- * legacy_manifest_free whether or not the manifest was taken.
+ * one case must run on `arch`, and each that does must have a program that
+ * is an artifact of its `prepare`, no standard input, ports, loop devices or
+ * host locks, and no fixture but `scratch`, or for a guest case `scratch`
+ * and `disk`. A guest case must also be of the role `ordinary` or `boot`,
+ * end as `exited` or `signaled`, and have a QEMU profile of direct firmware
+ * or SeaBIOS, reserved memory, and a kernel, a RAM image and disks that are
+ * artifacts of its `prepare`, each disk a CD, an empty disk or one of a
+ * `disk` fixture. The schema's other rules are the caller's to check. The
+ * caller frees `m` with legacy_manifest_free whether or not the manifest
+ * was taken.
  *
  * @return 0 with `m` filled; -1 with the reason in `m->why`, which begins
  *         with the manifest's path.
@@ -81,8 +95,10 @@ struct legacy_judge {
     const char *schemas;
     const char *manifest;
     const char *case_id;
-    const char *arch;   /* the item's architecture */
-    const char *output; /* the program's output */
+    const char *arch;      /* the item's architecture */
+    const char *placement; /* host or qemu */
+    const char *console;   /* a machine's console, or NULL for none */
+    const char *output;    /* the program's output */
     const char *run_id, *attempt_id, *item_id;
     const char *end;     /* exited, signaled, stopped or lost */
     int value;           /* the status or the signal, or -1 for none */
@@ -101,8 +117,9 @@ struct legacy_judgement {
 
 /**
  * Judge the attempt `j` names by `casecheck attempt`, run with no input and
- * killed after LEGACY_JUDGE_S seconds. Its document is kept only when it
- * exited 0, 1 or 3 and the document parses.
+ * killed after LEGACY_JUDGE_S seconds, with the console as its `-k` when `j`
+ * gives one. Its document is kept only when it exited 0, 1 or 3 and the
+ * document parses.
  */
 void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out);
 

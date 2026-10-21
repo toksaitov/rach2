@@ -2122,7 +2122,9 @@ run-stress-ahci: rach2 tests krffs $(HARNESS)
 # QEMU through etude's launcher, and the KRFFS tools because
 # etude_scenario_hosttest also boots the kernel on a disk root that mkdisk.sh
 # makes. casecheck is because etude_legacyset_hosttest judges the cases of its
-# fixture with it. etude-host runs the checks.
+# fixture with it; its guest cases boot the kernel and the test image too, and
+# run etude-guest and rngprobe, which the test image's prerequisites build.
+# etude-host runs the checks.
 ETUDE_SCENARIO_DISK = $(IMAGES_DIR)/host-etude-scenario.disk
 run-host: check-libc $(E2FSPROGS_STAMP) $(DEADLINE) $(ETUDEHOST) $(CASECHECK) \
           build/krffs/stageimage.krffs rach2 test-image krffs

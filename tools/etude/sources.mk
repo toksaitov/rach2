@@ -74,6 +74,8 @@ ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
 # tests/registry and their set driver, on Linux and macOS.
 ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
                    tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
+                   tools/etude/posix/legacy_guest.c tools/etude/serial.c \
+                   tools/etude/guest/wire.c tools/etude/posix/store.c \
                    tools/etude/digest.c tools/etude/json.c tools/etude/posix/exec.c \
                    tools/etude/posix/keeper.c tools/etude/posix/process.c \
                    tools/etude/capture.c tools/etude/watchdog.c \

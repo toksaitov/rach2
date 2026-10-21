@@ -20,12 +20,14 @@
 # leaves the complexity of the functions unjudged. The testing host has every
 # tool, at its recorded version.
 #
-# etude runs it in the root of the tree it checks, with ARCH naming the
-# architecture of a case that has one, and with TMPDIR a scratch directory of
-# the case's own, which etude keeps after a failure. The checkers it runs are
-# the artifacts the manifest's `prepare` lists, which etude builds first.
+# etude runs it in the case's workspace, with ETUDE_TREE naming the root of
+# the tree it checks, ARCH naming the architecture of a case that has one, and
+# TMPDIR the workspace, which etude keeps after a failure. The program changes
+# to ETUDE_TREE and unsets it, so that a tree it checks in turn is not taken
+# for this one. The checkers it runs are the artifacts the manifest's
+# `prepare` lists, which etude builds first.
 #
-# Usage, in the root of the tree:
+# Usage, in the root of the tree, or anywhere with ETUDE_TREE set to it:
 #     sh tests/cases/host/style.sh CASE
 #
 # The logs go to a private directory under TMPDIR, whose path the first line
@@ -38,6 +40,10 @@ set -u
 
 CASE=${1-}
 [ "$#" -eq 1 ] && [ -n "$CASE" ] || { echo "style: usage: style.sh CASE" >&2; exit 2; }
+if [ -n "${ETUDE_TREE-}" ]; then
+    cd "$ETUDE_TREE" || exit 2
+fi
+unset ETUDE_TREE
 [ -f tests/registry ] && [ -f tools/verify/scripts.sh ] || {
     echo "style: run it in the root of the tree" >&2
     exit 2

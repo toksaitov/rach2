@@ -7,10 +7,16 @@
  * in a child of its own, with a private ledger, and with `locks` a private
  * directory of the old runner's locks. The fixture's case manifests run one
  * shell script of the tree's, which its arguments make pass, fail, end its
- * report early or outrun its bound, and the built casecheck judges them.
+ * report early or outrun its bound, and the built casecheck judges them. Its
+ * guest cases run the tree's rngprobe on the real QEMU, booting the tree's
+ * kernel and test image of the architecture ARCH names, i686 when it is
+ * unset, which the fixture's preparation links into the fixture tree; their
+ * evidence goes under the tree's build/tests.
  *
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
+ * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
+ * host-deps: tools/etude/guest/wire.c tools/etude/posix/store.c
  * host-deps: tools/etude/json.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-deps: tools/etude/posix/process.c tools/etude/capture.c
@@ -24,7 +30,7 @@
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
- * host-seconds: 240
+ * host-seconds: 480
  *
  * A set of two suites that pass and one that fails exits 1, with a history
  * the schema accepts of one plan, one step, an attempt for each suite and a
@@ -48,19 +54,31 @@
  * A suite run by its cases gives an item of each repetition of each case that
  * runs on the architecture, or on none, with its program built by the
  * preparation as a goal: the tree's `build/NODE`, or `build/x86_64/NODE` for an
- * artifact of each architecture on x86_64. The program runs in the tree with
- * the driver's environment, less the driver's own ARCH and ETUDE_SEED, and the
- * case's identity, seed, architecture and scratch directory, which is removed
- * after a pass and kept otherwise; a case whose progress keeps its gap bound
- * passes. Its attempt has casecheck's outcome and the reason of the assertion
- * that decided it, an attempt that runs past its case bound is incomplete, and
- * `casecheck verdict` passes a run of passing cases and fails the suite of
- * failing ones. A failed case of a suite that `stops` leaves the suite's other
- * cases to run before the set stops. A case suite runs beside a suite of the
- * registry. A manifest that cannot be read, of another suite's family, with a
- * case that is not a host case, reads its input, needs ports, loop devices or a
- * fixture other than scratch, or has no case on the architecture is refused,
- * and so is a case suite without casecheck.
+ * artifact of each architecture on x86_64. The program runs in its workspace,
+ * which is removed after a pass and kept otherwise, with the driver's
+ * environment, less the driver's own ARCH and ETUDE_SEED, and the tree, the
+ * case's identity, seed, architecture and, with scratch, the workspace as
+ * TMPDIR; a case whose progress keeps its gap bound passes. Its attempt has
+ * casecheck's outcome and the reason of the assertion that decided it, an
+ * attempt that runs past its case bound is incomplete, and `casecheck
+ * verdict` passes a run of passing cases and fails the suite of failing ones.
+ * A failed case of a suite that `stops` leaves the suite's other cases to run
+ * before the set stops. A case suite runs beside a suite of the registry. A
+ * manifest that cannot be read, of another suite's family, with a case of a
+ * domain other than host and guest, that reads its input, needs ports, loop
+ * devices or a fixture other than scratch, or has no case on the
+ * architecture is refused, and so is a case suite without casecheck, and a
+ * guest case of the init role, booted by OVMF, ending other than by an exit,
+ * or with a disk of no disk fixture.
+ *
+ * A guest case boots its own machine of its profile, its program stored to
+ * etude-guest from the image and run there: rngprobe passes on the processor
+ * `max`, with its branch `trusted` decided by the profile's features, with the
+ * program's output, the console kept for casecheck and the plan's domain
+ * `qemu`; a boot on `qemu64` past its stage's bound is stopped and incomplete;
+ * each machine is given its profile's processor, which a wrapper of QEMU
+ * records; and the run's store of artifacts is removed at its end. A missing
+ * QEMU or image fails the test.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -105,8 +123,10 @@ static int fails;
 #define START_BOUND  60000
 #define STATUS_BOUND 30000
 
-/* The seconds a set may take before it is ended as hung. */
-#define SET_BOUND 120
+/* The seconds a set may take before it is ended as hung, and a set of guest
+ * cases, whose machines boot under TCG on the testing host. */
+#define SET_BOUND   120
+#define GUEST_BOUND 300
 
 /* The memory of the fixture machine's ledger, in MiB. */
 #define MEMORY_MIB 8192u
@@ -123,6 +143,15 @@ static char tree[PATH_LEN];
 static char schemas[PATH_MAX];
 static char ledger[PATH_LEN];
 static char locks[PATH_LEN];
+
+/* The guest cases' architecture, the tree's build of it, the directory of
+ * their evidence under the tree's build/tests, and the path without the
+ * stand-in for QEMU. */
+static const char *guest_arch;
+static char guest_build[PATH_MAX];
+static char guest_evidence[PATH_MAX];
+static char guest_bin[PATH_MAX]; /* the wrapper of QEMU, first on the path */
+static char real_path[8192];
 
 /* The suites of the fixture tree. */
 static const char registry[] = "# The suites of the fixture tree.\n"
@@ -188,9 +217,11 @@ static const char makefile[] =
 /* The program of the fixture's cases. Its first argument says what it
  * reports: `pass`; `fail`, a failed assertion; `cut`, a report with no end;
  * `tick`, progress for 4.5 s; or `slow`, progress for 11.7 s. It prints how
- * it was run and leaves a file in $TMPDIR. */
+ * it was run and where, and leaves a file in $TMPDIR. */
 static const char probe[] = "#!/bin/sh\n"
                             "echo \"program: $0 $*\"\n"
+                            "echo \"cwd: $(pwd -P)\"\n"
+                            "echo \"tree: ${ETUDE_TREE-unset}\"\n"
                             "echo \"case: $ETUDE_CASE arch: ${ARCH-unset} seed: ${ETUDE_SEED-unset}"
                             " inherited: ${FIXTURE_INHERITED-unset}\"\n"
                             "echo \"tmpdir: $TMPDIR\"\n"
@@ -281,12 +312,94 @@ static const struct fcase other_cases[] = {
  * with the text `from` made `to`, or the case of `other` for `noarch`. */
 static const struct {
     const char *name, *from, *to;
-} refusals[] = {{"domain", "\"domain\": \"host\"", "\"domain\": \"guest\""},
+} refusals[] = {{"domain", "\"domain\": \"host\"", "\"domain\": \"machine\""},
                 {"stdin", "\"stdin\": null", "\"stdin\": \"input\""},
                 {"ports", "\"ports\": 0", "\"ports\": 1"},
                 {"loops", "\"loop_devices\": 0", "\"loop_devices\": 1"},
                 {"fixture", "{\"fixture\": \"scratch\"}", "{\"fixture\": \"network\"}"},
                 {"noarch", NULL, NULL}};
+
+/* The form of a guest case of a fixture manifest: the tree's rngprobe on
+ * the test image, under the processor profile `cpu`, with its boot stage
+ * bounded in milliseconds, which casecheck accepts. */
+static const char guest_form[] =
+    "{\"case_id\": \"%s\", \"behavior\": \"The random devices give bytes from a trusted source "
+    "or refuse to read without one\",\n"
+    " \"units\": [\"rngprobe\"], \"domain\": \"guest\", \"architectures\": [\"i686\", "
+    "\"x86_64\"],\n"
+    " \"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null},\n"
+    " \"requirements\": {\"host_api\": \"c\", \"tools\": [], \"features\": {\"rdrand\": "
+    "\"either\", \"rdseed\": \"either\"},\n"
+    "  \"qemu\": {\"kernel\": \"kernel\", \"initrd\": \"test-image\", \"disks\": [], \"cpu\": "
+    "\"%s\", \"processors\": 1,\n"
+    "   \"memory_bytes\": 134217728, \"firmware\": \"direct\", \"devices\": [\"rtl8139\"], "
+    "\"boot_options\": []}},\n"
+    " \"execution\": {\"program\": \"rngprobe\", \"stdin\": null, \"role\": \"ordinary\", "
+    "\"privileges\": \"any\",\n"
+    "  \"isolation\": [], \"children\": \"none\", \"cleanup\": \"nothing to remove\"},\n"
+    " \"assertions\": [\n"
+    "  {\"assertion_id\": \"cpuid-leaf7\", \"checks\": \"kcpu_id gives leaf 7 as cpuid does\", "
+    "\"source\": \"program\"},\n"
+    "  {\"assertion_id\": \"trusted-urandom\", \"checks\": \"/dev/urandom reads and varies\", "
+    "\"source\": \"program\"},\n"
+    "  {\"assertion_id\": \"trusted-monobit\", \"checks\": \"its bytes pass a monobit count\", "
+    "\"source\": \"program\"},\n"
+    "  {\"assertion_id\": \"closed-urandom\", \"checks\": \"/dev/urandom answers EIO\", "
+    "\"source\": \"program\"},\n"
+    "  {\"assertion_id\": \"closed-random\", \"checks\": \"/dev/random answers EIO\", "
+    "\"source\": \"program\"},\n"
+    "  {\"assertion_id\": \"closed-insecure\", \"checks\": \"GRND_INSECURE returns bytes\", "
+    "\"source\": \"program\"}],\n"
+    " \"branches\": [{\"group_id\": \"source\", \"decided_by\": {\"features\": [\"rdrand\", "
+    "\"rdseed\"]},\n"
+    "  \"alternatives\": [\n"
+    "   {\"alternative_id\": \"trusted\", \"when\": \"present\", \"assertions\": "
+    "[\"trusted-urandom\", \"trusted-monobit\"]},\n"
+    "   {\"alternative_id\": \"fail-closed\", \"when\": \"absent\", \"assertions\": "
+    "[\"closed-urandom\", \"closed-random\", \"closed-insecure\"]}]}],\n"
+    " \"termination\": {\"end\": \"exited\", \"value\": 0}, \"progress\": [],\n"
+    " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 120000000, \"ceiling_us\": "
+    "600000000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 60000000, \"ceiling_us\": 300000000},\n"
+    "  \"stages\": {\"boot\": {\"floor_us\": 100000, \"initial_us\": %u000, \"ceiling_us\": "
+    "300000000}}},\n"
+    " \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
+    "268435456,\n"
+    "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 0, \"loop_devices\": 0},\n"
+    " \"prepare\": [{\"name\": \"rngprobe\", \"node\": \"guest/rngprobe\", \"per_architecture\": "
+    "true},\n"
+    "  {\"name\": \"kernel\", \"node\": \"guest/kernel\", \"per_architecture\": true},\n"
+    "  {\"name\": \"etude-guest\", \"node\": \"guest/etude-guest\", \"per_architecture\": true},\n"
+    "  {\"name\": \"test-image\", \"node\": \"guest/test.krffs\", \"per_architecture\": true}],\n"
+    " \"timing\": [], \"native\": {\"plan\": \"native\", \"fixtures\": [{\"fixture\": "
+    "\"workspace\"}]}}";
+
+/* A guest case of a fixture manifest, which guest_text writes. */
+struct gcase {
+    const char *id;
+    const char *cpu;  /* its processor profile */
+    unsigned boot_ms; /* the bound of its boot */
+};
+
+/* The family `guest`: rngprobe on a processor with a random source, and a
+ * boot on one without, bounded far below what the boot takes. etude-guest
+ * reads /dev/urandom for its boot's token, which a machine without a random
+ * source refuses, so no program runs on `qemu64`. */
+static const struct gcase guest_cases[] = {{"fixture.guest.rng", "max", 60000},
+                                           {"fixture.guest.boot", "qemu64", 200}};
+
+/* The family `badguest`, whose one case the refused manifests change. */
+static const struct gcase badguest_cases[] = {{"fixture.badguest.one", "max", 60000}};
+
+/* The manifests of `badguest` that the driver refuses, each its case with
+ * the text `from` made `to`. */
+static const struct {
+    const char *name, *from, *to;
+} guest_refusals[] = {
+    {"init", "\"role\": \"ordinary\"", "\"role\": \"init\""},
+    {"ovmf", "\"firmware\": \"direct\"", "\"firmware\": \"ovmf\""},
+    {"end", "\"end\": \"exited\", \"value\": 0", "\"end\": \"shutdown\", \"value\": null"},
+    {"disk", "\"disks\": []", "\"disks\": [\"etude-guest\"]"}};
 
 /* The script of the recipes. `meet SELF OTHER` waits two seconds at most
  * for the other suite to be present, and notes whether it met it and its
@@ -339,6 +452,7 @@ struct run {
     const char *var;    /* a variable the driver runs with, or NULL */
     const char *arch;   /* the architecture, or NULL for i686 */
     int nojudge;        /* the driver is given no casecheck */
+    int guest;          /* it runs guest cases, on the real QEMU */
     pid_t pid;
     int status;  /* the driver's, or -1 when it did not end by itself */
     long claims; /* the claims the ledger kept after it, or -1 */
@@ -729,6 +843,29 @@ static int manifest_text(char *buf, size_t size, const char *family, const struc
     return k >= 0 && (size_t)k < size ? 0 : -1;
 }
 
+/** Write in `buf` the manifest of family `family` with the `n` guest cases
+ * `c`; 0, or -1 when it does not fit. */
+static int guest_text(char *buf, size_t size, const char *family, const struct gcase *c, size_t n)
+{
+    size_t i, len;
+    int k;
+
+    k = snprintf(buf, size,
+                 "{\"schema_version\": 1, \"family_id\": \"%s\",\n"
+                 " \"summary\": \"Guest cases of the set driver's fixture\",\n \"cases\": [",
+                 family);
+    for (i = 0; k >= 0 && (size_t)k < size && i < n; i++) {
+        len = (size_t)k;
+        k = snprintf(buf + len, size - len, guest_form, c[i].id, c[i].cpu, c[i].boot_ms);
+        k = k < 0 ? k : (int)len + k;
+        if (k >= 0 && (size_t)k < size && i + 1 < n)
+            k += snprintf(buf + k, size - (size_t)k, ",\n");
+    }
+    if (k >= 0 && (size_t)k < size)
+        k += snprintf(buf + k, size - (size_t)k, "]}\n");
+    return k >= 0 && (size_t)k < size ? 0 : -1;
+}
+
 /** Write in `out` the text `text` with its first `from` made `to`; 0, or -1
  * when it has no `from` or the result does not fit. */
 static int replaced(char *out, size_t size, const char *text, const char *from, const char *to)
@@ -743,8 +880,9 @@ static int replaced(char *out, size_t size, const char *text, const char *from, 
 }
 
 /** Write the program of the fixture's cases and their manifests under
- * cases/: `good` and `mixed` in directories of their own, as casecheck's
- * verdict reads them, and the refused ones of `bad`; 0, or -1. */
+ * cases/: `good`, `mixed` and `guest` in directories of their own, as
+ * casecheck's verdict reads them, and the refused ones of `bad` and
+ * `badguest`; 0, or -1. */
 static int make_cases(void)
 {
     static char text[16384], changed[16384];
@@ -766,17 +904,63 @@ static int make_cases(void)
         fix_format(name, sizeof(name), "cases/bad/%s.json", refusals[i].name);
         bad |= write_text(in(path, sizeof(path), name), changed, 0644);
     }
+    bad |= guest_text(text, sizeof(text), "fixture.guest", guest_cases, 2) != 0 ||
+           write_text(in(path, sizeof(path), "cases/guest/guest.json"), text, 0644) != 0;
+    bad |= guest_text(text, sizeof(text), "fixture.badguest", badguest_cases, 1);
+    for (i = 0; i < sizeof(guest_refusals) / sizeof(guest_refusals[0]); i++) {
+        bad |=
+            replaced(changed, sizeof(changed), text, guest_refusals[i].from, guest_refusals[i].to);
+        fix_format(name, sizeof(name), "cases/badguest/%s.json", guest_refusals[i].name);
+        bad |= write_text(in(path, sizeof(path), name), changed, 0644);
+    }
     return bad ? -1 : 0;
+}
+
+/**
+ * Give in `out` the rules that link the guest cases' artifacts, the nodes
+ * `guest/NAME`, to the tree's build of their architecture, which the
+ * fixture's preparation makes; 0, or -1 when they do not fit.
+ */
+static int guest_rules(char *out, size_t size)
+{
+    static const char *const links[][2] = {{"kernel", "rach2/kernel"},
+                                           {"test.krffs", "images/test.krffs"},
+                                           {"etude-guest", "tools/etude/guest/etude-guest"},
+                                           {"rngprobe", "tests/rngprobe"}};
+    const char *dir = strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64" : "build";
+    size_t i, used = 0;
+    int k;
+
+    for (i = 0; i < sizeof(links) / sizeof(links[0]); i++) {
+        k = snprintf(out + used, size - used,
+                     "%s/guest/%s:\n\t@mkdir -p $(@D) && ln -sf %s/%s $@\n", dir, links[i][0],
+                     guest_build, links[i][1]);
+        if (k < 0 || (size_t)k >= size - used)
+            return -1;
+        used += (size_t)k;
+    }
+    return 0;
 }
 
 /** Make the fixture tree, with its run lock held by this process, runutil's
  * source, the recipes' script and the stand-in first on the path. */
 static void make_tree(void)
 {
-    static const char *const dirs[] = {
-        "",     "tests", "tests/system", "tests/system/runner", "build",       "build/.run.lock",
-        "meet", "qemu",  "cases",        "cases/good",          "cases/mixed", "cases/bad"};
-    static char source[1 << 20], newpath[8192];
+    static const char *const dirs[] = {"",
+                                       "tests",
+                                       "tests/system",
+                                       "tests/system/runner",
+                                       "build",
+                                       "build/.run.lock",
+                                       "meet",
+                                       "qemu",
+                                       "cases",
+                                       "cases/good",
+                                       "cases/mixed",
+                                       "cases/bad",
+                                       "cases/guest",
+                                       "cases/badguest"};
+    static char source[1 << 20], newpath[8192], rules[8192];
     const char *oldpath = getenv("PATH");
     char path[PATH_LEN], owner[64];
     size_t i;
@@ -793,15 +977,17 @@ static void make_tree(void)
     bad |= mkfifo(in(path, sizeof(path), "started.fifo"), 0644) != 0;
     snprintf(owner, sizeof(owner), "pid %ld\n", (long)getpid());
     bad |= write_text(in(path, sizeof(path), "tests/registry"), registry, 0644);
-    bad |= write_text(in(path, sizeof(path), "Makefile"), makefile, 0644);
+    bad |= guest_rules(rules, sizeof(rules)) != 0;
+    fix_format(source, sizeof(source), "%s%s", makefile, rules);
+    bad |= write_text(in(path, sizeof(path), "Makefile"), source, 0644);
     bad |= write_text(in(path, sizeof(path), "fixture.sh"), script, 0644);
     bad |= write_text(in(path, sizeof(path), "qemu/qemu-system-i386"), standin, 0755);
     bad |= write_text(in(path, sizeof(path), "build/.run.lock/owner"), owner, 0644);
     bad |= make_cases();
     bad |= read_text("tests/system/runner/runutil.c", source, sizeof(source)) <= 0;
     bad |= write_text(in(path, sizeof(path), "tests/system/runner/runutil.c"), source, 0644);
-    fix_format(newpath, sizeof(newpath), "%s/qemu:%s", tree,
-               oldpath != NULL ? oldpath : "/usr/bin:/bin");
+    fix_format(real_path, sizeof(real_path), "%s", oldpath != NULL ? oldpath : "/usr/bin:/bin");
+    fix_format(newpath, sizeof(newpath), "%s/qemu:%s", tree, real_path);
     bad |= setenv("PATH", newpath, 1) != 0;
     if (bad) {
         printf("etude-legacyset-test: fail: the fixture tree %s was not made\n", tree);
@@ -880,6 +1066,13 @@ static void driver(const struct run *r)
         unsetenv(r->unset);
     if (r->var != NULL)
         putenv((char *)r->var);
+    if (r->guest) {
+        static char path[sizeof(guest_bin) + sizeof(real_path) + 1];
+
+        fix_format(path, sizeof(path), "%s:%s", guest_bin, real_path);
+        if (setenv("PATH", path, 1) != 0)
+            _exit(120);
+    }
     opts_for(&o, r);
     o.stop = &stop_signal;
     if ((o.out = fopen(r->out_file, "w")) == NULL)
@@ -900,13 +1093,15 @@ static void driver(const struct run *r)
     _exit(status & 0xff);
 }
 
-/** Start the set of `r` in a child, with its files named for the row. */
+/** Start the set of `r` in a child, with its files named for the row, and
+ * the evidence of guest cases under the tree's build/tests. */
 static void set_start(struct run *r)
 {
     const char *dir = fix_dir();
 
     fix_format(r->results, sizeof(r->results), "%s/%s.results", dir, r->name);
-    fix_format(r->evidence, sizeof(r->evidence), "%s/%s.evidence", dir, r->name);
+    fix_format(r->evidence, sizeof(r->evidence), "%s/%s.evidence", r->guest ? guest_evidence : dir,
+               r->name);
     fix_format(r->status_file, sizeof(r->status_file), "%s/%s.status", dir, r->name);
     fix_format(r->out_file, sizeof(r->out_file), "%s/%s.out", dir, r->name);
     fix_format(r->side, sizeof(r->side), "%s/%s.side", dir, r->name);
@@ -920,22 +1115,23 @@ static void set_start(struct run *r)
         printf("etude-legacyset-test: fail: %s: no child: %s\n", r->name, strerror(errno));
 }
 
-/** Wait for the set of `r` to end within SET_BOUND seconds, or end it, and
- * take what it gave. */
+/** Wait for the set of `r` to end within its bound, SET_BOUND or
+ * GUEST_BOUND seconds, or end it, and take what it gave. */
 static void set_finish(struct run *r)
 {
+    int bound = r->guest ? GUEST_BOUND : SET_BOUND;
     char side[64];
     int status, i;
     pid_t got = 0;
 
-    for (i = 0; r->pid > 0 && i < SET_BOUND * 20; i++) {
+    for (i = 0; r->pid > 0 && i < bound * 20; i++) {
         if ((got = waitpid(r->pid, &status, WNOHANG)) != 0)
             break;
         /* interval: a set is looked at again every 50 ms */
         usleep(50000);
     }
     if (r->pid > 0 && got == 0) {
-        printf("etude-legacyset-test: fail: %s: the set did not end in %d s\n", r->name, SET_BOUND);
+        printf("etude-legacyset-test: fail: %s: the set did not end in %d s\n", r->name, bound);
         fails++;
         kill(r->pid, SIGKILL);
         got = waitpid(r->pid, &status, 0);
@@ -1376,10 +1572,18 @@ static void test_large(void)
 }
 
 /** Check the passing cases of `good` on i686 that run `r`, and the
- * environment and scratch directory of their program. */
+ * environment, workspace and scratch directory of their program. */
 static void good_ran(struct run *r)
 {
-    char line[PATH_LEN * 2];
+    char line[PATH_LEN * 2], evidence[PATH_MAX], root[PATH_MAX];
+
+    if (realpath(r->evidence, evidence) == NULL || realpath(tree, root) == NULL)
+        evidence[0] = root[0] = '\0';
+    fix_format(line, sizeof(line), "cwd: %s/%s.fixture.good.none.r0", evidence, r->run_id);
+    CHECK(output_has(r, "fixture.good.none.r0", line), "workspace: a host case runs in it");
+    fix_format(line, sizeof(line), "tree: %s", root);
+    CHECK(output_has(r, "fixture.good.none.r0", line), "workspace: ETUDE_TREE is the tree");
+    CHECK(!kept(r, "fixture.good.none.r0"), "workspace: removed after a pass without scratch");
 
     CHECK(case_is(r, "fixture.good.pass", "i686", 0, "pass", NULL) &&
               case_is(r, "fixture.good.pass", "i686", 1, "pass", NULL),
@@ -1604,12 +1808,23 @@ static void test_cases_refused(void)
         {"good", "cases/good/absent.json", "cases/good/absent.json: "},
         {"other", "cases/good/good.json", "its family fixture.good is not of the suite other"},
         {"bad", "cases/bad/domain.json",
-         "fixture.bad.one: a case of the domain guest; the set driver runs host cases alone"},
+         "fixture.bad.one: a case of the domain machine; the set driver runs host and guest cases "
+         "alone"},
         {"bad", "cases/bad/stdin.json", "fixture.bad.one: the case reads standard input"},
         {"bad", "cases/bad/ports.json", "fixture.bad.one: the case needs local ports"},
         {"bad", "cases/bad/loops.json", "fixture.bad.one: the case needs local ports"},
         {"bad", "cases/bad/fixture.json", "fixture.bad.one: the case needs the fixture network"},
         {"bad", "cases/bad/noarch.json", "no case of it runs on i686"},
+        {"badguest", "cases/badguest/init.json",
+         "fixture.badguest.one: the case's role is init; the set driver runs ordinary and boot "
+         "guest cases alone"},
+        {"badguest", "cases/badguest/ovmf.json",
+         "fixture.badguest.one: the case boots by ovmf, which the set driver does not find"},
+        {"badguest", "cases/badguest/end.json",
+         "fixture.badguest.one: the case ends as shutdown; the set driver runs a guest case that "
+         "exits"},
+        {"badguest", "cases/badguest/disk.json",
+         "fixture.badguest.one: the disk etude-guest is in no disk fixture"},
         {"good", "cases/good/good.json", "a suite run by its cases needs casecheck's path"}};
     static struct etude_legacy_member m[sizeof(rows) / sizeof(rows[0])];
     static struct run r[sizeof(rows) / sizeof(rows[0])];
@@ -1625,6 +1840,110 @@ static void test_cases_refused(void)
         fix_format(names[i], sizeof(names[i]), "caserefused%lu", (unsigned long)i);
         refused(&r[i], names[i], rows[i].why, rows[i].why);
     }
+}
+
+/** Say whether the plan of run `r` has the text `text`. */
+static int plan_has(const struct run *r, const char *text)
+{
+    size_t i;
+
+    for (i = 0; i < r->h.n; i++)
+        if (strstr(r->h.line[i], "\"kind\":\"plan\"") != NULL)
+            return strstr(r->h.line[i], text) != NULL;
+    return 0;
+}
+
+/** Give the store of guest artifacts that run `r` left under its evidence,
+ * `RUN.store`, in `out`. */
+static const char *guest_store(const struct run *r, char *out, size_t size)
+{
+    fix_format(out, size, "%s/%s.store", r->evidence, r->run_id);
+    return out;
+}
+
+/** Print the attempt records of guest run `r`, and the end of the console of
+ * each case whose workspace was kept, for a row that failed. */
+static void show_guest(const struct run *r)
+{
+    static const char *const ids[] = {"rng", "boot"};
+    static char text[OUT_LEN];
+    char path[PATH_LEN * 2];
+    size_t i;
+    long n;
+
+    for (i = 0; i < r->h.n; i++)
+        if (strstr(r->h.line[i], "\"kind\":\"attempt\"") != NULL)
+            printf("etude-legacyset-test: guest: attempt: %s\n", r->h.line[i]);
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        fix_format(path, sizeof(path), "%s/%s.fixture.guest.%s.r0/console", r->evidence, r->run_id,
+                   ids[i]);
+        if ((n = read_text(path, text, sizeof(text))) > 0)
+            printf("etude-legacyset-test: guest: the end of %s:\n%s\n", path,
+                   text + (n > 2048 ? n - 2048 : 0));
+    }
+}
+
+/**
+ * A suite run by guest cases on the real QEMU: rngprobe on the processor
+ * `max`, whose features decide its branch, and a boot on `qemu64` that runs
+ * past its stage's bound.
+ */
+static void test_guest(void)
+{
+    static const struct etude_legacy_member m[] = {{"guest", 0, 0, 0, "cases/guest/guest.json"}};
+    static struct run r;
+    static char text[OUT_LEN];
+    char path[PATH_LEN * 2];
+    int before = fails;
+
+    r.name = "guest";
+    r.members = m;
+    r.n = 1;
+    r.arch = guest_arch;
+    r.guest = 1;
+    set_run(&r);
+    CHECK(r.status == 1, "guest: the boot past its bound fails the run");
+    CHECK(r.read == 0, "guest: the history is whole");
+    CHECK(count_kind(&r.h, "attempt") == 2, "guest: an attempt of each case");
+    CHECK(case_is(&r, "fixture.guest.rng", guest_arch, 0, "pass", NULL),
+          "guest: rngprobe passed on max");
+    CHECK(results_has(&r, "fixture.guest.rng.r0",
+                      "{\"group_id\":\"source\",\"alternative_id\":\"trusted\",\"decided_by\":"
+                      "\"feature\"}"),
+          "guest: max's features decide the branch trusted");
+    fix_format(path, sizeof(path), "%s/qemu.argv", guest_evidence);
+    CHECK(read_text(path, text, sizeof(text)) > 0 && strstr(text, "-cpu max,") != NULL &&
+              strstr(text, "-cpu qemu64,") != NULL,
+          "guest: each machine has its profile's processor");
+    CHECK(results_has(&r, "fixture.guest.rng.r0", "\"placement\":\"qemu\"") &&
+              results_has(&r, "fixture.guest.rng.r0",
+                          "\"termination\":{\"end\":\"exited\",\"value\":0,\"observed_by\":"
+                          "\"etude_guest\""),
+          "guest: placed qemu, its end from etude-guest");
+    CHECK(results_has(&r, "fixture.guest.rng.r0",
+                      "{\"assertion_id\":\"etude.kernel\",\"source\":\"executor\",\"outcome\":"
+                      "\"pass\""),
+          "guest: the console judged for the kernel's faults");
+    CHECK(output_has(&r, "fixture.guest.rng.r0", "RNGPROBE START"), "guest: the program's output");
+    CHECK(case_is(&r, "fixture.guest.boot", guest_arch, 0, "incomplete",
+                  "it ran past its stage bound of 200 ms: "),
+          "guest: a boot past its stage's bound is incomplete");
+    CHECK(results_has(&r, "fixture.guest.boot.r0", "\"termination\":{\"end\":\"stopped\""),
+          "guest: a boot past its bound was stopped");
+    fix_format(path, sizeof(path), "%s/%s.fixture.guest.boot.r0/console", r.evidence, r.run_id);
+    CHECK(exists(path), "guest: the console kept when the case did not pass");
+    CHECK(!kept(&r, "fixture.guest.rng.r0"), "guest: the workspace removed after a pass");
+    CHECK(!exists(guest_store(&r, path, sizeof(path))), "guest: the store removed at the end");
+    CHECK(plan_has(&r, "\"domain\":\"qemu\"") && !plan_has(&r, "\"domain\":\"host\""),
+          "guest: the plan's items are of the domain qemu");
+    CHECK(recorded(&r, strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64/guest/test.krffs"
+                                                         : "build/guest/test.krffs"),
+          "prepare: the test image a goal");
+    CHECK(r.claims == 0, "guest: the ledger has no claim");
+    CHECK(!r.leaks, "guest: the driver leaks nothing");
+    if (fails != before)
+        show_guest(&r);
+    show(&r, before);
 }
 
 /** The requests refused before anything runs. */
@@ -1658,6 +1977,103 @@ static void test_refused(void)
     refused(&r[5], "relative", "refused: a relative ledger", NULL);
 }
 
+/** Remove the guest cases' evidence under the tree's build/tests. */
+static void remove_guest_evidence(void)
+{
+    char cmd[PATH_MAX + 16];
+
+    if (guest_evidence[0] == '\0')
+        return;
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", guest_evidence);
+    if (system(cmd) != 0)
+        printf("etude-legacyset-test: %s could not be removed\n", guest_evidence);
+}
+
+/** End the test at a signal, through its exit's cleanup. */
+static void on_signal(int sig)
+{
+    (void)sig;
+    exit(1);
+}
+
+/**
+ * Make the wrapper of the QEMU `qemu`, `guest_evidence/bin`, which appends
+ * its arguments to `guest_evidence/qemu.argv` and runs `qemu` in its place;
+ * 0, or -1.
+ */
+static int guest_wrapper(const char *qemu)
+{
+    char path[PATH_MAX + 32], text[PATH_MAX * 2 + 128];
+    const char *name = strrchr(qemu, '/');
+
+    fix_format(guest_bin, sizeof(guest_bin), "%s/bin", guest_evidence);
+    fix_format(path, sizeof(path), "%s/%s", guest_bin, name != NULL ? name + 1 : qemu);
+    fix_format(text, sizeof(text),
+               "#!/bin/sh\nprintf '%%s\\n' \"$*\" >> '%s/qemu.argv'\nexec '%s' \"$@\"\n",
+               guest_evidence, qemu);
+    return mkdir(guest_bin, 0755) != 0 || write_text(path, text, 0755) != 0 ? -1 : 0;
+}
+
+/**
+ * Find what the guest cases need, before the fixture's path hides QEMU: the
+ * architecture ARCH names, i686 when it is unset, QEMU on the path, the
+ * tree's build of the kernel, the test image, etude-guest and rngprobe for
+ * it, and a directory of their evidence under the tree's build/tests, which
+ * the test's exit removes; 0, or -1 after a line of what is missing.
+ */
+static int guest_site(void)
+{
+    static const char *const needed[] = {"rach2/kernel", "images/test.krffs",
+                                         "tools/etude/guest/etude-guest", "tests/rngprobe"};
+    const char *arch = getenv("ARCH"), *path = getenv("PATH"), *shims = getenv("RACH2_QEMU_SHIMS");
+    const char *qemu, *end;
+    char file[PATH_MAX], real_qemu[PATH_MAX];
+    size_t i, len;
+    int found = 0;
+
+    guest_arch = arch != NULL && strcmp(arch, "x86_64") == 0 ? "x86_64" : "i686";
+    qemu = strcmp(guest_arch, "x86_64") == 0 ? "qemu-system-x86_64" : "qemu-system-i386";
+    for (; !found && path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
+        end = strchr(path, ':');
+        if (end == NULL)
+            end = path + strlen(path);
+        len = (size_t)(end - path);
+        if (len == 0 || (shims != NULL && len == strlen(shims) && strncmp(path, shims, len) == 0))
+            continue;
+        snprintf(file, sizeof(file), "%.*s/%s", (int)len, path, qemu);
+        found = access(file, X_OK) == 0;
+    }
+    if (!found) {
+        printf("etude-legacyset-test: fail: cannot run the guest cases: no %s on PATH\n", qemu);
+        return -1;
+    }
+    fix_format(real_qemu, sizeof(real_qemu), "%s", file);
+    if (realpath(strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64" : "build", guest_build) == NULL)
+        guest_build[0] = '\0';
+    for (i = 0; i < sizeof(needed) / sizeof(needed[0]); i++) {
+        snprintf(file, sizeof(file), "%s/%s", guest_build, needed[i]);
+        if (guest_build[0] == '\0' || access(file, R_OK) != 0) {
+            printf("etude-legacyset-test: fail: cannot run the guest cases: %s is not built\n",
+                   file);
+            return -1;
+        }
+    }
+    snprintf(file, sizeof(file), "build/tests/etude-legacyset.XXXXXX");
+    if ((mkdir("build/tests", 0755) != 0 && errno != EEXIST) || mkdtemp(file) == NULL ||
+        realpath(file, guest_evidence) == NULL) {
+        printf("etude-legacyset-test: fail: build/tests/etude-legacyset.XXXXXX cannot be made\n");
+        return -1;
+    }
+    atexit(remove_guest_evidence);
+    if (guest_wrapper(real_qemu) != 0) {
+        printf("etude-legacyset-test: fail: the wrapper of %s cannot be made\n", real_qemu);
+        return -1;
+    }
+    signal(SIGTERM, on_signal);
+    signal(SIGINT, on_signal);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     char held[32];
@@ -1674,6 +2090,8 @@ int main(int argc, char **argv)
         printf("etude-legacyset-test: fail: build/tools/etude/casecheck is not built\n");
         return 1;
     }
+    if (guest_site() != 0)
+        return 1;
     snprintf(held, sizeof(held), "%ld", (long)getpid());
     setenv("RACH2_TREE_HELD", held, 1);
     setenv("RACH2_PORT_OFFSET", "7000", 1);
@@ -1700,6 +2118,7 @@ int main(int argc, char **argv)
     test_cases_stops();
     test_cases_beside();
     test_cases_refused();
+    test_guest();
     if (fails != 0)
         return 1;
     fix_passed();

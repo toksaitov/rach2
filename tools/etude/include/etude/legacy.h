@@ -122,9 +122,9 @@ struct etude_legacy_member {
     uint64_t memory_mib; /* the most guest memory its machines ask for at once */
     int serial;          /* it runs before the others, with nothing beside it */
     int stops;           /* its failure cancels the suites not yet started */
-    const char *cases;   /* the manifest whose host cases run the suite, from
-                            the tree's root unless absolute, or NULL for a
-                            suite of the registry */
+    const char *cases;   /* the manifest whose host and guest cases run the
+                            suite, from the tree's root unless absolute, or
+                            NULL for a suite of the registry */
 };
 
 /* The resources of a machine's ledger that a set's claims take. */
@@ -161,7 +161,9 @@ struct etude_legacy_set_opts {
     const char *record;          /* the file of the preparation's record, or NULL for
                                     `prepare.record` under `results` */
     const char *evidence;        /* the directory under which a suite that does not pass
-                                    keeps its work */
+                                    keeps its work, and each case its workspace;
+                                    the guest cases' store of artifacts is made in
+                                    it for the run */
     const char *status;          /* the status record, rewritten as the run goes, or NULL */
     const char *stamp;           /* a file touched once the preparation has ended, or NULL */
     const char *commit;          /* the tree's commit, or NULL when it has none */
@@ -189,15 +191,18 @@ struct etude_legacy_set_opts {
  * with `o->stop_on_fail`, the first member that does not pass does so at
  * once.
  *
- * A member with `cases` is run by the host cases of its manifest that run
- * on `o->arch` or on none, each repetition of each a member of its own that
- * keeps the suite's `serial`. Their programs are goals of the
- * preparation; each runs in the tree under the case's initial bounds, with
- * a claim of the case's resources, and `o->casecheck` judges each attempt.
- * A manifest that cannot be read, of another suite's family, with no case
- * on the architecture, or with a case that is not a host case or needs
- * input, ports, loop devices, host locks or a fixture other than scratch,
- * is refused.
+ * A member with `cases` is run by the host and guest cases of its manifest
+ * that run on `o->arch` or on none, each repetition of each a member of its
+ * own that keeps the suite's `serial`. Their artifacts are goals of the
+ * preparation. Each runs in a workspace of its own under `o->evidence`,
+ * under the case's initial bounds, with a claim of the case's resources: a
+ * host case's program with ETUDE_TREE naming the tree, and a guest case's
+ * program on a machine of its QEMU profile, through etude-guest, with the
+ * memory the launcher reserves for the machine as its claim. `o->casecheck`
+ * judges each attempt, a guest's placed `qemu` with the machine's console. A
+ * manifest that cannot be read, of another suite's family, with no case on
+ * the architecture, or with a case that the set driver cannot run
+ * (legacy_manifest_read) is refused.
  *
  * The history is one stream under `o->results`, with the plan of one item
  * for each suite of the registry, the case `legacy.SUITE` of the family

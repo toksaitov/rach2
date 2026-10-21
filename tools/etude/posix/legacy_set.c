@@ -2,11 +2,12 @@
  * legacy_set.c: the set driver on POSIX systems. It runs the suites of one
  * run of tests/run as one run of etude: it prepares them under a claim of
  * every limited resource of the machine, admits each suite of the registry,
- * and each item of a suite run by the host cases of a manifest, through the
- * machine's ledger with the old runner's host lock and a port block, runs a
- * suite as `etude-legacy run` under a watchdog of the whole suite and a
- * case's program under the case's own watchdog, and writes the run's history
- * and its status record.
+ * and each item of a suite run by the host and guest cases of a manifest,
+ * through the machine's ledger with the old runner's host lock and a port
+ * block, runs a suite as `etude-legacy run` under a watchdog of the whole
+ * suite, a host case's program in its workspace and a guest case's machine
+ * (legacy_guest.c) under the case's own watchdog, and writes the run's
+ * history and its status record.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -32,6 +33,7 @@
 #include "etude/status.h"
 #include "etude/watchdog.h"
 #include "legacy_cases.h"
+#include "legacy_guest.h"
 #include "posix.h"
 #include "sha256.h"
 
@@ -80,6 +82,9 @@ extern char **environ;
 /* The start of the result line etude-legacy ends its output with. */
 #define RESULT "etude-legacy: result: "
 
+/* The most variables a case's program is given by its item. */
+#define CASE_VARS 5
+
 static const char *const resource_names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
 static const char *const outcome_names[] = {"pass", "failure", "incomplete", "cancelled"};
 
@@ -111,7 +116,8 @@ struct command {
     char out[PATH_LEN]; /* the file of its output */
     char **argv;
     char **envp;
-    const char *cwd; /* its working directory, the tree's root */
+    const char *cwd; /* its working directory: the tree's root, or a case's
+                        workspace */
     char offset[40]; /* RACH2_PORT_OFFSET=N */
     struct etude_watchdog_spec wd;
     uint64_t grace_us;
@@ -152,13 +158,16 @@ struct member {
     char label[180]; /* a case's identity, and its repetition after the first */
     char item_id[300];
     char record_id[300];    /* its attempt record, once written */
-    char work[PATH_LEN];    /* a suite's work or a case's scratch directory, kept
-                               when it does not pass */
+    char work[PATH_LEN];    /* a suite's work directory or a case's workspace,
+                               kept when it does not pass */
     char program[PATH_LEN]; /* a case's program */
     char judged_out[PATH_LEN], judge_err[PATH_LEN]; /* casecheck's output */
     char *judged; /* the results document casecheck gave, or NULL */
     size_t njudged;
-    char vars[4][PATH_LEN + 32]; /* the variables a case's program is given */
+    char vars[CASE_VARS][PATH_LEN + 32]; /* the variables a case's program is
+                                            given */
+    struct legacy_guest *g;              /* a guest case's attempt while it runs */
+    char guest_err[PATH_LEN];            /* the standard error of a guest's program */
     char inventory[65];
     char workload[400], assertions[400], profile[400]; /* blob references */
     struct command c;
@@ -185,6 +194,8 @@ struct set {
                            given, the members of one suite together */
     size_t n;
     char tree[PATH_LEN];               /* the tree's absolute path */
+    struct etude_store *objects;       /* the guest cases' artifacts, or NULL */
+    char objects_dir[PATH_LEN];        /* their store, under the evidence */
     struct legacy_manifest *manifests; /* by the request's members; a suite
                                           of the registry has none */
     struct etude_job *jobs;            /* beside mem */
@@ -668,15 +679,16 @@ static void variable(struct cmp_text *d, const char *var, int first)
     cmp_printf(d, "}");
 }
 
-/** Append the reproduction of case member `m`: its program and arguments,
- * run in the tree with its variables, after make of its artifacts. */
+/** Append the reproduction of host case member `m`: its program and
+ * arguments, run in the tree with its variables, ETUDE_TREE among them,
+ * after make of its artifacts. */
 static void reproduce_case(const struct set *x, const struct member *m, struct cmp_text *d)
 {
     const struct legacy_case *k = m->k;
     size_t i;
 
     cmp_printf(d, ",\"environment\":[");
-    for (i = 0; i < 4 && m->vars[i][0] != '\0'; i++)
+    for (i = 0; i < CASE_VARS && m->vars[i][0] != '\0'; i++)
         if (strncmp(m->vars[i], "TMPDIR=", 7) != 0)
             variable(d, m->vars[i], i == 0);
     cmp_printf(d, "],\"preparation\":[[\"make\",\"-C\",");
@@ -696,7 +708,7 @@ static void reproduce_case(const struct set *x, const struct member *m, struct c
 }
 
 /** Append the reproduction commands of each item: tests/run of its suite,
- * or the program of its case. */
+ * which runs a guest case too, or the program of its host case. */
 static void reproduce(const struct set *x, struct cmp_text *d)
 {
     size_t i;
@@ -706,8 +718,8 @@ static void reproduce(const struct set *x, struct cmp_text *d)
         cmp_printf(d, "%s{\"item_id\":", i ? "," : "");
         string(d, x->mem[i].item_id);
         cmp_printf(d, ",\"directory\":");
-        string(d, x->mem[i].k != NULL ? x->tree : x->o->tree);
-        if (x->mem[i].k != NULL) {
+        string(d, x->mem[i].k != NULL && !x->mem[i].k->guest ? x->tree : x->o->tree);
+        if (x->mem[i].k != NULL && !x->mem[i].k->guest) {
             reproduce_case(x, &x->mem[i], d);
             continue;
         }
@@ -805,9 +817,10 @@ static int write_plan(struct set *x)
         cmp_printf(&t, ",\"family_id\":");
         string(&t, family_of(m));
         cmp_printf(&t,
-                   ",\"architecture\":\"%s\",\"domain\":\"host\",\"workload\":%s,"
+                   ",\"architecture\":\"%s\",\"domain\":\"%s\",\"workload\":%s,"
                    "\"assertions\":%s,\"profile\":%s,\"repetition\":%lld,\"attempt_ids\":[",
-                   m->arch, m->workload, m->assertions, m->profile, m->rep);
+                   m->arch, m->k != NULL && m->k->guest ? "qemu" : "host", m->workload,
+                   m->assertions, m->profile, m->rep);
         string(&t, m->c.id);
         cmp_printf(&t, "]}");
     }
@@ -1264,13 +1277,17 @@ static void judge_exit(struct command *c, const char *line, int v, int prep)
         came_out(c, INCOMPLETE, 1, "etude-legacy exited with status %d and no result", v);
 }
 
-/** Take the end of command `c` from its result `r`. */
+/** Take the end of command `c` from its result `r`: a host process's, or
+ * a machine's, whose processor time is QEMU's. */
 static void took(struct command *c, const struct etude_supervised_result *r)
 {
     c->end = r->end;
     c->value = r->value;
     c->cleanup = r->cleanup;
-    c->cpu_us = r->proc->cpu_us;
+    if (r->proc != NULL)
+        c->cpu_us = r->proc->cpu_us;
+    else if (r->machine != NULL && r->machine->qemu != NULL)
+        c->cpu_us = r->machine->qemu->cpu_us;
     c->ended_us = r->finished_us;
     c->max_gap_us = r->max_gap_us;
     etude_history_now(&c->done);
@@ -1331,12 +1348,26 @@ static enum outcome outcome_of(enum legacy_judged j)
     return j == LEGACY_PASS ? PASS : j == LEGACY_FAILURE ? FAILURE : INCOMPLETE;
 }
 
-/** Judge the case of member `m`, which has finished, by casecheck's
- * judgement of its output and its end. */
+/** Give the end that casecheck's name `end` stands for. */
+static enum etude_end end_named(const char *end)
+{
+    return strcmp(end, "exited") == 0     ? ETUDE_END_EXITED
+           : strcmp(end, "signaled") == 0 ? ETUDE_END_SIGNALED
+           : strcmp(end, "stopped") == 0  ? ETUDE_END_STOPPED
+                                          : ETUDE_END_LOST;
+}
+
+/**
+ * Judge the case of member `m`, which has finished, by casecheck's
+ * judgement of its output and its end. A guest case is judged as placed
+ * under QEMU, with the machine's console, by the end etude-guest reported;
+ * a fault of its session is a disruption beside casecheck's reason.
+ */
 static void judge_case(struct set *x, struct member *m)
 {
     struct command *c = &m->c;
     const struct etude_supervised_result *r = etude_supervised_result(c->sup);
+    const char *why = m->g != NULL ? legacy_guest_why(m->g) : "";
     struct legacy_judge j;
     struct legacy_judgement v;
 
@@ -1351,8 +1382,17 @@ static void judge_case(struct set *x, struct member *m)
     j.run_id = x->run_id;
     j.attempt_id = c->id;
     j.item_id = m->item_id;
-    j.end = end_of(r);
-    j.value = strcmp(j.end, "exited") == 0 || strcmp(j.end, "signaled") == 0 ? r->value : -1;
+    j.placement = "host";
+    if (m->g != NULL) {
+        j.placement = "qemu";
+        j.console = legacy_guest_console(m->g);
+        j.end = legacy_guest_end(m->g, r, &j.value);
+        c->end = end_named(j.end);
+        c->value = j.value;
+    } else {
+        j.end = end_of(r);
+        j.value = strcmp(j.end, "exited") == 0 || strcmp(j.end, "signaled") == 0 ? r->value : -1;
+    }
     j.results = m->judged_out;
     j.errors = m->judge_err;
     legacy_judge_run(&j, &v);
@@ -1363,6 +1403,8 @@ static void judge_case(struct set *x, struct member *m)
     else if (r->incomplete && r->expiry != ETUDE_EXPIRY_NONE)
         came_out(c, outcome_of(v.outcome), 0, "it ran past its %s bound of %llu ms: %s",
                  etude_expiry_name(r->expiry), (unsigned long long)(r->bound_us / 1000u), v.reason);
+    else if (why[0] != '\0' && v.outcome != LEGACY_PASS)
+        came_out(c, outcome_of(v.outcome), 1, "%s; %s", why, v.reason);
     else
         came_out(c, outcome_of(v.outcome), 0, "%s", v.reason);
     settle(x, c);
@@ -1454,7 +1496,8 @@ static int results(const struct set *x, const struct member *m, struct cmp_text 
 {
     const struct command *c = &m->c;
     struct cmp_text d = {NULL, 0, 0, 0};
-    const char *by = "host_process", *check;
+    int guest = m->k != NULL && m->k->guest;
+    const char *by = guest ? "etude_guest" : "host_process", *check;
     int value = c->value;
 
     if (m->judged != NULL)
@@ -1473,9 +1516,9 @@ static int results(const struct set *x, const struct member *m, struct cmp_text 
     cmp_printf(&d, ",\"case_id\":");
     string(&d, m->case_id);
     cmp_printf(&d,
-               ",\"inventory_sha256\":\"%s\",\"placement\":\"host\",\"termination\":{\"end\":"
+               ",\"inventory_sha256\":\"%s\",\"placement\":\"%s\",\"termination\":{\"end\":"
                "\"%s\",\"value\":",
-               m->inventory, end_name(c->end));
+               m->inventory, guest ? "qemu" : "host", end_name(c->end));
     if (value >= 0 && value <= 255)
         cmp_printf(&d, "%d", value);
     else
@@ -1992,7 +2035,10 @@ static void stop_all(struct set *x, const char *why, const char *what)
         if (c->state == QUEUED || c->state == LOCKING)
             not_run(x, c, CANCELLED, why, 0);
         else if (c->state == RUNNING && !c->cancelled) {
-            etude_supervised_cancel(c->sup);
+            if (x->mem[i].g != NULL)
+                legacy_guest_cancel(x->mem[i].g);
+            else
+                etude_supervised_cancel(c->sup);
             c->cancelled = 1;
         }
     }
@@ -2004,24 +2050,99 @@ static size_t case_vars(struct member *m, char **vars)
 {
     size_t n = 0;
 
-    while (n < 4 && m->vars[n][0] != '\0') {
+    while (n < CASE_VARS && m->vars[n][0] != '\0') {
         vars[n] = m->vars[n];
         n++;
     }
     return n;
 }
 
-/** Start the case of member `m`, whose claim and locks are held, with its
- * scratch directory made when it has one. */
+/** Open the store of the guest cases' artifacts, under the evidence, once;
+ * 0, or -1 with why in `why`. */
+static int open_objects(struct set *x, char *why, size_t size)
+{
+    if (x->objects != NULL)
+        return 0;
+    if (fit(x->objects_dir, sizeof(x->objects_dir), "%s/%s.store", x->o->evidence, x->run_id) !=
+            0 ||
+        (x->objects = etude_store_open(x->objects_dir)) == NULL) {
+        (void)fit(why, size, "the store of its artifacts, %s, cannot be opened: %s", x->objects_dir,
+                  strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Start the machine of guest case member `m`, whose claim and locks are
+ * held and whose workspace is made, with the `n` variables `vars` in QEMU's
+ * environment; 0, or -1 with why in `why`.
+ */
+static int start_guest(struct set *x, struct member *m, char *const *vars, size_t n, char *why,
+                       size_t size)
+{
+    struct command *c = &m->c;
+    struct legacy_guest_spec s;
+    const struct etude_supervised_result *r;
+
+    if (environment(c, vars, n) != 0) {
+        snprintf(why, size, "%s", strerror(errno));
+        return -1;
+    }
+    if (open_objects(x, why, size) != 0)
+        return -1;
+    memset(&s, 0, sizeof(s));
+    s.k = m->k;
+    s.run_id = x->run_id;
+    s.attempt_id = c->id;
+    s.arch = x->o->arch;
+    s.accel = x->o->accel;
+    s.tree = x->tree;
+    s.record = x->record;
+    s.store = x->objects;
+    s.work = m->work;
+    s.out = c->out;
+    s.err = m->guest_err;
+    s.envp = c->envp;
+    s.memory_bytes = m->k->memory_bytes;
+    s.grace_us = c->grace_us;
+    s.reg = etude_ledger_register;
+    s.reg_ctx = x->l;
+    s.wd = &c->wd;
+    if (legacy_guest_start(x->sup, &s, &m->g, &c->sup, why, size) != 0) {
+        c->sup = NULL;
+        return -1;
+    }
+    r = etude_supervised_result(c->sup);
+    c->ran = 1;
+    if (r->machine != NULL && r->machine->qemu != NULL) {
+        c->keeper = r->machine->qemu->keeper;
+        c->process = r->machine->qemu->process;
+    }
+    c->started_us = posix_now_us();
+    c->state = RUNNING;
+    return 0;
+}
+
+/** Start the case of member `m`, whose claim and locks are held, in its
+ * workspace: a host case's program, or a guest case's machine. */
 static void start_case(struct set *x, struct member *m)
 {
     struct command *c = &m->c;
-    char *vars[4];
+    char *vars[CASE_VARS], why[REASON_LEN];
     size_t n = case_vars(m, vars);
+    int rc;
 
     say(x, "run: %s: %s: starting", m->m->suite, m->label);
-    if ((m->k->scratch && make_dir(m->work) != 0) || start(x, c, vars, n) != 0) {
-        came_out(c, INCOMPLETE, 1, "the case could not start: %s", strerror(errno));
+    why[0] = '\0';
+    if ((rc = make_dir(m->work)) != 0)
+        (void)fit(why, sizeof(why), "%s: %s", m->work, strerror(errno));
+    else if (m->k->guest)
+        rc = start_guest(x, m, vars, n, why, sizeof(why));
+    else if ((rc = start(x, c, vars, n)) != 0)
+        snprintf(why, sizeof(why), "%s", strerror(errno));
+    if (rc != 0) {
+        came_out(c, INCOMPLETE, 1, "the case could not start: %s", why);
         not_run(x, c, INCOMPLETE, c->reason, 1);
         write_attempt(x, m);
         return;
@@ -2060,8 +2181,8 @@ static void start_member(struct set *x, struct member *m)
     status(x, 1);
 }
 
-/** Remove the scratch directory of case member `m` after a pass, and name
- * it otherwise, as its evidence. */
+/** Remove the workspace of case member `m` after a pass, and name it
+ * otherwise, as its evidence. */
 static void scratch_end(struct set *x, const struct member *m)
 {
     if (m->c.outcome != PASS)
@@ -2085,6 +2206,8 @@ static void finished(struct set *x, struct etude_supervised *f)
         return;
     }
     c = &m->c;
+    if (m->g != NULL)
+        legacy_guest_serve(m->g);
     if (m->k != NULL)
         judge_case(x, m);
     else
@@ -2097,10 +2220,12 @@ static void finished(struct set *x, struct etude_supervised *f)
     else if (c->cancelled && c->outcome == CANCELLED && !c->live)
         say(x, "run: %s: stopped before its end; its output so far:", c->name);
     drain(x, c, 1);
-    if (m->k != NULL && m->k->scratch)
+    if (m->k != NULL)
         scratch_end(x, m);
     etude_supervised_free(f);
     c->sup = NULL;
+    legacy_guest_free(m->g);
+    m->g = NULL;
     write_attempt(x, m);
     status(x, 1);
     if ((c->outcome == FAILURE || c->outcome == INCOMPLETE) && x->o->stop_on_fail)
@@ -2207,6 +2332,8 @@ static void drive(struct set *x)
                 advance(x, i);
             if (c->state == RUNNING) {
                 busy++;
+                if (x->mem[i].g != NULL)
+                    legacy_guest_serve(x->mem[i].g);
                 if (x->mem[i].k != NULL)
                     feed(c);
                 if (c->live)
@@ -2414,7 +2541,7 @@ static int member_command(struct set *x, struct member *m)
 }
 
 /** Name the files of case member `m`, the repetition `m->rep` of its case:
- * its item, its attempt, its scratch, its output and casecheck's, its
+ * its item, its attempt, its workspace, its output and casecheck's, its
  * program, and the variables its program is given; 0, or -1. */
 static int case_paths(struct set *x, struct member *m)
 {
@@ -2434,6 +2561,7 @@ static int case_paths(struct set *x, struct member *m)
         fit(c->out, sizeof(c->out), "%s/%s.log", x->output, tail) != 0 ||
         fit(m->judged_out, sizeof(m->judged_out), "%s/%s.results", x->output, tail) != 0 ||
         fit(m->judge_err, sizeof(m->judge_err), "%s/%s.judge", x->output, tail) != 0 ||
+        fit(m->guest_err, sizeof(m->guest_err), "%s/%s.err", x->output, tail) != 0 ||
         fit(m->program, sizeof(m->program), "%s/%s", x->tree, k->goals[k->program]) != 0)
         return -1;
     snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_CASE=%s", k->case_id);
@@ -2443,12 +2571,20 @@ static int case_paths(struct set *x, struct member *m)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "ARCH=%s", k->arch);
     if (k->scratch)
         snprintf(m->vars[v++], sizeof(m->vars[0]), "TMPDIR=%s", m->work);
+    if (!k->guest)
+        snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_TREE=%s", x->tree);
     return 0;
 }
 
-/** Fill the command of case member `m` from its case: the program under
- * the case's own bounds, and a claim of its resources held within the
- * ledger's limits, which takes the old host lock shared and no port. */
+/**
+ * Fill the command of case member `m` from its case, to run in its
+ * workspace under the case's own bounds, with a claim of its resources held
+ * within the ledger's limits. A host case's program takes the old host lock
+ * shared and no port. A guest case's machine, whose memory is what its QEMU
+ * profile reserves, takes a port block as a suite does, and the host lock
+ * alone when it claims more than half the memory; its watchdog bounds the
+ * stages the manifest bounds.
+ */
 static int case_command(struct set *x, struct member *m)
 {
     const struct legacy_case *k = m->k;
@@ -2459,7 +2595,7 @@ static int case_command(struct set *x, struct member *m)
     if (case_paths(x, m) != 0)
         return -1;
     c->name = m->label;
-    c->cwd = x->tree;
+    c->cwd = m->work;
     m->arch = k->arch;
     want[ETUDE_LEGACY_CPU] = k->cpu_millis;
     want[ETUDE_LEGACY_MEMORY] = k->memory_bytes;
@@ -2470,7 +2606,12 @@ static int case_command(struct set *x, struct member *m)
         c->res[c->nres].name = resource_names[i];
         c->res[c->nres++].amount = want[i] < x->cap[i].amount ? want[i] : x->cap[i].amount;
     }
-    c->exclusive = m->m->serial;
+    if (k->guest) {
+        c->ports = x->o->locks != NULL;
+        c->alone = c->ports && k->memory_bytes > x->cap[ETUDE_LEGACY_MEMORY].amount / 2;
+        memcpy(c->wd.stage_us, k->stage_us, sizeof(c->wd.stage_us));
+    }
+    c->exclusive = m->m->serial || c->alone;
     c->is_case = 1;
     c->live = x->n == 1;
     c->grace_us = CASE_GRACE_US;
@@ -2748,6 +2889,7 @@ static void tear_down(struct set *x)
     if (x->sup != NULL)
         etude_supervisor_free(x->sup);
     for (i = 0; x->mem != NULL && i < x->n; i++) {
+        legacy_guest_free(x->mem[i].g);
         free(x->mem[i].c.argv);
         free(x->mem[i].c.envp);
         free(x->mem[i].judged);
@@ -2759,6 +2901,11 @@ static void tear_down(struct set *x)
     free(x->prep.envp);
     free(x->mem);
     free(x->jobs);
+    if (x->objects != NULL) {
+        etude_store_close(x->objects);
+        if (legacy_remove_tree(x->objects_dir) != 0)
+            say(x, "etude-legacy: set: %s: not removed: %s", x->objects_dir, strerror(errno));
+    }
     if (x->l != NULL)
         etude_ledger_close(x->l);
     if (x->h != NULL && etude_history_close(x->h) != 0)

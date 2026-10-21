@@ -51,10 +51,11 @@
 # The program writes the case's report records on its standard output
 # (tools/etude/Readme.md, Report records), with the lines a person reads
 # between them, and exits 0 when every assertion passed and 1 otherwise.
-# etude runs it in the root of the tree, with TMPDIR a scratch directory of
-# the case's own, which etude keeps after a failure.
+# etude runs it in the case's workspace, with ETUDE_TREE naming the root of
+# the tree, to which the program changes, and TMPDIR the workspace, which
+# etude keeps after a failure.
 #
-# Usage, in the root of the tree:
+# Usage, in the root of the tree, or anywhere with ETUDE_TREE set to it:
 #     sh tests/cases/host/agentapi.sh codex|muse exchange|refusal
 #
 # The logs and the server's record go to a private directory under TMPDIR,
@@ -76,6 +77,9 @@ case "$AGENT $CASE" in
     "codex exchange" | "codex refusal" | "muse exchange" | "muse refusal") ;;
     *) usage ;;
 esac
+if [ -n "${ETUDE_TREE-}" ]; then
+    cd "$ETUDE_TREE" || exit 2
+fi
 [ -f tests/system/fakeapi/fakeapi.py ] || {
     echo "agentapi: run it in the root of the tree" >&2
     exit 2

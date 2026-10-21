@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "proof": "legacyset",
-  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver and its cases, each fault found by its own row",
+  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver, its cases and its guest attempts, each fault found by its own row",
   "tree": "private",
   "sources": [
     "tools/etude/posix/legacy_set.c",
     "tools/etude/posix/legacy_cases.c",
+    "tools/etude/posix/legacy_guest.c",
     "tools/etude/posix/legacy.c"
   ],
   "artifacts": [
@@ -15,7 +16,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude -I tools/etude/posix tests/host/etude_legacyset_hosttest.c ${SRC}/tools/etude/posix/legacy.c ${SRC}/tools/etude/posix/legacy_set.c ${SRC}/tools/etude/posix/legacy_cases.c tools/etude/digest.c tools/etude/json.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c tools/etude/watchdog.c tools/etude/supervise.c tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c tools/etude/posix/bridge.c tools/etude/posix/status.c tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c tools/etude/compare_run.c tools/etude/history.c tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c -o ${WORK}/etude_legacyset_hosttest"
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude -I tools/etude/posix tests/host/etude_legacyset_hosttest.c ${SRC}/tools/etude/posix/legacy.c ${SRC}/tools/etude/posix/legacy_set.c ${SRC}/tools/etude/posix/legacy_cases.c ${SRC}/tools/etude/posix/legacy_guest.c tools/etude/serial.c tools/etude/guest/wire.c tools/etude/posix/store.c tools/etude/digest.c tools/etude/json.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c tools/etude/watchdog.c tools/etude/supervise.c tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c tools/etude/posix/bridge.c tools/etude/posix/status.c tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c tools/etude/compare_run.c tools/etude/history.c tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c -o ${WORK}/etude_legacyset_hosttest"
     ],
     "bound_s": 300
   },
@@ -23,7 +24,7 @@
     "argv": [
       "${WORK}/etude_legacyset_hosttest"
     ],
-    "bound_s": 300,
+    "bound_s": 900,
     "fail_prefix": "etude-legacyset-test: fail: "
   },
   "faults": [
@@ -84,8 +85,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "    c->exclusive = m->m->serial || c->alone;\n",
-          "replace": "    c->exclusive = c->alone;\n"
+          "find": "    c->exclusive = m->m->serial || c->alone;\n    c->filter = 1;\n",
+          "replace": "    c->exclusive = c->alone;\n    c->filter = 1;\n"
         }
       ],
       "fails": {
@@ -560,14 +561,14 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_cases.c",
-          "find": "    if (domain == NULL || strcmp(domain, \"host\") != 0)\n",
+          "find": "    if (domain == NULL || (strcmp(domain, \"host\") != 0 && strcmp(domain, \"guest\") != 0))\n",
           "replace": "    if (domain == NULL)\n"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
-          ": fixture.bad.one: a case of the domain guest; the set driver runs host cases alone: "
+          ": fixture.bad.one: a case of the domain machine; the set driver runs host and guest cases alone: "
         ]
       }
     },
@@ -577,8 +578,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_cases.c",
-          "find": "        if ((f = json_text(iso->item[i], \"fixture\")) == NULL || strcmp(f, \"scratch\") != 0)\n",
-          "replace": "        if ((f = json_text(iso->item[i], \"fixture\")) == NULL)\n"
+          "find": "        if (f == NULL || strcmp(f, \"scratch\") != 0)\n",
+          "replace": "        if (f == NULL)\n"
         }
       ],
       "fails": {
@@ -602,6 +603,261 @@
         "status": 1,
         "lines": [
           ": a suite run by its cases needs casecheck's path: "
+        ]
+      }
+    },
+    {
+      "name": "workspace",
+      "summary": "a case's program runs in the tree and not in its workspace",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    c->cwd = m->work;\n",
+          "replace": "    c->cwd = x->tree;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": workspace: a host case runs in it: "
+        ]
+      }
+    },
+    {
+      "name": "tree",
+      "summary": "a host case's program is not given ETUDE_TREE",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "\"ETUDE_TREE=%s\", x->tree);\n",
+          "replace": "\"ETUDE_TREX=%s\", x->tree);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": workspace: ETUDE_TREE is the tree: "
+        ]
+      }
+    },
+    {
+      "name": "kept",
+      "summary": "the workspace of a case without scratch is kept after a pass",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (m->k != NULL)\n        scratch_end(x, m);\n",
+          "replace": "    if (m->k != NULL && m->k->scratch)\n        scratch_end(x, m);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": workspace: removed after a pass without scratch: "
+        ]
+      }
+    },
+    {
+      "name": "init",
+      "summary": "a guest case of the init role is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (role == NULL || (strcmp(role, \"ordinary\") != 0 && strcmp(role, \"boot\") != 0))\n",
+          "replace": "    if (role == NULL)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": fixture.badguest.one: the case's role is init; "
+        ]
+      }
+    },
+    {
+      "name": "ovmf",
+      "summary": "a guest case booted by OVMF is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (firmware == NULL || strcmp(firmware, \"ovmf\") == 0)\n",
+          "replace": "    if (firmware == NULL)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": fixture.badguest.one: the case boots by ovmf, "
+        ]
+      }
+    },
+    {
+      "name": "ends",
+      "summary": "a guest case that ends other than by an exit is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (end == NULL || (strcmp(end, \"exited\") != 0 && strcmp(end, \"signaled\") != 0))\n",
+          "replace": "    if (end == NULL)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": fixture.badguest.one: the case ends as shutdown; "
+        ]
+      }
+    },
+    {
+      "name": "disk",
+      "summary": "a guest case's disk of no disk fixture is taken, to be written in place",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "        if ((media == NULL || strcmp(media, \"cdrom\") != 0) && !disk_fixture(k, name))\n",
+          "replace": "        if ((media == NULL || strcmp(media, \"cdrom\") != 0) && !disk_fixture(k, name) && 0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": fixture.badguest.one: the disk etude-guest is in no disk fixture: "
+        ]
+      }
+    },
+    {
+      "name": "placement",
+      "summary": "casecheck is told that a guest case ran on the host",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        j.placement = \"qemu\";\n",
+          "replace": "        j.placement = \"host\";\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: placed qemu, its end from etude-guest: "
+        ]
+      }
+    },
+    {
+      "name": "console",
+      "summary": "casecheck is not given the machine's console",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        j.console = legacy_guest_console(m->g);\n",
+          "replace": "        j.console = NULL;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: the console judged for the kernel's faults: "
+        ]
+      }
+    },
+    {
+      "name": "processor",
+      "summary": "a guest case's machine is given the processor max whatever its profile",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_guest.c",
+          "find": "    p->cpu = json_text(q, \"cpu\");\n",
+          "replace": "    p->cpu = \"max\";\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: each machine has its profile's processor: "
+        ]
+      }
+    },
+    {
+      "name": "stages",
+      "summary": "a guest case's watchdog is not given the bounds of its stages",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        memcpy(c->wd.stage_us, k->stage_us, sizeof(c->wd.stage_us));\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: a boot past its stage's bound is incomplete: "
+        ]
+      }
+    },
+    {
+      "name": "stopped",
+      "summary": "a guest case stopped by its watchdog is taken as lost",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_guest.c",
+          "find": "    if (r->expiry != ETUDE_EXPIRY_NONE || g->cancelled ||\n",
+          "replace": "    if (g->cancelled ||\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: a boot past its bound was stopped: "
+        ]
+      }
+    },
+    {
+      "name": "output",
+      "summary": "the guest program's output is not written to its file",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_guest.c",
+          "find": "    if (f != NULL && fwrite(buf, 1, n, f) == n)\n        fflush(f);\n",
+          "replace": "    (void)f;\n    (void)buf;\n    (void)n;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: the program's output: "
+        ]
+      }
+    },
+    {
+      "name": "store",
+      "summary": "the run's store of guest artifacts is left behind",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        if (legacy_remove_tree(x->objects_dir) != 0)\n            say(x, \"etude-legacy: set: %s: not removed: %s\", x->objects_dir, strerror(errno));\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: the store removed at the end: "
+        ]
+      }
+    },
+    {
+      "name": "plandomain",
+      "summary": "the plan gives a guest case's item the domain host",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "m->k != NULL && m->k->guest ? \"qemu\" : \"host\", m->workload,",
+          "replace": "\"host\", m->workload,"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: the plan's items are of the domain qemu: "
         ]
       }
     }

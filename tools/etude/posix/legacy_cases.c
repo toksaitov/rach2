@@ -1,8 +1,8 @@
 /*
- * legacy_cases.c: the host cases of a suite's manifest as the set driver
- * runs them. It reads the manifest, gives each case that runs on the run's
- * architecture its program, its arguments, its bounds, its claim and the
- * canonical documents of its item, and judges an attempt by
+ * legacy_cases.c: the host and guest cases of a suite's manifest as the set
+ * driver runs them. It reads the manifest, gives each case that runs on the
+ * run's architecture its program, its arguments, its bounds, its claim and
+ * the canonical documents of its item, and judges an attempt by
  * `casecheck attempt`.
  */
 #include <dirent.h>
@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "digest.h"
+#include "etude/qemu.h"
 #include "legacy_cases.h"
 #include "posix.h"
 
@@ -191,9 +192,12 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     const char *domain = json_text(k->json, "domain"), *f;
     size_t i;
 
-    if (domain == NULL || strcmp(domain, "host") != 0)
-        return refuse(m, "%s: a case of the domain %s; the set driver runs host cases alone",
+    if (domain == NULL || (strcmp(domain, "host") != 0 && strcmp(domain, "guest") != 0))
+        return refuse(m,
+                      "%s: a case of the domain %s; the set driver runs host and guest cases "
+                      "alone",
                       k->case_id, domain != NULL ? domain : "?");
+    k->guest = strcmp(domain, "guest") == 0;
     if (iso == NULL || in == NULL || locks == NULL)
         return refuse(m, "%s: the case lacks its isolation, its input or its locks", k->case_id);
     if (in->type != JSON_NULL)
@@ -205,9 +209,13 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
                       "set driver does not give",
                       k->case_id);
     for (i = 0; i < iso->count; i++) {
-        if ((f = json_text(iso->item[i], "fixture")) == NULL || strcmp(f, "scratch") != 0)
+        f = json_text(iso->item[i], "fixture");
+        if (f != NULL && k->guest && strcmp(f, "disk") == 0)
+            continue;
+        if (f == NULL || strcmp(f, "scratch") != 0)
             return refuse(m,
-                          "%s: the case needs the fixture %s; the set driver gives scratch alone",
+                          "%s: the case needs the fixture %s; the set driver gives scratch alone, "
+                          "and disk to a guest case",
                           k->case_id, f != NULL ? f : "?");
         k->scratch = 1;
     }
@@ -217,6 +225,144 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     if (count_of(r, "cpu_millis") < 1 || count_of(r, "memory_bytes") < 1 ||
         count_of(r, "disk_bytes") < 0)
         return refuse(m, "%s: the case's resources lack a processor, memory or disk", k->case_id);
+    return 0;
+}
+
+/** Say whether `name` is in a `disk` fixture of case `k`'s isolation. */
+static int disk_fixture(const struct legacy_case *k, const char *name)
+{
+    const struct json *iso =
+        typed(typed(k->json, "execution", JSON_OBJECT), "isolation", JSON_ARRAY);
+    const struct json *names;
+    const char *f;
+    size_t i, j;
+
+    for (i = 0; iso != NULL && i < iso->count; i++) {
+        f = json_text(iso->item[i], "fixture");
+        names = typed(iso->item[i], "names", JSON_ARRAY);
+        for (j = 0; f != NULL && strcmp(f, "disk") == 0 && names != NULL && j < names->count; j++)
+            if (names->item[j]->type == JSON_STRING && strcmp(names->item[j]->string, name) == 0)
+                return 1;
+    }
+    return 0;
+}
+
+/** Say whether case `k` has an artifact named `name`. */
+static int artifact_of(const struct legacy_case *k, const char *name)
+{
+    size_t i;
+
+    for (i = 0; name != NULL && i < k->ngoals; i++)
+        if (strcmp(k->names[i], name) == 0)
+            return 1;
+    return 0;
+}
+
+/**
+ * Check the disks of guest case `k`'s QEMU profile `q`: each a CD whose
+ * medium is an artifact, an empty disk of its size, or an artifact of a
+ * `disk` fixture, which the driver copies; 0, or -1 after a refusal.
+ */
+static int disks_of(struct legacy_manifest *m, const struct legacy_case *k, const struct json *q)
+{
+    const struct json *disks = typed(q, "disks", JSON_ARRAY), *d;
+    const char *name, *media;
+    size_t i;
+
+    for (i = 0; disks != NULL && i < disks->count; i++) {
+        d = disks->item[i];
+        name = d->type == JSON_STRING ? d->string : json_text(d, "name");
+        media = d->type == JSON_OBJECT ? json_text(d, "media") : NULL;
+        if (name == NULL)
+            return refuse(m, "%s: a disk of the case's QEMU profile has no name", k->case_id);
+        if (d->type == JSON_OBJECT && json_member(d, "size_bytes") != NULL)
+            continue;
+        if (!artifact_of(k, name))
+            return refuse(m, "%s: the disk %s is no artifact of the case's prepare list",
+                          k->case_id, name);
+        if ((media == NULL || strcmp(media, "cdrom") != 0) && !disk_fixture(k, name))
+            return refuse(m,
+                          "%s: the disk %s is in no disk fixture, so it would be written in place",
+                          k->case_id, name);
+    }
+    return 0;
+}
+
+/** Give the stage that a manifest's `bounds.stages` names `name`, or -1. */
+static int stage_of(const char *name)
+{
+    static const struct {
+        const char *name;
+        enum etude_stage stage;
+    } stages[] = {{"prepare", ETUDE_STAGE_PREPARE},
+                  {"transfer", ETUDE_STAGE_TRANSFER},
+                  {"boot", ETUDE_STAGE_BOOT},
+                  {"capture", ETUDE_STAGE_CAPTURE},
+                  {"cleanup", ETUDE_STAGE_CLEANUP}};
+    size_t i;
+
+    for (i = 0; i < sizeof(stages) / sizeof(stages[0]); i++)
+        if (strcmp(stages[i].name, name) == 0)
+            return (int)stages[i].stage;
+    return -1;
+}
+
+/**
+ * Check what guest case `k` needs of the driver beyond a host case's: its
+ * role, its end, its QEMU profile and its artifacts; take its stages'
+ * bounds, and the memory etude_qemu_memory reserves for its machine as its
+ * claim; 0, or -1 after a refusal.
+ */
+static int guest_of(struct legacy_manifest *m, struct legacy_case *k, const char *arch)
+{
+    const struct json *e = typed(k->json, "execution", JSON_OBJECT);
+    const struct json *stages = typed(typed(k->json, "bounds", JSON_OBJECT), "stages", JSON_OBJECT);
+    const char *role = json_text(e, "role");
+    const char *end = json_text(typed(k->json, "termination", JSON_OBJECT), "end");
+    const char *firmware, *initrd;
+    struct etude_qemu_profile p;
+    struct etude_qemu_memory mem;
+    size_t i;
+    int s;
+
+    k->qemu = typed(typed(k->json, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT);
+    if (role == NULL || (strcmp(role, "ordinary") != 0 && strcmp(role, "boot") != 0))
+        return refuse(m,
+                      "%s: the case's role is %s; the set driver runs ordinary and boot guest "
+                      "cases alone",
+                      k->case_id, role != NULL ? role : "?");
+    if (end == NULL || (strcmp(end, "exited") != 0 && strcmp(end, "signaled") != 0))
+        return refuse(m, "%s: the case ends as %s; the set driver runs a guest case that exits",
+                      k->case_id, end != NULL ? end : "?");
+    if (k->qemu == NULL)
+        return refuse(m, "%s: the guest case has no QEMU profile", k->case_id);
+    firmware = json_text(k->qemu, "firmware");
+    initrd = json_text(k->qemu, "initrd");
+    if (firmware == NULL || strcmp(firmware, "ovmf") == 0)
+        return refuse(m, "%s: the case boots by %s, which the set driver does not find", k->case_id,
+                      firmware != NULL ? firmware : "?");
+    if (!artifact_of(k, json_text(k->qemu, "kernel")) ||
+        (initrd != NULL && !artifact_of(k, initrd)))
+        return refuse(m, "%s: the case's kernel or RAM image is no artifact of its prepare list",
+                      k->case_id);
+    if (disks_of(m, k, k->qemu) != 0)
+        return -1;
+    memset(&p, 0, sizeof(p));
+    p.architecture = arch;
+    p.cpu = json_text(k->qemu, "cpu");
+    p.processors = (unsigned)count_of(k->qemu, "processors");
+    p.memory_bytes = (uint64_t)count_of(k->qemu, "memory_bytes");
+    p.memory_profile = json_text(k->qemu, "memory_profile");
+    if ((p.memory_profile != NULL && strcmp(p.memory_profile, "reserved") != 0) ||
+        etude_qemu_memory(&p, &mem) != 0)
+        return refuse(m,
+                      "%s: the case's machine is not of reserved memory in whole mebibytes, "
+                      "which the set driver runs alone",
+                      k->case_id);
+    k->memory_bytes = mem.resident_bytes + mem.overhead_bytes;
+    for (i = 0; stages != NULL && i < stages->count; i++)
+        if ((s = stage_of(stages->item[i]->name)) >= 0)
+            k->stage_us[s] = initial_of(stages->item[i]);
     return 0;
 }
 
@@ -303,7 +449,8 @@ static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char
 
     if (prep == NULL || program == NULL)
         return refuse(m, "%s: the case lacks its prepare list or its program", k->case_id);
-    if ((k->goals = calloc(prep->count + 1, sizeof(*k->goals))) == NULL)
+    if ((k->goals = calloc(prep->count + 1, sizeof(*k->goals))) == NULL ||
+        (k->names = calloc(prep->count + 1, sizeof(*k->names))) == NULL)
         return refuse(m, "memory ran out");
     for (i = 0; i < prep->count; i++) {
         a = prep->item[i];
@@ -315,6 +462,7 @@ static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char
         dir = per->integer && strcmp(arch, "x86_64") == 0 ? "build/x86_64" : "build";
         if ((k->goals[k->ngoals] = text_of("%s/%s", dir, node)) == NULL)
             return refuse(m, "memory ran out");
+        k->names[k->ngoals] = name;
         if (!found && strcmp(name, program) == 0) {
             k->program = k->ngoals;
             found = 1;
@@ -339,11 +487,11 @@ static int take_case(struct legacy_manifest *m, const struct json *c, const char
     if ((k->case_id = json_text(c, "case_id")) == NULL)
         return refuse(m, "a case has no identity");
     if (needs_of(m, k) != 0 || workload_of(m, k) != 0 || bounds_of(m, k) != 0 ||
-        goals_of(m, k, arch) != 0)
+        goals_of(m, k, arch) != 0 || (k->guest && guest_of(m, k, arch) != 0))
         return -1;
     workload_document(c, item_arch, &k->workload);
     inventory_document(c, &k->inventory);
-    profile_document(c, "host", &k->profile);
+    profile_document(c, k->guest ? "qemu" : "host", &k->profile);
     return 0;
 }
 
@@ -392,6 +540,7 @@ void legacy_manifest_free(struct legacy_manifest *m)
         for (g = 0; g < k->ngoals; g++)
             free(k->goals[g]);
         free(k->goals);
+        free(k->names);
         free(k->args);
         free(k->witnesses);
         jbuf_free(&k->workload);
@@ -545,7 +694,7 @@ static void judge_take(const struct legacy_judge *j, int status, struct legacy_j
 void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out)
 {
     char value[16];
-    char *argv[20];
+    char *argv[24];
     size_t k = 0;
     pid_t pid;
     int status;
@@ -556,10 +705,14 @@ void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out
     argv[k++] = "-s";
     argv[k++] = (char *)j->schemas;
     argv[k++] = "attempt";
+    if (j->console != NULL) {
+        argv[k++] = "-k";
+        argv[k++] = (char *)j->console;
+    }
     argv[k++] = (char *)j->manifest;
     argv[k++] = (char *)j->case_id;
     argv[k++] = (char *)j->arch;
-    argv[k++] = "host";
+    argv[k++] = (char *)j->placement;
     argv[k++] = (char *)j->output;
     argv[k++] = (char *)j->run_id;
     argv[k++] = (char *)j->attempt_id;
