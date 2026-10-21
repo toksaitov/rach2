@@ -24,14 +24,15 @@
 # a deployment that finishes; a deployment on this machine from a clone,
 # which the probes leave as it was; a commit's source; Windows; the discovery
 # of QEMU's OVMF code image and an absent override. --ovmf runs only the two
-# firmware rows and Windows.
+# firmware rows and Windows. --kvm runs only the three KVM device rows.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored and the rows run again at the end.
 # --texts puts each fault into the copy, requires only that it changes the
 # file, and runs no row.
 #
-# Usage: sh tests/system/etude_deploy_test.sh [--mutate | --texts | --ovmf]
+# Usage: sh tests/system/etude_deploy_test.sh
+#            [--mutate | --texts | --ovmf | --kvm]
 #
 set -u
 
@@ -40,7 +41,8 @@ case ${1:-} in
     --mutate) mode=mutate ;;
     --texts) mode=texts ;;
     --ovmf) mode=ovmf ;;
-    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--mutate | --texts | --ovmf]' >&2; exit 2 ;;
+    --kvm) mode=kvm ;;
+    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--mutate | --texts | --ovmf | --kvm]' >&2; exit 2 ;;
 esac
 deploy_source=${ETUDE_DEPLOY_SOURCE:-}
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -54,12 +56,13 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-deploy-test.XXXXXX") || exit 1
 TREE=$work/tree
 FIX=$work/fix
 export TREE FIX
-mkdir -p "$TREE/tools/setup" "$TREE/utils" "$work/bin" "$work/mbin" "$work/windows" "$work/ctl" || exit 1
+mkdir -p "$TREE/tools/setup" "$TREE/utils" "$work/bin" "$work/mbin" "$work/windows" "$work/linux" "$work/ctl" || exit 1
 cp -R "$repo/tools/etude" "$TREE/tools/" || exit 1
 for f in prereq.sh e2fsprogs_path.sh ovmf_path.sh elfwrap.sh; do
     cp "$repo/tools/setup/$f" "$TREE/tools/setup/" || exit 1
 done
 cp "$repo/utils/sha256.c" "$repo/utils/sha256.h" "$TREE/utils/" || exit 1
+realuname=$(command -v uname) || exit 1
 realmv=$(command -v mv) || { echo 'etude-deploy-test: no mv on this host' >&2; exit 1; }
 [ "$(id -u)" != 0 ] && root=0 || root=1
 
@@ -140,6 +143,13 @@ case \$command in
 esac
 exec env HOME="\$FIX/home" TMPDIR="\$FIX/tmp" XDG_STATE_HOME= PATH="\$path" \\
     perl -e 'setpgrp(0, 0); exec @ARGV or die "ssh: exec: \$!\\n"' sh -c "\$command"
+EOF
+cat > "$work/linux/uname" <<EOF
+#!/bin/sh
+case \$1 in
+    -s) echo Linux ;;
+    *) exec "$realuname" "\$@" ;;
+esac
 EOF
 cat > "$work/windows/uname" <<'EOF'
 #!/bin/sh
@@ -226,7 +236,7 @@ fi
 exec $realmv "\$@"
 EOF
 chmod 755 "$work/bin/ssh" "$work/bin/fakecc" "$work/windows/uname" "$work/windows/cygpath" \
-    "$work/mbin/id" "$work/mbin/sudo" "$work/mbin/qemu-system-x86_64" "$work/mbin/mv" || exit 1
+    "$work/mbin/id" "$work/mbin/sudo" "$work/mbin/qemu-system-x86_64" "$work/mbin/mv" "$work/linux/uname" || exit 1
 
 # What the record says of this machine, which the stand-in ssh reaches.
 case $(uname -s) in
@@ -241,7 +251,9 @@ case $(uname -s) in
         cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)
         memory=$(($(sed -n 's/^MemTotal: *\([0-9][0-9]*\) kB$/\1/p' /proc/meminfo) * 1024))
         accels=tcg
-        [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ] || accels='kvm tcg' ;;
+        if [ -r /dev/kvm ] && [ -w /dev/kvm ] && ( : <> /dev/kvm ) 2>/dev/null; then
+            accels='kvm tcg'
+        fi ;;
 esac
 windows_memory=$(sed -n 's/^MemTotal: *\([0-9][0-9]*\) kB$/\1/p' /proc/meminfo 2>/dev/null)
 if [ -n "$windows_memory" ]; then windows_memory=$((windows_memory * 1024)); else windows_memory=-; fi
@@ -611,6 +623,37 @@ row()
             rm -rf "$TREE/.git"
             deployed || return 1
             record "$home_state/machine" "$home_state/ledger" ;;
+        kvm-open|kvm-unavailable|kvm-missing)
+            (
+                begin
+                cp "$TREE/tools/etude/deploy.sh" "$work/deploy.kvm" || exit 1
+                trap 'cp "$work/deploy.kvm" "$TREE/tools/etude/deploy.sh"' EXIT
+                sed "s#/dev/kvm#$FIX/kvm#g" "$work/deploy.kvm" > "$TREE/tools/etude/deploy.sh" || exit 1
+                wanted=tcg
+                case $1 in
+                    kvm-open)
+                        echo 'device data' > "$FIX/kvm"
+                        wanted='kvm tcg' ;;
+                    kvm-unavailable) mkdir "$FIX/kvm" || exit 1 ;;
+                esac
+                if [ "$1" != kvm-missing ]; then
+                    [ -r "$FIX/kvm" ] && [ -w "$FIX/kvm" ] ||
+                        { why 'the device fixture lacks read or write permission'; exit 1; }
+                fi
+                PATH="$work/linux:$PATH" run machine
+                deployed || exit 1
+                grep -qx "accelerators $wanted" "$home_state/machine" ||
+                    { why "the device state $1 did not record $wanted"; exit 1; }
+                case $1 in
+                    kvm-open)
+                        [ "$(cat "$FIX/kvm")" = 'device data' ] ||
+                            { why 'the device data changed'; exit 1; } ;;
+                    kvm-missing)
+                        [ ! -e "$FIX/kvm" ] ||
+                            { why 'the probe created the missing device'; exit 1; } ;;
+                esac
+                untouched
+            ) ;;
         ovmf-discovery)
             begin
             mkdir -p "$work/share/qemu" || exit 1
@@ -654,8 +697,9 @@ row()
     esac
 }
 
-rows='deploy again admin sudo check busy format rights lost stopped local revision ovmf-discovery ovmf-missing windows'
+rows='deploy again admin sudo check busy format rights lost stopped local revision kvm-open kvm-unavailable kvm-missing ovmf-discovery ovmf-missing windows'
 [ "$mode" != ovmf ] || rows='ovmf-discovery ovmf-missing windows'
+[ "$mode" != kvm ] || rows='kvm-open kvm-unavailable kvm-missing'
 
 # rows: run every row against the copy, print `etude-deploy-test: failed:
 # NAME` for each that fails, and fail when any did.

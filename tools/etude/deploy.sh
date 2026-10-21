@@ -279,7 +279,9 @@ deploy_accels()
     [ -n "$1" ] || { echo -; return; }
     a=
     case $platform in
-        linux*) [ -r /dev/kvm ] && [ -w /dev/kvm ] && a='kvm ' ;;
+        linux*)
+            [ -r /dev/kvm ] && [ -w /dev/kvm ] &&
+                ( : <> /dev/kvm ) 2>/dev/null && a='kvm ' ;;
         macos*) [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ] && a='hvf ' ;;
         windows*) [ "$ETUDE_WHPX" = 1 ] && a='whpx ' ;;
     esac
