@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "machine-grow-check",
-  "summary": "check_plan and check_boot_copy of tools/dev/machine_grow.sh, through tests/system/machine_grow_check.sh on real seed file systems and a whole boot partition, with each check taken out of a private copy of the script",
+  "summary": "check_plan and check_boot_copy of tools/dev/machine_grow.sh, through the case machine.grow.check of tests/cases/host/grow.sh on real seed file systems and a whole boot partition, with each check taken out of a private copy of the script",
   "tree": "private",
   "sources": [
     "tools/dev/machine_grow.sh"
@@ -19,12 +19,15 @@
   },
   "test": {
     "argv": [
+      "/usr/bin/env",
+      "TMPDIR=${WORK}",
       "/bin/sh",
-      "tests/system/machine_grow_check.sh",
+      "tests/cases/host/grow.sh",
+      "check",
       "${WORK}/machine_grow.sh"
     ],
     "bound_s": 1800,
-    "fail_prefix": "machine-grow-check: failed: "
+    "fail_prefix": "grow: result: failed: "
   },
   "faults": [
     {
@@ -40,7 +43,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-check: failed: small omitted range accepted"
+          "grow: result: failed: machine.grow.check: ranges-small plan-samsung ranges-samsung plan-samsung-gpt ranges-samsung-gpt boot-copy boot-corrupt"
         ]
       }
     },
@@ -57,7 +60,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-check: failed: same-length boot corruption accepted"
+          "grow: result: failed: machine.grow.check: boot-corrupt"
         ]
       }
     }

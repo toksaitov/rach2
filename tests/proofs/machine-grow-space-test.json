@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "machine-grow-space-test",
-  "summary": "the work directory, the log writes and the plan check of tools/dev/machine_grow.sh, through tests/system/machine_grow_space_test.sh on the script's own functions, with faults in a private copy of the script",
+  "summary": "the work directory, the log writes and the plan check of tools/dev/machine_grow.sh, through the case machine.grow.space of tests/cases/host/grow.sh on the script's own functions, with faults in a private copy of the script",
   "tree": "private",
   "sources": [
     "tools/dev/machine_grow.sh"
@@ -22,11 +22,12 @@
       "/usr/bin/env",
       "TMPDIR=${WORK}",
       "/bin/sh",
-      "tests/system/machine_grow_space_test.sh",
+      "tests/cases/host/grow.sh",
+      "space",
       "${WORK}/machine_grow.sh"
     ],
     "bound_s": 1800,
-    "fail_prefix": "machine-grow-space-test: failed: "
+    "fail_prefix": "grow: result: failed: "
   },
   "faults": [
     {
@@ -42,7 +43,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-space-test: failed: work returned 1, expected 0"
+          "grow: result: failed: machine.grow.space: work"
         ]
       }
     },
@@ -59,7 +60,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-space-test: failed: log returned 0, expected 1"
+          "grow: result: failed: machine.grow.space: log"
         ]
       }
     },
@@ -76,7 +77,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-space-test: failed: output diagnostic"
+          "grow: result: failed: machine.grow.space: output"
         ]
       }
     }

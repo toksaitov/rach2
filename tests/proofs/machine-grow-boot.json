@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "machine-grow-boot",
-  "summary": "prepare_boot and keep_recovery of tools/dev/machine_grow.sh, through tests/system/machine_grow_boot.sh on private FAT images, with faults in a private copy of the script",
+  "summary": "prepare_boot and keep_recovery of tools/dev/machine_grow.sh, through the case machine.grow.boot of tests/cases/host/grow.sh on private FAT images, with faults in a private copy of the script",
   "tree": "private",
   "sources": [
     "tools/dev/machine_grow.sh"
@@ -19,12 +19,15 @@
   },
   "test": {
     "argv": [
+      "/usr/bin/env",
+      "TMPDIR=${WORK}",
       "/bin/sh",
-      "tests/system/machine_grow_boot.sh",
+      "tests/cases/host/grow.sh",
+      "boot",
       "${WORK}/machine_grow.sh"
     ],
     "bound_s": 1800,
-    "fail_prefix": "machine-grow-boot: failed: "
+    "fail_prefix": "grow: result: failed: "
   },
   "faults": [
     {
@@ -40,7 +43,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-boot: failed: verified recovery was rewritten"
+          "grow: result: failed: machine.grow.boot: unchanged unparseable torn repaired retry-unchanged candidate own-input"
         ]
       }
     },
@@ -57,7 +60,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          "machine-grow-boot: failed: repair did not reach the torn write"
+          "grow: result: failed: machine.grow.boot: torn repaired retry-unchanged candidate own-input"
         ]
       }
     }

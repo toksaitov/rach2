@@ -256,7 +256,7 @@ rows()
             scratch-busy) [ ! -d /proc/self/fd ] || [ -d "$t/rach2-busy.Bu5yBu" ] ;;
             scratch-program) [ ! -d /proc/self/fd ] || [ -e "$t/rach2-prog.Pr0gPr/sleep" ] ;;
             scratch-stems) grep -qx rach2_verify "$work/stems" && grep -qx rach2-measure "$work/stems" &&
-                grep -qx rach2-grow-measure "$work/stems" && ! grep -q '[^A-Za-z0-9_-]' "$work/stems" &&
+                grep -qx rach2-muse-verify "$work/stems" && ! grep -q '[^A-Za-z0-9_-]' "$work/stems" &&
                 ! grep -qv '^rach2' "$work/stems" ;;
         esac || { echo "tidy-test: failed: $row: the row's condition does not hold"; failed=1; }
     done

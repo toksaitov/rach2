@@ -1559,23 +1559,12 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 # no target here. The exFAT volume comes from the host's own formatter.
 # `tests/run grow`: a 1 GiB ext2 root grown by `growroot` on the recovery
 # system to a partition the size of the installed machine's disk, its
-# writes checked against the grow set, a grow killed and repaired, one
-# interrupted between the entry and the grow, and the memory it needs.
-# Both modes also rehearse the machine's save, grow and restore on a small root,
-# on an MBR and on a GUID table.
-GROW_DIR = $(IMAGES_DIR)/grow
-run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(GROWSET) $(HARNESS) \
-          utils check-busybox check-dropbearmulti rach2-recovery $(RECOVERY_IMAGE) \
-          $(INSTALLER_MBR_DISK) $(GROW_GPT_DISK) $(INSTALL_TEST_STICK) $(MKEXFATFIXTURE)
-	sh tests/system/grow_measure_test.sh
-	sh tests/system/machine_grow_check.sh
-	sh tests/system/machine_grow_boot.sh
-	sh tests/system/machine_grow_space_test.sh
-	sh tests/system/suites/grow.sh $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(HARNESS) $(MKMBR) $(GROWSET) \
-	    $(GROW_DIR)
-	sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_MBR_DISK) $(GROW_DIR)
-	RACH2_GROW_TABLE=gpt sh tests/system/grow_machine.sh $(HARNESS) $(RECOVERY_ISO) $(INSTALLER_DISK) \
-	    $(GROW_GPT_DISK) $(GROW_DIR)
+# writes checked against the grow set, a grow stopped in resize2fs and
+# finished, one whose entry is already at the end, and the memory it needs;
+# the machine's save, grow and restore on a small root, on an MBR and on a
+# GUID table; and on the host, the grow script's checks and its measures'
+# checker. They are the cases of tests/cases/machine.grow.json, which etude
+# runs, and have no target here.
 # `tests/run queue`: real AHCI reads, interrupts, ext2 batch writes and
 # fallback root faults beside raw reads; controlled host models test deadlines.
 # It is the cases of tests/cases/guest.queue.json, which etude runs, and has
