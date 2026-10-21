@@ -112,9 +112,10 @@ static void save(struct etude_case *c)
     drive_send(&d, "d=$(grep ^identity /proc/disk | grep \" fixed \" | head -1 | cut -d\" \" -f2)");
     drive_send(&d, "unit() { u=1; for t in 2048 8; do if [ $(($1 %% t)) = 0 ] && "
                    "[ $(($2 %% t)) = 0 ] && [ $u = 1 ]; then u=$t; fi; done; }");
-    drive_send(&d, "i=0; while read s c; do unit $s $c; dd if=/dev/disk$d of=/save/range-$i "
-                   "ibs=$((u * 512)) obs=1M skip=$((s / u)) count=$((c / u)) 2>/dev/null || "
-                   "echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED\"\"ALL $i");
+    drive_send(&d,
+               "i=0; while read s c; do unit $s $c; dd if=/dev/disk$d of=/save/range-$i "
+               "ibs=$((u * 512)) obs=1M skip=$((s / u)) count=$((c / u)) 2>/dev/null || "
+               "echo SAVEFAIL $i; i=$((i + 1)); done < /save/ranges; sync; echo SAVED\"\"ALL $i");
     snprintf(want, sizeof(want), "SAVEDALL %d", nranges);
     drive_expect(&d, want);
     drive_send(&d, "umount /save && echo SAVE\"\"DONE");
@@ -285,8 +286,10 @@ static void judge_readback(struct etude_case *c)
         return;
     }
     for (line = text; line != NULL && why[0] == '\0'; line = next_line(line)) {
-        if (sscanf(line, "%*s %*s %79s", field) != 1)
-            continue;
+        if (sscanf(line, "%*s %*s %79s", field) != 1) {
+            snprintf(why, sizeof(why), "digest line %d has no digest in its third field", i + 1);
+            break;
+        }
         if (i == nranges) {
             snprintf(why, sizeof(why), "more digests than the %d ranges", nranges);
             break;
