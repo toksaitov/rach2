@@ -1043,13 +1043,14 @@ $(REHEARSE_FILES): $(REHEARSE_DIR)/base.raw
 # The recovery RAM image of a tree with no key, which the installer's case
 # puts on an installed disk's recovery partition, so that the key the install
 # placed there is the only one its recovery system can take: the recovery
-# manifest with the key's line taken out, staged as the image is.
+# manifest with the key's line taken out, staged as the image is. The copy
+# keeps the manifest's name, by which tools/inspect/setid.allow knows it.
 $(CASE_IMAGES)/recovery-keyless.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach2-recovery.manifest
-	@mkdir -p $(@D)
+	@mkdir -p $(@D)/keyless
 	sed '/^optional-file .* \/root\/\.ssh\/authorized_keys /d' \
-	    krffs/manifests/rach2-recovery.manifest > $@.manifest
-	! grep -q '^optional-file.*authorized_keys' $@.manifest
-	$(MKIMAGE) $@.manifest $@ 4
+	    krffs/manifests/rach2-recovery.manifest > $(@D)/keyless/rach2-recovery.manifest
+	! grep -q '^optional-file.*authorized_keys' $(@D)/keyless/rach2-recovery.manifest
+	$(MKIMAGE) $(@D)/keyless/rach2-recovery.manifest $@ 4
 # The files of the tree that the installer and installer-repair cases read
 # (tests/cases/machine.installer*.json), copied into the build, since a
 # case's preparation names its artifacts by a node of the build tree: the demo
