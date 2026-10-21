@@ -791,13 +791,30 @@ build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
 
-# The other scenarios drive their machines at the console, each linked with
-# the console driver, drive.c, and the code that the scenarios of each suite
-# share, lib_SUITE.c.
-CASE_LIB = tests/cases/machine/drive.c $(wildcard tests/cases/machine/lib_*.c)
-build/tests/cases/machine/%: tests/cases/machine/%.c $(CASE_LIB) \
-                             $(wildcard tests/cases/machine/drive.h tests/cases/machine/lib_*.h) \
-                             $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+# The scenarios of the installer and grow cases drive their machines at the
+# console, each linked with the console driver, drive.c, and the code that
+# the scenarios of each suite share, lib_SUITE.c.
+CONSOLE_SCENARIOS = build/tests/cases/machine/grow_entry_at_end \
+                    build/tests/cases/machine/grow_machine_gpt \
+                    build/tests/cases/machine/grow_machine_mbr \
+                    build/tests/cases/machine/grow_measured \
+                    build/tests/cases/machine/installer_alone \
+                    build/tests/cases/machine/installer_install \
+                    build/tests/cases/machine/installer_mounted \
+                    build/tests/cases/machine/installer_reflash \
+                    build/tests/cases/machine/installer_rehearse_sitting \
+                    build/tests/cases/machine/installer_repair_convert \
+                    build/tests/cases/machine/installer_repair_convert_stopped \
+                    build/tests/cases/machine/installer_repair_cut \
+                    build/tests/cases/machine/installer_repair_restore \
+                    build/tests/cases/machine/installer_repair_resume \
+                    build/tests/cases/machine/installer_spoiled \
+                    build/tests/cases/machine/installer_stick \
+                    build/tests/cases/machine/installer_stick_update
+CONSOLE_LIB = tests/cases/machine/drive.c tests/cases/machine/lib_grow.c \
+              tests/cases/machine/lib_installer.c tests/cases/machine/lib_installer_repair.c
+$(CONSOLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c $(CONSOLE_LIB) \
+                      $(CONSOLE_LIB:.c=.h) $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils -Itests/cases/machine
@@ -1528,7 +1545,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
              $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
-             $(USB_SCENARIOS) \
+             $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)

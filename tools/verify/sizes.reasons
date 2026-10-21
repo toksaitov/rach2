@@ -267,6 +267,25 @@ tests/bigfileprobe.c:write_mode lines 116 a probe, one sequence of steps in the 
 tests/bootprobe.c:probe_main lines 320 a probe, one sequence of steps in the order the log records them
 tests/bootprobe.c:auth_case lines 158 a probe, one sequence of steps in the order the log records them
 
+tests/cases/machine/grow_measured.c:etude_scenario complexity 52 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/grow_measured.c:etude_scenario lines 210 a scenario, one session at the machines' consoles in the order of the manifest's steps
+
+tests/cases/machine/installer_repair_convert.c:etude_scenario complexity 37 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/installer_repair_convert.c:etude_scenario lines 107 a scenario, one session at the machines' consoles in the order of the manifest's steps
+
+tests/cases/machine/installer_repair_resume.c:etude_scenario complexity 34 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/installer_repair_resume.c:etude_scenario lines 111 a scenario, one session at the machines' consoles in the order of the manifest's steps
+
+tests/cases/machine/installer_stick_update.c:read_volume complexity 27 one reading of the stick's volume and the sealed disk, each part judged as it is read
+
+tests/cases/machine/lib_grow.c:grow_machine complexity 52 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/lib_grow.c:grow_machine lines 200 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/lib_grow.c:grow_writes_inside complexity 28 one walk of the overlay's map, each extent judged against the boot partition, the plan's ranges and growset's coverage
+tests/cases/machine/lib_grow.c:grow_writes_inside params 7 the parameters are the case, the evidence's name, the overlay, the seed, the plan's ranges and the reason given back
+
+tests/cases/machine/lib_installer_repair.c:repair_digest_join params 7 the parameters are two extents, each a file, an offset and a length, and the digest
+tests/cases/machine/lib_installer_repair.c:repair_volume params 7 the parameters are one mtools command line, its volume and its evidence
+
 tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/credprobe.c:child_main lines 105 a probe, one sequence of steps in the order the log records them
 

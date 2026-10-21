@@ -1,6 +1,7 @@
 #!/bin/sh
-# rehearse_fixture.sh: the fixture of the case machine.installer-rehearse.sitting,
-# the rehearsal of the Lenovo's install sitting on a disk of its own.
+# rehearse_fixture.sh: the fixture of the case
+# machine.installer-rehearse.sitting, the rehearsal of the Lenovo's install
+# sitting on a disk of its own.
 #
 # Usage: rehearse_fixture.sh DISK SECTORS GROWSET MKEXFATFIXTURE MKMBR MKGPT DIR
 #
