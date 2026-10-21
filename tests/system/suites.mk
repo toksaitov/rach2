@@ -1301,6 +1301,39 @@ $(PARTS_DATA_DISKS) &: tests/system/parts_disks.sh $(MKMBR) $(MKGPT)
 BUS_DIR = $(IMAGES_DIR)/bus
 run-bus: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/bus.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
+# The disks of its cases, which the cases' preparation names. The four IDE
+# drives, of 16, 20, 24 and 28 MiB, each have one empty FAT32 partition from
+# sector 2048 to the end and an MBR id of their own, and hold data alone. The
+# AHCI disk and the IDE disk of the root cases are KRFFS disks of the disk
+# suites' manifest, for each architecture, with the MBR ids aaaa0001 and
+# bbbb0002. The disk of 130 GiB is an empty disk of its case, which the
+# scenario lays out, since the store cannot hash a file of that size.
+BUS_FOUR    = $(addprefix $(CASE_DIR)/bus/,pm.disk ps.disk sm.disk ss.disk)
+BUS_MIB_pm  = 16
+BUS_MIB_ps  = 20
+BUS_MIB_sm  = 24
+BUS_MIB_ss  = 28
+BUS_ID_pm   = 11110000
+BUS_ID_ps   = 11110001
+BUS_ID_sm   = 11110002
+BUS_ID_ss   = 11110003
+BUS_ROOTS   = $(ARCH_CASE_DIR)/bus/sata.disk $(ARCH_CASE_DIR)/bus/ide.disk
+BUS_ID_sata = aaaa0001
+BUS_ID_ide  = bbbb0002
+$(BUS_FOUR): $(CASE_DIR)/bus/%.disk: $(MKMBR)
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=$(BUS_MIB_$*) 2>/dev/null
+	$(MKMBR) --lba --id $(BUS_ID_$*) $@.tmp 2048:$$(($(BUS_MIB_$*) * 2048 - 2048)):0c >/dev/null
+	mformat -i $@.tmp@@1048576 -F -T $$(($(BUS_MIB_$*) * 2048 - 2048)) -v DISK$(BUS_ID_$*) ::
+	mv $@.tmp $@
+$(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
+              $(MANIFEST_DEPS_disk_test) $(MKDISK) build/krffs/mkfs.krffs \
+              build/krffs/stageimage.krffs $(MKMBR) | preflight krffs tests
+	rm -f $@.tmp
+	$(MKDISK) krffs/manifests/disk-test.manifest $@.tmp 64 48
+	$(MKMBR) --lba --id $(BUS_ID_$*) $@.tmp 2048:98304:7f >/dev/null
+	mv $@.tmp $@
 # `tests/run large`: a file past 4 GiB on ext2 and on exFAT, written, read
 # back after a remount, sought, sized, truncated, appended and shared
 # between two descriptors, and a write past each format's limit refused by

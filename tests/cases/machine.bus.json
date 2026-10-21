@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bus",
+  "summary": "The disk drivers on every position they serve: four IDE drives on both channels, an AHCI disk and an IDE disk with the root named on each in turn, and a disk past 128 GiB written through the 48-bit commands; the program is tests/cases/machine/bus_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bus.four",
+      "behavior": "four IDE drives of 16, 20, 24 and 28 MiB on the primary and secondary channels, master and slave, are listed at their sizes, and the FAT32 partition of each mounts and takes a write of its position's name that the host finds on that drive alone",
+      "units": ["bus", "busprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /busprobe four", "sectors": "32768, 40960, 49152 and 57344"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mtype"], "features": {}},
+      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["bus-pm", "bus-ps", "bus-sm", "bus-ss"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "four", "does": "boot the test image with a disk on each of the four IDE places, run busprobe four at the debug shell: /proc/disk lists ata 0 to 3 at their sizes, and each drive's partition is mounted, given drive.txt with its position's name, read back and unmounted; read the ATA driver's record of each drive, and end the machine with QMP's quit"},
+        {"step_id": "host", "stage": "execute", "does": "read drive.txt off the FAT32 volume of each drive's copy with mtype"}
+      ],
+      "machines": [
+        {"machine_id": "four", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["bus-pm", "bus-ps", "bus-sm", "bus-ss"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "four-drives", "checks": "busprobe's line says BUSPROBE OK, never BUSPROBE FAIL: /proc/disk lists ata 0 to 3 at 32768, 40960, 49152 and 57344 sectors, and the FAT32 partition of each mounts, takes drive.txt that reads back and unmounts", "source": "scenario"},
+        {"assertion_id": "pm-record", "checks": "the kernel says ata: primary master: 32768 sectors", "source": "scenario"},
+        {"assertion_id": "ps-record", "checks": "the kernel says ata: primary slave: 40960 sectors", "source": "scenario"},
+        {"assertion_id": "sm-record", "checks": "the kernel says ata: secondary master: 49152 sectors", "source": "scenario"},
+        {"assertion_id": "ss-record", "checks": "the kernel says ata: secondary slave: 57344 sectors", "source": "scenario"},
+        {"assertion_id": "pm-file", "checks": "mtype reads drive.txt off the primary master's copy, and its first line is primary master", "source": "scenario"},
+        {"assertion_id": "ps-file", "checks": "mtype reads drive.txt off the primary slave's copy, and its first line is primary slave", "source": "scenario"},
+        {"assertion_id": "sm-file", "checks": "mtype reads drive.txt off the secondary master's copy, and its first line is secondary master", "source": "scenario"},
+        {"assertion_id": "ss-file", "checks": "mtype reads drive.txt off the secondary slave's copy, and its first line is secondary slave", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "bus-pm", "node": "tests/cases/machine/bus/pm.disk", "per_architecture": false},
+        {"name": "bus-ps", "node": "tests/cases/machine/bus/ps.disk", "per_architecture": false},
+        {"name": "bus-sm", "node": "tests/cases/machine/bus/sm.disk", "per_architecture": false},
+        {"name": "bus-ss", "node": "tests/cases/machine/bus/ss.disk", "per_architecture": false},
+        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the case needs a drive on each of the four places of the PC's two IDE channels, which the Lenovo does not have"}
+    },
+    {
+      "case_id": "machine.bus.ide-root",
+      "behavior": "with a KRFFS disk on AHCI and another on IDE, each of its own MBR id, the root named by the IDE disk's id is found on disk 1, the IDE disk, beside disk 0 on AHCI, and blockprobe writes and reads back its files on it",
+      "units": ["bus", "blockprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /blockprobe", "root": "MBRID=bbbb0002,1"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["bus-sata", "bus-ide"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "root", "stage": "execute", "machine": "ide-root", "does": "boot with the AHCI disk and the IDE disk and rach2.root=MBRID=bbbb0002,1, read the kernel's records of the disks and of the root, run blockprobe at the debug shell on that root, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "ide-root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "bus-sata", "bus": "ahci"}, {"name": "bus-ide", "bus": "ide"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=MBRID=bbbb0002,1", "rach2.rootfstype=krffs", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-record", "checks": "the kernel's first record of the root says root: MBRID=bbbb0002,1: /dev/disk1p1, KRFFS", "source": "scenario"},
+        {"assertion_id": "disk0-ahci", "checks": "the kernel says disk: disk0: ahci 0: , so the AHCI disk is disk 0", "source": "scenario"},
+        {"assertion_id": "disk1-ata", "checks": "the kernel says disk: disk1: ata 0: , so the IDE disk is disk 1", "source": "scenario"},
+        {"assertion_id": "blockprobe-ok", "checks": "blockprobe's line says BLOCKPROBE OK, never BLOCKPROBE FAIL: its files are written, synced and read back whole on the root", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 201326592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bus-sata", "node": "tests/cases/machine/bus/sata.disk", "per_architecture": true},
+        {"name": "bus-ide", "node": "tests/cases/machine/bus/ide.disk", "per_architecture": true},
+        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the case boots a root named on a disk on IDE beside one on AHCI, and the Lenovo has no IDE channel and one disk"}
+    },
+    {
+      "case_id": "machine.bus.ahci-root",
+      "behavior": "with a KRFFS disk on AHCI and another on IDE, each of its own MBR id, the root named by the AHCI disk's id is found on disk 0, the AHCI disk, beside disk 1 on IDE, and blockprobe writes and reads back its files on it",
+      "units": ["bus", "blockprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /blockprobe", "root": "MBRID=aaaa0001,1"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["bus-sata", "bus-ide"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "root", "stage": "execute", "machine": "ahci-root", "does": "boot with the AHCI disk and the IDE disk and rach2.root=MBRID=aaaa0001,1, read the kernel's records of the disks and of the root, run blockprobe at the debug shell on that root, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "ahci-root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "bus-sata", "bus": "ahci"}, {"name": "bus-ide", "bus": "ide"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=MBRID=aaaa0001,1", "rach2.rootfstype=krffs", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-record", "checks": "the kernel's first record of the root says root: MBRID=aaaa0001,1: /dev/disk0p1, KRFFS", "source": "scenario"},
+        {"assertion_id": "disk0-ahci", "checks": "the kernel says disk: disk0: ahci 0: , so the AHCI disk is disk 0", "source": "scenario"},
+        {"assertion_id": "disk1-ata", "checks": "the kernel says disk: disk1: ata 0: , so the IDE disk is disk 1", "source": "scenario"},
+        {"assertion_id": "blockprobe-ok", "checks": "blockprobe's line says BLOCKPROBE OK, never BLOCKPROBE FAIL: its files are written, synced and read back whole on the root", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 201326592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bus-sata", "node": "tests/cases/machine/bus/sata.disk", "per_architecture": true},
+        {"name": "bus-ide", "node": "tests/cases/machine/bus/ide.disk", "per_architecture": true},
+        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the case boots a root named on a disk on AHCI beside one on IDE, and the Lenovo has no IDE channel and one disk"}
+    },
+    {
+      "case_id": "machine.bus.big",
+      "behavior": "a sparse disk of 130 GiB on the primary master, whose one FAT32 partition starts at sector 268437504, past what the 28-bit commands address, is listed at its size, and a file written to the partition through the 48-bit commands is read back by the host",
+      "units": ["bus", "busprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /busprobe big", "disk_bytes": 139586437120, "partition_start": 268437504, "partition_sectors": 65536}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mformat", "mtype"], "features": {}},
+      "execution": {"program": "bus_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes the empty disk's file, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "layout", "stage": "execute", "does": "give the empty disk an MBR with mkmbr, of id 12345678 and one FAT32 partition of 65536 sectors at sector 268437504, and format the partition with mformat"},
+        {"step_id": "probe", "stage": "execute", "machine": "big", "does": "boot the test image with the disk on the primary master, run busprobe big at the debug shell: the disk listed at 272629760 sectors, its partition at sector 268437504, mounted, given far.txt, read back and unmounted; read the ATA driver's record of the drive, and end the machine with QMP's quit"},
+        {"step_id": "host", "stage": "execute", "does": "read far.txt off the partition of the disk's file with mtype"}
+      ],
+      "machines": [
+        {"machine_id": "big", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "bus-big", "bus": "ide", "size_bytes": 139586437120}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "far-partition", "checks": "busprobe's line says BUSPROBE OK, never BUSPROBE FAIL: /proc/disk lists disk 0 ata 0 at 272629760 sectors and its partition at sector 268437504 of 65536 sectors, which mounts, takes far.txt that reads back and unmounts", "source": "scenario"},
+        {"assertion_id": "lba48-record", "checks": "the kernel says ata: primary master: 272629760 sectors, 133120 MiB, LBA48", "source": "scenario"},
+        {"assertion_id": "far-file", "checks": "mtype reads far.txt off the partition at byte 137440002048 of the disk's file, and it says 'written past 128 GiB'", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "bus_scenario", "node": "tests/cases/machine/bus_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the case needs a disk of 130 GiB on an IDE channel, whose partition past 2^28 sectors only the ATA driver's 48-bit commands reach, and the Lenovo has no IDE channel"}
+    }
+  ]
+}
