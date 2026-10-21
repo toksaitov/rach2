@@ -91,7 +91,7 @@ static void read_volume(struct etude_case *c, struct state *s)
 {
     const char *stick = etude_artifact(c, "stick"), *sealed = etude_artifact(c, "sealed");
     const char *root = etude_artifact(c, "root");
-    char want[65] = "", got[65] = "", bytes[32] = "", sum[80] = "", detail[400];
+    char want[65] = "", got[65] = "", bytes[32] = "", sum[80] = "", name[128], detail[640];
     char *argv[] = {"mkexfatfixture",          "--check", (char *)stick, s->start, "--read",
                     "/rach2-install.manifest", NULL};
     unsigned char entry[4];
@@ -122,17 +122,19 @@ static void read_volume(struct etude_case *c, struct state *s)
         text_field(text, "sha256 ", 1, sum, sizeof(sum));
     }
     free(text);
+    if (inst_artifact_line(c, "sealed_name", name, sizeof(name)) != 0)
+        name[0] = '\0';
     want[0] = '\0';
     if (sealed == NULL || stat(sealed, &st) != 0 || file_digest(sealed, 0, UINT64_MAX, want) != 0)
         st.st_size = 0;
     snprintf(detail, sizeof(detail),
-             "the manifest names '%s' of %s bytes and hash %s; the sealed disk has %" PRIu64
+             "the manifest names '%s' of %s bytes and hash %s; the sealed disk '%s' has %" PRIu64
              " bytes and hash %s",
-             s->image, bytes, sum, (uint64_t)st.st_size, want);
+             s->image, bytes, sum, name, (uint64_t)st.st_size, want);
     snprintf(got, sizeof(got), "%" PRIu64, (uint64_t)st.st_size);
     inst_assert(c, "manifest",
-                s->image[0] != '\0' && want[0] != '\0' && strcmp(bytes, got) == 0 &&
-                    strcmp(sum, want) == 0,
+                name[0] != '\0' && strcmp(s->image, name) == 0 && want[0] != '\0' &&
+                    strcmp(bytes, got) == 0 && strcmp(sum, want) == 0,
                 detail);
 
     for (i = 0; i < 2; i++) {

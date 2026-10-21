@@ -1025,6 +1025,10 @@ $(CASE_IMAGES)/recovery.krffs: $(RECOVERY_IMAGE)
 $(CASE_IMAGE_LINKS):
 	@mkdir -p $(@D)
 	ln -f $< $@
+# The sealed disk's own name, which the install stick's manifest gives it.
+$(CASE_IMAGES)/sealed.name: $(SEALED_DISK)
+	@mkdir -p $(@D)
+	printf '%s\n' $(notdir $(SEALED_DISK)) > $@
 # The fixture of the rehearsal of the install sitting
 # (machine.installer-rehearse.sitting), which rehearse_fixture.sh writes from
 # the disk the test stick installs: a target disk of 256 MiB, 524288 sectors,

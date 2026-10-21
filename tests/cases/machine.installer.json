@@ -63,7 +63,7 @@
       ],
       "assertions": [
         {"assertion_id": "root-on-volume", "checks": "the stick's volume checks clean and has the root image, byte for byte", "source": "scenario"},
-        {"assertion_id": "manifest", "checks": "the manifest on the volume names an image of the sealed disk's length and SHA-256", "source": "scenario"},
+        {"assertion_id": "manifest", "checks": "the manifest on the volume names the sealed disk by its file name, of its length and SHA-256", "source": "scenario"},
         {"assertion_id": "layout", "checks": "the sealed disk's boot and recovery partitions are each 64 MiB at a mebibyte boundary", "source": "scenario"},
         {"assertion_id": "usb", "checks": "the stick boots by USB, and its mounted volume has the sealed disk and the root image at its length", "source": "scenario"},
         {"assertion_id": "saved", "checks": "the stick boots by IDE, its volume has room for both partitions, and each is saved to it whole", "source": "scenario"},
@@ -86,6 +86,7 @@
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/cases/install-stick.img", "per_architecture": true},
         {"name": "sealed", "node": "images/cases/sealed.disk", "per_architecture": true},
+        {"name": "sealed_name", "node": "images/cases/sealed.name", "per_architecture": true},
         {"name": "root", "node": "images/rach2-metal-disk.ext2", "per_architecture": true},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
