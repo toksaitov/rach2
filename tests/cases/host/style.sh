@@ -667,9 +667,11 @@ case_registry() {
 # own database, prerequisites expanded, and the closure is transitive, so a
 # product reached through an image counts as prepared. `prepare-all` builds
 # its halves from its recipe, so the recipe is read for the targets it
-# names; a half dropped from it is found.
+# names; a half dropped from it is found. The database comes from one serial
+# make, whatever MAKEFLAGS the caller gives: sub-makes run in parallel would
+# print their databases into one file at once, and their lines would mix.
 case_prepared() {
-    if ! make -C "$REPO" -pn prepare-all >"$VDIR/_db.txt" 2>/dev/null; then
+    if ! MAKEFLAGS='' make -j1 -C "$REPO" -pn prepare-all >"$VDIR/_db.txt" 2>/dev/null; then
         fail products "make -pn prepare-all failed"
         return
     fi
