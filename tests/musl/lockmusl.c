@@ -34,7 +34,10 @@
  * once the descriptors are closed.
  *
  * Prints `LOCKMUSL OK` and exits 0 on success, and prints
- * `LOCKMUSL FAIL (detail)` and exits 1 otherwise.
+ * `LOCKMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists; the first failure leaves the checks after it not
+ * run, those of the rows `which_file` goes on to among them.
  */
 
 #define _GNU_SOURCE
@@ -54,6 +57,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_report.h"
+
 #define LOCK_PATH "/tmp/lockmusl"
 /* The directory of the rows about which file a lock is on. */
 #define KEY_DIR   "/tmp/lockmusl.d"
@@ -62,10 +67,171 @@
  * bound that ends a wait the kernel never satisfies, far past a correct one. */
 #define ASLEEP_BOUND 20
 
-/** Report one failed check with errno and return 1, the failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    THE_FILE,
+    KEY_DIR_MADE,
+    PIPES,
+    BESIDE,
+    OVER_EAGAIN,
+    GETLK_CHILD,
+    SPLIT_SIDES,
+    SPLIT_GETLK,
+    CLOSE_DROPS,
+    LOCKING_CHILD,
+    LARGEST_PIPES,
+    LARGEST_JOIN,
+    LARGEST_CHILD,
+    SETLKW_SETUP,
+    SETLKW_WAITS,
+    SETLKW_GETS,
+    DEADLK_SETUP,
+    DEADLK_CHILD_WAITS,
+    DEADLK_CHILD,
+    DEADLK_PARENT,
+    DEADLK_ONE,
+    CLOSED_PIPES,
+    WAITING_THREAD,
+    THREAD_ASLEEP,
+    THREAD_AND_HOLDER,
+    CLOSED_EBADF,
+    CLOSED_FREE,
+    SHARED_SETUP,
+    CLONE_SHARED,
+    SHARED_GETLK,
+    SHARED_CLOSE,
+    SHARED_RELOCK,
+    SHARER_EXIT,
+    SHARED_KEPT,
+    HASH_FILES,
+    HASH_FREE,
+    HASH_CHILD,
+    RENAMED_FILE,
+    RENAMED_HELD,
+    MOVED_FILE,
+    MOVED_HELD,
+    MOVED_WAIT_FILE,
+    MOVED_WAIT_THREAD,
+    MOVED_WAIT_ASLEEP,
+    MOVED_WAIT_GROW,
+    MOVED_WAIT_END,
+    MOVED_WAIT_EBADF,
+    MOVED_WAIT_FREE,
+    FLOCK_EX,
+    FLOCK_NB,
+    FLOCK_DUP,
+    FLOCK_SH,
+    FLOCK_CLOSE,
+    FLOCK_ONE_CLOSE,
+    FLOCK_LAST_CLOSE,
+    OFD_SETLK,
+    OFD_SECOND,
+    OFD_POSIX,
+    OFD_CLOSE,
+    PROC_LOCKS_READ,
+    PROC_LOCKS_COLUMNS,
+    PROC_LOCKS_GONE,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"file", "the file"},
+    {"key-dir", "the directory of the rows about which file a lock is on"},
+    {"pipes", "pipes"},
+    {"beside", "a lock beside the child's"},
+    {"over-eagain", "a lock over the child's did not fail"},
+    {"getlk-child", "F_GETLK did not report the child's lock"},
+    {"split-sides", "the middle the child unlocked"},
+    {"split-getlk", "the child's unlock of the middle did not leave bytes 10 to 14 and 20 to 29"},
+    {"close-drops", "the child's close of another descriptor left its locks"},
+    {"locking-child", "the locking child"},
+    {"largest-pipes", "pipes for the largest offset"},
+    {"largest-join", "the locks that reach the largest offset are not one to the end"},
+    {"largest-child", "the child of the largest offset"},
+    {"setlkw-setup", "setup for F_SETLKW"},
+    {"setlkw-waits", "F_SETLKW did not wait"},
+    {"setlkw-gets", "F_SETLKW did not get the lock after the unlock"},
+    {"deadlk-setup", "setup for EDEADLK"},
+    {"deadlk-child-waits", "the child's F_SETLKW did not wait for the parent's lock"},
+    {"deadlk-child", "the child of the deadlock took neither the lock nor EDEADLK"},
+    {"deadlk-parent", "the parent of the deadlock took neither the lock nor EDEADLK"},
+    {"deadlk-one", "not one lock and one EDEADLK for the two waits"},
+    {"closed-pipes", "pipes for the closed wait"},
+    {"waiting-thread", "the waiting thread"},
+    {"thread-asleep", "the waiting thread was never seen asleep in F_SETLKW"},
+    {"thread-and-holder", "the waiting thread and the holding child"},
+    {"closed-ebadf", "a wait whose descriptor was closed did not fail with EBADF"},
+    {"closed-free", "the lock of a closed wait outlived the close"},
+    {"shared-setup", "setup for the shared table"},
+    {"clone-files", "clone with CLONE_FILES"},
+    {"shared-getlk", "F_GETLK did not name the process of a shared table that took each lock"},
+    {"shared-close", "a close by a process sharing the table left the table's locks"},
+    {"shared-relock", "a lock after the close in the shared table"},
+    {"sharer-exit", "the process that shares the table"},
+    {"shared-kept", "the exit of a process sharing the table dropped the table's locks"},
+    {"hash-files", "two files whose names hash alike"},
+    {"hash-free", "a lock on one file refused a lock on another whose name hashes alike"},
+    {"hash-child", "the child that locked the file whose name hashes alike"},
+    {"renamed-file", "a locked file renamed"},
+    {"renamed-held", "a lock through the new name did not meet one taken before the rename"},
+    {"moved-file", "a locked file grown past its node"},
+    {"moved-held", "a lock through an open after a move did not meet one taken before it"},
+    {"moved-wait-file", "a file for the closed wait across a move"},
+    {"moved-wait-thread", "the waiting thread across a move"},
+    {"moved-wait-asleep", "the waiting thread across a move was never seen asleep in F_SETLKW"},
+    {"moved-wait-grow", "the file of the wait grown past its node"},
+    {"moved-wait-end", "the waiting thread and the holding child across a move"},
+    {"moved-wait-ebadf", "a closed wait across a move did not fail with EBADF"},
+    {"moved-wait-free", "the lock of a closed wait whose file moved outlived the close"},
+    {"flock-ex", "flock LOCK_EX"},
+    {"flock-nb", "a second open's LOCK_EX was not EWOULDBLOCK"},
+    {"flock-dup", "the dup did not share the lock"},
+    {"flock-sh", "LOCK_SH beside another's LOCK_EX"},
+    {"flock-close", "the close did not release the flock lock"},
+    {"flock-one-close", "the close of one of two descriptors released the flock lock"},
+    {"flock-last-close", "the last close of a description did not release the flock lock"},
+    {"ofd-setlk", "F_OFD_SETLK"},
+    {"ofd-second", "a second open's OFD lock did not fail"},
+    {"ofd-posix", "a POSIX lock over an OFD lock"},
+    {"ofd-close", "the close did not release the OFD lock"},
+    {"proc-locks-read", "the locks /proc/locks lists"},
+    {"proc-locks-columns", "/proc/locks lacks a flock, a POSIX or an OFD lock in Linux's columns"},
+    {"proc-locks-gone", "/proc/locks lists a lock after its descriptors are closed"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("LOCKMUSL FAIL (%s: errno %d)\n", what, errno);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check`, with errno, and return 1, the probe's
+ * failure status. */
+static int fail(int check)
+{
+    printf("LOCKMUSL FAIL (%s: errno %d)\n", checks[check].text, errno);
+    report_at(check);
+
     return 1;
 }
 
@@ -204,7 +370,7 @@ static int records(int fd)
     pid_t pid;
 
     if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
-        return fail("pipes");
+        return fail(PIPES);
     }
     pid = fork();
     if (pid == 0) {
@@ -229,10 +395,10 @@ static int records(int fd)
     }
     await(to_parent[0]);
     if (lk(fd, F_SETLK, F_WRLCK, 0, 10) != 0) {
-        return fail("a lock beside the child's");
+        return fail(BESIDE);
     }
     if (lk(fd, F_SETLK, F_RDLCK, 25, 1) != -1 || (errno != EAGAIN && errno != EACCES)) {
-        return fail("a lock over the child's did not fail");
+        return fail(OVER_EAGAIN);
     }
     memset(&q, 0, sizeof(q));
     q.l_type = F_WRLCK;
@@ -241,24 +407,24 @@ static int records(int fd)
     q.l_len = 1;
     if (fcntl(fd, F_GETLK, &q) != 0 || q.l_type != F_WRLCK || q.l_pid != pid || q.l_start != 10 ||
         q.l_len != 20) {
-        return fail("F_GETLK did not report the child's lock");
+        return fail(GETLK_CHILD);
     }
     post(to_child[1]);
     await(to_parent[0]);
     if (lk(fd, F_SETLK, F_WRLCK, 15, 5) != 0 || lk(fd, F_SETLK, F_UNLCK, 15, 5) != 0) {
-        return fail("the middle the child unlocked");
+        return fail(SPLIT_SIDES);
     }
     if (!held_by(fd, pid, 12, 10, 5) || !held_by(fd, pid, 25, 20, 10)) {
-        return fail("the child's unlock of the middle did not leave bytes 10 to 14 and 20 to 29");
+        return fail(SPLIT_GETLK);
     }
     post(to_child[1]);
     await(to_parent[0]);
     if (lk(fd, F_SETLK, F_WRLCK, 10, 20) != 0) {
-        return fail("the child's close of another descriptor left its locks");
+        return fail(CLOSE_DROPS);
     }
     post(to_child[1]);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the locking child");
+        return fail(LOCKING_CHILD);
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 0);
     close(to_child[0]);
@@ -282,7 +448,7 @@ static int waits(int fd)
     pid_t pid;
 
     if (pipe(done) != 0 || pipe(ready) != 0 || lk(fd, F_SETLK, F_WRLCK, 0, 1) != 0) {
-        return fail("setup for F_SETLKW");
+        return fail(SETLKW_SETUP);
     }
     pid = fork();
     if (pid == 0) {
@@ -295,16 +461,16 @@ static int waits(int fd)
     pfd.fd = done[0];
     pfd.events = POLLIN;
     if (!seen_asleep(pid) || poll(&pfd, 1, 0) != 0) {
-        return fail("F_SETLKW did not wait");
+        return fail(SETLKW_WAITS);
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 1);
     if (read(done[0], &c, 1) != 1 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("F_SETLKW did not get the lock after the unlock");
+        return fail(SETLKW_GETS);
     }
 
     if (lk(fd, F_SETLK, F_WRLCK, 0, 1) != 0) {
-        return fail("setup for EDEADLK");
+        return fail(DEADLK_SETUP);
     }
     pid = fork();
     if (pid == 0) {
@@ -319,20 +485,20 @@ static int waits(int fd)
     }
     await(ready[0]);
     if (!seen_asleep(pid)) {
-        return fail("the child's F_SETLKW did not wait for the parent's lock");
+        return fail(DEADLK_CHILD_WAITS);
     }
     rc = lk(fd, F_SETLKW, F_WRLCK, 1, 1);
     err = errno;
     lk(fd, F_SETLK, F_UNLCK, 0, 1);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) > 1) {
-        return fail("the child of the deadlock took neither the lock nor EDEADLK");
+        return fail(DEADLK_CHILD);
     }
     errno = err;
     if (rc != 0 && err != EDEADLK) {
-        return fail("the parent of the deadlock took neither the lock nor EDEADLK");
+        return fail(DEADLK_PARENT);
     }
     if ((rc == 0) == (WEXITSTATUS(status) == 0)) {
-        return fail("not one lock and one EDEADLK for the two waits");
+        return fail(DEADLK_ONE);
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 0);
     close(done[0]);
@@ -357,7 +523,7 @@ static int largest(int fd)
     pid_t pid;
 
     if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
-        return fail("pipes for the largest offset");
+        return fail(LARGEST_PIPES);
     }
     pid = fork();
     if (pid == 0) {
@@ -376,11 +542,11 @@ static int largest(int fd)
     q.l_start = 5;
     q.l_len = 1;
     if (fcntl(fd, F_GETLK, &q) != 0 || q.l_type != F_WRLCK || q.l_start != 0 || q.l_len != 0) {
-        return fail("the locks that reach the largest offset are not one to the end");
+        return fail(LARGEST_JOIN);
     }
     post(to_child[1]);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the child of the largest offset");
+        return fail(LARGEST_CHILD);
     }
     close(to_child[0]);
     close(to_child[1]);
@@ -467,7 +633,7 @@ static int closed_wait(void)
     pid_t pid;
 
     if (pipe(to_child) != 0 || pipe(to_parent) != 0) {
-        return fail("pipes for the closed wait");
+        return fail(CLOSED_PIPES);
     }
     pid = fork();
     if (pid == 0) {
@@ -485,23 +651,23 @@ static int closed_wait(void)
     waiter_fd = open(LOCK_PATH, O_RDWR);
     waiter_tid = 0;
     if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
-        return fail("the waiting thread");
+        return fail(WAITING_THREAD);
     }
     if (!asleep(&waiter_tid, 1)) {
-        return fail("the waiting thread was never seen asleep in F_SETLKW");
+        return fail(THREAD_ASLEEP);
     }
     close(waiter_fd);
     post(to_child[1]);
     if (pthread_join(waiter, NULL) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("the waiting thread and the holding child");
+        return fail(THREAD_AND_HOLDER);
     }
     if (waiter_rc != -1 || waiter_errno != EBADF) {
         errno = waiter_errno;
-        return fail("a wait whose descriptor was closed did not fail with EBADF");
+        return fail(CLOSED_EBADF);
     }
     if (!byte_free()) {
-        return fail("the lock of a closed wait outlived the close");
+        return fail(CLOSED_FREE);
     }
     close(to_child[0]);
     close(to_child[1]);
@@ -540,10 +706,11 @@ static int sharer(void *arg)
     return other >= 0 ? 0 : 2;
 }
 
-/** Fail with `what`, and let the process of `shared_table` run to its end. */
-static int sharer_fail(const char *what)
+/** Fail the check `check`, and let the process of `shared_table` run to its
+ * end. */
+static int sharer_fail(int check)
 {
-    int rc = fail(what);
+    int rc = fail(check);
 
     post(to_sharer[1]);
     post(to_sharer[1]);
@@ -602,31 +769,30 @@ static int shared_table(int fd)
     pid_t pid;
 
     if (pipe(to_sharer) != 0 || pipe(from_sharer) != 0 || lk(fd, F_SETLK, F_WRLCK, 70, 1) != 0) {
-        return fail("setup for the shared table");
+        return fail(SHARED_SETUP);
     }
     pid = clone(sharer, sharer_stack + sizeof(sharer_stack), CLONE_FILES | SIGCHLD, &fd);
     if (pid < 0) {
-        return fail("clone with CLONE_FILES");
+        return fail(CLONE_SHARED);
     }
     await(from_sharer[0]);
     if (holder_of(70) != getpid() || holder_of(72) != pid) {
-        return sharer_fail(
-            "F_GETLK did not name the process of a shared table that took each lock");
+        return sharer_fail(SHARED_GETLK);
     }
     post(to_sharer[1]);
     await(from_sharer[0]);
     if (!byte_free_at(LOCK_PATH, 70) || !byte_free_at(LOCK_PATH, 72)) {
-        return sharer_fail("a close by a process sharing the table left the table's locks");
+        return sharer_fail(SHARED_CLOSE);
     }
     if (lk(fd, F_SETLK, F_WRLCK, 74, 1) != 0) {
-        return sharer_fail("a lock after the close in the shared table");
+        return sharer_fail(SHARED_RELOCK);
     }
     post(to_sharer[1]);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the process that shares the table");
+        return fail(SHARER_EXIT);
     }
     if (!byte_held_at(LOCK_PATH, 74)) {
-        return fail("the exit of a process sharing the table dropped the table's locks");
+        return fail(SHARED_KEPT);
     }
     lk(fd, F_SETLK, F_UNLCK, 0, 0);
     close(to_sharer[0]);
@@ -656,7 +822,7 @@ static int same_hash(void)
     one = open(KEY_DIR "/bC", O_RDWR | O_CREAT | O_TRUNC, 0644);
     two = open(KEY_DIR "/cb", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (one < 0 || two < 0 || pipe(to_child) != 0 || pipe(to_parent) != 0) {
-        return fail("two files whose names hash alike");
+        return fail(HASH_FILES);
     }
     pid = fork();
     if (pid == 0) {
@@ -686,10 +852,10 @@ static int same_hash(void)
     unlink(KEY_DIR "/cb");
     if (refused) {
         errno = err;
-        return fail("a lock on one file refused a lock on another whose name hashes alike");
+        return fail(HASH_FREE);
     }
     if (!reaped) {
-        return fail("the child that locked the file whose name hashes alike");
+        return fail(HASH_CHILD);
     }
     return 0;
 }
@@ -712,10 +878,10 @@ static int renamed(void)
 
     if (fd < 0 || lk(fd, F_SETLK, F_WRLCK, 0, 1) != 0 ||
         rename(KEY_DIR "/old", KEY_DIR "/new") != 0) {
-        return fail("a locked file renamed");
+        return fail(RENAMED_FILE);
     }
     if (!byte_held(KEY_DIR "/new")) {
-        return fail("a lock through the new name did not meet one taken before the rename");
+        return fail(RENAMED_HELD);
     }
     close(fd);
     unlink(KEY_DIR "/new");
@@ -739,10 +905,10 @@ static int moved(void)
     beside = open(KEY_DIR "/beside", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || beside < 0 || lk(fd, F_SETLK, F_WRLCK, 0, 1) != 0 ||
         write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
-        return fail("a locked file grown past its node");
+        return fail(MOVED_FILE);
     }
     if (!byte_held(KEY_DIR "/moved")) {
-        return fail("a lock through an open after a move did not meet one taken before it");
+        return fail(MOVED_HELD);
     }
     close(fd);
     close(beside);
@@ -770,7 +936,7 @@ static int closed_wait_moved(void)
     made = open(KEY_DIR "/waited", O_RDWR | O_CREAT | O_TRUNC, 0644);
     beside = open(KEY_DIR "/after", O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (made < 0 || beside < 0 || pipe(to_child) != 0 || pipe(to_parent) != 0) {
-        return fail("a file for the closed wait across a move");
+        return fail(MOVED_WAIT_FILE);
     }
     close(made);
     pid = fork();
@@ -789,29 +955,29 @@ static int closed_wait_moved(void)
     waiter_fd = open(KEY_DIR "/waited", O_RDWR);
     waiter_tid = 0;
     if (waiter_fd < 0 || pthread_create(&waiter, NULL, wait_for_byte, NULL) != 0) {
-        return fail("the waiting thread across a move");
+        return fail(MOVED_WAIT_THREAD);
     }
     if (!asleep(&waiter_tid, 1)) {
-        return fail("the waiting thread across a move was never seen asleep in F_SETLKW");
+        return fail(MOVED_WAIT_ASLEEP);
     }
     close(waiter_fd);
     memset(block, 'w', sizeof(block));
     grow = open(KEY_DIR "/waited", O_RDWR);
     if (grow < 0 || write(grow, block, sizeof(block)) != (ssize_t)sizeof(block)) {
-        return fail("the file of the wait grown past its node");
+        return fail(MOVED_WAIT_GROW);
     }
     close(grow);
     post(to_child[1]);
     if (pthread_join(waiter, NULL) != 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("the waiting thread and the holding child across a move");
+        return fail(MOVED_WAIT_END);
     }
     if (waiter_rc != -1 || waiter_errno != EBADF) {
         errno = waiter_errno;
-        return fail("a closed wait across a move did not fail with EBADF");
+        return fail(MOVED_WAIT_EBADF);
     }
     if (!byte_free_at(KEY_DIR "/waited", 50)) {
-        return fail("the lock of a closed wait whose file moved outlived the close");
+        return fail(MOVED_WAIT_FREE);
     }
     close(beside);
     close(to_child[0]);
@@ -857,30 +1023,30 @@ static int flocks(void)
     struct flock fl;
 
     if (a < 0 || b < 0 || flock(a, LOCK_EX) != 0) {
-        return fail("flock LOCK_EX");
+        return fail(FLOCK_EX);
     }
     if (flock(b, LOCK_EX | LOCK_NB) != -1 || errno != EWOULDBLOCK) {
-        return fail("a second open's LOCK_EX was not EWOULDBLOCK");
+        return fail(FLOCK_NB);
     }
     d = dup(a);
     if (flock(d, LOCK_UN) != 0 || flock(b, LOCK_EX | LOCK_NB) != 0) {
-        return fail("the dup did not share the lock");
+        return fail(FLOCK_DUP);
     }
     if (flock(a, LOCK_SH | LOCK_NB) != -1 || errno != EWOULDBLOCK) {
-        return fail("LOCK_SH beside another's LOCK_EX");
+        return fail(FLOCK_SH);
     }
     close(b);
     if (flock(a, LOCK_SH | LOCK_NB) != 0) {
-        return fail("the close did not release the flock lock");
+        return fail(FLOCK_CLOSE);
     }
     b = open(LOCK_PATH, O_RDWR);
     close(a);
     if (b < 0 || flock(b, LOCK_EX | LOCK_NB) != -1 || errno != EWOULDBLOCK) {
-        return fail("the close of one of two descriptors released the flock lock");
+        return fail(FLOCK_ONE_CLOSE);
     }
     close(d);
     if (flock(b, LOCK_EX | LOCK_NB) != 0) {
-        return fail("the last close of a description did not release the flock lock");
+        return fail(FLOCK_LAST_CLOSE);
     }
     close(b);
 
@@ -891,17 +1057,17 @@ static int flocks(void)
     fl.l_whence = SEEK_SET;
     fl.l_len = 10;
     if (fcntl(a, F_OFD_SETLK, &fl) != 0) {
-        return fail("F_OFD_SETLK");
+        return fail(OFD_SETLK);
     }
     if (fcntl(b, F_OFD_SETLK, &fl) != -1 || errno != EAGAIN) {
-        return fail("a second open's OFD lock did not fail");
+        return fail(OFD_SECOND);
     }
     if (lk(b, F_SETLK, F_WRLCK, 0, 10) != -1) {
-        return fail("a POSIX lock over an OFD lock");
+        return fail(OFD_POSIX);
     }
     close(a);
     if (fcntl(b, F_OFD_SETLK, &fl) != 0) {
-        return fail("the close did not release the OFD lock");
+        return fail(OFD_CLOSE);
     }
     close(b);
     return 0;
@@ -960,20 +1126,20 @@ static int proc_locks(void)
     fl.l_start = 20;
     if (a < 0 || b < 0 || c < 0 || fstat(a, &st) != 0 || flock(a, LOCK_EX) != 0 ||
         lk(b, F_SETLK, F_RDLCK, 5, 10) != 0 || fcntl(c, F_OFD_SETLK, &fl) != 0) {
-        return fail("the locks /proc/locks lists");
+        return fail(PROC_LOCKS_READ);
     }
     if (read_locks(text, (int)sizeof(text)) < 0 ||
         !listed(text, "FLOCK  ADVISORY  WRITE ", (long)getpid(), &st, "0 EOF") ||
         !listed(text, "POSIX  ADVISORY  READ  ", (long)getpid(), &st, "5 14") ||
         !listed(text, "OFDLCK ADVISORY  WRITE ", -1L, &st, "20 EOF")) {
-        return fail("/proc/locks lacks a flock, a POSIX or an OFD lock in Linux's columns");
+        return fail(PROC_LOCKS_COLUMNS);
     }
     close(a);
     close(b);
     close(c);
     snprintf(ino, sizeof(ino), ":%llu ", (unsigned long long)st.st_ino);
     if (read_locks(text, (int)sizeof(text)) < 0 || strstr(text, ino)) {
-        return fail("/proc/locks lists a lock after its descriptors are closed");
+        return fail(PROC_LOCKS_GONE);
     }
     return 0;
 }
@@ -983,13 +1149,14 @@ int main(void)
     char block[100];
     int fd;
 
+    report_begin(report_case(environ, "guest.default.lockmusl"));
     memset(block, 'l', sizeof(block));
     fd = open(LOCK_PATH, O_RDWR | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
-        return fail("the file");
+        return fail(THE_FILE);
     }
     if (mkdir(KEY_DIR, 0755) != 0 && errno != EEXIST) {
-        return fail("the directory of the rows about which file a lock is on");
+        return fail(KEY_DIR_MADE);
     }
     if (records(fd) || largest(fd) || waits(fd) || closed_wait() || shared_table(fd) ||
         which_file() || flocks() || proc_locks()) {
@@ -998,6 +1165,7 @@ int main(void)
     close(fd);
     unlink(LOCK_PATH);
     rmdir(KEY_DIR);
+    report_at(CHECKS);
     printf("LOCKMUSL OK\n");
     return 0;
 }

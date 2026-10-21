@@ -37,7 +37,10 @@
  * status has no WCOREDUMP, since the zero no longer fits.
  *
  * It prints "COREMUSL OK" and exits 0 on success, or prints "COREMUSL FAIL
- * (detail: errno N)" and exits 1 at the first failure.
+ * (detail: errno N)" and exits 1 at the first failure. It writes etude's
+ * report records (../probe_report.h) for the case ETUDE_CASE names, an
+ * assertion for each check `checks` lists; a failure leaves the checks after
+ * it not run.
  */
 
 #define _GNU_SOURCE
@@ -60,6 +63,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The directory the cores are made in, absolute, and its two files: the
  * core and the target of the link that has its name at first. */
@@ -131,10 +135,103 @@ static char alt_stack[65536];
 static char maps_text[16384];
 static unsigned char in_core[1024];
 
-/** Report one failed check with errno and return 1, the failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    DIR_PATH_OK,
+    DIR_AND_LINK,
+    ABORT_CORE,
+    FILE_WHERE_LINK,
+    READ_CORE,
+    ELF_HEADER,
+    ONE_NOTE,
+    PRSTATUS,
+    PRPSINFO,
+    AUXV,
+    SEGMENTS_INSIDE,
+    MARK_WORD,
+    TWO_PAGE,
+    READ_SHORT,
+    SHORT_HEADER,
+    SHORT_NOTES_WHOLE,
+    SHORT_NOTES,
+    SHORT_CUT,
+    SHORT_LIMIT,
+    THREADS_CORE,
+    THREADS_STATUS,
+    THREADS_REGS,
+    LIMIT_ZERO,
+    NOT_DUMPABLE,
+    HOLE_DIRS,
+    HOLE_CHILDREN,
+    HOLE_COUNT,
+    HOLE_ZERO,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"dir-path", "the directory's path"},
+    {"dir-and-link", "making the directory and the link"},
+    {"abort-core", "an abort with no core flag"},
+    {"file-where-link", "the file where the link was"},
+    {"read-core", "reading the core file"},
+    {"elf-header", "the ELF header"},
+    {"one-note", "two note segments"},
+    {"prstatus", "NT_PRSTATUS"},
+    {"prpsinfo", "NT_PRPSINFO"},
+    {"auxv", "NT_AUXV"},
+    {"segments-inside", "a segment past the end of the file"},
+    {"mark", "the mark in the child's data"},
+    {"two-page", "a core past a two-page limit"},
+    {"read-short", "reading the short core file"},
+    {"short-header", "the short core's ELF header"},
+    {"short-notes-whole", "the short core's notes cut short"},
+    {"short-notes", "no note segment in the short core"},
+    {"short-cut", "a short core with every segment whole"},
+    {"short-limit", "a short core with more bytes than its limit"},
+    {"threads-core", "a process of two threads left no core"},
+    {"threads-status", "the core of two threads has no status for each"},
+    {"threads-regs", "the spinning thread's registers in the core are not the ones it stopped with "
+                     "before its memory was copied"},
+    {"limit-zero", "a core with the limit 0"},
+    {"not-dumpable", "a core from a process that is not dumpable"},
+    {"hole-dirs", "the directories of the counting children"},
+    {"hole-children", "a child that rebuilt its stack's top and aborted"},
+    {"hole-count", "the limit a child counted from its regions"},
+    {"hole-zero", "a limit of the bytes before the zero at the end took the zero"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with `why`, those after it as not run, and the
+ * report's end; with `check` CHECKS, every check held. */
+static void report_at(int check, const char *why)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report that the check `check` failed as `what`, with errno, and return 1,
+ * the failure status. */
+static int fail(int check, const char *what)
 {
     printf("COREMUSL FAIL (%s: errno %d)\n", what, errno);
+    report_at(check, what);
     return 1;
 }
 
@@ -225,10 +322,10 @@ static unsigned char *slurp(const char *path, size_t *size)
 
 /**
  * Check the notes of the segment `seg` of `core`: the status and signal of
- * `child`, its name and its page size. Returns 0, or 1 after the failure is
- * printed.
+ * `child`, its name and its page size, as the checks `check`, `check + step`
+ * and `check + 2 * step`. Returns 0, or 1 after the failure is printed.
  */
-static int notes_check(const unsigned char *core, const Phdr *seg, pid_t child)
+static int notes_check(const unsigned char *core, const Phdr *seg, pid_t child, int check, int step)
 {
     const unsigned char *p = core + seg->p_offset;
     const unsigned char *end = p + seg->p_filesz;
@@ -261,7 +358,12 @@ static int notes_check(const unsigned char *core, const Phdr *seg, pid_t child)
     }
     if (!status || !info || !auxv) {
         errno = 0;
-        return fail(!status ? "NT_PRSTATUS" : !info ? "NT_PRPSINFO" : "NT_AUXV");
+        return fail(!status ? check
+                    : !info ? check + step
+                            : check + 2 * step,
+                    !status ? "NT_PRSTATUS"
+                    : !info ? "NT_PRPSINFO"
+                            : "NT_AUXV");
     }
     return 0;
 }
@@ -281,23 +383,23 @@ static int core_check(pid_t child)
     int i;
 
     if (!core || size < sizeof(*eh)) {
-        return fail("reading the core file");
+        return fail(READ_CORE, "reading the core file");
     }
     errno = 0;
     if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_ident[EI_CLASS] != ELF_CLASS ||
         eh->e_type != ET_CORE || eh->e_machine != ELF_MACHINE || eh->e_phentsize != sizeof(Phdr) ||
         eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > size) {
-        return fail("the ELF header");
+        return fail(ELF_HEADER, "the ELF header");
     }
     for (i = 0; i < eh->e_phnum; i++) {
         const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + i;
 
         if ((size_t)ph->p_offset + ph->p_filesz > size) {
-            return fail("a segment past the end of the file");
+            return fail(SEGMENTS_INSIDE, "a segment past the end of the file");
         }
         if (ph->p_type == PT_NOTE) {
-            if (notes++ != 0 || notes_check(core, ph, child) != 0) {
-                return notes > 1 ? fail("two note segments") : 1;
+            if (notes++ != 0 || notes_check(core, ph, child, PRSTATUS, 1) != 0) {
+                return notes > 1 ? fail(ONE_NOTE, "two note segments") : 1;
             }
             note_bytes = ph->p_filesz;
         } else if (ph->p_type == PT_LOAD && at >= ph->p_vaddr &&
@@ -310,7 +412,8 @@ static int core_check(pid_t child)
     }
     free(core);
     if (!notes || !found) {
-        return fail(!notes ? "no note segment" : "the mark in the child's data");
+        return fail(!notes ? ONE_NOTE : MARK_WORD,
+                    !notes ? "no note segment" : "the mark in the child's data");
     }
     return 0;
 }
@@ -329,21 +432,21 @@ static int short_check(pid_t child, size_t limit)
     int k;
 
     if (!core || size < sizeof(*eh)) {
-        return fail("reading the short core file");
+        return fail(READ_SHORT, "reading the short core file");
     }
     errno = 0;
     if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 || eh->e_type != ET_CORE ||
         eh->e_phoff + (size_t)eh->e_phnum * sizeof(Phdr) > size) {
-        return fail("the short core's ELF header");
+        return fail(SHORT_HEADER, "the short core's ELF header");
     }
     for (k = 0; k < eh->e_phnum; k++) {
         const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + k;
 
         if (ph->p_type == PT_NOTE) {
             if ((size_t)ph->p_offset + ph->p_filesz > size) {
-                return fail("the short core's notes cut short");
+                return fail(SHORT_NOTES_WHOLE, "the short core's notes cut short");
             }
-            if (notes_check(core, ph, child) != 0) {
+            if (notes_check(core, ph, child, SHORT_NOTES, 0) != 0) {
                 return 1;
             }
             notes = 1;
@@ -356,7 +459,10 @@ static int short_check(pid_t child, size_t limit)
     }
     free(core);
     if (!notes || size >= end || written > limit) {
-        return fail(!notes        ? "no note segment in the short core"
+        return fail(!notes        ? SHORT_NOTES
+                    : size >= end ? SHORT_CUT
+                                  : SHORT_LIMIT,
+                    !notes        ? "no note segment in the short core"
                     : size >= end ? "a short core with every segment whole"
                                   : "a short core with more bytes than its limit");
     }
@@ -553,7 +659,7 @@ static int hole_row(void)
     for (i = 0; i < 2; i++) {
         unlink(cores[i]);
         if (mkdir(dirs[i], 0700) != 0 && errno != EEXIST) {
-            return fail("the directories of the counting children");
+            return fail(HOLE_DIRS, "the directories of the counting children");
         }
     }
     for (i = 0; i < 2; i++) {
@@ -566,14 +672,14 @@ static int hole_row(void)
         rmdir(dirs[i]);
     }
     if (!ran) {
-        return fail("a child that rebuilt its stack's top and aborted");
+        return fail(HOLE_CHILDREN, "a child that rebuilt its stack's top and aborted");
     }
     errno = 0;
     if (counted[0] != counted[1] || WCOREDUMP(status[0]) || marked[0] != 0 || marked[1] != 1) {
-        return fail("the limit a child counted from its regions");
+        return fail(HOLE_COUNT, "the limit a child counted from its regions");
     }
     if (WCOREDUMP(status[1]) || size[1] != whole[1] - 4096u) {
-        return fail("a limit of the bytes before the zero at the end took the zero");
+        return fail(HOLE_ZERO, "a limit of the bytes before the zero at the end took the zero");
     }
     return 0;
 }
@@ -684,16 +790,16 @@ static int threads_row(void)
     }
     if (child < 0 || waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
         WTERMSIG(status) != SIGABRT || !WCOREDUMP(status)) {
-        return fail("a process of two threads left no core");
+        return fail(THREADS_CORE, "a process of two threads left no core");
     }
     errno = 0;
     if (status_pids(pids, 4, &reg, &mem) != 2 || pids[0] != child || pids[1] <= 0 ||
         pids[1] == child) {
-        return fail("the core of two threads has no status for each");
+        return fail(THREADS_STATUS, "the core of two threads has no status for each");
     }
     if (reg - mem > 1) {
-        return fail("the spinning thread's registers in the core are not the ones it stopped "
-                    "with before its memory was copied");
+        return fail(THREADS_REGS, "the spinning thread's registers in the core are not the ones it "
+                                  "stopped with before its memory was copied");
     }
     return 0;
 }
@@ -708,11 +814,11 @@ static int no_core_rows(void)
     pid_t child = abort_child(0, 1, &status);
 
     if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || access(CORE_PATH, F_OK) == 0) {
-        return fail("a core with the limit 0");
+        return fail(LIMIT_ZERO, "a core with the limit 0");
     }
     child = abort_child(RLIM_INFINITY, 0, &status);
     if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status) || access(CORE_PATH, F_OK) == 0) {
-        return fail("a core from a process that is not dumpable");
+        return fail(NOT_DUMPABLE, "a core from a process that is not dumpable");
     }
     return 0;
 }
@@ -725,22 +831,23 @@ int main(int argc, char **argv)
 
     first_arg = argc > 0 ? (uintptr_t)argv[0] : 0;
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.coremusl"));
     if (!set_paths()) {
-        return fail("the directory's path");
+        return fail(DIR_PATH_OK, "the directory's path");
     }
 
     unlink(CORE_PATH);
     unlink(TARGET_PATH);
     if ((mkdir(DIR_PATH, 0700) != 0 && errno != EEXIST) || symlink(TARGET_PATH, CORE_PATH) != 0) {
-        return fail("making the directory and the link");
+        return fail(DIR_AND_LINK, "making the directory and the link");
     }
     child = abort_child(RLIM_INFINITY, 1, &status);
     if (child < 0 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT || !WCOREDUMP(status)) {
-        return fail("an abort with no core flag");
+        return fail(ABORT_CORE, "an abort with no core flag");
     }
     if (lstat(CORE_PATH, &st) != 0 || !S_ISREG(st.st_mode) || (st.st_mode & 07777) != 0600 ||
         access(TARGET_PATH, F_OK) == 0) {
-        return fail("the file where the link was");
+        return fail(FILE_WHERE_LINK, "the file where the link was");
     }
     if (core_check(child) != 0) {
         return 1;
@@ -749,7 +856,7 @@ int main(int argc, char **argv)
     unlink(CORE_PATH);
     child = abort_child(8192, 1, &status);
     if (child < 0 || !WIFSIGNALED(status) || WCOREDUMP(status)) {
-        return fail("a core past a two-page limit");
+        return fail(TWO_PAGE, "a core past a two-page limit");
     }
     if (short_check(child, 8192) != 0) {
         return 1;
@@ -763,6 +870,7 @@ int main(int argc, char **argv)
         return 1;
     }
     rmdir(DIR_PATH);
+    report_at(CHECKS, NULL);
     printf("COREMUSL OK\n");
     return 0;
 }
