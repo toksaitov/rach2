@@ -17,11 +17,11 @@ T56 enrolled the testing PC's Ubuntu endpoint for #645 on 2026-10-20. The initia
 | Admitted disk | 171798691840 bytes (160 GiB) |
 | Admission wait and execution bounds | 20400 seconds each |
 | Executable cache | `/var/cache/rach2-etude` |
-| Version key | `faf830e7b2ab178941c403f13774eca2505ae4e87c8071c18be7165711fde7f6` |
-| Bridge SHA-256 | `589ea49204d4a93c641b5ebaed6c88f15485741d64e04524b18ad73a92aed7ab` |
+| Version key | `899cec0163aa1538449c9959b2117535ce1052abc789cdce68a44d3dc97fdb79` |
+| Bridge SHA-256 | `bb5943179c9fcd17c1f351e3e7ab595eb56d62d53fc7957f197b5e23290fc04b` |
 | Make wrapper | `/usr/local/libexec/rach2/etude-bin/make`, from `tools/etude/make.sh` |
 | Make wrapper SHA-256 | `b8ac1aedc0794258e09666c3611642d61cfaf1458935726e2923d448c28f53fa` |
-| Launch script SHA-256 | `1d60c013dddaf06ddb2cbfd6de7b0d6ff645225a22ad306b50c5bcf812b2b5b2` |
+| Launch script SHA-256 | `d9016f3e53321283c0eb480967c03095d61a7ecfe52f7253202124d9030b5eaf` |
 
 The installed wrapper sets umask 0002 before executing the launch script. The ledger and its verdict directory have group `users` and mode 2770; the lock has mode 0660. All seven existing test accounts belong to that group. The policy is readable by all accounts, and the cache and installed executables are writable only by root. No private per-account machine record is needed: the installed policy precedes it in bisection and supplies the admitted limits instead of the hardware's whole capacity.
 
@@ -48,3 +48,7 @@ On 2026-10-21, `testing` and `toksaitov-m` ran their `host` suites concurrently 
 ## CI cancellation
 
 On 2026-10-22, #820 replaced the policy's bridge with the cached version above after the build, style checks, host suite and `etude-runner-cleanup` proof passed. An installed launch checked the [process markers](../../tools/etude/Readme.md#installed-launch-admission) and left no claim. Earlier jobs kept their previous bridge. The private record is under `/var/lib/rach2-etude/enrollment/820-cleanup/`.
+
+## Memory admission
+
+On 2026-10-22, #829 replaced the bridge with the cached version above, which admits each claim by its memory alone, and the launch script with the one above, which gives a shell command an ordinary run's share of the host and accepts the site field `boundary_lazy` of #827. The first bridge of #829, active from 01:13 to 01:47 UTC+6, was built from a tree without #820's change, and in those minutes ci's cleanup supervisors kept GitHub Actions' process marker; the bridge above has both changes. Before each switch the new build directory was made readable by every account and the bridge was run as `testing` and as `ghrunner`. Claims admitted by an earlier bridge kept their reservations and finished in order. The private record is under `/var/lib/rach2-etude/enrollment/829-memory/`.
