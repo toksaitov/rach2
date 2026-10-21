@@ -111,11 +111,15 @@
  * boot.
  *
  * Prints "FDSTALE OK" and exits 0 only when every case passed; any failure
- * names the step and the answer it got, and exits 1. Freestanding; direct
- * system calls (probe.h).
+ * names the step and the answer it got, and exits 1. Writes etude's report
+ * records (probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists, with the branch `root` krffs or ext2; a failure,
+ * a child's included, leaves the checks after it not run. Freestanding;
+ * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -223,6 +227,497 @@ static void putd(int v)
     puts_(&buf[i]);
 }
 
+/* The checks, one assertion each, in the order the probe makes them, and
+ * the step each prints when it fails. A step of `mint`, `fill_round` or a
+ * leak loop is not here: it belongs to the check after the last one that
+ * held, a row whose text no step prints. A child's checks come before the
+ * reap that waits for it. `root` is 'K' for a check that only KRFFS makes,
+ * 'E' for one that only ext2 makes, and 0 for the rest. */
+enum {
+    MINT_CONTROL,
+    CONTROL_OPEN,
+    CONTROL_READ,
+    CONTROL_CLOSE,
+    REMOVE_CONTROL,
+    MINT_HELD,
+    OPEN_UNLINKED,
+    UNLINK_UNDER,
+    READ_UNLINKED,
+    LSEEK_UNLINKED,
+    LLSEEK_UNLINKED,
+    LLSEEK_RESULT,
+    FSTAT_UNLINKED,
+    FCHMOD_UNLINKED,
+    OPEN_UNLINKED_NAME,
+    CLOSE_UNLINKED,
+    OPEN_AFTER_CLOSE,
+    CREATE_ORPHAN,
+    SEED_ORPHAN,
+    ORPHAN_NEIGHBOUR,
+    ORPHAN_INDEPENDENT,
+    ORPHAN_DUPLICATE,
+    UNLINK_BEFORE_TRUNCATE,
+    SHRINK_ORPHAN,
+    SEES_SHRINK,
+    SHRINK_KEEPS_OFFSET,
+    SHRINK_KEEPS_BYTE,
+    GROW_ORPHAN,
+    SEES_RELOCATED,
+    DUPLICATE_SEES,
+    GROWTH_KEEPS_OFFSET,
+    REWIND_RELOCATED,
+    READ_RELOCATED,
+    RELOCATED_FIRST_BYTE,
+    GROWTH_ZERO,
+    STAYS_NAMELESS,
+    CLOSE_ORPHAN_WRITER,
+    CLOSE_ORPHAN_DUPLICATE,
+    LAST_OPEN_RETAINS,
+    CLOSE_LAST_HOLDER,
+    CLOSE_NEIGHBOUR,
+    REMOVE_NEIGHBOUR,
+    MKDIR_ORPHAN_DIR,
+    MINT_KID,
+    LIST_DIR,
+    COUNT_CHILDREN,
+    OPEN_CHILD,
+    UNLINK_CHILD,
+    LIST_PAST_ORPHAN,
+    COUNT_PAST_ORPHAN,
+    RMDIR_OVER_ORPHAN,
+    READ_ORPHAN,
+    CLOSE_ORPHAN,
+    MINT_KEEP,
+    MKDIR_REFUSED,
+    OPEN_DESTINATION,
+    RENAME_DIR_ONTO_HELD,
+    READ_SPARED_HELD,
+    READ_SPARED_NAME,
+    OPEN_DIR_DESTINATION,
+    RENAME_FILE_ONTO_DIR,
+    OPEN_SPARED_DIR,
+    CLOSE_REOPENED_DIR,
+    CLOSE_DIR_DESTINATION,
+    CLOSE_SPARED,
+    REMOVE_REFUSED,
+    REMOVE_SPARED,
+    PIPE_UP,
+    PIPE_DOWN,
+    MINT_READER_FILES,
+    FORK_READER,
+    PARENT_WAITS_OPENS,
+    MINT_REPLACEMENT,
+    RENAME_ONTO_HELD,
+    UNLINK_RECREATED,
+    MINT_FRESH,
+    PARENT_RELEASES,
+    CHILD_SIGNALS,
+    CHILD_OPENS_OLD,
+    CHILD_OPENS_GONE,
+    CHILD_WAITS,
+    CHILD_READS_RENAMED,
+    CHILD_READS_RECREATED,
+    CHILD_CLOSES_OLD,
+    CHILD_CLOSES_GONE,
+    READER_CHILD,
+    RENAMED_HAS_REPLACEMENT,
+    RECREATED_HAS_NEW,
+    REMOVE_RENAMED,
+    REMOVE_RECREATED,
+    MINT_EXIT,
+    FORK_HOLDER,
+    PARENT_WAITS_HOLDER,
+    UNLINK_UNDER_HOLDER,
+    PARENT_RELEASES_HOLDER,
+    HOLDER_SIGNALS,
+    HOLDER_OPENS,
+    HOLDER_WAITS,
+    HOLDER_READS,
+    HOLDER_CHILD,
+    NAME_LET_GO,
+    MINT_XGROW,
+    CLOSE_XGROW,
+    MINT_XWALL,
+    CLOSE_XWALL,
+    FORK_MOVED,
+    PARENT_WAITS_MOVED,
+    OPEN_MOVER,
+    WRITE_MOVES_SHARED,
+    CLOSE_MOVER,
+    PARENT_RELEASES_MOVED,
+    MOVED_SIGNALS,
+    MOVED_OPENS,
+    MOVED_WAITS,
+    MOVED_SEEKS_END,
+    MOVED_REWINDS,
+    MOVED_READS,
+    MOVED_CLOSES,
+    MOVED_CHILD,
+    REMOVE_SHARED_MOVED,
+    REMOVE_SHARED_WALL,
+    MKDIR_DDIR,
+    OPEN_DDIR,
+    RMDIR_UNDER_FD,
+    GETDENTS_HELD,
+    RELATIVE_HELD,
+    CLOSE_RELATIVE,
+    GETDENTS_REMOVED,
+    CLOSE_HELD_DIR,
+    MKDIR_OPATH,
+    OPEN_OPATH,
+    RMDIR_UNDER_OPATH,
+    CLOSE_OPATH,
+    MKDIR_CHILD_CWD,
+    FORK_CWD_CHILD,
+    PARENT_WAITS_CHDIR,
+    RMDIR_UNDER_CWD,
+    PARENT_RELEASES_CWD,
+    CWD_SIGNALS,
+    CWD_ENTERS,
+    CWD_WAITS,
+    CWD_CHILD,
+    MKDIR_OWN_CWD,
+    CHDIR_INTO,
+    RMDIR_OWN_CWD,
+    CHDIR_ROOT,
+    RMDIR_UNREFERENCED,
+    CLOSE_UP_READ,
+    CLOSE_UP_WRITE,
+    CLOSE_DOWN_READ,
+    CLOSE_DOWN_WRITE,
+    MINT_DUP,
+    OPEN_DUP,
+    DUP_FD,
+    UNLINK_DUP_PAIR,
+    CLOSE_ONE,
+    READ_SURVIVOR,
+    CLOSE_SURVIVOR,
+    MINT_GROW,
+    CLOSE_GROW,
+    MINT_WALL,
+    CLOSE_WALL,
+    OPEN_READER,
+    OPEN_WRITER,
+    WRITE_MOVES,
+    LSEEK_MOVED_FROM,
+    REWIND_MOVED_FROM,
+    READ_MOVED_FROM,
+    FSTAT_MOVED_FROM,
+    CLOSE_READER,
+    CLOSE_WRITER,
+    REMOVE_MOVED,
+    REMOVE_WALL,
+    LEAK_BY_CLOSE,
+    LEAK_BY_UNLINK,
+    LEAK_BY_RENAME,
+    REMOVE_REPLACED,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+    char root;
+} checks[CHECKS] = {
+    {"mint-control", "mint the control", 0},
+    {"control-open", "the control open", 0},
+    {"control-read", "the control read", 0},
+    {"control-close", "the control close", 0},
+    {"remove-control", "remove the control", 0},
+    {"mint-held", "mint the file to be unlinked", 0},
+    {"open-unlinked", "open the file to be unlinked", 0},
+    {"unlink-under", "unlink under the descriptor", 0},
+    {"read-unlinked", "read through the unlinked descriptor", 0},
+    {"lseek-unlinked", "lseek SEEK_END through the unlinked descriptor", 0},
+    {"llseek-unlinked", LLSEEK_NAME " SEEK_END through the unlinked descriptor", 0},
+    {"llseek-result", LLSEEK_NAME "'s result through the unlinked descriptor", 0},
+    {"fstat-unlinked", "fstat64 through the unlinked descriptor", 0},
+    {"fchmod-unlinked", "fchmod through the unlinked descriptor", 0},
+    {"open-unlinked-name", "open the unlinked name", 0},
+    {"close-unlinked", "close the unlinked descriptor", 0},
+    {"open-after-close", "open the unlinked name after the last close", 0},
+    {"create-orphan", "create orphan truncate file", 0},
+    {"seed-orphan", "seed orphan truncate file", 0},
+    {"orphan-neighbour", "allocate orphan truncate neighbour", 0},
+    {"orphan-independent", "independent orphan truncate open", 0},
+    {"orphan-duplicate", "duplicate orphan truncate open", 0},
+    {"unlink-before-truncate", "unlink before truncate", 0},
+    {"shrink-orphan", "shrink orphan", 0},
+    {"sees-shrink", "independent open sees orphan shrink", 0},
+    {"shrink-keeps-offset", "shrink preserves shared offset", 0},
+    {"shrink-keeps-byte", "orphan shrink preserves first byte", 0},
+    {"grow-orphan", "grow orphan", 0},
+    {"sees-relocated", "independent open sees relocated orphan", 0},
+    {"duplicate-sees", "duplicate sees relocated orphan", 0},
+    {"growth-keeps-offset", "growth preserves shared offset", 0},
+    {"rewind-relocated", "rewind relocated orphan", 0},
+    {"read-relocated", "read relocated orphan", 0},
+    {"relocated-first-byte", "relocated orphan retains first byte", 0},
+    {"growth-zero", "orphan growth is zero filled", 0},
+    {"stays-nameless", "truncate keeps orphan nameless", 0},
+    {"close-orphan-writer", "close orphan writer", 0},
+    {"close-orphan-duplicate", "close orphan duplicate", 0},
+    {"last-open-retains", "last open retains relocated orphan", 0},
+    {"close-last-holder", "close last orphan holder", 0},
+    {"close-neighbour", "close orphan neighbour", 0},
+    {"remove-neighbour", "remove orphan neighbour", 0},
+    {"mkdir-orphan-dir", "mkdir the orphan's directory", 0},
+    {"mint-kid", "mint the child file", 0},
+    {"list-dir", "list the directory", 0},
+    {"count-children", "count the directory's children", 0},
+    {"open-child", "open the child", 0},
+    {"unlink-child", "unlink the child under the descriptor", 0},
+    {"list-past-orphan", "list past the orphan", 0},
+    {"count-past-orphan", "count the children past the orphan", 0},
+    {"rmdir-over-orphan", "rmdir over the orphan", 0},
+    {"read-orphan", "read the orphan after its directory went", 0},
+    {"close-orphan", "close the orphan", 0},
+    {"mint-keep", "mint the file a rename spares", 0},
+    {"mkdir-refused", "mkdir the refused source", 0},
+    {"open-destination", "open the refused rename's destination", 0},
+    {"rename-dir-onto-held", "rename a directory onto a held name", 0},
+    {"read-spared-held", "read the spared file through the held descriptor", 0},
+    {"read-spared-name", "read the spared file by name", 0},
+    {"open-dir-destination", "open the directory destination", 0},
+    {"rename-file-onto-dir", "rename a file onto a held directory", 0},
+    {"open-spared-dir", "open the spared directory by name", 0},
+    {"close-reopened-dir", "close the re-opened directory", 0},
+    {"close-dir-destination", "close the directory destination", 0},
+    {"close-spared", "close the spared file", 0},
+    {"remove-refused", "remove the refused source", 0},
+    {"remove-spared", "remove the spared file", 0},
+    {"pipe-up", "pipe for the child's signal", 0},
+    {"pipe-down", "pipe for the parent's signal", 0},
+    {"mint-reader-files", "mint the reader's two files", 0},
+    {"fork-reader", "fork the reader", 0},
+    {"parent-waits-opens", "the parent waits for the child's opens", 0},
+    {"mint-replacement", "mint the replacement", 0},
+    {"rename-onto-held", "rename the replacement onto the held name", 0},
+    {"unlink-recreated", "unlink the re-created name", 0},
+    {"mint-fresh", "mint the re-created name", 0},
+    {"parent-releases", "the parent releases the child", 0},
+    {"child-signals", "the child signals its opens", 0},
+    {"child-opens-old", "the child opens the renamed-over name", 0},
+    {"child-opens-gone", "the child opens the re-created name", 0},
+    {"child-waits", "the child waits for the replacement", 0},
+    {"child-reads-renamed", "the child reads across a rename onto its name", 0},
+    {"child-reads-recreated", "the child reads across a re-created name", 0},
+    {"child-closes-old", "the child closes the renamed-over file", 0},
+    {"child-closes-gone", "the child closes the re-created file", 0},
+    {"reader-child", "the reader child", 0},
+    {"renamed-has-replacement", "the renamed-onto name has the replacement", 0},
+    {"recreated-has-new", "the re-created name has the new file", 0},
+    {"remove-renamed", "remove the renamed-onto name", 0},
+    {"remove-recreated", "remove the re-created name", 0},
+    {"mint-exit", "mint the file the holder keeps", 0},
+    {"fork-holder", "fork the holder", 0},
+    {"parent-waits-holder", "the parent waits for the holder's open", 0},
+    {"unlink-under-holder", "unlink under the holder", 0},
+    {"parent-releases-holder", "the parent releases the holder", 0},
+    {"holder-signals", "the holder signals its open", 0},
+    {"holder-opens", "the holder opens the file", 0},
+    {"holder-waits", "the holder waits for the unlink", 0},
+    {"holder-reads", "the holder reads the file whose name went", 0},
+    {"holder-child", "the holder child", 0},
+    {"name-let-go", "open the name the holder let go", 0},
+    {"mint-xgrow", "mint the file another process moves", 0},
+    {"close-xgrow", "close the file another process moves", 0},
+    {"mint-xwall", "mint the wall behind the shared file", 0},
+    {"close-xwall", "close the wall behind the shared file", 0},
+    {"fork-moved", "fork the moved-file reader", 0},
+    {"parent-waits-moved", "the parent waits for the moved-file child's open", 0},
+    {"open-mover", "open the writer that moves the file", 0},
+    {"write-moves-shared", "the write that must move the file under another process", 0},
+    {"close-mover", "close the writer that moved the file", 0},
+    {"parent-releases-moved", "the parent releases the moved-file child", 0},
+    {"moved-signals", "the moved-file child signals its open", 0},
+    {"moved-opens", "the moved-file child opens the file", 0},
+    {"moved-waits", "the moved-file child waits for the write", 0},
+    {"moved-seeks-end", "the moved-file child seeks to the new end", 0},
+    {"moved-rewinds", "the moved-file child rewinds", 0},
+    {"moved-reads", "the moved-file child reads what another process grew", 0},
+    {"moved-closes", "the moved-file child closes the moved file", 0},
+    {"moved-child", "the moved-file child", 0},
+    {"remove-shared-moved", "remove the shared moved file", 0},
+    {"remove-shared-wall", "remove the wall behind it", 0},
+    {"mkdir-ddir", "mkdir the directory to be removed", 0},
+    {"open-ddir", "open the directory", 0},
+    {"rmdir-under-fd", "rmdir under the directory descriptor", 0},
+    {"getdents-held", "getdents64 through the held directory", 'K'},
+    {"relative-held", "a relative path through the held directory", 'K'},
+    {"close-relative", "close what the relative path opened", 'K'},
+    {"getdents-removed", "getdents64 through the removed directory", 'E'},
+    {"close-held-dir", "close the held directory", 0},
+    {"mkdir-opath", "mkdir for the O_PATH descriptor", 'E'},
+    {"open-opath", "open the directory with O_PATH", 0},
+    {"rmdir-under-opath", "rmdir under the O_PATH descriptor", 0},
+    {"close-opath", "close the O_PATH descriptor", 0},
+    {"mkdir-child-cwd", "mkdir for the child's working directory", 'E'},
+    {"fork-cwd-child", "fork the working-directory child", 0},
+    {"parent-waits-chdir", "the parent waits for the child's chdir", 0},
+    {"rmdir-under-cwd", "rmdir under a working directory", 0},
+    {"parent-releases-cwd", "the parent releases the working-directory child", 0},
+    {"cwd-signals", "the working-directory child signals its chdir", 0},
+    {"cwd-enters", "the child enters the directory", 0},
+    {"cwd-waits", "the working-directory child waits for the rmdir", 0},
+    {"cwd-child", "the working-directory child", 0},
+    {"mkdir-own-cwd", "mkdir for the caller's working directory", 'E'},
+    {"chdir-into", "chdir into the directory", 0},
+    {"rmdir-own-cwd", "rmdir under the caller's own working directory", 0},
+    {"chdir-root", "chdir back to the root", 0},
+    {"rmdir-unreferenced", "rmdir once nothing refers to the directory", 'K'},
+    {"close-up-read", "close the child's signal read end", 0},
+    {"close-up-write", "close the child's signal write end", 0},
+    {"close-down-read", "close the parent's signal read end", 0},
+    {"close-down-write", "close the parent's signal write end", 0},
+    {"mint-dup", "mint the file to be dup'd", 0},
+    {"open-dup", "open the file to be dup'd", 0},
+    {"dup-fd", "dup the descriptor", 0},
+    {"unlink-dup-pair", "unlink under the dup'd pair", 0},
+    {"close-one", "close one of the pair", 0},
+    {"read-survivor", "read through the surviving descriptor", 0},
+    {"close-survivor", "close the survivor", 0},
+    {"mint-grow", "mint the file to be moved", 0},
+    {"close-grow", "close the file to be moved", 0},
+    {"mint-wall", "mint the wall behind it", 0},
+    {"close-wall", "close the wall", 0},
+    {"open-reader", "open the reader before the move", 0},
+    {"open-writer", "open the writer", 0},
+    {"write-moves", "the write that must move the file", 0},
+    {"lseek-moved-from", "lseek SEEK_END through the moved-from descriptor", 0},
+    {"rewind-moved-from", "rewind the moved-from descriptor", 0},
+    {"read-moved-from", "read through the moved-from descriptor", 0},
+    {"fstat-moved-from", "fstat64 through the moved-from descriptor", 0},
+    {"close-reader", "close the reader", 0},
+    {"close-writer", "close the writer", 0},
+    {"remove-moved", "remove the moved file", 0},
+    {"remove-wall", "remove the wall", 0},
+    {"leak-by-close", "the unlink leak loop", 0},
+    {"leak-by-unlink", "the unheld unlink loop", 0},
+    {"leak-by-rename", "the rename leak loop", 0},
+    {"remove-replaced", "remove the replaced name", 0},
+};
+
+/* The last check that held, an index of `checks`, or -1 before the first. */
+static int at = -1;
+
+/* Whether the root is KRFFS, which decides the branch `root`. */
+static int krffs_root;
+
+/* In a child, the write end of the pipe on which it tells its parent the
+ * check it reached; -1 in the parent. */
+static int child_fd = -1;
+
+/* In the parent, the read end of that pipe for the child not yet reaped. */
+static int child_rd = -1;
+
+/* The step of a child's failed check, which the parent reports for it. */
+static const char *child_step;
+
+/** Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The check whose step is `step`: the last one that held, or the first of
+ * the checks after it; -1 for a step that is no check's. */
+static int find(const char *step)
+{
+    int i;
+
+    if (at >= 0 && same(checks[at].text, step)) {
+        return at;
+    }
+    for (i = at + 1; i < CHECKS; i++) {
+        if (same(checks[i].text, step)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Record that the check of `step`, if it is one, held. */
+static void held(const char *step)
+{
+    int i = find(step);
+
+    if (i >= 0) {
+        at = i;
+    }
+}
+
+/** Record that every check before `check` held, as a part of the probe
+ * whose steps are no check's begins. */
+static void pass_to(int check)
+{
+    at = check - 1;
+}
+
+/** Whether the check `i` is one that the root, KRFFS or not, does not make. */
+static int other_root(int i)
+{
+    return checks[i].root == (krffs_root ? 'E' : 'K');
+}
+
+/** In the process that began the report, report the branch of the group
+ * `root`, every check of it before `check` as held, `check` as failed with
+ * `why`, those after it as not run, and the report's end; with `check`
+ * CHECKS, every check held. */
+static void report_at(int check, const char *why)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    report_branch("root", krffs_root ? "krffs" : "ext2");
+    for (i = 0; i < CHECKS; i++) {
+        if (other_root(i)) {
+            continue;
+        }
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** End the process at the failed step `step`, a check's or one inside the
+ * check after the last that held: a child tells its parent which check
+ * failed, and the process that began the report reports it. Exits 1. */
+static void stop(const char *step)
+{
+    int i = child_step != 0 ? -1 : find(step);
+
+    if (i < 0) {
+        i = at + 1 < CHECKS ? at + 1 : CHECKS - 1;
+    }
+    if (child_fd >= 0) {
+        syscall3(SYS_WRITE, child_fd, (long)&i, (int)sizeof(i));
+    }
+    report_at(i, child_step != 0 ? child_step : step);
+    syscall1(SYS_EXIT, 1);
+}
+
+/** End a child whose checks held: tell its parent the last check that held,
+ * and exit 0. */
+static void child_done(void)
+{
+    if (child_fd >= 0) {
+        syscall3(SYS_WRITE, child_fd, (long)&at, (int)sizeof(at));
+    }
+    syscall1(SYS_EXIT, 0);
+}
+
 /** Print "FDSTALE FAIL: ", the step and the answer it got, and exit 1. */
 static void fail(const char *step, int got)
 {
@@ -231,7 +726,7 @@ static void fail(const char *step, int got)
     puts_(" (got ");
     putd(got);
     puts_(")\n");
-    syscall1(SYS_EXIT, 1);
+    stop(step);
 }
 
 /** A failure with its round, since the leak loops are judged by where they
@@ -245,7 +740,7 @@ static void fail_round(const char *step, int round, int got)
     puts_(", got ");
     putd(got);
     puts_(")\n");
-    syscall1(SYS_EXIT, 1);
+    stop(step);
 }
 
 /** Fail at `step` unless the answer `got` is exactly `want`: an errno, not
@@ -255,6 +750,7 @@ static void want_eq(const char *step, int got, int want)
     if (got != want) {
         fail(step, got);
     }
+    held(step);
 }
 
 /** Fail at `step` unless the call succeeded, which for open is a descriptor
@@ -264,6 +760,7 @@ static void want_ok(const char *step, int got)
     if (got < 0) {
         fail(step, got);
     }
+    held(step);
 }
 
 /* The bytes every filling write emits, and what the relocation case reads
@@ -304,13 +801,14 @@ static void want_bytes(const char *step, int fd, const char *want, int len)
             puts_(" (byte ");
             putd(i);
             puts_(")\n");
-            syscall1(SYS_EXIT, 1);
+            stop(step);
         }
     }
     n = syscall3(SYS_READ, fd, (long)rdbuf, (int)sizeof(rdbuf));
     if (n != 0) {
         fail(step, n);
     }
+    held(step);
 }
 
 /** Open `path` read-only, read it whole, close it: the view by name, which
@@ -334,6 +832,7 @@ static void want_fd_size(const char *step, int fd, int size)
     if (got != size) {
         fail(step, got);
     }
+    held(step);
 }
 
 /** Create `path` holding `text`, whatever was there before. */
@@ -406,22 +905,63 @@ static void wait_for(const char *step, int fd)
 
 /** Fork a child that runs `body`, which exits itself; the child's pid. The
  * child closes the parent's ends of the two pipes, so that a parent that
- * fails and exits ends the child's wait on `down` with end of file. */
+ * fails and exits ends the child's wait on `down` with end of file, and
+ * tells the parent the check it reached on a pipe of its own, which `reap`
+ * reads. */
 static int spawn(void (*body)(void), const char *what)
 {
-    int pid = syscall1(SYS_FORK, 0);
+    int fds[2] = {-1, -1};
+    int pid;
 
+    held(what);
+    if (syscall1(SYS_PIPE, (long)fds) != 0) {
+        fds[0] = fds[1] = -1;
+    }
+    pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail(what, pid);
     }
     if (pid == 0) {
         syscall3(SYS_CLOSE, up[0], 0, 0);
         syscall3(SYS_CLOSE, down[1], 0, 0);
+        if (fds[0] >= 0) {
+            syscall1(SYS_CLOSE, fds[0]);
+        }
+        child_fd = fds[1];
         body();
         /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);
     }
+    if (fds[1] >= 0) {
+        syscall1(SYS_CLOSE, fds[1]);
+    }
+    child_rd = fds[0];
     return pid;
+}
+
+/** Read from `child_rd`, unless it is -1, the check the child reached, -1
+ * when it said none, and close it. After the child's exit with `status`, a
+ * check that held is the parent's last, and one that failed is the parent's
+ * to report. */
+static void child_reached(int exited_zero)
+{
+    int reached = -1;
+
+    if (child_rd >= 0) {
+        if (syscall3(SYS_READ, child_rd, (long)&reached, (int)sizeof(reached)) !=
+                (int)sizeof(reached) ||
+            reached < 0 || reached >= CHECKS) {
+            reached = -1;
+        }
+        syscall1(SYS_CLOSE, child_rd);
+        child_rd = -1;
+    }
+    if (reached >= 0 && exited_zero) {
+        at = reached;
+    } else if (reached >= 0) {
+        at = reached - 1;
+        child_step = checks[reached].text;
+    }
 }
 
 /** Reap one child and require a clean exit 0. WIFEXITED comes first: a
@@ -432,6 +972,9 @@ static void reap(int pid, const char *what)
     int status = 0;
     int reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
 
+    child_reached(reaped == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    held(what);
+
     if (reaped != pid) {
         fail(what, reaped);
     }
@@ -441,7 +984,7 @@ static void reap(int pid, const char *what)
         puts_(": died by signal ");
         putd(status & 0x7F);
         puts_("\n");
-        syscall1(SYS_EXIT, 1);
+        stop(what);
     }
     if (WEXITSTATUS(status) != 0) {
         fail(what, WEXITSTATUS(status));
@@ -648,7 +1191,7 @@ static void reader_child(void)
                (int)slen(GONE_LINE));
     want_eq("the child closes the renamed-over file", syscall3(SYS_CLOSE, fd_old, 0, 0), 0);
     want_eq("the child closes the re-created file", syscall3(SYS_CLOSE, fd_gone, 0, 0), 0);
-    syscall1(SYS_EXIT, 0);
+    child_done();
 }
 
 /** The rename onto a reader's name, with the reader in another process,
@@ -690,7 +1233,7 @@ static void holder_child(void)
     want_ok("the holder opens the file", fd);
     wait_for("the holder waits for the unlink", down[0]);
     want_bytes("the holder reads the file whose name went", fd, EXIT_LINE, (int)slen(EXIT_LINE));
-    syscall1(SYS_EXIT, 0);
+    child_done();
 }
 
 /** The release at exit: the holder child exits with the only descriptor on
@@ -724,7 +1267,7 @@ static void moved_child(void)
     want_eq("the moved-file child rewinds", syscall3(SYS_LSEEK, fd, 0, 0), 0);
     want_bytes("the moved-file child reads what another process grew", fd, blob, GROW_BYTES);
     want_eq("the moved-file child closes the moved file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    syscall1(SYS_EXIT, 0);
+    child_done();
 }
 
 /** Relocation with the holder in another process. The two-descriptor case
@@ -830,6 +1373,7 @@ static void leak_by_close_case(void)
 {
     int round;
 
+    pass_to(LEAK_BY_CLOSE);
     for (round = 0; round < LEAK_ROUNDS; round++) {
         int fd = syscall3(SYS_OPEN, (long)LEAK, O_RDWR | O_CREAT, 0644);
         int rc;
@@ -857,6 +1401,7 @@ static void leak_by_unlink_case(void)
 {
     int round;
 
+    pass_to(LEAK_BY_UNLINK);
     for (round = 0; round < LEAK_ROUNDS; round++) {
         int fd = syscall3(SYS_CREAT, (long)SOLO, 0644, 0);
         int rc;
@@ -883,6 +1428,7 @@ static void leak_by_rename_case(void)
 {
     int round;
 
+    pass_to(LEAK_BY_RENAME);
     for (round = 0; round < LEAK_ROUNDS; round++) {
         int fd = syscall3(SYS_CREAT, (long)STAGE, 0644, 0);
         int rc;
@@ -912,7 +1458,7 @@ static void cwd_child(void)
     notify("the working-directory child signals its chdir", up[1]);
     want_eq("the child enters the directory", rc, 0);
     wait_for("the working-directory child waits for the rmdir", down[0]);
-    syscall1(SYS_EXIT, 0);
+    child_done();
 }
 
 /**
@@ -979,12 +1525,19 @@ static void directory_case(void)
     }
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** Run every case, the cross-process ones over the two pipes, and print
- * FDSTALE OK; each case exits 1 at its first failure. */
-PROBE_START void _start(void)
+ * FDSTALE OK; each case exits 1 at its first failure. `_start` calls it with
+ * the initial stack, whose environment gives the case's identity. */
+void probe_main(unsigned long *sp)
 {
     int i;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.fdstale"));
+    krffs_root = root_is_krffs();
     for (i = 0; i < LEAK_CHUNK; i++) {
         blob[i] = (char)('a' + (i % 26));
     }
@@ -1012,6 +1565,7 @@ PROBE_START void _start(void)
     leak_by_unlink_case();
     leak_by_rename_case();
 
+    report_at(CHECKS, 0);
     puts_("FDSTALE OK\n");
     syscall1(SYS_EXIT, 0);
 }
