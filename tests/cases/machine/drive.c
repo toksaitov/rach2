@@ -47,6 +47,16 @@ static const char *status_name(enum etude_status st)
     return "unknown";
 }
 
+/** Name end `e` for a person. */
+static const char *end_name(enum etude_end e)
+{
+    static const char *const names[] = {
+        "exited",   "signaled", "init exited", "init killed",        "panic",   "reset",
+        "shutdown", "halted",   "QEMU exited", "accelerator failed", "stopped", "lost"};
+
+    return (unsigned)e < sizeof(names) / sizeof(names[0]) ? names[e] : "unknown";
+}
+
 /** Record the first call of `d` that did not complete, and its status. */
 static int fail(struct drive *d, enum etude_status st, const char *fmt, ...)
 {
@@ -95,7 +105,8 @@ int drive_boot(struct drive *d, struct etude_case *c, const char *machine,
         d->boot = count_boot(machine);
     if (st != ETUDE_OK) {
         d->m = NULL;
-        return fail(d, st, "the boot of %s", machine);
+        return fail(d, st, "the boot of %s, which ended %s %d", machine, end_name(d->end.end),
+                    d->end.value);
     }
     return 0;
 }
