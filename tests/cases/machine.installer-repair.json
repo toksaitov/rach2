@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.installer-repair",
+  "summary": "The machine that will not boot: a destroyed disk restored from the install stick, an installed machine updated from it or from its archive, an MBR disk converted to boot by UEFI, and updates stopped part way and run again; the scenarios are tests/cases/machine/installer_repair_*.c",
+  "cases": [
+    {
+      "case_id": "machine.installer-repair.cut",
+      "behavior": "a write of the disk image that reflash -p was asked for ninety-six mebibytes of and given sixteen, stopped once it has printed its progress line for the sixteen, leaves exactly the image's first sixteen mebibytes over the disk that was there",
+      "units": ["installer-repair", "`tests/system/suites/installer.sh` row 9, a write stopped while it runs leaves the sixteen mebibytes it reported"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick", "image": "installer-test.disk on the stick and its artifact", "cut": "an empty disk of 256 MiB filled with the pattern of fill_pattern", "asked": "96 MiB", "written": "16 MiB"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "installer_repair_cut", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "fill", "stage": "execute", "does": "fill the disk with the pattern, and take the digests of what the write may leave"},
+        {"step_id": "write", "stage": "execute", "does": "boot the stick beside the disk, start the write of ninety-six mebibytes of the image given only sixteen and then a FIFO nothing writes, and end the machine once the write has printed its progress line for the sixteen", "machine": "recovery"},
+        {"step_id": "judge", "stage": "execute", "does": "compare the digest of the disk's first ninety-six mebibytes with the pattern's, the image's and the sixteen mebibytes' over the pattern"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "cut", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "distinct", "checks": "the image's first sixteen mebibytes over the pattern differ both from the pattern and from the image's first ninety-six mebibytes, so the judgement can tell the three apart", "source": "scenario"},
+        {"assertion_id": "progress", "checks": "the write prints its progress line for the first sixteen mebibytes, so it was stopped while it ran", "source": "scenario"},
+        {"assertion_id": "partial", "checks": "the disk's first ninety-six mebibytes are the image's first sixteen over the pattern: the write had begun, had not finished, and left exactly what it reported", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1200000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "disk", "node": "images/installer-test.disk", "per_architecture": true},
+        {"name": "installer_repair_cut", "node": "tests/cases/machine/installer_repair_cut", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case writes a whole disk from the install stick and stops the machine while it writes"}
+    },
+    {
+      "case_id": "machine.installer-repair.restore",
+      "behavior": "a disk with no boot code and no table is put back through rach2-recover's menu and boots with the image's accounts; changed and updated from the stick it keeps its password, keys and homes and names its archive's difference; with its root damaged it is updated from the archive on its recovery partition",
+      "units": ["installer-repair", "`tests/system/suites/installer.sh` rows 9 and 10, a destroyed disk is put back through the recovery menu and boots", "`tests/system/suites/installer.sh` rows 11 to 13, a changed machine is updated from the stick and keeps what it had", "`tests/system/suites/installer.sh` rows 14 and 15, a machine whose root does not read is updated from its archive"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick", "image": "installer-test.disk on the stick", "root": "installer-root.ext2 on the stick", "target": "an empty disk of 256 MiB filled with the pattern of fill_pattern", "password": "the demo password", "new_password": "an-installed-machine", "account": "alice"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "installer_repair_restore", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
+      "steps": [
+        {"step_id": "fill", "stage": "execute", "does": "fill the disk with the pattern, and take the digest of the image's boot code"},
+        {"step_id": "restore", "stage": "execute", "does": "boot the stick beside the disk, restore the stick's image to the disk through rach2-recover's menu, and compare the disk's boot code with the image's", "machine": "recovery"},
+        {"step_id": "recovered", "stage": "execute", "does": "boot the disk and log in with the image's password", "machine": "installed"},
+        {"step_id": "change", "stage": "execute", "does": "change root's password, remove its keys, make an account's home with a file of 8 MiB, mark the motd, and put an archive in the old layout with a group line the root lacks", "machine": "installed"},
+        {"step_id": "update", "stage": "execute", "does": "boot the stick and update the disk from it", "machine": "recovery"},
+        {"step_id": "updated", "stage": "execute", "does": "boot the disk and check the password, the keys, the home and the motd", "machine": "installed"},
+        {"step_id": "damage", "stage": "execute", "does": "boot the stick, zero the root's superblock and update the disk from it", "machine": "recovery"},
+        {"step_id": "archived", "stage": "execute", "does": "boot the disk and check the password, the group file, the homes and the test account's keys, and commit the boot", "machine": "installed"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "target", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "setup", "checks": "the disk is filled with the pattern, and the image's boot code and the demo password are read", "source": "scenario"},
+        {"assertion_id": "restored", "checks": "rach2-recover's menu restores the stick's image to the disk, hashes it first, reports its progress, and reads it back", "source": "scenario"},
+        {"assertion_id": "boot-code", "checks": "the restored disk's first 440 bytes are the image's boot code", "source": "scenario"},
+        {"assertion_id": "recovered-boots", "checks": "the restored disk boots to a login that takes the image's root password", "source": "scenario"},
+        {"assertion_id": "changed", "checks": "the installed machine takes a new root password, an account's home with a file of 8 MiB and a marked motd, and its recovery partition an archive whose group file has a line the root's lacks", "source": "scenario"},
+        {"assertion_id": "updated", "checks": "the update from the stick copies the machine's accounts, names the archive's difference and keeps the root's group file, writes the image, writes the accounts back, archives the configuration and arms one trial boot", "source": "scenario"},
+        {"assertion_id": "updated-boots", "checks": "the updated machine refuses the image's password and takes its own, has no keys for root, keeps the home with its owner and its file of 8 MiB, and has the image's motd", "source": "scenario"},
+        {"assertion_id": "archive-update", "checks": "with its superblock zeroed the root does not read, and the update takes the configuration from the recovery partition's archive, writes the image and the accounts and archives them again", "source": "scenario"},
+        {"assertion_id": "archive-boots", "checks": "the machine updated from the archive takes the password the archive kept, has the group file the last update archived and not the tampered one, has lost the home file the archive did not keep, keeps the test account's keys with their owner and modes, and commits its boot", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 8}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 14400000000, "ceiling_us": 28800000000}, "gap": {"floor_us": 1000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 536870912, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "disk", "node": "images/installer-test.disk", "per_architecture": true},
+        {"name": "password", "node": "tests/cases/fixtures/demo-password", "per_architecture": false},
+        {"name": "installer_repair_restore", "node": "tests/cases/machine/installer_repair_restore", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case writes a whole disk from the install stick and boots it"}
+    },
+    {
+      "case_id": "machine.installer-repair.convert",
+      "behavior": "an MBR disk whose boot partition is FAT32 at eight sectors to a cluster is updated from the stick and converted: its boot partition made again at one sector to a cluster with its serial, GRUB's EFI image and the menu, its entry of type 0xef in the same place; a second update leaves the EFI image alone, and the disk boots by UEFI to a login on its root and by BIOS into its saved default",
+      "units": ["installer-repair", "`tests/system/suites/installer.sh` row 18, an MBR disk is converted by the update and boots by UEFI and by BIOS"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick", "root": "installer-root.ext2 on the stick", "mbr": "installer-test-mbr.disk", "efi": "vendor/grub/bootx64.efi"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mcopy", "minfo", "mtype"], "features": {}},
+      "execution": {"program": "installer_repair_convert", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
+      "steps": [
+        {"step_id": "layout", "stage": "execute", "does": "read the MBR disk's first entry with mkmbr and its boot partition with minfo"},
+        {"step_id": "convert", "stage": "execute", "does": "boot the stick beside the disk and update the disk from it twice", "machine": "recovery"},
+        {"step_id": "inspect", "stage": "execute", "does": "read the converted disk's first entry, its boot partition with minfo, its EFI image with mcopy and its menu with mtype"},
+        {"step_id": "uefi", "stage": "execute", "does": "boot the disk by UEFI to its login", "machine": "uefi"},
+        {"step_id": "bios", "stage": "execute", "does": "boot the disk by BIOS to its saved default", "machine": "bios"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "uefi", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["mbr"], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "ovmf", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "bios", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "old-layout", "checks": "the MBR disk's first entry has type 0x0c and its boot partition is FAT32 at eight sectors to a cluster, the layout installed before", "source": "scenario"},
+        {"assertion_id": "converted", "checks": "the update makes the boot partition's file system again, converts the disk keeping its MBR, writes the image and arms a trial boot, and the second update finds GRUB's EFI image already there", "source": "scenario"},
+        {"assertion_id": "converted-volume", "checks": "the converted disk's first entry has type 0xef at the same place, its file system one sector to a cluster with serial 1ACE-F00D, GRUB's EFI image as EFI/BOOT/BOOTX64.EFI and a menu that names the root MBRID=1acef00d,3", "source": "scenario"},
+        {"assertion_id": "uefi-boots", "checks": "the converted disk boots by UEFI from its hard disk to a login, with its root found as MBRID=1acef00d,3 on /dev/disk0p3", "source": "scenario"},
+        {"assertion_id": "bios-boots", "checks": "the converted disk still boots by BIOS, into its saved default, the recovery system, since nothing committed the trial", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1207959552, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "mbr", "node": "images/installer-test-mbr.disk", "per_architecture": true},
+        {"name": "bootx64", "node": "tests/cases/fixtures/bootx64.efi", "per_architecture": false},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "installer_repair_convert", "node": "tests/cases/machine/installer_repair_convert", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case boots one disk by UEFI and by BIOS after the stick has converted it"}
+    },
+    {
+      "case_id": "machine.installer-repair.convert-stopped",
+      "behavior": "the conversion of an MBR disk stopped after the boot partition's files were kept on the recovery partition and before its new file system had them is finished by the update run again, which makes the file system from the copy, converts the disk and removes the copy",
+      "units": ["installer-repair", "`tests/system/suites/installer.sh` row 18b, a stopped conversion is finished by the update run again"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick", "root": "installer-root.ext2 on the stick", "mbr": "installer-test-mbr.disk", "zeroed": "the boot partition's first 64 sectors"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "dd", "rm", "mkdir", "mcopy", "mdir", "minfo", "mtype"], "features": {}},
+      "execution": {"program": "installer_repair_convert_stopped", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
+      "steps": [
+        {"step_id": "plant", "stage": "execute", "does": "keep the boot partition's files and first sector on the recovery partition, marked whole, and zero the boot partition's first sectors, with installer_repair_disk.sh keep"},
+        {"step_id": "resume", "stage": "execute", "does": "boot the stick beside the disk and update the disk from it", "machine": "recovery"},
+        {"step_id": "inspect", "stage": "execute", "does": "look for the copy on the recovery partition with mdir, and read the boot partition with minfo and its menu with mtype"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "mbr"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "planted", "checks": "the boot partition's files are planted on the recovery partition and its file system zeroed", "source": "scenario"},
+        {"assertion_id": "resumed", "checks": "the update says the conversion was stopped part way, makes the boot partition's file system again from the kept files, and converts the disk", "source": "scenario"},
+        {"assertion_id": "resumed-volume", "checks": "the copy is gone from the recovery partition, and the boot partition is the converted one, one sector to a cluster with serial 1ACE-F00D and a menu that names the root MBRID=1acef00d,3", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 5400000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "mbr", "node": "images/installer-test-mbr.disk", "per_architecture": true},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "installer_repair_disk", "node": "tests/cases/machine/installer_repair_disk", "per_architecture": false},
+        {"name": "installer_repair_convert_stopped", "node": "tests/cases/machine/installer_repair_convert_stopped", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case writes the partitions of a disk and updates it from the install stick"}
+    },
+    {
+      "case_id": "machine.installer-repair.resume",
+      "behavior": "updates stopped after the root's write are run again and give the machine back its accounts, homes, keys and their owners and modes: a stop planted on the disk with the archive in the old layout or in slot A, and stops made by copies of the installer that exit at a line of their own, before the archive is written and after the root is checked",
+      "units": ["installer-repair", "`tests/system/suites/installer.sh` row archive-keys, a normal update archives the machine's configuration", "`tests/system/suites/installer.sh` row archive-stop, a retry takes the complete archive in the old layout", "`tests/system/suites/installer.sh` rows 16 and 17, an update stopped after the root's write is retried from the marked archive and the machine keeps its keys", "`tests/system/suites/installer.sh` row 19, an update stopped after the root's write is run again in the same boot"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick, its volume made again with the keyed root", "disk": "installer-test.disk", "root": "installer-root.ext2 with keys in /srv/alice and /srv/empty, as key-root.ext2", "password": "the demo password", "key": "root's demo key", "accounts": "worker, Alice and alice, each with a new ed25519 key", "stops": "exit 99 before the new archive's directory, exit 98 after the root is checked"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "dd", "rm", "mkdir", "grep", "debugfs", "mcopy", "mmd", "mdeltree", "ssh", "ssh-keygen"], "features": {}},
+      "execution": {"program": "installer_repair_resume", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "disk", "root"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory, with the keys it made, unless an assertion failed"},
+      "steps": [
+        {"step_id": "keys", "stage": "execute", "does": "copy root's demo key, take its public half with ssh-keygen, and make a key for each of three accounts"},
+        {"step_id": "record", "stage": "execute", "does": "boot the disk, give root, the test account and three accounts keys and two homes outside /home, make the host keys, and print every key's digest", "machine": "installed"},
+        {"step_id": "payload", "stage": "execute", "does": "put keys in /srv/alice and /srv/empty of a copy of the root image with debugfs, and make it the one file of the stick's volume with mkexfatfixture"},
+        {"step_id": "archive-keys", "stage": "execute", "does": "boot the stick, plant a half-written slot A and a key name that differs only in case, update, remove the name, update again and check the homes outside /home", "machine": "recovery"},
+        {"step_id": "plant-legacy", "stage": "execute", "does": "move the archive to the old layout with an account and an unowned key added, write the image over the root, mark the stop, and plant an unfinished slot A, with installer_repair_disk.sh legacy"},
+        {"step_id": "archive-stop", "stage": "execute", "does": "boot the stick, stop a copy of the installer before it writes the new archive, check the old archive is whole, update and check the slots", "machine": "recovery"},
+        {"step_id": "plant-slot", "stage": "execute", "does": "replant the unowned key in slot A, write the image over the root again and mark slot A, with installer_repair_disk.sh slot"},
+        {"step_id": "stopped-update", "stage": "execute", "does": "boot the stick and update the disk from the marked archive", "machine": "recovery"},
+        {"step_id": "stopped-boot", "stage": "execute", "does": "boot the disk with its SSH port forwarded, check the accounts, homes, keys and modes, log in with root's key and print every key's digest", "machine": "installed-net"},
+        {"step_id": "retry", "stage": "execute", "does": "boot the stick, put a file in a home, stop a copy of the installer after the root is checked, and run the update again", "machine": "recovery"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, "disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed-net", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "keys-recorded", "checks": "the installed machine takes keys for root, the test account and three accounts, two homes outside /home and its host keys, and prints at least six key digests", "source": "scenario"},
+        {"assertion_id": "payload", "checks": "the root image has the image's key in /srv/alice and /srv/empty, and is the one file of the stick's volume", "source": "scenario"},
+        {"assertion_id": "key-collision", "checks": "two key names that differ only in case stop the update with status 1, naming both, before the root is written", "source": "scenario"},
+        {"assertion_id": "half-slot-ignored", "checks": "a half-written slot A is passed by, and the update takes the root's configuration and finishes", "source": "scenario"},
+        {"assertion_id": "outside-home-keys", "checks": "the keys of a home outside /home are kept with their owner and modes, 2004:2004 at 750 and 640, and the machine's key", "source": "scenario"},
+        {"assertion_id": "outside-home-empty", "checks": "the image's key is removed from a home outside /home whose account had none", "source": "scenario"},
+        {"assertion_id": "archived", "checks": "the normal update's boot finishes and archives the machine's configuration, every check above having held", "source": "scenario"},
+        {"assertion_id": "legacy-planted", "checks": "the archive is moved to the old layout with an account and an unowned key added, the image written over the root, the stop marked and an unfinished slot A planted", "source": "scenario"},
+        {"assertion_id": "legacy-archive", "checks": "a copy of the installer stopped before it writes the new archive leaves the old archive whole, and the retry takes it, adds the account, removes the old layout and leaves slot A current and unmarked", "source": "scenario"},
+        {"assertion_id": "slot-planted", "checks": "the unowned key is replanted in slot A, the image written over the root again and slot A marked", "source": "scenario"},
+        {"assertion_id": "stopped-update", "checks": "the update says it was stopped part way with the image's accounts on the root, takes the archive, and writes and archives again", "source": "scenario"},
+        {"assertion_id": "restored-keys", "checks": "the resumed machine has the archive's added account with an empty home, no unowned key, each account's home and keys with their owners and modes, the homes outside /home kept or left without keys, and no mark", "source": "scenario"},
+        {"assertion_id": "restored-login", "checks": "root logs in over SSH with its restored key", "source": "scenario"},
+        {"assertion_id": "finished", "checks": "the resumed machine finishes its key checks, told over SSH", "source": "scenario"},
+        {"assertion_id": "key-hashes", "checks": "every host and account key's digest after the resumed update is what it was before the stops", "source": "scenario"},
+        {"assertion_id": "retry-finished", "checks": "the boot of the stopped and repeated update finishes", "source": "scenario"},
+        {"assertion_id": "retry-stopped", "checks": "the copy of the installer exits with status 98 after the root is written and checked, and the image's root has replaced the home's file", "source": "scenario"},
+        {"assertion_id": "retry-restored", "checks": "the update run again in the same boot says it takes the configuration the first kept, exits 0, puts the home's file back with its owner, and removes the kept copy", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 21600000000, "ceiling_us": 43200000000}, "gap": {"floor_us": 1000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 805306368, "disk_bytes": 1073741824, "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "disk", "node": "images/installer-test.disk", "per_architecture": true},
+        {"name": "root", "node": "images/installer-root.ext2", "per_architecture": true},
+        {"name": "password", "node": "tests/cases/fixtures/demo-password", "per_architecture": false},
+        {"name": "demo-key", "node": "tests/cases/fixtures/demo-ed25519", "per_architecture": false},
+        {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "installer_repair_disk", "node": "tests/cases/machine/installer_repair_disk", "per_architecture": false},
+        {"name": "installer_repair_resume", "node": "tests/cases/machine/installer_repair_resume", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "system", "reason": "the case changes the installed machine's accounts and keys and updates it from the install stick"}
+    }
+  ]
+}
