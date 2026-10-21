@@ -528,6 +528,15 @@ $(ARCH_CASE_DIR)/install.disk: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
 run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKGPT) $(RUNUTIL) $(SHA256TOOL)
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
+# The artifact of the sealed cases beyond the kernel, the sealed disk and the
+# demo key: GRUB's pinned GPT core, which the fault case installs through
+# /dev/grubcore, checked against the GRUB manifest as it is copied.
+$(CASE_DIR)/sealed/gpt-core.img: vendor/grub/gpt-core.img vendor/grub/manifest.txt \
+                                 vendor/grub/verify_grub.sh $(SHA256TOOL)
+	@mkdir -p $(@D)
+	cp vendor/grub/gpt-core.img $@.new
+	sh vendor/grub/verify_grub.sh "gpt-core.img=$@.new" || { rm -f $@.new; exit 1; }
+	mv $@.new $@
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
 # three partitions the sealed disk has. It is the cases of
 # tests/cases/machine.drill.json, which etude runs, and has no target here: the
