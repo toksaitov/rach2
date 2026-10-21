@@ -1,27 +1,27 @@
 /**
  * krffsprobe: a mounted KRFFS volume, from a program.
  *
- * `krffsprobe read` mounts /dev/disk0p1, the volume
- * tests/system/suites/krffsmount.sh builds, on /k read-only and checks what
- * a mounted volume must give: every byte of a file whose contents follow a
- * rule, the names in the root and in a subdirectory, a stat of each kind, a
- * read past the end, a name that is not there, and a write refused because
- * the mount is read-only. Then it unmounts.
+ * `krffsprobe read` mounts /dev/disk0p1, the volume tests/system/krffsvol.sh
+ * builds, on /k read-only and checks what a mounted volume must give: every
+ * byte of a file whose contents follow a rule, the names in the root and in
+ * a subdirectory, a stat of each kind, a read past the end, a name that is
+ * not there, and a write refused because the mount is read-only. Then it
+ * unmounts.
  *
  * `krffsprobe write` mounts it for writing and does what a file system is
  * for: creates, writes, reads back, grows, truncates, renames, removes,
  * makes and removes a directory, changes a mode, syncs and unmounts.
  * `krffsprobe readback` is the next boot, which must find every one of those
  * where the write boot left it. `krffsprobe crash` writes and never unmounts,
- * for a machine the harness kills, and `krffsprobe writers` runs two writers
- * on one mount.
+ * for a machine the case ends from outside, and `krffsprobe writers` runs
+ * two writers on one mount.
  *
  * `krffsprobe refuse` mounts the same device expecting the kernel to refuse
- * it: the suite gives it a volume broken on purpose, and the row is the
- * errno plus the kernel's own line on the console. `krffsprobe failed`
- * writes until the device fails a write, `krffsprobe three` mounts three
- * volumes at once, and `krffsprobe pull` writes until the stick under the
- * mount is pulled; `probe_main` says what each requires.
+ * it: the case gives it a volume broken on purpose, and checks the errno and
+ * the kernel's own line on the console. `krffsprobe failed` writes until the
+ * device fails a write, `krffsprobe three` mounts three volumes at once, and
+ * `krffsprobe pull` writes until the stick under the mount is pulled;
+ * `probe_main` says what each requires.
  *
  * The mount directories, k, k2 and k3, are made in the working directory,
  * which is `/` on the test image, so that they are /k, /k2 and /k3 there. A

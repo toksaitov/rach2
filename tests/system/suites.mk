@@ -789,7 +789,8 @@ $(LOOPDEV_ARTIFACTS) &: tests/system/loopdev_disks.sh krffs/manifests/loopimg-te
 # writing and repaired by the next mount, written by two processes at once,
 # refused when it is malformed, taken read-only by a write the device fails,
 # mounted three at a time, and left by a stick pulled from under it. Its
-# cases are in tests/cases/machine.krffsmount.json, which etude runs.
+# cases are in tests/cases/machine.krffsmount.json, which etude runs, and it
+# has no target here.
 #
 # The volumes, which the native cases of tests/native/probes.cases read too,
 # and the disks and the stick that the cases boot copies of; none depends on
@@ -803,10 +804,6 @@ KRFFSMOUNT_DISKS = $(addprefix $(CASE_DIR)/krffsmount/,volume.disk broken.disk b
                    badchain.disk region.disk three.disk stick.img)
 $(KRFFSMOUNT_DISKS) &: tests/system/krffsvol.sh $(KRFFSVOLS) $(MKMBR)
 	sh tests/system/krffsvol.sh disks $(CASE_DIR)/krffsmount
-KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
-run-krffsmount: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
-	sh tests/system/suites/krffsmount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
-	    $(KRFFSMOUNT_DISK) build/krffs/fsck.krffs
 
 # `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
 # mke2fs wrote, with the walker's link rows on the mounted volume.
