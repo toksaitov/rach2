@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "rows-sealed",
-  "summary": "the sealed suite's rows of update and mke2fs, with the sealed root's manifest missing each",
+  "summary": "the sealed fault case's assertions of update and mke2fs, with the sealed root's manifest missing each",
   "tree": "shared",
   "sources": [
     "krffs/manifests/rach2-metal-disk.manifest"
@@ -20,12 +20,10 @@
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "make",
-      "run-sealed"
+      "-c",
+      "exec tests/run sealed </dev/null"
     ],
-    "bound_s": 3600,
-    "fail_prefix": "sealed-test: FAIL: "
+    "bound_s": 7200
   },
   "faults": [
     {
@@ -40,8 +38,10 @@
       ],
       "fails": {
         "lines": [
-          "sealed-test: FAIL: the installed root runs no update process"
-        ]
+          "run: sealed: FAIL",
+          "assert update fail"
+        ],
+        "status": 1
       }
     },
     {
@@ -56,8 +56,10 @@
       ],
       "fails": {
         "lines": [
-          "sealed-test: FAIL: mke2fs on the installed root made no volume a loop device mounts"
-        ]
+          "run: sealed: FAIL",
+          "assert mke2fs fail"
+        ],
+        "status": 1
       }
     }
   ]

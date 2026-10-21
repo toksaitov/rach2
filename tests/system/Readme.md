@@ -180,7 +180,7 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `exe.json`: the `gnu` suite's bash row, against an `execve` that names the program by the path it was given, links and all, in `/proc/PID/exe`.
 * `rows-default.json`: the `default` suite's `devprobe`, `sigprobe` and `procprobe` rows, each against a kernel fault that fails its own row.
 * `rows-runner.json`: the runner's self-test, against a copy of `tests/run` whose check of the run's own products is taken out.
-* `rows-sealed.json`: the `sealed` suite's rows, against a sealed root without `update` and one without `mke2fs`.
+* `rows-sealed.json`: the `sealed` fault case's `update` and `mke2fs` assertions, against a sealed root without `update` and one without `mke2fs`.
 * `rtc-host.json` and `rtc-guest.json`: the clock's time between ticks, in `rtc_hosttest` and in `stattest`'s STATTIME row on the KRFFS root, against a `clock.c` whose time between ticks lacks the PIT's position.
 * `sb16.json`: an SB16 boot like the `audio` suite's, on the host's clock and on a slow instruction clock, against a scale command that does not lower its rate for the SB16, an SB16 that does not refill from the callback, and one that plays stereo as mono.
 * `audio.json`: the `audio` cases, against an HDA stream that raises no interrupt at the end of a buffer, so that the notes come from the timer's service alone, and an SB16 that plays stereo as mono.

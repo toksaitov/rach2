@@ -76,7 +76,6 @@ AGENTS_PORT     := $(call port,2301)
 AGENTS_API_PORT := $(call port,2302)
 AGENTSACCEPT_PORT     := $(call port,2303)
 AGENTSACCEPT_API_PORT := $(call port,2304)
-SEALED_PORT     := $(call port,2297)
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 # The suites' wall-clock limit tool (see its rule below).
@@ -513,21 +512,15 @@ $(ARCH_CASE_DIR)/install.disk: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
-# will be operated once it is in there. Two runs of one artifact on separate
-# copies: a fault run that walks the whole life of the machine over SSH (a
-# kernel sent down the connection, installed, tried and committed; a destroyed
-# candidate caught by the fallback and repaired; a menu staged and then torn;
-# the boot loader replaced with a marked core; the root destroyed and rewritten
-# from recovery), and a control run that injects nothing and asserts that no
-# fallback and no recovery appears anywhere. The disk is assembled natively; the
-# runs are QEMU and ssh.
-# The disk itself and not the alias that builds it: the alias is a phony whose
-# recipe always runs, and two suites of the pool that named it would write the
-# one image at the same time. `prepare-images` builds the file before the pool
-# starts, and a suite run on its own builds it through this rule.
-run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MKGPT) $(RUNUTIL) $(SHA256TOOL)
-	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
-	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
+# will be operated once it is in there. It is the two cases of
+# tests/cases/machine.sealed.json, which etude runs on separate copies of the
+# one disk, and has no target here: a fault case that walks the whole life of
+# the machine over SSH (a kernel sent down the connection, installed, tried and
+# committed; a destroyed candidate caught by the fallback and repaired; a
+# missing, a damaged and an unclean root each landing in recovery and repaired;
+# a menu staged and then torn; the boot loader replaced through /dev/grubcore;
+# the root destroyed and rewritten from recovery), and a control case that
+# injects nothing and finds no fallback and no recovery anywhere.
 # The artifact of the sealed cases beyond the kernel, the sealed disk and the
 # demo key: GRUB's pinned GPT core, which the fault case installs through
 # /dev/grubcore, checked against the GRUB manifest as it is copied.
