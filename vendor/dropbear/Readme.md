@@ -68,5 +68,5 @@ The result is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. The stamp
 
 * `tests/run ssh` boots os-real from a disk, starts the server from the console as Use does, and logs in as root by key and as the test account by password, over a pty; it requires the refusal of a missing key, a wrong password and root's password under `-g`.
 * `tests/run metal` boots the metal image with nothing typed at the console, logs in by key to the server its init started, and requires init to start the server again after it is killed.
-* `tests/run noentropy` runs `dropbearmulti dropbearkey` on a CPU with neither RDSEED nor RDRAND, and requires it to stop with its error that it could not read the random device and to write no key. `rach2/run.sh` passes `-cpu max` for this reason, so that the kernel's random source has a trusted seed.
+* `tests/run noentropy` runs `dropbearmulti dropbearkey` from the test image, which stages the program at os-real's path for it, on a CPU with neither RDSEED nor RDRAND, and requires it to stop with its error that it could not read the random device and to write no key. `rach2/run.sh` passes `-cpu max` for this reason, so that the kernel's random source has a trusted seed.
 * `tests/run sealed`, `drill`, `installer` and `uefi` reach their machines over SSH.

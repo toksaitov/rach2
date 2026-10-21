@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.noentropy",
+  "summary": "With no trusted entropy the random devices, the salt mint, passwd and Dropbear's key generator refuse and change nothing; each case boots the test image on a processor without RDRAND and RDSEED",
+  "cases": [
+    {
+      "case_id": "guest.noentropy.saltnoent",
+      "behavior": "With no trusted entropy the salt mint refuses, says so once and writes nothing, and a writer that minted nothing leaves the shadow file as it was",
+      "units": ["musl/saltnoent"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "saltnoent", "stdin": null, "role": "ordinary", "privileges": "root, to take the lock and read /etc/shadow", "isolation": [], "children": "none", "cleanup": "nothing to remove; /etc/shadow, its temporary files and /etc/.pwlock are as the image has them"},
+      "assertions": [
+        {"assertion_id": "premise", "checks": "getrandom fails with EIO", "source": "program"},
+        {"assertion_id": "mint-refused", "checks": "pwauth_mint_salt returns -1", "source": "program"},
+        {"assertion_id": "salt-untouched", "checks": "the refused mint wrote no byte of the salt buffer", "source": "program"},
+        {"assertion_id": "said-once", "checks": "the line pwauth: no trusted entropy reaches standard error exactly once", "source": "program"},
+        {"assertion_id": "writer-refused", "checks": "inside a writer's transaction the mint refuses too, and the transaction ends", "source": "program"},
+        {"assertion_id": "shadow-unchanged", "checks": "/etc/shadow is byte for byte what it was", "source": "program"},
+        {"assertion_id": "no-temporary", "checks": "no temporary file of /etc/shadow is left", "source": "program"},
+        {"assertion_id": "no-lock", "checks": "no /etc/.pwlock is left", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "transfer": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "saltnoent", "node": "tests/musl/saltnoent", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the processor must lack RDRAND and RDSEED, as QEMU's qemu64 does, so that the kernel's generator is untrusted"}
+    },
+    {
+      "case_id": "guest.noentropy.passwdmusl",
+      "behavior": "With no trusted entropy passwd refuses before it asks for a new password, both it and the library say why, and the shadow file is unchanged",
+      "units": ["musl/passwdmusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "passwdmusl", "stdin": null, "role": "ordinary", "privileges": "root, to run the set-user-ID /passwd as uid 1000 and read /etc/shadow", "isolation": [], "children": "reaped", "cleanup": "the probe restores /etc/passwd, /etc/shadow and /etc/group and removes the lock"},
+      "assertions": [
+        {"assertion_id": "change", "checks": "a uid-1000 change of its own password gives a new $6$ hash that crypt reproduces, and leaves every other line, the mode, the owner, no temporary file and no lock", "source": "program"},
+        {"assertion_id": "refusals", "checks": "a wrong old password, another account, an account named twice, and records and passwords no reader would accept are refused and change nothing", "source": "program"},
+        {"assertion_id": "concurrent", "checks": "two accounts changed at once both survive, and records changed under a writer at its prompt are refused", "source": "program"},
+        {"assertion_id": "closed-refused", "checks": "passwd exits with a failure", "source": "program"},
+        {"assertion_id": "closed-library", "checks": "the library's line says there is no trusted entropy", "source": "program"},
+        {"assertion_id": "closed-program", "checks": "passwd says the password is unchanged", "source": "program"},
+        {"assertion_id": "closed-no-prompt", "checks": "passwd never asks for the new password", "source": "program"},
+        {"assertion_id": "closed-shadow", "checks": "/etc/shadow is byte for byte what it was", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "source", "decided_by": {"features": ["rdrand", "rdseed"]}, "alternatives": [{"alternative_id": "trusted", "when": "present", "assertions": ["change", "refusals", "concurrent"]}, {"alternative_id": "fail-closed", "when": "absent", "assertions": ["closed-refused", "closed-library", "closed-program", "closed-no-prompt", "closed-shadow"]}]}
+      ],
+      "termination": {"end": "exited", "value": 1},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "transfer": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "passwdmusl", "node": "tests/musl/passwdmusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the processor must lack RDRAND and RDSEED, as QEMU's qemu64 does, so that the kernel's generator is untrusted"}
+    },
+    {
+      "case_id": "guest.noentropy.rngprobe",
+      "behavior": "With no trusted entropy getrandom, /dev/urandom and /dev/random answer EIO, while GRND_INSECURE still returns bytes",
+      "units": ["rngprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "rngprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "cpuid-leaf7", "checks": "kcpu_id gives leaf 7 subleaf 0 as a direct cpuid does", "source": "program"},
+        {"assertion_id": "trusted-urandom", "checks": "with getrandom succeeding, /dev/urandom opens, reads and varies across reads", "source": "program"},
+        {"assertion_id": "trusted-monobit", "checks": "the bytes of /dev/urandom pass a loose monobit count", "source": "program"},
+        {"assertion_id": "closed-urandom", "checks": "with getrandom answering EIO, a read of /dev/urandom answers EIO", "source": "program"},
+        {"assertion_id": "closed-random", "checks": "with getrandom answering EIO, a read of /dev/random answers EIO", "source": "program"},
+        {"assertion_id": "closed-insecure", "checks": "getrandom(GRND_INSECURE) still returns bytes", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "source", "decided_by": {"features": ["rdrand", "rdseed"]}, "alternatives": [{"alternative_id": "trusted", "when": "present", "assertions": ["trusted-urandom", "trusted-monobit"]}, {"alternative_id": "fail-closed", "when": "absent", "assertions": ["closed-urandom", "closed-random", "closed-insecure"]}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "rngprobe", "node": "tests/rngprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the processor must lack RDRAND and RDSEED, as QEMU's qemu64 does, so that the kernel's generator is untrusted"}
+    },
+    {
+      "case_id": "guest.noentropy.keygennoent",
+      "behavior": "With no trusted entropy Dropbear's key generator exits with its error that it could not read the random device, and writes no key",
+      "units": ["noentropy"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"rdrand": "absent", "rdseed": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "keygennoent", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the program removes keygennoent.key from its working directory on every path"},
+      "assertions": [
+        {"assertion_id": "premise", "checks": "getrandom fails with EIO", "source": "program"},
+        {"assertion_id": "refused", "checks": "dropbearmulti dropbearkey exits with a status other than 0", "source": "program"},
+        {"assertion_id": "reason", "checks": "its output says it failed reading the random device", "source": "program"},
+        {"assertion_id": "no-key", "checks": "no key file is left", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "transfer": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "keygennoent", "node": "tests/musl/keygennoent", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the processor must lack RDRAND and RDSEED, as QEMU's qemu64 does, so that the kernel's generator is untrusted"}
+    }
+  ]
+}

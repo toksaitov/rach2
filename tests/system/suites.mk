@@ -288,83 +288,20 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    "expect=Type 'help'" "send=exec /pingtest" until=60
 	$(PCAPCHECK) bcast $(ADDRESSED_PCAP) --source 10.0.2.77 --arp-from 10.0.2.77
 # `tests/run noentropy`: the entropy policy's fail-closed half, which no other
-# target can reach. The probe suite boots -cpu max, so the CPU has RDSEED and
-# RDRAND and the kernel's pool is trusted; a minter that quietly fell back to
-# the untrusted stream would pass every probe there. This boots on a CPU that
-# exposes neither instruction. On the test image /musl/saltnoent (staged by the
-# image sweep, deliberately absent from the probe runner's list because it must
-# fail where entropy is trusted) asserts that the mint refuses, says so once,
-# and leaves /etc/shadow, its temporary file and the lock exactly as they were;
-# /musl/passwdmusl takes its fail-closed side; and /rngprobe takes its
-# fail-closed branch, in which getrandom, /dev/urandom and /dev/random answer
-# EIO while GRND_INSECURE still returns bytes. On os-real, Dropbear's key
-# generator must stop with its error that it could not read the random device
-# and write no key, which is why rach2/run.sh and its siblings boot -cpu max.
-# The harness passes no -cpu of its own, so the passthrough is the only one on
-# the command line.
-run-noentropy: $(DEMO_CREDS) rach2 test-image os-real-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=qemu64 \
-	    --timeout 90 --ok "SALTNOENT OK" \
-	    "expect=Type 'help'" "send=exec /musl/saltnoent" until=20
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=qemu64 \
-	    --timeout 180 --ok "PASSWDMUSL OK (fail-closed)" \
-	    "expect=Type 'help'" "send=exec /musl/passwdmusl" until=60
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=qemu64 --log $(IMAGES_DIR)/noentropy-rng.log \
-	    --timeout 90 --ok "RNGPROBE OK (fail-closed)" --never "RNGPROBE FAIL" \
-	    "expect=Type 'help'" "send=exec /rngprobe" until=20
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(OS_REAL_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=qemu64 --log $(IMAGES_DIR)/noentropy-keygen.log \
-	    --timeout 300 --steptmo 90 --ok "KEYGEN:REFUSED" \
-	    --never "KEYGEN:MADE" --never "KEYGEN:OTHER" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" "expect=# " \
-	    "send=if dropbearmulti dropbearkey -t ed25519 -f /tmp/k > /tmp/kg 2>&1; then echo KEY\"\"GEN:MADE; elif grep -q 'reading random device' /tmp/kg && [ ! -e /tmp/k ]; then echo KEY\"\"GEN:REFUSED; else echo KEY\"\"GEN:OTHER; fi" \
-	    "expect=KEYGEN:"
-# `tests/run fpu`: the floating-point state of a process is its own. Boots
-# of `fpuprobe`: with XSAVE, where the x87, XMM and YMM registers, the
-# control word and MXCSR are saved by `xsave`; under `rach2.noxsave` and on
-# QEMU's `qemu64`, which has no XSAVE, where `fxsave` saves them and
-# `xsaveprobe` must find OSXSAVE clear and no NT_X86_XSTATE; and with
-# `rach2.nofxsr`, where the x87 state is saved by `fnsave` and an SSE
-# instruction is an invalid opcode, so the probe's x87 branch runs alone.
-# Only the i686 kernel takes `rach2.nofxsr`, since every x86-64 processor
-# has FXSR, so x86-64 boots the first three alone.
-run-fpu: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
-	    --timeout 90 --steptmo 30 --ok "FPUPROBE OK" --never "FPUPROBE FAIL" \
-	    --log $(IMAGES_DIR)/fpu-test.log \
-	    "expect=fpu: fxsr: on, sse: on, xsave: on" "expect=Type 'help'" \
-	    "send=exec /fpuprobe" "expect=FPUPROBE"
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue rach2.noxsave" \
-	    --timeout 90 --steptmo 30 --ok "XSAVEPROBE OK" \
-	    --never "FPUPROBE FAIL" --never "XSAVEPROBE FAIL" \
-	    --log $(IMAGES_DIR)/fpu-test.noxsave.log \
-	    "expect=fpu: fxsr: on, sse: on, xsave: off" "expect=Type 'help'" \
-	    "send=exec /fpuprobe" "expect=FPUPROBE OK" "expect=Type 'help'" \
-	    "send=exec /xsaveprobe noxsave" "expect=XSAVEPROBE"
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=qemu64 --append "rach2.rescue" \
-	    --timeout 90 --steptmo 30 --ok "XSAVEPROBE OK" \
-	    --never "FPUPROBE FAIL" --never "XSAVEPROBE FAIL" \
-	    --log $(IMAGES_DIR)/fpu-test.qemu64.log \
-	    "expect=fpu: fxsr: on, sse: on, xsave: off" "expect=Type 'help'" \
-	    "send=exec /fpuprobe" "expect=FPUPROBE OK" "expect=Type 'help'" \
-	    "send=exec /xsaveprobe" "expect=XSAVEPROBE"
-ifeq ($(ARCH),i686)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue rach2.nofxsr" \
-	    --timeout 90 --steptmo 30 --ok "XSAVEPROBE OK" \
-	    --never "FPUPROBE FAIL" --never "XSAVEPROBE FAIL" \
-	    --log $(IMAGES_DIR)/fpu-test.x87.log \
-	    "expect=fpu: fxsr: off" "expect=Type 'help'" "send=exec /fpuprobe x87" \
-	    "expect=FPUPROBE OK" "expect=Type 'help'" "send=exec /xsaveprobe noxsave" \
-	    "expect=XSAVEPROBE"
-endif
+# suite can reach, on a processor without RDRAND and RDSEED. The kernel's
+# generator is untrusted there: the salt mint refuses and writes nothing,
+# passwd refuses before it asks for a new password, the random devices and
+# getrandom answer EIO while GRND_INSECURE still returns bytes, and
+# Dropbear's key generator exits with its error and writes no key, which is
+# why rach2/run.sh and its siblings boot -cpu max. They are the cases of
+# tests/cases/guest.noentropy.json, which etude runs, and have no target here.
+# `tests/run fpu`: the floating-point state of a process is its own, by each
+# path the kernel saves it with: XSAVE under QEMU's `max`, FXSAVE under
+# `rach2.noxsave` and on `qemu64`, where `xsaveprobe` must find OSXSAVE clear
+# and no NT_X86_XSTATE, and the x87 state alone by `fnsave` under
+# `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64
+# processor has FXSR. They are the cases of tests/cases/guest.fpu.json, which
+# etude runs, and have no target here.
 # `tests/run bigmem`: all of an x86-64 machine's eight gigabytes is counted,
 # and a program's pages fill memory past what lies below 4 GiB and read back
 # as written; without 1 GiB pages, 72 GiB is counted to the direct map's

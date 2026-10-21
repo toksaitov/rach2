@@ -1,20 +1,24 @@
 {
   "schema_version": 1,
   "proof": "noentropy",
-  "summary": "the noentropy suite, whose steps require the random devices and getrandom to refuse while the generator is untrusted, with three faults in the kernel; a failing run is followed by one of every step, make told to go on past a failure",
+  "summary": "the noentropy cases, which require the random devices, getrandom, the salt mint, passwd and Dropbear's key generator to refuse while the generator is untrusted, against three faults in the kernel and one in the salt mint; etude-guest makes its boot's token with GRND_INSECURE where /dev/urandom refuses, so a getrandom that refuses GRND_INSECURE leaves every case without its program, incomplete at its boot stage's bound",
   "tree": "shared",
   "sources": [
     "rach2/sys/fs/devfs.c",
-    "rach2/sys/syscall.c"
+    "rach2/sys/syscall.c",
+    "utils/pwauth.c"
   ],
   "artifacts": [
-    "${WORK}/kernel"
+    "${WORK}/kernel",
+    "${WORK}/saltnoent",
+    "${WORK}/passwdmusl",
+    "${WORK}/passwd"
   ],
   "build": {
     "argv": [
       "/bin/sh",
       "-c",
-      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+      "sh tests/proofs/guest.sh make rach2 musl-programs utils && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/musl/saltnoent tests/musl/passwdmusl utils/sbin/passwd"
     ],
     "bound_s": 3600
   },
@@ -22,7 +26,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "RACH2_ARCH=${ARCH:-i686}\nREPO=$(pwd)\n. ./mk/arch.sh\nstatus=0\nsh tests/proofs/guest.sh run noentropy || status=$?\nif [ \"$status\" -ne 0 ]; then\n    echo 'noentropy-proof: every step, with make told to go on past a failure'\n    rm -f \"$ARCH_BUILD/images/noentropy-rng.log\" \"$ARCH_BUILD/images/noentropy-keygen.log\"\n    make -i run-noentropy \"ARCH=$RACH2_ARCH\" \"RACH2_QEMU=$ARCH_QEMU\" </dev/null 2>&1\n    cat \"$ARCH_BUILD/images/noentropy-rng.log\" \"$ARCH_BUILD/images/noentropy-keygen.log\" 2>/dev/null\nfi\nexit \"$status\""
+      "ARCH=i686 exec sh tests/proofs/guest.sh run noentropy 'run: noentropy: PASS'"
     ],
     "bound_s": 3600
   },
@@ -39,9 +43,8 @@
       ],
       "fails": {
         "lines": [
-          "HARNESS: saw 'RNGPROBE FAIL', which must not appear",
-          "RNGPROBE FAIL (urandom not fail-closed)",
-          "HARNESS: saw 'KEYGEN:MADE', which must not appear"
+          "guest.noentropy.rngprobe on i686: failure: ",
+          "guest.noentropy.keygennoent on i686: failure: "
         ]
       }
     },
@@ -57,8 +60,7 @@
       ],
       "fails": {
         "lines": [
-          "HARNESS: saw 'RNGPROBE FAIL', which must not appear",
-          "RNGPROBE FAIL (random not fail-closed)"
+          "guest.noentropy.rngprobe on i686: failure: "
         ]
       }
     },
@@ -74,8 +76,25 @@
       ],
       "fails": {
         "lines": [
-          "HARNESS: saw 'RNGPROBE FAIL', which must not appear",
-          "RNGPROBE FAIL (GRND_INSECURE refused)"
+          "guest.noentropy.rngprobe on i686: incomplete: it ran past its stage bound",
+          "guest.noentropy.keygennoent on i686: incomplete: it ran past its stage bound"
+        ]
+      }
+    },
+    {
+      "name": "mint",
+      "summary": "a salt mint that fills the salt with zeros when getrandom fails",
+      "edits": [
+        {
+          "file": "utils/pwauth.c",
+          "find": "        if (n <= 0) {\n            fprintf(stderr, \"pwauth: no trusted entropy\\n\");\n            return -1;\n        }",
+          "replace": "        if (n <= 0) {\n            memset(raw + got, 0, sizeof(raw) - got);\n            break;\n        }"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.noentropy.saltnoent on i686: failure: ",
+          "guest.noentropy.passwdmusl on i686: failure: "
         ]
       }
     }

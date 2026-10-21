@@ -20,4 +20,5 @@ usbdiskprobe sticks pulled and plugged through QEMU's monitor
 usbprobe QEMU's USB keyboard, mouse and hub models, and rach2.nousb and rach2.hubtree
 musl/clockloadmusl the emulator stopped by the host and the clocks compared with its time
 musl/creddisk three boots of one disk image after _exit
+musl/keygennoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
 musl/saltnoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64

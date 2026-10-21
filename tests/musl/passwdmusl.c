@@ -41,6 +41,12 @@
  * for byte before it exits, since the probes share one boot and the ones
  * after this read the same files.
  *
+ * Beside those lines it writes etude's report records (probe_report.h) for
+ * the case ETUDE_CASE names, guest.default.passwdmusl without it: the branch
+ * `source`, trusted or fail-closed as `getrandom` answered, and an assertion
+ * for each group of checks on that side. The first check that fails ends the
+ * side: its assertion fails and those after it are not run.
+ *
  * `probe` is uid 1000 and `probe2` uid 1001, or the NEW of each when a native
  * run gives `ids=OLD:NEW,...` (tests/native/Readme.md) and a private root
  * whose account files have them there. Given `machine=native`, it runs the
@@ -66,6 +72,9 @@
 
 #include "pwauth.h"
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 #define PASSWD_PATH "/passwd"
 #define ETC_PASSWD  "/etc/passwd"
@@ -89,9 +98,11 @@ static const char *Databases[3] = {ETC_PASSWD, ETC_SHADOW, ETC_GROUP};
 static char Snapshot[3][4096];
 static long Snapshot_len[3];
 
-/** Report one failed check and return 1, the probe's failure status. */
+/** Report one failed check, which ends the side's report, and return 1, the
+ * probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("PASSWDMUSL FAIL (%s)\n", what);
 
     return 1;
@@ -1030,18 +1041,23 @@ static int check_entropy(void)
     if (status == 0) {
         return fail("passwd changed a password with no trusted entropy");
     }
+    report_held();
     if (strstr(report, "no trusted entropy") == NULL) {
         return fail("passwd refused for want of entropy without the library saying so");
     }
+    report_held();
     if (strstr(report, "password unchanged") == NULL) {
         return fail("passwd refused for want of entropy without saying so itself");
     }
+    report_held();
     if (strstr(report, "New password:") != NULL) {
         return fail("passwd asked for a password it could not have used");
     }
+    report_held();
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0 || strcmp(before, after) != 0) {
         return fail("a refusal for want of entropy altered the shadow file");
     }
+    report_held();
 
     return 0;
 }
@@ -1336,8 +1352,9 @@ static int check_refusals(void)
  * Two runs read the result, and neither can pass on the side the other
  * expects. The probe runner reads the kernel's exit line, so the status is 0
  * only on the trusted side, and a fail-closed boot under `-cpu max` fails it.
- * `tests/run noentropy` matches a token and never reads the status, so the
- * fail-closed side prints its own token and exits 1.
+ * The case guest.noentropy.passwdmusl reads the report, whose branch the
+ * processor without RDRAND and RDSEED decides, and expects the status 1 of
+ * the fail-closed side.
  */
 int main(int argc, char **argv)
 {
@@ -1359,22 +1376,41 @@ int main(int argc, char **argv)
         }
     }
 
+    report_begin(report_case(environ, "guest.default.passwdmusl"));
     drawn = getrandom(sample, sizeof(sample), 0);
     if (drawn == (ssize_t)sizeof(sample)) {
+        report_branch("source", "trusted");
+        report_plan("change");
+        report_plan("refusals");
+        report_plan("concurrent");
         rc = check_change();
         if (rc == 0) {
+            report_held();
             rc = check_refusals();
         }
         if (rc == 0) {
+            report_held();
             rc = check_concurrent();
+        }
+        if (rc == 0) {
+            report_held();
         }
         trusted = 1;
     } else if (drawn < 0 && errno == EIO && probe_native()) {
         rc = fail("the machine has no trusted entropy, so the trusted side cannot run");
     } else if (drawn < 0 && errno == EIO) {
+        report_branch("source", "fail-closed");
+        report_plan("closed-refused");
+        report_plan("closed-library");
+        report_plan("closed-program");
+        report_plan("closed-no-prompt");
+        report_plan("closed-shadow");
         rc = check_entropy();
     } else {
         rc = fail("getrandom answered neither a full draw nor the fail-closed -EIO");
+    }
+    if (rc == 0) {
+        report_end();
     }
 
     /* The probes share one boot, and the ones after this read these files. */

@@ -43,6 +43,7 @@ ahciprobe queue
 bigfileprobe large
 musl/creddisk cred-persist
 musl/saltnoent noentropy
+musl/keygennoent noentropy
 musl/smpmusl smp
 musl/clockloadmusl clock
 musl/textbusymusl textbusy

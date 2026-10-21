@@ -45,7 +45,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `smp` (full tier; needs qemu; 512 MiB): the kernel on one processor, on four and on two of four, each finding its processors and passing a stress of fork, exec, pipes, futexes and munmap across them and sleeps on the last, the debug shell's preemption test and its ring-3 payload on two, an NMI on two that must stop the machine as a fault of the machine, and a parallel build on the installed system that runs on every one of four (see tests/system/suites/smp.sh).
 * `clock` (full tier; needs qemu, python3; 256 MiB; x86_64 only): the guest's monotonic and real clocks keeping the host's time within 250 ms, including reference uncertainty, across thirty host stops, under the run's accelerator and under TCG (see tests/system/suites/clock.sh).
 * `host` (full tier; needs qemu; 384 MiB): the host tests, kernel code compiled and run natively under the sanitizers, etude's QEMU launcher booting the kernel, and the fuzz corpora replayed through their harnesses.
-* `noentropy` (full tier; needs qemu; 128 MiB): the entropy policy's fail-closed half, which no other target can reach.
+* `noentropy` (full tier; needs qemu; 128 MiB): the entropy policy's fail-closed half, which no other suite can reach, on a processor without RDRAND and RDSEED.
 * `shutdown` (full tier; needs qemu; 128 MiB): userland stopping the machine, on a disk fixture, with every claim of a stop asserted on the QEMU process ending, and every claim of a halt on the processors halted in QEMU's monitor, rather than on a token, every image checked by offline fsck afterwards, and init killed on four processors leaving all four halted with interrupts off and the disk dirty.
 * `fatwrite` (core tier; needs qemu, mformat, mcopy, mdir, python3; 128 MiB): FAT32 written from a program, read back after a reboot, judged by the host's walk and mtools, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
 * `ssh` (core tier; needs qemu, ssh, nc; 128 MiB): logins over SSH with nobody at the keyboard.
@@ -85,7 +85,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `disk` (core tier; needs qemu; 128 MiB): the disk-backed page-cache integrity check.
 * `diskpolicy` (full tier; needs qemu; 128 MiB): the read-only kernel does not write the disk, shown on the bytes rather than on a return value.
 * `console` (core tier; needs qemu; 128 MiB): the two probes that read from the console, which the shared probe boot cannot run because they block until something is typed.
-* `fpu` (core tier; needs qemu; 128 MiB): the floating-point state of a process is its own.
+* `fpu` (core tier; needs qemu; 128 MiB): the floating-point state of a process is its own, by each path the kernel saves it with: XSAVE under QEMU's `max`, FXSAVE under `rach2.noxsave` and on `qemu64`, where `xsaveprobe` must find OSXSAVE clear and no NT_X86_XSTATE, and the x87 state alone by `fnsave` under `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64 processor has FXSR.
 * `socket` (core tier; needs qemu; 128 MiB): the guest opening connections of its own, checked by a host that answers (see tests/system/suites/socket.sh).
 * `bootorder` (full tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the GRUB disk on the second AHCI port behind a disk holding nothing, booted by the firmware, its root found as disk 1.
 * `reset` (core tier; needs qemu; 128 MiB): each reset mechanism on its own.

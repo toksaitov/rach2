@@ -22,8 +22,12 @@
  * transaction, read `/etc/shadow`, mint, fail, end. The database must be byte
  * for byte what it was, with no temporary file and no lock left behind.
  *
- * Prints "SALTNOENT OK" on success and "SALTNOENT FAIL (detail)" otherwise.
- * Linked against the ported musl and the credential library.
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, guest.noentropy.saltnoent without it, one assertion for each check
+ * above, and beside them prints "SALTNOENT OK" on success and "SALTNOENT FAIL
+ * (detail)" otherwise. A failed check ends the program: its assertion fails
+ * and those after it are not run. Linked against the ported musl and the
+ * credential library.
  */
 
 #define _GNU_SOURCE /* getrandom */
@@ -37,14 +41,19 @@
 #include <sys/stat.h>
 
 #include "pwauth.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 /* The byte the salt buffer is filled with before a mint, so that a write by
  * the mint shows. */
 #define SENTINEL '#'
 
-/** Print the failure line and return 1, this program's failing status. */
+/** Report the path's next assertion failed, print the failure line and
+ * return 1, this program's failing status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("SALTNOENT FAIL (%s)\n", what);
 
     return 1;
@@ -137,9 +146,19 @@ int main(void)
     int saved;
     int minted;
 
+    report_begin(report_case(environ, "guest.noentropy.saltnoent"));
+    report_plan("premise");
+    report_plan("mint-refused");
+    report_plan("salt-untouched");
+    report_plan("said-once");
+    report_plan("writer-refused");
+    report_plan("shadow-unchanged");
+    report_plan("no-temporary");
+    report_plan("no-lock");
     if (getrandom(raw, sizeof(raw), 0) != -1 || errno != EIO) {
         return fail("this CPU has trusted entropy; the premise of the run is wrong");
     }
+    report_held();
 
     memset(salt, SENTINEL, sizeof(salt));
     if (pipe(pipefd) != 0) {
@@ -160,14 +179,17 @@ int main(void)
     if (minted == 0) {
         return fail("the mint returned a salt with no trusted entropy behind it");
     }
+    report_held();
     for (i = 0; i < sizeof(salt); i++) {
         if (salt[i] != SENTINEL) {
             return fail("the refused mint wrote part of a salt anyway");
         }
     }
+    report_held();
     if (occurrences(report, "pwauth: no trusted entropy") != 1) {
         return fail("the refusal was not reported exactly once");
     }
+    report_held();
 
     before = slurp("/etc/shadow", shadow_before, sizeof(shadow_before));
     if (before < 0) {
@@ -189,17 +211,22 @@ int main(void)
     if (cred_txn_end() != 0) {
         return fail("could not end the transaction");
     }
+    report_held();
 
     after = slurp("/etc/shadow", shadow_after, sizeof(shadow_after));
     if (after != before || memcmp(shadow_before, shadow_after, (size_t)before) != 0) {
         return fail("/etc/shadow changed under a writer that minted nothing");
     }
+    report_held();
     if (shadow_temps() != 0) {
         return fail("a writer that minted nothing left a temporary file behind");
     }
+    report_held();
     if (present("/etc/.pwlock")) {
         return fail("a writer that minted nothing left its lock behind");
     }
+    report_held();
+    report_end();
 
     printf("SALTNOENT OK\n");
 

@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "proof": "fpu",
+  "summary": "the fpu cases, which boot fpuprobe and xsaveprobe by each path the kernel saves a process's floating-point state with, against faults in fpu.c's choice of path and in its FXSAVE and FNSAVE saves; for i686, whose kernel alone takes rach2.nofxsr",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/arch/x86/fpu.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 exec sh tests/proofs/guest.sh run fpu 'run: fpu: PASS'"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "noxsave",
+      "summary": "rach2.noxsave not read, so the kernel saves with XSAVE where the boot line tells it not to",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/fpu.c",
+          "find": "        !kcmdline_has(\"rach2.noxsave\")) {",
+          "replace": "        1) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.fpu.fpuprobe-noxsave on i686: failure: ",
+          "guest.fpu.xsaveprobe-noxsave on i686: failure: "
+        ]
+      }
+    },
+    {
+      "name": "nofxsr",
+      "summary": "rach2.nofxsr not read, so the kernel saves with FXSAVE where the boot line tells it not to",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/fpu.c",
+          "find": "    if (use_fxsr && kcmdline_has(\"rach2.nofxsr\")) {",
+          "replace": "    if (0) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.fpu.fpuprobe-x87 on i686: failure: ",
+          "guest.fpu.xsaveprobe-x87 on i686: failure: "
+        ]
+      }
+    },
+    {
+      "name": "fxsave",
+      "summary": "a switch that does not save the x87 and SSE state on the FXSAVE path",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/fpu.c",
+          "find": "        __asm__ __volatile__(FXSAVE \" (%0)\" : : \"r\"(area) : \"memory\");\n    } else {\n        __asm__ __volatile__(\"fnsave (%0); frstor (%0)\" : : \"r\"(area) : \"memory\");",
+          "replace": "        (void)area;\n    } else {\n        __asm__ __volatile__(\"fnsave (%0); frstor (%0)\" : : \"r\"(area) : \"memory\");"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.fpu.fpuprobe-noxsave on i686: failure: ",
+          "guest.fpu.fpuprobe-qemu64 on i686: failure: "
+        ]
+      }
+    },
+    {
+      "name": "fnsave",
+      "summary": "a switch that does not save the x87 state on the FNSAVE path",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/fpu.c",
+          "find": "        __asm__ __volatile__(\"fnsave (%0); frstor (%0)\" : : \"r\"(area) : \"memory\");",
+          "replace": "        (void)area;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.fpu.fpuprobe-x87 on i686: failure: "
+        ]
+      }
+    }
+  ]
+}

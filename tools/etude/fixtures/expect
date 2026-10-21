@@ -5,7 +5,7 @@
 # unless the line gives it.
 
 # The examples of the contracts are valid, and judge as their Readme says.
-0 -r ../../.. manifest ../schemas/case.guest.example.json ../schemas/case.host.example.json ../schemas/case.machine.example.json ../schemas/case.fpu.example.json
+0 -r ../../.. manifest ../schemas/case.guest.example.json ../schemas/case.host.example.json ../schemas/case.machine.example.json
 0 manifest ./usb.json
 0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-lost: incomplete
 0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-notrun: failure
@@ -125,9 +125,9 @@
 0 report -f xsave=absent -f avx=absent ../schemas/case.guest.example.json guest.default.xsaveprobe i686 native ./report-xsave-none.out | branch save fxsave decided by feature
 1 report ../schemas/case.guest.example.json guest.default.xsaveprobe x86_64 qemu ./report-xsave-stop.out | assert image-size not_run: an earlier check failed
 1 report ../schemas/case.guest.example.json guest.default.xsaveprobe x86_64 qemu ./report-xsave-stop.out | outcome failure
-0 report ../schemas/case.fpu.example.json guest.fpu.fpuprobe i686 qemu ./report-fpu-xsave.out | branch save xsave decided by feature
-1 report ../schemas/case.fpu.example.json guest.fpu.fpuprobe x86_64 qemu ./report-fpu-fxsave.out | the program took fxsave where the processor gives xsave
-0 report -f xsave=absent ../schemas/case.fpu.example.json guest.fpu.fpuprobe x86_64 native ./report-fpu-fxsave.out | outcome pass
+0 report ../../../tests/cases/guest.fpu.json guest.fpu.fpuprobe i686 qemu ./report-fpu-xsave.out | branch save xsave decided by feature
+1 report ../../../tests/cases/guest.fpu.json guest.fpu.fpuprobe x86_64 qemu ./report-fpu-fxsave.out | the program took fxsave where the processor gives xsave
+0 report -f xsave=absent ../../../tests/cases/guest.fpu.json guest.fpu.fpuprobe x86_64 native ./report-fpu-fxsave.out | outcome pass
 0 report ./judge.json fixture.judge.tlsprobe i686 qemu ./report-tls.out | outcome pass
 1 report ./judge.json fixture.judge.tlsprobe x86_64 qemu ./report-tls.out | does not apply to x86_64: no plan has an item of it there, and it is neither run nor passed
 0 report ./judge.json fixture.judge.counter i686 qemu ./report-counter.out | outcome pass

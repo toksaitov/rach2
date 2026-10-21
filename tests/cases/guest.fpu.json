@@ -1,0 +1,235 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.fpu",
+  "summary": "The floating-point state of a process is its own, by each path the kernel saves it with: XSAVE, FXSAVE, and on i686 the x87 state alone; each case boots the test image and runs fpuprobe or xsaveprobe",
+  "cases": [
+    {
+      "case_id": "guest.fpu.fpuprobe",
+      "behavior": "A process's x87 and SSE state is its own across switches, signals and exec, saved with XSAVE where the processor has it",
+      "units": ["fpuprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "either"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "fpuprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87, XMM, control word and MXCSR values across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler starts with the initial state, and the interrupted values survive its clobbering and a nested signal", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with control word 0x37F, an empty stack and MXCSR 0x1F80", "source": "program"},
+        {"assertion_id": "damaged", "checks": "a frame with a reserved MXCSR bit kills its process with SIGSEGV", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": {"features": ["xsave"]}, "alternatives": [{"alternative_id": "xsave", "when": "present", "assertions": []}, {"alternative_id": "fxsave", "when": "absent", "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fpuprobe", "node": "tests/fpuprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
+      "case_id": "guest.fpu.fpuprobe-noxsave",
+      "behavior": "With rach2.noxsave on a processor with XSAVE the kernel saves the x87 and SSE state with FXSAVE, and a process's state is its own across switches, signals and exec",
+      "units": ["fpuprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.noxsave"]}},
+      "execution": {"program": "fpuprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
+        {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87, XMM, control word and MXCSR values across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler starts with the initial state, and the interrupted values survive its clobbering and a nested signal", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with control word 0x37F, an empty stack and MXCSR 0x1F80", "source": "program"},
+        {"assertion_id": "damaged", "checks": "a frame with a reserved MXCSR bit kills its process with SIGSEGV", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": "report", "alternatives": [{"alternative_id": "fnsave", "when": null, "assertions": []}, {"alternative_id": "fxsave", "when": null, "assertions": []}, {"alternative_id": "xsave", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fpuprobe", "node": "tests/fpuprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the kernel leaves XSAVE unused only when it boots with rach2.noxsave"}
+    },
+    {
+      "case_id": "guest.fpu.xsaveprobe-noxsave",
+      "behavior": "With rach2.noxsave on a processor with XSAVE the kernel keeps no XSAVE state: OSXSAVE is clear and NT_X86_XSTATE is refused",
+      "units": ["xsaveprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["noxsave"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.noxsave"]}},
+      "execution": {"program": "xsaveprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
+        {"assertion_id": "osxsave", "checks": "cpuid does not report OSXSAVE, as the kernel keeps no XSAVE state", "source": "program"},
+        {"assertion_id": "ptrace-enodev", "checks": "without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with ENODEV", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": "report", "alternatives": [{"alternative_id": "fxsave", "when": null, "assertions": ["ptrace-enodev"]}, {"alternative_id": "xsave", "when": null, "assertions": []}]},
+        {"group_id": "avx", "decided_by": "report", "alternatives": [{"alternative_id": "none", "when": null, "assertions": []}, {"alternative_id": "avx", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "xsaveprobe", "node": "tests/xsaveprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the kernel leaves XSAVE unused only when it boots with rach2.noxsave"}
+    },
+    {
+      "case_id": "guest.fpu.fpuprobe-qemu64",
+      "behavior": "On a processor without XSAVE the kernel saves the x87 and SSE state with FXSAVE, and a process's state is its own across switches, signals and exec",
+      "units": ["fpuprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "fpuprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
+        {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87, XMM, control word and MXCSR values across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler starts with the initial state, and the interrupted values survive its clobbering and a nested signal", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with control word 0x37F, an empty stack and MXCSR 0x1F80", "source": "program"},
+        {"assertion_id": "damaged", "checks": "a frame with a reserved MXCSR bit kills its process with SIGSEGV", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": {"features": ["xsave"]}, "alternatives": [{"alternative_id": "xsave", "when": "present", "assertions": []}, {"alternative_id": "fxsave", "when": "absent", "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fpuprobe", "node": "tests/fpuprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the processor must lack XSAVE, as QEMU's qemu64 does"}
+    },
+    {
+      "case_id": "guest.fpu.xsaveprobe-qemu64",
+      "behavior": "On a processor without XSAVE and AVX, cpuid reports no OSXSAVE and NT_X86_XSTATE is refused",
+      "units": ["xsaveprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "absent", "avx": "absent"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "qemu64", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "xsaveprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes its core directory on every path"},
+      "assertions": [
+        {"assertion_id": "kernel-path", "checks": "the kernel says it saves with FXSAVE and not XSAVE", "source": "executor", "record": "fpu: fxsr: on, sse: on, xsave: off"},
+        {"assertion_id": "osxsave", "checks": "cpuid reports OSXSAVE exactly where the processor has XSAVE", "source": "program"},
+        {"assertion_id": "xcr0", "checks": "XCR0 is x87, SSE, and AVX and AVX-512 where the processor has them", "source": "program"},
+        {"assertion_id": "image-size", "checks": "leaf 0xD gives an XSAVE image of 576 to 4096 bytes", "source": "program"},
+        {"assertion_id": "ptrace-enodev", "checks": "without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with ENODEV", "source": "program"},
+        {"assertion_id": "switches", "checks": "a forked child finds the parent's YMM registers, and each keeps its own across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler's frame has the YMM registers in Linux's layout, and sigreturn restores them as the frame gives them", "source": "program"},
+        {"assertion_id": "header", "checks": "a frame with a damaged XSAVE header kills its process with SIGSEGV", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with every YMM register zero", "source": "program"},
+        {"assertion_id": "ptrace", "checks": "a tracer reads and writes the YMM registers through NT_X86_XSTATE", "source": "program"},
+        {"assertion_id": "core", "checks": "a core file has an NT_X86_XSTATE note with the registers' image", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": {"features": ["xsave"]}, "alternatives": [{"alternative_id": "xsave", "when": "present", "assertions": ["xcr0", "image-size"]}, {"alternative_id": "fxsave", "when": "absent", "assertions": ["ptrace-enodev"]}]},
+        {"group_id": "avx", "decided_by": {"features": ["avx"]}, "alternatives": [{"alternative_id": "avx", "when": "present", "assertions": ["switches", "signals", "header", "exec", "ptrace", "core"]}, {"alternative_id": "none", "when": "absent", "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "xsaveprobe", "node": "tests/xsaveprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the processor must lack XSAVE and AVX, as QEMU's qemu64 does"}
+    },
+    {
+      "case_id": "guest.fpu.fpuprobe-x87",
+      "behavior": "With rach2.nofxsr the kernel saves the x87 state alone, and a process's x87 state is its own across switches, signals and exec",
+      "units": ["fpuprobe"],
+      "domain": "guest",
+      "architectures": ["i686"],
+      "workload": {"arguments": ["x87"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nofxsr"]}},
+      "execution": {"program": "fpuprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "kernel-path", "checks": "the kernel says it saves without FXSAVE", "source": "executor", "record": "fpu: fxsr: off"},
+        {"assertion_id": "x87-only", "checks": "an SSE instruction kills its process with SIGILL", "source": "program"},
+        {"assertion_id": "switches", "checks": "a forked child and its parent each keep their own x87 values and control word across switches", "source": "program"},
+        {"assertion_id": "signals", "checks": "a handler starts with the initial x87 state, and the interrupted values survive its clobbering and a nested signal", "source": "program"},
+        {"assertion_id": "exec", "checks": "an exec starts with control word 0x37F and an empty stack", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": "report", "alternatives": [{"alternative_id": "fnsave", "when": null, "assertions": []}, {"alternative_id": "fxsave", "when": null, "assertions": []}, {"alternative_id": "xsave", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "fpuprobe", "node": "tests/fpuprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the kernel saves the x87 state alone only when it boots with rach2.nofxsr"}
+    },
+    {
+      "case_id": "guest.fpu.xsaveprobe-x87",
+      "behavior": "With rach2.nofxsr on a processor with XSAVE the kernel keeps no XSAVE state: OSXSAVE is clear and NT_X86_XSTATE is refused",
+      "units": ["xsaveprobe"],
+      "domain": "guest",
+      "architectures": ["i686"],
+      "workload": {"arguments": ["noxsave"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {"xsave": "present"}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.nofxsr"]}},
+      "execution": {"program": "xsaveprobe", "stdin": null, "role": "boot", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "nothing to remove"},
+      "assertions": [
+        {"assertion_id": "kernel-path", "checks": "the kernel says it saves without FXSAVE", "source": "executor", "record": "fpu: fxsr: off"},
+        {"assertion_id": "osxsave", "checks": "cpuid does not report OSXSAVE, as the kernel keeps no XSAVE state", "source": "program"},
+        {"assertion_id": "ptrace-enodev", "checks": "without XSAVE, PTRACE_GETREGSET with NT_X86_XSTATE fails with ENODEV", "source": "program"}
+      ],
+      "branches": [
+        {"group_id": "save", "decided_by": "report", "alternatives": [{"alternative_id": "fxsave", "when": null, "assertions": ["ptrace-enodev"]}, {"alternative_id": "xsave", "when": null, "assertions": []}]},
+        {"group_id": "avx", "decided_by": "report", "alternatives": [{"alternative_id": "none", "when": null, "assertions": []}, {"alternative_id": "avx", "when": null, "assertions": []}]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "xsaveprobe", "node": "tests/xsaveprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the kernel saves the x87 state alone only when it boots with rach2.nofxsr"}
+    }
+  ]
+}

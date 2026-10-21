@@ -27,6 +27,9 @@ file 0755 /bin/sh build/ish/ish
 # ISH has only `cd` and `exit` as builtins, so a command that prints has to
 # be a program.
 file 0755 /bin/echo build/utils/echo
+# Dropbear's program, at os-real's path, whose key generator keygennoent
+# runs on a processor without hardware entropy.
+file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
 
 # suidprobe's fixtures: the one helper program at several modes and owners.
 # The exec-dir line above stages a plain 0755 /suidhelper, the control;
