@@ -378,13 +378,9 @@ run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARN
 	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
 # `tests/run pools`: many pipes, ptys, sockets and processes live at once,
 # and the kernel heap back where it started after a thousand each of pipes,
-# ptys and sockets (see tests/poolprobe.c).
-run-pools: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max --append "rach2.rescue" \
-	    --timeout 120 --steptmo 60 --ok "POOLPROBE OK" --never "POOLPROBE FAIL" \
-	    --log $(IMAGES_DIR)/pools-test.log \
-	    "expect=Type 'help'" "send=exec /poolprobe" "expect=POOLPROBE"
+# ptys and sockets (see tests/poolprobe.c). They are the guest cases of
+# tests/cases/guest.pools.json, which etude runs, each in a boot of its own,
+# and have no target here.
 # `tests/run fault`: the three probes whose whole claim is that the kernel
 # killed them. vmfault writes through a pointer in no mapping, vmro writes a
 # page it mapped read-only, and winprobe reads the page-cache window, which
