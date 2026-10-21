@@ -44,6 +44,12 @@ void lc_begin(struct lc *l, struct etude_case *c, const char *const ids[]);
  */
 void lc_assert(struct lc *l, const char *id, int held, const char *detail);
 
+/**
+ * Report assertion `id` as not evaluated, with `reason`, under the same rule
+ * of one report each as lc_assert.
+ */
+void lc_notrun(struct lc *l, const char *id, const char *reason);
+
 /** Say whether the scenario can go on: nothing it needed failed. */
 int lc_ok(const struct lc *l);
 

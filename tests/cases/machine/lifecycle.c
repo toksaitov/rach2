@@ -76,7 +76,11 @@ void lc_begin(struct lc *l, struct etude_case *c, const char *const ids[])
         fprintf(stderr, "lifecycle: %s: more than %d assertions\n", etude_case_id(c), LC_ASSERTS);
 }
 
-void lc_assert(struct lc *l, const char *id, int held, const char *detail)
+/**
+ * Mark assertion `id` reported, and say whether it may be: it is declared
+ * and was not reported before. A fault is said on standard error.
+ */
+static int lc_tell(struct lc *l, const char *id)
 {
     size_t i;
 
@@ -86,10 +90,22 @@ void lc_assert(struct lc *l, const char *id, int held, const char *detail)
     if (l->ids[i] == NULL || l->told[i]) {
         fprintf(stderr, "lifecycle: %s: %s is not declared or was reported\n", etude_case_id(l->c),
                 id);
-        return;
+        return 0;
     }
     l->told[i] = 1;
-    etude_assert(l->c, id, held, held ? NULL : detail);
+    return 1;
+}
+
+void lc_assert(struct lc *l, const char *id, int held, const char *detail)
+{
+    if (lc_tell(l, id))
+        etude_assert(l->c, id, held, held ? NULL : detail);
+}
+
+void lc_notrun(struct lc *l, const char *id, const char *reason)
+{
+    if (lc_tell(l, id))
+        etude_notrun(l->c, id, reason);
 }
 
 int lc_ok(const struct lc *l)
