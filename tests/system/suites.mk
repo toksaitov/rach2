@@ -1157,14 +1157,15 @@ $(DOOM_TEST_DISK): krffs/manifests/doom-test.manifest $(MANIFEST_DEPS_doom_test)
 # system cannot run and requires each to be refused with its reason and to leave
 # no output behind. The boot carries `rach2.trace=enosys`, so a syscall the
 # compiler wants and this kernel lacks is named on the console rather than
-# turning into a mysterious failure.
-TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
-run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
-	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
-	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
-# The disks of the tcc and make cases (tests/cases/machine.tcc.json and
-# tests/cases/machine.make.json), each a disk of os-real, which its case
+# turning into a mysterious failure. It is the case of
+# tests/cases/machine.tcc.json, which etude runs, and has no target here.
+# `tests/run make`: the machine building a program on itself, and the claim a
+# compiler alone cannot make: that a second build does nothing, that touching
+# one source rebuilds one object, and that the answer survives a reboot. It is
+# the case of tests/cases/machine.make.json, which etude runs, and has no
+# target here; the case boots one disk twice, since the reboot is half the
+# point.
+# The disks of the tcc and make cases, each a disk of os-real, which its case
 # boots as a private copy.
 $(IMAGES_DIR)/tcc-test.disk $(IMAGES_DIR)/make-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest \
                              $(MANIFEST_DEPS_os_real) $(IMAGE_TOOLS) $(MAN_ALL) \
@@ -1186,16 +1187,6 @@ $(IMAGES_DIR)/tcc-test.disk $(IMAGES_DIR)/make-test.disk: $(DEMO_CREDS) krffs/ma
 $(IMAGES_DIR)/smp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                              $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
-# `tests/run make`: the machine building a program on itself, and the claim a
-# compiler alone cannot make: that a second build does nothing, that touching
-# one source rebuilds one object, and that the answer survives a reboot. Two
-# boots of one disk, since the reboot is half the point.
-MAKE_TEST_DISK = $(IMAGES_DIR)/make-test.disk
-run-make: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
-	@mkdir -p $(IMAGES_DIR)
-	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
-	sh tests/system/suites/make.sh $(BOOT_KERNEL) $(MAKE_TEST_DISK) \
-	    "`cat krffs/rach2_test_password`"
 # `tests/run selfbuild`: the machine builds its own kernel, utilities and
 # shell with the staged TinyCC and pdpmake, and what it built runs. It is the
 # cases of tests/cases/machine.selfbuild.json, which etude runs, and has no
