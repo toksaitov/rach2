@@ -90,7 +90,11 @@
  * that no lock and no temporary file is left anywhere it touched.
  *
  * Prints "PWAUTHMUSL OK" on success; any failure prints
- * "PWAUTHMUSL FAIL (detail)" and exits 1.
+ * "PWAUTHMUSL FAIL (detail)" and exits 1. It writes etude's report records
+ * (../probe_report.h) for the case ETUDE_CASE names, an assertion for each
+ * check `checks` lists: a failed case leaves the checks after it not run,
+ * and `nothing-left`, the check of what the run left behind, is reported
+ * from its own result.
  *
  * The `probe` account is uid and gid 1000. A native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md) and a private root whose account
@@ -117,6 +121,7 @@
 
 #include "pwauth.h"
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define SALT_ALPHABET "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -169,10 +174,397 @@ static const char *Databases[] = {"/etc/passwd", "/etc/shadow", "/etc/group"};
 static char Snapshot[3][512];
 static ssize_t Snapshot_len[3];
 
-/** Print the failure line and return -1, the status every case fails with. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    DATABASES,
+    SALT_MINT,
+    SALT_LENGTH,
+    SALT_ALPHABET_ONLY,
+    SALT_SECOND,
+    SALT_DIFFERS,
+    REWRITE_STAGE,
+    REWRITE_READER,
+    REWRITE_TXN,
+    REWRITE_PUBLISH,
+    REWRITE_TEXT,
+    REWRITE_INHERIT,
+    REWRITE_NO_TEMP,
+    REWRITE_OLD_WHOLE,
+    REWRITE_OLD_SAME,
+    SETID_STAGE,
+    SETID_TXN,
+    SETID_PUBLISH,
+    SETID_INHERIT,
+    FORK_STAGE,
+    FORK_TXN,
+    FORK_EXIT_FORK,
+    FORK_EXIT_KEPT,
+    FORK_KILL_FORK,
+    FORK_KILL_DIES,
+    FORK_KILL_KEPT,
+    FORK_TRY_FORK,
+    FORK_TRY_REFUSED,
+    FORK_TRY_FILE,
+    FORK_TRY_LOCK,
+    FORK_END,
+    LOST_STAGE,
+    LOST_FIRST,
+    LOST_SECOND,
+    LOST_INODE,
+    LOST_TXN,
+    LOST_PID,
+    LOST_OTHER,
+    LOST_REFUSED,
+    LOST_TARGET,
+    LOST_NO_TEMP,
+    LOST_END,
+    LOST_KEPT,
+    LOST_UNCHANGED,
+    INTER_STAGE,
+    INTER_PIPE,
+    INTER_FORK,
+    INTER_FIRST,
+    INTER_SECOND,
+    INTER_BOTH,
+    INTER_ANNOUNCED,
+    RECOVERY_PID,
+    REAPED_WRITE,
+    REAPED_CAPTURE,
+    REAPED_REFUSED,
+    REAPED_REPORT,
+    REAPED_ANNOUNCED,
+    REAPED_STALE,
+    REAPED_PRESENT,
+    REAPED_BYTES,
+    RECOVERY_AGE,
+    HOUR_WRITE,
+    HOUR_CAPTURE,
+    HOUR_REFUSED,
+    HOUR_REPORT,
+    HOUR_ANNOUNCED,
+    HOUR_STALE,
+    HOUR_PRESENT,
+    HOUR_BYTES,
+    RECOVERY_REMOVE,
+    RECOVERY_ACQUIRE,
+    RECOVERY_LOCKED,
+    RECOVERY_END,
+    PROMPT_PTY,
+    PROMPT_FORK,
+    PROMPT_SHOWN,
+    PROMPT_TYPE,
+    PROMPT_NO_ECHO,
+    PROMPT_SUSPEND,
+    PROMPT_STOPPED,
+    PROMPT_TYPE_STOPPED,
+    PROMPT_ECHO_RESTORED,
+    PROMPT_CONTINUE,
+    PROMPT_REPRINT,
+    PROMPT_TYPE_PASSWORD,
+    PROMPT_NO_ECHO_AGAIN,
+    PROMPT_PASSWORD,
+    BURST_PTY,
+    BURST_FORK,
+    BURST_SHOWN,
+    BURST_SEND,
+    BURST_STOPPED,
+    BURST_CONTINUE,
+    BURST_REPRINT,
+    BURST_TYPE,
+    BURST_PASSWORD,
+    OVER_PIPE,
+    OVER_FORK,
+    OVER_WRITE,
+    OVER_TAKEN,
+    OVER_STOPPED,
+    OVER_WAITS,
+    OVER_WRITE_PASSWORD,
+    OVER_FINISHED,
+    OVER_FITS,
+    OVER_PASSWORD,
+    PREREAD_PTY,
+    PREREAD_PIPE,
+    PREREAD_FORK,
+    PREREAD_RESUMED,
+    PREREAD_REPRINT,
+    PREREAD_TYPE,
+    PREREAD_HEARD,
+    PREREAD_REAP,
+    PREREAD_PASSWORD,
+    STALE_PTY,
+    STALE_PIPE,
+    STALE_FORK,
+    STALE_REAP,
+    STALE_HEARD,
+    STALE_ANSWER,
+    NEVER_PTY,
+    NEVER_PIPE,
+    NEVER_FORK,
+    NEVER_REAP,
+    NEVER_HEARD,
+    NEVER_SIGTTIN,
+    NEVER_ECHO,
+    BG_PTY,
+    BG_PIPE,
+    BG_FORK,
+    BG_SHOWN,
+    BG_SUSPEND,
+    BG_REPORTED,
+    BG_DRIVE,
+    BG_NO_REPRINT,
+    BG_ECHO,
+    BROKEN_PIPES,
+    BROKEN_SCRIPT,
+    BROKEN_PROMPT_RUN,
+    BROKEN_PROMPT_LIVES,
+    BROKEN_PROMPT_LINE,
+    BROKEN_WRITER_RUN,
+    BROKEN_WRITER_LIVES,
+    BROKEN_WRITER_TXN,
+    BROKEN_WRITER_LOCK,
+    HIGH_FORK,
+    HIGH_BEGIN,
+    HIGH_REAP,
+    HIGH_HANDLED,
+    HIGH_EXITED,
+    HIGH_UNLOCKED,
+    HIGH_RESERVED,
+    SU_RUN,
+    SU_NON_LOGIN,
+    SU_SHADOW,
+    SU_HASH,
+    SU_STAGE_LONG,
+    SU_LONG,
+    SU_CALLER_KEPT,
+    SU_WRONG,
+    SU_LOGIN_RUN,
+    SU_LOGIN,
+    NOTHING_LEFT,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"databases", "cannot read the account databases at entry"},
+    {"salt-mint", "mint_salt refused on a CPU that has trusted entropy"},
+    {"salt-length", "mint_salt returned a salt of the wrong length"},
+    {"salt-alphabet", "mint_salt returned a character outside the alphabet"},
+    {"salt-second", "mint_salt refused the second draw"},
+    {"salt-differs", "two minted salts are identical"},
+    {"rewrite-stage", "could not stage the file the replacement inherits from"},
+    {"rewrite-reader", "could not open the file the reader holds across the rename"},
+    {"rewrite-txn", "could not take the transaction the replacement runs under"},
+    {"rewrite-publish", "cred_rewrite refused a replacement it should have published"},
+    {"rewrite-text", "the published file is not the text that was written"},
+    {"rewrite-inherit", "the replacement did not inherit the original's mode and owner"},
+    {"rewrite-no-temp", "the replacement left its temporary file behind"},
+    {"rewrite-old-whole", "a reader across the rename did not read the old file whole"},
+    {"rewrite-old-same", "a reader across the rename read something other than what it opened"},
+    {"setid-stage", "could not stage the set-id file the replacement inherits from"},
+    {"setid-txn", "could not take the transaction the set-id replacement runs under"},
+    {"setid-publish", "cred_rewrite refused a set-id file it should have published"},
+    {"setid-inherit", "the replacement did not inherit the original's set-id bit and owner"},
+    {"fork-stage", "could not stage the file the fork cases guard"},
+    {"fork-txn", "could not take the transaction the fork cases run under"},
+    {"fork-exit-fork", "could not fork the child that exits under its parent's transaction"},
+    {"fork-exit-kept", "a child's exit removed its parent's lock"},
+    {"fork-kill-fork", "could not fork the child a signal kills under its parent's transaction"},
+    {"fork-kill-dies", "a child under its parent's transaction did not die of the signal sent"},
+    {"fork-kill-kept", "a child's death removed its parent's lock"},
+    {"fork-try-fork", "could not fork the child that tries the transaction it inherited"},
+    {"fork-try-refused", "a child acted on a transaction it does not hold"},
+    {"fork-try-file", "a child replaced the file its parent's transaction protects"},
+    {"fork-try-lock", "a child rewrote the lock its parent holds"},
+    {"fork-end", "ending the transaction the fork cases held did not drop the lock"},
+    {"lost-stage", "could not stage the file the lost-lock case guards"},
+    {"lost-first", "could not stage the first of two locks at one name"},
+    {"lost-second", "could not stage the second of two locks at one name"},
+    {"lost-inode", "two files at one name have distinct inodes: bind the removal to one"},
+    {"lost-txn", "could not take the transaction the lost-lock case runs under"},
+    {"lost-pid", "could not mint a pid for the writer that takes the name"},
+    {"lost-other", "could not stand another writer's lock at the name"},
+    {"lost-refused", "a replacement published with the transaction's lock gone"},
+    {"lost-target", "a replacement with the transaction's lock gone changed the target"},
+    {"lost-no-temp", "a replacement refused for a lost lock left its temporary file behind"},
+    {"lost-end", "cred_txn_end refused the transaction the lost-lock case held"},
+    {"lost-kept", "a release removed a lock another writer created at the same name"},
+    {"lost-unchanged", "a release rewrote another writer's lock"},
+    {"inter-stage", "could not stage the file the two writers rewrite"},
+    {"inter-pipe", "could not make the pipe that orders the two writers"},
+    {"inter-fork", "could not fork the two writers"},
+    {"inter-first", "the first writer did not finish its transaction cleanly"},
+    {"inter-second", "the second writer did not wait for the transaction and publish"},
+    {"inter-both", "an update was lost: the file does not hold both writers' lines"},
+    {"inter-announced", "a writer that waited did not announce it exactly once"},
+    {"recovery-pid", "could not mint a reaped pid for the stale-lock case"},
+    {"reaped-write", "could not write the lock file a refusal case needs"},
+    {"reaped-capture", "could not capture what a refused acquire reports"},
+    {"reaped-refused", "an acquire took a lock naming a reaped pid"},
+    {"reaped-report", "a refused acquire reported nothing at all"},
+    {"reaped-announced", "an acquire that waited did not announce it exactly once"},
+    {"reaped-stale", "a stale lock was not reported as one to remove by hand"},
+    {"reaped-present", "a refused acquire removed the lock file"},
+    {"reaped-bytes", "a refused acquire rewrote the lock file it reported"},
+    {"recovery-age", "could not push a lock file's modification time back"},
+    {"hour-write", "could not write the lock file a refusal case needs"},
+    {"hour-capture", "could not capture what a refused acquire reports"},
+    {"hour-refused", "an acquire took an hour-old lock"},
+    {"hour-report", "a refused acquire reported nothing at all"},
+    {"hour-announced", "an acquire that waited did not announce it exactly once"},
+    {"hour-stale", "a stale lock was not reported as one to remove by hand"},
+    {"hour-present", "a refused acquire removed the lock file"},
+    {"hour-bytes", "a refused acquire rewrote the lock file it reported"},
+    {"recovery-remove", "could not remove the lock by hand, which is the whole recovery"},
+    {"recovery-acquire", "an acquire failed with the lock removed"},
+    {"recovery-locked", "a held transaction has no lock file"},
+    {"recovery-end", "ending the transaction did not drop the lock"},
+    {"prompt-pty", "could not open and name a pseudo-terminal"},
+    {"prompt-fork", "could not fork the process that reads the prompt"},
+    {"prompt-shown", "the prompt never reached the terminal"},
+    {"prompt-type", "could not type at the prompt"},
+    {"prompt-no-echo", "the terminal echoed what was typed at a password prompt"},
+    {"prompt-suspend", "could not send the suspend character"},
+    {"prompt-stopped", "the suspend character did not stop the reader"},
+    {"prompt-type-stopped", "could not type at the stopped reader's terminal"},
+    {"prompt-echo-restored", "a stopped reader left the terminal with echo still off"},
+    {"prompt-continue", "could not continue the stopped reader"},
+    {"prompt-reprint", "the continued reader did not reprint its prompt"},
+    {"prompt-type-password", "could not type the password after the continue"},
+    {"prompt-no-echo-again", "the continued reader echoed the password back"},
+    {"prompt-password", "the password read across the stop was not the one typed after it"},
+    {"burst-pty", "could not open a pseudo-terminal for the burst case"},
+    {"burst-fork", "could not fork the reader the burst case suspends"},
+    {"burst-shown", "the prompt never reached the terminal in the burst case"},
+    {"burst-send", "could not send the suspend character and the bytes behind it"},
+    {"burst-stopped", "a suspend character in a burst did not stop the reader"},
+    {"burst-continue", "could not continue the reader the burst case stopped"},
+    {"burst-reprint", "the continued reader did not reprint its prompt in the burst case"},
+    {"burst-type", "could not type the password after the burst"},
+    {"burst-password", "a byte typed behind the suspend character became a password byte"},
+    {"over-pipe", "could not make the pipe the overflow-resume case feeds"},
+    {"over-fork", "could not fork the reader the overflow-resume case interrupts"},
+    {"over-write", "could not write the over-long run"},
+    {"over-taken", "the reader never took the over-long run and waited for more"},
+    {"over-stopped", "the reader did not stop in the overflow-resume case"},
+    {"over-waits", "the reader did not wait for input again after the continue"},
+    {"over-write-password", "could not write the password after the resume"},
+    {"over-finished", "the reader did not finish the overflow-resume case"},
+    {"over-fits", "a line that fits was refused because an earlier one had not"},
+    {"over-password", "the password typed after the resume was not the one read"},
+    {"preread-pty", "could not open a pseudo-terminal for the pre-read stop case"},
+    {"preread-pipe", "could not make the pipe the pre-read stop case reports on"},
+    {"preread-fork", "could not fork the session leader the pre-read stop case needs"},
+    {"preread-resumed", "the pre-read stop case never saw its reader resume"},
+    {"preread-reprint", "the pre-read stop case never saw the prompt its reader reprints"},
+    {"preread-type", "could not type the password the pre-read stop case checks"},
+    {"preread-heard", "the pre-read stop case never heard how its reader finished"},
+    {"preread-reap", "could not reap the session leader of the pre-read stop case"},
+    {"preread-password",
+     "a password typed after a stop served before the first read lost a character"},
+    {"stale-pty", "could not open a pseudo-terminal for the stale-owner case"},
+    {"stale-pipe", "could not make the pipe the stale-owner case reports on"},
+    {"stale-fork", "could not fork the session leader the stale-owner case needs"},
+    {"stale-reap", "could not reap the session leader of the stale-owner case"},
+    {"stale-heard", "the stale-owner case never heard from its session leader"},
+    {"stale-answer", "a reader continued in the background acted on a stale ownership answer"},
+    {"never-pty", "could not open a pseudo-terminal for the never-foreground case"},
+    {"never-pipe", "could not make the pipe the never-foreground case reports on"},
+    {"never-fork", "could not fork the session leader the never-foreground case needs"},
+    {"never-reap", "could not reap the session leader of the never-foreground case"},
+    {"never-heard", "the never-foreground case never heard from its session leader"},
+    {"never-sigttin", "a background reader did not stop on SIGTTIN as it should have"},
+    {"never-echo", "a background reader took echo from a terminal it did not own"},
+    {"bg-pty", "could not open a pseudo-terminal for the background case"},
+    {"bg-pipe", "could not make the pipe the background case reports on"},
+    {"bg-fork", "could not fork the session leader the background case needs"},
+    {"bg-shown", "the prompt never reached the terminal in the background case"},
+    {"bg-suspend", "could not send the suspend character in the background case"},
+    {"bg-reported", "the session leader did not report what the continue left behind"},
+    {"bg-drive", "the session leader could not drive the background case"},
+    {"bg-no-reprint", "a reader continued in the background reprinted its prompt"},
+    {"bg-echo", "a reader continued in the background took echo from the shell"},
+    {"broken-pipes", "could not make the pipes the SIGPIPE cases need"},
+    {"broken-script", "could not script the line the prompt case reads"},
+    {"broken-prompt-run", "could not run the prompt whose standard error nobody reads"},
+    {"broken-prompt-lives", "a prompt written into a pipe with no reader killed the reader"},
+    {"broken-prompt-line", "a prompt written into a pipe with no reader did not read its line"},
+    {"broken-writer-run", "could not run the writer whose standard error nobody reads"},
+    {"broken-writer-lives",
+     "a writer reporting into a pipe with no reader was killed holding its lock"},
+    {"broken-writer-txn",
+     "the writer whose standard error nobody reads could not take its transaction"},
+    {"broken-writer-lock", "a writer killed at its own diagnostic left its lock behind"},
+    {"high-fork", "could not fork the writer the high-signal case signals"},
+    {"high-begin", "the writer the high-signal case signals did not begin"},
+    {"high-reap", "could not reap the writer the high-signal case signals"},
+    {"high-handled", "a writer sent a handled signal took the default action"},
+    {"high-exited", "a writer sent a handled signal ended in no known way"},
+    {"high-unlocked", "a writer sent a handled signal left its lock behind"},
+    {"high-reserved", "this libc accepted a signal the library excluded as unreachable"},
+    {"su-run", "could not run su from a uid-1000 caller"},
+    {"su-non-login", "a non-login su did not run the target's shell as it was"},
+    {"su-shadow", "cannot read the shadow file the long-password case rewrites"},
+    {"su-hash", "cannot mint the hash the long-password case needs"},
+    {"su-stage-long", "could not stage the account with a long password"},
+    {"su-long", "su accepted a password longer than any reader in the image will take"},
+    {"su-caller-kept", "a refused su left the caller's identity changed"},
+    {"su-wrong", "su accepted another account's password"},
+    {"su-login-run", "could not run a login su from a uid-1000 caller"},
+    {"su-login", "a login su did not enter the target's home under a dashed argv[0]"},
+    {"nothing-left", "a lock or a temporary file outlived the run"},
+};
+
+/** In the process that began the report, report once the checks before
+ * NOTHING_LEFT: those before `check` as held, `check` as failed with its
+ * text, and those after it as not run; with `check` NOTHING_LEFT, every one
+ * of them held. */
+static void report_cases(int check)
 {
-    printf("PWAUTHMUSL FAIL (%s)\n", what);
+    static int reported;
+    int i;
+
+    if (reported || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    reported = 1;
+    for (i = 0; i < NOTHING_LEFT; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+}
+
+/** In the process that began the report, report the check NOTHING_LEFT as
+ * held when `left` is 0, failed when it is 1 and not run when it is -1, and
+ * then the report's end. */
+static void report_last(int left)
+{
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    if (left < 0) {
+        report_notrun(checks[NOTHING_LEFT].id, "an earlier check failed");
+    } else if (left > 0) {
+        report_fail(checks[NOTHING_LEFT].id, checks[NOTHING_LEFT].text);
+    } else {
+        report_pass(checks[NOTHING_LEFT].id);
+    }
+    report_end();
+}
+
+/** Print the failure line of the check `check`, report it, and return -1, the
+ * status every case fails with. */
+static int fail(int check)
+{
+    printf("PWAUTHMUSL FAIL (%s)\n", checks[check].text);
+    report_cases(check);
 
     return -1;
 }
@@ -456,21 +848,21 @@ static int check_salt(void)
     size_t i;
 
     if (pwauth_mint_salt(first, sizeof(first)) != 0) {
-        return fail("mint_salt refused on a CPU that has trusted entropy");
+        return fail(SALT_MINT);
     }
     if (strlen(first) != PWAUTH_SALT_LEN) {
-        return fail("mint_salt returned a salt of the wrong length");
+        return fail(SALT_LENGTH);
     }
     for (i = 0; i < PWAUTH_SALT_LEN; i++) {
         if (strchr(SALT_ALPHABET, first[i]) == NULL) {
-            return fail("mint_salt returned a character outside the alphabet");
+            return fail(SALT_ALPHABET_ONLY);
         }
     }
     if (pwauth_mint_salt(second, sizeof(second)) != 0) {
-        return fail("mint_salt refused the second draw");
+        return fail(SALT_SECOND);
     }
     if (strcmp(first, second) == 0) {
-        return fail("two minted salts are identical");
+        return fail(SALT_DIFFERS);
     }
 
     return 0;
@@ -502,42 +894,42 @@ static int check_rewrite(void)
 
     if (spill("/credmode.txt", before, 0640) != 0 ||
         chown("/credmode.txt", PROBE_UID, PROBE_UID) != 0 || chmod("/credmode.txt", 0640) != 0) {
-        return fail("could not stage the file the replacement inherits from");
+        return fail(REWRITE_STAGE);
     }
     reader = open("/credmode.txt", O_RDONLY);
     if (reader < 0) {
-        return fail("could not open the file the reader holds across the rename");
+        return fail(REWRITE_READER);
     }
 
     if (cred_txn_begin("pwauthmusl") != 0) {
         close(reader);
 
-        return fail("could not take the transaction the replacement runs under");
+        return fail(REWRITE_TXN);
     }
     held = cred_rewrite("/credmode.txt", after, sizeof(after) - 1);
     cred_txn_end();
     if (held != 0) {
         close(reader);
 
-        return fail("cred_rewrite refused a replacement it should have published");
+        return fail(REWRITE_PUBLISH);
     }
 
     if (slurp("/credmode.txt", buffer, sizeof(buffer)) != (ssize_t)sizeof(after) - 1 ||
         strcmp(buffer, after) != 0) {
         close(reader);
 
-        return fail("the published file is not the text that was written");
+        return fail(REWRITE_TEXT);
     }
     if (stat("/credmode.txt", &st) != 0 || (st.st_mode & 07777) != 0640 || st.st_uid != PROBE_UID ||
         st.st_gid != PROBE_UID) {
         close(reader);
 
-        return fail("the replacement did not inherit the original's mode and owner");
+        return fail(REWRITE_INHERIT);
     }
     if (temps_left("/credmode.txt") != 0) {
         close(reader);
 
-        return fail("the replacement left its temporary file behind");
+        return fail(REWRITE_NO_TEMP);
     }
 
     buffer[0] = '\0';
@@ -546,29 +938,29 @@ static int check_rewrite(void)
 
         close(reader);
         if (n != (ssize_t)sizeof(before) - 1) {
-            return fail("a reader across the rename did not read the old file whole");
+            return fail(REWRITE_OLD_WHOLE);
         }
         buffer[n] = '\0';
     }
     if (strcmp(buffer, before) != 0) {
-        return fail("a reader across the rename read something other than what it opened");
+        return fail(REWRITE_OLD_SAME);
     }
 
     if (spill("/credmode.txt", before, 0640) != 0 ||
         chown("/credmode.txt", PROBE_UID, PROBE_UID) != 0 || chmod("/credmode.txt", 04640) != 0) {
-        return fail("could not stage the set-id file the replacement inherits from");
+        return fail(SETID_STAGE);
     }
     if (cred_txn_begin("pwauthmusl") != 0) {
-        return fail("could not take the transaction the set-id replacement runs under");
+        return fail(SETID_TXN);
     }
     held = cred_rewrite("/credmode.txt", after, sizeof(after) - 1);
     cred_txn_end();
     if (held != CRED_PUBLISHED) {
-        return fail("cred_rewrite refused a set-id file it should have published");
+        return fail(SETID_PUBLISH);
     }
     if (stat("/credmode.txt", &st) != 0 || (st.st_mode & 07777) != 04640 ||
         st.st_uid != PROBE_UID || st.st_gid != PROBE_UID) {
-        return fail("the replacement did not inherit the original's set-id bit and owner");
+        return fail(SETID_INHERIT);
     }
 
     return 0;
@@ -598,10 +990,10 @@ static int check_fork(void)
 
     unlink("/etc/.pwlock");
     if (spill("/credlost.txt", "before the fork\n", 0600) != 0) {
-        return fail("could not stage the file the fork cases guard");
+        return fail(FORK_STAGE);
     }
     if (cred_txn_begin("pwauthmusl") != 0) {
-        return fail("could not take the transaction the fork cases run under");
+        return fail(FORK_TXN);
     }
     n = slurp("/etc/.pwlock", before, sizeof(before));
 
@@ -612,12 +1004,12 @@ static int check_fork(void)
     if (child < 0 || waitpid(child, &status, 0) != child) {
         cred_txn_end();
 
-        return fail("could not fork the child that exits under its parent's transaction");
+        return fail(FORK_EXIT_FORK);
     }
     if (!present("/etc/.pwlock")) {
         cred_txn_end();
 
-        return fail("a child's exit removed its parent's lock");
+        return fail(FORK_EXIT_KEPT);
     }
 
     child = fork();
@@ -629,19 +1021,19 @@ static int check_fork(void)
     if (child < 0) {
         cred_txn_end();
 
-        return fail("could not fork the child a signal kills under its parent's transaction");
+        return fail(FORK_KILL_FORK);
     }
     nap(200);
     kill(child, SIGINT);
     if (waitpid(child, &status, 0) != child || !WIFSIGNALED(status) || WTERMSIG(status) != SIGINT) {
         cred_txn_end();
 
-        return fail("a child under its parent's transaction did not die of the signal sent");
+        return fail(FORK_KILL_DIES);
     }
     if (!present("/etc/.pwlock")) {
         cred_txn_end();
 
-        return fail("a child's death removed its parent's lock");
+        return fail(FORK_KILL_KEPT);
     }
 
     child = fork();
@@ -662,29 +1054,29 @@ static int check_fork(void)
     if (child < 0 || waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
         cred_txn_end();
 
-        return fail("could not fork the child that tries the transaction it inherited");
+        return fail(FORK_TRY_FORK);
     }
     if (WEXITSTATUS(status) != 0) {
         printf("pwauthmusl: the child acted on its parent's transaction: %d\n",
                WEXITSTATUS(status));
         cred_txn_end();
 
-        return fail("a child acted on a transaction it does not hold");
+        return fail(FORK_TRY_REFUSED);
     }
     if (slurp("/credlost.txt", content, sizeof(content)) < 0 ||
         strcmp(content, "before the fork\n") != 0) {
         cred_txn_end();
 
-        return fail("a child replaced the file its parent's transaction protects");
+        return fail(FORK_TRY_FILE);
     }
     if (slurp("/etc/.pwlock", after, sizeof(after)) != n || memcmp(before, after, (size_t)n) != 0) {
         cred_txn_end();
 
-        return fail("a child rewrote the lock its parent holds");
+        return fail(FORK_TRY_LOCK);
     }
 
     if (cred_txn_end() != 0 || present("/etc/.pwlock")) {
-        return fail("ending the transaction the fork cases held did not drop the lock");
+        return fail(FORK_END);
     }
 
     return 0;
@@ -718,22 +1110,22 @@ static int check_lost_lock(void)
 
     unlink("/etc/.pwlock");
     if (spill("/credlost.txt", "the file a lost lock protects\n", 0600) != 0) {
-        return fail("could not stage the file the lost-lock case guards");
+        return fail(LOST_STAGE);
     }
     if (spill("/etc/.pwlock", "1\n", 0600) != 0 || stat("/etc/.pwlock", &first) != 0) {
-        return fail("could not stage the first of two locks at one name");
+        return fail(LOST_FIRST);
     }
     unlink("/etc/.pwlock");
     if (spill("/etc/.pwlock", "2\n", 0600) != 0 || stat("/etc/.pwlock", &second) != 0) {
-        return fail("could not stage the second of two locks at one name");
+        return fail(LOST_SECOND);
     }
     if (first.st_ino != second.st_ino) {
-        return fail("two files at one name have distinct inodes: bind the removal to one");
+        return fail(LOST_INODE);
     }
     unlink("/etc/.pwlock");
 
     if (cred_txn_begin("pwauthmusl") != 0) {
-        return fail("could not take the transaction the lost-lock case runs under");
+        return fail(LOST_TXN);
     }
     reaped = fork();
     if (reaped == 0) {
@@ -742,14 +1134,14 @@ static int check_lost_lock(void)
     if (reaped < 0 || waitpid(reaped, &status, 0) != reaped) {
         cred_txn_end();
 
-        return fail("could not mint a pid for the writer that takes the name");
+        return fail(LOST_PID);
     }
     snprintf(body, sizeof(body), "%d\n", (int)reaped);
     unlink("/etc/.pwlock");
     if (spill("/etc/.pwlock", body, 0600) != 0) {
         cred_txn_end();
 
-        return fail("could not stand another writer's lock at the name");
+        return fail(LOST_OTHER);
     }
     n = slurp("/etc/.pwlock", before, sizeof(before));
 
@@ -757,30 +1149,30 @@ static int check_lost_lock(void)
     if (rc != CRED_UNCHANGED) {
         cred_txn_end();
 
-        return fail("a replacement published with the transaction's lock gone");
+        return fail(LOST_REFUSED);
     }
     if (slurp("/credlost.txt", content, sizeof(content)) < 0 ||
         strcmp(content, "the file a lost lock protects\n") != 0) {
         cred_txn_end();
 
-        return fail("a replacement with the transaction's lock gone changed the target");
+        return fail(LOST_TARGET);
     }
     if (temps_left("/credlost.txt") != 0) {
         cred_txn_end();
 
-        return fail("a replacement refused for a lost lock left its temporary file behind");
+        return fail(LOST_NO_TEMP);
     }
 
     if (cred_txn_end() != 0) {
-        return fail("cred_txn_end refused the transaction the lost-lock case held");
+        return fail(LOST_END);
     }
     if (!present("/etc/.pwlock")) {
-        return fail("a release removed a lock another writer created at the same name");
+        return fail(LOST_KEPT);
     }
     if (slurp("/etc/.pwlock", after, sizeof(after)) != n || memcmp(before, after, (size_t)n) != 0) {
         unlink("/etc/.pwlock");
 
-        return fail("a release rewrote another writer's lock");
+        return fail(LOST_UNCHANGED);
     }
     unlink("/etc/.pwlock");
 
@@ -875,10 +1267,10 @@ static int check_interleave(void)
     int status;
 
     if (spill("/credtxn.txt", "original\n", 0644) != 0) {
-        return fail("could not stage the file the two writers rewrite");
+        return fail(INTER_STAGE);
     }
     if (pipe(ordering) != 0) {
-        return fail("could not make the pipe that orders the two writers");
+        return fail(INTER_PIPE);
     }
     unlink("/credbusy.txt");
 
@@ -895,23 +1287,23 @@ static int check_interleave(void)
     close(ordering[0]);
     close(ordering[1]);
     if (first < 0 || second < 0) {
-        return fail("could not fork the two writers");
+        return fail(INTER_FORK);
     }
 
     if (waitpid(first, &status, 0) != first || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the first writer did not finish its transaction cleanly");
+        return fail(INTER_FIRST);
     }
     if (waitpid(second, &status, 0) != second || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the second writer did not wait for the transaction and publish");
+        return fail(INTER_SECOND);
     }
 
     if (slurp("/credtxn.txt", buffer, sizeof(buffer)) < 0 ||
         strcmp(buffer, "original\nfirst\nsecond\n") != 0) {
-        return fail("an update was lost: the file does not hold both writers' lines");
+        return fail(INTER_BOTH);
     }
     if (slurp("/credbusy.txt", buffer, sizeof(buffer)) < 0 ||
         occurrences(buffer, "credential database busy, waiting") != 1) {
-        return fail("a writer that waited did not announce it exactly once");
+        return fail(INTER_ANNOUNCED);
     }
 
     return 0;
@@ -924,10 +1316,11 @@ static int check_interleave(void)
  *
  * The acquire waits out the compiled-in retry budget, so this is the path a
  * writer takes, with the lock path and the budget the shipped programs use
- * rather than parameters a test chose. Returns 0, or -1 after printing the
- * failure, which is `what` when the acquire succeeds.
+ * rather than parameters a test chose. Its checks are `check` to `check + 7`
+ * in the order it makes them, the third failing when the acquire succeeds.
+ * Returns 0, or -1 after printing the failure.
  */
-static int check_refusal(const char *what, const char *body, const char *expected)
+static int check_refusal(int check, const char *body, const char *expected)
 {
     char before[128];
     char after[128];
@@ -938,14 +1331,14 @@ static int check_refusal(const char *what, const char *body, const char *expecte
     int taken;
 
     if (spill("/etc/.pwlock", body, 0600) != 0) {
-        return fail("could not write the lock file a refusal case needs");
+        return fail(check);
     }
     n = slurp("/etc/.pwlock", before, sizeof(before));
 
     log = open("/credlog.txt", O_CREAT | O_TRUNC | O_WRONLY, 0644);
     saved = dup(2);
     if (log < 0 || saved < 0 || dup2(log, 2) != 2) {
-        return fail("could not capture what a refused acquire reports");
+        return fail(check + 1);
     }
     close(log);
     taken = cred_txn_begin("pwauthmusl");
@@ -954,23 +1347,23 @@ static int check_refusal(const char *what, const char *body, const char *expecte
     if (taken == 0) {
         cred_txn_end();
 
-        return fail(what);
+        return fail(check + 2);
     }
 
     if (slurp("/credlog.txt", report, sizeof(report)) < 0) {
-        return fail("a refused acquire reported nothing at all");
+        return fail(check + 3);
     }
     if (occurrences(report, "credential database busy, waiting") != 1) {
-        return fail("an acquire that waited did not announce it exactly once");
+        return fail(check + 4);
     }
     if (strstr(report, expected) == NULL || strstr(report, "remove it as root and retry") == NULL) {
-        return fail("a stale lock was not reported as one to remove by hand");
+        return fail(check + 5);
     }
     if (!present("/etc/.pwlock")) {
-        return fail("a refused acquire removed the lock file");
+        return fail(check + 6);
     }
     if (slurp("/etc/.pwlock", after, sizeof(after)) != n || memcmp(before, after, (size_t)n) != 0) {
-        return fail("a refused acquire rewrote the lock file it reported");
+        return fail(check + 7);
     }
 
     return 0;
@@ -997,12 +1390,12 @@ static int check_recovery(void)
         _exit(0);
     }
     if (reaped < 0 || waitpid(reaped, &status, 0) != reaped) {
-        return fail("could not mint a reaped pid for the stale-lock case");
+        return fail(RECOVERY_PID);
     }
     snprintf(body, sizeof(body), "%d\n", (int)reaped);
     snprintf(expected, sizeof(expected), "stale lock /etc/.pwlock (pid %d is gone)", (int)reaped);
 
-    if (check_refusal("an acquire took a lock naming a reaped pid", body, expected) != 0) {
+    if (check_refusal(REAPED_WRITE, body, expected) != 0) {
         return -1;
     }
     /* The same lock, an hour old. */
@@ -1013,24 +1406,24 @@ static int check_recovery(void)
         ts[0].tv_nsec = 0;
         ts[1] = ts[0];
         if (utimensat(AT_FDCWD, "/etc/.pwlock", ts, 0) != 0) {
-            return fail("could not push a lock file's modification time back");
+            return fail(RECOVERY_AGE);
         }
     }
-    if (check_refusal("an acquire took an hour-old lock", body, expected) != 0) {
+    if (check_refusal(HOUR_WRITE, body, expected) != 0) {
         return -1;
     }
 
     if (unlink("/etc/.pwlock") != 0) {
-        return fail("could not remove the lock by hand, which is the whole recovery");
+        return fail(RECOVERY_REMOVE);
     }
     if (cred_txn_begin("pwauthmusl") != 0) {
-        return fail("an acquire failed with the lock removed");
+        return fail(RECOVERY_ACQUIRE);
     }
     if (!present("/etc/.pwlock")) {
-        return fail("a held transaction has no lock file");
+        return fail(RECOVERY_LOCKED);
     }
     if (cred_txn_end() != 0 || present("/etc/.pwlock")) {
-        return fail("ending the transaction did not drop the lock");
+        return fail(RECOVERY_END);
     }
 
     return 0;
@@ -1246,7 +1639,7 @@ static int check_prompt(void)
 
     master = pty_make(name, sizeof(name));
     if (master < 0) {
-        return fail("could not open and name a pseudo-terminal");
+        return fail(PROMPT_PTY);
     }
 
     child = fork();
@@ -1256,7 +1649,7 @@ static int check_prompt(void)
     if (child < 0) {
         close(master);
 
-        return fail("could not fork the process that reads the prompt");
+        return fail(PROMPT_FORK);
     }
     fcntl(master, F_SETFL, O_NONBLOCK);
 
@@ -1264,63 +1657,63 @@ static int check_prompt(void)
     if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
         close(master);
 
-        return fail("the prompt never reached the terminal");
+        return fail(PROMPT_SHOWN);
     }
 
     /* Echo is off, so what is typed at the prompt must not come back. */
     if (write(master, "abc", 3) != 3) {
         close(master);
 
-        return fail("could not type at the prompt");
+        return fail(PROMPT_TYPE);
     }
     nap(500);
     if (drain(master, buffer, sizeof(buffer)) != 0) {
         close(master);
 
-        return fail("the terminal echoed what was typed at a password prompt");
+        return fail(PROMPT_NO_ECHO);
     }
 
     if (write(master, "\032", 1) != 1) {
         close(master);
 
-        return fail("could not send the suspend character");
+        return fail(PROMPT_SUSPEND);
     }
     if (!wait_for(child, &status, WUNTRACED, 5000) || !WIFSTOPPED(status) ||
         WSTOPSIG(status) != SIGTSTP) {
         close(master);
 
-        return fail("the suspend character did not stop the reader");
+        return fail(PROMPT_STOPPED);
     }
 
     /* A stopped reader leaves a terminal that echoes. */
     if (write(master, "xyz", 3) != 3) {
         close(master);
 
-        return fail("could not type at the stopped reader's terminal");
+        return fail(PROMPT_TYPE_STOPPED);
     }
     buffer[0] = '\0';
     if (!expect_on(master, "xyz", buffer, sizeof(buffer), 3000)) {
         close(master);
 
-        return fail("a stopped reader left the terminal with echo still off");
+        return fail(PROMPT_ECHO_RESTORED);
     }
 
     if (kill(child, SIGCONT) != 0) {
         close(master);
 
-        return fail("could not continue the stopped reader");
+        return fail(PROMPT_CONTINUE);
     }
     buffer[0] = '\0';
     if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
         close(master);
 
-        return fail("the continued reader did not reprint its prompt");
+        return fail(PROMPT_REPRINT);
     }
 
     if (write(master, "secret\n", 7) != 7) {
         close(master);
 
-        return fail("could not type the password after the continue");
+        return fail(PROMPT_TYPE_PASSWORD);
     }
     nap(500);
     {
@@ -1332,14 +1725,14 @@ static int check_prompt(void)
             if (buffer[i] != '\n' && buffer[i] != '\r') {
                 close(master);
 
-                return fail("the continued reader echoed the password back");
+                return fail(PROMPT_NO_ECHO_AGAIN);
             }
         }
     }
     if (!wait_for(child, &status, 0, 5000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(master);
 
-        return fail("the password read across the stop was not the one typed after it");
+        return fail(PROMPT_PASSWORD);
     }
     close(master);
 
@@ -1370,7 +1763,7 @@ static int check_prompt_burst(void)
 
     master = pty_make(name, sizeof(name));
     if (master < 0) {
-        return fail("could not open a pseudo-terminal for the burst case");
+        return fail(BURST_PTY);
     }
     child = fork();
     if (child == 0) {
@@ -1379,7 +1772,7 @@ static int check_prompt_burst(void)
     if (child < 0) {
         close(master);
 
-        return fail("could not fork the reader the burst case suspends");
+        return fail(BURST_FORK);
     }
     fcntl(master, F_SETFL, O_NONBLOCK);
 
@@ -1387,39 +1780,39 @@ static int check_prompt_burst(void)
     if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
         close(master);
 
-        return fail("the prompt never reached the terminal in the burst case");
+        return fail(BURST_SHOWN);
     }
     if (write(master, "\032X\n", 3) != 3) {
         close(master);
 
-        return fail("could not send the suspend character and the bytes behind it");
+        return fail(BURST_SEND);
     }
     if (!wait_for(child, &status, WUNTRACED, 5000) || !WIFSTOPPED(status) ||
         WSTOPSIG(status) != SIGTSTP) {
         close(master);
 
-        return fail("a suspend character in a burst did not stop the reader");
+        return fail(BURST_STOPPED);
     }
     if (kill(child, SIGCONT) != 0) {
         close(master);
 
-        return fail("could not continue the reader the burst case stopped");
+        return fail(BURST_CONTINUE);
     }
     buffer[0] = '\0';
     if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
         close(master);
 
-        return fail("the continued reader did not reprint its prompt in the burst case");
+        return fail(BURST_REPRINT);
     }
     if (write(master, "secret\n", 7) != 7) {
         close(master);
 
-        return fail("could not type the password after the burst");
+        return fail(BURST_TYPE);
     }
     if (!wait_for(child, &status, 0, 5000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(master);
 
-        return fail("a byte typed behind the suspend character became a password byte");
+        return fail(BURST_PASSWORD);
     }
     close(master);
 
@@ -1676,12 +2069,12 @@ static int check_prompt_stop_before_read(void)
 
     master = pty_make(name, sizeof(name));
     if (master < 0) {
-        return fail("could not open a pseudo-terminal for the pre-read stop case");
+        return fail(PREREAD_PTY);
     }
     if (pipe(channel) != 0) {
         close(master);
 
-        return fail("could not make the pipe the pre-read stop case reports on");
+        return fail(PREREAD_PIPE);
     }
     leader = fork();
     if (leader == 0) {
@@ -1693,13 +2086,13 @@ static int check_prompt_stop_before_read(void)
         close(master);
         close(channel[0]);
 
-        return fail("could not fork the session leader the pre-read stop case needs");
+        return fail(PREREAD_FORK);
     }
     if (read_verdict(channel[0], leader, verdict, 1, 10000) != 1 || verdict[0] != 'r') {
         close(master);
         close(channel[0]);
 
-        return fail("the pre-read stop case never saw its reader resume");
+        return fail(PREREAD_RESUMED);
     }
     prompts[0] = '\0';
     if (!expect_nth_on(master, "Password: ", 2, prompts, sizeof(prompts), 10000)) {
@@ -1708,27 +2101,27 @@ static int check_prompt_stop_before_read(void)
         close(channel[0]);
         (void)waitpid(leader, &status, 0);
 
-        return fail("the pre-read stop case never saw the prompt its reader reprints");
+        return fail(PREREAD_REPRINT);
     }
     if (write(master, "secret\n", 7) != 7) {
         close(master);
         close(channel[0]);
 
-        return fail("could not type the password the pre-read stop case checks");
+        return fail(PREREAD_TYPE);
     }
     if (read_verdict(channel[0], leader, verdict, 1, 10000) != 1) {
         close(master);
         close(channel[0]);
 
-        return fail("the pre-read stop case never heard how its reader finished");
+        return fail(PREREAD_HEARD);
     }
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
-        return fail("could not reap the session leader of the pre-read stop case");
+        return fail(PREREAD_REAP);
     }
     if (verdict[0] != '1') {
-        return fail("a password typed after a stop served before the first read lost a character");
+        return fail(PREREAD_PASSWORD);
     }
 
     return 0;
@@ -1826,12 +2219,12 @@ static int check_prompt_stale_owner(void)
 
     master = pty_make(name, sizeof(name));
     if (master < 0) {
-        return fail("could not open a pseudo-terminal for the stale-owner case");
+        return fail(STALE_PTY);
     }
     if (pipe(channel) != 0) {
         close(master);
 
-        return fail("could not make the pipe the stale-owner case reports on");
+        return fail(STALE_PIPE);
     }
     leader = fork();
     if (leader == 0) {
@@ -1843,19 +2236,19 @@ static int check_prompt_stale_owner(void)
         close(master);
         close(channel[0]);
 
-        return fail("could not fork the session leader the stale-owner case needs");
+        return fail(STALE_FORK);
     }
     got = read_verdict(channel[0], leader, verdict, 2, 20000);
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
-        return fail("could not reap the session leader of the stale-owner case");
+        return fail(STALE_REAP);
     }
     if (got != 2) {
-        return fail("the stale-owner case never heard from its session leader");
+        return fail(STALE_HEARD);
     }
     if (verdict[0] != '1') {
-        return fail("a reader continued in the background acted on a stale ownership answer");
+        return fail(STALE_ANSWER);
     }
 
     return 0;
@@ -1912,7 +2305,7 @@ static int check_prompt_overflow_resume(void)
     size_t i;
 
     if (pipe(in) != 0) {
-        return fail("could not make the pipe the overflow-resume case feeds");
+        return fail(OVER_PIPE);
     }
     child = fork();
     if (child == 0) {
@@ -1923,7 +2316,7 @@ static int check_prompt_overflow_resume(void)
     if (child < 0) {
         close(in[1]);
 
-        return fail("could not fork the reader the overflow-resume case interrupts");
+        return fail(OVER_FORK);
     }
 
     /* Too long to keep, with no newline, so the reader is still collecting. */
@@ -1936,14 +2329,14 @@ static int check_prompt_overflow_resume(void)
         (void)waitpid(child, &status, 0);
         close(in[1]);
 
-        return fail("could not write the over-long run");
+        return fail(OVER_WRITE);
     }
     if (!asleep_drained(child, in[1])) {
         kill(child, SIGKILL);
         (void)waitpid(child, &status, 0);
         close(in[1]);
 
-        return fail("the reader never took the over-long run and waited for more");
+        return fail(OVER_TAKEN);
     }
     kill(child, SIGTSTP);
     if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status)) {
@@ -1951,7 +2344,7 @@ static int check_prompt_overflow_resume(void)
         (void)waitpid(child, &status, 0);
         close(in[1]);
 
-        return fail("the reader did not stop in the overflow-resume case");
+        return fail(OVER_STOPPED);
     }
     kill(child, SIGCONT);
     if (!asleep_drained(child, -1)) {
@@ -1959,24 +2352,24 @@ static int check_prompt_overflow_resume(void)
         (void)waitpid(child, &status, 0);
         close(in[1]);
 
-        return fail("the reader did not wait for input again after the continue");
+        return fail(OVER_WAITS);
     }
     if (write(in[1], "secret\n", 7) != 7) {
         kill(child, SIGKILL);
         (void)waitpid(child, &status, 0);
         close(in[1]);
 
-        return fail("could not write the password after the resume");
+        return fail(OVER_WRITE_PASSWORD);
     }
     close(in[1]);
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
-        return fail("the reader did not finish the overflow-resume case");
+        return fail(OVER_FINISHED);
     }
     if (WEXITSTATUS(status) == 44) {
-        return fail("a line that fits was refused because an earlier one had not");
+        return fail(OVER_FITS);
     }
     if (WEXITSTATUS(status) != 0) {
-        return fail("the password typed after the resume was not the one read");
+        return fail(OVER_PASSWORD);
     }
 
     return 0;
@@ -2059,12 +2452,12 @@ static int check_prompt_never_owned(void)
 
     master = pty_make(name, sizeof(name));
     if (master < 0) {
-        return fail("could not open a pseudo-terminal for the never-foreground case");
+        return fail(NEVER_PTY);
     }
     if (pipe(channel) != 0) {
         close(master);
 
-        return fail("could not make the pipe the never-foreground case reports on");
+        return fail(NEVER_PIPE);
     }
     leader = fork();
     if (leader == 0) {
@@ -2076,22 +2469,22 @@ static int check_prompt_never_owned(void)
         close(master);
         close(channel[0]);
 
-        return fail("could not fork the session leader the never-foreground case needs");
+        return fail(NEVER_FORK);
     }
     got = read_verdict(channel[0], leader, verdict, 2, 20000);
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
-        return fail("could not reap the session leader of the never-foreground case");
+        return fail(NEVER_REAP);
     }
     if (got != 2) {
-        return fail("the never-foreground case never heard from its session leader");
+        return fail(NEVER_HEARD);
     }
     if (verdict[0] != '1') {
-        return fail("a background reader did not stop on SIGTTIN as it should have");
+        return fail(NEVER_SIGTTIN);
     }
     if (verdict[1] != '1') {
-        return fail("a background reader took echo from a terminal it did not own");
+        return fail(NEVER_ECHO);
     }
 
     return 0;
@@ -2125,12 +2518,12 @@ static int check_prompt_background(void)
 
     master = pty_make(name, sizeof(name));
     if (master < 0) {
-        return fail("could not open a pseudo-terminal for the background case");
+        return fail(BG_PTY);
     }
     if (pipe(channel) != 0) {
         close(master);
 
-        return fail("could not make the pipe the background case reports on");
+        return fail(BG_PIPE);
     }
     leader = fork();
     if (leader == 0) {
@@ -2142,7 +2535,7 @@ static int check_prompt_background(void)
         close(master);
         close(channel[0]);
 
-        return fail("could not fork the session leader the background case needs");
+        return fail(BG_FORK);
     }
     fcntl(master, F_SETFL, O_NONBLOCK);
     fcntl(channel[0], F_SETFL, O_NONBLOCK);
@@ -2152,13 +2545,13 @@ static int check_prompt_background(void)
         close(master);
         close(channel[0]);
 
-        return fail("the prompt never reached the terminal in the background case");
+        return fail(BG_SHOWN);
     }
     if (write(master, "\032", 1) != 1) {
         close(master);
         close(channel[0]);
 
-        return fail("could not send the suspend character in the background case");
+        return fail(BG_SUSPEND);
     }
 
     verdict[0] = '\0';
@@ -2166,22 +2559,22 @@ static int check_prompt_background(void)
         close(master);
         close(channel[0]);
 
-        return fail("the session leader did not report what the continue left behind");
+        return fail(BG_REPORTED);
     }
     close(channel[0]);
     if (!wait_for(leader, &status, 0, 10000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(master);
 
-        return fail("the session leader could not drive the background case");
+        return fail(BG_DRIVE);
     }
     buffer[0] = '\0';
     drain(master, buffer, sizeof(buffer));
     close(master);
     if (strstr(buffer, "Password: ") != NULL) {
-        return fail("a reader continued in the background reprinted its prompt");
+        return fail(BG_NO_REPRINT);
     }
     if (strstr(verdict, "echo=on") == NULL) {
-        return fail("a reader continued in the background took echo from the shell");
+        return fail(BG_ECHO);
     }
 
     return 0;
@@ -2212,10 +2605,10 @@ static int check_sigpipe(void)
 
     unlink("/etc/.pwlock");
     if (pipe(broken) != 0 || pipe(feed) != 0) {
-        return fail("could not make the pipes the SIGPIPE cases need");
+        return fail(BROKEN_PIPES);
     }
     if (write(feed[1], "secret\n", 7) != 7) {
-        return fail("could not script the line the prompt case reads");
+        return fail(BROKEN_SCRIPT);
     }
     close(feed[1]);
     close(broken[0]); /* from here the write end has no reader anywhere */
@@ -2234,17 +2627,17 @@ static int check_sigpipe(void)
     if (child < 0 || waitpid(child, &status, 0) != child) {
         close(broken[1]);
 
-        return fail("could not run the prompt whose standard error nobody reads");
+        return fail(BROKEN_PROMPT_RUN);
     }
     if (!WIFEXITED(status)) {
         close(broken[1]);
 
-        return fail("a prompt written into a pipe with no reader killed the reader");
+        return fail(BROKEN_PROMPT_LIVES);
     }
     if (WEXITSTATUS(status) != 0) {
         close(broken[1]);
 
-        return fail("a prompt written into a pipe with no reader did not read its line");
+        return fail(BROKEN_PROMPT_LINE);
     }
 
     child = fork();
@@ -2260,22 +2653,22 @@ static int check_sigpipe(void)
     }
     close(broken[1]);
     if (child < 0 || waitpid(child, &status, 0) != child) {
-        return fail("could not run the writer whose standard error nobody reads");
+        return fail(BROKEN_WRITER_RUN);
     }
     if (!WIFEXITED(status)) {
         unlink("/etc/.pwlock");
 
-        return fail("a writer reporting into a pipe with no reader was killed holding its lock");
+        return fail(BROKEN_WRITER_LIVES);
     }
     if (WEXITSTATUS(status) != 0) {
         unlink("/etc/.pwlock");
 
-        return fail("the writer whose standard error nobody reads could not take its transaction");
+        return fail(BROKEN_WRITER_TXN);
     }
     if (present("/etc/.pwlock")) {
         unlink("/etc/.pwlock");
 
-        return fail("a writer killed at its own diagnostic left its lock behind");
+        return fail(BROKEN_WRITER_LOCK);
     }
 
     return 0;
@@ -2394,28 +2787,28 @@ static int check_high_signals(void)
             }
         }
         if (child < 0) {
-            return fail("could not fork the writer the high-signal case signals");
+            return fail(HIGH_FORK);
         }
         while (!present("/etc/.pwlock")) {
             if (waitpid(child, &status, WNOHANG) == child) {
-                return fail("the writer the high-signal case signals did not begin");
+                return fail(HIGH_BEGIN);
             }
             sleep(1);
         }
         kill(child, handled[i]);
         if (waitpid(child, &status, 0) != child) {
-            return fail("could not reap the writer the high-signal case signals");
+            return fail(HIGH_REAP);
         }
         if (WIFSIGNALED(status)) {
-            return fail("a writer sent a handled signal took the default action");
+            return fail(HIGH_HANDLED);
         }
         if (!WIFEXITED(status)) {
-            return fail("a writer sent a handled signal ended in no known way");
+            return fail(HIGH_EXITED);
         }
         if (present("/etc/.pwlock")) {
             unlink("/etc/.pwlock");
 
-            return fail("a writer sent a handled signal left its lock behind");
+            return fail(HIGH_UNLOCKED);
         }
     }
 
@@ -2427,7 +2820,7 @@ static int check_high_signals(void)
         sigemptyset(&probe.sa_mask);
         probe.sa_flags = 0;
         if (sigaction(reserved[i], &probe, NULL) == 0) {
-            return fail("this libc accepted a signal the library excluded as unreachable");
+            return fail(HIGH_RESERVED);
         }
     }
 
@@ -2465,12 +2858,12 @@ static int check_su(void)
 
     status = run_su("/musl", non_login, caller_env, PROBE_PASSWORD);
     if (status == CALLER_BROKEN || status < 0) {
-        return fail("could not run su from a uid-1000 caller");
+        return fail(SU_RUN);
     }
     if (status != 0) {
         printf("pwauthmusl: su without a dash left status %d\n", status);
 
-        return fail("a non-login su did not run the target's shell as it was");
+        return fail(SU_NON_LOGIN);
     }
 
     /* A password longer than any reader in the image takes. */
@@ -2488,41 +2881,41 @@ static int check_su(void)
 
         /* The account's own password, made that long in the shadow file. */
         if (slurp("/etc/shadow", saved, sizeof(saved)) < 0) {
-            return fail("cannot read the shadow file the long-password case rewrites");
+            return fail(SU_SHADOW);
         }
         made = crypt(overlong, "$6$sulimit");
         if (!made || made[0] != '$') {
-            return fail("cannot mint the hash the long-password case needs");
+            return fail(SU_HASH);
         }
         if (replace_field(saved, "probe", made, rebuilt, sizeof(rebuilt)) != 0 ||
             spill("/etc/shadow", rebuilt, 0600) != 0) {
             (void)spill("/etc/shadow", saved, 0600);
 
-            return fail("could not stage the account with a long password");
+            return fail(SU_STAGE_LONG);
         }
         status = run_su("/musl", non_login, caller_env, overlong);
         (void)spill("/etc/shadow", saved, 0600);
         if (status == 0) {
-            return fail("su accepted a password longer than any reader in the image will take");
+            return fail(SU_LONG);
         }
     }
 
     status = run_su("/musl", non_login, caller_env, ROOT_PASSWORD);
     if (status == CALLER_BROKEN) {
-        return fail("a refused su left the caller's identity changed");
+        return fail(SU_CALLER_KEPT);
     }
     if (status < 0 || status == 0) {
-        return fail("su accepted another account's password");
+        return fail(SU_WRONG);
     }
 
     status = run_su("/musl", login, caller_env, PROBE_PASSWORD);
     if (status == CALLER_BROKEN || status < 0) {
-        return fail("could not run a login su from a uid-1000 caller");
+        return fail(SU_LOGIN_RUN);
     }
     if (status != 0) {
         printf("pwauthmusl: su with a dash left status %d\n", status);
 
-        return fail("a login su did not enter the target's home under a dashed argv[0]");
+        return fail(SU_LOGIN);
     }
 
     return 0;
@@ -2567,7 +2960,7 @@ static int finish(void)
         spill(Databases[i], Snapshot[i], i == 1 ? 0600 : 0644);
     }
     if (left) {
-        return fail("a lock or a temporary file outlived the run");
+        return fail(NOTHING_LEFT);
     }
 
     return 0;
@@ -2580,13 +2973,16 @@ static int finish(void)
 int main(int argc, char **argv)
 {
     size_t i;
-    int rc;
+    int rc, left;
 
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.pwauthmusl"));
     for (i = 0; i < 3; i++) {
         Snapshot_len[i] = slurp(Databases[i], Snapshot[i], sizeof(Snapshot[i]));
         if (Snapshot_len[i] < 0) {
             printf("PWAUTHMUSL FAIL (cannot read %s)\n", Databases[i]);
+            report_cases(DATABASES);
+            report_last(-1);
 
             return 1;
         }
@@ -2638,7 +3034,10 @@ int main(int argc, char **argv)
     if (rc == 0) {
         rc = check_su();
     }
-    if (finish() != 0) {
+    report_cases(NOTHING_LEFT);
+    left = finish() != 0;
+    report_last(left);
+    if (left) {
         rc = -1;
     }
     if (rc != 0) {
