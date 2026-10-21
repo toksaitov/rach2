@@ -35,9 +35,21 @@
  * runner's limit on the probe's step ends a run that stalls. Prints
  * "PTYPROBE START", then "PTYPROBE OK" or "PTYPROBE FAIL (why)".
  * Freestanding; direct system calls (probe.h).
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, comes from
+ * the parent alone and has an assertion for each row, a setup step joined to
+ * the row after it: `ptmx-open`, `tiocgptn`, `unlock`, `master-winsz`,
+ * `master-nonblock`, `ctty`, `proc-stat-tty`, `slave-winsz`, `tcgets`,
+ * `tcsets`, `tcgets2`, `tcsetsw2`, `cooked-read`, `slave-output`, `echo`,
+ * `hangup-ignored`, `hangup-queued` and `hangup-blocked`. The child's rows,
+ * `ctty` to `tcsetsw2` and the cooked read, are reported from its exit status
+ * and its readiness line. The first failure fails its assertion and leaves the
+ * rest not run; a child that ends before it is ready with a status no row gives
+ * fails `ctty`.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define O_RDONLY 0
 #define O_RDWR   2
@@ -532,18 +544,81 @@ done:
     return ok;
 }
 
+/** Print "PTYPROBE FAIL (`why`)", fail the report's next assertion with
+ * `why` (`report_stop`), and exit 1. */
+static void fail(const char *why)
+{
+    char line[96];
+    int n = 0;
+    const char *part[3];
+    int i, k;
+
+    part[0] = "PTYPROBE FAIL (";
+    part[1] = why;
+    part[2] = ")\n";
+    for (i = 0; i < 3; i++) {
+        for (k = 0; part[i][k] != '\0' && n < (int)sizeof(line) - 1; k++) {
+            line[n++] = part[i][k];
+        }
+    }
+    line[n] = '\0';
+    puts(line);
+    report_stop(why);
+    sys_exit(1);
+}
+
+/* The index in the planned path of the child's first row, `ctty`, and of the
+ * cooked read. */
+#define ROW_CTTY   5
+#define ROW_COOKED 12
+
+/** The index in the planned path of the row whose failure the child's exit
+ * status `status` says, or ROW_CTTY for a status no row gives. */
+static int child_row(int status)
+{
+    static const signed char rows[] = {11, 5,  12, 5,  28, 6,  14, 7,  15, 7,  16, 8,
+                                       17, 8,  18, 9,  19, 9,  20, 9,  23, 10, 24, 10,
+                                       25, 11, 26, 11, 27, 11, 21, 12, 13, 12, 22, 13};
+    int i;
+
+    for (i = 0; i < (int)sizeof(rows); i += 2) {
+        if (rows[i] == status) {
+            return rows[i + 1];
+        }
+    }
+    return ROW_CTTY;
+}
+
+/** Report the planned assertions before the one at `row` held. */
+static void held_to(int row)
+{
+    while (report_path_at < row) {
+        report_held();
+    }
+}
+
+/** Report the planned assertions before the one at `row` held, and that one
+ * failed with `why`, the rest not run. */
+static void stop_at(int row, const char *why)
+{
+    held_to(row);
+    report_stop(why);
+}
+
 /**
  * Read the non-blocking `master` into `mbuf`, of `cap` bytes, until the
  * child `pid` has written its readiness line, and return the bytes read.
  *
  * Between empty reads the probe looks for the child's exit and yields. A
  * child that exits before it is ready has refused its terminal, and the
- * probe prints its status and exits with it; one that fills `mbuf` without
- * the line is killed and the probe exits 1. Neither returns.
+ * probe prints its status, reports the row the status says and exits with
+ * it; one that fills `mbuf` without the line is killed and the probe exits
+ * 1. Neither returns.
  */
 static int await_ready(int master, int pid, char *mbuf, int cap)
 {
     int n = 0, status = -1;
+    char why[64];
 
     while (n < cap - 1) {
         int r = sys_read(master, mbuf + n, cap - 1 - n);
@@ -560,129 +635,176 @@ static int await_ready(int master, int pid, char *mbuf, int cap)
             numbered_path(mbuf, "PTYPROBE FAIL (the child refused its terminal: status ", status,
                           ")\n");
             puts(mbuf);
+            numbered_path(why, "the child refused its terminal: status ", status, "");
+            stop_at(child_row(status), why);
             sys_exit(status);
         }
         yield();
     }
     syscall3(SYS_KILL, pid, SIGKILL, 0);
     sys_waitpid(pid, &status, 0);
-    puts("PTYPROBE FAIL (the child never reported its terminal ready)\n");
-    sys_exit(1);
+    fail("the child never reported its terminal ready");
     return 0;
 }
 
 /**
- * The probe's entry: the pair, the window size, the child on the slave, the
- * round trip, and the hangup rows.
+ * Open the master, read its slave's index into `*ptn`, unlock the pair and
+ * set the window size, as a login server does before the shell is started.
+ * Returns the master; a failure exits.
+ */
+static int open_master(int *ptn)
+{
+    int master, unlock = 0;
+    short ws[4];
+
+    master = sys_open("/dev/ptmx", O_RDWR);
+    if (master < 0) {
+        fail("open ptmx");
+    }
+    report_held();
+    *ptn = -1;
+    if (sys_ioctl(master, TIOCGPTN, ptn) < 0 || *ptn < 0) {
+        fail("TIOCGPTN");
+    }
+    report_held();
+    if (sys_ioctl(master, TIOCSPTLCK, &unlock) < 0) {
+        fail("TIOCSPTLCK");
+    }
+    report_held();
+    ws[0] = WS_ROWS;
+    ws[1] = WS_COLS;
+    ws[2] = 0;
+    ws[3] = 0;
+    if (sys_ioctl(master, TIOCSWINSZ, ws) < 0) {
+        fail("master TIOCSWINSZ");
+    }
+    report_held();
+    return master;
+}
+
+/**
+ * The child on the slave /dev/pts/`ptn`, at `path`: a new session leader, it
+ * makes the slave its controlling terminal, runs its rows, writes "ready",
+ * reads the cooked line the parent sends and writes "world". It exits 0, or
+ * with the status of the row that failed. It does not return.
+ */
+static void child(const char *path, int ptn)
+{
+    char sbuf[32];
+    int sn, sid, slave;
+
+    sid = sys_setsid();
+    slave = sys_open(path, O_RDWR);
+    if (slave < 0) {
+        sys_exit(11); /* open slave failed */
+    }
+    if (sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
+        sys_exit(12); /* TIOCSCTTY failed */
+    }
+    if (!stat_has_tty(sid, ptn)) {
+        sys_exit(28); /* /proc/<pid>/stat does not give the terminal */
+    }
+    sn = slave_rows(slave);
+    if (sn != 0) {
+        sys_exit(sn);
+    }
+    if (sys_write(slave, "ready\n", 6) != 6) {
+        sys_exit(21); /* the readiness line was not written whole */
+    }
+    sn = sys_read(slave, sbuf, (int)sizeof(sbuf));
+    if (sn < 5 || !contains(sbuf, sn, "hello")) {
+        sys_exit(13); /* did not read the cooked line */
+    }
+    if (sys_write(slave, "world\n", 6) != 6) {
+        sys_exit(22);
+    }
+    sys_close(slave);
+    sys_exit(0);
+}
+
+/** Report the hangup row whose result is `ok` held, or fail it. */
+static void hangup_row(int ok)
+{
+    if (!ok) {
+        fail("persistent hangup EOF");
+    }
+    report_held();
+}
+
+/** Begin the report of the case the environment of the initial stack `sp`
+ * gives, and plan its assertions in the order they are reported. */
+static void plan(unsigned long *sp)
+{
+    static const char *const ids[] = {
+        "ptmx-open",      "tiocgptn",      "unlock",        "master-winsz", "master-nonblock",
+        "ctty",           "proc-stat-tty", "slave-winsz",   "tcgets",       "tcsets",
+        "tcgets2",        "tcsetsw2",      "cooked-read",   "slave-output", "echo",
+        "hangup-ignored", "hangup-queued", "hangup-blocked"};
+    unsigned i;
+
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.ptyprobe"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * The probe: the pair, the window size, the child on the slave, the round
+ * trip, and the hangup rows.
  *
- * The child, a new session leader, makes the slave its controlling terminal,
- * runs its rows, writes "ready", reads the cooked line the parent sends and
- * writes "world"; when a row fails, it exits with that row's status, which
- * the parent prints. The parent puts the master in non-blocking mode and
- * reads it until "ready" arrives or the child has exited, yielding between
- * tries, so that a child that exits before it is ready fails the test
- * instead of hanging it. It then writes "hello", which the slave reads
+ * The parent puts the master in non-blocking mode and reads it until
+ * "ready" arrives or the child has exited, yielding between tries, so that
+ * a child that exits before it is ready fails the test instead of hanging
+ * it; when a row of the child fails, it exits with that row's status, which
+ * the parent prints. The parent then writes "hello", which the slave reads
  * cooked and the master gets back as the echo, reaps the child, and reads
  * the echo and "world" back on the master: the child wrote both before it
  * exited, so the master has them, and an empty read ends the reading.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
-    int master, slave, ptn, unlock, pid, status, nb;
+    int master, ptn, pid, status, nb;
     char path[32];
     char mbuf[128];
     int n;
 
     puts("PTYPROBE START\n");
-
-    master = sys_open("/dev/ptmx", O_RDWR);
-    if (master < 0) {
-        puts("PTYPROBE FAIL (open ptmx)\n");
-        sys_exit(1);
-    }
-
-    ptn = -1;
-    if (sys_ioctl(master, TIOCGPTN, &ptn) < 0 || ptn < 0) {
-        puts("PTYPROBE FAIL (TIOCGPTN)\n");
-        sys_exit(1);
-    }
-
-    unlock = 0;
-    if (sys_ioctl(master, TIOCSPTLCK, &unlock) < 0) {
-        puts("PTYPROBE FAIL (TIOCSPTLCK)\n");
-        sys_exit(1);
-    }
-
+    plan(sp);
+    master = open_master(&ptn);
     numbered_path(path, "/dev/pts/", ptn, "");
-
-    {
-        short ws[4];
-        ws[0] = WS_ROWS;
-        ws[1] = WS_COLS;
-        ws[2] = 0;
-        ws[3] = 0;
-        if (sys_ioctl(master, TIOCSWINSZ, ws) < 0) {
-            puts("PTYPROBE FAIL (master TIOCSWINSZ)\n");
-            sys_exit(1);
-        }
-    }
 
     pid = sys_fork();
     if (pid < 0) {
-        puts("PTYPROBE FAIL (fork)\n");
-        sys_exit(1);
+        fail("fork");
     }
     if (pid == 0) {
-        char sbuf[32];
-        int sn, sid;
-
-        sid = sys_setsid();
-        slave = sys_open(path, O_RDWR);
-        if (slave < 0) {
-            sys_exit(11); /* open slave failed */
-        }
-        if (sys_ioctl(slave, TIOCSCTTY, 0) < 0) {
-            sys_exit(12); /* TIOCSCTTY failed */
-        }
-        if (!stat_has_tty(sid, ptn)) {
-            sys_exit(28); /* /proc/<pid>/stat does not give the terminal */
-        }
-        sn = slave_rows(slave);
-        if (sn != 0) {
-            sys_exit(sn);
-        }
-        if (sys_write(slave, "ready\n", 6) != 6) {
-            sys_exit(21); /* the readiness line was not written whole */
-        }
-        sn = sys_read(slave, sbuf, (int)sizeof(sbuf));
-        if (sn < 5 || !contains(sbuf, sn, "hello")) {
-            sys_exit(13); /* did not read the cooked line */
-        }
-        if (sys_write(slave, "world\n", 6) != 6) {
-            sys_exit(22);
-        }
-        sys_close(slave);
-        sys_exit(0);
+        child(path, ptn);
     }
 
     nb = 1;
     if (sys_ioctl(master, FIONBIO, &nb) < 0) {
-        puts("PTYPROBE FAIL (the master would not go non-blocking)\n");
-        sys_exit(1);
+        fail("the master would not go non-blocking");
     }
+    report_held();
     n = await_ready(master, pid, mbuf, (int)sizeof(mbuf));
+    held_to(ROW_COOKED);
     if (sys_write(master, "hello\n", 6) != 6) {
-        puts("PTYPROBE FAIL (the master would not take the line)\n");
-        sys_exit(1);
+        fail("the master would not take the line");
     }
     if (sys_waitpid(pid, &status, 0) != pid) {
-        puts("PTYPROBE FAIL (the child never finished)\n");
-        sys_exit(1);
+        fail("the child never finished");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         puts("PTYPROBE FAIL (child)\n");
+        stop_at(WIFEXITED(status) && WEXITSTATUS(status) == 22 ? ROW_COOKED + 1 : ROW_COOKED,
+                "child");
         sys_exit(1);
     }
+    report_held();
 
     while (n < (int)sizeof(mbuf) - 1) {
         int r = sys_read(master, mbuf + n, (int)sizeof(mbuf) - 1 - n);
@@ -694,16 +816,20 @@ PROBE_START void _start(void)
             break;
         }
     }
-    if (!contains(mbuf, n, "hello") || !contains(mbuf, n, "world")) {
-        puts("PTYPROBE FAIL (master round-trip)\n");
-        sys_exit(1);
+    if (!contains(mbuf, n, "world")) {
+        fail("master round-trip");
     }
+    report_held();
+    if (!contains(mbuf, n, "hello")) {
+        fail("master round-trip");
+    }
+    report_held();
 
     sys_close(master);
-    if (!hangup_readers(0) || !hangup_queued() || !hangup_readers(1)) {
-        puts("PTYPROBE FAIL (persistent hangup EOF)\n");
-        sys_exit(1);
-    }
+    hangup_row(hangup_readers(0));
+    hangup_row(hangup_queued());
+    hangup_row(hangup_readers(1));
+    report_end();
     puts("PTYPROBE OK\n");
     sys_exit(0);
 }

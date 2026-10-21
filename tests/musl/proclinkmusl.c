@@ -24,6 +24,16 @@
  * Prints "PROCLINKMUSL OK" on success and "PROCLINKMUSL FAIL (detail)"
  * otherwise. Uids 1000 and 1001 are the NEW of each when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order, a setup step joined to the row after it:
+ * `lookup`, `dots`, `create`, `mkdir`, `rename`, `unlink`, `renamed-lookup`,
+ * `renamed-mkdir`, `renamed-chdir`, `renamed-file-link`, `removed-lookup`,
+ * `removed-links`, `removed-create`, `removed-cwd`, `file-notdir`,
+ * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
+ * `cwd-root-self`, `fd-other-root`, `fd-other-same-uid`, `fd-other-eacces`,
+ * `long-link`, `long-removal` and `cleanup`. The first failure fails its
+ * assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -37,13 +47,18 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define TOP "/tmp/proclinkmusl"
 
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
-    printf("PROCLINKMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[96];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("PROCLINKMUSL FAIL (%s)\n", why);
+    report_stop(why);
     return 1;
 }
 
@@ -51,7 +66,11 @@ static int fail(const char *what)
  * did not exit), and return 1. */
 static int fail_step(const char *what, int step)
 {
-    printf("PROCLINKMUSL FAIL (%s: step %d)\n", what, step);
+    char why[96];
+
+    snprintf(why, sizeof(why), "%s: step %d", what, step);
+    printf("PROCLINKMUSL FAIL (%s)\n", why);
+    report_stop(why);
     return 1;
 }
 
@@ -144,24 +163,30 @@ static int through(int d)
     if (!holds(at(a, "/proc/self/fd", d, "f"), "one") || !holds(at(a, "/dev/fd", d, "f"), "one")) {
         return fail("a lookup through the link");
     }
+    report_held();
     if (!same_file(at(a, "/proc/self/fd", d, "."), TOP "/d") ||
         !same_file(at(a, "/proc/self/fd", d, ".."), TOP)) {
         return fail("dots after the link");
     }
+    report_held();
     if (!put(at(a, "/proc/self/fd", d, "new"), "two") || !holds(TOP "/d/new", "two")) {
         return fail("a create through the link");
     }
+    report_held();
     if (mkdir(at(a, "/proc/self/fd", d, "sub"), 0755) != 0 || !is_dir(TOP "/d/sub")) {
         return fail("a mkdir through the link");
     }
+    report_held();
     if (rename(at(a, "/proc/self/fd", d, "new"), at(b, "/dev/fd", d, "sub/moved")) != 0 ||
         !holds(TOP "/d/sub/moved", "two") || !refused(access(TOP "/d/new", F_OK), ENOENT)) {
         return fail("a rename through the link");
     }
+    report_held();
     if (unlink(at(a, "/proc/self/fd", d, "sub/moved")) != 0 ||
         !refused(access(TOP "/d/sub/moved", F_OK), ENOENT)) {
         return fail("an unlink through the link");
     }
+    report_held();
     return 0;
 }
 
@@ -185,14 +210,17 @@ static int renamed(int d)
         !refused(access(TOP "/d/f", F_OK), ENOENT)) {
         return fail("a lookup through the link to a renamed directory");
     }
+    report_held();
     if (mkdir(at(a, "/proc/self/fd", d, "sub2"), 0755) != 0 || !is_dir(TOP "/d2/sub2") ||
         !same_file(at(a, "/proc/self/fd", d, ".."), TOP)) {
         return fail("a mkdir through the link to a renamed directory");
     }
+    report_held();
     if (chdir(at(a, "/proc/self/fd", d, "sub2")) != 0 || !cwd_is(TOP "/d2/sub2") ||
         chdir("/") != 0) {
         return fail("a chdir through the link");
     }
+    report_held();
     f = open(at(a, "/proc/self/fd", d, "f"), O_RDONLY);
     if (f < 0) {
         return fail("an open through the link");
@@ -203,6 +231,7 @@ static int renamed(int d)
     if (n != (ssize_t)strlen(TOP "/d2/f") || memcmp(target, TOP "/d2/f", (size_t)n) != 0) {
         return fail("the link of a file opened through a link");
     }
+    report_held();
     return 0;
 }
 
@@ -252,9 +281,11 @@ static int long_paths(void)
     if (bad) {
         return fail("the link of a long path");
     }
+    report_held();
     if (unlink(file) != 0 || rmdir(sub) != 0 || rmdir(dir) != 0) {
         return fail("the removal of the long path");
     }
+    report_held();
     return 0;
 }
 
@@ -282,16 +313,19 @@ static int removed(void)
         close(e);
         return fail("a lookup through the link to a removed directory");
     }
+    report_held();
     if (fstat(e, &st) != 0 || st.st_nlink != 0) {
         close(e);
         return fail("the links of a removed directory");
     }
+    report_held();
     if (!refused(open(at(a, "/proc/self/fd", e, "f"), O_WRONLY | O_CREAT, 0644), ENOENT) ||
         !refused(openat(e, "f", O_WRONLY | O_CREAT, 0644), ENOENT) ||
         !refused(mkdir(at(a, "/proc/self/fd", e, "s"), 0755), ENOENT)) {
         close(e);
         return fail("a name made in a removed directory");
     }
+    report_held();
     close(e);
     if (mkdir(TOP "/w", 0755) != 0 || chdir(TOP "/w") != 0 || rmdir(TOP "/w") != 0 ||
         !refused(open("f", O_WRONLY | O_CREAT, 0644), ENOENT) || chdir("..") != 0 || !cwd_is(TOP) ||
@@ -299,6 +333,7 @@ static int removed(void)
         chdir("/");
         return fail("a removed working directory");
     }
+    report_held();
     return 0;
 }
 
@@ -324,16 +359,20 @@ static int not_dirs(void)
         !refused(open(at(a, "/dev/fd", f, "x"), O_RDONLY), ENOTDIR)) {
         return fail("a file used as a directory");
     }
+    report_held();
     if (!refused(open(at(a, "/proc/self/fd", p[0], "x"), O_RDONLY), ENOTDIR)) {
         return fail("a pipe used as a directory");
     }
+    report_held();
     if (!refused(open(at(a, "/proc/self/fd", 999, "x"), O_RDONLY), ENOENT)) {
         return fail("a closed descriptor");
     }
+    report_held();
     null = open(at(a, "/proc/self/fd", dev, "null"), O_WRONLY);
     if (null < 0 || write(null, "x", 1) != 1) {
         return fail("a device through a link to /dev");
     }
+    report_held();
     close(null);
     close(dev);
     close(f);
@@ -382,12 +421,14 @@ static int cwd_root(void)
     if (write(go[1], &c, 1) != 1 || child_status(pid) != 0 || !ok) {
         return fail("another process's cwd and root");
     }
+    report_held();
     close(ready[0]);
     close(go[1]);
     if (chdir(TOP "/d2/sub2") != 0 || !holds("/proc/self/cwd/../f", "one") ||
         !holds("/proc/self/root" TOP "/d2/f", "one") || chdir("/") != 0) {
         return fail("the caller's cwd and root");
     }
+    report_held();
     return 0;
 }
 
@@ -418,7 +459,7 @@ static int as_user(int id, const char *path, int want)
  * Check another process's /proc/PID/fd/N: a child of uid 1000 holds TOP/d2
  * open, and root and a process of uid 1000 reach TOP/d2/f through its link,
  * where a process of uid 1001 is refused with EACCES. Returns 0, or 1 after
- * printing the failure.
+ * printing the failure; the step that failed says which of the three it is.
  */
 static int other_process(void)
 {
@@ -464,7 +505,41 @@ static int other_process(void)
     }
     close(ready[0]);
     close(go[1]);
+    if (st != 10) {
+        report_held();
+    }
+    if (st == 0 || st > 10) {
+        report_held();
+    }
+    if (st == 0) {
+        report_held();
+    }
     return st == 0 ? 0 : fail_step("another process's descriptor", st);
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {"lookup",          "dots",
+                                      "create",          "mkdir",
+                                      "rename",          "unlink",
+                                      "renamed-lookup",  "renamed-mkdir",
+                                      "renamed-chdir",   "renamed-file-link",
+                                      "removed-lookup",  "removed-links",
+                                      "removed-create",  "removed-cwd",
+                                      "file-notdir",     "pipe-notdir",
+                                      "closed-enoent",   "dev-through",
+                                      "cwd-root-other",  "cwd-root-self",
+                                      "fd-other-root",   "fd-other-same-uid",
+                                      "fd-other-eacces", "long-link",
+                                      "long-removal",    "cleanup"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.proclinkmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
 }
 
 int main(int argc, char **argv)
@@ -473,6 +548,7 @@ int main(int argc, char **argv)
     int bad;
 
     probe_args(argc, argv);
+    plan();
 
     mkdir(TOP, 0755);
     if (mount("none", TOP, "tmpfs", 0, NULL) != 0 || chmod(TOP, 0755) != 0 ||
@@ -492,6 +568,8 @@ int main(int argc, char **argv)
     if (bad) {
         return 1;
     }
+    report_held();
+    report_end();
     printf("PROCLINKMUSL OK\n");
     return 0;
 }

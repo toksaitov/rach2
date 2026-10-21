@@ -20,10 +20,21 @@
  * place of the line of /.
  *
  * Prints "VFSPROBE OK". Freestanding; direct system calls (probe.h).
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row, a setup step joined to the row after it, and
+ * `rows` gives each failure message its assertion. The first failure fails
+ * its assertion and leaves the rest not run. The group `arch` is `i686`,
+ * which checks the old stat of the root as `old-stat-root`, or `x86-64`,
+ * which has no old call; the group `root` is `krffs`, whose hard link is
+ * `link-krffs`, or `ext2`, whose is `link-ext2-names`, `link-ext2-read` and
+ * `link-ext2-unlink`. A probe that cannot read the root type reports no
+ * branch of `root`.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define PHYSICAL_DOTDOT 1
 
@@ -76,11 +87,157 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-/** Print "VFSPROBE FAIL: " and `why`, and exit 1. */
+/* A failure message of the probe and the assertion it fails, with the root
+ * magic of the root type it is checked on, 0 for every type. */
+struct row {
+    const char *why;
+    const char *id;
+    unsigned root;
+};
+
+/* The rows in the order the probe checks them; an assertion's messages are
+ * next to each other. */
+static const struct row rows[] = {
+    {"open /proc/mounts", "root-type", 0},
+    {"/proc/mounts must list a krffs or ext2 root", "root-type", 0},
+    {"mkdir /vp", "stat-file", 0},
+    {"mkdir /vp/d", "stat-file", 0},
+    {"create /vp/d/f", "stat-file", 0},
+    {"write /vp/d/f", "stat-file", 0},
+    {"stat of a real file", "stat-file", 0},
+    {"a file used as a directory is ENOTDIR", "enotdir-component", 0},
+    {"a missing directory is ENOENT", "enoent-component", 0},
+    {"/procx is not /proc", "procx", 0},
+    {"the synthetic roots stat", "synthetic-roots", 0},
+    {"repeated slashes, dot and dot-dot through a directory", "slashes-dots", 0},
+#if !defined __x86_64__
+    {"stat of the root", "old-stat-root", 0},
+    {"the old stat of the root", "old-stat-root", 0},
+    {"the old stat of the root reports what stat of the root does", "old-stat-root", 0},
+#else
+    {"stat of the root", "dotdot-root", 0},
+#endif
+    {"dot-dot at the root is the root", "dotdot-root", 0},
+    {"dot-dot through a missing directory (marked row)", "dotdot-missing", 0},
+    {"dot-dot through a file (marked row)", "dotdot-file", 0},
+    {"open the directory", "openat", 0},
+    {"openat through the directory descriptor", "openat", 0},
+    {"read through the openat descriptor", "openat", 0},
+    {"close the openat directory", "openat", 0},
+    {"O_CREAT|O_EXCL on an existing file is EEXIST", "excl-eexist", 0},
+    {"a directory opened for writing is EISDIR", "dir-write-eisdir", 0},
+    {"O_DIRECTORY on a file is ENOTDIR", "o-directory-enotdir", 0},
+    {"create /vp/d/f2", "unlinked-name-gone", 0},
+    {"reopen /vp/d/f2", "unlinked-name-gone", 0},
+    {"unlink the open file", "unlinked-name-gone", 0},
+    {"the unlinked name is gone", "unlinked-name-gone", 0},
+    {"the description outlives the unlink", "unlink-description", 0},
+    {"open before rename", "rename-description", 0},
+    {"rename f to g", "rename-description", 0},
+    {"the description outlives the rename", "rename-description", 0},
+    {"rename g back to f", "rename-description", 0},
+    {"lseek to 1", "lseek-read", 0},
+    {"read after lseek", "lseek-read", 0},
+    {"SEEK_END reports the size", "seek-end", 0},
+    {"fsync", "fsync", 0},
+    {"syncfs flushes through an open descriptor and refuses a closed one", "syncfs", 0},
+    {"ftruncate to 1", "ftruncate", 0},
+    {"the ftruncated size reads back", "ftruncate", 0},
+    {"open with O_TRUNC", "o-trunc", 0},
+    {"refill after O_TRUNC", "o-trunc", 0},
+    {"the truncated file reads back what was refilled", "o-trunc", 0},
+    {"create the file that will grow", "relocated-size", 0},
+    {"create the neighbour", "relocated-size", 0},
+    {"the second description on the growing file", "relocated-size", 0},
+    {"grow the file past its neighbour", "relocated-size", 0},
+    {"the second description sees the grown size", "relocated-size", 0},
+    {"the second description reads the moved bytes", "relocated-bytes", 0},
+    {"remove the growth files", "relocated-bytes", 0},
+    {"getdents64 lists the directory's file", "getdents", 0},
+    {"mkdir over a directory is EEXIST", "mkdir-eexist", 0},
+    {"rmdir of a full directory is ENOTEMPTY", "rmdir-enotempty", 0},
+    {"rmdir of a file is ENOTDIR", "rmdir-enotdir", 0},
+    {"unlink of a directory is EISDIR", "unlink-eisdir", 0},
+    {"chmod sets the mode stat reports", "chmod", 0},
+    {"utimensat with the current time", "utimensat-now", 0},
+    {"utimensat sets the time stat reports", "utimensat-set", 0},
+    {"the link source has one name", "link-source", 0},
+    {"link on krffs is EPERM and creates no name", "link-krffs", STATFS_MAGIC_KRFFS},
+    {"link on ext2 succeeds", "link-ext2-names", STATFS_MAGIC_EXT2},
+    {"both ext2 names report one inode with two links", "link-ext2-names", STATFS_MAGIC_EXT2},
+    {"read through the ext2 hard link", "link-ext2-read", STATFS_MAGIC_EXT2},
+    {"unlink leaves the ext2 source with one link", "link-ext2-unlink", STATFS_MAGIC_EXT2},
+    {"ftruncate a new file to 64 KiB", "blocks-hole", 0},
+    {"st_blocks of a file that is one hole", "blocks-hole", 0},
+    {"st_blocks after a write into the hole", "blocks-write", 0},
+    {"statfs64 of /proc", "statfs-proc", 0},
+    {"statfs64 of the root", "statfs-root", 0},
+    {"statfs64 of the root counts its inodes", "statfs-inodes", 0},
+    {"chdir", "getcwd", 0},
+    {"getcwd reports /vp/d", "getcwd", 0},
+    {"a relative open in the working directory", "relative-open", 0},
+    {"chdir back to the root", "relative-open", 0},
+    {"sync", "sync", 0},
+    {"cleanup", "cleanup", 0},
+};
+
+#define NROWS ((int)(sizeof(rows) / sizeof(rows[0])))
+
+/* The root magic once `root_magic` has read it, and 0 before. */
+static unsigned root_seen;
+
+/** Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/**
+ * Report every assertion of the rows checked on this root and end the
+ * report: those before the one the message `why` fails held, that one
+ * failed, and those after it not run; with `why` null, every one held. A
+ * message that no row gives fails the first assertion.
+ */
+static void report_rows(const char *why)
+{
+    const char *failed = why == 0 ? 0 : rows[0].id;
+    const char *last = 0;
+    int i, after = 0;
+
+    for (i = 0; why != 0 && i < NROWS; i++) {
+        if (same(rows[i].why, why) && (rows[i].root == 0 || rows[i].root == root_seen)) {
+            failed = rows[i].id;
+        }
+    }
+    for (i = 0; i < NROWS; i++) {
+        if ((rows[i].root != 0 && rows[i].root != root_seen) ||
+            (last != 0 && same(last, rows[i].id))) {
+            continue;
+        }
+        last = rows[i].id;
+        if (after) {
+            report_notrun(last, "an earlier check failed");
+        } else if (failed != 0 && same(failed, last)) {
+            report_fail(last, why);
+            after = 1;
+        } else {
+            report_pass(last);
+        }
+    }
+    report_end();
+}
+
+/** Print "VFSPROBE FAIL: " and `why`, report it (`report_rows`), and exit
+ * 1. */
 static void fail(const char *why)
 {
     syscall3(SYS_WRITE, 1, (long)"VFSPROBE FAIL: ", 15);
     puts(why);
+    report_rows(why);
     sys_exit(1);
 }
 
@@ -335,12 +492,30 @@ int stat_marked_file_dotdot(void)
 #endif
 }
 
-/** Keep the arguments of the initial stack `sp` (probe_args.h) and return
- * the root type's magic (`root_magic`). */
+/** Keep the arguments of the initial stack `sp` (probe_args.h), begin the
+ * report with the branch of the architecture and that of the root type, and
+ * return the root type's magic (`root_magic`). */
 static unsigned start(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
-    return root_magic();
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.vfsprobe"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    root_seen = root_magic();
+    report_branch("root", root_seen == STATFS_MAGIC_KRFFS ? "krffs" : "ext2");
+    return root_seen;
+}
+
+/** Report every assertion held (`report_rows`), print "VFSPROBE OK" and
+ * exit 0. */
+static void succeed(void)
+{
+    report_rows(0);
+    puts("VFSPROBE OK");
+    sys_exit(0);
 }
 
 void probe_main(unsigned long *sp);
@@ -629,6 +804,5 @@ void probe_main(unsigned long *sp)
         fail("cleanup");
     }
 
-    puts("VFSPROBE OK");
-    sys_exit(0);
+    succeed();
 }

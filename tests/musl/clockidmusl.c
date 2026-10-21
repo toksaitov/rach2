@@ -35,6 +35,21 @@
  * FAIL (detail)" and exits 1 at the first failure. Given `machine=native`
  * (tests/native/Readme.md), it leaves out the row of real time past 2^31
  * seconds, since it sets the machine's clock.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each check in order, a setup step joined to the check after it:
+ * `within-tick`, `boot-clocks`, `coarse-boot`, `coarse-real`, `res-fine`,
+ * `res-coarse`, `res-time64`, `res-null`, `einval-clock`,
+ * `process-cpu-advances`, `thread-cpu`, `cpu-times`, `cpuclockid-self`,
+ * `cpuclockid-esrch`, `child-clock-reads`, `child-clock-advances`,
+ * `absolute-sleep`, `relative-sleep`, `past-time`, `cpu-reached`,
+ * `signal-relative`, `relative-remainder`, `signal-absolute`,
+ * `absolute-no-remainder`, `eopnotsupp`, `sleep-einval`, `cpu-sleep-ends`,
+ * `cpu-sleep-reached`, `wide-real`, `boot-time`, `wide-relative` and
+ * `wide-absolute`. `res-time64` is i686's alone, and `wide-relative` and
+ * `wide-absolute` x86-64's; the branch of the group `arch`, `i686` or `x86-64`,
+ * says which ran. A native run reports `wide-real` and `boot-time` not run. The
+ * first failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -53,6 +68,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /*
  * The kernel's timespec of a long's width, which the raw calls take: 32 bits
@@ -86,6 +102,7 @@ static volatile sig_atomic_t alarms;
 static int fail(const char *what)
 {
     printf("CLOCKIDMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -220,8 +237,10 @@ static int coarse_clocks(void)
         printf("CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick: "
                "ticks %lld ns, coarse %lld ns, ticks %lld ns, fine %lld ns)\n",
                t0, x, t1, after);
+        report_stop("coarse time since boot is not time since boot at the last tick");
         return 1;
     }
+    report_held();
     do {
         before = ns_of(CLOCK_MONOTONIC_COARSE);
         x = ns_of(CLOCK_REALTIME_COARSE);
@@ -235,14 +254,66 @@ static int coarse_clocks(void)
         printf("CLOCKIDMUSL FAIL (coarse real time is not real time at the last tick: "
                "offset %lld ns, fine %lld ns, real less offset %lld ns, fine %lld ns)\n",
                offset, before, x, after);
+        report_stop("coarse real time is not real time at the last tick");
         return 1;
     }
+    report_held();
     return 0;
 }
 
 /**
- * Check the eight clocks, their resolutions, and the CPU clocks by id.
- * Returns 0, or 1 after the failure is printed.
+ * Check the CPU clocks: the process's advances while it spins, the thread's
+ * reads the process's time, which `times` reports too, and a clock by id
+ * reads this process's time and is refused for no process. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int cpu_clocks(void)
+{
+    struct tms tm;
+    clockid_t cpu;
+    long long before;
+    long long after;
+    long long x;
+
+    if (spin_until(CLOCK_PROCESS_CPUTIME_ID, 5 * TICK_NS) < 5 * TICK_NS) {
+        return fail("the process CPU clock did not advance while the process spun");
+    }
+    report_held();
+    before = ns_of(CLOCK_THREAD_CPUTIME_ID);
+    x = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    after = ns_of(CLOCK_THREAD_CPUTIME_ID);
+    if (x < before || x > after) {
+        return fail("the thread CPU clock does not read the process's time");
+    }
+    report_held();
+    before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    times(&tm);
+    after = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    x = ((long long)tm.tms_utime + tm.tms_stime) * TICK_NS;
+    if (x < before || x > after) {
+        return fail("the process CPU clock does not read what times reports");
+    }
+    report_held();
+    if (clock_getcpuclockid(0, &cpu) != 0) {
+        return fail("clock_getcpuclockid gave no clock for this process");
+    }
+    before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    x = ns_of(cpu);
+    after = ns_of(CLOCK_PROCESS_CPUTIME_ID);
+    if (x < before || x > after) {
+        return fail("the CPU clock by id does not read this process's time");
+    }
+    report_held();
+    if (clock_getcpuclockid(999999, &cpu) != ESRCH) {
+        return fail("a CPU clock of no such process was not refused");
+    }
+    report_held();
+    return 0;
+}
+
+/**
+ * Check the eight clocks and their resolutions, and then the CPU clocks
+ * (`cpu_clocks`). Returns 0, or 1 after the failure is printed.
  */
 static int clocks(void)
 {
@@ -252,8 +323,6 @@ static int clocks(void)
     static const clockid_t coarse[] = {CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID,
                                        CLOCK_REALTIME_COARSE, CLOCK_MONOTONIC_COARSE};
     struct timespec res;
-    struct tms tm;
-    clockid_t cpu;
     long long before;
     long long after;
     long long x;
@@ -271,6 +340,7 @@ static int clocks(void)
     if (step >= TICK_NS) {
         return fail("time since boot does not read within the tick");
     }
+    report_held();
     for (i = 0; i < sizeof(boot_clocks) / sizeof(boot_clocks[0]); i++) {
         before = ns_of(CLOCK_MONOTONIC);
         x = ns_of(boot_clocks[i]);
@@ -279,6 +349,7 @@ static int clocks(void)
             return fail("a clock of time since boot does not read CLOCK_MONOTONIC");
         }
     }
+    report_held();
     if (coarse_clocks() != 0) {
         return 1;
     }
@@ -287,11 +358,13 @@ static int clocks(void)
             return fail("real time or time since boot does not resolve to the microsecond");
         }
     }
+    report_held();
     for (i = 0; i < sizeof(coarse) / sizeof(coarse[0]); i++) {
         if (clock_getres(coarse[i], &res) != 0 || res.tv_sec != 0 || res.tv_nsec != TICK_NS) {
             return fail("a coarse or CPU clock does not resolve to the tick");
         }
     }
+    report_held();
 #if defined SYS_clock_getres_time64
     for (i = 0; i <= 7; i++) {
         struct kts r32;
@@ -303,43 +376,17 @@ static int clocks(void)
             return fail("clock_getres_time64 does not answer as clock_getres");
         }
     }
+    report_held();
 #endif
     if (syscall(SYS_CLOCK_GETRES, (long)CLOCK_MONOTONIC, NULL) != 0) {
         return fail("a resolution asked for with no timespec was refused");
     }
+    report_held();
     if (clock_gettime((clockid_t)12, &res) == 0 || errno != EINVAL) {
         return fail("clock 12 was not refused with EINVAL");
     }
-
-    if (spin_until(CLOCK_PROCESS_CPUTIME_ID, 5 * TICK_NS) < 5 * TICK_NS) {
-        return fail("the process CPU clock did not advance while the process spun");
-    }
-    before = ns_of(CLOCK_THREAD_CPUTIME_ID);
-    x = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    after = ns_of(CLOCK_THREAD_CPUTIME_ID);
-    if (x < before || x > after) {
-        return fail("the thread CPU clock does not read the process's time");
-    }
-    before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    times(&tm);
-    after = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    x = ((long long)tm.tms_utime + tm.tms_stime) * TICK_NS;
-    if (x < before || x > after) {
-        return fail("the process CPU clock does not read what times reports");
-    }
-    if (clock_getcpuclockid(0, &cpu) != 0) {
-        return fail("clock_getcpuclockid gave no clock for this process");
-    }
-    before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    x = ns_of(cpu);
-    after = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    if (x < before || x > after) {
-        return fail("the CPU clock by id does not read this process's time");
-    }
-    if (clock_getcpuclockid(999999, &cpu) != ESRCH) {
-        return fail("a CPU clock of no such process was not refused");
-    }
-    return 0;
+    report_held();
+    return cpu_clocks();
 }
 
 /**
@@ -415,9 +462,11 @@ static int child_clock(void)
         seen[1] > own[1] + TICK_NS) {
         return fail("a child's CPU clock by id did not read the time the child reported");
     }
+    report_held();
     if (seen[1] - seen[0] < 3 * TICK_NS) {
         return fail("a child's CPU clock by id did not advance while the child spun");
     }
+    report_held();
     return 0;
 }
 
@@ -447,23 +496,27 @@ static int sleeps(void)
             return fail("an absolute sleep returned before its clock read the time asked");
         }
     }
+    report_held();
     start = ns_of(CLOCK_MONOTONIC);
     to_kts(50000000LL, &req);
     if (sleep_raw(CLOCK_MONOTONIC, 0, &req, NULL) != 0 ||
         ns_of(CLOCK_MONOTONIC) - start < 50000000LL) {
         return fail("a relative sleep of 50 ms took less than 50 ms of time since boot");
     }
+    report_held();
     start = ns_of(CLOCK_MONOTONIC);
     to_kts(start / 2, &req);
     if (sleep_raw(CLOCK_MONOTONIC, TIMER_ABSTIME, &req, NULL) != 0 ||
         ns_of(CLOCK_MONOTONIC) - start > 1000000000LL) {
         return fail("an absolute sleep to a time already past did not return");
     }
+    report_held();
     req.sec = 0;
     req.nsec = 0;
     if (sleep_raw(CLOCK_PROCESS_CPUTIME_ID, TIMER_ABSTIME, &req, NULL) != 0) {
         return fail("the CPU clock did not return at once for a time it had reached");
     }
+    report_held();
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_alarm;
@@ -476,10 +529,12 @@ static int sleeps(void)
     if (sleep_raw(CLOCK_MONOTONIC, 0, &req, &rem) != -1 || errno != EINTR || alarms != 1) {
         return fail("a signal did not end a relative sleep with EINTR");
     }
+    report_held();
     if (rem.sec < 0 || rem.nsec < 0 || rem.nsec >= 1000000000L || ns_kts(&rem) == 0 ||
         ns_kts(&rem) > ns_kts(&req)) {
         return fail("the remainder of a relative sleep is not within its interval");
     }
+    report_held();
     to_kts(ns_of(CLOCK_MONOTONIC) + 5000000000LL, &req);
     rem.sec = -1;
     rem.nsec = -1;
@@ -488,9 +543,11 @@ static int sleeps(void)
         alarms != 2) {
         return fail("a signal did not end an absolute sleep with EINTR");
     }
+    report_held();
     if (rem.sec != -1 || rem.nsec != -1) {
         return fail("an absolute sleep a signal ended wrote a remainder");
     }
+    report_held();
 
     to_kts(10000000LL, &req);
     for (i = 0; i < sizeof(nosleep) / sizeof(nosleep[0]); i++) {
@@ -498,6 +555,7 @@ static int sleeps(void)
             return fail("a clock Linux cannot sleep on was not refused with EOPNOTSUPP");
         }
     }
+    report_held();
     if (sleep_raw(12, 0, &req, NULL) != -1 || errno != EINVAL) {
         return fail("a sleep on clock 12 was not refused with EINVAL");
     }
@@ -505,6 +563,7 @@ static int sleeps(void)
     if (sleep_raw(CLOCK_MONOTONIC, 0, &req, NULL) != -1 || errno != EINVAL) {
         return fail("a sleep of a whole second in nanoseconds was not refused");
     }
+    report_held();
     return 0;
 }
 
@@ -555,9 +614,11 @@ static int cpu_sleep_sibling(void)
     if (rc != 0) {
         return fail("a sleep on the process CPU clock another thread advanced did not end");
     }
+    report_held();
     if (ns_of(CLOCK_PROCESS_CPUTIME_ID) - before < 50000000LL) {
         return fail("a sleep on the process CPU clock ended before the clock reached its time");
     }
+    report_held();
     return 0;
 }
 
@@ -662,9 +723,11 @@ static int wide_real_time(void)
     if (!coarse) {
         return fail("coarse real time set past 2^31 seconds does not read back whole");
     }
+    report_held();
     if (boot != NULL) {
         return fail(boot);
     }
+    report_held();
     return 0;
 }
 
@@ -698,6 +761,7 @@ static int wide_times(void)
         if (r != -1 || errno != EINTR || alarms < 1) {
             return fail("a sleep of 2^32 seconds did not wait for the signal");
         }
+        report_held();
         req.sec = 1L << 62;
         alarms = 0;
         alarm_every(100000);
@@ -706,18 +770,82 @@ static int wide_times(void)
         if (r != -1 || errno != EINTR || alarms < 1) {
             return fail("an absolute sleep to 2^62 seconds did not wait for the signal");
         }
+        report_held();
     }
 #endif
     return 0;
 }
 
+/**
+ * Begin the report, with the branch of the architecture, and plan its
+ * assertions in the order they are checked; a native run reports those of
+ * real time past 2^31 seconds not run.
+ */
+static void plan(void)
+{
+    static const char *const before[] = {"within-tick", "boot-clocks", "coarse-boot",
+                                         "coarse-real", "res-fine",    "res-coarse"};
+    static const char *const after[] = {"res-null",
+                                        "einval-clock",
+                                        "process-cpu-advances",
+                                        "thread-cpu",
+                                        "cpu-times",
+                                        "cpuclockid-self",
+                                        "cpuclockid-esrch",
+                                        "child-clock-reads",
+                                        "child-clock-advances",
+                                        "absolute-sleep",
+                                        "relative-sleep",
+                                        "past-time",
+                                        "cpu-reached",
+                                        "signal-relative",
+                                        "relative-remainder",
+                                        "signal-absolute",
+                                        "absolute-no-remainder",
+                                        "eopnotsupp",
+                                        "sleep-einval",
+                                        "cpu-sleep-ends",
+                                        "cpu-sleep-reached"};
+    static const char *const wide[] = {"wide-real", "boot-time"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.clockidmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    for (i = 0; i < sizeof(before) / sizeof(before[0]); i++) {
+        report_plan(before[i]);
+    }
+#if defined SYS_clock_getres_time64
+    report_plan("res-time64");
+#endif
+    for (i = 0; i < sizeof(after) / sizeof(after[0]); i++) {
+        report_plan(after[i]);
+    }
+    for (i = 0; i < sizeof(wide) / sizeof(wide[0]); i++) {
+        if (probe_native()) {
+            report_notrun(wide[i], "a native run does not set the machine's clock");
+        } else {
+            report_plan(wide[i]);
+        }
+    }
+#if defined __x86_64__
+    report_plan("wide-relative");
+    report_plan("wide-absolute");
+#endif
+}
+
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    plan();
     if (clocks() != 0 || child_clock() != 0 || sleeps() != 0 || cpu_sleep_sibling() != 0 ||
         wide_times() != 0) {
         return 1;
     }
+    report_end();
     printf("CLOCKIDMUSL OK\n");
 
     return 0;

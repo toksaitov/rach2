@@ -36,10 +36,24 @@
  *
  * Prints "SIGPROBE OK" and exits 0 when all pass, and "SIGPROBE FAIL" with
  * the count of failed checks as its status otherwise.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each check, a setup step such as a sigaction or a fork
+ * joined to the check it serves: `handler-runs`, `blocked-stays-pending`,
+ * `unblock-delivers`, `sigterm-default`, `forge-ran`, `forge-survived`,
+ * `resethand`, `sleeps-interrupted`, `sleep-eintr`, `sleep-counted`,
+ * `timer-bad-which`, `timer-bad-usec`, `alarm-blocked-sleep`,
+ * `alarm-unblocked-handler`, `interval-ends-sleeps`, `interval-reported`,
+ * `interval-counted`, `getitimer`, `zero-disarms`, `fork-no-timer`,
+ * `alarm-none`, `alarm-left`, `alarm-zero`, `uncatchable-query`,
+ * `uncatchable-refused` and `uncatchable-unchanged`. Given `machine=native`,
+ * `sleep-counted` and `interval-counted` are not run, and `sleep-counted` is
+ * not run either when the sleeper cannot be forked.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -99,22 +113,67 @@ static void puts(const char *s)
 
 static int fails = 0;
 
-/** Count a failure and print `msg` when `cond` is false. */
-static void check(int cond, const char *msg)
+/** Count a failure and print `msg` when `cond` is false; return whether it
+ * failed. */
+static int note(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
         syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
     }
+    return !cond;
+}
+
+/* The assertion of the part of the report that is open, or null. */
+static const char *open_id;
+
+/** End the open part of the report and begin the one of the assertion `id`,
+ * unless `id` is the open one. */
+static void part(const char *id)
+{
+    int i = 0;
+
+    if (open_id != 0) {
+        while (id[i] != '\0' && open_id[i] == id[i]) {
+            i++;
+        }
+        if (open_id[i] == id[i]) {
+            return;
+        }
+    }
+    report_part(id);
+    open_id = id;
+}
+
+/** Check `cond` as `note` does, as a check of the assertion `id`, or of the
+ * open part's when `id` is null. */
+static void check(int cond, const char *id, const char *msg)
+{
+    if (id != 0) {
+        part(id);
+    }
+    if (note(cond, msg)) {
+        report_miss(msg);
+    }
+}
+
+/** End the open part and report the assertion `id` not run, for `why`. */
+static void not_run(const char *id, const char *why)
+{
+    report_part_end();
+    open_id = 0;
+    report_notrun(id, why);
 }
 
 /** Check `cond` as `check` does, unless given `machine=native`, since the
- * check is of the machine's count. */
-static void check_count(int cond, const char *msg)
+ * check is of the machine's count, and the assertion `id` is not run. */
+static void check_count(int cond, const char *id, const char *msg)
 {
     if (!probe_native()) {
-        check(cond, msg);
+        check(cond, id, msg);
+    } else {
+        not_run(id, "a native run leaves out the machine's count");
     }
 }
 
@@ -181,7 +240,8 @@ static void forge_handler(int sig)
 #endif
 
 /** Install `h` for `signo` with SA_SIGINFO, the restorer and the flags
- * `extra`, and an empty mask; a failure counts as a failed check. */
+ * `extra`, and an empty mask; a failure counts as a failed check of the
+ * open part. */
 static void install_with(int signo, void (*h)(int), unsigned long extra)
 {
     struct k_sigaction ka;
@@ -191,7 +251,7 @@ static void install_with(int signo, void (*h)(int), unsigned long extra)
     ka.restorer = sig_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
-    check(syscall4(SYS_RT_SIGACTION, signo, (long)&ka, 0, 8) == 0, "rt_sigaction");
+    check(syscall4(SYS_RT_SIGACTION, signo, (long)&ka, 0, 8) == 0, 0, "rt_sigaction");
 }
 
 /** The decimal after `key` in `text`, or -1 if the key is not there. */
@@ -376,53 +436,58 @@ static void timer_rows(void)
     unsigned alrm[2];
     int i, ended = 0, pid, status, before;
 
+    part("timer-bad-which");
     install(SIGALRM, alarm_handler);
     check(syscall3(SYS_SETITIMER, ITIMER_PROF + 1, (long)second, 0) == -EINVAL && itimer_disarmed(),
-          "a timer other than the three is refused and arms nothing");
-    check(syscall3(SYS_SETITIMER, ITIMER_REAL, (long)bad, 0) == -EINVAL,
+          0, "a timer other than the three is refused and arms nothing");
+    check(syscall3(SYS_SETITIMER, ITIMER_REAL, (long)bad, 0) == -EINVAL, "timer-bad-usec",
           "a million microseconds is refused");
 
     alrm[0] = 1u << (SIGALRM - 1);
     alrm[1] = 0;
     alarms = 0;
     check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)alrm, 0, 8) == 0 && itimer(20, 0, 0) == 0,
-          "arm a single alarm with SIGALRM blocked");
-    check(sleep_ms(1000) == 0 && itimer_disarmed(),
+          "alarm-blocked-sleep", "arm a single alarm with SIGALRM blocked");
+    check(sleep_ms(1000) == 0 && itimer_disarmed(), "alarm-blocked-sleep",
           "a blocked alarm does not end a sleep and leaves the timer disarmed");
     check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)alrm, 0, 8) == 0 && alarms == 1,
-          "and its handler runs once SIGALRM is unblocked");
+          "alarm-unblocked-handler", "and its handler runs once SIGALRM is unblocked");
 
     before = sleeps_cut_short();
     alarms = 0;
-    check(itimer(20, 20, 0) == 0, "arm an interval timer");
+    check(itimer(20, 20, 0) == 0, "interval-ends-sleeps", "arm an interval timer");
     for (i = 0; i < 3; i++) {
         ended += sleep_ms(5000) == -EINTR;
     }
-    check(itimer(0, 0, old) == 0 && ended == 3 && alarms >= 3,
+    check(itimer(0, 0, old) == 0 && ended == 3 && alarms >= 3, "interval-ends-sleeps",
           "the interval timer ends three sleeps in turn");
-    check(old[0] == 0 && old[1] == 20000, "and reports its interval as it is disarmed");
-    check_count(sleeps_cut_short() >= before + 3,
+    check(old[0] == 0 && old[1] == 20000, "interval-reported",
+          "and reports its interval as it is disarmed");
+    check_count(sleeps_cut_short() >= before + 3, "interval-counted",
                 "the kernel counted the sleeps the timer cut short");
 
     check(itimer(5000, 250, 0) == 0 && syscall2(SYS_GETITIMER, ITIMER_REAL, (long)cur) == 0 &&
               cur[0] == 0 && cur[1] == 250000 && (cur[2] > 0 || cur[3] > 0) &&
               (cur[2] < 5 || (cur[2] == 5 && cur[3] == 0)),
-          "getitimer reports the interval set and no more than the value set");
-    check(itimer(0, 0, 0) == 0 && itimer_disarmed(), "a value of zero disarms the timer");
+          "getitimer", "getitimer reports the interval set and no more than the value set");
+    check(itimer(0, 0, 0) == 0 && itimer_disarmed(), "zero-disarms",
+          "a value of zero disarms the timer");
 
-    check(itimer(3600000, 0, 0) == 0, "arm an alarm an hour away");
+    check(itimer(3600000, 0, 0) == 0, "fork-no-timer", "arm an alarm an hour away");
     pid = syscall1(SYS_FORK, 0);
     if (pid == 0) {
         sys_exit(itimer_disarmed() ? 0 : 1);
     }
     check(pid > 0 && syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0,
-          "a fork's child has no timer");
-    check(itimer(0, 0, 0) == 0, "and the alarm is disarmed again");
+          "fork-no-timer", "a fork's child has no timer");
+    check(itimer(0, 0, 0) == 0, "fork-no-timer", "and the alarm is disarmed again");
 
-    check(syscall1(SYS_ALARM, 3600) == 0, "alarm returns 0 when none was armed");
+    check(syscall1(SYS_ALARM, 3600) == 0, "alarm-none", "alarm returns 0 when none was armed");
     i = syscall1(SYS_ALARM, 0);
-    check(i >= 1 && i <= 3600, "alarm returns the seconds left before the alarm it replaces");
-    check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "and alarm(0) leaves none");
+    check(i >= 1 && i <= 3600, "alarm-left",
+          "alarm returns the seconds left before the alarm it replaces");
+    check(syscall1(SYS_ALARM, 0) == 0 && itimer_disarmed(), "alarm-zero",
+          "and alarm(0) leaves none");
 }
 
 /* SIG_IGN as the kernel reads a k_sigaction: the handler, the flags, the
@@ -445,25 +510,72 @@ static void fill_ones(struct k_sigaction *ka)
  * The actions of SIGKILL and SIGSTOP. A query, with no new action, succeeds
  * and reads SIG_DFL into a buffer filled with ones beforehand. A new action
  * of SIG_IGN is refused with -EINVAL, writes no old action and changes none,
- * so a query after it still reads SIG_DFL.
+ * so a query after it still reads SIG_DFL. The two signals are checked in
+ * turn, and each of the three assertions holds for both or fails.
  */
 static void uncatchable_rows(void)
 {
     static const int sigs[2] = {SIGKILL, SIGSTOP};
+    static const char *const ids[3] = {"uncatchable-query", "uncatchable-refused",
+                                       "uncatchable-unchanged"};
+    static const char *const msgs[3] = {
+        "a query of SIGKILL or SIGSTOP reads SIG_DFL",
+        "SIG_IGN for SIGKILL or SIGSTOP is refused and writes no old action",
+        "and leaves the action SIG_DFL"};
     struct k_sigaction old;
+    int bad[3] = {0, 0, 0};
     int i;
 
     for (i = 0; i < 2; i++) {
         fill_ones(&old);
-        check(syscall4(SYS_RT_SIGACTION, sigs[i], 0, (long)&old, 8) == 0 && old.handler == 0 &&
-                  old.flags == 0,
-              "a query of SIGKILL or SIGSTOP reads SIG_DFL");
+        bad[0] |= note(syscall4(SYS_RT_SIGACTION, sigs[i], 0, (long)&old, 8) == 0 &&
+                           old.handler == 0 && old.flags == 0,
+                       msgs[0]);
         fill_ones(&old);
-        check(syscall4(SYS_RT_SIGACTION, sigs[i], (long)&ignore, (long)&old, 8) == -EINVAL &&
-                  old.flags == ~0ul,
-              "SIG_IGN for SIGKILL or SIGSTOP is refused and writes no old action");
-        check(syscall4(SYS_RT_SIGACTION, sigs[i], 0, (long)&old, 8) == 0 && old.handler == 0,
-              "and leaves the action SIG_DFL");
+        bad[1] |=
+            note(syscall4(SYS_RT_SIGACTION, sigs[i], (long)&ignore, (long)&old, 8) == -EINVAL &&
+                     old.flags == ~0ul,
+                 msgs[1]);
+        bad[2] |=
+            note(syscall4(SYS_RT_SIGACTION, sigs[i], 0, (long)&old, 8) == 0 && old.handler == 0,
+                 msgs[2]);
+    }
+    for (i = 0; i < 3; i++) {
+        part(ids[i]);
+        if (bad[i]) {
+            report_miss(msgs[i]);
+        }
+    }
+}
+
+/**
+ * Row 6 of the probe: a signal ends a child's sleep where it lands, which
+ * the kernel's count of the sleeps a signal cut short shows.
+ */
+static void sleep_row(void)
+{
+    int before = sleeps_cut_short();
+    int pid, status;
+
+    check(before >= 0, "sleeps-interrupted", "/proc/stat reports sleeps_interrupted");
+    part("sleep-eintr");
+    install(SIGUSR1, usr1_handler);
+    pid = syscall1(SYS_FORK, 0);
+    check(pid >= 0, "sleep-eintr", "fork the sleeper");
+    if (pid == 0) {
+        sys_exit(sleep_ms(30000) == -4 ? 0 : 1); /* -EINTR is -4 */
+    }
+    if (pid > 0) {
+        check(seen_asleep(pid), "sleep-eintr", "the sleeper is seen asleep before it is signalled");
+        syscall2(SYS_KILL, pid, SIGUSR1);
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "sleep-eintr",
+              "reap the sleeper");
+        check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0, "sleep-eintr",
+              "the sleeper's own sleep returned EINTR");
+        check_count(sleeps_cut_short() > before, "sleep-counted",
+                    "the kernel counted a sleep the signal cut short");
+    } else {
+        not_run("sleep-counted", "the sleeper was not forked");
     }
 }
 
@@ -497,26 +609,31 @@ void probe_main(unsigned long *sp)
     unsigned set[2];
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.sigprobe"));
     /* 1. A handler runs on a raised signal, and execution resumes after it. */
+    part("handler-runs");
     install(SIGUSR1, usr1_handler);
     handler_ran = 0;
     handler_sig = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
-    check(handler_ran == 1 && handler_sig == SIGUSR1, "SIGUSR1 handler ran and resumed");
+    check(handler_ran == 1 && handler_sig == SIGUSR1, "handler-runs",
+          "SIGUSR1 handler ran and resumed");
 
     /* 2. A blocked signal stays pending until unblocked. */
     set[0] = 1u << (SIGUSR1 - 1);
     set[1] = 0;
     handler_ran = 0;
-    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)set, 0, 8) == 0, "sigprocmask block");
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_BLOCK, (long)set, 0, 8) == 0, "blocked-stays-pending",
+          "sigprocmask block");
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
-    check(handler_ran == 0, "blocked signal does not deliver");
-    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)set, 0, 8) == 0, "sigprocmask unblock");
-    check(handler_ran == 1, "unblocking delivers the pending signal");
+    check(handler_ran == 0, "blocked-stays-pending", "blocked signal does not deliver");
+    check(syscall4(SYS_RT_SIGPROCMASK, SIG_UNBLOCK, (long)set, 0, 8) == 0, "unblock-delivers",
+          "sigprocmask unblock");
+    check(handler_ran == 1, "unblock-delivers", "unblocking delivers the pending signal");
 
     /* 3. Default action terminates a process that does not handle it. */
     pid = syscall1(SYS_FORK, 0);
-    check(pid >= 0, "fork");
+    check(pid >= 0, "sigterm-default", "fork");
     if (pid == 0) {
         /* Child: spin so the parent's SIGTERM is delivered on a timer tick. */
         for (;;) {
@@ -525,51 +642,39 @@ void probe_main(unsigned long *sp)
     }
     if (pid > 0) {
         syscall2(SYS_KILL, pid, SIGTERM);
-        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap killed child");
-        check((status & 0x7f) == SIGTERM, "child terminated by SIGTERM (WTERMSIG)");
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "sigterm-default",
+              "reap killed child");
+        check((status & 0x7f) == SIGTERM, "sigterm-default",
+              "child terminated by SIGTERM (WTERMSIG)");
     }
 
     /* 4. A forged selector in the frame the kernel restores. */
+    part("forge-ran");
     install(SIGUSR1, forge_handler);
     forge_ran = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
-    check(forge_ran == 1, "the forging handler ran");
-    check(syscall1(SYS_GETPID, 0) > 0, "the machine survives a forged selector in the frame");
+    check(forge_ran == 1, "forge-ran", "the forging handler ran");
+    check(syscall1(SYS_GETPID, 0) > 0, "forge-survived",
+          "the machine survives a forged selector in the frame");
 
     /* 5. A one-shot handler runs once. */
+    part("resethand");
     install_with(SIGUSR1, usr1_handler, SA_RESETHAND);
     handler_ran = 0;
     handler_sig = 0;
     syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
-    check(handler_ran == 1 && handler_sig == SIGUSR1, "a one-shot handler runs on its signal");
+    check(handler_ran == 1 && handler_sig == SIGUSR1, "resethand",
+          "a one-shot handler runs on its signal");
 
     /* 6. A signal ends a sleep where it lands. */
-    {
-        int before = sleeps_cut_short();
-
-        check(before >= 0, "/proc/stat reports sleeps_interrupted");
-        install(SIGUSR1, usr1_handler);
-        pid = syscall1(SYS_FORK, 0);
-        check(pid >= 0, "fork the sleeper");
-        if (pid == 0) {
-            sys_exit(sleep_ms(30000) == -4 ? 0 : 1); /* -EINTR is -4 */
-        }
-        if (pid > 0) {
-            check(seen_asleep(pid), "the sleeper is seen asleep before it is signalled");
-            syscall2(SYS_KILL, pid, SIGUSR1);
-            check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "reap the sleeper");
-            check((status & 0x7f) == 0 && ((status >> 8) & 0xff) == 0,
-                  "the sleeper's own sleep returned EINTR");
-            check_count(sleeps_cut_short() > before,
-                        "the kernel counted a sleep the signal cut short");
-        }
-    }
+    sleep_row();
 
     /* 7. The real-time interval timer. */
     timer_rows();
 
     /* 8. SIGKILL and SIGSTOP. */
     uncatchable_rows();
+    report_finish();
 
     if (fails == 0) {
         puts("SIGPROBE OK");

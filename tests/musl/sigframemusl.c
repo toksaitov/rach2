@@ -21,7 +21,15 @@
  * nothing below the stack.
  *
  * It prints "SIGFRAMEMUSL OK" and exits 0 on success, or prints
- * "SIGFRAMEMUSL FAIL (detail)" and exits 1 at the first failure.
+ * "SIGFRAMEMUSL FAIL (detail)" and exits 1 at the first failure. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for each
+ * check in order, a setup step joined to the check after it: `segv-accerr`,
+ * `segv-maperr`, `restart-handler`, `restart-read`, `eintr-handler`,
+ * `eintr-read`, `altstack`, `altstack-saved-flags`, `int3`, `sigpending`,
+ * `old-sigprocmask`, `suspend-eintr`, `suspend-handler`,
+ * `suspend-handler-mask`, `suspend-mask-restored`, `sigchld`, `overflow-segv`
+ * and `overflow-below`. The first failure fails its assertion and leaves the
+ * rest not run.
  */
 
 #define _GNU_SOURCE
@@ -39,6 +47,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 /*
  * A mask of one word, which blocks signals by number through BLOCK_RAW: the
@@ -79,6 +89,7 @@ static char altstack[16384];
 static int fail(const char *what)
 {
     printf("SIGFRAMEMUSL FAIL (%s)\n", what);
+    report_stop(what);
     return 1;
 }
 
@@ -167,12 +178,15 @@ static int suspend_row(void)
     if (sigsuspend(&empty) != -1 || errno != EINTR) {
         return fail("sigsuspend did not return -1 with EINTR");
     }
+    report_held();
     if (handler_mask_had_usr1 == -1) {
         return fail("sigsuspend's handler did not run");
     }
+    report_held();
     if (handler_mask_had_usr1 != 0) {
         return fail("the handler did not run under the suspend's mask");
     }
+    report_held();
     return 0;
 }
 
@@ -234,11 +248,13 @@ static int overflow(void)
         WTERMSIG(status) != SIGSEGV) {
         return fail("a handler that overflows its alternate stack");
     }
+    report_held();
     for (i = 0; i < 4096; i++) {
         if (m[i] != 0x5a) {
             return fail("a frame written below the alternate stack");
         }
     }
+    report_held();
     munmap(m, 8192);
     return 0;
 }
@@ -387,12 +403,14 @@ static int interrupted_read(int restart)
         return fail(restart ? "the handler with SA_RESTART did not run once"
                             : "the handler without SA_RESTART did not run once");
     }
+    report_held();
     if (restart && n != 1) {
         return fail("SA_RESTART did not restart the read");
     }
     if (!restart && (n != -1 || err != EINTR)) {
         return fail("a read cut by a handler without SA_RESTART did not end with EINTR");
     }
+    report_held();
     return 0;
 }
 
@@ -415,6 +433,7 @@ static int fault_rows(void)
         ((volatile char *)page)[10] != 'w') {
         return fail("the write to a read-only page was not handled and run again");
     }
+    report_held();
     if (sigsetjmp(escape, 1) == 0) {
         (void)*unmapped;
         return fail("the read of an unmapped page went through");
@@ -422,6 +441,7 @@ static int fault_rows(void)
     if (got_code != SEGV_MAPERR || got_addr != (uintptr_t)unmapped) {
         return fail("SEGV_MAPERR or its address");
     }
+    report_held();
     return 0;
 }
 
@@ -450,10 +470,31 @@ static int alt_stack_row(void)
     if (!on_alt) {
         return fail("the SA_ONSTACK handler was not on the alternate stack");
     }
+    report_held();
     if (saved_ss_flags != 0) {
         return fail("the frame saved SS_ONSTACK for a signal that came on the normal stack");
     }
+    report_held();
     return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {
+        "segv-accerr",     "segv-maperr",          "restart-handler",
+        "restart-read",    "eintr-handler",        "eintr-read",
+        "altstack",        "altstack-saved-flags", "int3",
+        "sigpending",      "old-sigprocmask",      "suspend-eintr",
+        "suspend-handler", "suspend-handler-mask", "suspend-mask-restored",
+        "sigchld",         "overflow-segv",        "overflow-below"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.sigframemusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
 }
 
 int main(void)
@@ -463,6 +504,7 @@ int main(void)
     word_mask_t set;
     pid_t pid;
 
+    plan();
     if (fault_rows() != 0 || interrupted_read(1) != 0 || interrupted_read(0) != 0 ||
         alt_stack_row() != 0) {
         return 1;
@@ -475,6 +517,7 @@ int main(void)
     if (trapped != SI_KERNEL) {
         return fail("int3 did not reach the SIGTRAP handler as SI_KERNEL");
     }
+    report_held();
 
     sigemptyset(&block);
     sigaddset(&block, SIGUSR2);
@@ -483,6 +526,7 @@ int main(void)
     if (syscall(SYS_rt_sigpending, &pending, 8) != 0 || !sigismember(&pending, SIGUSR2)) {
         return fail("rt_sigpending did not report the blocked signal");
     }
+    report_held();
     if (install(SIGUSR2, on_usr2, 0) != 0) {
         return fail("sigaction SIGUSR2");
     }
@@ -494,6 +538,7 @@ int main(void)
     if (!sigismember(&now, SIGUSR1)) {
         return fail("the old sigprocmask call did not block the signal");
     }
+    report_held();
     if (suspend_row() != 0) {
         return 1;
     }
@@ -501,6 +546,7 @@ int main(void)
     if (!sigismember(&now, SIGUSR1) || !sigismember(&now, SIGUSR2)) {
         return fail("the mask from before sigsuspend did not come back");
     }
+    report_held();
 
     if (install(SIGCHLD, on_chld, 0) != 0) {
         return fail("sigaction SIGCHLD");
@@ -513,9 +559,11 @@ int main(void)
     if (chld_code != CLD_EXITED || chld_pid != pid || chld_status != 7) {
         return fail("SIGCHLD's siginfo");
     }
+    report_held();
     if (overflow() != 0) {
         return 1;
     }
+    report_end();
 
     printf("SIGFRAMEMUSL OK\n");
     return 0;

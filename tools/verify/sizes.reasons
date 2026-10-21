@@ -529,7 +529,6 @@ tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table
 
-tests/musl/clockidmusl.c:clocks complexity 34 a test's rows, each a case, read as one table
 tests/musl/clockidmusl.c:sleeps complexity 29 a test's rows, each a case, read as one table
 
 tests/musl/clonemusl.c:main complexity 26 a test's rows, each a case, read as one table
@@ -617,8 +616,6 @@ tests/pingtest.c:probe_main nesting 5 a probe, one sequence of steps in the orde
 tests/procprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
 tests/procprobe.c:probe_main lines 399 a probe, one sequence of steps in the order the log records them
 
-tests/ptyprobe.c:_start complexity 38 a probe, one sequence of steps in the order the log records them
-tests/ptyprobe.c:_start lines 142 a probe, one sequence of steps in the order the log records them
 
 tests/rawprobe.c:probe_main complexity 30 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:probe_main lines 370 a probe, one sequence of steps in the order the log records them
