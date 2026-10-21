@@ -305,11 +305,15 @@ run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # 64 GiB (see tests/system/suites/bigmem.sh).
 run-bigmem: rach2 tests krffs test-image $(HARNESS)
 	sh tests/system/suites/bigmem.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS)
-# `tests/run memory`: the kernel's account of physical memory at five sizes
-# (see tests/system/suites/memory.sh).
-run-memory: rach2 rach2-recovery tests krffs test-image $(RECOVERY_IMAGE) $(HARNESS)
-	sh tests/system/suites/memory.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
-	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
+# `tests/run memory`: the kernel's account of physical memory at five sizes,
+# memprobe and frame allocations failed at the two ends of the range, the
+# string routines swept, a machine of 8 MiB refused and kernel stacks run
+# out. They are the machine cases of tests/cases/machine.memory.json, which
+# etude runs, and have no target here. The case of 8 MiB boots the recovery
+# kernel with this copy of its image, whose name does not depend on whether
+# the image carries a key.
+$(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
+	cp $(RECOVERY_IMAGE) $@
 # `tests/run pools`: many pipes, ptys, sockets and processes live at once,
 # and the kernel heap back where it started after a thousand each of pipes,
 # ptys and sockets (see tests/poolprobe.c). They are the guest cases of

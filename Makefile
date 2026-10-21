@@ -657,6 +657,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/crash_scenario \
                       build/tests/cases/machine/doom_scenario \
+                      build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/reset_scenario \
                       build/tests/cases/machine/shutdown_scenario
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \

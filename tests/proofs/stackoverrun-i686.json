@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "stackoverrun-i686",
-  "summary": "the memory suite's two stack-overrun rows on i686, whose double fault has a task gate, with faults in the guard pages and in vector 8's gate",
+  "summary": "the memory suite's two stack-overrun cases, machine.memory.stackoverrun-fork and stackoverrun-boot, on i686, whose double fault has a task gate, with faults in the guard pages and in vector 8's gate",
   "tree": "shared",
   "sources": [
     "rach2/sys/mm/kheap.c",
@@ -15,30 +15,22 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "ARCH=i686 sh tests/proofs/guest.sh make rach2 test-image build/tests/system/harness && ARCH=i686 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel images/test.krffs"
+      "ARCH=i686 sh tests/proofs/guest.sh make rach2 && ARCH=i686 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
-      "/usr/bin/env",
-      "ARCH=i686",
-      "sh",
-      "tests/proofs/guest.sh",
-      "exec",
-      "${WORK}",
       "/bin/sh",
       "-c",
-      ". tests/system/stackoverrun_row.sh; status=0; for where in fork boot; do stackoverrun_row build/tests/system/harness \"$1/kernel\" \"$1/test.krffs\" \"$where\" \"$1/$where.console.log\" || status=1; done; exit \"$status\"",
-      "stackoverrun",
-      "${WORK}"
+      "ARCH=i686 RACH2_WORKERS=4 exec tests/run memory"
     ],
-    "bound_s": 300
+    "bound_s": 3600
   },
   "faults": [
     {
       "name": "guard-mapped",
-      "summary": "kalloc_guarded mapping the guard page below a stack like the pages above it, which breaks the fork row",
+      "summary": "kalloc_guarded mapping the guard page below a stack like the pages above it, which breaks the fork case",
       "edits": [
         {
           "file": "rach2/sys/mm/kheap.c",
@@ -47,15 +39,15 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "stackoverrun: fork: fail: the overrun was not reported",
-          "stackoverrun: boot: pass"
+          "run: memory: machine.memory.stackoverrun-fork: evidence: "
         ]
       }
     },
     {
       "name": "boot-guard-mapped",
-      "summary": "guard_boot_stack leaving the page below the boot stack mapped, which breaks the boot row",
+      "summary": "guard_boot_stack leaving the page below the boot stack mapped, which breaks the boot case",
       "edits": [
         {
           "file": "rach2/kernel.c",
@@ -64,15 +56,15 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "stackoverrun: fork: pass",
-          "stackoverrun: boot: fail: the overrun was not reported"
+          "run: memory: machine.memory.stackoverrun-boot: evidence: "
         ]
       }
     },
     {
       "name": "interrupt-gate",
-      "summary": "vector 8 given an interrupt gate that runs on the stack in use, in place of its task gate, which breaks both rows, since the double fault then faults a third time",
+      "summary": "vector 8 given an interrupt gate that runs on the stack in use, in place of its task gate, which breaks both cases, since the double fault then faults a third time",
       "edits": [
         {
           "file": "rach2/sys/arch/i686/idt.c",
@@ -81,9 +73,10 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "stackoverrun: fork: fail: the overrun was not reported",
-          "stackoverrun: boot: fail: the overrun was not reported"
+          "run: memory: machine.memory.stackoverrun-fork: evidence: ",
+          "run: memory: machine.memory.stackoverrun-boot: evidence: "
         ]
       }
     }

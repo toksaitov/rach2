@@ -1,9 +1,10 @@
 /*
- * lifecycle.h: what the scenarios of machine.crash, machine.reset,
- * machine.shutdown, machine.audio and machine.doom share: each declared
- * assertion reported once, waits and searches of a console that report what
- * they found, a value read off a console, the end of a machine by QMP's
- * quit, a look at its processors, and fsck.krffs on a disk copy.
+ * lifecycle.h: what the scenarios of tests/cases/machine/ share: each
+ * declared assertion reported once, waits and searches of a console that
+ * report what they found, a value read off a console, a program run from the
+ * kernel's debug shell and judged by the record that hands the shell back,
+ * the end of a machine by QMP's quit, a look at its processors, and
+ * fsck.krffs on a disk copy.
  */
 #ifndef LIFECYCLE_H
 #define LIFECYCLE_H
@@ -81,6 +82,46 @@ int lc_wait(struct lc *l, struct etude_case_machine *m, const char *text, uint64
 
 /** Type `text` at the console. @return 1 when it was written. */
 int lc_type(struct lc *l, struct etude_case_machine *m, const char *text);
+
+/**
+ * Begin step `step`, boot machine `machine` and wait for the prompt of the
+ * kernel's debug shell, putting in `*at` the offset past it.
+ *
+ * @return the machine, or NULL when the scenario cannot go on.
+ */
+struct etude_case_machine *lc_shell(struct lc *l, const char *step, const char *machine,
+                                    uint64_t *at);
+
+/**
+ * Read bytes `from` to `to` of the console of the first boot of machine
+ * `machine`, which the library writes to its evidence as it reads them.
+ *
+ * @return the bytes, NUL-ended, which the caller frees; or NULL, after
+ *         which the scenario cannot go on.
+ */
+char *lc_console(struct lc *l, const char *machine, uint64_t from, uint64_t to);
+
+/**
+ * Give the offset past the kernel's record prefix, `<N>[SECONDS] `, at
+ * offset `at` of the `len` bytes of `text`, or `at` when there is none.
+ */
+size_t lc_past_prefix(const char *text, size_t len, size_t at);
+
+/**
+ * Run `command`, typed at the debug shell of machine `machine`, `m`, whose
+ * console has been read to `*at`, and wait for the kernel's record that
+ * hands the shell back. Assertion `id` holds when no line of the run's
+ * window, from the typing to that record, begins with the record of the
+ * program's death by a signal, and the first that begins with the record of
+ * its exit gives status 0; each record is matched whole after its prefix,
+ * so that a program that prints a record's text is not credited with it.
+ *
+ * @return the window, NUL-ended, which the caller frees; or NULL when the
+ *         scenario cannot go on, with `id` reported failed unless a stop
+ *         came.
+ */
+char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, const char *command,
+             uint64_t *at, const char *id);
 
 /**
  * Report assertion `id` from a search of the console after `from`: it holds

@@ -1,6 +1,5 @@
 /*
- * lifecycle.c: the code the scenarios of machine.crash, machine.reset,
- * machine.shutdown, machine.audio and machine.doom share, over
+ * lifecycle.c: the code the scenarios of tests/cases/machine/ share, over
  * libetude-case.
  */
 #include <stdio.h>
@@ -9,6 +8,9 @@
 
 #include "history_json.h"
 #include "lifecycle.h"
+
+/* The room for the reason an assertion fails. */
+#define WHY_LEN 160
 
 /** Give the name of status `st`. */
 static const char *status_name(enum etude_status st)
@@ -240,6 +242,138 @@ int lc_text(struct lc *l, const char *console, const char *key, uint64_t from, c
     return found;
 }
 
+struct etude_case_machine *lc_shell(struct lc *l, const char *step, const char *machine,
+                                    uint64_t *at)
+{
+    struct etude_case_machine *m;
+
+    *at = 0;
+    if (!lc_step(l, step) || (m = lc_boot(l, machine)) == NULL ||
+        !lc_wait(l, m, "Type 'help'", at, NULL) || !lc_wait(l, m, "\n> ", at, NULL))
+        return NULL;
+    return m;
+}
+
+char *lc_console(struct lc *l, const char *machine, uint64_t from, uint64_t to)
+{
+    char name[64];
+    const char *path;
+    FILE *f;
+    char *buf = NULL;
+    size_t n = (size_t)(to - from);
+
+    snprintf(name, sizeof(name), "%s.1.console", machine);
+    path = etude_evidence(l->c, name);
+    f = path != NULL && from <= to ? fopen(path, "rb") : NULL;
+    if (f != NULL && fseek(f, (long)from, SEEK_SET) == 0 && (buf = malloc(n + 1)) != NULL &&
+        fread(buf, 1, n, f) == n) {
+        buf[n] = '\0';
+    } else {
+        free(buf);
+        buf = NULL;
+        lc_halt(l, ETUDE_FAILED, "the read of the console's evidence");
+    }
+    if (f != NULL)
+        fclose(f);
+    return buf;
+}
+
+size_t lc_past_prefix(const char *text, size_t len, size_t at)
+{
+    size_t i = at;
+
+    if (i + 4 > len || text[i] != '<' || text[i + 2] != '>' || text[i + 3] != '[')
+        return at;
+    for (i += 4; i < len && ((text[i] >= '0' && text[i] <= '9') || text[i] == '.'); i++) {
+    }
+    if (i + 2 > len || text[i] != ']' || text[i + 1] != ' ')
+        return at;
+    return i + 2;
+}
+
+/* The records that hand the debug shell back: an exit with its status, or a
+ * death by a signal. */
+static const char exit_head[] = "sys_exit: init process ";
+static const char exit_mid[] = " exited with status ";
+static const char kill_head[] = "terminate: init process ";
+static const char kill_mid[] = " killed by signal ";
+static const char back[] = ", returning to kernel shell";
+
+/**
+ * Say whether `head`, a pid, `mid`, a number and `back` are whole at offset
+ * `at` of the `len` bytes of `text`, giving the number, which may have a
+ * minus sign, in `*value`.
+ */
+static int marker_at(const char *text, size_t len, size_t at, const char *head, const char *mid,
+                     long *value)
+{
+    size_t i = at, hlen = strlen(head), mlen = strlen(mid), blen = strlen(back), start;
+    long sign = 1, n = 0;
+
+    if (i + hlen > len || memcmp(text + i, head, hlen) != 0)
+        return 0;
+    for (i += hlen, start = i; i < len && text[i] >= '0' && text[i] <= '9'; i++) {
+    }
+    if (i == start || i + mlen > len || memcmp(text + i, mid, mlen) != 0)
+        return 0;
+    i += mlen;
+    if (i < len && text[i] == '-') {
+        sign = -1;
+        i++;
+    }
+    for (start = i; i < len && text[i] >= '0' && text[i] <= '9' && i - start < 9; i++)
+        n = n * 10 + (text[i] - '0');
+    if (i == start || i + blen > len || memcmp(text + i, back, blen) != 0)
+        return 0;
+    *value = sign * n;
+    return 1;
+}
+
+/**
+ * Judge the `len` bytes of window `w` as lc_run says, putting what decided
+ * it in `why`. @return 1 when the program exited with status 0.
+ */
+static int score_window(const char *w, size_t len, char *why, size_t size)
+{
+    size_t at;
+    long value;
+    int pass;
+
+    for (pass = 0; pass < 2; pass++)
+        for (at = 0; at < len; at++) {
+            if (at != 0 && w[at - 1] != '\n')
+                continue;
+            if (pass == 0 &&
+                marker_at(w, len, lc_past_prefix(w, len, at), kill_head, kill_mid, &value)) {
+                snprintf(why, size, "the program was killed by signal %ld", value);
+                return 0;
+            }
+            if (pass == 1 &&
+                marker_at(w, len, lc_past_prefix(w, len, at), exit_head, exit_mid, &value)) {
+                snprintf(why, size, "the program exited with status %ld", value);
+                return value == 0;
+            }
+        }
+    snprintf(why, size, "the kernel reported no exit of the program");
+    return 0;
+}
+
+char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, const char *command,
+             uint64_t *at, const char *id)
+{
+    uint64_t from = *at;
+    char why[WHY_LEN], *w;
+
+    if (!lc_type(l, m, command) || !lc_wait(l, m, back, at, NULL) ||
+        (w = lc_console(l, machine, from, *at)) == NULL) {
+        if (!l->stopped)
+            lc_assert(l, id, 0, l->why[0] != '\0' ? l->why : "the program did not run");
+        return NULL;
+    }
+    lc_assert(l, id, score_window(w, strlen(w), why, sizeof(why)), why);
+    return w;
+}
+
 int lc_end(struct lc *l, struct etude_case_machine *m, struct etude_termination *end)
 {
     enum etude_status st;
@@ -282,9 +416,6 @@ int lc_quit(struct lc *l, struct etude_case_machine *m, const char *id)
     lc_assert(l, id, quit == ETUDE_OK && end.end == ETUDE_END_QEMU_EXITED, detail);
     return 1;
 }
-
-/* The room for the reason an assertion of the machine's state fails. */
-#define WHY_LEN 160
 
 /**
  * Send QMP command `execute` with `arguments` and give the member `return`

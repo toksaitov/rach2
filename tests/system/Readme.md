@@ -178,7 +178,7 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `audio.json`: the `audio` cases, against an HDA stream that raises no interrupt at the end of a buffer, so that the notes come from the timer's service alone, and an SB16 that plays stereo as mono.
 * `servicelog.json`: the `servicelog` suite, against an init that never empties its log within a boot and one that never removes a full log at boot.
 * `sigcontext.json`: `musl/sigmusl`'s signal frame rows, on i686 alone, with FXSR and with `rach2.nofxsr`, against a `sigframe.c` that does not fill the ucontext.
-* `stackoverrun-i686.json` and `stackoverrun-x86-64.json`: the `memory` suite's two stack-overrun rows, against a mapped stack guard, a mapped boot stack guard, and a double fault without a stack of its own (a task gate on i686, the interrupt stack on x86-64).
+* `stackoverrun-i686.json` and `stackoverrun-x86-64.json`: the `memory` suite's two stack-overrun cases, against a mapped stack guard, a mapped boot stack guard, and a double fault without a stack of its own (a task gate on i686, the interrupt stack on x86-64).
 * `usb-latency-guest.json`: the `usb` suite's two wake-to-dispatch rows, against a kernel without preemption after a device interrupt and one without the service point in a large random read.
 * `xsave.json`: `xsaveprobe`'s report, judged as etude will under the processor profile `max`, and the frame host tests, against eight faults in `sys/arch/x86/fpu.c`, and the report of a processor without XSAVE and AVX, which that profile refuses.
 * `textbusy.json` and `bindhold.json`: the `textbusy` cases, as their entries above say.
