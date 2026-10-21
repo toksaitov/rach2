@@ -28,8 +28,8 @@
 # next run starts; the status is then 143.
 #
 # `results` below says how this tree's tests/run gives its results. With
-# `lines`, the runner's own `run: NAME: PASS|FAIL in` and `run: result:
-# failed:` lines name the suites that failed, and a pass is its status 0.
+# `lines`, the runner's last `run: result: failed:` line on its standard
+# error names the suites that failed, and a pass is its status 0.
 # With `history`, the suites of a kind run as one run of tests/run, core's
 # as `tests/run style host core` and full's with `bigmem` among them, since
 # report.sh reads the history of one run. tests/run writes etude's history
@@ -126,24 +126,22 @@ run_history() { # run_history NAME ARGS...
 
 # Run tests/run with ARGS, and append to DIR/failed the suites it failed, or
 # NAME when it failed without naming a suite of the registry; return 0 when it
-# passed and 1 when it failed. The suites are on the runner's own
-# `run: result: failed: SUITE...` lines, which follow the last suite's result;
-# the runner suite's output, printed before it, has lines of the same form
-# from the runs it drives.
+# passed and 1 when it failed. The suites are on the runner's
+# `run: result: failed: SUITE...` line, the last line of its standard error
+# that begins `run: `. The launcher passes standard output and standard error
+# through pipes of their own, so the two are not in order in the log; and the
+# runner suite's output, printed before the summary, has lines of the same
+# form from the runs it drives.
 run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
-    { tests/run "$@" 2>&1; echo "$?" > "$out/rc"; } | copy "$out/set.log" | copy -a "$out/log"
+    : > "$out/set.err"
+    { { tests/run "$@" 2>&1 1>&3 3>&-; echo "$?" > "$out/rc"; } | copy "$out/set.err"; } 3>&1 |
+        copy "$out/set.log" | copy -a "$out/log"
     rc=$(cat "$out/rc")
     [ "$rc" = 0 ] && return 0
-    failed=$(awk '
-        /^run: [a-z0-9-]+: (PASS|FAIL) in / { last = NR }
-        { line[NR] = $0 }
-        END {
-            for (i = last + 1; i <= NR; i++)
-                if (sub(/^run: result: failed: */, "", line[i]))
-                    print line[i]
-        }' "$out/set.log" | tr ' ' '\n' | sed '/^$/d')
+    failed=$(grep '^run: ' "$out/set.err" | tail -n 1 |
+        sed -n 's/^run: result: failed: *//p' | tr ' ' '\n' | sed '/^$/d')
     known=$(awk -F'|' '/^[a-z]/ { print $1 }' tests/registry)
     for f in $failed; do
         echo "$known" | grep -qx "$f" || failed=""

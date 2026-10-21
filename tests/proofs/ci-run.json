@@ -87,14 +87,32 @@
       "edits": [
         {
           "file": "tools/ci/run.sh",
-          "find": "            for (i = last + 1; i <= NR; i++)\n",
-          "replace": "            for (i = 1; i <= NR; i++)\n"
+          "find": "    failed=$(grep '^run: ' \"$out/set.err\" | tail -n 1 |\n",
+          "replace": "    failed=$(grep '^run: result: failed: ' \"$out/set.err\" | tail -n 1 |\n"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           "ci-run-test: lines: the runner suite's own lines: failed ",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "streams",
+      "summary": "the runner's standard output read with its standard error",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    { { tests/run \"$@\" 2>&1 1>&3 3>&-; echo",
+          "replace": "    { { tests/run \"$@\" 2>&1 3>&-; echo"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-run-test: lines: the standard error before the standard output: failed ",
           "ci-run-test: result: fail: ci reading of results"
         ]
       }

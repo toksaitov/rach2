@@ -1,7 +1,8 @@
 #!/bin/sh
 # ci_run_test.sh: check how tools/ci/run.sh reads what tests/run gives. From
-# the runner's lines: the suites it failed, the set's name when it names
-# none, and nothing from the lines that the runner suite's own runs print.
+# the runner's lines: the suites it failed, whichever of its standard output
+# and standard error came first, the set's name when it names none, and
+# nothing from the lines that the runner suite's own runs print.
 # From etude's history: core run as one run of style, host and the core
 # tier's suites of the registry, its history left in DIR/history and
 # DIR/store, where history_failures, report.sh's reader, reads it as well; a
@@ -75,7 +76,8 @@ cat > "$work/bin/make" <<'EOF'
 exit "${CI_RUN_TEST_MAKE:-0}"
 EOF
 # The stand-in tests/run: a set whose first suite is not CI_RUN_TEST_SET
-# passes and writes no history; that set prints CI_RUN_TEST_PRINT, copies the
+# passes and writes no history; that set prints CI_RUN_TEST_PRINT, then
+# CI_RUN_TEST_ERR on standard error and CI_RUN_TEST_LATE after it, copies the
 # history streams CI_RUN_TEST_STREAMS names into RACH2_RESULTS/history and
 # the fixtures' store into RACH2_RESULTS/store, which run.sh makes, and
 # exits CI_RUN_TEST_STATUS.
@@ -88,6 +90,8 @@ if [ "$1" != "$CI_RUN_TEST_SET" ]; then
     exit 0
 fi
 printf '%b' "$CI_RUN_TEST_PRINT"
+printf '%b' "$CI_RUN_TEST_ERR" >&2
+printf '%b' "$CI_RUN_TEST_LATE"
 for s in $CI_RUN_TEST_STREAMS; do
     cp "$CI_RUN_TEST_FIXTURES/$s" "$RACH2_RESULTS/history/" || exit 3
 done
@@ -104,6 +108,8 @@ lost='pass/plan.jsonl pass/item-d0.jsonl item-d1-lost.jsonl pass/item-h.jsonl pa
 rows=0
 streams=
 print=
+errs=
+late=
 make_status=0
 suites=
 
@@ -111,9 +117,9 @@ suites=
 # MODE says, with the set SET of tests/run exiting STATUS, and require the
 # lines of DIR/failed to be the words FAILED, `done` written, and run.sh's
 # status 0 for no failure and 1 for any. The stand-in tests/run prints
-# `print` and copies the streams `streams` names, make exits `make_status`,
-# and SUITES is `suites`; row then empties `print` and `streams` and sets
-# `make_status` to 0.
+# `print`, `errs` on standard error and `late`, and copies the streams
+# `streams` names, make exits `make_status`, and SUITES is `suites`; row then
+# empties `print`, `errs`, `late` and `streams` and sets `make_status` to 0.
 row()
 {
     rows=$((rows + 1))
@@ -123,12 +129,15 @@ row()
     (
         cd "$tree" &&
             PATH="$work/bin:$PATH" ARCH=i686 SUITES=$suites CI_RUN_TEST_SET=$4 \
-                CI_RUN_TEST_STATUS=$5 CI_RUN_TEST_PRINT=$print CI_RUN_TEST_STREAMS=$streams \
+                CI_RUN_TEST_STATUS=$5 CI_RUN_TEST_PRINT=$print CI_RUN_TEST_ERR=$errs \
+                CI_RUN_TEST_LATE=$late CI_RUN_TEST_STREAMS=$streams \
                 CI_RUN_TEST_MAKE=$make_status CI_RUN_TEST_FIXTURES=$fixtures \
                 CI_RUN_TEST_CALLS=$work/calls sh tools/ci/run.sh "$3" "$out"
     ) > "$work/row.log" 2>&1
     status=$?
     print=
+    errs=
+    late=
     streams=
     make_status=0
     got=$(tr '\n' ' ' < "$out/failed" | sed 's/ $//')
@@ -147,12 +156,20 @@ lines_rows()
 {
     suites=
     row 'lines: a pass' lines core core 0 '' || return 1
-    print='run: default: FAIL in 3s\nrun: result: failed: default\n'
+    print='run: style: PASS in 3s\n'
+    errs='run: default: FAIL in 3s\nrun: result: failed: default\n'
     row 'lines: a failed suite' lines core core 1 default || return 1
-    print='run: default: PASS in 3s\nrun: result: failed: nothing-such\n'
+    print='run: default: PASS in 3s\n'
+    errs='run: result: failed: nothing-such\n'
     row 'lines: no suite named' lines core core 1 core || return 1
-    print='run: result: failed: default\nrun: runner: PASS in 9s\n'
+    print='run: runner: PASS in 9s\n'
+    errs='run: result: failed: default\nrun: shutdown: INCOMPLETE in ?s\n'
     row "lines: the runner suite's own lines" lines core core 1 core || return 1
+    errs='run: default: INCOMPLETE in 121s\nrun: shutdown: INCOMPLETE in 301s\n'
+    errs="${errs}run: result: failed: default shutdown\n"
+    late='run: runner: PASS in 9s\nrun: result: incomplete\n'
+    row 'lines: the standard error before the standard output' lines core core 1 \
+        'default shutdown' || return 1
     make_status=1
     row 'lines: the build' lines core core 0 build || return 1
 }
