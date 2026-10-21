@@ -8,7 +8,7 @@
  * descriptor's directory has and not the other; AT_EMPTY_PATH changes the
  * file a descriptor is open on, an O_PATH one included, and the working
  * directory; and each error of the flags comes before the path is read.
- * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
+ * With a directory argument, which the machine.ext2 cases give as /tmp
  * on an ext2 root, the rows run there and a symbolic link is required: lchown
  * and AT_SYMLINK_NOFOLLOW change the link and leave its target alone, chown
  * changes the target, an O_PATH descriptor opened with O_NOFOLLOW refers to

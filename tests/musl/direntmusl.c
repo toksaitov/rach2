@@ -58,7 +58,7 @@
  * directory and not the link, and is ENOTDIR to unlink and rename, in /dev/shm
  * and on an ext2 root.
  *
- * With a directory argument, which tests/system/suites/ext2.sh gives as /tmp
+ * With a directory argument, which the machine.ext2 cases give as /tmp
  * on an ext2 root, the probe's own directory is made there and must have a
  * symbolic link reported as DT_LNK, and / and /bin of that root are checked
  * too. A relative directory is taken from the working directory, as a native

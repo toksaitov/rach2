@@ -1,0 +1,931 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.ext2",
+  "summary": "The ext2 driver booted: the probes as init on an ext2 root, ext2probe's rows on a fixture volume the host's mke2fs wrote, os-real on its ext2 root, each row on a copy of its own, and one copy taken through a kill, the mount's check, a lost block, a fault, recovery's e2fsck and a clean boot; the program is tests/cases/machine/ext2_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.ext2.probe-shelltest",
+      "behavior": "/shelltest, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/shelltest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/shelltest", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/shelltest", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-limitprobe",
+      "behavior": "/limitprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/limitprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/limitprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/limitprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-dirprobe",
+      "behavior": "/dirprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/dirprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/dirprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/dirprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-unlinkdirprobe",
+      "behavior": "/unlinkdirprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/unlinkdirprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/unlinkdirprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/unlinkdirprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-mvtest",
+      "behavior": "/mvtest, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/mvtest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/mvtest", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/mvtest", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-vfsprobe",
+      "behavior": "/vfsprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/vfsprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/vfsprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/vfsprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-dnstest",
+      "behavior": "/dnstest, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/dnstest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/dnstest", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/dnstest", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-devprobe",
+      "behavior": "/devprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/devprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/devprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/devprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-orphanprobe",
+      "behavior": "/orphanprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/orphanprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/orphanprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/orphanprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-modeprobe",
+      "behavior": "/modeprobe, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/modeprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/modeprobe", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/modeprobe", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.probe-mapmusl",
+      "behavior": "/musl/mapmusl, run as init from the debug shell on an ext2 root staged from the test manifest, is the program the build made and passes its rows on an ext2 root, among them a shared mapping of a file written back to it, which the KRFFS root refuses",
+      "units": ["ext2", "tests/system/probe_roots.sh", "tests/musl/mapmusl"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"probe": "/musl/mapmusl", "volume_mib": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["probes-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the probe read back from it, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "staged", "stage": "execute", "does": "read the probe back from the copy's ext2 volume with debugfs and compare it with the built one"},
+        {"step_id": "probe", "stage": "execute", "machine": "probe", "does": "boot the copy as the ext2 root with rach2.rescue, run the probe from the debug shell as its transient init, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "probe", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["probes-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "staged", "checks": "the probe that debugfs reads from the volume is the built one, byte for byte", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "probes-disk", "node": "images/ext2-probes.disk", "per_architecture": true},
+        {"name": "probe", "node": "tests/musl/mapmusl", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the probe runs as init on an ext2 root of the test manifest's programs, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.links",
+      "behavior": "ext2probe links on the fixture volume the host's mke2fs wrote, mounted read-only: the symbolic-link rows the walker must answer, a chain of forty followed and one of forty-one refused, and the hard-link rows of a read-only volume",
+      "units": ["ext2", "tests/ext2probe.c", "tests/system/mkext2fixture.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"mode": "links"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["fixture-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image beside a copy of the fixture disk, run ext2probe links from the debug shell, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fixture-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"},
+        {"assertion_id": "said-ok", "checks": "ext2probe says EXT2PROBE OK (links) and never EXT2PROBE FAIL", "source": "scenario"},
+        {"assertion_id": "mounted", "checks": "the kernel says ext2: mounted: as the probe mounts the fixture", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "fixture-disk", "node": "images/ext2-fixture.disk", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case mounts the fixture from the machine's IDE disk and counts that disk's commands; tests/native/probes.cases runs ext2probe natively on the fixture through a loop device"}
+    },
+    {
+      "case_id": "machine.ext2.cost",
+      "behavior": "ext2probe cost on the fixture volume mounted with MS_SYNCHRONOUS: sixteen rewrites of a block take four disk commands and two flushes, none before the fsync, and two appends at most ten commands and five flushes, which the probe counts in /proc/disk",
+      "units": ["ext2", "tests/ext2probe.c", "tests/system/mkext2fixture.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"mode": "cost"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["fixture-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image beside a copy of the fixture disk, run ext2probe cost from the debug shell, wait for the shell and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["fixture-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "exit", "checks": "the kernel hands the debug shell back with the record that the program exited with status 0, and with no record that it was killed", "source": "scenario"},
+        {"assertion_id": "said-ok", "checks": "ext2probe says EXT2PROBE OK (cost) and never EXT2PROBE FAIL, so the counts it judges held", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "fixture-disk", "node": "images/ext2-fixture.disk", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case mounts the fixture from the machine's IDE disk and counts that disk's commands; tests/native/probes.cases runs ext2probe natively on the fixture through a loop device"}
+    },
+    {
+      "case_id": "machine.ext2.rewrite",
+      "behavior": "Fifty rewrites in place of a 4 KiB file on the ext2 root, each with the drive's cache flush, take at most five disk commands a write, so a second inode store in each call fails",
+      "units": ["ext2"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"writes": 50, "bytes": 4096, "most_commands": 250}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, read disk-commands from /proc/disk around fifty rewrites of /root/cost.bin and their sync, and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "writes", "checks": "every write and the sync succeed and the file stays 4096 bytes, which the guest's shell judges", "source": "scenario"},
+        {"assertion_id": "commands", "checks": "the fifty rewrites take at most 250 disk commands, by /proc/disk", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.append",
+      "behavior": "Fifty appends of 4 KiB to a file on the ext2 root, which add the group's bitmap and its descriptor to each write and cross into the first indirect block, take at most eleven disk commands a write",
+      "units": ["ext2"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"writes": 50, "bytes": 4096, "most_commands": 550}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, read disk-commands from /proc/disk around fifty appends to /root/grow.bin and their sync, and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "writes", "checks": "every append and the sync succeed and the file is 204800 bytes, which the guest's shell judges", "source": "scenario"},
+        {"assertion_id": "commands", "checks": "the fifty appends take at most 550 disk commands, by /proc/disk", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.setid",
+      "behavior": "The set-id rules of chown and write on the ext2 root, which modeprobe asserts over the pathname call and the descriptor: a directory keeps its bits, a setgid file with and without group-execute, a privileged change, a permitted and a refused group change, and both spellings of a request that changes nothing",
+      "units": ["ext2", "tests/modeprobe.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"program": "/modeprobe", "directory": "/tmp"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /modeprobe /tmp and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "said-ok", "checks": "modeprobe says MODEPROBE OK and never MODEPROBE FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.lchown",
+      "behavior": "lchown and fchownat's AT_SYMLINK_NOFOLLOW on the ext2 root, which has symbolic links: the link changes and its target does not, chown changes the target, an O_PATH descriptor opened with O_NOFOLLOW names the link, and a dangling link changes",
+      "units": ["ext2", "tests/musl/lchownmusl.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"program": "/lchownmusl", "directory": "/tmp"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /lchownmusl /tmp and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "said-ok", "checks": "lchownmusl says LCHOWNMUSL OK (links) and never LCHOWNMUSL FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.dirent",
+      "behavior": "The entry types getdents64 reports from ext2's file-type bytes: a symbolic link is DT_LNK, and every entry of / and /bin of the root has the type lstat gives it",
+      "units": ["ext2", "tests/musl/direntmusl.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"program": "/direntmusl", "directory": "/tmp"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /direntmusl /tmp and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "said-ok", "checks": "direntmusl says DIRENTMUSL OK (links) and never DIRENTMUSL FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.zombie",
+      "behavior": "Forty processes killed beside a writer on the ext2 root are all reaped, and the poweroff after them waits for every teardown and unmounts the root",
+      "units": ["ext2", "tests/zombieprobe.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"program": "/zombieprobe", "processes": 40}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk, log in as root at the console, run /zombieprobe in /tmp, power the machine off and end it"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "said-ok", "checks": "zombieprobe says ZOMBIEPROBE OK and never ZOMBIEPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "unmounted", "checks": "the poweroff reaches the kernel's goodbye with the record shutdown: root: unmounted before it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.repair",
+      "behavior": "One copy of the ext2 root taken through the boots that carry its state: a write and a kill, volumes made in files on the second partition, the dirty root checked and unmounted clean, a lost block kept for e2fsck with the error bit set, a fault that mounts the root read-only, a recovery boot that changes nothing without rach2.fsck and one whose init repairs both disks with it, and a clean boot after",
+      "units": ["ext2", "rach2/sys/fs/ext2.c", "utils/init.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root_mib": 96, "second_mib": 32, "lost_block": 20000, "freed": "/etc/hostname", "sector": 16383}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["debugfs", "e2fsck", "mtype"], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copy, the second disk and the volumes read out of the copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "first", "stage": "execute", "machine": "root", "does": "boot the copy, log in as root, read /proc/mounts, write /root/first and sync, write to the second partition's node, and end the machine with QMP's quit"},
+        {"step_id": "mkfs", "stage": "execute", "machine": "root", "does": "boot the copy, make an ext2 and a FAT volume in files on the second partition, mount each through a loop device, write it, unmount the partition and end the machine"},
+        {"step_id": "made", "stage": "execute", "does": "read the two volumes out of the second partition with debugfs, and run e2fsck, debugfs's stats and mtype on them"},
+        {"step_id": "dirty", "stage": "execute", "machine": "root", "does": "read the superblock's state, boot the copy, read /root/first and /proc/mounts, power off, and run e2fsck on the first partition"},
+        {"step_id": "lose", "stage": "execute", "does": "mark block 20000 used and clear the valid bit with debugfs"},
+        {"step_id": "lost", "stage": "execute", "machine": "root", "does": "boot the copy, read /proc/mounts, write /root/again, power off, read the superblock's state and run e2fsck"},
+        {"step_id": "damage", "stage": "execute", "does": "mark the inode of /etc/hostname free with debugfs"},
+        {"step_id": "fault", "stage": "execute", "machine": "root", "does": "boot the copy, read /proc/mounts, try a write and power off"},
+        {"step_id": "look", "stage": "execute", "machine": "look", "does": "hash the copy, boot the recovery system on it without rach2.fsck, reach its shell, end the machine and hash the copy again"},
+        {"step_id": "repair", "stage": "execute", "machine": "repair", "does": "copy the disk into the second disk, boot the recovery system with rach2.fsck on both, write a sector of the second partition through its node and back, end the machine, and run e2fsck"},
+        {"step_id": "clean", "stage": "execute", "machine": "root", "does": "boot the repaired copy, read /proc/mounts and /root/again, and power off"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "look", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "repair", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": ["root-disk", {"name": "root-copy", "bus": "ide", "size_bytes": 136314880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.fsck"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "first-mounted", "checks": "/proc/mounts has /dev/disk0p1 / ext2 rw,relatime 0 0", "source": "scenario"},
+        {"assertion_id": "first-write", "checks": "echo writes /root/first and sync succeeds", "source": "scenario"},
+        {"assertion_id": "node-refused", "checks": "the ordinary kernel refuses dd's write to /dev/disk0p2 with Operation not permitted", "source": "scenario"},
+        {"assertion_id": "root-before-usb", "checks": "the kernel's record ext2: root: /dev/disk0p1 comes before usb: started", "source": "scenario"},
+        {"assertion_id": "first-unchecked", "checks": "the kernel never says ext2: check on the clean volume's first boot", "source": "scenario"},
+        {"assertion_id": "loop-ext2", "checks": "mke2fs makes a volume in a file on the second partition, which a loop device mounts as /dev/loop0 /mnt/v ext2 rw", "source": "scenario"},
+        {"assertion_id": "loop-ext2-read", "checks": "a file written there reads back made after a remount", "source": "scenario"},
+        {"assertion_id": "loop-vfat", "checks": "mkfs.vfat makes a volume in a file, which a loop device mounts as /dev/loop0 /mnt/v vfat rw", "source": "scenario"},
+        {"assertion_id": "loop-done", "checks": "the FAT volume takes a file, and the volume, the loop device and the partition are unmounted, detached and synced", "source": "scenario"},
+        {"assertion_id": "made-e2fsck", "checks": "the host's e2fsck -fn passes the volume mke2fs made", "source": "scenario"},
+        {"assertion_id": "made-features", "checks": "debugfs's stats give its features as resize_inode filetype sparse_super large_file", "source": "scenario"},
+        {"assertion_id": "made-block-size", "checks": "debugfs's stats give its block size as 4096", "source": "scenario"},
+        {"assertion_id": "made-label", "checks": "debugfs's stats give its volume name as made", "source": "scenario"},
+        {"assertion_id": "made-fat-file", "checks": "mtype reads made from the file written on the FAT volume", "source": "scenario"},
+        {"assertion_id": "killed-dirty", "checks": "the machine ended by quit left the superblock's state 0, the valid bit clear", "source": "scenario"},
+        {"assertion_id": "dirty-kept", "checks": "the next boot reads first from /root/first", "source": "scenario"},
+        {"assertion_id": "dirty-mounted", "checks": "/proc/mounts has the dirty root mounted rw", "source": "scenario"},
+        {"assertion_id": "dirty-unmounted", "checks": "poweroff reaches the goodbye with shutdown: root: unmounted", "source": "scenario"},
+        {"assertion_id": "dirty-checked", "checks": "the kernel says ext2: check: clean of the dirty root", "source": "scenario"},
+        {"assertion_id": "dirty-valid", "checks": "the poweroff left the superblock's state 1", "source": "scenario"},
+        {"assertion_id": "dirty-e2fsck", "checks": "the host's e2fsck -fn exits 0 on the first partition", "source": "scenario"},
+        {"assertion_id": "lost-mounted", "checks": "with block 20000 lost and the valid bit clear, /proc/mounts has the root mounted rw", "source": "scenario"},
+        {"assertion_id": "lost-write", "checks": "echo writes /root/again and sync succeeds", "source": "scenario"},
+        {"assertion_id": "lost-record", "checks": "the kernel says ext2: check: 1 lost blocks, 0 orphan inodes, kept for e2fsck", "source": "scenario"},
+        {"assertion_id": "lost-error-bit", "checks": "the poweroff left the superblock's state 2, the error bit", "source": "scenario"},
+        {"assertion_id": "lost-e2fsck", "checks": "the host's e2fsck -fn exits 4 on the first partition", "source": "scenario"},
+        {"assertion_id": "lost-bitmap", "checks": "e2fsck names the block bitmap's differences", "source": "scenario"},
+        {"assertion_id": "fault-read-only", "checks": "with an inode in use marked free, /proc/mounts has /dev/disk0p1 / ext2 ro,relatime 0 0", "source": "scenario"},
+        {"assertion_id": "fault-refused", "checks": "a write to /root fails with Read-only file system", "source": "scenario"},
+        {"assertion_id": "fault-record", "checks": "the kernel says ext2: check: inode N: a reached inode the bitmap calls free", "source": "scenario"},
+        {"assertion_id": "fault-reason", "checks": "the kernel says ext2: mounted read-only: the check found a fault", "source": "scenario"},
+        {"assertion_id": "look-same", "checks": "a recovery boot without rach2.fsck reaches its shell and leaves every byte of the disk as it was", "source": "scenario"},
+        {"assertion_id": "look-no-e2fsck", "checks": "its init never says init: e2fsck", "source": "scenario"},
+        {"assertion_id": "repair-root", "checks": "with rach2.fsck, init says init: e2fsck: /dev/disk0p1: status 1", "source": "scenario"},
+        {"assertion_id": "repair-second", "checks": "init says init: e2fsck: /dev/disk0p2: status 0", "source": "scenario"},
+        {"assertion_id": "repair-copy", "checks": "init says init: e2fsck: /dev/disk1p1: status 1 of the copy on the second disk", "source": "scenario"},
+        {"assertion_id": "node-writes", "checks": "the recovery kernel writes a sector through /dev/disk0p2, reads it back and puts the old one back", "source": "scenario"},
+        {"assertion_id": "repair-e2fsck", "checks": "the host's e2fsck -fn exits 0 on the repaired partition", "source": "scenario"},
+        {"assertion_id": "repair-valid", "checks": "the repair left the superblock's state 1", "source": "scenario"},
+        {"assertion_id": "repair-changed", "checks": "the repair changed the disk", "source": "scenario"},
+        {"assertion_id": "clean-mounted", "checks": "the repaired root mounts rw", "source": "scenario"},
+        {"assertion_id": "clean-kept", "checks": "it reads again from /root/again, which the lost block's boot wrote", "source": "scenario"},
+        {"assertion_id": "clean-unchecked", "checks": "the kernel never says ext2: check of the repaired root", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 11}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 10800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2400000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 805306368, "disk_bytes": 402653184, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "recovery-image", "node": "images/etude-recovery.krffs", "per_architecture": true},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case kills the machine under its root, damages the disk between boots and boots the recovery system on it, which the installed machine's disk cannot be"}
+    }
+  ]
+}

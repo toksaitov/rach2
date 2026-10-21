@@ -15,7 +15,7 @@
 #include "etude/scenario.h"
 
 /* The most assertions a case of these families declares. */
-#define LC_ASSERTS 16
+#define LC_ASSERTS 48
 
 /* The KRFFS partition of the disks mkdisk.sh makes with `64 48`. */
 #define LC_PART_OFFSET "1048576"

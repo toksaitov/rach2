@@ -810,14 +810,59 @@ KRFFSMOUNT_DISKS = $(addprefix $(CASE_DIR)/krffsmount/,volume.disk broken.disk b
 $(KRFFSMOUNT_DISKS) &: tests/system/krffsvol.sh $(KRFFSVOLS) $(MKMBR)
 	sh tests/system/krffsvol.sh disks $(CASE_DIR)/krffsmount
 
-# `tests/run ext2`: the ext2 driver booted over a fixture disk the host's
-# mke2fs wrote, with the walker's link rows on the mounted volume.
-EXT2_DISK = $(IMAGES_DIR)/ext2-test.disk
-run-ext2: $(DEMO_CREDS) rach2 tests krffs test-image $(HARNESS) $(RUNUTIL) $(MKMBR) \
-          $(MANIFEST_PARTS_os_real) \
-          rach2-recovery $(RECOVERY_IMAGE)
-	sh tests/system/suites/ext2.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXT2_DISK) \
-	    build/tools/image/mkmbr $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
+# `tests/run ext2`: the ext2 driver booted: the probes as init on an ext2
+# root, ext2probe's link and cost rows on a fixture volume the host's mke2fs
+# wrote, and os-real on its ext2 root, written, killed, checked, damaged and
+# repaired by recovery's e2fsck. They are the machine cases of
+# tests/cases/machine.ext2.json, which etude runs, and have no target here.
+# The cases boot private copies of the three disks below.
+#
+# The probes' disk: the test manifest as an ext2 volume of 16 MiB, the first
+# MBR partition at sector 2048.
+$(IMAGES_DIR)/ext2-probes.disk: $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) \
+                                tools/image/mkext2.sh $(IMAGE_TOOLS) $(MKMBR) \
+                                | preflight krffs rach2 tests musl-programs utils ish \
+                                  tools/etude/guest check-dropbearmulti
+	@mkdir -p $(IMAGES_DIR)
+	sh tools/image/mkext2.sh krffs/manifests/test.manifest $@.vol 16
+	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $@.vol; } > $@.tmp
+	rm -f $@.vol
+	$(MKMBR) --lba $@.tmp 2048:32768:83 > /dev/null
+	mv $@.tmp $@
+# The fixture disk of ext2probe's rows, which mkext2fixture.sh writes.
+$(IMAGES_DIR)/ext2-fixture.disk: tests/system/mkext2fixture.sh $(MKMBR) | preflight
+	@mkdir -p $(IMAGES_DIR)
+	sh tests/system/mkext2fixture.sh $@.tmp $(MKMBR) > /dev/null
+	mv $@.tmp $@
+# The root disk: os-real as an ext2 volume of 96 MiB at sector 2048, and an
+# empty ext2 volume of 32 MiB after it. The set-id probe, the helper it execs
+# and the programs run beside it are test programs, not in the shipped image,
+# so debugfs writes each into the volume at the root under its own name; it
+# writes a file with the mode of the host's copy, so each mode is set after.
+EXT2_ROOT_PROGRAMS = modeprobe suidhelper zombieprobe musl/lchownmusl musl/direntmusl
+$(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                              $(filter $(addprefix %/,$(EXT2_ROOT_PROGRAMS)),$(MANIFEST_DEPS_test)) \
+                              tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) $(MKMBR) \
+                              | preflight krffs rach2 $(MANIFEST_PARTS_os_real) tests musl-programs
+	@mkdir -p $(IMAGES_DIR)
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@.p1 96
+	. tools/setup/e2fsprogs_path.sh && for prog in $(EXT2_ROOT_PROGRAMS); do \
+	    name=`basename $$prog` && \
+	    debugfs -w -R "write $(ARCH_BUILD)/tests/$$prog $$name" $@.p1 > /dev/null 2>&1 && \
+	    debugfs -w -R "sif $$name mode 0100755" $@.p1 > /dev/null 2>&1 && \
+	    rm -f $@.check && debugfs -R "dump /$$name $@.check" $@.p1 > /dev/null 2>&1 && \
+	    cmp -s $(ARCH_BUILD)/tests/$$prog $@.check || \
+	    { echo "ext2-root: $$name: not written into the volume" >&2; exit 1; }; \
+	done
+	rm -f $@.check $@.p2 && : > $@.p2
+	. tools/setup/e2fsprogs_path.sh && E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
+	    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+	    $@.p2 32M > /dev/null 2>&1
+	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $@.p1 $@.p2; \
+	  dd if=/dev/zero bs=1048576 count=1 2>/dev/null; } > $@.tmp
+	rm -f $@.p1 $@.p2
+	$(MKMBR) --lba $@.tmp 2048:196608:83 198656:65536:83 > /dev/null
+	mv $@.tmp $@
 
 # `tests/run gnu`: the GNU system on its ext2 root, driven over OpenSSH with
 # nobody at the console, logged in to by key and by password, and each port,
