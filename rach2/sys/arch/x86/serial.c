@@ -146,26 +146,36 @@ void serial_init(void)
  * How many times a transmit is polled before the byte is dropped.
  *
  * A UART that is not draining makes the wait below never end, and a kernel
- * that hangs while reporting a fault reports nothing. At 115200 baud a byte
- * leaves in about 87 microseconds and this loop is far faster than that, so
- * the count is high enough that a working port never reaches it and low
- * enough that a stuck one delays each byte by a bounded time instead of
- * stopping the kernel.
+ * that hangs while reporting a fault reports nothing. A UART that drains
+ * slowly is no fault: QEMU's keeps a byte in its FIFO while the program that
+ * reads its console socket falls behind, which on a loaded host lasts tens of
+ * milliseconds or more, and a byte dropped then is lost from the record a
+ * test reads. A hardware UART empties its 16-byte FIFO in 1.4 ms at 115200
+ * baud, some thousand polls. So a byte waits up to SERIAL_TX_POLLS, seconds
+ * of polling, and a port that misses that is taken as stuck: until it takes
+ * a byte again, each byte waits only SERIAL_TX_STUCK_POLLS, so that a dead
+ * port costs one long wait and then a short one per byte.
  */
-#define SERIAL_TX_POLLS 100000
+#define SERIAL_TX_POLLS       20000000UL
+#define SERIAL_TX_STUCK_POLLS 100000UL
+
+static int _serial_stuck; /* the last byte timed out; reset by one sent */
 
 void serial_out(char c)
 {
+    unsigned long limit = _serial_stuck ? SERIAL_TX_STUCK_POLLS : SERIAL_TX_POLLS;
     unsigned long spins = 0;
 
     if (!_serial_port_exists) {
         return;
     }
     while (!_serial_is_transmit_empty()) {
-        if (++spins >= SERIAL_TX_POLLS) {
+        if (++spins >= limit) {
+            _serial_stuck = 1;
             return;
         }
     }
+    _serial_stuck = 0;
     outb(SERIAL_COM1 + SERIAL_DATA, c);
 }
 
