@@ -17,7 +17,7 @@
  * qcow2 overlays, an IDE disk with a serial and the firmware's flash among
  * them; `--argv` runs these rows alone. A capture of a card's frames is a
  * filter-dump after the card, and a capture of a card the profile lacks is
- * refused; `--capture` runs these rows alone. Thirteen stand-in machines then
+ * refused; `--capture` runs these rows alone. Fourteen stand-in machines then
  * run at once, each with an end of its own, and each must keep its own console
  * and end: a QEMU that fails before it connects is an unexpected exit, and one
  * that reports that it could not start the accelerator is a failed
@@ -25,11 +25,13 @@
  * query-accelerators or, for a QEMU without that command, query-kvm. QMP's
  * SHUTDOWN events of the guest give a shutdown, a reset and a panic; one of the
  * host, or an exit without an event, is an unexpected exit; a cancellation of a
- * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, and
- * of one that never answers QMP is a cancellation. Each leaves no process and
- * no socket behind. With the real QEMU, the kernel of the architecture ARCH
- * names boots under TCG to the debug shell, the first boot with an empty disk
- * on IDE and two on AHCI that the kernel must find where the profile put them,
+ * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, of
+ * one that never answers QMP, and of one that obeys quit while its QEMU is
+ * suspended, which the cancellation resumes, is a cancellation; `--ends` runs
+ * these machines alone. Each leaves no process and no socket behind. With the
+ * real QEMU, the kernel of the architecture ARCH names boots under TCG to the
+ * debug shell, the first boot with an empty disk on IDE and two on AHCI that
+ * the kernel must find where the profile put them,
  * and its `poweroff` must give a shutdown; a cancellation at the prompt must
  * give a cancellation, and an accelerator this host's QEMU does not have must
  * give a failed accelerator. OVMF's code image, as tools/setup/ovmf_path.sh
@@ -374,7 +376,8 @@ struct row {
     int act; /* 'g' types go at the start, 'c' cancels when
                 running, 'C' cancels at once, 'p' types poweroff
                 at the prompt, 'P' cancels at the prompt, 'b' runs the boundary probe,
-                'u' boots by OVMF and cancels once it names the CD and the NVMe disk */
+                'u' boots by OVMF and cancels once it names the CD and the NVMe disk,
+                's' suspends QEMU when running and cancels once it is seen stopped */
     int acted;
     struct etude_qemu_profile profile;
     struct etude_qemu_site site;
@@ -416,11 +419,33 @@ static void row_shell(struct row *r, const struct etude_machine_result *res)
         etude_machine_cancel(r->m);
 }
 
+/**
+ * Act on the suspended row `r`: suspend its QEMU once the machine runs, which
+ * a second suspension cannot repeat, and cancel the machine once the stop is
+ * seen.
+ */
+static void row_hold(struct row *r, const struct etude_machine_result *res)
+{
+    if (r->acted == 1 && res->qemu->suspension == ETUDE_SUSPEND_STOPPED) {
+        r->acted = 2;
+        etude_machine_cancel(r->m);
+    }
+    if (r->acted == 0 && res->state == ETUDE_MACHINE_RUNNING) {
+        r->acted = 1;
+        CHECK(etude_machine_suspend(r->m) == 0, r->name);
+        CHECK(etude_machine_suspend(r->m) != 0 && errno == EBUSY, r->name);
+    }
+}
+
 /** Act on a row whose machine has changed, as its `act` says. */
 static void row_act(struct row *r)
 {
     const struct etude_machine_result *res = etude_machine_result(r->m);
 
+    if (r->act == 's') {
+        row_hold(r, res);
+        return;
+    }
     if (r->act == 'a' && r->acted == 1 && find(&res->console, "Done.", 0) >= 0) {
         r->acted = 2;
         CHECK(etude_machine_type(r->m, "poweroff\r", 9) == 0, r->name);
@@ -650,6 +675,10 @@ static void check_details(const struct row *r, const struct etude_machine_result
     } else if (strcmp(r->name, "obey") == 0) {
         CHECK(res->qemu->exit_end == ETUDE_END_EXITED && res->qemu->exit_value == 0, "obey");
         CHECK(strcmp(res->reason, "host-qmp-quit") == 0, "obey");
+    } else if (strcmp(r->name, "held") == 0) {
+        CHECK(res->qemu->exit_end == ETUDE_END_EXITED && res->qemu->exit_value == 0, "held");
+        CHECK(strcmp(res->reason, "host-qmp-quit") == 0, "held");
+        CHECK(res->qemu->suspensions == 1 && res->qemu->suspended_us >= res->running_us, "held");
     } else if (strcmp(r->name, "silent") == 0) {
         CHECK(res->running_us == 0, "silent");
     }
@@ -665,7 +694,7 @@ static void check_ran(const struct row *r, const struct etude_machine_result *re
     CHECK(res->accel != NULL && strcmp(res->accel, etude_accel_name(r->accel)) == 0, r->name);
 }
 
-/** Run the thirteen stand-in machines at once and check each one's end. */
+/** Run the fourteen stand-in machines at once and check each one's end. */
 static void test_ends(void)
 {
     static struct row rows[] = {
@@ -681,6 +710,7 @@ static void test_ends(void)
         ROW("crash", "crash", ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_QEMU_EXITED, 0),
         ROW("obey", "obey", ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 'c'),
         ROW("deaf", "deaf", ETUDE_ACCEL_TCG, "x86_64", ETUDE_END_STOPPED, 'c'),
+        ROW("held", "obey", ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 's'),
         ROW("silent", "silent", ETUDE_ACCEL_TCG, "i686", ETUDE_END_STOPPED, 'C'),
     };
     int n = (int)(sizeof(rows) / sizeof(rows[0])), i;
@@ -2270,6 +2300,40 @@ static void test_memory(void)
     etude_qemu_free(q);
 }
 
+/** Run the rows that option `opt` selects alone; 0 for no such option. */
+static int test_alone(const char *opt)
+{
+    if (strcmp(opt, "--boundary") == 0) {
+        test_real(1);
+    } else if (strcmp(opt, "--network") == 0) {
+        test_network_argv();
+        test_network_refused();
+    } else if (strcmp(opt, "--capture") == 0) {
+        test_captures();
+    } else if (strcmp(opt, "--audio") == 0) {
+        test_audio_argv();
+        test_audio();
+    } else if (strcmp(opt, "--memory") == 0) {
+        test_memory();
+    } else if (strcmp(opt, "--usb") == 0) {
+        test_usb();
+    } else if (strcmp(opt, "--argv") == 0) {
+        test_argv();
+    } else if (strcmp(opt, "--uefi") == 0) {
+        test_uefi();
+    } else if (strcmp(opt, "--ends") == 0) {
+        test_ends();
+    } else if (strcmp(opt, "--forwards") == 0) {
+        test_forwards();
+        test_guest_addresses();
+        test_guest_forwards();
+        test_card();
+    } else {
+        return 0;
+    }
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
@@ -2282,30 +2346,7 @@ int main(int argc, char **argv)
     }
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         return 1;
-    if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
-        test_real(1);
-    } else if (argc == 2 && strcmp(argv[1], "--network") == 0) {
-        test_network_argv();
-        test_network_refused();
-    } else if (argc == 2 && strcmp(argv[1], "--capture") == 0) {
-        test_captures();
-    } else if (argc == 2 && strcmp(argv[1], "--audio") == 0) {
-        test_audio_argv();
-        test_audio();
-    } else if (argc == 2 && strcmp(argv[1], "--memory") == 0) {
-        test_memory();
-    } else if (argc == 2 && strcmp(argv[1], "--usb") == 0) {
-        test_usb();
-    } else if (argc == 2 && strcmp(argv[1], "--argv") == 0) {
-        test_argv();
-    } else if (argc == 2 && strcmp(argv[1], "--uefi") == 0) {
-        test_uefi();
-    } else if (argc == 2 && strcmp(argv[1], "--forwards") == 0) {
-        test_forwards();
-        test_guest_addresses();
-        test_guest_forwards();
-        test_card();
-    } else {
+    if (argc != 2 || !test_alone(argv[1])) {
         test_argv();
         test_network_argv();
         test_network_refused();

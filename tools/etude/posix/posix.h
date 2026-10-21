@@ -23,11 +23,15 @@ enum keeper_type {
     KEEP_EXIT,    /* a: ETUDE_END_EXITED or ETUDE_END_SIGNALED; b: the value */
     KEEP_USAGE,   /* a: processor microseconds; b: 1 when exact; c: peak bytes */
     KEEP_CLEANED, /* a: 1 when every process is confirmed ended */
+    KEEP_STOPPED, /* a: when the case's process was seen to stop */
+    KEEP_RESUMED, /* a: when it was seen to continue, or was let go */
     /* From the controller. */
     KEEP_GO,     /* let the case's process execute its program */
-    KEEP_CANCEL, /* end the case: SIGTERM, then SIGKILL after the grace */
+    KEEP_CANCEL, /* end the case: SIGTERM and SIGCONT, SIGKILL after the grace */
     KEEP_CHILD,  /* a, b: a reported descendant's pid and start */
-    KEEP_CLEAN   /* the controller has read the output; end what is left */
+    KEEP_CLEAN,  /* the controller has read the output; end what is left */
+    KEEP_STOP,   /* send SIGSTOP to the case's group */
+    KEEP_CONT    /* send SIGCONT to the case's group */
 };
 
 struct keeper_msg {

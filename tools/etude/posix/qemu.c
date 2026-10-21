@@ -997,7 +997,28 @@ void etude_machine_cancel(struct etude_machine *m)
     if (m->finished || m->cancelled || m->shutdown || m->proc_done)
         return;
     m->cancelled = 1;
+    etude_exec_resume(m->proc);
     machine_quit(m);
+}
+
+int etude_machine_suspend(struct etude_machine *m)
+{
+    if (m->finished || m->cancelled || m->proc_done) {
+        errno = ESRCH;
+        return -1;
+    }
+    if (m->r.state != ETUDE_MACHINE_RUNNING) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return etude_exec_suspend(m->proc);
+}
+
+int etude_machine_resume(struct etude_machine *m)
+{
+    if (m->finished || m->proc_done)
+        return 0;
+    return etude_exec_resume(m->proc);
 }
 
 /** Say whether `name` is a QMP command's name: letters, digits, - and _. */

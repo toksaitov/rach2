@@ -41,6 +41,7 @@ struct etude_proc {
     int reaped;           /* the keeper has ended and been reaped */
     uint64_t drain_until; /* after the keeper's end, when open output
                              proves a process of the case still runs */
+    int noticed;          /* the keeper reported a change of the suspension */
     int finished;
     int returned;
     struct etude_exec_result r;
@@ -314,6 +315,7 @@ static void keeper_message(struct etude_proc *p, const struct keeper_msg *m)
         p->r.exit_value = (int)m->b;
         p->r.end = p->cancelled ? ETUDE_END_STOPPED : p->r.exit_end;
         p->r.value = p->cancelled ? -1 : p->r.exit_value;
+        p->r.suspension = ETUDE_SUSPEND_NONE;
         read_output(p, &p->out, &p->r.out, 1);
         read_output(p, &p->err, &p->r.err, 0);
         keeper_send(p->ctl, KEEP_CLEAN, 0, 0, 0);
@@ -327,6 +329,15 @@ static void keeper_message(struct etude_proc *p, const struct keeper_msg *m)
     } else if (m->type == KEEP_CLEANED) {
         p->cleaned = 1;
         p->r.cleanup = m->a && !p->unverified ? ETUDE_CLEANUP_CONFIRMED : ETUDE_CLEANUP_UNCONFIRMED;
+    } else if (m->type == KEEP_STOPPED && p->r.suspension == ETUDE_SUSPEND_ASKED) {
+        p->r.suspension = ETUDE_SUSPEND_STOPPED;
+        p->r.suspensions++;
+        p->r.suspended_us = (uint64_t)m->a;
+        p->noticed = 1;
+    } else if (m->type == KEEP_RESUMED && p->r.suspension == ETUDE_SUSPEND_RESUMING) {
+        p->r.suspension = ETUDE_SUSPEND_NONE;
+        p->r.resumed_us = (uint64_t)m->a;
+        p->noticed = 1;
     }
 }
 
@@ -443,7 +454,7 @@ static int poll_timeout(uint64_t until)
 /**
  * Serve every unfinished attempt once, after a poll of their descriptors.
  *
- * @return the count of output bytes read.
+ * @return the count of output bytes read, and of suspensions that changed.
  */
 static size_t serve(struct etude_exec *ex)
 {
@@ -457,6 +468,8 @@ static size_t serve(struct etude_exec *ex)
         n += read_output(p, &p->err, &p->r.err, 0);
         if (!p->reaped)
             read_keeper(p);
+        n += (size_t)p->noticed;
+        p->noticed = 0;
         proc_settle(p);
     }
     return n;
@@ -541,6 +554,40 @@ void etude_exec_cancel(struct etude_proc *p)
     p->cancelled = 1;
     if (!p->exited)
         keeper_send(p->ctl, KEEP_CANCEL, 0, 0, 0);
+}
+
+int etude_exec_suspend(struct etude_proc *p)
+{
+    if (p->exited || p->cancelled || p->finished) {
+        errno = ESRCH;
+        return -1;
+    }
+    if (p->r.suspension != ETUDE_SUSPEND_NONE) {
+        errno = EBUSY;
+        return -1;
+    }
+    if (keeper_send(p->ctl, KEEP_STOP, 0, 0, 0) != 0) {
+        errno = EPIPE;
+        return -1;
+    }
+    p->r.suspension = ETUDE_SUSPEND_ASKED;
+    return 0;
+}
+
+int etude_exec_resume(struct etude_proc *p)
+{
+    if (p->r.suspension != ETUDE_SUSPEND_ASKED && p->r.suspension != ETUDE_SUSPEND_STOPPED)
+        return 0;
+    if (p->exited || p->finished) {
+        p->r.suspension = ETUDE_SUSPEND_NONE;
+        return 0;
+    }
+    p->r.suspension = ETUDE_SUSPEND_RESUMING;
+    if (keeper_send(p->ctl, KEEP_CONT, 0, 0, 0) != 0) {
+        errno = EPIPE;
+        return -1;
+    }
+    return 0;
 }
 
 const struct etude_exec_result *etude_proc_result(const struct etude_proc *p)

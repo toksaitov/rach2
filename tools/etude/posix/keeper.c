@@ -34,6 +34,8 @@ struct keeper {
     int controller; /* the controller's pipe is open */
     int wake;       /* the read end of the pipe SIGCHLD writes to */
     int cancelled;
+    int held;         /* 1 once SIGSTOP is sent, 2 once the stop is seen */
+    int resuming;     /* SIGCONT sent after a stop seen; not yet seen to act */
     uint64_t kill_at; /* when a cancellation sends SIGKILL; 0 for none */
     struct etude_pid reported[KEEPER_MAX];
     int nreported;
@@ -102,15 +104,26 @@ fail:
 
 /**
  * Reap every child that has ended, the case's process among them, and tell
- * the controller how the case's process ended.
+ * the controller how the case's process ended; tell it too when that process
+ * has stopped after a KEEP_STOP, or continued after a KEEP_CONT.
  */
 static void reap(struct keeper *kp)
 {
     int st;
     pid_t w;
 
-    while ((w = waitpid(-1, &st, WNOHANG)) > 0) {
+    while ((w = waitpid(-1, &st, WNOHANG | WUNTRACED | WCONTINUED)) > 0) {
         if (w != kp->pid)
+            continue;
+        if (WIFSTOPPED(st) && kp->held == 1) {
+            kp->held = 2;
+            keeper_send(kp->args->ev, KEEP_STOPPED, (int64_t)posix_now_us(), 0, 0);
+        }
+        if (WIFCONTINUED(st) && kp->resuming) {
+            kp->resuming = 0;
+            keeper_send(kp->args->ev, KEEP_RESUMED, (int64_t)posix_now_us(), 0, 0);
+        }
+        if (WIFSTOPPED(st) || WIFCONTINUED(st))
             continue;
         kp->alive = 0;
         if (WIFSIGNALED(st))
@@ -309,8 +322,33 @@ static void keeper_finish(struct keeper *kp)
 }
 
 /**
+ * Stop the case's process group at the controller's KEEP_STOP, or let it go
+ * at its KEEP_CONT. A stop is reported once waitpid(2) has seen it, and a
+ * continuation after a stop seen once waitpid(2) has seen that; a SIGCONT
+ * with no stop seen is reported at once, since the stop may never have
+ * happened. A cancelled or ended case is not stopped.
+ */
+static void keeper_hold(struct keeper *kp, int type)
+{
+    if (type == KEEP_STOP && kp->alive && !kp->cancelled && kp->held == 0) {
+        kp->held = 1;
+        kill(-kp->pid, SIGSTOP);
+        return;
+    }
+    if (type != KEEP_CONT)
+        return;
+    if (kp->alive)
+        kill(-kp->pid, SIGCONT);
+    kp->resuming = kp->alive && kp->held == 2;
+    kp->held = 0;
+    if (!kp->resuming)
+        keeper_send(kp->args->ev, KEEP_RESUMED, (int64_t)posix_now_us(), 0, 0);
+}
+
+/**
  * Act on one message of the controller's. The end of the controller's pipe
- * cancels the case, since nobody is left to read its results.
+ * cancels the case, since nobody is left to read its results; the SIGCONT
+ * of a cancellation lets a stopped case take its SIGTERM.
  */
 static void keeper_command(struct keeper *kp)
 {
@@ -322,9 +360,12 @@ static void keeper_command(struct keeper *kp)
     }
     if (m.type == KEEP_CANCEL && !kp->cancelled) {
         kp->cancelled = 1;
+        kp->held = 0;
         kp->kill_at = posix_now_us() + kp->args->spec->grace_us;
         signal_all(kp, SIGTERM);
         signal_all(kp, SIGCONT);
+    } else if (m.type == KEEP_STOP || m.type == KEEP_CONT) {
+        keeper_hold(kp, m.type);
     } else if (m.type == KEEP_CHILD && kp->nreported < KEEPER_MAX) {
         kp->reported[kp->nreported].pid = (long)m.a;
         kp->reported[kp->nreported].start = (uint64_t)m.b;
@@ -351,6 +392,21 @@ static int kill_timeout(const struct keeper *kp)
 }
 
 /**
+ * Give the milliseconds the keeper may wait for an event: until a
+ * cancellation's kill, and KEEPER_LOOK_MS at most while a stop or a
+ * continuation is still to be seen, since not every system sends SIGCHLD
+ * when a child continues.
+ */
+static int wait_ms(const struct keeper *kp)
+{
+    int ms = kill_timeout(kp);
+
+    if ((kp->held == 1 || kp->resuming) && kp->alive && (ms < 0 || ms > KEEPER_LOOK_MS))
+        return KEEPER_LOOK_MS;
+    return ms;
+}
+
+/**
  * Serve the case until it has ended and been cleaned up: reap on each
  * SIGCHLD, act on the controller's messages, and kill a cancelled case whose
  * grace has passed.
@@ -366,7 +422,7 @@ static void supervise(struct keeper *kp)
         p[1].fd = kp->controller ? kp->args->ctl : -1;
         p[1].events = POLLIN;
         p[0].revents = p[1].revents = 0;
-        n = poll(p, 2, kill_timeout(kp));
+        n = poll(p, 2, wait_ms(kp));
         if (n > 0 && p[0].revents != 0)
             wait_wake(kp, 0);
         reap(kp);
@@ -436,7 +492,7 @@ static int keeper_signals(struct keeper *kp)
     kp->wake = wake[0];
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = keeper_sigchld;
-    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
     return sigaction(SIGCHLD, &sa, NULL);
 }

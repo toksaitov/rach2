@@ -97,6 +97,14 @@ struct etude_output {
     int closed;     /* nonzero once the stream reached its end */
 };
 
+/* Where a suspension of an attempt's process is, on POSIX systems. */
+enum etude_suspension {
+    ETUDE_SUSPEND_NONE,    /* not suspended, or seen to continue after a stop */
+    ETUDE_SUSPEND_ASKED,   /* SIGSTOP sent; the stop not yet seen */
+    ETUDE_SUSPEND_STOPPED, /* the keeper saw the process stop */
+    ETUDE_SUSPEND_RESUMING /* SIGCONT sent; the continuation not yet seen */
+};
+
 /* What the executor observed of one attempt. */
 struct etude_exec_result {
     const char *attempt_id;
@@ -118,6 +126,11 @@ struct etude_exec_result {
     uint64_t started_us;  /* monotonic times: the start was asked, */
     uint64_t ended_us;    /* the end of the process was seen, */
     uint64_t finished_us; /* and the cleanup was done */
+    /* The suspensions of etude_exec_suspend, on POSIX systems alone. */
+    enum etude_suspension suspension;
+    unsigned suspensions;  /* the stops the keeper saw */
+    uint64_t suspended_us; /* monotonic times: the keeper saw the last stop, */
+    uint64_t resumed_us;   /* and saw the process continue after it */
 };
 
 /* The executor: the processes of the cases it runs at once. */
@@ -159,8 +172,9 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
                      struct etude_proc **p);
 
 /**
- * Serve every running attempt until one finishes, new output arrives, or
- * `timeout_ms` milliseconds pass; -1 sets no time.
+ * Serve every running attempt until one finishes, new output arrives, the
+ * suspension of one changes, or `timeout_ms` milliseconds pass; -1 sets no
+ * time.
  *
  * An attempt finishes when its process has ended, the executor has ended
  * the descendants it knows of, and the cleanup is confirmed or found
@@ -168,7 +182,7 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
  * the results of the running attempts after each return.
  *
  * @return the attempt that finished, each once, or NULL when output arrived,
- *         the time passed, or no attempt is running.
+ *         a suspension changed, the time passed, or no attempt is running.
  */
 struct etude_proc *etude_exec_wait(struct etude_exec *ex, int timeout_ms);
 
@@ -202,6 +216,34 @@ struct etude_proc *etude_exec_watch(struct etude_exec *ex, int timeout_ms, struc
  * ETUDE_END_STOPPED, unless the process had already ended.
  */
 void etude_exec_cancel(struct etude_proc *p);
+
+/**
+ * Suspend an attempt that runs: its keeper sends SIGSTOP to the case's
+ * process group, and the result's `suspension` becomes ETUDE_SUSPEND_STOPPED,
+ * with `suspended_us`, once the keeper has seen the case's process stop,
+ * every thread of it, by waitpid(2). A stopped process runs nothing and
+ * answers nothing until it is resumed.
+ *
+ * Only the POSIX executor has it. A cancellation sends SIGCONT after its
+ * SIGTERM, and so does the keeper when its controller has gone, so that no
+ * case is left stopped and a stopped case ends by its own handling of
+ * SIGTERM.
+ *
+ * @return 0, or -1 with errno ESRCH for an attempt whose process has ended
+ *         or that is cancelled, EBUSY for one whose suspension is not
+ *         ETUDE_SUSPEND_NONE, or EPIPE when its keeper has gone.
+ */
+int etude_exec_suspend(struct etude_proc *p);
+
+/**
+ * Resume a suspended attempt: its keeper sends SIGCONT to the case's process
+ * group, and `suspension` becomes ETUDE_SUSPEND_NONE, with `resumed_us`, once
+ * the keeper has seen the process continue, or at once when the keeper never
+ * saw it stop. An attempt not suspended, or that has ended, is left as it is.
+ *
+ * @return 0, or -1 with errno EPIPE when the keeper has gone.
+ */
+int etude_exec_resume(struct etude_proc *p);
 
 /** Give what was observed of an attempt so far. */
 const struct etude_exec_result *etude_proc_result(const struct etude_proc *p);
