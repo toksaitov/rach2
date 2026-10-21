@@ -114,9 +114,11 @@ record() {
     printf '@etude 1 %s\n' "$*"
 }
 
-# Make TEXT printable ASCII of at most 160 bytes, for a record's detail.
+# Make TEXT printable ASCII of at most 160 bytes with no space at either
+# end, for a record's detail, which a space there would keep from parsing.
 clip() {
-    printf '%s' "$1" | tr -c ' -~' '?' | cut -c1-160
+    _clip=$(printf '%s' "$1" | tr -c ' -~' '?' | sed 's/^ *//' | cut -c1-160 | sed 's/ *$//')
+    printf '%s' "${_clip:-?}"
 }
 
 # pass ID: report that the assertion ID passed.

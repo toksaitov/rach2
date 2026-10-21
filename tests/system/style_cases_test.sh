@@ -85,6 +85,12 @@ source_fault() {
 }
 printf 'int line; // a line comment\n' >> "$TREE/rach2/clean.c"
 source_fault comment no-line-comments
+# A failure's detail is cut at 160 bytes, and here the cut falls just after a
+# space, which the record must not end with: "a // comment: rach2/clean.c:3:"
+# and the line's first 130 bytes, the last of them a space.
+printf '/* clean.c: a file with no fault. */\nint clean;\n' > "$TREE/rach2/clean.c"
+printf 'int line; // %s tail\n' "$(printf '%0116d' 0 | tr 0 x)" >> "$TREE/rach2/clean.c"
+source_fault cut no-line-comments
 printf '/* clean.c: a file with no fault. */\nint clean;\n' > "$TREE/rach2/clean.c"
 printf 'extern int unguarded;\n' > "$TREE/rach2/unguarded.h"
 source_fault guard header-guards
@@ -130,4 +136,4 @@ status=0
 "$CASECHECK" -s "$SCHEMAS" families "$WORK/duplicate.manifest.json" > "$WORK/families" 2> "$WORK/families.err" || status=$?
 [ "$status" = 1 ] || fail "casecheck families exited $status on a manifest with a case twice"
 [ ! -s "$WORK/families" ] || fail "casecheck families printed a family of a manifest at fault"
-echo "style-cases-test: passed: three source faults and three manifest faults are fatal"
+echo "style-cases-test: passed: four source faults and three manifest faults are fatal"

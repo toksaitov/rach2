@@ -115,6 +115,23 @@
       }
     },
     {
+      "name": "edge",
+      "summary": "a failure's detail cut just after a space keeps the space at its end, and its record does not parse",
+      "edits": [
+        {
+          "file": "tests/cases/host/style.sh",
+          "find": "| sed 's/^ *//' | cut -c1-160 | sed 's/ *$//')",
+          "replace": "| cut -c1-160)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "style-cases-test: cut: the judgment does not have"
+        ]
+      }
+    },
+    {
       "name": "renamed",
       "summary": "the manifest's conventions case declares an assertion the program does not report, in place of one it does",
       "edits": [
