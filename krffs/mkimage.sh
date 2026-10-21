@@ -49,10 +49,14 @@ mkdir -p "$(dirname "$OUT")"
 # failure leaves the previous image as it was. The temporary names have the
 # process ID, since two suites of a parallel run can build one image at
 # once; both stage the same manifest, so either result is the image, and the
-# rename is atomic.
+# rename is atomic. A signal ends the build at once: a shell that ran the
+# cleanup and went on would publish what the cleanup left.
 TMP="$OUT.new.$$"
 DEPS_TMP="$OUT.d.new.$$"
-trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$" "$OUT.programs.$$"' EXIT INT TERM
+trap 'rm -f "$TMP" "$DEPS_TMP" "$OUT.d.list.$$" "$OUT.d.$$" "$OUT.programs.$$"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 dd if=/dev/zero of="$TMP" bs=1048576 count="$SIZE" 2>/dev/null
 "$TOOLS/mkfs.krffs" "$TMP" >/dev/null
 STAGED=$(STAGEIMAGE_DEPS="$DEPS_TMP" "$TOOLS/stageimage.krffs" "$MANIFEST" "$TMP")
@@ -75,16 +79,17 @@ make -s -C "$REPO" build/tools/inspect/setidcheck || exit 1
 "$SETIDCHECK" --image "$TMP" --manifest "$MANIFEST"
 
 # The programs staged from each `exec-dir` directory, which the dependency
-# file lists in place of the directory (krffs/programs.sh). The image is
-# touched after them, so that it is the newer of the two: the move keeps the
-# time the stager last wrote it, which is before them, and a make that keeps
-# times to the nanosecond would find the image out of date at once.
+# file lists in place of the directory (krffs/programs.sh).
 EXEC_DIRS=$(sed -n 's/^exec-dir	//p' "$DEPS_TMP" | sort -u | while IFS= read -r d; do
     case "$d" in
         (/*) printf '%s\n' "$d" ;;
         (*) printf '%s\n' "$REPO/$d" ;;
     esac
 done)
+case "$OUT" in
+    /*) PROGRAMS=$OUT.programs ;;
+    *) PROGRAMS=$REPO/$OUT.programs ;;
+esac
 if [ -n "$EXEC_DIRS" ]; then
     # shellcheck disable=SC2086 # the directories, one word each
     sh "$REPO/krffs/programs.sh" snapshot $EXEC_DIRS > "$OUT.programs.$$"
@@ -92,18 +97,14 @@ if [ -n "$EXEC_DIRS" ]; then
 else
     rm -f "$OUT.programs"
 fi
-touch "$TMP"
 
-mv "$TMP" "$OUT"
-
-# The staged inputs as a make dependency file beside the image, written after
-# the image, so a failed build keeps the previous list. A recorded path that
-# exists becomes a prerequisite with an empty rule of its own, so a later
-# deletion puts the image out of date instead of stopping make. A recorded
-# path that is absent, a skipped optional-file, is not a prerequisite, since
-# its empty rule would restage the image on every run; its nearest existing
-# directory is listed in its place, since that directory's time changes when
-# the file appears.
+# The staged inputs as a make dependency file beside the image. A recorded
+# path that exists becomes a prerequisite with an empty rule of its own, so
+# a later deletion puts the image out of date instead of stopping make. A
+# recorded path that is absent, a skipped optional-file, is not a
+# prerequisite, since its empty rule would restage the image on every run;
+# its nearest existing directory is listed in its place, since that
+# directory's time changes when the file appears.
 if [ -s "$DEPS_TMP" ]; then
     DEPS_LIST="$OUT.d.list.$$"
     # The paths are made absolute: a relative recorded path such as `rach2`
@@ -124,7 +125,7 @@ if [ -s "$DEPS_TMP" ]; then
             printf '%s\n' "$d"
         fi
     done | sort -u > "$DEPS_LIST"
-    [ -z "$EXEC_DIRS" ] || printf '%s\n' "$REPO/$OUT.programs" >> "$DEPS_LIST"
+    [ -z "$EXEC_DIRS" ] || printf '%s\n' "$PROGRAMS" >> "$DEPS_LIST"
     {
         printf '%s:' "$OUT"
         while IFS= read -r p; do printf ' %s' "$p"; done < "$DEPS_LIST"
@@ -134,3 +135,14 @@ if [ -s "$DEPS_TMP" ]; then
     mv "$OUT.d.$$" "$OUT.d"
     rm -f "$DEPS_LIST"
 fi
+
+# The image is published last, and touched first so that it is newer than
+# the programs file it depends on: the move keeps the time the stager last
+# wrote it, and a make that keeps times to the nanosecond would otherwise
+# find the image out of date at once. A build stopped before the move
+# leaves the previous image beside the new lists, which name every input
+# this build staged, so an input that changed since that image is still
+# newer than it and the next make builds it again; a build stopped after the
+# move has published the whole set.
+touch "$TMP"
+mv "$TMP" "$OUT"
