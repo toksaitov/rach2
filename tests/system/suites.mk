@@ -1025,6 +1025,21 @@ $(CASE_IMAGES)/recovery.krffs: $(RECOVERY_IMAGE)
 $(CASE_IMAGE_LINKS):
 	@mkdir -p $(@D)
 	ln -f $< $@
+# The fixture of the rehearsal of the install sitting
+# (machine.installer-rehearse.sitting), which rehearse_fixture.sh writes from
+# the disk the test stick installs: a target disk of 256 MiB, 524288 sectors,
+# marked at the first sector of each range of the save set, the save disk, the
+# ranges, the root's head that growset reads and the root's offset. base.raw is
+# written last, so the other files are there once it is.
+REHEARSE_DIR = $(CASE_IMAGES)/rehearse
+REHEARSE_FILES = $(REHEARSE_DIR)/head.vol $(REHEARSE_DIR)/params $(REHEARSE_DIR)/ranges \
+                 $(REHEARSE_DIR)/save.img
+$(REHEARSE_DIR)/base.raw: $(INSTALLER_DISK) tests/cases/machine/rehearse_fixture.sh $(GROWSET) \
+                          $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
+	sh tests/cases/machine/rehearse_fixture.sh $(INSTALLER_DISK) 524288 $(GROWSET) \
+	    $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT) $(REHEARSE_DIR)
+$(REHEARSE_FILES): $(REHEARSE_DIR)/base.raw
+	@test -f $@
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.

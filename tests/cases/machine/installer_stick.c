@@ -54,8 +54,7 @@ int etude_scenario(struct etude_case *c)
     drive_stop(&d);
     if (drive_halted())
         return 1;
-    etude_assert(c, "boots", ok && text != NULL,
-                 d.failed ? d.why : "the manifest names no image");
+    etude_assert(c, "boots", ok && text != NULL, d.failed ? d.why : "the manifest names no image");
 
     if (etude_step(c, "judge") != ETUDE_OK) {
         free(text);
@@ -72,8 +71,8 @@ int etude_scenario(struct etude_case *c)
     } else {
         snprintf(want, sizeof(want), "%" PRIu64, (uint64_t)st.st_size);
         snprintf(detail, sizeof(detail),
-                 "the host built %s bytes, the manifest declares %s, the volume holds %s", want, bytes,
-                 size);
+                 "the host built %s bytes, the manifest declares %s, the volume holds %s", want,
+                 bytes, size);
         etude_assert(c, "length", strcmp(want, bytes) == 0 && strcmp(want, size) == 0, detail);
         etude_assert(c, "hash", strcmp(host, sum) == 0, "the manifest's hash is not the image's");
     }

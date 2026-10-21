@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.installer-rehearse",
+  "summary": "The Lenovo's install sitting rehearsed in its small form: save, install with the grow, and restore, each judged against the save set; the scenario is tests/cases/machine/installer_rehearse_sitting.c",
+  "cases": [
+    {
+      "case_id": "machine.installer-rehearse.sitting",
+      "behavior": "the Lenovo's install sitting rehearsed on a disk of 256 MiB: the recovery system saves the save set onto a save disk, the install from the test stick grows the root to the disk's end, the saved ranges are put back with reflash and read back, and neither the install nor the restore writes a sector outside the save set",
+      "units": ["installer-rehearse", "`tests/system/suites/installer.sh` rehearse part, the rehearsal of the install sitting in its small form"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk_sectors": 524288, "stick": "the test stick", "image": "installer-test.disk", "password": "an-installed-machine", "account": "alice", "account_password": "alices-own-password"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["qemu-img"], "features": {}},
+      "execution": {"program": "installer_rehearse_sitting", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["save", "stick"]}], "children": "none", "cleanup": "libetude-case ends each boot and removes the overlay and the copies of the save disk and the stick, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "save", "stage": "execute", "machine": "sitting", "does": "boot the recovery system from the stick and save each range of the target into a file of the save disk"},
+        {"step_id": "install", "stage": "execute", "machine": "sitting", "does": "boot again and install from the stick onto the target, growing the root to the disk's end"},
+        {"step_id": "install-map", "stage": "execute", "does": "read the overlay's map with qemu-img and judge it with growset against the save set"},
+        {"step_id": "restore", "stage": "execute", "machine": "sitting", "does": "boot again, put each saved range back with reflash and write the digests reflash --verify reads into the save disk"},
+        {"step_id": "restore-check", "stage": "execute", "does": "read the digests off the save disk, compare them with the saved bytes', and judge the overlay's map again"}
+      ],
+      "machines": [
+        {"machine_id": "sitting", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "base": "base", "cluster_bytes": 4096}, "save", {"name": "stick", "bus": "device", "id": "stick"}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "saved", "checks": "the recovery system mounts the save disk and saves every range of the save set onto it, with no read failing", "source": "scenario"},
+        {"assertion_id": "installed", "checks": "the install from the stick checks the image against its manifest and its readback, writes the table and the accounts, grows the root and says it installed", "source": "scenario"},
+        {"assertion_id": "install-wrote", "checks": "the overlay's map lists the extents the install wrote", "source": "scenario"},
+        {"assertion_id": "install-inside", "checks": "every sector the install and the grow wrote lies in the save set", "source": "scenario"},
+        {"assertion_id": "restored", "checks": "every saved range is written back with reflash and read back with reflash --verify, with no write failing", "source": "scenario"},
+        {"assertion_id": "readback", "checks": "each range reads back as the bytes that were saved: its mark and then zeros to its length", "source": "scenario"},
+        {"assertion_id": "restore-inside", "checks": "the restore writes nothing outside the save set", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 21600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 300000000, "ceiling_us": 1200000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "base", "node": "images/cases/rehearse/base.raw", "per_architecture": true},
+        {"name": "save", "node": "images/cases/rehearse/save.img", "per_architecture": true},
+        {"name": "head", "node": "images/cases/rehearse/head.vol", "per_architecture": true},
+        {"name": "ranges", "node": "images/cases/rehearse/ranges", "per_architecture": true},
+        {"name": "params", "node": "images/cases/rehearse/params", "per_architecture": true},
+        {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "installer_rehearse_sitting", "node": "tests/cases/machine/installer_rehearse_sitting", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots the install stick by the firmware and installs onto a disk of its own"}
+    }
+  ]
+}

@@ -22,10 +22,10 @@ struct drive {
     struct etude_case *c;
     struct etude_case_machine *m;
     char machine[64];
-    unsigned boot;    /* the machine's boots in this attempt, counted from 1 */
-    uint64_t at;      /* the console offset just past the last text waited for */
-    int failed;       /* a call did not complete */
-    char why[200];    /* what the first call that did not complete was */
+    unsigned boot;                /* the machine's boots in this attempt, counted from 1 */
+    uint64_t at;                  /* the console offset just past the last text waited for */
+    int failed;                   /* a call did not complete */
+    char why[200];                /* what the first call that did not complete was */
     struct etude_termination end; /* how the machine ended, once it has */
 };
 
