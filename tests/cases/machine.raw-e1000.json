@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.raw-e1000",
+  "summary": "Raw ICMP sockets on the e1000 card, as rawprobe and the capture of its sends check them",
+  "cases": [
+    {
+      "case_id": "machine.raw-e1000.rawprobe",
+      "behavior": "Raw ICMP sockets on the e1000 card: the refusals, delivery of each datagram to every raw socket, IP_TTL and its time-exceeded reply, the send limits, a queue eight deep and sockets under descriptor pressure, and the hop limits and the caller's checksum on the wire",
+      "units": ["raw-e1000", "rawprobe", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "e1000", "gateway": "10.0.2.2", "far": "8.8.8.8", "empty": "10.0.2.9"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "raw_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case removes the capture with the other evidence after a pass, and ends the machine if it still runs"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image to the debug shell with the card's frames captured"},
+        {"step_id": "rawprobe", "stage": "execute", "machine": "guest",
+         "does": "run rawprobe at the debug shell and take its report from the console"},
+        {"step_id": "poweroff", "stage": "execute", "machine": "guest",
+         "does": "once the debug shell is back, power the machine off and wait for its end, so that the capture is whole"},
+        {"step_id": "rawwire", "stage": "execute",
+         "does": "run pcapcheck rawwire on the capture of the first card"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["e1000"], "boot_options": [], "captures": ["net0"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "unprivileged-refused", "checks": "a child that drops to uid 1000 is refused a raw ICMP socket with EPERM", "source": "scenario"},
+        {"assertion_id": "protocol-refused", "checks": "a raw socket for TCP, a protocol with no raw path here, is refused with EPROTONOSUPPORT", "source": "scenario"},
+        {"assertion_id": "echo-both", "checks": "two raw ICMP sockets open, the kernel's own ping reaches the gateway, and its echo reply arrives on both with the same length and bytes, an IPv4 ICMP datagram from the gateway", "source": "scenario"},
+        {"assertion_id": "ttl-exceeded", "checks": "IP_TTL 1 on a datagram socket is accepted and read back, and a send off the subnet with it draws a time-exceeded message on both raw sockets", "source": "scenario"},
+        {"assertion_id": "hdrincl-refused", "checks": "setting IP_HDRINCL on a raw socket is refused with ENOPROTOOPT", "source": "scenario"},
+        {"assertion_id": "mtu-refused", "checks": "a raw send of 1501 bytes is refused with EMSGSIZE", "source": "scenario"},
+        {"assertion_id": "unresolved-accepted", "checks": "a raw send to a neighbour whose hardware address is not known returns its length", "source": "scenario"},
+        {"assertion_id": "queue-eight", "checks": "of nine echo replies, which /proc/net/snmp counts as received, a raw socket's queue keeps exactly eight", "source": "scenario"},
+        {"assertion_id": "wire-sends", "checks": "raw sends with hop limits 1 to 3, one with the checksum 0x1234, and datagram sends with hop limits 4 to 6 are each accepted", "source": "scenario"},
+        {"assertion_id": "more-sockets", "checks": "eight more raw sockets open at once beside the first", "source": "scenario"},
+        {"assertion_id": "socket-pressure", "checks": "while two children hold full descriptor tables of datagram sockets, a socket opens, the gateway answers the kernel's ping, the first raw socket receives its reply, and a socket opens after the children close theirs", "source": "scenario"},
+        {"assertion_id": "rawwire", "checks": "pcapcheck rawwire finds on the card's capture the raw echo requests with hop limits 1, 2 and 3, the datagrams to ports 40004 to 40006 with hop limits 4, 5 and 6, and the echo request whose checksum 0x1234 crossed the wire unchanged", "source": "scenario"}
+      ],
+      "branches": [
+        {"group_id": "capture", "decided_by": "report",
+         "alternatives": [
+           {"alternative_id": "sent", "when": null, "assertions": ["wire-sends"]},
+           {"alternative_id": "left-out", "when": null, "assertions": []}
+         ]}
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "raw_scenario", "node": "tests/cases/machine/raw_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the rows run on the e1000's driver, which a native machine has only with that card; tests/native/probes.cases runs rawprobe's rows natively on the machine's own card"}
+    }
+  ]
+}

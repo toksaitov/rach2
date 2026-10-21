@@ -477,6 +477,16 @@ build/tests/cases/host/%: tests/cases/host/%.sh
 build/downloads/muse/muse: tests/system/fakeapi/fetch_muse.sh $(SHA256TOOL)
 	f=$$(sh tests/system/fakeapi/fetch_muse.sh) && ln -f "$$f" $@
 
+# The passwords of the images' root and test accounts, as artifacts that the
+# machine scenarios which log in type at the console. The rule of krffs/shadow
+# makes the plain-text files of the source tree that these copy.
+build/tests/cases/machine/root-password: krffs/shadow
+	@mkdir -p $(@D)
+	cp krffs/rach2_demo_password $@
+build/tests/cases/machine/test-password: krffs/shadow
+	@mkdir -p $(@D)
+	cp krffs/rach2_test_password $@
+
 # The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
 # check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a
 # build, and the TCP transfer measurer (tools/dev/machine_net.c). They are
@@ -642,7 +652,7 @@ $(MACHINE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # The machine scenarios that also link the reader of a probe's report on the
 # console (tests/cases/machine/console_report.c), for the cases whose probe
 # runs inside the machine and reports there.
-PROBE_SCENARIOS =
+PROBE_SCENARIOS = build/tests/cases/machine/raw_scenario
 $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                     tests/cases/machine/console_report.c tests/cases/machine/console_report.h \
                     $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
