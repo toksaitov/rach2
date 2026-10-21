@@ -68,4 +68,6 @@ The storage cases have catalogues of their own, each with faults in the kernel. 
 
 [`tests/proofs/large-cases.json`](../proofs/large-cases.json) proves the large cases with an ext2 read that cuts a file's offset to 32 bits, which the sparse row finds astride the 4 GiB line, and exFAT and FAT32 writes that check the offset and not the end of the write, which let a byte at each format's limit through to be refused for space, without the record that names the limit.
 
+[`tests/proofs/ext2-cases.json`](../proofs/ext2-cases.json) proves the ext2 cases with a mount check that counts no lost block, a statfs that gives ext2 the magic number of KRFFS, which `vfsprobe` finds on the ext2 root, and a recovery init that runs `e2fsck` on the first disk alone, which the copy on the second disk finds.
+
 The catalogues `account-cases.json`, `login-cases.json`, `cred-persist.json`, `procfiles.json` and `fdlock.json` in `tests/proofs/` prove the process and account cases. The existing `authority.json`, `textbusy.json` and `bindhold.json` prove the other families of that conversion.
