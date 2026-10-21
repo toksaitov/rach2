@@ -161,7 +161,7 @@
     },
     {
       "case_id": "machine.drill.no-dhcp",
-      "behavior": "the recovery kernel and image, booted directly as the core image boots them, on a card whose link is down so that no DHCP server answers, take the fixed address 192.168.0.105 and stop the DHCP client",
+      "behavior": "the recovery kernel and image, booted directly as the core image boots them, on a card on a hub of QEMU's with nothing else on it, where no DHCP server answers, take the fixed address 192.168.0.105 and stop the DHCP client",
       "units": ["drill"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -175,14 +175,14 @@
       },
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "isolated",
-         "does": "boot the recovery kernel and image directly with rach2.slot=recovery and rach2.ip=none, take the card's link down with QMP's set_link at once, and wait for recovery's shell"},
+         "does": "boot the recovery kernel and image directly with rach2.slot=recovery and rach2.ip=none, its card on a hub of its own, and wait for recovery's shell"},
         {"step_id": "fixed", "stage": "execute", "machine": "isolated",
          "does": "wait for the kernel's record of eth0's first address, then at recovery's shell for rescue-static's line in the service log, read eth0's address and look for udhcpc, and end the machine with QMP's quit"}
       ],
       "machines": [
         {"machine_id": "isolated",
          "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [{"name": "drill-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
-                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"],
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "rtl8139", "hub": true}],
                   "boot_options": ["rach2.root=ram", "rach2.slot=recovery", "rach2.ip=none"]},
          "console": "serial", "qmp": true, "helper": false}
       ],
@@ -213,7 +213,7 @@
         {"name": "drill_scenario", "node": "tests/cases/machine/drill_scenario", "per_architecture": false}
       ],
       "timing": [],
-      "native": {"plan": "none", "class": "image", "reason": "the case needs a machine whose network has no DHCP server, which the host makes by taking the emulated card's link down"}
+      "native": {"plan": "none", "class": "image", "reason": "the case needs a machine whose network has no DHCP server, which the case makes by putting the emulated card on a hub of QEMU's with nothing else on it"}
     }
   ]
 }

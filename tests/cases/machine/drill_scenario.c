@@ -19,8 +19,8 @@
  * machine.drill.publish reads the everyday kernel's authority off the
  * artifact with the tree's check_recovery.sh, and boots the recovery kernel
  * directly to show that it publishes /dev/disk0 with no rach2.diskdiag.
- * machine.drill.no-dhcp boots the recovery kernel directly with its card's
- * link down, a network on which no DHCP server answers, and requires the
+ * machine.drill.no-dhcp boots the recovery kernel directly with its card on
+ * a hub of QEMU's, a network on which no DHCP server answers, and requires the
  * recovery image to take its fixed address and stop its DHCP client.
  */
 #include <stdio.h>
@@ -719,17 +719,13 @@ static int drill_publish(struct etude_case *c)
 /** The case machine.drill.no-dhcp. */
 static int drill_no_dhcp(struct etude_case *c)
 {
-    char line[200], *reply = NULL;
+    char line[200];
     struct net_case u;
     struct net_boot b;
 
     net_case(&u, c);
     net_step(&u, "boot");
     net_boot(&b, &u, "isolated", 1, NULL);
-    if (net_ok(&u) &&
-        etude_qmp(b.m, "set_link", "{\"name\": \"net0\", \"up\": false}", &reply) != ETUDE_OK)
-        net_fail(&u, "the card's link could not be taken down: %s", reply != NULL ? reply : "");
-    free(reply);
     net_wait(&b, RECOVERY_UP);
     net_wait(&b, RECOVERY_PROMPT);
     net_step(&u, "fixed");
