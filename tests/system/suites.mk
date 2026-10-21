@@ -777,8 +777,25 @@ run-loopdev: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 	sh tests/system/suites/loopdev.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
 	    $(LOOPDEV_DISK)
 
-# `tests/run krffsmount`: a KRFFS volume placed by mount(2), read through to
-# its last byte and unmounted, and the three volumes the kernel refuses.
+# `tests/run krffsmount`: a KRFFS volume mounted by mount(2) from a program,
+# read, written, read back after a reboot, left by a machine killed while
+# writing and repaired by the next mount, written by two processes at once,
+# refused when it is malformed, taken read-only by a write the device fails,
+# mounted three at a time, and left by a stick pulled from under it. Its
+# cases are in tests/cases/machine.krffsmount.json, which etude runs.
+#
+# The volumes, which the native cases of tests/native/probes.cases read too,
+# and the disks and the stick that the cases boot copies of; none depends on
+# the architecture.
+KRFFSVOL_DIR = build/tests/system/krffsvol
+KRFFSVOLS = $(addprefix $(KRFFSVOL_DIR)/,volume.krffs broken.krffs badmagic.krffs badchain.krffs)
+$(KRFFSVOLS) &: tests/system/krffsvol.sh krffs/manifests/krffsvol-test.manifest krffs/mkimage.sh \
+                build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs
+	sh tests/system/krffsvol.sh volumes
+KRFFSMOUNT_DISKS = $(addprefix $(CASE_DIR)/krffsmount/,volume.disk broken.disk badmagic.disk \
+                   badchain.disk region.disk three.disk stick.img)
+$(KRFFSMOUNT_DISKS) &: tests/system/krffsvol.sh $(KRFFSVOLS) $(MKMBR)
+	sh tests/system/krffsvol.sh disks $(CASE_DIR)/krffsmount
 KRFFSMOUNT_DISK = $(IMAGES_DIR)/krffsmount-test.disk
 run-krffsmount: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 	sh tests/system/suites/krffsmount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \

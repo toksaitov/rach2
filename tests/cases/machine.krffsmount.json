@@ -1,0 +1,434 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.krffsmount",
+  "summary": "A KRFFS volume mounted by mount(2) from krffsprobe at the kernel's debug shell, judged by the probe's line, the kernel's records and fsck.krffs on the disk each boot left; the program is tests/cases/machine/krffsmount_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.krffsmount.volume",
+      "behavior": "one volume through six boots: mounted read-only and read to its last byte with nothing written; written and unmounted clean; read back after a reboot; left dirty by a machine ended while it writes; read back again; and checked and written by the next mount that writes, which leaves it clean",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "read write readback crash readback write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["volume-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "read", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe read from the debug shell and end the machine with QMP's quit"},
+        {"step_id": "unchanged", "stage": "execute", "does": "compare the volume on the copy with the volume built"},
+        {"step_id": "write", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe write and end the machine"},
+        {"step_id": "write-fsck", "stage": "execute", "does": "run fsck.krffs --strict on the volume of the copy"},
+        {"step_id": "readback", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe readback and end the machine"},
+        {"step_id": "crash", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe crash and end the machine with QMP's quit once it writes"},
+        {"step_id": "crash-fsck", "stage": "execute", "does": "run fsck.krffs --strict on the volume of the copy, which must be dirty"},
+        {"step_id": "crash-readback", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe readback and end the machine"},
+        {"step_id": "repair", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe write, whose mount checks the volume, and end the machine"},
+        {"step_id": "repair-fsck", "stage": "execute", "does": "run fsck.krffs --strict on the volume of the copy"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["volume-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "read-ok", "checks": "krffsprobe read says KRFFSPROBE OK (read), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "read-only-mount", "checks": "the kernel says krffs: mount: N bytes, read-only", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "the volume on the copy is byte for byte the volume built after the read-only mount", "source": "scenario"},
+        {"assertion_id": "write-ok", "checks": "krffsprobe write says KRFFSPROBE OK (write)", "source": "scenario"},
+        {"assertion_id": "read-write-mount", "checks": "the kernel says krffs: mount: N bytes, read-write", "source": "scenario"},
+        {"assertion_id": "write-fsck-clean", "checks": "fsck.krffs --strict exits 0 on the volume the write boot unmounted", "source": "scenario"},
+        {"assertion_id": "readback-ok", "checks": "krffsprobe readback says KRFFSPROBE OK (readback) on the next boot", "source": "scenario"},
+        {"assertion_id": "crash-writing", "checks": "krffsprobe crash says KRFFSPROBE WRITING before the machine is ended", "source": "scenario"},
+        {"assertion_id": "crash-fsck-dirty", "checks": "fsck.krffs --strict exits with another status than 0 and says the volume was not cleanly unmounted", "source": "scenario"},
+        {"assertion_id": "crash-readback-ok", "checks": "krffsprobe readback says KRFFSPROBE OK (readback) on the volume the ended machine left", "source": "scenario"},
+        {"assertion_id": "repair-ok", "checks": "krffsprobe write says KRFFSPROBE OK (write) on that volume", "source": "scenario"},
+        {"assertion_id": "repair-checked", "checks": "the kernel says krffs: check: the volume was not unmounted cleanly", "source": "scenario"},
+        {"assertion_id": "repair-fsck-clean", "checks": "fsck.krffs --strict exits 0 on the volume the checking mount wrote", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10},
+        {"witness_id": "fsck", "kind": "quiet", "means": "fsck.krffs has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 2400000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "volume-disk", "node": "tests/cases/machine/krffsmount/volume.disk", "per_architecture": false},
+        {"name": "volume", "node": "tests/system/krffsvol/volume.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case ends a machine from outside while it writes, with QMP's quit, and checks the disk each boot left with fsck.krffs before the next boot; tests/native/probes.cases runs krffsprobe read and write natively on a loop device"}
+    },
+    {
+      "case_id": "machine.krffsmount.repair",
+      "behavior": "the mount that writes a dirty volume repairs a backward link the forward chain contradicts, a reserved node that no name reaches and a name repeated in one directory, says how many of each, and leaves a volume that needs no repair",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["broken-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "write", "stage": "execute", "machine": "fixture", "does": "boot the copy of the broken volume, run krffsprobe write and end the machine"},
+        {"step_id": "fsck", "stage": "execute", "does": "run fsck.krffs --strict on the volume of the copy"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["broken-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe write says KRFFSPROBE OK (write), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "repaired", "checks": "the kernel says krffs: check: repaired: 1 backward link(s), 2 orphan(s), 1 repeated name(s)", "source": "scenario"},
+        {"assertion_id": "fsck-clean", "checks": "fsck.krffs --strict exits 0 on the repaired volume", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2},
+        {"witness_id": "fsck", "kind": "quiet", "means": "fsck.krffs has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "broken-disk", "node": "tests/cases/machine/krffsmount/broken.disk", "per_architecture": false},
+        {"name": "volume", "node": "tests/system/krffsvol/volume.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots a disk whose volume the host broke on purpose and checks with fsck.krffs what the kernel's repair left on it"}
+    },
+    {
+      "case_id": "machine.krffsmount.writers",
+      "behavior": "two processes write files on one mount, each reads back, and the unmounted volume needs no repair",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "writers"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["volume-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "writers", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe writers and end the machine"},
+        {"step_id": "fsck", "stage": "execute", "does": "run fsck.krffs --strict on the volume of the copy"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["volume-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe writers says KRFFSPROBE OK (writers), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "fsck-clean", "checks": "fsck.krffs --strict exits 0 on the volume the writers left", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2},
+        {"witness_id": "fsck", "kind": "quiet", "means": "fsck.krffs has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "volume-disk", "node": "tests/cases/machine/krffsmount/volume.disk", "per_architecture": false},
+        {"name": "volume", "node": "tests/system/krffsvol/volume.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case checks with fsck.krffs the disk the kernel wrote; tests/native/probes.cases runs krffsprobe writers natively on a loop device"}
+    },
+    {
+      "case_id": "machine.krffsmount.refuse-magic",
+      "behavior": "a volume whose root lacks the magic number is refused with EINVAL, and the kernel says why",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "refuse"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["badmagic-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "refuse", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe refuse and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["badmagic-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe refuse says KRFFSPROBE OK (refuse), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the kernel says krffs: mount: refused: magic", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "badmagic-disk", "node": "tests/cases/machine/krffsmount/badmagic.disk", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots a disk whose partition holds a volume the host broke on purpose; tests/native/probes.cases runs krffsprobe refuse on the same volume natively on a loop device"}
+    },
+    {
+      "case_id": "machine.krffsmount.refuse-chain",
+      "behavior": "a volume whose node chain does not close is refused with EINVAL, and the kernel says why",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "refuse"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["badchain-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "refuse", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe refuse and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["badchain-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe refuse says KRFFSPROBE OK (refuse), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the kernel says krffs: mount: refused: the node chain is malformed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "badchain-disk", "node": "tests/cases/machine/krffsmount/badchain.disk", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots a disk whose partition holds a volume the host broke on purpose; tests/native/probes.cases runs krffsprobe refuse on the same volume natively on a loop device"}
+    },
+    {
+      "case_id": "machine.krffsmount.refuse-region",
+      "behavior": "a volume in a partition eight sectors longer than it, a region its ring does not fill, is refused with EINVAL, and the kernel says why",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "refuse"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["region-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "refuse", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe refuse and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["region-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe refuse says KRFFSPROBE OK (refuse), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the kernel says krffs: mount: refused: the node chain is malformed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "region-disk", "node": "tests/cases/machine/krffsmount/region.disk", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case needs a partition longer than the volume in it, which a loop device of the volume's own file does not give"}
+    },
+    {
+      "case_id": "machine.krffsmount.failed",
+      "behavior": "a write the device fails takes the mount read-only, its unmount writes nothing, and the volume still says that a check is owed",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "failed"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["volume-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "failed", "stage": "execute", "machine": "fixture", "does": "boot the copy with rach2.blocklag=1 and rach2.blockfail=24, run krffsprobe failed and end the machine"},
+        {"step_id": "fsck", "stage": "execute", "does": "run fsck.krffs --strict on the volume of the copy, which must be dirty"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "volume-disk", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "rach2.blocklag=1", "rach2.blockfail=24"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe failed says KRFFSPROBE OK (failed), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "went-read-only", "checks": "the kernel says vfs: read-only: for the mount whose write failed", "source": "scenario"},
+        {"assertion_id": "fsck-dirty", "checks": "fsck.krffs --strict exits with another status than 0 and says the volume was not cleanly unmounted", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2},
+        {"witness_id": "fsck", "kind": "quiet", "means": "fsck.krffs has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "volume-disk", "node": "tests/cases/machine/krffsmount/volume.disk", "per_architecture": false},
+        {"name": "volume", "node": "tests/system/krffsvol/volume.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the device's failure comes from rach2.blocklag and rach2.blockfail on the kernel's command line"}
+    },
+    {
+      "case_id": "machine.krffsmount.three",
+      "behavior": "three volumes in three partitions of one disk are mounted at once, each keeps only its own files, and each unmounts",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "three"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["three-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "three", "stage": "execute", "machine": "fixture", "does": "boot the copy, run krffsprobe three and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["three-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "krffsprobe three says KRFFSPROBE OK (three), never KRFFSPROBE FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "three-disk", "node": "tests/cases/machine/krffsmount/three.disk", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case boots one disk with three partitions; tests/native/probes.cases runs krffsprobe three on three loop devices natively on a loop device"}
+    },
+    {
+      "case_id": "machine.krffsmount.pull",
+      "behavior": "a USB stick pulled from under a mounted volume while a program writes it makes the writes fail, the stick plugged in again while the old mount is still there is a device of its own that the old mount does not read, and the old mount unmounts",
+      "units": ["krffsmount"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"modes": "pull"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "krffsmount_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "pull", "stage": "execute", "machine": "fixture", "does": "boot with the stick on an xHCI controller, run krffsprobe pull, remove the stick with QMP's device_del once the probe writes, and once the probe says the stick has gone add a second drive on the same file and a second usb-storage device with QMP"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "stick", "bus": "device", "id": "kst"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "kst", "id": "kst0"}], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "holding", "checks": "krffsprobe pull says KRFFSPROBE HOLDING once it has written the stick's volume", "source": "scenario"},
+        {"assertion_id": "pulled", "checks": "QMP's device_del of the stick returns", "source": "scenario"},
+        {"assertion_id": "gone", "checks": "krffsprobe pull then says KRFFSPROBE GONE, a write or an open of the volume having failed", "source": "scenario"},
+        {"assertion_id": "plugged", "checks": "the human monitor's drive_add says OK and QMP's device_add of a second stick on the same file returns", "source": "scenario"},
+        {"assertion_id": "probe-ok", "checks": "krffsprobe pull says KRFFSPROBE OK (pull), never KRFFSPROBE FAIL", "source": "scenario"},
+        {"assertion_id": "said-gone", "checks": "the kernel says usbdisk: gone", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/krffsmount/stick.img", "per_architecture": false},
+        {"name": "krffsmount_scenario", "node": "tests/cases/machine/krffsmount_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case pulls a stick and plugs it in again through QEMU's monitor"}
+    }
+  ]
+}

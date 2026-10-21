@@ -66,7 +66,7 @@ large|qemu,mke2fs,e2fsck,mformat,hdiutil+newfs_exfat/mkfs.exfat+fsck.exfat|full
 usb|qemu|core
 raw-e1000|qemu|full
 raw|qemu|full
-krffsmount|qemu|full
+krffsmount|qemu,python3|full
 diskrate|qemu,mformat|full||512
 usbdisk|qemu,xorriso,mformat,mcopy,mtype|core
 stress-ahci|qemu|full|stress-ahci-test*,stress-ahci.*,stress-ahci/*,stress-test-ahci.*
