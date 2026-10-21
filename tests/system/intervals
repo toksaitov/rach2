@@ -5,7 +5,6 @@ tests/system/agents/codex.sh: the pane is read every second until the screen is 
 tests/system/suites/agents.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/fakeapi.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answers
-tests/system/suites/selfbuild.sh: the self-built server is asked every second until it answers
 tests/system/suites/uefi.sh: the server starts after the login prompt
 tests/system/suites/uefi.sh: the dump is written whole by then, or still growing
 tests/system/suites/uefi.sh: the monitor takes the command between the guest's work

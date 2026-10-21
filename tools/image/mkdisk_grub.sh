@@ -65,8 +65,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# The kernel and output default to the host build's, and both can be named:
-# the self-build proof hands the guest-built kernel here and boots the result.
+# The kernel and output default to the host build's, and both can be named.
 # The output's default is the name the root Makefile gives the GRUB disk, with
 # `-with-key` in it when this tree has a recovery key. Both defaults are in
 # the build tree of the architecture ARCH names.

@@ -40,4 +40,4 @@ The result is a static executable, ELF32 i386 or ELF64 x86-64. The stamp depends
 `make check-pdpmake` runs with every image build that stages the program. `tests/run style` runs [`guestcheck`](../../tools/verify/guestcheck.c), which checks each `guest.mk` against the host build it mirrors. The suites, described in [suites.md](../../tests/system/suites.md):
 
 * `tests/run make` builds a program of two sources and a shared header on os-real, as the `test` account, and requires a second build to do nothing, a touched source or header to rebuild only what depends on it, a command-line `CC` to override the makefile's, and the result to stand after a reboot.
-* `tests/run selfbuild` builds the kernel, the utilities and ISH on os-real from the staged `/src` trees, and `selfbuild-ext2` does the same on an ext2 root.
+* `tests/run selfbuild` builds the kernel, the utilities and ISH on os-real from the staged `/src` trees, and `selfbuild-ext2` builds the kernel and ISH on an ext2 root.

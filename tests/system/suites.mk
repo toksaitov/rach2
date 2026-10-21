@@ -173,7 +173,7 @@ $(ETUDESERIAL): tests/system/runner/etudeserial.c tools/etude/guest/wire.c utils
 # and machine cases, whose scenario (tests/cases/machine/default_scenario.c)
 # runs a probe as the debug shell's transient init on the console. The runner
 # tests/system/runner/runtests.c, which boots the probes in one machine, is
-# kept for selfbuild and for the proofs of tests/system/default_probe.sh.
+# kept for the proofs of tests/system/default_probe.sh.
 # `tests/run etudeguest`: etude-guest on the test image's serial console, as
 # the debug shell's designated init, without the debug-exit port. The driver
 # stores the image's /hello and /ish without a transfer and utils' `yes` with
@@ -1189,34 +1189,6 @@ run-make: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(MAKE_TEST_DISK) 64 48
 	sh tests/system/suites/make.sh $(BOOT_KERNEL) $(MAKE_TEST_DISK) \
 	    "`cat krffs/rach2_test_password`"
-# `tests/run selfbuild`: the machine builds its own kernel. Boots os-real from a
-# disk copy as the unprivileged test account, copies /src/rach2 home, and runs
-# the staged make and compiler over the staged guest.mk, twice from clean
-# workspaces; the two kernels must hash equal. Every wait is bounded, and the
-# whole run carries one deadline over the per-step ones.
-SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
-run-selfbuild: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs test-image $(OS_SIMPLE_EXT2) $(MANIFEST_PARTS_os_real) $(ELFCHECK) $(RUNTESTS) $(RUNUTIL) $(SHA256TOOL)
-	@mkdir -p $(IMAGES_DIR)
-	$(MKDISK) krffs/manifests/os-real.manifest $(SELFBUILD_DISK) 64 48
-	sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_DISK) \
-	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
-# `tests/run selfbuild-ext2`: the self-build on an ext2 root, the os-real
-# system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted
-# with rach2.root=ext2; the suite reads the volume back with debugfs and
-# e2fsck must find it consistent after the synced stop. One clean kernel
-# build and the boot of what it built; the second build and the userland
-# half are the KRFFS suite's.
-SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
-SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
-$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
-	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
-run-selfbuild-ext2: $(DEMO_CREDS) rach2 krffs test-image $(MANIFEST_PARTS_os_real) $(ELFCHECK) $(RUNTESTS) $(SELFBUILD_EXT2_VOL) build/tools/image/mkmbr $(RUNUTIL) $(HARNESS) $(SHA256TOOL)
-	@mkdir -p $(IMAGES_DIR)
-	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
-	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $(SELFBUILD_EXT2_DISK)
-	build/tools/image/mkmbr --lba $(SELFBUILD_EXT2_DISK) 2048:98304:83 > /dev/null
-	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_EXT2_DISK) \
-	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
 # `tests/run selfbuild`: the machine builds its own kernel, utilities and
 # shell with the staged TinyCC and pdpmake, and what it built runs. It is the
 # cases of tests/cases/machine.selfbuild.json, which etude runs, and has no
@@ -1246,6 +1218,9 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 krffs test-image $(MANIFEST_PARTS_os_rea
 # tests/system/runner/runtests.c less the probes this architecture does not
 # build. SELFBUILD_ROOTS has the same placeholder, and its candidate entry
 # boots an ext2 root of the test manifest to the debug shell.
+SELFBUILD_DISK = $(IMAGES_DIR)/selfbuild-test.disk
+SELFBUILD_EXT2_VOL = $(IMAGES_DIR)/selfbuild-ext2.vol
+SELFBUILD_EXT2_DISK = $(IMAGES_DIR)/selfbuild-ext2-test.disk
 SELFBUILD_GRUB = $(ARCH_CASE_DIR)/selfbuild/grub.disk
 SELFBUILD_ROOTS = $(ARCH_CASE_DIR)/selfbuild/roots.disk
 SELFBUILD_PROBES = $(ARCH_CASE_DIR)/selfbuild/probes.list
@@ -1253,6 +1228,10 @@ SELFBUILD_PLACEHOLDER = no kernel: the selfbuild scenario writes the one the mac
 $(SELFBUILD_DISK): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                    $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+$(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                       tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 \
+                       $(MANIFEST_PARTS_os_real)
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 48
 $(SELFBUILD_EXT2_DISK): $(SELFBUILD_EXT2_VOL) $(MKMBR)
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $@.tmp
