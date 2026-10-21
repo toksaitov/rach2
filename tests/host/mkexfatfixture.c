@@ -4,7 +4,7 @@
  * kernel's driver; the pair of mkfatfixture.c for FAT32.
  *
  *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] [--list] [--dump]
- *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] --read PATH
+ *   mkexfatfixture --check IMAGE [OFFSET-SECTORS] --read PATH [--out FILE]
  *
  * `--check` walks a volume: both boot regions and their checksums, the FAT,
  * the root's allocation bitmap and up-case table, every entry set the tree
@@ -15,9 +15,10 @@
  * the boot sector, the up-case and bitmap entries and the first file set as
  * hex beside the values the specification gives them, which is the record
  * `dev-log/38-exfat/notes.md` keeps of a volume another implementation
- * wrote. `--read PATH` writes a file's bytes to stdout, which is how the
- * suite reads on the host what the kernel wrote, since mtools does not
- * read exFAT. The builder is the second half of this file, with its usage.
+ * wrote. `--read PATH` writes a file's bytes to stdout, or to FILE with
+ * `--out`, which is how the exfat cases read on the host what the kernel
+ * wrote, since mtools does not read exFAT. The builder is the second half of
+ * this file, with its usage.
  */
 
 #include <stdint.h>
@@ -1119,6 +1120,49 @@ static int read_path(struct vol *v, const char *path)
     return export_file(v, first, length, valid, nofat);
 }
 
+/* The arguments of the `--check` command. */
+struct check_args {
+    const char *image;     /* the image file */
+    const char *read_what; /* the path `--read` exports, or 0 */
+    const char *out;       /* the file `--out` names, or 0 for stdout */
+    uint64_t offset;       /* the volume's first sector in the image */
+};
+
+/**
+ * Read the `--check` command's arguments in `argv` into `a`, and `--list` and
+ * `--dump` into `v`. Returns 0, or 2 after the usage for arguments that name
+ * no image or give `--out` without `--read`.
+ */
+static int check_args(int argc, char **argv, struct vol *v, struct check_args *a)
+{
+    int i;
+
+    memset(a, 0, sizeof(*a));
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--check") == 0)
+            continue;
+        else if (strcmp(argv[i], "--read") == 0 && i + 1 < argc)
+            a->read_what = argv[++i];
+        else if (strcmp(argv[i], "--out") == 0 && i + 1 < argc)
+            a->out = argv[++i];
+        else if (strcmp(argv[i], "--list") == 0)
+            v->list = 1;
+        else if (strcmp(argv[i], "--dump") == 0)
+            v->dump = 1;
+        else if (!a->image)
+            a->image = argv[i];
+        else
+            a->offset = strtoull(argv[i], 0, 10);
+    }
+    if (!a->image || (a->out && !a->read_what)) {
+        fprintf(stderr, "usage: mkexfatfixture --check IMAGE [OFFSET-SECTORS] [--list] [--dump]\n"
+                        "       mkexfatfixture --check IMAGE [OFFSET-SECTORS] --read PATH "
+                        "[--out FILE]\n");
+        return 2;
+    }
+    return 0;
+}
+
 /**
  * The `--check` command over the image and the optional sector offset in
  * `argv`. After the boot regions and the root's objects, it walks the
@@ -1132,33 +1176,19 @@ static int read_path(struct vol *v, const char *path)
 static int check_main(int argc, char **argv)
 {
     struct vol v;
+    struct check_args a;
     FILE *f;
-    uint64_t offset = 0;
-    const char *image = 0, *read_what = 0;
-    int i;
+    const char *image;
+    uint64_t offset;
     long n;
     uint64_t c, allocated = 0, reached = 0;
     char text[200];
 
     memset(&v, 0, sizeof(v));
-    for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--check") == 0)
-            continue;
-        else if (strcmp(argv[i], "--read") == 0 && i + 1 < argc)
-            read_what = argv[++i];
-        else if (strcmp(argv[i], "--list") == 0)
-            v.list = 1;
-        else if (strcmp(argv[i], "--dump") == 0)
-            v.dump = 1;
-        else if (!image)
-            image = argv[i];
-        else
-            offset = strtoull(argv[i], 0, 10);
-    }
-    if (!image) {
-        fprintf(stderr, "usage: mkexfatfixture --check IMAGE [OFFSET-SECTORS] [--list] [--dump]\n");
+    if (check_args(argc, argv, &v, &a) != 0)
         return 2;
-    }
+    image = a.image;
+    offset = a.offset;
     f = fopen(image, "rb");
     if (!f) {
         fprintf(stderr, "mkexfatfixture: cannot open %s\n", image);
@@ -1177,8 +1207,12 @@ static int check_main(int argc, char **argv)
         printf("check: FAIL: %d finding(s)\n", v.findings);
         return 1;
     }
-    if (read_what) {
-        return read_path(&v, read_what);
+    if (a.read_what) {
+        if (a.out && !freopen(a.out, "wb", stdout)) {
+            fprintf(stderr, "mkexfatfixture: cannot write %s\n", a.out);
+            return 2;
+        }
+        return read_path(&v, a.read_what);
     }
     n = walk_chain(&v, v.bitmap_first, v.bitmap_length, 0, "(bitmap)");
     if (n >= 0)
