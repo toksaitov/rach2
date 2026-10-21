@@ -114,14 +114,21 @@ echo "e2fsprogs: configuring"
 # The libraries first, then e2fsck, resize2fs, mke2fs, tune2fs and dumpe2fs
 # alone. RDYNAMIC is the link flag that exports every symbol for a backtrace,
 # which is disabled above and which the freestanding linker does not take.
+# Under a parent make's jobserver, which mk/arch.sh keeps in MAKEFLAGS, each
+# make takes its job slots from the parent's `-j` budget; a `-j` of its own
+# would start a second jobserver beside it. Without one, JOBS bounds the build.
+case " ${MAKEFLAGS-} " in
+    *' --jobserver-auth='*|*' --jobserver-fds='*) JOBFLAG= ;;
+    *) JOBFLAG="-j${JOBS:-4}" ;;
+esac
 echo "e2fsprogs: building the libraries"
-make -j"${JOBS:-4}" libs > build-libs.log 2>&1 || { tail -20 build-libs.log >&2; exit 1; }
+make ${JOBFLAG:+"$JOBFLAG"} libs > build-libs.log 2>&1 || { tail -20 build-libs.log >&2; exit 1; }
 echo "e2fsprogs: building e2fsck"
-make -j"${JOBS:-4}" -C e2fsck e2fsck RDYNAMIC= > build-e2fsck.log 2>&1 || { tail -20 build-e2fsck.log >&2; exit 1; }
+make ${JOBFLAG:+"$JOBFLAG"} -C e2fsck e2fsck RDYNAMIC= > build-e2fsck.log 2>&1 || { tail -20 build-e2fsck.log >&2; exit 1; }
 echo "e2fsprogs: building resize2fs"
-make -j"${JOBS:-4}" -C resize resize2fs RDYNAMIC= > build-resize2fs.log 2>&1 || { tail -20 build-resize2fs.log >&2; exit 1; }
+make ${JOBFLAG:+"$JOBFLAG"} -C resize resize2fs RDYNAMIC= > build-resize2fs.log 2>&1 || { tail -20 build-resize2fs.log >&2; exit 1; }
 echo "e2fsprogs: building mke2fs, tune2fs and dumpe2fs"
-make -j"${JOBS:-4}" -C misc mke2fs tune2fs dumpe2fs RDYNAMIC= > build-mke2fs.log 2>&1 ||
+make ${JOBFLAG:+"$JOBFLAG"} -C misc mke2fs tune2fs dumpe2fs RDYNAMIC= > build-mke2fs.log 2>&1 ||
     { tail -20 build-mke2fs.log >&2; exit 1; }
 
 mkdir -p "$STAGE"

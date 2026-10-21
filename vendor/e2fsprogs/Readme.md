@@ -34,7 +34,7 @@ The configure run uses the private uuid and blkid libraries and the resizer, and
 2. Applies the patches `patches/series` lists. It fails on a named patch that is absent and on a `patches/*.patch` the series does not list.
 3. Copies in `mke2fs.conf`.
 4. Configures with `CC` set to the `muslgcc` wrapper and the cross `ar` and `ranlib`, with the options above. The configure output goes to `configure.log` in the extracted tree, and each later step to its own `build-*.log` there; a failed step prints the last 20 lines of its log.
-5. Builds the libraries, then the five programs, with `-j` set from `JOBS`, 4 by default.
+5. Builds the libraries, then the five programs. Under the root `make -j`, each make shares the root's jobserver and its job limit; run without one, it takes `-j` from `JOBS`, 4 by default.
 6. Strips the five and stages them.
 
 Each staged program is a stripped static `ET_EXEC`, ELF32 i386 or ELF64 x86-64. The stamp depends on the script, the tarball, `mke2fs.conf`, `muslgcc`, `mk/arch.sh`, `patches/series` and every patch, and the musl stamp. `make check-e2fsck` requires each program to be nonempty, runs `elfcheck` on it for the architecture, and refuses one larger than its limit in the root `Makefile` (`E2FSCK_LIMIT`, `RESIZE2FS_LIMIT`, `MKE2FS_LIMIT`, `TUNE2FS_LIMIT` and `DUMPE2FS_LIMIT`, one set for both architectures), so that a configure that turns a library or a feature back on fails here and not in an image.
