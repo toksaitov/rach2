@@ -86,7 +86,7 @@ host|qemu|full||384
 noentropy|qemu|full
 shutdown|qemu|full
 fatwrite|qemu,mformat,mcopy,mdir,python3|core
-ssh|qemu,ssh,nc|core
+ssh|qemu,ssh|core
 ssh-e1000|qemu,ssh|full
 exfat|qemu,python3|core
 ext2|qemu,mke2fs,e2fsck,mtype|core
@@ -115,7 +115,7 @@ style|cppcheck,shellcheck,clang,clang-format,python3|full
 dgram-e1000|qemu|full
 dgram|qemu|core
 diskdiag|qemu,ssh|full
-e1000|qemu,ssh|core
+e1000|qemu|core
 disk-ahci|qemu|core|disk-ahci-test*,disk-ahci.*,disk-ahci/*
 grub|qemu,mformat,mmd,mcopy|core
 disk-q35|qemu|full|disk-q35-test*,disk-q35.*,disk-q35/*

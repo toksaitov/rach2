@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.ssh-e1000",
+  "summary": "Logins to os-real over SSH on the e1000, one boot that tests/cases/machine/ssh_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.ssh-e1000.logins",
+      "behavior": "logins to os-real's dropbear over the e1000 with nobody at the keyboard: root by key and the test account by password, the logins that must be refused, and root's console login under a flood of connections",
+      "units": ["ssh-e1000"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"flood": 40, "rows": 40, "columns": 100}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "ssh_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["ssh-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case stops the flood and the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "server",
+          "does": "boot a copy of the os-real disk until its console asks for a login"
+        },
+        {"step_id": "console", "stage": "execute", "machine": "server", "does": "log in as root at the console"},
+        {
+          "step_id": "dropbear",
+          "stage": "execute",
+          "machine": "server",
+          "does": "start dropbear on port 22 as the Readme's recipe does, with -R and -g"
+        },
+        {
+          "step_id": "key-login",
+          "stage": "execute",
+          "does": "run ssh as root with the demo key, on a terminal, through the case's port"
+        },
+        {
+          "step_id": "password-login",
+          "stage": "execute",
+          "does": "run ssh under ptydrive as the test account with its password"
+        },
+        {
+          "step_id": "window",
+          "stage": "execute",
+          "does": "run stty size and stty -a in a session of the test account on a 40 by 100 terminal"
+        },
+        {
+          "step_id": "refusals",
+          "stage": "execute",
+          "does": "try a login with no credentials, the test account with a wrong password and root with its password"
+        },
+        {
+          "step_id": "flood",
+          "stage": "execute",
+          "machine": "server",
+          "does": "hold forty connections open, read the guest's count of them, and log in again as root at the console"
+        },
+        {
+          "step_id": "release",
+          "stage": "execute",
+          "machine": "server",
+          "does": "stop the flood and wait in the guest until no connection is established"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "server",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["ssh-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "e1000", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+            "boot_options": ["rach2.fsdisk"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "flood",
+          "program": "sshpeer",
+          "ready": "sshpeer: open",
+          "does": "open forty connections to the case's port and hold them without a word, saying each time the server answers another"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "root-prompt",
+          "checks": "root logs in at the console with its password and reaches the shell's prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dropbear",
+          "checks": "dropbear started from the console says `Running in background`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-login",
+          "checks": "ssh as root by key exits 0 and prints the marker of a command that runs only when its standard input and output are terminals",
+          "source": "scenario"
+        },
+        {"assertion_id": "key-root", "checks": "the key login's `id` says `uid=0(root)`", "source": "scenario"},
+        {
+          "assertion_id": "password-login",
+          "checks": "ptydrive runs ssh as the test account to its end, ssh asks for the password once, and the command's marker comes back",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "password-uid",
+          "checks": "the password login's `id` says `uid=1000(test)`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "window-size",
+          "checks": "`stty size` in a session on a terminal of 40 rows and 100 columns prints `40 100`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "window-termios",
+          "checks": "`stty -a` there prints `rows 40; columns 100` and `icanon`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-credentials-refused",
+          "checks": "a login offering no credential fails with the server's `Permission denied` and runs no command",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "wrong-password-refused",
+          "checks": "the test account's password with a byte added is asked for once and refused by the server, and runs no command",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "root-password-refused",
+          "checks": "root's right password is refused by the server, which dropbear's -g makes it, and runs no command",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "flood-held",
+          "checks": "once the server has answered a connection of the flood, the guest's netstat counts more than no established connection",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "flood-console-login",
+          "checks": "under the flood root logs in again at the console, and `id` there says `uid=0(root)`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "flood-released",
+          "checks": "once the flood is stopped, the guest's netstat comes to count no established connection",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 9}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "ssh-disk", "node": "images/ssh-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "test-password", "node": "tests/cases/credentials/rach2_test_password", "per_architecture": false},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "ptydrive", "node": "tests/system/ptydrive", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "ssh_scenario", "node": "tests/cases/machine/ssh_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "it tests the driver of QEMU's emulated e1000, which the Lenovo does not have; the Lenovo's own card and SSH server are checked by the release's metal_accept.sh"
+      }
+    }
+  ]
+}

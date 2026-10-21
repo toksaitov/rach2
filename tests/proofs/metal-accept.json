@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "proof": "metal-accept",
-  "summary": "the metal suite on i686 with its acceptance script taken from a private copy of metal_accept.sh, laid out beside the tree's su_command.sh",
-  "tree": "private",
+  "summary": "the metal cases on i686 with faults in the tree's metal_accept.sh, which machine.metal.unattended runs against the metal image",
+  "tree": "shared",
   "sources": ["tests/system/accept/metal_accept.sh"],
-  "artifacts": ["${WORK}/accept/tests/system/accept/metal_accept.sh"],
+  "artifacts": ["${WORK}/metal_accept.sh"],
   "build": {
-    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/accept && mkdir -p ${WORK}/accept/tests/system/accept && ln -s ${TREE}/build ${WORK}/accept/build && ln -s ${TREE}/krffs ${WORK}/accept/krffs && cp ${SRC}/tests/system/accept/metal_accept.sh tests/system/accept/su_command.sh ${WORK}/accept/tests/system/accept/"],
+    "argv": ["/bin/sh", "-c", "cp tests/system/accept/metal_accept.sh ${WORK}/metal_accept.sh"],
     "bound_s": 60
   },
   "test": {
-    "argv": ["/bin/sh", "-c", "log=build/images/metal-test.metal.log; rm -f $log; status=0; METAL_ACCEPT_SCRIPT=${WORK}/accept/tests/system/accept/metal_accept.sh ARCH=i686 tests/run metal </dev/null || status=$?; [ ! -f $log ] || cat $log; exit $status"],
+    "argv": ["/bin/sh", "-c", "ARCH=i686 exec sh tests/proofs/guest.sh run metal"],
     "bound_s": 3600
   },
   "faults": [
@@ -22,7 +22,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["FAIL: stick: first unmount failed", "stick: cached bytes match", "metal-test: the acceptance flushed the stick's writes"]
+        "lines": ["run: metal: machine.metal.unattended: evidence: ", "FAIL: stick: first unmount failed", "stick: cached bytes match"]
       }
     },
     {
@@ -33,7 +33,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["FAIL: disk: the published whole-disk window did not supply one complete sector"]
+        "lines": ["run: metal: machine.metal.unattended: evidence: ", "FAIL: disk: the published whole-disk window did not supply one complete sector"]
       }
     }
   ]

@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "proof": "installed",
-  "summary": "the five rows of installed_test.sh on i686, the acceptance's rows that read the command line, the disk and the ext2 root, on the tree's metal_accept.sh and bootctl",
+  "summary": "the five installed cases of the metal family on i686, the acceptance's rows that read the command line, the disk and the ext2 root, on disks made from the tree's metal_accept.sh and bootctl",
   "tree": "shared",
   "sources": ["tests/system/accept/metal_accept.sh", "utils/bootctl.c"],
   "artifacts": ["${WORK}/bootctl", "${WORK}/metal_accept.sh"],
   "build": {
-    "argv": ["/bin/sh", "-c", "make -s -j4 rach2 build/tests/system/harness metal-installed-tools ARCH=i686 </dev/null && rm -f build/utils/sbin/bootctl && make -s -C utils ../build/utils/sbin/bootctl ARCH=i686 </dev/null && cp build/utils/sbin/bootctl ${WORK}/bootctl && cp tests/system/accept/metal_accept.sh ${WORK}/metal_accept.sh"],
+    "argv": ["/bin/sh", "-c", "make -s rach2 ARCH=i686 </dev/null && rm -f build/utils/sbin/bootctl && make -s -C utils ../build/utils/sbin/bootctl ARCH=i686 </dev/null && cp build/utils/sbin/bootctl ${WORK}/bootctl && cp tests/system/accept/metal_accept.sh ${WORK}/metal_accept.sh && rm -rf build/tests/cases/machine/metal-installed"],
     "bound_s": 1800
   },
   "test": {
-    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/rows && METAL_ACCEPT_SCRIPT=${WORK}/metal_accept.sh METAL_BOOTCTL=${WORK}/bootctl exec sh tests/system/accept/installed_test.sh build/rach2/kernel build/tests/system/harness ${WORK}/rows all"],
-    "bound_s": 900
+    "argv": ["/bin/sh", "-c", "ARCH=i686 exec sh tests/proofs/guest.sh run metal"],
+    "bound_s": 3600
   },
   "faults": [
     {
@@ -22,7 +22,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["wrong-partition: wrong acceptance status"]
+        "lines": ["run: metal: machine.metal.installed-wrong-partition: evidence: "]
       }
     },
     {
@@ -33,7 +33,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["readonly: missing root rejection"]
+        "lines": ["run: metal: machine.metal.installed-readonly: evidence: "]
       }
     },
     {
@@ -44,7 +44,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["candidate: wrong acceptance status"]
+        "lines": ["run: metal: machine.metal.installed-candidate: evidence: "]
       }
     },
     {
@@ -55,7 +55,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["gpt: wrong acceptance status"]
+        "lines": ["run: metal: machine.metal.installed-gpt: evidence: "]
       }
     },
     {
@@ -66,7 +66,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["fallback: wrong acceptance status"]
+        "lines": ["run: metal: machine.metal.installed-fallback: evidence: "]
       }
     }
   ]

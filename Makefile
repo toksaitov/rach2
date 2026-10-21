@@ -470,16 +470,21 @@ build/tests/cases/host/%: tests/cases/host/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
 
-# The demo credentials that etude's machine cases use as artifacts, such as
-# the password of tests/cases/machine.diskrate.json: copies readable by their
-# owner alone, since krffs/rach2_demo_password is made by gen_demo_password.sh
-# beside krffs/shadow.
-build/tests/cases/credentials/rach2_demo_ed25519: krffs/rach2_demo_ed25519
+# The keys and passwords of the demo and test accounts that etude's machine
+# cases use as artifacts, such as the password of
+# tests/cases/machine.diskrate.json: copies readable by their owner alone,
+# since krffs/rach2_demo_password and its companion are made by
+# gen_demo_password.sh beside krffs/shadow.
+CASE_KEYS = build/tests/cases/credentials/rach2_demo_ed25519 \
+            build/tests/cases/credentials/rach2_test_ed25519
+CASE_PASSWORDS = build/tests/cases/credentials/rach2_demo_password \
+                 build/tests/cases/credentials/rach2_test_password
+$(CASE_KEYS): build/tests/cases/credentials/%: krffs/%
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
-build/tests/cases/credentials/rach2_demo_password: krffs/shadow
+$(CASE_PASSWORDS): build/tests/cases/credentials/%: krffs/shadow
 	@mkdir -p $(@D)
-	cp krffs/rach2_demo_password $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
+	cp krffs/$* $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
 
 # Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
 # tests/system/fakeapi/fetch_muse.sh downloads it once into
@@ -679,6 +684,22 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
+# The network scenarios share netcase.c.
+NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
+                build/tests/cases/machine/metal_scenario
+$(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                  tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
+                  $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
+# The host's side of the network cases' connections that are not logins: a
+# wait for the guest's SSH server, and the ssh cases' flood.
+build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
 
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
@@ -1405,7 +1426,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
              $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
-             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS)
+             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) build/tests/cases/machine/sshpeer
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

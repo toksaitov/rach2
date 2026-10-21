@@ -48,8 +48,8 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `noentropy` (full tier; needs qemu; 128 MiB): the entropy policy's fail-closed half, which no other suite can reach, on a processor without RDRAND and RDSEED.
 * `shutdown` (full tier; needs qemu; 128 MiB): userland stopping the machine, on a disk fixture, with every claim of a stop asserted on QEMU's event, and every claim of a halt on the processors halted in QEMU's monitor, rather than on a token, every disk checked by offline fsck afterwards, and init killed on four processors leaving all four halted with interrupts off and the disk dirty.
 * `fatwrite` (core tier; needs qemu, mformat, mcopy, mdir, python3; 128 MiB): FAT32 written from a program, read back after a reboot, judged by the host's walk and mtools, taken through a crash and its repair, written from BusyBox, and written by two processes under the lag.
-* `ssh` (core tier; needs qemu, ssh, nc; 128 MiB): logins over SSH with nobody at the keyboard.
-* `ssh-e1000` (full tier; needs qemu, ssh; 128 MiB): the ssh suite on the e1000 card.
+* `ssh` (core tier; needs qemu, ssh; 128 MiB): logins over SSH with nobody at the keyboard, the case of tests/cases/machine.ssh.json.
+* `ssh-e1000` (full tier; needs qemu, ssh; 128 MiB): the ssh suite on the e1000 card, the case of tests/cases/machine.ssh-e1000.json.
 * `exfat` (core tier; needs qemu, python3; 128 MiB): exFAT written from a program, read back after a reboot, judged by the host's reader and the external checker where the host has one, taken through a crash and its repair, written from BusyBox and by two processes under the lag, and unmounted after a failed write with its dirty bit still set.
 * `ext2` (core tier; needs qemu, mke2fs, e2fsck, mtype; 128 MiB): the ext2 driver booted over a fixture disk the host's mke2fs wrote, with the walker's link rows on the mounted volume.
 * `cred-persist` (full tier; needs qemu; 128 MiB): the credential replacement's durability across a reboot.
@@ -69,7 +69,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `etudeexec` (full tier; needs qemu; 512 MiB): Rach2 builds etude by its TinyCC recipe, and the POSIX executor, built the same way, passes its test there.
 * `login` (core tier; needs qemu; 128 MiB): prove the console cannot fall back to an unauthenticated shell.
 * `man` (core tier; needs qemu; 128 MiB): the manual pages on the machine.
-* `metal` (core tier; needs qemu, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image and acceptance of an installed ext2 root.
+* `metal` (core tier; needs qemu, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image, the acceptance script rehearsed on it, and the script's installed-root rows, the cases of tests/cases/machine.metal.json.
 * `bootline` (full tier; needs qemu, mke2fs; 128 MiB): the boot line that contradicts itself.
 * `servicelog` (full tier; needs qemu, mke2fs; 128 MiB): the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next.
 * `persist` (core tier; needs qemu; 128 MiB): fsync durability across a reboot.
@@ -77,7 +77,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `dgram-e1000` (full tier; needs qemu; 128 MiB): the dgram suite on the e1000 card.
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.
 * `diskdiag` (full tier; needs qemu, ssh; 128 MiB): a disk read without being mounted and without being written.
-* `e1000` (core tier; needs qemu, ssh; 128 MiB): the network path on the other emulated card, and the probe order that decides which card a machine with more than one of them gets.
+* `e1000` (core tier; needs qemu; 128 MiB): the network path on the other emulated card, and the probe order that decides which card a machine with more than one of them gets, the cases of tests/cases/machine.e1000.json, each a boot of its own.
 * `disk-ahci` (core tier; needs qemu; 128 MiB): the disk suite's page-cache integrity check with the disk on an AHCI controller.
 * `grub` (core tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the machine replacing its own boot loader.
 * `disk-q35` (full tier; needs qemu; 128 MiB): the same disk proof on the q35 machine, whose AHCI controller is built in at 0:31.2, function 2 of the multi-function device 31.

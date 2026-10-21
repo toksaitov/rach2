@@ -11,9 +11,8 @@
 # one the pipe inspection cannot see must be reported as inconclusive, and
 # an interrupted run must report its signal. fixtures/runutil_machine.c must
 # tell a live survivor from a zombie or a reused pid. With --mutate each of
-# six rules is reversed in a compiled copy of the helper and must be caught;
-# tests/proofs/ssh-flood.json proves the SSH flood's cleanup test, which runs
-# in either mode. --texts checks that each fault is in the helper.
+# six rules is reversed in a compiled copy of the helper and must be caught.
+# --texts checks that each fault is in the helper.
 set -eu
 case ${1:-} in
     '') mutate=0 ;;
@@ -326,5 +325,3 @@ if [ "$mutate" -eq 1 ]; then
     check_phase restored
     cmp "$work/fixed/helper" "$work/restored/helper"
 fi
-
-sh "$repo/tests/system/ssh_flood_test.sh"

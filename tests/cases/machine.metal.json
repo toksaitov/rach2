@@ -1,0 +1,932 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.metal",
+  "summary": "The metal image reached over SSH with nobody at its console and the acceptance script rehearsed on it, the script's installed-root rows on small GRUB disks, both under tests/cases/machine/metal_scenario.c, and the script's host checks",
+  "cases": [
+    {
+      "case_id": "machine.metal.transport",
+      "behavior": "metal_accept.sh, run whole against a stand-in for ssh, passes a machine that answers as it should and fails each fault, through root's key and through su",
+      "units": ["metal", "tests/system/accept/transport_test.sh"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["transport"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh"], "features": {}},
+      "execution": {
+        "program": "metalchecks",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "reaped",
+        "cleanup": "transport_test.sh removes its work directory under TMPDIR on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "transport",
+          "checks": "tests/system/accept/transport_test.sh exits 0: the script passes the right answers and fails or refuses each fault",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [{"name": "metalchecks", "node": "tests/cases/host/metalchecks", "per_architecture": false}],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "machine.metal.password",
+      "behavior": "su_command.sh answers the password prompt on a real pseudo-terminal without the password reaching any transcript",
+      "units": ["metal", "tests/system/accept/password_test.sh"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["password"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "cc"], "features": {}},
+      "execution": {
+        "program": "metalchecks",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "reaped",
+        "cleanup": "password_test.sh removes its work directory under TMPDIR on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "password",
+          "checks": "tests/system/accept/password_test.sh exits 0 in each of its cases of prompt and echo",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [{"name": "metalchecks", "node": "tests/cases/host/metalchecks", "per_architecture": false}],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "machine.metal.unattended",
+      "behavior": "the metal image, which the Lenovo boots, reached over SSH with nobody at its console: init's server, a file each way, init's restart of the server, the boot and system logs, and metal_accept.sh rehearsed against the machine and its sticks",
+      "units": ["metal"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"lines": 1000}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh", "sh", "cksum", "shasum", "mcopy"], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "rstick1", "rstick2"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure; metal_accept.sh removes what it made on the machine and on the host"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "metal",
+          "does": "boot the metal image with a LAN address on its command line, a hub, a keyboard and three sticks, until the console asks for a login"
+        },
+        {
+          "step_id": "server",
+          "stage": "execute",
+          "machine": "metal",
+          "does": "wait for init's record of starting the SSH server, then run sshpeer until the server answers on the case's port"
+        },
+        {
+          "step_id": "session",
+          "stage": "execute",
+          "does": "run a command as root by key, and `tty` in a session on a terminal"
+        },
+        {
+          "step_id": "transfer",
+          "stage": "execute",
+          "does": "send a file of a thousand lines to the guest, compare its cksum there, and read it back"
+        },
+        {
+          "step_id": "restart",
+          "stage": "execute",
+          "machine": "metal",
+          "does": "kill the server init started, wait for init's record of starting another, and for that one's answer"
+        },
+        {
+          "step_id": "logs",
+          "stage": "execute",
+          "does": "read /dev/bootlog, and send a line to the system log with logger and read it back"
+        },
+        {
+          "step_id": "su",
+          "stage": "execute",
+          "does": "run a quoted command that exits 7 as root through su_command.sh, logged in as the test account"
+        },
+        {
+          "step_id": "unnamed",
+          "stage": "execute",
+          "does": "run metal_accept.sh with no stick named, and hash the stick before and after"
+        },
+        {
+          "step_id": "accept",
+          "stage": "execute",
+          "does": "run metal_accept.sh as the test account through su with the stick ACCEPT01 named, reading the stick's flush count before and after"
+        },
+        {
+          "step_id": "stick",
+          "stage": "capture",
+          "does": "check the stick's KRFFS volume and its MBR with the host's tools, and read /dev/bootlog once more"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "metal",
+          "qemu": {
+            "kernel": "metal-kernel",
+            "initrd": "metal-image",
+            "disks": [
+              {"name": "stick", "bus": "device", "id": "stick"},
+              {"name": "rstick1", "bus": "device", "id": "rstick1"},
+              {"name": "rstick2", "bus": "device", "id": "rstick2"}
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "192.168.90.0/24",
+                "host": "192.168.90.2",
+                "dhcpstart": "192.168.90.15",
+                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]
+              },
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"},
+              {
+                "model": "usb-storage",
+                "bus": "xhci.0",
+                "port": "1.3",
+                "drive": "stick",
+                "properties": {"serial": "ACCEPT01"}
+              },
+              {
+                "model": "usb-storage",
+                "bus": "xhci.0",
+                "port": "1.4",
+                "drive": "rstick1",
+                "properties": {"serial": "RECOVERY01"}
+              },
+              {
+                "model": "usb-storage",
+                "bus": "xhci.0",
+                "port": "1.5",
+                "drive": "rstick2",
+                "properties": {"serial": "RECOVERY02"}
+              }
+            ],
+            "boot_options": ["rach2.ip=192.168.90.15/24", "rach2.gateway=192.168.90.2", "rach2.netconsole"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "login-prompt",
+          "checks": "the console asks for a login with nobody typing at it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "address",
+          "checks": "the kernel reports `IPv4 192.168.90.15/24`, the address its command line gives",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "disk-policy",
+          "checks": "the running kernel reports `disk: policy: read-only`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "server",
+          "checks": "init reports `init: sshd: started as pid N`, and the server then answers on the case's port with its identification",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "key-command",
+          "checks": "a command run as root by key exits 0 and prints its marker",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pty",
+          "checks": "`tty` in a session that ssh's -tt asks a terminal for prints a name under /dev/pts/",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "file-sent",
+          "checks": "a file of a thousand lines sent to the guest has there the cksum it has on the host",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "file-back",
+          "checks": "the file read back from the guest is the file sent, byte for byte",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "restart",
+          "checks": "the server init reported starting is running; once killed, init reports starting another under another pid, which answers and is running",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bootlog",
+          "checks": "/dev/bootlog has `Rach2 Booting`, `Initializing system components` and `net: ready`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "syslog",
+          "checks": "a line logger sends to /dev/log comes to be in /var/log/messages once",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "su-quoting",
+          "checks": "su_command.sh gives back the output of a quoted command with a dollar sign unchanged, and its status 7",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unnamed-pass",
+          "checks": "metal_accept.sh with no stick named prints `metal-accept: PASS` and that the stick was not named and is not written, and writes no stick",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unnamed-stick",
+          "checks": "the stick's cksum is the same after that run as before it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-pass",
+          "checks": "metal_accept.sh with the stick named exits 0 and prints `metal-accept: PASS`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-flush",
+          "checks": "the stick's flush count in /proc/usb is higher after the acceptance than before it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-disk",
+          "checks": "its disk row reads the registry: `disk: disk 0 usb`, `disk: identity 0 512 removable free ACCEPT01` and the MBR's hash",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-image",
+          "checks": "its image row says that the file system in a file mounts and reads",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-fat",
+          "checks": "its stick section mounts the volume ACCEPT, and the bytes match after the remount and on the host while unmounted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-sticks",
+          "checks": "it refuses both recovery sticks by their tables and writes the stick ACCEPT01",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-krffs",
+          "checks": "its KRFFS section says that the stick's KRFFS volume mounts, reads and takes a write",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "accept-hub",
+          "checks": "its hub section finds the hub and the devices behind it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stick-volume",
+          "checks": "the host's fsck.krffs --strict finds the stick's KRFFS volume clean, and readfile.krffs reads `written-on-the-stick` from its /accept.txt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stick-mbr",
+          "checks": "the SHA-256 of the stick's first sector on the host is the one the acceptance printed",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bootlog-kept",
+          "checks": "/dev/bootlog after the acceptance still has `boot: Rach2 Booting`, `usb: controller:` and `lapic:`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true},
+        {"name": "metal-image", "node": "images/rach2-metal.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/metal/stick.img", "per_architecture": false},
+        {"name": "rstick1", "node": "tests/cases/machine/metal/rstick1.img", "per_architecture": false},
+        {"name": "rstick2", "node": "tests/cases/machine/metal/rstick2.img", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "test-key", "node": "tests/cases/credentials/rach2_test_ed25519", "per_architecture": false},
+        {"name": "fsck-krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "readfile-krffs", "node": "krffs/readfile.krffs", "per_architecture": false},
+        {"name": "mkfs-krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "stageimage-krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "ptydrive", "node": "tests/system/ptydrive", "per_architecture": false},
+        {"name": "runutil", "node": "tests/system/runutil", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the Lenovo runs this check itself: the release runs metal_accept.sh against the installed machine, and these cases rehearse it on QEMU"
+      }
+    },
+    {
+      "case_id": "machine.metal.installed-candidate",
+      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: the candidate disk, an MBR and a writable ext2 root on its third partition booted from the candidate slot, passes the rows",
+      "units": ["metal", "tests/system/accept/installed_test.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "candidate"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["installed-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "installed",
+          "does": "boot the disk through SeaBIOS and GRUB until the debug shell's greeting"
+        },
+        {
+          "step_id": "rows",
+          "stage": "execute",
+          "machine": "installed",
+          "does": "type `exec /bin/sh /check.sh` and wait for `METAL_INSTALLED_DONE`"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "installed",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["installed-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "status", "checks": "/check.sh prints `accept-status: 0`", "source": "scenario"},
+        {
+          "assertion_id": "mbr",
+          "checks": "the rows print the MBR's hash, `disk: the MBR hashes to` and 64 hexadecimal digits",
+          "source": "scenario"
+        },
+        {"assertion_id": "no-diagnostic", "checks": "the console has no `rach2.diskdiag`", "source": "scenario"},
+        {
+          "assertion_id": "root-writable",
+          "checks": "the rows say `the ext2 root is mounted writable from /dev/disk0p3`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "candidate-slot",
+          "checks": "the rows say `the ext2 root boot came from the candidate slot`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "root-write",
+          "checks": "the rows say `the ext2 root takes a file and gives it back`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {
+          "name": "installed-disk",
+          "node": "tests/cases/machine/metal-installed/candidate.disk",
+          "per_architecture": true
+        },
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the Lenovo runs this check itself: the release runs metal_accept.sh against the installed machine, and these cases rehearse it on QEMU"
+      }
+    },
+    {
+      "case_id": "machine.metal.installed-gpt",
+      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: the same root on a GUID table, which the boot line names by the table's disk GUID, passes the rows",
+      "units": ["metal", "tests/system/accept/installed_test.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "gpt"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["installed-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "installed",
+          "does": "boot the disk through SeaBIOS and GRUB until the debug shell's greeting"
+        },
+        {
+          "step_id": "rows",
+          "stage": "execute",
+          "machine": "installed",
+          "does": "type `exec /bin/sh /check.sh` and wait for `METAL_INSTALLED_DONE`"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "installed",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["installed-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "status", "checks": "/check.sh prints `accept-status: 0`", "source": "scenario"},
+        {
+          "assertion_id": "mbr",
+          "checks": "the rows print the MBR's hash, `disk: the MBR hashes to` and 64 hexadecimal digits",
+          "source": "scenario"
+        },
+        {"assertion_id": "no-diagnostic", "checks": "the console has no `rach2.diskdiag`", "source": "scenario"},
+        {
+          "assertion_id": "gpt-cmdline",
+          "checks": "the command line has `rach2.root=GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,3`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "root-writable",
+          "checks": "the rows say `the ext2 root is mounted writable from /dev/disk0p3`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "candidate-slot",
+          "checks": "the rows say `the ext2 root boot came from the candidate slot`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "root-write",
+          "checks": "the rows say `the ext2 root takes a file and gives it back`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "installed-disk", "node": "tests/cases/machine/metal-installed/gpt.disk", "per_architecture": true},
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the Lenovo runs this check itself: the release runs metal_accept.sh against the installed machine, and these cases rehearse it on QEMU"
+      }
+    },
+    {
+      "case_id": "machine.metal.installed-wrong-partition",
+      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: a root on the fourth partition, which the boot line names, fails the rows",
+      "units": ["metal", "tests/system/accept/installed_test.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "wrong-partition"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["installed-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "installed",
+          "does": "boot the disk through SeaBIOS and GRUB until the debug shell's greeting"
+        },
+        {
+          "step_id": "rows",
+          "stage": "execute",
+          "machine": "installed",
+          "does": "type `exec /bin/sh /check.sh` and wait for `METAL_INSTALLED_DONE`"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "installed",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["installed-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "status", "checks": "/check.sh prints `accept-status: 1`", "source": "scenario"},
+        {
+          "assertion_id": "mbr",
+          "checks": "the rows print the MBR's hash, `disk: the MBR hashes to` and 64 hexadecimal digits",
+          "source": "scenario"
+        },
+        {"assertion_id": "no-diagnostic", "checks": "the console has no `rach2.diskdiag`", "source": "scenario"},
+        {
+          "assertion_id": "mounted",
+          "checks": "the mount table has `/dev/disk0p4 / ext2 rw,relatime`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "the rows fail with `FAIL: the ext2 root is not the mounted root:`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {
+          "name": "installed-disk",
+          "node": "tests/cases/machine/metal-installed/wrong-partition.disk",
+          "per_architecture": true
+        },
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the Lenovo runs this check itself: the release runs metal_accept.sh against the installed machine, and these cases rehearse it on QEMU"
+      }
+    },
+    {
+      "case_id": "machine.metal.installed-readonly",
+      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: a root with dir_index, which the driver mounts read-only, fails the rows",
+      "units": ["metal", "tests/system/accept/installed_test.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "readonly"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["installed-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "installed",
+          "does": "boot the disk through SeaBIOS and GRUB until the debug shell's greeting"
+        },
+        {
+          "step_id": "rows",
+          "stage": "execute",
+          "machine": "installed",
+          "does": "type `exec /bin/sh /check.sh` and wait for `METAL_INSTALLED_DONE`"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "installed",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["installed-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "status", "checks": "/check.sh prints `accept-status: 1`", "source": "scenario"},
+        {
+          "assertion_id": "mbr",
+          "checks": "the rows print the MBR's hash, `disk: the MBR hashes to` and 64 hexadecimal digits",
+          "source": "scenario"
+        },
+        {"assertion_id": "no-diagnostic", "checks": "the console has no `rach2.diskdiag`", "source": "scenario"},
+        {
+          "assertion_id": "mounted",
+          "checks": "the mount table has `/dev/disk0p3 / ext2 ro,relatime`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "the rows fail with `FAIL: the ext2 root is not the mounted root:`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {
+          "name": "installed-disk",
+          "node": "tests/cases/machine/metal-installed/readonly.disk",
+          "per_architecture": true
+        },
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the Lenovo runs this check itself: the release runs metal_accept.sh against the installed machine, and these cases rehearse it on QEMU"
+      }
+    },
+    {
+      "case_id": "machine.metal.installed-fallback",
+      "behavior": "the rows of metal_accept.sh that read the command line, the disk and the ext2 root, run on a small installed disk: a boot from the fallback slot fails the rows",
+      "units": ["metal", "tests/system/accept/installed_test.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "fallback"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "metal_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["installed-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "installed",
+          "does": "boot the disk through SeaBIOS and GRUB until the debug shell's greeting"
+        },
+        {
+          "step_id": "rows",
+          "stage": "execute",
+          "machine": "installed",
+          "does": "type `exec /bin/sh /check.sh` and wait for `METAL_INSTALLED_DONE`"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "installed",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["installed-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "status", "checks": "/check.sh prints `accept-status: 1`", "source": "scenario"},
+        {
+          "assertion_id": "mbr",
+          "checks": "the rows print the MBR's hash, `disk: the MBR hashes to` and 64 hexadecimal digits",
+          "source": "scenario"
+        },
+        {"assertion_id": "no-diagnostic", "checks": "the console has no `rach2.diskdiag`", "source": "scenario"},
+        {
+          "assertion_id": "fallback-cmdline",
+          "checks": "the command line has `rach2.slot=fallback`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "the rows fail with `FAIL: the ext2 root boot did not come from the candidate slot:`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {
+          "name": "installed-disk",
+          "node": "tests/cases/machine/metal-installed/fallback.disk",
+          "per_architecture": true
+        },
+        {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the Lenovo runs this check itself: the release runs metal_accept.sh against the installed machine, and these cases rehearse it on QEMU"
+      }
+    }
+  ]
+}

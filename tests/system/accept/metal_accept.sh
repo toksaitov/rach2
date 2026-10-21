@@ -29,9 +29,11 @@
 # and uses su for root commands. The owner sets RACH2_ACCEPT_PASSWORD in the
 # environment; it is never put in a command argument or printed.
 #
-# It writes its records under build/images, which it creates, and its image
-# row needs the host KRFFS tools, which `make krffs` builds; a tree that holds
-# only a fetched kernel needs nothing else.
+# It saves the boot log it reads as metal-bootlog.txt in the directory
+# RACH2_ACCEPT_RECORDS names, build/images by default, which it creates, and
+# keeps nothing else on the host. Its image row needs the host KRFFS tools,
+# which `make krffs` builds; a tree that holds only a fetched kernel needs
+# nothing else.
 #
 # Usage: metal_accept.sh <host> [port] [stick-serial]
 #
@@ -66,8 +68,8 @@ if [ ! -f "$KEY" ]; then
          "RACH2_ACCEPT_KEY" >&2
     exit 2
 fi
-KNOWN="$REPO/build/images/metal-accept.known"
-mkdir -p "$REPO/build/images"
+RECORDS="${RACH2_ACCEPT_RECORDS:-$REPO/build/images}"
+mkdir -p "$RECORDS"
 umask 077
 
 # The MBR's SHA-256 as Windows measured it, from dev-log/24-metal/baseline.md.
@@ -106,7 +108,6 @@ cleanup() {
     if [ -n "$TRANSFER_TMP" ]; then
         account "rm -rf $TRANSFER_TMP" > /dev/null 2>&1 || true
     fi
-    rm -f "$KNOWN"
     [ -z "$LOCAL_TMP" ] || rm -rf "$LOCAL_TMP"
     return 0
 }
@@ -115,6 +116,7 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX")
+KNOWN="$LOCAL_TMP/known"
 
 fails=0
 # Record $1 as a note, or as a failure that is counted.
@@ -454,7 +456,7 @@ else
 fi
 
 # Each invocation reads the running machine, including after rehearsal faults.
-BOOTLOG_OUT="$REPO/build/images/metal-bootlog.txt"
+BOOTLOG_OUT="$RECORDS/metal-bootlog.txt"
 if run 'cat /dev/bootlog' > "$BOOTLOG_OUT" 2>/dev/null && [ -s "$BOOTLOG_OUT" ]; then
     note "boot log: $(wc -l < "$BOOTLOG_OUT" | tr -d ' ') lines saved to $BOOTLOG_OUT"
 else
@@ -715,13 +717,12 @@ elif ! printf '%s\n' "$FILESYSTEMS" | grep -qw krffs; then
 elif [ ! -x "$REPO/build/krffs/mkfs.krffs" ]; then
     bad "the host KRFFS tools required for the image row are not built; run make krffs"
 else
-    IMG="$REPO/build/images/metal-loop.krffs"
-    TREE="$REPO/build/tests/system/loopimg"
-    mkdir -p "$TREE"
-    printf 'hello from inside an image' > "$TREE/hello.txt"
-    dd if=/dev/zero of="$TREE/inner.bin" bs=512 count=8 2>/dev/null
-    if ! sh "$REPO/krffs/mkimage.sh" "$REPO/krffs/manifests/loopimg-test.manifest" \
-        "$IMG" 1 >/dev/null 2>&1; then
+    IMG="$LOCAL_TMP/loop.krffs"
+    printf 'hello from inside an image' > "$LOCAL_TMP/hello.txt"
+    dd if=/dev/zero of="$LOCAL_TMP/inner.bin" bs=512 count=8 2>/dev/null
+    printf 'file 0644 /hello.txt %s\nfile 0644 /inner.bin %s\n' \
+        "$LOCAL_TMP/hello.txt" "$LOCAL_TMP/inner.bin" > "$LOCAL_TMP/loopimg-test.manifest"
+    if ! sh "$REPO/krffs/mkimage.sh" "$LOCAL_TMP/loopimg-test.manifest" "$IMG" 1 >/dev/null 2>&1; then
         bad "the image could not be built here"
     elif ! MACHINE_TMP="$(run 'mktemp -d /tmp/accept.XXXXXX')" || [ -z "$MACHINE_TMP" ]; then
         bad "the machine gave no temporary directory for the image row"

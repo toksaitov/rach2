@@ -21,7 +21,12 @@
 #   guest.sh run SUITE LINE...       run `tests/run SUITE` and print its
 #                                    output; a run that passes must print
 #                                    each LINE, or the test fails with
-#                                    `guest: fail: SUITE passed without LINE`
+#                                    `guest: fail: SUITE passed without LINE`;
+#                                    one that fails prints each text file
+#                                    in `evidence/` of each case's workspace
+#                                    it kept, after `guest: evidence: FILE`;
+#                                    a binary file, such as a disk image, it
+#                                    names alone
 #   guest.sh exec WORK COMMAND...    run COMMAND with ARCH the architecture,
 #                                    RACH2_QEMU its emulator and ARCH_BUILD
 #                                    its build tree relative to the root
@@ -121,6 +126,17 @@ case $verb in
         status=0
         ARCH=$RACH2_ARCH tests/run "$suite" >"$scratch/out" 2>&1 </dev/null || status=$?
         cat "$scratch/out"
+        if [ "$status" -ne 0 ]; then
+            sed -n 's/^run: [^ ]*: [^ ]*: evidence: //p' "$scratch/out" | while read -r kept; do
+                for f in "$kept"/evidence/*; do
+                    [ -f "$f" ] || continue
+                    echo "guest: evidence: $f"
+                    if grep -Iq '' "$f"; then
+                        cat "$f"
+                    fi
+                done
+            done
+        fi
         if [ "$status" -eq 0 ]; then
             for line in "$@"; do
                 if ! grep -Fq -- "$line" "$scratch/out"; then

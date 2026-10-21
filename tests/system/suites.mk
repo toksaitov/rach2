@@ -36,6 +36,12 @@ export RACH2_QEMU := $(ARCH_QEMU)
 # proves is the boot path.
 BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 
+# Where the artifacts of etude's machine cases (tests/cases) are made, beyond
+# the product's: under it for both architectures, and under the same path in
+# $(ARCH_BUILD) for one, as the cases' preparation names them.
+CASE_DIR = build/tests/cases/machine
+ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
+
 # No file is named `run-<suite>`, so every suite target is phony. The names are
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
@@ -45,9 +51,8 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 
 # The card the network suites attach. The RTL8139 is the default, which an
 # invocation that names no card gets; the `NAME-e1000` suites run these same
-# targets with the other emulated card. The runner and the harness both take
-# --device, and ssh.sh takes the card as an argument, because it builds its
-# own QEMU command line.
+# targets with the other emulated card, which the runner and the harness both
+# take as --device.
 # The host ports the suites forward. They are named here because two suites
 # sharing one cannot both run, and a number buried in a recipe is a collision
 # nobody sees until the two are scheduled together.
@@ -71,13 +76,9 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 # etude's set driver gives the machine cases of tests/cases the ports 2400 to
 # 2499 of the block (tools/etude/Readme.md, The set driver). A make run
 # without tests/run has no offset and forwards the table's numbers.
-# SSH_TEST_PORT alone may come from the environment or the command line, as
-# in SSH_TEST_PORT=4022 make run-ssh; a port given that way is forwarded as
-# given, with no offset added.
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
 port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
 DISKDIAG_PORT   := $(call port,2225)
-METAL_PORT      := $(call port,2223)
 GNU_PORT        := $(call port,2296)
 FAKEAPI_PORT    := $(call port,2300)
 AGENTS_PORT     := $(call port,2301)
@@ -90,7 +91,6 @@ PROCFILES_PORT  := $(call port,2299)
 SOCKET_PORT     := $(call port,7777)
 ifeq ($(NIC),e1000)
 NIC_TAG          = -e1000
-SSH_TEST_PORT   ?= $(call port,2322)
 DHCP_SSH_PORT   := $(call port,2324)
 DHCP_TWO_PORT_A := $(call port,2326)
 DHCP_TWO_PORT_B := $(call port,2328)
@@ -98,7 +98,6 @@ DGRAM_PORT      := $(call port,15898)
 NETIF_PORT      := $(call port,15899)
 else
 NIC_TAG          =
-SSH_TEST_PORT   ?= $(call port,2222)
 DHCP_SSH_PORT   := $(call port,2224)
 DHCP_TWO_PORT_A := $(call port,2226)
 DHCP_TWO_PORT_B := $(call port,2228)
@@ -1272,7 +1271,8 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 	    --expect "Stopping the system. Goodbye!" \
 	    --reject "powering off"
 # `tests/run e1000`: the network path on the other emulated card, and the probe
-# order that decides which card a machine with more than one of them gets.
+# order that decides which card a machine with more than one of them gets, the
+# cases of tests/cases/machine.e1000.json, each a boot of its own.
 #
 # This card is the one QEMU attaches when nobody asks for one, so it is what a
 # person running qemu-system-i386 from a generic command line has. The suites
@@ -1283,34 +1283,6 @@ run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
 # can see what it costs. The other suites are about disks, accounts and
 # building, and running them again on a second card would cost minutes and
 # show nothing.
-run-e1000: rach2 tests krffs test-image $(HARNESS)
-# The probe order, which only a machine holding more than one card can show.
-# The table tries the RTL8139 first, so a machine with both must bind that one;
-# a machine with only the e1000 must bind the e1000; and a machine whose card no
-# driver claims must say so and still reach its shell, which is what proves each
-# driver reports ABSENT for a device that is not its own rather than starting on
-# it. The 82574L is that card: Intel, gigabit, and a different register
-# interface, so the e1000 driver must refuse it by device id.
-#
-# Each boot is asserted on the bound driver's own detail line rather than on the
-# summary, because the summary names the card in parentheses and the harness
-# matcher takes no parenthesis. Only the bound driver prints a detail line, so
-# the line is the binding.
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
-	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
-	    --timeout 90 --ok "Type 'help'" \
-	    "expect=rtl8139: IRQ" "expect=Type 'help'"
-	$(HARNESS) --device e1000,netdev=net0 --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 90 --ok "Type 'help'" \
-	    "expect=e1000: 82540EM" "expect=Type 'help'"
-	$(HARNESS) --device e1000e,netdev=net0 --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 90 --ok "Type 'help'" \
-	    "expect=no supported network card" \
-	    "expect=Type 'help'"
 # `tests/run reset`: each reset mechanism on its own. The kernel tries three,
 # most of the machine first, and each case of tests/cases/machine.reset.json
 # boots the kernel and the test image with the ones before it left out, so
@@ -1615,14 +1587,25 @@ run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
 # here: copies of one disk are booted with each kernel; the ordinary one must
 # change its copy, which is what makes the other half mean anything, and the
 # metal one must refuse a command by name and leave its copy untouched.
-# `tests/run metal`: unattended SSH on the metal image and acceptance of an
-# installed ext2 root. The RAM boot checks server restart, authentication,
-# transfers, mounts and USB writes. Four serial boots check the installed
-# root's partition, write access and slot without a whole-disk diagnostic node.
-.PHONY: metal-installed-tools
-metal-installed-tools: rach2 utils check-busybox $(HARNESS) $(RUNUTIL) $(DISK_TOOLS)
-run-metal: rach2-metal rach2-metal-image metal-installed-tools $(PTYDRIVE)
-	sh tests/system/suites/metal.sh $(METAL_KERNEL) $(METAL_IMAGE) $(METAL_PORT)
+# `tests/run metal`: unattended SSH on the metal image, the acceptance script
+# rehearsed on it, and the script's installed-root rows, the cases of
+# tests/cases/machine.metal.json.
+
+# The artifacts of the metal cases beyond the kernels, the metal image and
+# the credentials: the three sticks of the unattended case, which
+# metal_sticks.sh makes, and the five disks of the installed cases, which
+# metal_installed_disks.sh makes from the kernel, BusyBox and bootctl of the
+# architecture's build and the rows of metal_accept.sh.
+METAL_STICKS = $(addprefix $(CASE_DIR)/metal/,stick.img rstick1.img rstick2.img)
+$(METAL_STICKS) &: tests/system/metal_sticks.sh $(MKMBR) build/krffs/mkfs.krffs \
+                   build/krffs/stageimage.krffs
+	sh tests/system/metal_sticks.sh $(CASE_DIR)/metal
+METAL_INSTALLED = $(addprefix $(ARCH_CASE_DIR)/metal-installed/, \
+                  candidate.disk gpt.disk wrong-partition.disk readonly.disk fallback.disk)
+$(METAL_INSTALLED) &: tests/system/metal_installed_disks.sh tests/system/accept/metal_accept.sh \
+                      tools/image/mkdisk_grub.sh $(KERNEL) $(DISK_TOOLS) $(GRUB_FILES) \
+                      | rach2 utils check-busybox
+	sh tests/system/metal_installed_disks.sh $(ARCH_BUILD) $(ARCH_CASE_DIR)/metal-installed
 # `tests/run account`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools and they are different code.
 # os-real gets busybox's over three boots, so what is asserted is what reached
@@ -1714,17 +1697,16 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 krffs test-image $(MANIFEST_PARTS_os_rea
 	build/tools/image/mkmbr --lba $(SELFBUILD_EXT2_DISK) 2048:98304:83 > /dev/null
 	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_EXT2_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
-# `tests/run ssh`: logins over SSH with nobody at the keyboard. Boots os-real
-# from a disk with the port forwarded, starts dropbear from the console session
-# the way the Readme's recipe does, then logs in twice: root by key, and the
-# unprivileged account by password, which is the half that reaches /etc/shadow.
-# Every wait is bounded, so a hang fails instead of sitting there.
-SSH_TEST_DISK = $(IMAGES_DIR)/ssh-test$(NIC_TAG).disk
-run-ssh: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(PTYDRIVE)
-	$(MKDISK) krffs/manifests/os-real.manifest $(SSH_TEST_DISK) 64 48
-	sh tests/system/suites/ssh.sh $(BOOT_KERNEL) $(SSH_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
-	    $(SSH_TEST_PORT) $(NIC)
+# `tests/run ssh`: logins over SSH with nobody at the keyboard, the case of
+# tests/cases/machine.ssh.json.
+
+# The artifact of the ssh cases beyond the kernel, the scenario, the flood and
+# the demo credentials: a disk of os-real, of which each case boots a private
+# copy.
+$(IMAGES_DIR)/ssh-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                             $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+
 # `tests/run shutdown`: userland stopping the machine, on a disk fixture, with
 # every claim of a stop asserted on QEMU's event, and every claim of a halt on
 # the processors halted in QEMU's monitor, rather than on a token, every disk
@@ -2016,9 +1998,8 @@ run-netconsole-e1000:
 run-dhcp-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-dhcp
 
-# `tests/run ssh-e1000`: the ssh suite on the e1000 card.
-run-ssh-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-ssh
+# `tests/run ssh-e1000`: the ssh suite on the e1000 card, the case of
+# tests/cases/machine.ssh-e1000.json.
 
 
 # The other products a `run-` target names, built with `prepare-images` before
