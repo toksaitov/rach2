@@ -21,6 +21,12 @@
  * and so does umount2 of the tmpfs; both succeed once the process is gone.
  *
  * Prints "CHROOTMUSL OK" on success and "CHROOTMUSL FAIL (detail)" otherwise.
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order: `jail`, `refusals`, `chroot-root`,
+ * `eperm-nonroot`, `private-root`, `krffs-root`, `moved-cwd`, `tmpfs-root`,
+ * `busy-krffs`, `busy-tmpfs` and `cleanup`. The first failure fails its
+ * assertion and leaves the rest not run; the copy exec'd inside writes no
+ * record.
  * The other uid and gid are 1000, or the NEW of 1000 when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
  */
@@ -36,6 +42,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define SELF  "/musl/chrootmusl"
 #define JAIL  "/tmp/chrootmusl"
@@ -49,7 +56,11 @@
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
-    printf("CHROOTMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[96];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("CHROOTMUSL FAIL (%s)\n", why);
+    report_stop(why);
     return 1;
 }
 
@@ -59,7 +70,11 @@ static int fail(const char *what)
  */
 static int fail_step(const char *what, int step)
 {
-    printf("CHROOTMUSL FAIL (%s: step %d)\n", what, step);
+    char why[96];
+
+    snprintf(why, sizeof(why), "%s: step %d", what, step);
+    printf("CHROOTMUSL FAIL (%s)\n", why);
+    report_stop(why);
     return 1;
 }
 
@@ -179,6 +194,7 @@ static int build_jail(void)
     if (!put(JAIL "/marker", "inside") || !copy(SELF, JAIL "/bin/probe")) {
         return fail("the KRFFS jail");
     }
+    report_held();
     return 0;
 }
 
@@ -195,10 +211,12 @@ static int refusals(void)
         !refused(chroot("/proc"), EINVAL) || !refused(chroot("/dev"), EINVAL)) {
         return fail("the refusals");
     }
+    report_held();
     if (chdir(JAIL "/dir") != 0 || chroot("/") != 0 || !cwd_is(JAIL "/dir") ||
         !holds(JAIL "/marker", "inside") || chdir("/") != 0) {
         return fail("chroot of /");
     }
+    report_held();
     pid = fork();
     if (pid == 0) {
         if (setgid(PROBE_ID) != 0 || setuid(PROBE_ID) != 0) {
@@ -417,12 +435,27 @@ static int clean(void)
     return 0;
 }
 
+/** Report the path's next assertion held when `failed`, a row's result, is
+ * 0, and return `failed`. */
+static int held(int failed)
+{
+    if (!failed) {
+        report_held();
+    }
+    return failed;
+}
+
 /**
  * Run every check, or, with the argument `inside`, the checks of the copy
  * exec'd inside JAIL.
  */
 int main(int argc, char **argv)
 {
+    static const char *const ids[] = {"jail",         "refusals",   "chroot-root", "eperm-nonroot",
+                                      "private-root", "krffs-root", "moved-cwd",   "tmpfs-root",
+                                      "busy-krffs",   "busy-tmpfs", "cleanup"};
+    unsigned i;
+
     probe_args(argc, argv);
     if (argc == 2 && strcmp(argv[1], "inside") == 0) {
         int st = inside();
@@ -432,11 +465,17 @@ int main(int argc, char **argv)
         }
         return 0;
     }
+    report_begin(report_case(environ, "guest.default.chrootmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
     mkdir(EMPTY, 0755);
-    if (build_jail() || refusals() || private_root() || krffs_root() || moved_cwd() ||
-        tmpfs_root() || busy(EMPTY, NULL) || busy(TJAIL "/a", TJAIL) || clean()) {
+    if (build_jail() || held(refusals()) || held(private_root()) || held(krffs_root()) ||
+        held(moved_cwd()) || held(tmpfs_root()) || held(busy(EMPTY, NULL)) ||
+        held(busy(TJAIL "/a", TJAIL)) || held(clean())) {
         return 1;
     }
+    report_end();
     printf("CHROOTMUSL OK\n");
     return 0;
 }

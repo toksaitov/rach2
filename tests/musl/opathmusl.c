@@ -20,7 +20,17 @@
  * /dev/ptmx, since other logins move it.
  *
  * Prints `OPATHMUSL OK` and exits 0 on success, and prints
- * `OPATHMUSL FAIL (detail)` and exits 1 otherwise.
+ * `OPATHMUSL FAIL (detail)` and exits 1 otherwise. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each row in order: `trunc-dropped`, with the making of the file,
+ * `getfl-path`, `file-refuses-io`, `fd-flags`, `dupfd-path`, `dup-path`,
+ * `utimensat-empty`, `close`, `creat-dropped`, `cloexec-kept`,
+ * `directory-checked`, `no-permission`, `dir-refuses-io`, with the making of
+ * the directory, `at-calls`, `fchdir`, `dev-null`, `ptmx-no-terminal`,
+ * `ptmx-refuses-io`, `proc-meminfo`, `dev-dir`, `nofollow-self`,
+ * `nofollow-fd-link` and `proc-self-followed`. The first failure fails its
+ * assertion and leaves the rest not run. A native run reports
+ * `ptmx-no-terminal` not run, since it leaves the count out.
  */
 
 #define _GNU_SOURCE
@@ -40,6 +50,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* fchown of 32-bit ids: fchown32 on i386, whose fchown takes 16-bit ones,
  * and fchown on x86-64, which has only that. */
@@ -59,6 +70,7 @@
 static int fail(const char *what)
 {
     printf("OPATHMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -176,28 +188,34 @@ static int file_rows(void)
     if (fd < 0 || stat(FILE_PATH, &st) != 0 || st.st_size != 3) {
         return fail("O_TRUNC is dropped");
     }
+    report_held();
     flags = fcntl(fd, F_GETFL);
     if (flags == -1 || (flags & O_PATH) != O_PATH || (flags & 3) != O_RDONLY ||
         (flags & O_APPEND) != 0) {
         return fail("F_GETFL reports O_PATH and nothing else");
     }
+    report_held();
     if (!same_file(fd, FILE_PATH) || !refuses_io(fd)) {
         return fail("a file of the boot root");
     }
+    report_held();
     if (fcntl(fd, F_GETFD) != 0 || fcntl(fd, F_SETFD, FD_CLOEXEC) != 0 ||
         fcntl(fd, F_GETFD) != FD_CLOEXEC) {
         return fail("F_GETFD and F_SETFD");
     }
+    report_held();
     dup_fd = fcntl(fd, F_DUPFD, 10);
     if (dup_fd < 10 || fcntl(dup_fd, F_GETFD) != 0 || !same_file(dup_fd, FILE_PATH) ||
         !keeps_path(dup_fd)) {
         return fail("F_DUPFD keeps O_PATH");
     }
+    report_held();
     close(dup_fd);
     dup_fd = dup(fd);
     if (dup_fd < 0 || !keeps_path(dup_fd)) {
         return fail("dup keeps O_PATH");
     }
+    report_held();
     close(dup_fd);
     ts[0].tv_sec = ts[1].tv_sec = 1786712707;
     ts[0].tv_nsec = ts[1].tv_nsec = 0;
@@ -205,22 +223,27 @@ static int file_rows(void)
         st.st_mtime != 1786712707) {
         return fail("utimensat with AT_EMPTY_PATH");
     }
+    report_held();
     if (close(fd) != 0 || !refused(close(fd), EBADF)) {
         return fail("close");
     }
+    report_held();
     unlink("/opath.none");
     if (!refused(open("/opath.none", O_PATH | O_CREAT | O_WRONLY, 0644), ENOENT) ||
         access("/opath.none", F_OK) == 0) {
         return fail("O_CREAT is dropped");
     }
+    report_held();
     fd = open(FILE_PATH, O_PATH | O_CLOEXEC);
     if (fd < 0 || fcntl(fd, F_GETFD) != FD_CLOEXEC) {
         return fail("O_CLOEXEC is kept");
     }
+    report_held();
     close(fd);
     if (!refused(open(FILE_PATH, O_PATH | O_DIRECTORY), ENOTDIR)) {
         return fail("O_DIRECTORY is checked");
     }
+    report_held();
     return 0;
 }
 
@@ -254,6 +277,7 @@ static int permission_rows(void)
         WEXITSTATUS(status) != 0) {
         return fail("no permission on the file itself");
     }
+    report_held();
     return 0;
 }
 
@@ -278,18 +302,46 @@ static int dir_rows(void)
     if (dfd < 0 || !same_file(dfd, DIR_PATH) || !refuses_io(dfd)) {
         return fail("a directory of the boot root");
     }
+    report_held();
     fd = openat(dfd, "inner", O_RDONLY);
     if (fd < 0 || fstatat(dfd, "inner", &st, 0) != 0 || !S_ISREG(st.st_mode)) {
         return fail("the *at calls against it");
     }
+    report_held();
     close(fd);
     if (fchdir(dfd) != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, DIR_PATH) != 0 ||
         chdir("/") != 0) {
         return fail("fchdir");
     }
+    report_held();
     close(dfd);
     unlink(DIR_PATH "/inner");
     rmdir(DIR_PATH);
+    return 0;
+}
+
+/**
+ * Check that an O_PATH open of /dev/ptmx allocates no terminal, by the count
+ * of /dev/pts that a native run leaves out, and refuses I/O. Returns 0, or 1
+ * once the failure is reported.
+ */
+static int ptmx_rows(void)
+{
+    int fd, before;
+
+    before = pts_count();
+    fd = open("/dev/ptmx", O_PATH | O_RDWR);
+    if (fd < 0 || before < 0 || pts_count() != before) {
+        return fail("/dev/ptmx allocates no terminal");
+    }
+    if (!probe_native()) {
+        report_held();
+    }
+    if (!refuses_io(fd)) {
+        return fail("/dev/ptmx allocates no terminal");
+    }
+    report_held();
+    close(fd);
     return 0;
 }
 
@@ -302,7 +354,7 @@ static int synth_rows(void)
 {
     char buf[64], cwd[64], want[64];
     struct stat st;
-    int fd, before;
+    int fd;
     ssize_t n;
 
     fd = open("/dev/null", O_PATH);
@@ -312,18 +364,17 @@ static int synth_rows(void)
         n != 9 || memcmp(buf, "/dev/null", 9) != 0) {
         return fail("/dev/null");
     }
+    report_held();
     close(fd);
-    before = pts_count();
-    fd = open("/dev/ptmx", O_PATH | O_RDWR);
-    if (fd < 0 || before < 0 || pts_count() != before || !refuses_io(fd)) {
-        return fail("/dev/ptmx allocates no terminal");
+    if (ptmx_rows() != 0) {
+        return 1;
     }
-    close(fd);
     fd = open("/proc/meminfo", O_PATH);
     if (fd < 0 || fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || !on_fs(fd, PROC_MAGIC) ||
         !refuses_io(fd)) {
         return fail("/proc/meminfo");
     }
+    report_held();
     close(fd);
     fd = open("/dev", O_PATH | O_DIRECTORY);
     if (fd < 0 || !same_file(fd, "/dev") || !refuses_io(fd) || fstatat(fd, "null", &st, 0) != 0 ||
@@ -331,16 +382,19 @@ static int synth_rows(void)
         strcmp(cwd, "/dev") != 0 || chdir("/") != 0) {
         return fail("/dev");
     }
+    report_held();
     close(fd);
     fd = open("/proc/self", O_PATH | O_NOFOLLOW);
     if (fd < 0 || fstat(fd, &st) != 0 || !S_ISLNK(st.st_mode)) {
         return fail("O_NOFOLLOW names /proc/self");
     }
+    report_held();
     close(fd);
     fd = open("/proc/self/fd/1", O_PATH | O_NOFOLLOW);
     if (fd < 0 || fstat(fd, &st) != 0 || !S_ISLNK(st.st_mode)) {
         return fail("O_NOFOLLOW names a descriptor link");
     }
+    report_held();
     close(fd);
     snprintf(want, sizeof(want), "/proc/%d", (int)getpid());
     fd = open("/proc/self", O_PATH);
@@ -348,18 +402,61 @@ static int synth_rows(void)
         chdir("/") != 0) {
         return fail("/proc/self followed");
     }
+    report_held();
     close(fd);
     return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked; a native run leaves out the count of /dev/pts, whose assertion
+ * is not run. */
+static void plan(void)
+{
+    static const char *const ids[] = {"trunc-dropped",
+                                      "getfl-path",
+                                      "file-refuses-io",
+                                      "fd-flags",
+                                      "dupfd-path",
+                                      "dup-path",
+                                      "utimensat-empty",
+                                      "close",
+                                      "creat-dropped",
+                                      "cloexec-kept",
+                                      "directory-checked",
+                                      "no-permission",
+                                      "dir-refuses-io",
+                                      "at-calls",
+                                      "fchdir",
+                                      "dev-null",
+                                      "ptmx-no-terminal",
+                                      "ptmx-refuses-io",
+                                      "proc-meminfo",
+                                      "dev-dir",
+                                      "nofollow-self",
+                                      "nofollow-fd-link",
+                                      "proc-self-followed"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.opathmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        if (probe_native() && strcmp(ids[i], "ptmx-no-terminal") == 0) {
+            report_notrun(ids[i], "a native run leaves out the count of /dev/pts");
+        } else {
+            report_plan(ids[i]);
+        }
+    }
 }
 
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    plan();
     if (file_rows() != 0 || permission_rows() != 0 || dir_rows() != 0 || synth_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
     unlink(FILE_PATH);
+    report_end();
     printf("OPATHMUSL OK\n");
     return 0;
 }

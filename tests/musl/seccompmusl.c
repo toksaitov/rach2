@@ -28,6 +28,17 @@
  * "SECCOMPMUSL FAIL (detail: errno N)" and the program exits 1. The
  * unprivileged caller is uid 1000, or the NEW of 1000 when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, comes
+ * from the parent alone and has an assertion for each row in order:
+ * `no-filter`, `einval-programs`, `allow-available`,
+ * `user-notif-unavailable`, `eacces-unprivileged`, `strict-allows`,
+ * `strict-kills-getpid`, `strict-kills-close`, and the rows of the filter
+ * child, `filter-install`, `filter-errno`, `status-file`, `trap-siginfo`,
+ * `trap-wins`, `grandchild-sigsys`, `tsync-install`, `tsync-thread` and
+ * `exec-keeps`. The filter child and the image it execs exit with the number
+ * of the row that failed, counted from 1, which the parent reports. The
+ * first failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -38,6 +49,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/prctl.h>
+
+#include "../probe_report.h"
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <ucontext.h>
@@ -101,7 +114,33 @@ static volatile int trap_ok;
 static int fail(const char *what)
 {
     printf("SECCOMPMUSL FAIL (%s: errno %d)\n", what, errno);
+    report_stop(what);
     return 1;
+}
+
+/* The assertions of the filter child's rows, in the order it checks them,
+ * and the check each fails with. */
+#define FILTER_ROWS 9
+static const char *const filter_ids[FILTER_ROWS] = {
+    "filter-install",    "filter-errno",  "status-file",  "trap-siginfo", "trap-wins",
+    "grandchild-sigsys", "tsync-install", "tsync-thread", "exec-keeps"};
+static const char *const filter_whats[FILTER_ROWS] = {
+    "a filter installs under no_new_privs",
+    "the filter fails getppid with its errno and lets getpid run",
+    "the status file shows the mode and one filter",
+    "a trap posts SIGSYS with the call's siginfo and its number in EAX",
+    "of a trap and an errno for one call, the trap wins",
+    "a grandchild's filter kills it with SIGSYS",
+    "TSYNC installs over a second thread",
+    "the second thread has the filter TSYNC gave it",
+    "an exec keeps the filters"};
+
+/** Report the failed check `what` of the filter row `row`, and return the
+ * exit status that names the row to the parent, `row` + 1. */
+static int fail_row(const char *what, int row)
+{
+    fail(what);
+    return row + 1;
 }
 
 /**
@@ -184,17 +223,21 @@ static int refusals(void)
     if (prctl(PR_GET_SECCOMP) != 0 || !status_has("Seccomp:\t0\n")) {
         return fail("a process starts with no filter");
     }
+    report_held();
     if (install(past, 0, 0) != -1 || errno != EINVAL || install(past, 2, 0) != -1 ||
         errno != EINVAL || install(wide, 2, 0) != -1 || errno != EINVAL) {
         return fail("an empty program, a jump past the end and a wide load are refused");
     }
+    report_held();
     if (syscall(NR_SECCOMP, GET_ACTION_AVAIL, 0, &action) != 0) {
         return fail("SECCOMP_RET_ALLOW is available");
     }
+    report_held();
     action = RET_USER_NOTIF;
     if (syscall(NR_SECCOMP, GET_ACTION_AVAIL, 0, &action) != -1 || errno != EOPNOTSUPP) {
         return fail("SECCOMP_RET_USER_NOTIF is not available");
     }
+    report_held();
     pid = fork();
     if (pid == 0) {
         uid_t user = (uid_t)probe_id(1000);
@@ -206,6 +249,7 @@ static int refusals(void)
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("an unprivileged caller without no_new_privs is refused");
     }
+    report_held();
     return 0;
 }
 
@@ -227,7 +271,8 @@ static void *tsync_thread(void *arg)
 /**
  * Install and check the filters, in a forked child, which this sets
  * no_new_privs in. On success it execs `self` with the argument `exec`, so
- * it returns only on failure: 1, after the failure is printed.
+ * it returns only on failure: the number of the row that failed, counted
+ * from 1, after the failure is printed.
  */
 static int filters(const char *self)
 {
@@ -239,13 +284,13 @@ static int filters(const char *self)
     int status;
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 || answer(NR_GETPPID, RET_ERRNO | 77, 0) != 0) {
-        return fail("a filter installs under no_new_privs");
+        return fail_row(filter_whats[0], 0);
     }
     if (syscall(NR_GETPPID) != -1 || errno != 77 || getpid() <= 0) {
-        return fail("the filter fails getppid with its errno and lets getpid run");
+        return fail_row(filter_whats[1], 1);
     }
     if (prctl(PR_GET_SECCOMP) != 2 || !status_has("Seccomp:\t2\nSeccomp_filters:\t1\n")) {
-        return fail("the status file shows the mode and one filter");
+        return fail_row(filter_whats[2], 2);
     }
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = on_sigsys;
@@ -253,10 +298,10 @@ static int filters(const char *self)
     sigaction(SIGSYS, &sa, NULL);
     if (answer(NR_GETUID, RET_TRAP | 5, 0) != 0 || syscall(NR_GETUID) != 4242 || trapped != 1 ||
         !trap_ok) {
-        return fail("a trap posts SIGSYS with the call's siginfo and its number in EAX");
+        return fail_row(filter_whats[3], 3);
     }
     if (answer(NR_GETPPID, RET_TRAP | 5, 0) != 0 || syscall(NR_GETPPID) == -1 || trapped != 2) {
-        return fail("of a trap and an errno for one call, the trap wins");
+        return fail_row(filter_whats[4], 4);
     }
     pid = fork();
     if (pid == 0) {
@@ -267,29 +312,30 @@ static int filters(const char *self)
         _exit(3);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSYS) {
-        return fail("a grandchild's filter kills it with SIGSYS");
+        return fail_row(filter_whats[5], 5);
     }
     if (pthread_create(&th, NULL, tsync_thread, (void *)&go) != 0 ||
         answer(NR_GETTID, RET_ERRNO | 33, FLAG_TSYNC) != 0) {
-        return fail("TSYNC installs over a second thread");
+        return fail_row(filter_whats[6], 6);
     }
     go = 1;
     if (pthread_join(th, &res) != 0 || res == NULL) {
-        return fail("the second thread has the filter TSYNC gave it");
+        return fail_row(filter_whats[7], 7);
     }
     execl(self, self, "exec", (char *)NULL);
-    return fail("execl");
+    return fail_row("execl", 8);
 }
 
 /**
  * Check, in the image `filters` execs, that the four filters were kept.
- * Returns 0, or 1 after the failure is printed.
+ * Returns 0, or the number of its row, counted from 1, after the failure is
+ * printed.
  */
 static int after_exec(void)
 {
     if (prctl(PR_GET_SECCOMP) != 2 || syscall(NR_GETTID) != -1 || errno != 33 ||
         !status_has("Seccomp_filters:\t4\n")) {
-        return fail("an exec keeps the filters");
+        return fail_row(filter_whats[8], 8);
     }
     return 0;
 }
@@ -339,26 +385,64 @@ static int strict(void)
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the strict mode lets write, read and exit run");
     }
+    report_held();
     status = strict_child(SYS_getpid);
     if (status == -1 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         return fail("the strict mode kills at getpid");
     }
+    report_held();
     status = strict_child(SYS_close);
     if (status == -1 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         return fail("the strict mode kills at close");
     }
+    report_held();
     return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {
+        "no-filter",           "einval-programs", "allow-available",     "user-notif-unavailable",
+        "eacces-unprivileged", "strict-allows",   "strict-kills-getpid", "strict-kills-close"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.seccompmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
+    for (i = 0; i < FILTER_ROWS; i++) {
+        report_plan(filter_ids[i]);
+    }
+}
+
+/** Report the filter child's rows from its wait status `status`: those
+ * before the row its exit names held, and that row failed. */
+static void filter_report(int status)
+{
+    int row = WIFEXITED(status) ? WEXITSTATUS(status) - 1 : -1, i;
+
+    if (row < 0 || row >= FILTER_ROWS) {
+        report_stop("the filter child ended without naming a row");
+        return;
+    }
+    for (i = 0; i < row; i++) {
+        report_held();
+    }
+    report_stop(filter_whats[row]);
 }
 
 int main(int argc, char **argv)
 {
     pid_t pid;
-    int status;
+    int status = -1, i;
 
     probe_args(argc, argv);
     if (probe_words() > 0) {
         return after_exec();
     }
+    plan();
     if (refusals() || strict()) {
         return 1;
     }
@@ -368,8 +452,13 @@ int main(int argc, char **argv)
         _exit(filters(argv[0]));
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        filter_report(status);
         return 1;
     }
+    for (i = 0; i < FILTER_ROWS; i++) {
+        report_held();
+    }
+    report_end();
     printf("SECCOMPMUSL OK\n");
     return 0;
 }

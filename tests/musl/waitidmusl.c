@@ -18,7 +18,16 @@
  * and a wait with no child at all with ECHILD.
  *
  * It prints "WAITIDMUSL OK" and exits 0 on success, or prints "WAITIDMUSL
- * FAIL (detail)" and exits 1 at the first failure.
+ * FAIL (detail)" and exits 1 at the first failure. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each row in order: `exit-status`, `killed-sigterm`, `wnohang-empty`,
+ * `stopped`, `continued`, `killed-sigkill`, `wnowait-stop`,
+ * `wnowait-death`, `dead-not-stopped`, `killed-reaped`, `wnowait-exit`,
+ * `wnowait-zombie`, `select-pid`, `select-pgid`, `select-callers-group`,
+ * `rusage-reap`, `rusage-values`, `wnohang-rusage`, `einval-no-event`,
+ * `einval-option`, `einval-idtype`, `einval-pid-zero`, `ebadf-pidfd` and
+ * `echild`. The first failure fails its assertion and leaves the rest not
+ * run.
  */
 
 #define _GNU_SOURCE
@@ -30,6 +39,8 @@
 #include <sys/times.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 /* The kernel's struct rusage, which the raw call writes: two timevals of
  * seconds and microseconds of a long's width, 32 bits on i386 and 64 on
@@ -46,6 +57,7 @@ struct krusage {
 static int fail(const char *what)
 {
     printf("WAITIDMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -145,18 +157,22 @@ static int dead_stop(void)
         end_child(pid);
         return fail("WNOWAIT did not report the stop");
     }
+    report_held();
     kill(pid, SIGKILL);
     if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT) != 0 ||
         !reports(&si, pid, CLD_KILLED, SIGKILL)) {
         return fail("WNOWAIT did not report the death");
     }
+    report_held();
     memset(&si, 0xFF, sizeof(si));
     if (waitid(P_PID, (id_t)pid, &si, WSTOPPED | WNOHANG) != 0 || si.si_pid != 0) {
         return fail("a child that died was reported stopped");
     }
+    report_held();
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         return fail("the killed child was not reaped");
     }
+    report_held();
     return 0;
 }
 
@@ -174,11 +190,13 @@ static int events(void)
     if (waitid(P_PID, (id_t)pid, &si, WEXITED) != 0 || !reports(&si, pid, CLD_EXITED, 7)) {
         return fail("an exit did not report CLD_EXITED with its status");
     }
+    report_held();
     pid = idle_child();
     kill(pid, SIGTERM);
     if (waitid(P_PID, (id_t)pid, &si, WEXITED) != 0 || !reports(&si, pid, CLD_KILLED, SIGTERM)) {
         return fail("a death by SIGTERM did not report CLD_KILLED with the signal");
     }
+    report_held();
 
     pid = idle_child();
     memset(&si, 0xFF, sizeof(si));
@@ -187,21 +205,25 @@ static int events(void)
         end_child(pid);
         return fail("WNOHANG with nothing to report did not return 0 with si_pid 0");
     }
+    report_held();
     kill(pid, SIGSTOP);
     if (waitid(P_PID, (id_t)pid, &si, WSTOPPED) != 0 || !reports(&si, pid, CLD_STOPPED, SIGSTOP)) {
         end_child(pid);
         return fail("a stop did not report CLD_STOPPED with the signal");
     }
+    report_held();
     kill(pid, SIGCONT);
     if (waitid(P_PID, (id_t)pid, &si, WCONTINUED) != 0 ||
         !reports(&si, pid, CLD_CONTINUED, SIGCONT)) {
         end_child(pid);
         return fail("a continue did not report CLD_CONTINUED with SIGCONT");
     }
+    report_held();
     kill(pid, SIGKILL);
     if (waitid(P_PID, (id_t)pid, &si, WEXITED) != 0 || !reports(&si, pid, CLD_KILLED, SIGKILL)) {
         return fail("a death by SIGKILL was not reported");
     }
+    report_held();
     return dead_stop();
 }
 
@@ -272,13 +294,24 @@ static int selections(void)
     if (waitid(P_ALL, 0, &si, WEXITED | WNOWAIT) != 0 || !reports(&si, pid, CLD_EXITED, 3)) {
         return fail("WNOWAIT did not report the exit");
     }
+    report_held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 3) {
         return fail("WNOWAIT did not leave the zombie to be reaped");
     }
+    report_held();
 
-    if (selects(P_PID, 0) != 0 || selects(P_PGID, 0) != 0 || selects(P_PGID, 1) != 0) {
+    if (selects(P_PID, 0) != 0) {
         return 1;
     }
+    report_held();
+    if (selects(P_PGID, 0) != 0) {
+        return 1;
+    }
+    report_held();
+    if (selects(P_PGID, 1) != 0) {
+        return 1;
+    }
+    report_held();
 
     pid = spinning_child(2);
     memset(&ru, 0xFF, sizeof(ru));
@@ -286,10 +319,12 @@ static int selections(void)
         !reports(&si, pid, CLD_EXITED, 0)) {
         return fail("the raw waitid did not reap the spinning child");
     }
+    report_held();
     if (ru.utime_sec * 100 + ru.utime_usec / 10000 < 2 || ru.counters[0] <= 0 ||
         ru.counters[1] != 0) {
         return fail("the raw waitid's usage is not the child's CPU time and peak memory");
     }
+    report_held();
     pid = idle_child();
     memset(&ru, 0xFF, sizeof(ru));
     if (syscall(SYS_waitid, (long)P_PID, (long)pid, &si, (long)(WEXITED | WNOHANG), &ru) != 0 ||
@@ -297,35 +332,63 @@ static int selections(void)
         end_child(pid);
         return fail("WNOHANG with nothing to report wrote the usage");
     }
+    report_held();
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
 
     if (waitid(P_ALL, 0, &si, 0) != -1 || errno != EINVAL) {
         return fail("a waitid with no event was not refused with EINVAL");
     }
+    report_held();
     if (waitid(P_ALL, 0, &si, WEXITED | 0x100) != -1 || errno != EINVAL) {
         return fail("an unknown option was not refused with EINVAL");
     }
+    report_held();
     if (waitid((idtype_t)7, 0, &si, WEXITED) != -1 || errno != EINVAL) {
         return fail("an unknown idtype was not refused with EINVAL");
     }
+    report_held();
     if (waitid(P_PID, 0, &si, WEXITED) != -1 || errno != EINVAL) {
         return fail("a pid of 0 was not refused with EINVAL");
     }
+    report_held();
     if (waitid(P_PIDFD, 3, &si, WEXITED) != -1 || errno != EBADF) {
         return fail("a pidfd was not refused with EBADF");
     }
+    report_held();
     if (waitid(P_ALL, 0, &si, WEXITED) != -1 || errno != ECHILD) {
         return fail("a waitid with no children was not refused with ECHILD");
     }
+    report_held();
     return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {
+        "exit-status",      "killed-sigterm",  "wnohang-empty",        "stopped",
+        "continued",        "killed-sigkill",  "wnowait-stop",         "wnowait-death",
+        "dead-not-stopped", "killed-reaped",   "wnowait-exit",         "wnowait-zombie",
+        "select-pid",       "select-pgid",     "select-callers-group", "rusage-reap",
+        "rusage-values",    "wnohang-rusage",  "einval-no-event",      "einval-option",
+        "einval-idtype",    "einval-pid-zero", "ebadf-pidfd",          "echild"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.waitidmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
 }
 
 int main(void)
 {
+    plan();
     if (events() != 0 || selections() != 0) {
         return 1;
     }
+    report_end();
     printf("WAITIDMUSL OK\n");
 
     return 0;

@@ -41,6 +41,18 @@
  * so a check that did not wait could fail for a reason that is not a defect.
  *
  * Prints "STAMPMUSL OK" on success and "STAMPMUSL FAIL (detail)" otherwise.
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order, a setup step joined to the row after it:
+ * `create-file`, `create-dir`, `write-mtime`, `write-ctime`,
+ * `zero-write-nostamp`, `zero-write-nogrow`, `hole-zero`, `truncate`,
+ * `chmod-ctime`, `chmod-mtime`, `chown-group-ctime`, `chown-mtime`,
+ * `chown-noop`, `rename-dir`, `rename-ctime`, `rename-same-dir`,
+ * `rename-same-file`, `rename-from-dir`, `rename-to-dir`, `rename-replace`,
+ * `unlink`, `unlink-held`, `mkdir-new`, `mkdir-parent`, `rmdir-parent`,
+ * `root-create`, `root-fstat`, `root-old-stat` and `root-fstatat`.
+ * `root-old-stat` is i686's alone, and the branch of the group `arch`, `i686`
+ * or `x86-64`, says whether it ran. The first failure fails its assertion and
+ * leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -51,6 +63,8 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 #if !defined __x86_64__
 /*
@@ -95,6 +109,7 @@ static const char *const FILLER = "/stampfill.tmp";
 static int fail(const char *what)
 {
     printf("STAMPMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -139,74 +154,16 @@ static long long ctime_of(const char *path)
     return (long long)st.st_ctim.tv_sec * 1000 + (long long)st.st_ctim.tv_nsec / 1000000;
 }
 
-int main(void)
+/**
+ * Check that a hole reads as zeros over free space first dirtied with 0xA5,
+ * as the file's opening comment says. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int hole_rows(void)
 {
-    struct stat st;
-    long long before;
-    long long after;
-    long long ctime_before;
     int fd;
     int i;
 
-    /* Create: the file is stamped, and so is its directory. */
-    if (mkdir(DIR, 0755) != 0 || mkdir(OTHER, 0755) != 0) {
-        return fail("could not create the directories");
-    }
-    before = mtime_of(DIR);
-    tick();
-    fd = open(FILE_IN_DIR, O_CREAT | O_RDWR, 0644);
-    if (fd < 0) {
-        return fail("could not create the file");
-    }
-    if (mtime_of(FILE_IN_DIR) <= 0) {
-        return fail("a new file was not stamped when it was created");
-    }
-    after = mtime_of(DIR);
-    if (after <= before) {
-        return fail("creating a file did not stamp its directory");
-    }
-
-    /* Write: both times move. */
-    before = mtime_of(FILE_IN_DIR);
-    ctime_before = ctime_of(FILE_IN_DIR);
-    tick();
-    if (write(fd, "hello", 5) != 5) {
-        return fail("could not write the file");
-    }
-    if (mtime_of(FILE_IN_DIR) <= before) {
-        return fail("a write did not stamp the file");
-    }
-    if (ctime_of(FILE_IN_DIR) <= ctime_before) {
-        return fail("a write did not move the attribute-change time");
-    }
-    close(fd);
-
-    /* A zero-byte write past the end. */
-    fd = open(FILE_IN_DIR, O_WRONLY);
-    if (fd < 0) {
-        return fail("could not reopen the file");
-    }
-    before = mtime_of(FILE_IN_DIR);
-    tick();
-    if (lseek(fd, 4096, SEEK_SET) < 0) {
-        close(fd);
-        return fail("could not seek past the end");
-    }
-    if (write(fd, "", 0) != 0) {
-        close(fd);
-        return fail("a zero-byte write did not report zero");
-    }
-    if (mtime_of(FILE_IN_DIR) != before) {
-        close(fd);
-        return fail("a zero-byte write stamped the file");
-    }
-    if (stat(FILE_IN_DIR, &st) != 0 || st.st_size != 5) {
-        close(fd);
-        return fail("a zero-byte write past the end grew the file");
-    }
-
-    /* A hole over dirtied free space. */
-    close(fd);
     {
         char pattern[512];
         int filler;
@@ -266,6 +223,187 @@ int main(void)
             }
         }
     }
+    return 0;
+}
+
+/**
+ * Check that creating a file in the root stamps it, and that every path that
+ * reports the root gives the same time. Returns 0, or 1 once the failure is
+ * reported.
+ */
+static int root_rows(void)
+{
+    struct stat st;
+    long long before;
+    long long after;
+    int fd;
+
+    /* The root, by every path that reports it. */
+    before = mtime_of("/");
+    tick();
+    fd = open(IN_ROOT, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) {
+        return fail("could not create a file in the root");
+    }
+    close(fd);
+    after = mtime_of("/");
+    if (after <= before) {
+        return fail("creating a file in the root did not stamp it");
+    }
+    report_held();
+    {
+        int dirfd = open("/", O_RDONLY | O_DIRECTORY);
+
+        if (dirfd < 0) {
+            return fail("could not open the root");
+        }
+        if (fstat(dirfd, &st) != 0) {
+            close(dirfd);
+            return fail("could not fstat the root");
+        }
+        if ((long long)st.st_mtim.tv_sec * 1000 + (long long)st.st_mtim.tv_nsec / 1000000 !=
+            after) {
+            close(dirfd);
+            return fail("a descriptor on the root reports a different time than a path to it");
+        }
+        report_held();
+        close(dirfd);
+    }
+#if !defined __x86_64__
+    {
+        struct old_stat os;
+
+        if (syscall(SYS_stat, "/", &os) != 0) {
+            return fail("the old stat(2) of the root failed");
+        }
+        if ((long long)os.st_mtime_seconds * 1000 + (long long)os.st_mtime_nanoseconds / 1000000 !=
+            after) {
+            return fail("the old stat(2) reports a different time for the root");
+        }
+        report_held();
+    }
+#endif
+    if (fstatat(AT_FDCWD, "/", &st, 0) != 0) {
+        return fail("could not fstatat the root");
+    }
+    if ((long long)st.st_mtim.tv_sec * 1000 + (long long)st.st_mtim.tv_nsec / 1000000 != after) {
+        return fail("fstatat reports a different time for the root than stat does");
+    }
+    report_held();
+    return 0;
+}
+
+/** Begin the report, with the branch of the architecture, and plan its
+ * assertions in the order they are checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {"create-file",     "create-dir",         "write-mtime",
+                                      "write-ctime",     "zero-write-nostamp", "zero-write-nogrow",
+                                      "hole-zero",       "truncate",           "chmod-ctime",
+                                      "chmod-mtime",     "chown-group-ctime",  "chown-mtime",
+                                      "chown-noop",      "rename-dir",         "rename-ctime",
+                                      "rename-same-dir", "rename-same-file",   "rename-from-dir",
+                                      "rename-to-dir",   "rename-replace",     "unlink",
+                                      "unlink-held",     "mkdir-new",          "mkdir-parent",
+                                      "rmdir-parent",    "root-create",        "root-fstat",
+                                      "root-old-stat",   "root-fstatat"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.stampmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+#if defined __x86_64__
+        if (strcmp(ids[i], "root-old-stat") == 0) {
+            continue;
+        }
+#endif
+        report_plan(ids[i]);
+    }
+}
+
+int main(void)
+{
+    struct stat st;
+    long long before;
+    long long after;
+    long long ctime_before;
+    int fd;
+
+    plan();
+
+    /* Create: the file is stamped, and so is its directory. */
+    if (mkdir(DIR, 0755) != 0 || mkdir(OTHER, 0755) != 0) {
+        return fail("could not create the directories");
+    }
+    before = mtime_of(DIR);
+    tick();
+    fd = open(FILE_IN_DIR, O_CREAT | O_RDWR, 0644);
+    if (fd < 0) {
+        return fail("could not create the file");
+    }
+    if (mtime_of(FILE_IN_DIR) <= 0) {
+        return fail("a new file was not stamped when it was created");
+    }
+    report_held();
+    after = mtime_of(DIR);
+    if (after <= before) {
+        return fail("creating a file did not stamp its directory");
+    }
+    report_held();
+
+    /* Write: both times move. */
+    before = mtime_of(FILE_IN_DIR);
+    ctime_before = ctime_of(FILE_IN_DIR);
+    tick();
+    if (write(fd, "hello", 5) != 5) {
+        return fail("could not write the file");
+    }
+    if (mtime_of(FILE_IN_DIR) <= before) {
+        return fail("a write did not stamp the file");
+    }
+    report_held();
+    if (ctime_of(FILE_IN_DIR) <= ctime_before) {
+        return fail("a write did not move the attribute-change time");
+    }
+    report_held();
+    close(fd);
+
+    /* A zero-byte write past the end. */
+    fd = open(FILE_IN_DIR, O_WRONLY);
+    if (fd < 0) {
+        return fail("could not reopen the file");
+    }
+    before = mtime_of(FILE_IN_DIR);
+    tick();
+    if (lseek(fd, 4096, SEEK_SET) < 0) {
+        close(fd);
+        return fail("could not seek past the end");
+    }
+    if (write(fd, "", 0) != 0) {
+        close(fd);
+        return fail("a zero-byte write did not report zero");
+    }
+    if (mtime_of(FILE_IN_DIR) != before) {
+        close(fd);
+        return fail("a zero-byte write stamped the file");
+    }
+    report_held();
+    if (stat(FILE_IN_DIR, &st) != 0 || st.st_size != 5) {
+        close(fd);
+        return fail("a zero-byte write past the end grew the file");
+    }
+    report_held();
+
+    /* A hole over dirtied free space. */
+    close(fd);
+    if (hole_rows() != 0) {
+        return 1;
+    }
+    report_held();
 
     /* Truncate, through the open that does it. */
     before = mtime_of(FILE_IN_DIR);
@@ -278,6 +416,7 @@ int main(void)
     if (mtime_of(FILE_IN_DIR) <= before) {
         return fail("a truncate did not stamp the file");
     }
+    report_held();
 
     /* chmod and chown move the attribute-change time alone. */
     before = mtime_of(FILE_IN_DIR);
@@ -289,9 +428,11 @@ int main(void)
     if (ctime_of(FILE_IN_DIR) <= ctime_before) {
         return fail("chmod did not move the attribute-change time");
     }
+    report_held();
     if (mtime_of(FILE_IN_DIR) != before) {
         return fail("chmod moved the modification time, which it must not");
     }
+    report_held();
     ctime_before = ctime_of(FILE_IN_DIR);
     tick();
     /* A chown of the group alone. */
@@ -301,9 +442,11 @@ int main(void)
     if (ctime_of(FILE_IN_DIR) <= ctime_before) {
         return fail("a group-only chown did not move the attribute-change time");
     }
+    report_held();
     if (mtime_of(FILE_IN_DIR) != before) {
         return fail("chown moved the modification time, which it must not");
     }
+    report_held();
 
     /* A chown that changes nothing. */
     ctime_before = ctime_of(FILE_IN_DIR);
@@ -314,6 +457,7 @@ int main(void)
     if (ctime_of(FILE_IN_DIR) != ctime_before) {
         return fail("a chown that changed nothing still moved a time");
     }
+    report_held();
 
     /* Rename within one directory: the directory and the file are stamped. */
     before = mtime_of(DIR);
@@ -325,9 +469,11 @@ int main(void)
     if (mtime_of(DIR) <= before) {
         return fail("a rename did not stamp the directory it happened in");
     }
+    report_held();
     if (ctime_of(MOVED) <= ctime_before) {
         return fail("a rename did not move the file's attribute-change time");
     }
+    report_held();
 
     /* Rename to the name the file already has. */
     before = mtime_of(DIR);
@@ -339,9 +485,11 @@ int main(void)
     if (mtime_of(DIR) != before) {
         return fail("a rename to the same name stamped the directory");
     }
+    report_held();
     if (ctime_of(MOVED) != ctime_before) {
         return fail("a rename to the same name stamped the file");
     }
+    report_held();
 
     /* Rename across two directories: both are stamped. */
     before = mtime_of(DIR);
@@ -353,9 +501,11 @@ int main(void)
     if (mtime_of(DIR) <= before) {
         return fail("a rename did not stamp the directory the name left");
     }
+    report_held();
     if (mtime_of(OTHER) <= after) {
         return fail("a rename did not stamp the directory the name arrived in");
     }
+    report_held();
 
     /* Rename onto an existing name. */
     fd = open(MOVED, O_CREAT | O_RDWR, 0644);
@@ -371,6 +521,7 @@ int main(void)
     if (mtime_of(DIR) <= before) {
         return fail("a rename onto an existing name did not stamp the directory");
     }
+    report_held();
 
     /* Unlink. */
     before = mtime_of(DIR);
@@ -381,6 +532,7 @@ int main(void)
     if (mtime_of(DIR) <= before) {
         return fail("an unlink did not stamp the directory");
     }
+    report_held();
 
     /* Unlink of a file this program holds open. */
     fd = open(FILE_IN_DIR, O_CREAT | O_RDWR, 0644);
@@ -397,6 +549,7 @@ int main(void)
         close(fd);
         return fail("unlinking an open file did not stamp the directory");
     }
+    report_held();
     close(fd);
 
     /* mkdir and rmdir stamp the parent. */
@@ -408,9 +561,11 @@ int main(void)
     if (mtime_of("/stampdir/sub") <= 0) {
         return fail("a new directory was not stamped when it was created");
     }
+    report_held();
     if (mtime_of(DIR) <= before) {
         return fail("mkdir did not stamp its parent");
     }
+    report_held();
     before = mtime_of(DIR);
     tick();
     if (rmdir("/stampdir/sub") != 0) {
@@ -419,58 +574,15 @@ int main(void)
     if (mtime_of(DIR) <= before) {
         return fail("rmdir did not stamp its parent");
     }
+    report_held();
 
-    /* The root, by every path that reports it. */
-    before = mtime_of("/");
-    tick();
-    fd = open(IN_ROOT, O_CREAT | O_RDWR, 0644);
-    if (fd < 0) {
-        return fail("could not create a file in the root");
-    }
-    close(fd);
-    after = mtime_of("/");
-    if (after <= before) {
-        return fail("creating a file in the root did not stamp it");
-    }
-    {
-        int dirfd = open("/", O_RDONLY | O_DIRECTORY);
-
-        if (dirfd < 0) {
-            return fail("could not open the root");
-        }
-        if (fstat(dirfd, &st) != 0) {
-            close(dirfd);
-            return fail("could not fstat the root");
-        }
-        if ((long long)st.st_mtim.tv_sec * 1000 + (long long)st.st_mtim.tv_nsec / 1000000 !=
-            after) {
-            close(dirfd);
-            return fail("a descriptor on the root reports a different time than a path to it");
-        }
-        close(dirfd);
-    }
-#if !defined __x86_64__
-    {
-        struct old_stat os;
-
-        if (syscall(SYS_stat, "/", &os) != 0) {
-            return fail("the old stat(2) of the root failed");
-        }
-        if ((long long)os.st_mtime_seconds * 1000 + (long long)os.st_mtime_nanoseconds / 1000000 !=
-            after) {
-            return fail("the old stat(2) reports a different time for the root");
-        }
-    }
-#endif
-    if (fstatat(AT_FDCWD, "/", &st, 0) != 0) {
-        return fail("could not fstatat the root");
-    }
-    if ((long long)st.st_mtim.tv_sec * 1000 + (long long)st.st_mtim.tv_nsec / 1000000 != after) {
-        return fail("fstatat reports a different time for the root than stat does");
+    if (root_rows() != 0) {
+        return 1;
     }
     unlink(IN_ROOT);
     rmdir(DIR);
     rmdir(OTHER);
+    report_end();
 
     printf("STAMPMUSL OK\n");
 
