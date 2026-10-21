@@ -14,7 +14,6 @@ tests/system/suites/uefi.sh: the monitor takes the command between the guest's w
 tests/system/suites/uefi.sh: a look at the game's output every second until its first frame
 tests/system/suites/uefi.sh: a look every second until the killed game has gone
 tests/system/suites/grub.sh: a holder keeps the console's feed open while the machine runs
-tests/system/suites/install.sh: a holder keeps the console's feed open while the machine runs
 tests/system/accept/metal_accept.sh: a reset before the session is tried again after a second
 tests/host/etude_watchdog_hosttest.c: a heartbeat every 20 ms, which is no progress
 tests/host/etude_watchdog_hosttest.c: progress every 20 ms, which the case's bound must end

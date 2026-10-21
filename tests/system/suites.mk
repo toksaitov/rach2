@@ -473,16 +473,17 @@ run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(G
 $(IMAGES_DIR)/auth-test.disk: $(MKFIXTURE)
 	@mkdir -p $(@D)
 	$(MKFIXTURE) auth $@.tmp && mv $@.tmp $@
-# `tests/run install`: the machine installs its own kernel. Builds the GRUB disk
-# around the host kernel, boots it with no -kernel, and runs the whole install
-# loop twice as root: a marker edited into the banner source, the kernel built
-# in place, installed as a one-boot trial, proved running by its marker after
-# reboot -f, committed, held across a cold boot, corrupted at the
-# installer-named extent, recovered through the fallback and repaired from
-# inside. The interruption matrix's determinate states are then booted from
-# host-crafted environment blocks.
-# The install disk's entries boot the ext2 root, the os-real system at
-# 96 MiB. The kernel is built on that root and installed from it.
+# `tests/run install`: the machine installs its own kernel. It is the case of
+# tests/cases/machine.install.json, which etude runs, and has no target here:
+# on the GRUB disk below, booted with no -kernel, the whole install loop twice
+# as root, a marker edited into the banner source, the kernel built in place,
+# installed as a one-boot trial, proved running by its marker after
+# reboot -f, committed, held across a cold boot, corrupted at the extent
+# bootctl names, recovered through the fallback and repaired from inside; then
+# the interruption matrix's determinate states, booted from environment
+# blocks that the case's scenario writes into its copy of the disk.
+# The disk's entries boot the ext2 root, the os-real system at 96 MiB. The
+# kernel is built on that root and installed from it.
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
 $(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
@@ -511,18 +512,6 @@ $(ARCH_CASE_DIR)/install.disk: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
-INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
-run-install: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
-	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_EXT2_MB=96 \
-	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
-	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
-	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(INSTALL_TEST_DISK)
-	sh tests/system/suites/install.sh $(INSTALL_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`"
 # `tests/run sealed`: the disk that goes into the laptop, operated the way it
 # will be operated once it is in there. Two runs of one artifact on separate
 # copies: a fault run that walks the whole life of the machine over SSH (a
