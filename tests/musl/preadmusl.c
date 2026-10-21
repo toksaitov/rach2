@@ -30,6 +30,14 @@
  *
  * Prints `PREADMUSL OK` and exits 0 on success, and prints
  * `PREADMUSL FAIL (detail)` and exits 1 otherwise.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run. The branch of
+ * the group `arch` is the architecture the program was built for: `x86-64`
+ * with the assertions of preadv and pwritev, from `vector-file` to
+ * `vector-refusals`, and `i686` with `mem-write-eio`, the write past 32 bits
+ * of /proc/self/mem, and `no-vectors`.
  */
 
 #define _GNU_SOURCE
@@ -44,6 +52,10 @@
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
+
+extern char **environ;
 
 /* The file the rows make and remove. */
 #define FILE_PATH "/pread.tmp"
@@ -64,9 +76,48 @@
 #define WIDE_ROW                        "the offset in ESI and EDI"
 #endif
 
-/** Report one failed check and return 1, the probe's failure status. */
+/* The assertions, a check each, in the order the program makes them, with
+ * those of the architecture's alternative of the group `arch` in place. */
+static const char *const assertion_id[] = {
+    "make-file",        "pread-middle",    "pread-across-end",  "pread-past-end",
+    "pwrite-middle",    "pwrite-past-end", "file-after-writes", "read-from-offset",
+    "pread-wide",       "append",          "proc-snapshot",     "dev-zero",
+    "dev-null",         "proc-seek",       "mem-stack",
+#if !defined __x86_64__
+    "mem-write-eio",
+#endif
+    "proc-sys-4g",      "negative-offset", "sign-bit",          "make-pipe",
+    "pipe-espipe",      "socket-espipe",   "stdout-espipe",     "other-direction",
+    "directory",        "lseek-espipe",
+#if defined __x86_64__
+    "vector-file",      "pwritev-vector",  "preadv-vector",     "preadv-short",
+    "preadv-high-half", "pwritev-efault",  "vector-refusals"
+#else
+    "no-vectors"
+#endif
+};
+
+/** Begin the report, give the branch of `arch`, and plan the assertions. */
+static void report_start(void)
+{
+    unsigned int i;
+
+    report_begin(report_case(environ, "guest.default.preadmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
+}
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("PREADMUSL FAIL (%s)\n", what);
 
     return 1;
@@ -100,32 +151,41 @@ static int file_rows(void)
     if (fd < 0 || write(fd, "0123456789", 10) != 10 || lseek(fd, 3, SEEK_SET) != 3) {
         return fail("make the file");
     }
+    report_held();
     memset(buf, 0, sizeof(buf));
     if (pread(fd, buf, 4, 5) != 4 || memcmp(buf, "5678", 4) != 0 || !offset_is(fd, 3)) {
         return fail("pread in the middle");
     }
+    report_held();
     if (pread(fd, buf, 4, 8) != 2 || memcmp(buf, "89", 2) != 0) {
         return fail("pread across the end");
     }
+    report_held();
     if (pread(fd, buf, 4, 100) != 0 || pread(fd, NULL, 0, 0) != 0) {
         return fail("pread past the end or of nothing");
     }
+    report_held();
     if (pwrite(fd, "AB", 2, 1) != 2 || !offset_is(fd, 3)) {
         return fail("pwrite in the middle");
     }
+    report_held();
     if (pwrite(fd, "Z", 1, 12) != 1 || fstat(fd, &st) != 0 || st.st_size != 13) {
         return fail("pwrite past the end");
     }
+    report_held();
     memset(buf, 'x', sizeof(buf));
     if (pread(fd, buf, sizeof(buf), 0) != 13 || memcmp(buf, "0AB3456789\0\0Z", 13) != 0) {
         return fail("the file after the writes");
     }
+    report_held();
     if (read(fd, buf, 2) != 2 || memcmp(buf, "34", 2) != 0 || !offset_is(fd, 5)) {
         return fail("read goes on from the offset lseek left");
     }
+    report_held();
     if (PREAD_WIDE(fd, buf, 3, 7, 0) != 3 || memcmp(buf, "789", 3) != 0) {
         return fail(WIDE_ROW);
     }
+    report_held();
     close(fd);
 
     fd = open(FILE_PATH, O_WRONLY | O_APPEND);
@@ -138,6 +198,7 @@ static int file_rows(void)
     if (!ok) {
         return fail("O_APPEND writes at the end");
     }
+    report_held();
     return 0;
 }
 
@@ -160,6 +221,7 @@ static int device_rows(void)
     if (!ok) {
         return fail("a /proc snapshot");
     }
+    report_held();
     fd = open("/dev/zero", O_RDWR);
     memset(part, 'x', sizeof(part));
     ok = fd >= 0 && pread(fd, part, 8, 0x10000000000LL) == 8 &&
@@ -169,12 +231,14 @@ static int device_rows(void)
     if (!ok) {
         return fail("/dev/zero");
     }
+    report_held();
     fd = open("/dev/null", O_RDONLY);
     ok = fd >= 0 && pread(fd, part, 8, 100) == 0;
     close(fd);
     if (!ok) {
         return fail("/dev/null");
     }
+    report_held();
     return 0;
 }
 
@@ -211,6 +275,7 @@ static int proc_seek_rows(void)
     if (!ok) {
         return fail("lseek of a /proc snapshot or of /proc/self/mem");
     }
+    report_held();
     return 0;
 }
 
@@ -226,26 +291,34 @@ static int wide_proc_rows(void)
 {
     char stack_mark[8], part[8];
     off_t at = (off_t)(uintptr_t)stack_mark;
-    int fd, ok;
+    int fd, ok, wide = 1;
 
     memcpy(stack_mark, "stackmem", 8);
     fd = open("/proc/self/mem", O_RDWR);
     ok = fd >= 0 && lseek(fd, at, SEEK_SET) == at && read(fd, part, 8) == 8 &&
          memcmp(part, stack_mark, 8) == 0;
 #if !defined __x86_64__
-    ok = ok && refused(pwrite(fd, "x", 1, ((off_t)1 << 32) + at), EIO) &&
-         memcmp(stack_mark, "stackmem", 8) == 0;
+    wide = ok && refused(pwrite(fd, "x", 1, ((off_t)1 << 32) + at), EIO) &&
+           memcmp(stack_mark, "stackmem", 8) == 0;
 #endif
     close(fd);
     if (!ok) {
         return fail("/proc/self/mem at an address of the stack, or past 32 bits");
     }
+    report_held();
+    if (!wide) {
+        return fail("/proc/self/mem at an address of the stack, or past 32 bits");
+    }
+#if !defined __x86_64__
+    report_held();
+#endif
     fd = open("/proc/sys/kernel/hostname", O_RDWR);
     ok = fd >= 0 && pread(fd, part, sizeof(part), (off_t)1 << 32) == 0;
     close(fd);
     if (!ok) {
         return fail("a writable /proc/sys file read at 4 GiB is not at its end");
     }
+    report_held();
     return 0;
 }
 
@@ -263,12 +336,15 @@ static int refusal_rows(void)
     if (!refused(pread(999, buf, 1, -1), EINVAL) || !refused(pread(999, buf, 1, 0), EBADF)) {
         return fail("a negative offset before the descriptor");
     }
+    report_held();
     if (!refused(PWRITE_WIDE(999, buf, 1, 0, 0x80000000L), EINVAL)) {
         return fail("a high word with its sign bit set");
     }
+    report_held();
     if (pipe(pipefd) != 0) {
         return fail("make a pipe");
     }
+    report_held();
     ok = refused(pread(pipefd[0], buf, 1, 0), ESPIPE) &&
          refused(pwrite(pipefd[1], "p", 1, 0), ESPIPE) &&
          refused(pread(pipefd[1], buf, 1, 0), ESPIPE);
@@ -277,15 +353,18 @@ static int refusal_rows(void)
     if (!ok) {
         return fail("a pipe");
     }
+    report_held();
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     ok = fd >= 0 && refused(pread(fd, buf, 1, 0), ESPIPE);
     close(fd);
     if (!ok) {
         return fail("a socket");
     }
+    report_held();
     if (!refused(pwrite(1, "t", 0, 0), ESPIPE)) {
         return fail("the terminal, with nothing to write");
     }
+    report_held();
 
     fd = open(FILE_PATH, O_RDONLY);
     ok = fd >= 0 && refused(pwrite(fd, "r", 1, 0), EBADF);
@@ -297,6 +376,7 @@ static int refusal_rows(void)
     if (!ok) {
         return fail("the other direction, or an end past the signed range");
     }
+    report_held();
     dirfd = open("/", O_RDONLY | O_DIRECTORY);
     ok = dirfd >= 0 && refused(pread(dirfd, buf, 1, 0), EISDIR) &&
          refused(pread(dirfd, buf, 0, 0), EISDIR) &&
@@ -308,6 +388,7 @@ static int refusal_rows(void)
     if (!ok) {
         return fail("a directory");
     }
+    report_held();
     return 0;
 }
 
@@ -332,6 +413,7 @@ static int seek_refusal_rows(void)
     if (!ok) {
         return fail("lseek of a socket or a pseudo-terminal master");
     }
+    report_held();
     return 0;
 }
 
@@ -358,6 +440,7 @@ static int vector_refusal_rows(void)
         memcmp(two, "01", 2) != 0) {
         return fail("pwritev refuses a vector with a bad buffer before it writes");
     }
+    report_held();
     in[0].iov_base = two;
     in[0].iov_len = sizeof(two);
     ok = refused(preadv(fd, in, 1, -1), EINVAL) && refused(preadv(fd, in, -1, 0), EINVAL) &&
@@ -374,6 +457,7 @@ static int vector_refusal_rows(void)
     if (!ok) {
         return fail("the refusals of preadv and pwritev");
     }
+    report_held();
     return 0;
 }
 
@@ -391,6 +475,7 @@ static int vector_rows(void)
     if (fd < 0 || write(fd, "0123456789", 10) != 10 || lseek(fd, 3, SEEK_SET) != 3) {
         return fail("make the file for the vector rows");
     }
+    report_held();
     out[0].iov_base = "ab";
     out[0].iov_len = 2;
     out[1].iov_base = NULL;
@@ -403,6 +488,7 @@ static int vector_rows(void)
         memcmp(whole, "0123456789\0\0abcdefg", 19) != 0) {
         return fail("pwritev writes its buffers in turn at the offset");
     }
+    report_held();
     in[0].iov_base = head;
     in[0].iov_len = sizeof(head);
     in[1].iov_base = NULL;
@@ -413,6 +499,7 @@ static int vector_rows(void)
         !offset_is(fd, 3)) {
         return fail("preadv reads its buffers in turn from the offset");
     }
+    report_held();
     memset(head, 'x', sizeof(head));
     memset(tail, 'x', sizeof(tail));
     in[0].iov_base = tail;
@@ -423,11 +510,13 @@ static int vector_rows(void)
         preadv(fd, in, 2, 19) != 0 || preadv(fd, in, 0, 0) != 0) {
         return fail("a short preadv ends at the end of the file");
     }
+    report_held();
     in[0].iov_base = three;
     in[0].iov_len = sizeof(three);
     if (syscall(SYS_preadv, fd, in, 1, 4L, 0xdeadL) != 3 || memcmp(three, "456", 3) != 0) {
         return fail("preadv does not read the offset's high half");
     }
+    report_held();
     close(fd);
     return vector_refusal_rows();
 }
@@ -449,18 +538,21 @@ static int vector_rows(void)
     if (!ok) {
         return fail("i686 has neither preadv nor pwritev");
     }
+    report_held();
     return 0;
 }
 #endif
 
 int main(void)
 {
+    report_start();
     if (file_rows() != 0 || device_rows() != 0 || proc_seek_rows() != 0 || wide_proc_rows() != 0 ||
         refusal_rows() != 0 || seek_refusal_rows() != 0 || vector_rows() != 0) {
         unlink(FILE_PATH);
         return 1;
     }
     unlink(FILE_PATH);
+    report_end();
     printf("PREADMUSL OK\n");
     return 0;
 }

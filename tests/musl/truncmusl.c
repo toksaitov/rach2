@@ -28,6 +28,10 @@
  * and prints `TRUNCMUSL FAIL (detail)` and exits 1 otherwise. Uid and gid
  * 1000 are the NEW of 1000 when a native run gives `ids=OLD:NEW,...`
  * (tests/native/Readme.md).
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -43,6 +47,26 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
+
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {"make-file",        "shorten",
+                                           "lengthen-zeros",   "truncate-by-number",
+                                           "truncate-wide",    "fresh-file",
+                                           "move-length",      "write-after-move",
+                                           "truncate-zero",    "root-keeps-setid",
+                                           "user-drops-setid", "moved-drops-setid",
+                                           "no-write-eacces",  "negative-length",
+                                           "enoent",           "eisdir",
+                                           "device-einval",    "proc-eacces",
+                                           "enotdir",          "long-path-alloc",
+                                           "enametoolong",     "efbig",
+                                           "ftruncate-file",   "ftruncate-negative",
+                                           "ftruncate-ebadf",  "ftruncate-dir",
+                                           "make-pipe",        "ftruncate-pipe",
+                                           "ftruncate-socket", "ftruncate-device"};
 
 /* The file the rows make and remove, and the file made right after it. */
 #define FILE_PATH "/trunc.tmp"
@@ -68,9 +92,11 @@
 #define WIDE_ROW                    "call 193 with the length in two words"
 #endif
 
-/** Report one failed check and return 1, the probe's failure status. */
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("TRUNCMUSL FAIL (%s)\n", what);
 
     return 1;
@@ -160,36 +186,45 @@ static int length_rows(void)
     if (fd < 0 || write(fd, "0123456789", 10) != 10) {
         return fail("make the file");
     }
+    report_held();
     if (truncate(FILE_PATH, 4) != 0 || !size_is(fd, 4) || pread(fd, buf, 16, 0) != 4 ||
         memcmp(buf, "0123", 4) != 0) {
         return fail("shorten");
     }
+    report_held();
     memset(buf, 'x', sizeof(buf));
     if (truncate(FILE_PATH, 12) != 0 || !size_is(fd, 12) || pread(fd, buf, 16, 0) != 12 ||
         memcmp(buf, "0123\0\0\0\0\0\0\0\0", 12) != 0) {
         return fail("lengthen with zeros");
     }
+    report_held();
     if (syscall(SYS_truncate, FILE_PATH, 2L) != 0 || !size_is(fd, 2)) {
         return fail("truncate by number");
     }
+    report_held();
     if (TRUNCATE_WIDE(FILE_PATH, 7L, 0L) != 0 || !size_is(fd, 7)) {
         return fail(WIDE_ROW);
     }
+    report_held();
     close(fd);
     if (fresh_file() != 0 || (fd = open(FILE_PATH, O_RDWR)) < 0) {
         return fail("make the file afresh, with a file right after it");
     }
+    report_held();
     memset(buf, 'x', sizeof(buf));
     if (truncate(FILE_PATH, FAR) != 0 || !size_is(fd, FAR) || pread(fd, buf, 4, FAR - 4) != 4 ||
         memcmp(buf, "\0\0\0\0", 4) != 0) {
         return fail("a length the file moves to reach");
     }
+    report_held();
     if (write(fd, "Z", 1) != 1 || pread(fd, buf, 1, 0) != 1 || buf[0] != 'Z') {
         return fail("write through the descriptor after the move");
     }
+    report_held();
     if (truncate(FILE_PATH, 0) != 0 || !size_is(fd, 0)) {
         return fail("truncate to nothing");
     }
+    report_held();
     close(fd);
     return 0;
 }
@@ -203,16 +238,20 @@ static int identity_rows(void)
     if (chmod(FILE_PATH, 06777) != 0 || truncate(FILE_PATH, 3) != 0 || !mode_is(06777)) {
         return fail("root keeps the set-id bits");
     }
+    report_held();
     if (!as_user(5, 0, 0) || !mode_is(0777)) {
         return fail("an unprivileged truncate drops the set-id bits");
     }
+    report_held();
     if (fresh_file() != 0 || chmod(FILE_PATH, 06777) != 0 || !as_user(2 * FAR, 0, 0) ||
         !mode_is(0777)) {
         return fail("the set-id bits of a file that moved");
     }
+    report_held();
     if (chmod(FILE_PATH, 0644) != 0 || !as_user(1, -1, EACCES)) {
         return fail("no write permission");
     }
+    report_held();
     return 0;
 }
 
@@ -229,25 +268,32 @@ static int refusal_rows(void)
         !refused(TRUNCATE_WIDE(NULL, 0L, 0x80000000L), EINVAL)) {
         return fail("a negative length before the path");
     }
+    report_held();
     if (!refused(truncate("/no.such.trunc", 0), ENOENT) || !refused(truncate("", 0), ENOENT)) {
         return fail("a missing file");
     }
+    report_held();
     if (!refused(truncate("/", 0), EISDIR) || !refused(truncate("/dev", 0), EISDIR)) {
         return fail("a directory");
     }
+    report_held();
     if (!refused(truncate("/dev/null", 0), EINVAL)) {
         return fail("a device");
     }
+    report_held();
     if (!refused(truncate("/proc/meminfo", 0), EACCES)) {
         return fail("a /proc file");
     }
+    report_held();
     if (!refused(truncate(FILE_PATH "/x", 0), ENOTDIR)) {
         return fail("a file used as a directory");
     }
+    report_held();
     longpath = malloc(4097);
     if (!longpath) {
         return fail("allocate the long path");
     }
+    report_held();
     memset(longpath, 'a', 4096);
     longpath[0] = '/';
     longpath[4096] = '\0';
@@ -255,10 +301,12 @@ static int refusal_rows(void)
         free(longpath);
         return fail("a path of 4096 bytes");
     }
+    report_held();
     free(longpath);
     if (!refused(TRUNCATE_WIDE(FILE_PATH, 0L, 1L), EFBIG)) {
         return fail("4 GiB on KRFFS");
     }
+    report_held();
     return 0;
 }
 
@@ -284,38 +332,52 @@ static int descriptor_rows(void)
     if (fd < 0) {
         return fail("make the file for ftruncate");
     }
+    report_held();
     if (!refused(ftruncate(fd, -1), EINVAL) || !refused(syscall(SYS_ftruncate, fd, -1L), EINVAL) ||
         !refused(FTRUNCATE_WIDE(fd, 0L, 0x80000000L), EINVAL) ||
         !refused(ftruncate(-1, -1), EINVAL) || !size_is(fd, 0)) {
         close(fd);
         return fail("a negative length to ftruncate");
     }
+    report_held();
     close(fd);
     if (!refused(ftruncate(fd, 0), EBADF)) {
         return fail("ftruncate of a closed descriptor");
     }
+    report_held();
     if (!not_regular(open("/", O_RDONLY | O_DIRECTORY))) {
         return fail("ftruncate of a directory");
     }
+    report_held();
     if (pipe(ends) != 0) {
         return fail("make a pipe");
     }
+    report_held();
     close(ends[0]);
     if (!not_regular(ends[1])) {
         return fail("ftruncate of a pipe");
     }
+    report_held();
     if (!not_regular(socket(AF_UNIX, SOCK_STREAM, 0))) {
         return fail("ftruncate of a socket");
     }
+    report_held();
     if (!not_regular(open("/dev/null", O_WRONLY))) {
         return fail("ftruncate of a device");
     }
+    report_held();
     return 0;
 }
 
 int main(int argc, char **argv)
 {
+    unsigned int i;
+
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.truncmusl"));
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
     if (length_rows() != 0 || identity_rows() != 0 || refusal_rows() != 0 ||
         descriptor_rows() != 0) {
         unlink(FILE_PATH);
@@ -324,6 +386,7 @@ int main(int argc, char **argv)
     }
     unlink(FILE_PATH);
     unlink(NEXT_PATH);
+    report_end();
     printf("TRUNCMUSL OK\n");
     return 0;
 }

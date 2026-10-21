@@ -29,6 +29,11 @@
  *
  * Uid 1000 is the NEW of 1000 when a native run gives `ids=OLD:NEW,...`
  * (tests/native/Readme.md).
+ *
+ * The parent writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
+ * them; a failed check fails its assertion and leaves those after it not
+ * run. The new images write none.
  */
 
 #define _GNU_SOURCE
@@ -44,6 +49,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 static const char *const SELF = "/musl/fdexecmusl";
 
@@ -64,9 +72,19 @@ static const char *const SELF = "/musl/fdexecmusl";
 #define ST_EXE    20
 #define ST_EUID   21
 
-/** Report one failed check and return 1, the probe's failure status. */
+/* The assertions, a check each, in the order the parent makes them. */
+static const char *const assertion_id[] = {"copy-root",     "read-descriptor", "opath-descriptor",
+                                           "open-unlink",   "unlinked-run",    "dir-eacces",
+                                           "no-x-eacces",   "pipe2",           "pipe-eacces",
+                                           "mount-tmpfs",   "copy-tmpfs",      "make-links",
+                                           "links-exe",     "tmpfs-exe",       "script-exe",
+                                           "noexec-eacces", "setuid-euid",     "nosuid-euid"};
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("FDEXECMUSL FAIL (%s)\n", what);
 
     return 1;
@@ -206,39 +224,48 @@ static int on_root(void)
     if (copy_self(ROOT_COPY, 0755) != 0 || copy_self(ROOT_PLAIN, 0644) != 0) {
         return fail("copy the program to the boot root");
     }
+    report_held();
     if ((st = run_path(ROOT_COPY, O_RDONLY, ROOT_COPY)) != 0) {
         return fail(st == ST_EACCES ? "a descriptor opened for reading: EACCES"
                                     : "a descriptor opened for reading");
     }
+    report_held();
     if (run_path(ROOT_COPY, O_PATH, ROOT_COPY) != 0) {
         return fail("an O_PATH descriptor");
     }
+    report_held();
     fd = open(ROOT_COPY, O_RDONLY | O_CLOEXEC);
     if (fd < 0 || unlink(ROOT_COPY) != 0) {
         return fail("open and unlink the copy");
     }
+    report_held();
     st = run_fd(fd, 0, "child", "");
     close(fd);
     if (st != 0) {
         return fail("a descriptor of a file whose name is gone");
     }
+    report_held();
     if (run_path("/", O_RDONLY | O_DIRECTORY, "") != ST_EACCES ||
         run_path("/", O_PATH | O_DIRECTORY, "") != ST_EACCES) {
         return fail("a directory was not refused with EACCES");
     }
+    report_held();
     if (run_path(ROOT_PLAIN, O_RDONLY, "") != ST_EACCES ||
         run_path(ROOT_PLAIN, O_PATH, "") != ST_EACCES) {
         return fail("a file without an execute bit was not refused with EACCES");
     }
+    report_held();
     if (pipe2(fds, O_CLOEXEC) != 0) {
         return fail("pipe2");
     }
+    report_held();
     st = run_fd(fds[0], 0, "child", "");
     close(fds[0]);
     close(fds[1]);
     if (st != ST_EACCES) {
         return fail("a pipe was not refused with EACCES");
     }
+    report_held();
     return 0;
 }
 
@@ -259,10 +286,12 @@ static int through_links(void)
         symlink("d/e", MNT "/de") != 0 || realpath(MNT_COPY, real) == NULL) {
         return fail("make the links on the tmpfs");
     }
+    report_held();
     if ((st = run_exec(MNT "/top/de/../rel", 0, "child", real)) != 0) {
         return fail(st == ST_EXE ? "/proc/self/exe of a copy run through links"
                                  : "a copy run through links");
     }
+    report_held();
     return 0;
 }
 
@@ -287,10 +316,12 @@ static int on_tmpfs(void)
         mount_tmpfs(NOSUID, MS_NOSUID) != 0) {
         return fail("mount the tmpfs");
     }
+    report_held();
     if (copy_self(MNT_COPY, 04755) != 0 || write_script(MNT_SCRIPT, MNT_COPY) != 0 ||
         copy_self(NOEXEC "/bin", 0755) != 0 || copy_self(NOSUID "/bin", 04755) != 0) {
         return fail("copy the program to the tmpfs");
     }
+    report_held();
     if ((st = through_links()) != 0) {
         return st;
     }
@@ -298,13 +329,16 @@ static int on_tmpfs(void)
         return fail(st == ST_EXE ? "/proc/self/exe of a tmpfs copy run by its descriptor"
                                  : "a tmpfs copy run by its descriptor");
     }
+    report_held();
     if ((st = run_path(MNT_SCRIPT, O_RDONLY, MNT_COPY)) != 0) {
         return fail(st == ST_EXE ? "/proc/self/exe of a script run by its descriptor"
                                  : "a script run by its descriptor");
     }
+    report_held();
     if (run_path(NOEXEC "/bin", O_RDONLY, "") != ST_EACCES) {
         return fail("a copy on a noexec mount was not refused with EACCES");
     }
+    report_held();
     fd = open(MNT_COPY, O_PATH | O_CLOEXEC);
     st = fd < 0 ? -1 : run_fd(fd, other, "euid", "0");
     if (fd >= 0) {
@@ -313,6 +347,7 @@ static int on_tmpfs(void)
     if (st != 0) {
         return fail("a set-user-ID copy run by its descriptor gave no effective uid 0");
     }
+    report_held();
     fd = open(NOSUID "/bin", O_PATH | O_CLOEXEC);
     st = fd < 0 ? -1 : run_fd(fd, other, "euid", other_text);
     if (fd >= 0) {
@@ -321,6 +356,7 @@ static int on_tmpfs(void)
     if (st != 0) {
         return fail("a set-user-ID copy on a nosuid mount changed the effective uid");
     }
+    report_held();
     return 0;
 }
 
@@ -353,11 +389,16 @@ static int image(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    unsigned int i;
     int rc;
 
     probe_args(argc, argv);
     if (probe_words() > 0) {
         return image(argc, argv);
+    }
+    report_begin(report_case(environ, "guest.default.fdexecmusl"));
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
     }
     clean();
     rc = on_root();
@@ -366,6 +407,7 @@ int main(int argc, char **argv)
     }
     clean();
     if (rc == 0) {
+        report_end();
         printf("FDEXECMUSL OK\n");
     }
     return rc;

@@ -39,7 +39,10 @@
  *
  * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
  * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
- * otherwise.
+ * otherwise. It writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
+ * them; a failed check fails its assertion and leaves those after it not
+ * run.
  */
 
 #define _GNU_SOURCE
@@ -55,6 +58,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define DIR_PATH    "/tmp/tmpfsmusl"
 #define DEEP_PATH   "/tmp/tmpfsmusl-d"
@@ -63,10 +67,80 @@
 #define BIND_DEV    "/tmp/tmpfsmusl-dev"
 #define TMPFS_MAGIC 0x01021994
 
-/** Report one failed check and return 1, the probe's failure status. */
+extern char **environ;
+
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {"mount",
+                                           "root-mode-magic",
+                                           "file",
+                                           "dir-links",
+                                           "rename-linked",
+                                           "proc-files",
+                                           "umount-busy",
+                                           "umount",
+                                           "second-mount",
+                                           "remount-mount",
+                                           "two-pages",
+                                           "remount-size",
+                                           "remount-umount",
+                                           "deep-mount",
+                                           "deep-levels",
+                                           "deep-umount",
+                                           "shm-kind",
+                                           "shm-mounts",
+                                           "shm-create",
+                                           "shm-file",
+                                           "shm-cwd",
+                                           "shm-pts-dotdot",
+                                           "shm-busy",
+                                           "bind-source",
+                                           "bind",
+                                           "bind-same-file",
+                                           "bind-flock",
+                                           "bind-dotdot",
+                                           "bind-readonly",
+                                           "bind-mountinfo",
+                                           "bind-source-busy",
+                                           "rbind-devices",
+                                           "rbind-dotdot",
+                                           "rbind-umount",
+                                           "kbind",
+                                           "kbind-grown",
+                                           "kbind-fstat",
+                                           "kbind-busy",
+                                           "kbind-umount",
+                                           "krbind",
+                                           "krbind-stat",
+                                           "krbind-umount"};
+
+#define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
+
+/* The index in `assertion_id` of the next assertion to report. */
+static unsigned int assertion_at;
+
+/** Report that the next assertion held. */
+static void row_held(void)
+{
+    report_pass(assertion_id[assertion_at++]);
+}
+
+/** Report that the next assertion failed for `why`, that those after it
+ * were not run, and the report's end. */
+static void row_stop(const char *why)
+{
+    report_fail(assertion_id[assertion_at++], why);
+    while (assertion_at < ASSERTIONS) {
+        report_notrun(assertion_id[assertion_at++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("TMPFSMUSL FAIL (%s: errno %d)\n", what, errno);
+    row_stop(what);
     return 1;
 }
 
@@ -189,39 +263,48 @@ static int placed(void)
     if (mount("none", DIR_PATH, "tmpfs", 0, "mode=0700") != 0) {
         return fail("mount -t tmpfs");
     }
+    row_held();
     if (stat(DIR_PATH, &st) != 0 || !S_ISDIR(st.st_mode) || (st.st_mode & 07777) != 0700 ||
         statfs(DIR_PATH, &sf) != 0 || sf.f_type != TMPFS_MAGIC) {
         return fail("the root's mode and the magic");
     }
+    row_held();
     if (!put(DIR_PATH "/f", "tmpfs") || !holds(DIR_PATH "/f", "tmpfs") ||
         stat(DIR_PATH "/f", &st) != 0 || st.st_size != 5) {
         return fail("a file");
     }
+    row_held();
     if (mkdir(DIR_PATH "/d", 0755) != 0 || link(DIR_PATH "/f", DIR_PATH "/d/g") != 0 ||
         stat(DIR_PATH "/f", &st) != 0 || st.st_nlink != 2 || symlink("f", DIR_PATH "/l") != 0 ||
         !link_is(DIR_PATH "/l", "f") || !holds(DIR_PATH "/l", "tmpfs")) {
         return fail("a directory and the two links");
     }
+    row_held();
     if (!put(DIR_PATH "/e", "E") || rename(DIR_PATH "/e", DIR_PATH "/f") != 0 ||
         !holds(DIR_PATH "/f", "E") || !holds(DIR_PATH "/d/g", "tmpfs")) {
         return fail("a rename over a linked file");
     }
+    row_held();
     if (!has_line("/proc/mounts", rooted("none %s" DIR_PATH " tmpfs rw")) ||
         !has_line("/proc/filesystems", "nodev\ttmpfs")) {
         return fail("the /proc files");
     }
+    row_held();
     fd = open(DIR_PATH "/f", O_RDONLY);
     if (fd < 0 || umount2(DIR_PATH, 0) != -1 || errno != EBUSY) {
         return fail("an unmount with a file open");
     }
+    row_held();
     close(fd);
     if (umount2(DIR_PATH, 0) != 0 || entries(DIR_PATH) != 0) {
         return fail("the unmount");
     }
+    row_held();
     if (mount("tmpfs", DIR_PATH, "tmpfs", 0, NULL) != 0 || entries(DIR_PATH) != 0 ||
         stat(DIR_PATH, &st) != 0 || (st.st_mode & 07777) != 01777 || umount2(DIR_PATH, 0) != 0) {
         return fail("a second mount, empty");
     }
+    row_held();
     rmdir(DIR_PATH);
     return 0;
 }
@@ -239,14 +322,17 @@ static int deep(void)
     if (mount("none", DEEP_PATH, "tmpfs", 0, NULL) != 0 || chdir(DEEP_PATH) != 0) {
         return fail("the deep tree's mount");
     }
+    row_held();
     for (i = 0; i < 512; i++) {
         if (mkdir("a", 0755) != 0 || chdir("a") != 0) {
             return fail("a level of the deep tree");
         }
     }
+    row_held();
     if (chdir("/") != 0 || umount2(DEEP_PATH, 0) != 0 || rmdir(DEEP_PATH) != 0) {
         return fail("the deep tree's unmount");
     }
+    row_held();
     return 0;
 }
 
@@ -266,31 +352,38 @@ static int shm(void)
         !lists("/dev", "shm", DT_DIR) || statfs("/dev/shm", &sf) != 0 || sf.f_type != TMPFS_MAGIC) {
         return fail("/dev/shm's kind, mode and magic");
     }
+    row_held();
     if (!has_line("/proc/mounts", rooted("tmpfs %s/dev/shm tmpfs rw,nosuid,nodev"))) {
         return fail("/dev/shm in /proc/mounts");
     }
+    row_held();
     unlink("/dev/shm/tmpfsmusl");
     fd = open("/dev/shm/tmpfsmusl", O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
     if (fd < 0) {
         return fail("a file in /dev/shm");
     }
+    row_held();
     close(fd);
     if (!put("/dev/shm/tmpfsmusl", "shared") || !holds("/dev/shm/tmpfsmusl", "shared") ||
         !lists("/dev/shm", "tmpfsmusl", DT_REG) || unlink("/dev/shm/tmpfsmusl") != 0) {
         return fail("the file's bytes and its removal");
     }
+    row_held();
     if (chdir("/dev/shm") != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, "/dev/shm") != 0 ||
         stat("../null", &st) != 0 || !S_ISCHR(st.st_mode) || chdir("/") != 0) {
         return fail("a working directory in /dev/shm");
     }
+    row_held();
     if (stat("/dev/pts/../shm", &st) != 0 || !S_ISDIR(st.st_mode) ||
         chdir("/dev/pts/../shm") != 0 || !getcwd(cwd, sizeof(cwd)) ||
         strcmp(cwd, "/dev/shm") != 0 || chdir("/") != 0) {
         return fail("/dev/shm by way of /dev/pts/..");
     }
+    row_held();
     if (umount2("/dev/shm", 0) != -1 || errno != EBUSY) {
         return fail("an unmount of /dev/shm");
     }
+    row_held();
     return 0;
 }
 
@@ -326,20 +419,24 @@ static int bound(void)
         mount("tmpfsmusl", BIND_SRC, "tmpfs", 0, NULL) != 0 || mkdir(BIND_SRC "/sub", 0755) != 0) {
         return fail("the source of a bind");
     }
+    row_held();
     if (mount(BIND_SRC "/sub", BIND_DST, NULL, MS_BIND, NULL) != 0) {
         return fail("a bind of a directory of a tmpfs");
     }
+    row_held();
     if (!put(BIND_DST "/f", "through") || !holds(BIND_SRC "/sub/f", "through") ||
         stat(BIND_DST "/f", &a) != 0 || stat(BIND_SRC "/sub/f", &b) != 0 || a.st_dev != b.st_dev ||
         a.st_ino != b.st_ino) {
         return fail("a file made through a bind is the source's file");
     }
+    row_held();
     one = open(BIND_DST "/f", O_RDONLY);
     two = open(BIND_SRC "/sub/f", O_RDONLY);
     if (one < 0 || two < 0 || flock(one, LOCK_EX) != 0 || flock(two, LOCK_EX | LOCK_NB) != -1 ||
         errno != EWOULDBLOCK) {
         return fail("a lock through a bind meets one through its source");
     }
+    row_held();
     close(one);
     close(two);
     return 0;
@@ -358,17 +455,21 @@ static int bound_mount(void)
         strcmp(cwd, "/tmp") != 0 || chdir("/") != 0) {
         return fail("\"..\" at a bind's root climbs to the directory it covers");
     }
+    row_held();
     if (mount(NULL, BIND_DST, NULL, MS_REMOUNT | MS_BIND | MS_RDONLY, NULL) != 0 ||
         put(BIND_DST "/g", "no") || errno != EROFS || !put(BIND_SRC "/sub/g", "yes")) {
         return fail("a bind remounted read-only refuses a write its source takes");
     }
+    row_held();
     if (!mountinfo_has(rooted(" /sub %s" BIND_DST " "))) {
         return fail("mountinfo gives a bind its root within the file system");
     }
+    row_held();
     if (umount2(BIND_SRC, 0) != -1 || errno != EBUSY || umount2(BIND_DST, 0) != 0 ||
         umount2(BIND_SRC, 0) != 0 || rmdir(BIND_DST) != 0 || rmdir(BIND_SRC) != 0) {
         return fail("the source's mount is busy until the bind is unmounted");
     }
+    row_held();
     return 0;
 }
 
@@ -387,15 +488,18 @@ static int rbound(void)
         (b.st_mode & 07777) != 01777) {
         return fail("a recursive bind of /dev has its devices and /dev/shm");
     }
+    row_held();
     if (stat("/tmp", &a) != 0 || stat(BIND_DEV "/..", &b) != 0 || a.st_dev != b.st_dev ||
         a.st_ino != b.st_ino || stat(BIND_DEV "/pts/../../tmpfsmusl-dev/null", &b) != 0 ||
         !S_ISCHR(b.st_mode)) {
         return fail("\"..\" above the root of a bind of /dev is the parent of what it covers");
     }
+    row_held();
     if (umount2(BIND_DEV, 0) != -1 || errno != EBUSY || umount2(BIND_DEV "/shm", 0) != 0 ||
         umount2(BIND_DEV "/mqueue", 0) != 0 || umount2(BIND_DEV, 0) != 0 || rmdir(BIND_DEV) != 0) {
         return fail("a recursive bind is unmounted from the bottom");
     }
+    row_held();
     return 0;
 }
 
@@ -415,18 +519,22 @@ static int resized(void)
     if (mount("none", DIR_PATH, "tmpfs", 0, NULL) != 0) {
         return fail("a tmpfs for the remount");
     }
+    row_held();
     fd = open(DIR_PATH "/two", O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (fd < 0 || write(fd, two, sizeof(two)) != (ssize_t)sizeof(two) || close(fd) != 0) {
         return fail("a file of two pages");
     }
+    row_held();
     if (mount(NULL, DIR_PATH, NULL, MS_REMOUNT, "size=4k") != -1 || errno != EINVAL ||
         mount(NULL, DIR_PATH, NULL, MS_REMOUNT, "size=16k") != 0 || statfs(DIR_PATH, &sf) != 0 ||
         sf.f_blocks != 4 || sf.f_bfree != 2) {
         return fail("a remount with size=");
     }
+    row_held();
     if (unlink(DIR_PATH "/two") != 0 || umount2(DIR_PATH, 0) != 0) {
         return fail("the remounted tmpfs unmounts");
     }
+    row_held();
     return 0;
 }
 
@@ -445,6 +553,7 @@ static int kbound(void)
         mount("/tmp/kbsrc", "/tmp/kbdst", NULL, MS_BIND, NULL) != 0) {
         return fail("a bind of a directory of the KRFFS root");
     }
+    row_held();
     fd = put("/tmp/kbdst/f", "small") ? open("/tmp/kbdst/f", O_RDONLY) : -1;
     memset(big, 'x', sizeof(big));
     wfd = open("/tmp/kbsrc/f", O_WRONLY | O_APPEND);
@@ -454,17 +563,21 @@ static int kbound(void)
         pread(fd, buf, 1, 5 + 65535) != 1 || buf[0] != 'x') {
         return fail("a KRFFS file grown through its source reads alike through the bind");
     }
+    row_held();
     if (fstat(fd, &a) != 0 || a.st_size != 5 + 65536) {
         return fail("a description opened through the bind of KRFFS follows its moved file");
     }
+    row_held();
     close(fd);
     if (rmdir("/tmp/kbsrc") != -1 || errno != EBUSY) {
         return fail("the root of a bind of KRFFS is busy to rmdir");
     }
+    row_held();
     if (umount2("/tmp/kbdst", 0) != 0 || unlink("/tmp/kbsrc/f") != 0 || rmdir("/tmp/kbsrc") != 0 ||
         rmdir("/tmp/kbdst") != 0) {
         return fail("the bind of KRFFS unmounts and its directories go");
     }
+    row_held();
     return 0;
 }
 
@@ -479,6 +592,7 @@ static int krbound(void)
     if (mkdir("/tmp/kbroot", 0755) != 0 || mount("/", "/tmp/kbroot", NULL, MS_BIND, NULL) != 0) {
         return fail("a bind of the KRFFS root directory");
     }
+    row_held();
     if (stat("/", &a) != 0 || stat("/tmp/kbroot", &b) != 0 || a.st_ino != b.st_ino ||
         a.st_mode != b.st_mode || a.st_nlink != b.st_nlink || a.st_uid != b.st_uid ||
         a.st_gid != b.st_gid || a.st_mtim.tv_sec != b.st_mtim.tv_sec ||
@@ -486,20 +600,24 @@ static int krbound(void)
         a.st_ctim.tv_nsec != b.st_ctim.tv_nsec || a.st_atim.tv_sec != b.st_atim.tv_sec) {
         return fail("a bind of the KRFFS root reports its links, owner and times as / does");
     }
+    row_held();
     if (umount2("/tmp/kbroot", 0) != 0 || rmdir("/tmp/kbroot") != 0) {
         return fail("the bind of the KRFFS root unmounts and its directory goes");
     }
+    row_held();
     return 0;
 }
 
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.tmpfsmusl"));
     root_prefix = probe_arg("root", "");
     if (placed() || resized() || deep() || shm() || bound() || bound_mount() || rbound() ||
         kbound() || krbound()) {
         return 1;
     }
+    report_end();
     printf("TMPFSMUSL OK\n");
     return 0;
 }

@@ -22,7 +22,10 @@
  * through the source frees its node, which statfs counts.
  *
  * Prints `FIFOMUSL OK` and exits 0 on success, and prints
- * `FIFOMUSL FAIL (detail)` and exits 1 otherwise.
+ * `FIFOMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check, as `assertion_id` lists them; a failed check fails its
+ * assertion and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -39,6 +42,8 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_report.h"
+
 #define FIFO_PATH "/tmp/fifomusl"
 #define NODE_PATH "/tmp/fifomusl.node"
 /* Two names with one hash, the DJB hash the KRFFS root numbers files by. */
@@ -52,10 +57,76 @@
  * bytes, so together they are some 17 KiB of the root. */
 #define ALIASES   48
 
-/** Report one failed check with errno and return 1, the failure status. */
+extern char **environ;
+
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {"mkfifo",
+                                           "mknodat",
+                                           "writer-enxio",
+                                           "reader-no-writer",
+                                           "bytes",
+                                           "end-of-input",
+                                           "told-pipe",
+                                           "open-waits",
+                                           "child-bytes",
+                                           "writing-child",
+                                           "rw-open",
+                                           "rw-fill-open",
+                                           "full-not-writable",
+                                           "reader-setup",
+                                           "reading-child",
+                                           "poll-wake",
+                                           "no-early-hangup",
+                                           "empty-not-ready",
+                                           "hangup",
+                                           "separate-hangup",
+                                           "hangup-cleared",
+                                           "data-with-hangup",
+                                           "hangup-after-drain",
+                                           "twins",
+                                           "twin-reader",
+                                           "twin-enxio",
+                                           "rename",
+                                           "renamed-reader",
+                                           "unlinked-name",
+                                           "new-enxio",
+                                           "bind",
+                                           "fifo-under-source",
+                                           "bind-join",
+                                           "statfs-before",
+                                           "alias-ends",
+                                           "alias-space",
+                                           "alias-freed",
+                                           "bind-umount"};
+
+#define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
+
+/* The index in `assertion_id` of the next assertion to report. */
+static unsigned int assertion_at;
+
+/** Report that the next assertion held. */
+static void row_held(void)
+{
+    report_pass(assertion_id[assertion_at++]);
+}
+
+/** Report that the next assertion failed for `why`, that those after it
+ * were not run, and the report's end. */
+static void row_stop(const char *why)
+{
+    report_fail(assertion_id[assertion_at++], why);
+    while (assertion_at < ASSERTIONS) {
+        report_notrun(assertion_id[assertion_at++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report one failed check with errno, end the report at the assertion that
+ * `what` fails, and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("FIFOMUSL FAIL (%s: errno %d)\n", what, errno);
+    row_stop(what);
     return 1;
 }
 
@@ -101,17 +172,20 @@ static int reader_hangup(void)
         error = "a new FIFO reader reported hangup before a writer opened";
         goto out;
     }
+    row_held();
     w = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
     if (w < 0 || !poll_events(fds, 1, 0, 0)) {
         error = "an empty FIFO with a writer polled ready";
         goto out;
     }
+    row_held();
     close(w);
     w = -1;
     if (!poll_events(fds, 1, POLLHUP, 0)) {
         error = "a FIFO reader missed hangup after a writer opened and closed";
         goto out;
     }
+    row_held();
     fds[1].fd = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
     fds[2].fd = dup(fds[1].fd);
     if (fds[1].fd < 0 || fds[2].fd < 0 || fcntl(fds[2].fd, F_SETFL, 0) != 0 ||
@@ -119,22 +193,26 @@ static int reader_hangup(void)
         error = "FIFO read opens did not keep separate hangup state";
         goto out;
     }
+    row_held();
     w = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
     fds[3].fd = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
     if (w < 0 || fds[3].fd < 0 || !poll_events(fds, 4, 0, 0) || write(w, "x", 1) != 1) {
         error = "a reopened FIFO writer did not clear hangup";
         goto out;
     }
+    row_held();
     close(w);
     w = -1;
     if (!poll_events(fds, 4, POLLIN | POLLHUP, POLLIN | POLLHUP)) {
         error = "FIFO readers missed buffered data with hangup";
         goto out;
     }
+    row_held();
     if (read(fds[0].fd, &byte, 1) != 1 || byte != 'x' || !poll_events(fds, 4, POLLHUP, POLLHUP)) {
         error = "FIFO readers missed hangup after draining data";
         goto out;
     }
+    row_held();
 out:
     if (w >= 0) {
         close(w);
@@ -286,11 +364,13 @@ static int poll_opens(void)
     if (rw < 0 || write(rw, "rw", 2) != 2 || read(rw, buf, sizeof(buf)) != 2) {
         return fail("an open for reading and writing");
     }
+    row_held();
     close(rw);
     rw = open(FIFO_PATH, O_RDWR | O_NONBLOCK);
     if (rw < 0) {
         return fail("an open for reading and writing to fill");
     }
+    row_held();
     memset(buf, 'f', sizeof(buf));
     while (write(rw, buf, sizeof(buf)) > 0) {
     }
@@ -300,12 +380,14 @@ static int poll_opens(void)
     if (errno != EAGAIN || poll(&pfd, 1, 0) != 0) {
         return fail("a full FIFO polled writable");
     }
+    row_held();
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_alarm;
     if (pipe(ack) != 0 || fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0 ||
         sigaction(SIGALRM, &sa, NULL) != 0) {
         return fail("setup for the reading child");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         drainer(parent, ack[0]);
@@ -320,9 +402,11 @@ static int poll_opens(void)
                         ? "the parent was never seen asleep in poll"
                         : "the reading child");
     }
+    row_held();
     if (n != 1 || !(pfd.revents & POLLOUT) || alarms) {
         return fail("a read by another open did not wake a poll for output");
     }
+    row_held();
     close(ack[0]);
     close(ack[1]);
     close(rw);
@@ -348,19 +432,23 @@ static int aliased(void)
         mount(BIND_SRC, BIND_DST, NULL, MS_BIND, NULL) != 0) {
         return fail("a bind of a directory of the KRFFS root");
     }
+    row_held();
     if (mkfifo(BIND_SRC "/f", 0600) != 0) {
         return fail("a FIFO under the bind's source");
     }
+    row_held();
     r = open(BIND_SRC "/f", O_RDONLY | O_NONBLOCK);
     w = r < 0 ? -1 : open(BIND_DST "/f", O_WRONLY | O_NONBLOCK);
     if (w < 0 || write(w, "bd", 2) != 2 || read(r, buf, sizeof(buf)) != 2) {
         return fail("a writer through a bind did not join a reader through its source");
     }
+    row_held();
     close(w);
     close(r);
     if (unlink(BIND_SRC "/f") != 0 || statfs("/tmp", &before) != 0) {
         return fail("statfs before the FIFOs");
     }
+    row_held();
     for (i = 0; i < ALIASES; i++) {
         snprintf(src, sizeof(src), BIND_SRC "/o%d", i);
         snprintf(dst, sizeof(dst), BIND_DST "/o%d", i);
@@ -368,18 +456,22 @@ static int aliased(void)
             return fail("an end through a bind of a FIFO unlinked through its source");
         }
     }
+    row_held();
     if (statfs("/tmp", &held) != 0 || held.f_bfree + 8 > before.f_bfree) {
         return fail("the FIFOs held through a bind took no space statfs counts");
     }
+    row_held();
     for (i = 0; i < ALIASES; i++) {
         close(ends[i]);
     }
     if (statfs("/tmp", &after) != 0 || after.f_bfree + 2 < before.f_bfree) {
         return fail("the last close through a bind did not free unlinked FIFOs");
     }
+    row_held();
     if (umount2(BIND_DST, 0) != 0 || rmdir(BIND_DST) != 0 || rmdir(BIND_SRC) != 0) {
         return fail("the bind unmounts and its directories go");
     }
+    row_held();
     return 0;
 }
 
@@ -399,27 +491,34 @@ static int identity(void)
     if (mkfifo(TWIN_A, 0600) != 0 || mkfifo(TWIN_B, 0600) != 0) {
         return fail("two FIFOs whose names have one hash");
     }
+    row_held();
     r = open(TWIN_A, O_RDONLY | O_NONBLOCK);
     if (r < 0) {
         return fail("a reader of the first");
     }
+    row_held();
     if (open(TWIN_B, O_WRONLY | O_NONBLOCK) != -1 || errno != ENXIO) {
         return fail("the second found the first's reader");
     }
+    row_held();
     if (rename(TWIN_A, MOVED) != 0) {
         return fail("the rename");
     }
+    row_held();
     w = open(MOVED, O_WRONLY | O_NONBLOCK);
     if (w < 0 || write(w, "mv", 2) != 2 || read(r, buf, sizeof(buf)) != 2) {
         return fail("the renamed FIFO lost its reader");
     }
+    row_held();
     close(w);
     if (unlink(MOVED) != 0 || mkfifo(MOVED, 0600) != 0) {
         return fail("a FIFO in an unlinked one's name");
     }
+    row_held();
     if (open(MOVED, O_WRONLY | O_NONBLOCK) != -1 || errno != ENXIO) {
         return fail("a new FIFO found the unlinked one's reader");
     }
+    row_held();
     close(r);
     unlink(MOVED);
     unlink(TWIN_B);
@@ -444,6 +543,7 @@ static int blocking_open(void)
     if (pipe(told) != 0 || fcntl(told[0], F_SETFL, O_NONBLOCK) != 0) {
         return fail("the pipe the child writes to");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         writer(parent, told[1]);
@@ -456,13 +556,16 @@ static int blocking_open(void)
         return fail(buf[0] == 'n' ? "the blocking open for reading was never seen asleep"
                                   : "a blocking open for reading returned before a writer opened");
     }
+    row_held();
     if (read(r, buf, sizeof(buf)) != 5 || memcmp(buf, "child", 5) != 0) {
         return fail("the child's bytes");
     }
+    row_held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0 ||
         read(r, buf, sizeof(buf)) != 0) {
         return fail("the writing child");
     }
+    row_held();
     close(r);
     close(told[0]);
     close(told[1]);
@@ -475,33 +578,40 @@ int main(void)
     char buf[16];
     int r, w;
 
+    report_begin(report_case(environ, "guest.default.fifomusl"));
     unlink(FIFO_PATH);
     unlink(NODE_PATH);
     if (mkfifo(FIFO_PATH, 0600) != 0 || stat(FIFO_PATH, &st) != 0 || !S_ISFIFO(st.st_mode)) {
         return fail("mkfifo");
     }
+    row_held();
     if (mknodat(AT_FDCWD, NODE_PATH, S_IFIFO | 0600, 0) != 0 || stat(NODE_PATH, &st) != 0 ||
         !S_ISFIFO(st.st_mode)) {
         return fail("mknodat S_IFIFO");
     }
+    row_held();
     unlink(NODE_PATH);
 
     if (open(FIFO_PATH, O_WRONLY | O_NONBLOCK) != -1 || errno != ENXIO) {
         return fail("a writer with no reader was not ENXIO");
     }
+    row_held();
     r = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
     if (r < 0 || read(r, buf, sizeof(buf)) != 0) {
         return fail("a nonblocking reader with no writer");
     }
+    row_held();
     w = open(FIFO_PATH, O_WRONLY | O_NONBLOCK);
     if (w < 0 || write(w, "fifo", 4) != 4 || read(r, buf, sizeof(buf)) != 4 ||
         memcmp(buf, "fifo", 4) != 0) {
         return fail("bytes through the FIFO");
     }
+    row_held();
     close(w);
     if (read(r, buf, sizeof(buf)) != 0) {
         return fail("no end of input after the writer closed");
     }
+    row_held();
     close(r);
 
     if (blocking_open() != 0 || poll_opens() != 0) {
@@ -512,6 +622,7 @@ int main(void)
     if (identity() != 0) {
         return 1;
     }
+    report_end();
     printf("FIFOMUSL OK\n");
     return 0;
 }
