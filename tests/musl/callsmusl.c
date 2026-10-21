@@ -74,6 +74,34 @@
  * (tests/native/Readme.md). Given `machine=native`, it leaves out the
  * adjtimex row, since the machine's NTP client has already adjusted the clock
  * that row requires unsynchronized.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order, a setup step joined to the row after it:
+ * `sigtimedwait-pending`, `sigtimedwait-eagain`, `sigtimedwait-thread-first`,
+ * `sigtimedwait-far`, `zombie-kill`, `zombie-esrch`, `mlock`, `mlockall`,
+ * `mlock-gap`, `mincore`, `getcpu`, `personality`, `ids-unsigned`, `sendmmsg`,
+ * `recvmmsg`, `recvmmsg-wide-count`, `socket-wide-domain`, `clock-gettime64`,
+ * `time-call`, `close-range-cloexec`, `close-range-below`,
+ * `close-range-einval-flag`, `close-range-backward`, `close-range-end`,
+ * `splice-einval`, `tee-einval`, `sendfile-einval`, `splice-ebadf`,
+ * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
+ * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
+ * `clock-adjtime`, `listxattr`, `getxattr`, `lsetxattr-enoent`,
+ * `readahead-fadvise`, `fadvise-espipe`, `noctty-session`, `maxrss-self`,
+ * `maxrss-child`, `udp-refused`, `setgid-file`, `setgid-dir`,
+ * `privacy-other-root`, `privacy-own-maps`, `privacy-dumpable`,
+ * `timer-si-timer`, `timer-overrun`, `timer-delete`, `sigqueue`,
+ * `rt-sigqueueinfo`, `pty-nonblock-eagain`, `pty-writer-sleeps`, `pty-64k`,
+ * `pty-whole-lines`, `signalfd-eagain`, `signalfd-read`, `itimer-interval`,
+ * `itimer-signals`, `ptimer-gettime`, `ptimer-signals`, `devmem-low`,
+ * `devmem-ram-eperm`, `devmem-private-einval`, `devmem-apic`, `klog-size`,
+ * `klog-records`, `klog-clear`, `dev-log-link`, `rtc-alarm-refused`,
+ * `rtc-alarm-readback`, `rtc-read-af`, `rtc-wakeup-enabled`,
+ * `power-state-mode`, `freeze-wakes` and `freeze-holds`. `ids-unsigned`,
+ * `recvmmsg-wide-count` and `socket-wide-domain` are x86-64's alone, and the
+ * branch of the group `arch`, `i686` or `x86-64`, says whether they ran. A
+ * native run reports `adjtimex` not run. The first failure fails its assertion
+ * and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -108,6 +136,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /*
  * The calls of 64-bit fields and offsets, by their i386 names: i386's
@@ -137,10 +166,56 @@
  * writes first in the other rounds. */
 #define WHOLE_ROUNDS 4
 
+/* The assertions of etude's report in the order they are checked, more than
+ * probe_report.h's path holds, and how many are planned and reported. */
+static const char *rows[96];
+static int rows_planned, rows_reported;
+
+/** Add the assertion `id` to the end of the planned rows. */
+static void plan_row(const char *id)
+{
+    rows[rows_planned++] = id;
+}
+
+/** Report that the next planned row held. */
+static void held(void)
+{
+    report_pass(rows[rows_reported++]);
+}
+
+/** In the process that began the report, report that the next planned row
+ * failed with `why`, that those after it were not run, and the report's
+ * end; after the end, nothing. */
+static void stop(const char *why)
+{
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    if (rows_reported < rows_planned) {
+        report_fail(rows[rows_reported++], why);
+    }
+    while (rows_reported < rows_planned) {
+        report_notrun(rows[rows_reported++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report the planned rows before the one at index `row` held. */
+static void held_to(int row)
+{
+    while (rows_reported < row && rows_reported < rows_planned) {
+        held();
+    }
+}
+
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
-    printf("CALLSMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[200];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("CALLSMUSL FAIL (%s)\n", why);
+    stop(why);
     return 1;
 }
 
@@ -176,6 +251,7 @@ static int peaks(void)
     if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss < 4096) {
         return fail("getrusage did not report the 4 MiB touched as ru_maxrss");
     }
+    held();
     pid = fork();
     if (pid == 0) {
         char *more = malloc(12 << 20);
@@ -188,6 +264,7 @@ static int peaks(void)
     if (pid < 0 || wait4(pid, &status, 0, &ru) != pid || ru.ru_maxrss < 12288) {
         return fail("wait4 did not report the child's 12 MiB as ru_maxrss");
     }
+    held();
     free(mine);
     return 0;
 }
@@ -226,6 +303,7 @@ static int refusals(void)
             return fail("the receive after a port unreachable was not ECONNREFUSED");
         }
     }
+    held();
     close(fd);
     return 0;
 }
@@ -259,6 +337,7 @@ static int timers(void)
         si.si_value.sival_int != 99) {
         return fail("the timer's signal did not come with SI_TIMER and its value");
     }
+    held();
     its.it_interval.tv_nsec = 20000000;
     if (timer_settime(t, 0, &its, NULL) != 0) {
         return fail("timer_settime of a periodic timer");
@@ -267,9 +346,11 @@ static int timers(void)
     if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_overrun < 3 || timer_getoverrun(t) < 3) {
         return fail("a blocked periodic timer's signal did not carry its overrun");
     }
+    held();
     if (timer_delete(t) != 0 || syscall(SYS_timer_delete, (long)t) != -1 || errno != EINVAL) {
         return fail("timer_delete, then again");
     }
+    held();
     while (sigtimedwait(&set, &si, &zero) == SIGUSR2) {
     }
     return 0;
@@ -297,6 +378,7 @@ static int queues(void)
         si.si_value.sival_int != 4242 || si.si_pid != getpid()) {
         return fail("sigqueue's signal did not come with SI_QUEUE, its value and its sender");
     }
+    held();
     memset(&si, 0, sizeof(si));
     si.si_signo = SIGUSR2;
     si.si_errno = 77;
@@ -312,6 +394,7 @@ static int queues(void)
         si.si_value.sival_int != 4343) {
         return fail("rt_sigqueueinfo's signal did not come with its errno and value");
     }
+    held();
     return 0;
 }
 
@@ -333,6 +416,7 @@ static int signalfds(void)
     if (fd < 0 || read(fd, &si, sizeof si) != -1 || errno != EAGAIN) {
         return fail("a signalfd with nothing pending did not read EAGAIN");
     }
+    held();
     v.sival_int = 31;
     if (kill(getpid(), SIGUSR2) != 0 || read(fd, &si, sizeof si) != (int)sizeof si ||
         si.ssi_signo != SIGUSR2 || si.ssi_pid != (uint32_t)getpid() ||
@@ -340,6 +424,7 @@ static int signalfds(void)
         si.ssi_int != 31) {
         return fail("a signalfd did not read the signal sent, its sender and sigqueue's value");
     }
+    held();
     close(fd);
     return 0;
 }
@@ -365,10 +450,12 @@ static int setgids(void)
     if (fd < 0 || close(fd) != 0 || stat("/tmp/callsmusl.sg/f", &st) != 0 || st.st_gid != group) {
         return fail("a file made in a setgid directory did not take its group");
     }
+    held();
     if (mkdir("/tmp/callsmusl.sg/d", 0755) != 0 || stat("/tmp/callsmusl.sg/d", &st) != 0 ||
         st.st_gid != group || !(st.st_mode & S_ISGID)) {
         return fail("a directory made in a setgid directory did not take its group and the bit");
     }
+    held();
     unlink("/tmp/callsmusl.sg/f");
     rmdir("/tmp/callsmusl.sg/d");
     rmdir(dir);
@@ -420,12 +507,15 @@ static int privacies_child(pid_t parent)
 }
 
 /**
- * Run `privacies_child` in a child and judge its exit status. Returns 0, or 1
- * after the failure is printed.
+ * Run `privacies_child` in a child and judge its exit status, which also says
+ * which of the three rows of etude's report failed: another user's opens, the
+ * child's own maps, and its /proc directory. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int privacies(void)
 {
     int status;
+    int base = rows_reported;
     pid_t pid, parent = getpid();
 
     pid = fork();
@@ -440,11 +530,14 @@ static int privacies(void)
                     "one of its descriptors' links");
     }
     if (WEXITSTATUS(status) == 5) {
+        held_to(base + 2);
         return fail("the /proc directory of a dumpable process of user 4243 was not its own");
     }
     if (WEXITSTATUS(status) != 0) {
+        held_to(base + (WEXITSTATUS(status) == 4 ? 1 : 0));
         return fail("a child of user 4243 could not become it or read its own maps");
     }
+    held_to(base + 3);
     return 0;
 }
 
@@ -618,6 +711,7 @@ static int flows(void)
     if (cut <= 0 || write(slave, buf, sizeof buf) != -1 || errno != EAGAIN) {
         return fail("a non-blocking slave write past the master ring was not cut and then EAGAIN");
     }
+    held();
     while (cut > 0 && (n = read(master, buf, sizeof buf)) > 0) {
         cut -= n;
     }
@@ -639,6 +733,7 @@ static int flows(void)
         waitpid(pid, &status, 0);
         return fail("a slave writer past the master ring was never seen asleep for room");
     }
+    held();
     while (total < 16 * (int)sizeof buf && (n = read(master, buf, sizeof buf)) > 0) {
         total += n;
     }
@@ -646,9 +741,11 @@ static int flows(void)
         WEXITSTATUS(status) != 0 || total != 16 * (int)sizeof buf) {
         return fail("a slave writer's 64 KiB did not all reach the master");
     }
+    held();
     if (whole_writes(master, name) != 0) {
         return 1;
     }
+    held();
     close(master);
     return 0;
 }
@@ -685,6 +782,7 @@ static int terminals(void)
         WEXITSTATUS(status) != 0) {
         return fail("a session leader did not take the slave it opened");
     }
+    held();
     close(master);
     return 0;
 }
@@ -709,9 +807,11 @@ static int zombies(void)
     if (kill(pid, 0) != 0 || kill(pid, SIGTERM) != 0 || kill(-pid, SIGTERM) != 0) {
         return fail("kill of a child not yet reaped did not succeed");
     }
+    held();
     if (waitpid(pid, NULL, 0) != pid || kill(pid, 0) != -1 || errno != ESRCH) {
         return fail("kill of a reaped child was not ESRCH");
     }
+    held();
     return 0;
 }
 
@@ -737,10 +837,12 @@ static int signals(void)
         info.si_pid != getpid()) {
         return fail("sigtimedwait did not take the pending signal");
     }
+    held();
     errno = 0;
     if (sigtimedwait(&set, &info, &zero) != -1 || errno != EAGAIN) {
         return fail("sigtimedwait with nothing pending");
     }
+    held();
     sigaddset(&set, SIGUSR2);
     if (sigprocmask(SIG_BLOCK, &set, NULL) != 0 || kill(getpid(), SIGUSR1) != 0 ||
         syscall(SYS_tkill, syscall(SYS_gettid), SIGUSR2) != 0) {
@@ -750,6 +852,7 @@ static int signals(void)
         sigtimedwait(&set, &info, &zero) != SIGUSR1 || info.si_code != SI_USER) {
         return fail("sigtimedwait did not take the thread's signal before the process's");
     }
+    held();
     sigemptyset(&set);
     sigaddset(&set, SIGALRM);
     if (sigprocmask(SIG_BLOCK, &set, NULL) != 0) {
@@ -759,6 +862,7 @@ static int signals(void)
     if (sigtimedwait(&set, &info, &far) != SIGALRM) {
         return fail("sigtimedwait under a timeout past 2^31 ticks did not wait for the alarm");
     }
+    held();
     return zombies();
 }
 
@@ -779,18 +883,22 @@ static int memory(void)
     if (mlock(p, 2 * page) != 0 || munlock(p, 2 * page) != 0) {
         return fail("mlock of a mapped range");
     }
+    held();
     if (mlockall(MCL_CURRENT) != 0 || munlockall() != 0) {
         return fail("mlockall");
     }
+    held();
     munmap(p + page, page);
     errno = 0;
     if (mlock(p, 2 * page) != -1 || errno != ENOMEM) {
         return fail("mlock across a gap");
     }
+    held();
     p[0] = 1;
     if (mincore(p, page, vec) != 0 || !(vec[0] & 1)) {
         return fail("mincore of a touched page");
     }
+    held();
     munmap(p, page);
     return 0;
 }
@@ -810,12 +918,14 @@ static int identity(void)
         !CPU_ISSET(cpu, &set) || node != 0) {
         return fail("getcpu");
     }
+    held();
     old = syscall(SYS_personality, 0xffffffffUL);
     if (old < 0 || syscall(SYS_personality, 0x0040000UL) != old ||
         syscall(SYS_personality, 0xffffffffUL) != 0x0040000L ||
         syscall(SYS_personality, (unsigned long)old) != 0x0040000L) {
         return fail("personality");
     }
+    held();
 #if defined __x86_64__
     {
         int status;
@@ -834,6 +944,7 @@ static int identity(void)
             WEXITSTATUS(status) != 0) {
             return fail("an id past 2^31 read back signed");
         }
+        held();
     }
 #endif
     return 0;
@@ -876,10 +987,12 @@ static int messages(void)
         out[1].msg_len != sizeof(b)) {
         return fail("sendmmsg");
     }
+    held();
     if (recvmmsg(sv[1], in, 2, 0, NULL) != 2 || in[0].msg_len != sizeof(a) ||
         in[1].msg_len != sizeof(b) || strcmp(ra, a) != 0 || strcmp(rb, b) != 0) {
         return fail("recvmmsg");
     }
+    held();
 #if defined __x86_64__
     {
         int pair[2];
@@ -892,10 +1005,12 @@ static int messages(void)
             recv(sv[1], rb, sizeof(rb), 0) != sizeof(b)) {
             return fail("recvmmsg of a count past 32 bits did not take its low word");
         }
+        held();
         fd = syscall(SYS_socket, 0x100000001UL, SOCK_STREAM, 0);
         if (fd < 0 || syscall(SYS_socketpair, 0x100000001UL, SOCK_STREAM, 0, pair) != 0) {
             return fail("a domain past 32 bits did not take its low word");
         }
+        held();
         close((int)fd);
         close(pair[0]);
         close(pair[1]);
@@ -922,6 +1037,7 @@ static int clocks(void)
         t[1] >= 1000000000) {
         return fail("clock_gettime64");
     }
+    held();
     if (clock_gettime(CLOCK_REALTIME, &before) != 0) {
         return fail("clock_gettime before time");
     }
@@ -932,6 +1048,7 @@ static int clocks(void)
     if (got < (long)before.tv_sec || got > (long)after.tv_sec || stored != got) {
         return fail("time");
     }
+    held();
     return 0;
 }
 
@@ -961,22 +1078,27 @@ static int ranges(void)
             return fail("close_range with CLOSE_RANGE_CLOEXEC left a descriptor unmarked");
         }
     }
+    held();
     flags = fcntl(0, F_GETFD);
     if (flags < 0 || (flags & FD_CLOEXEC)) {
         return fail("close_range with CLOSE_RANGE_CLOEXEC marked a descriptor below the range");
     }
+    held();
     errno = 0;
     if (syscall(436, fd[0], fd[0], 8) != -1 || errno != EINVAL) {
         return fail("close_range with an unknown flag");
     }
+    held();
     errno = 0;
     if (syscall(436, fd[2], fd[0], 0) != -1 || errno != EINVAL) {
         return fail("close_range with first past last");
     }
+    held();
     if (syscall(436, fd[0], ~0U, 0) != 0 || fcntl(fd[0], F_GETFD) != -1 ||
         fcntl(fd[2], F_GETFD) != -1 || fcntl(0, F_GETFD) < 0) {
         return fail("close_range to the end of the table");
     }
+    held();
     return 0;
 }
 
@@ -996,15 +1118,19 @@ static int copies(void)
     if (syscall(SYS_splice, p[0], NULL, null, NULL, 16, 0) != -1 || errno != EINVAL) {
         return fail("splice from a pipe to /dev/null was not EINVAL");
     }
+    held();
     if (syscall(SYS_tee, p[0], q[1], 16, 0) != -1 || errno != EINVAL) {
         return fail("tee was not EINVAL");
     }
+    held();
     if (syscall(SYS_sendfile64, null, p[0], NULL, 16) != -1 || errno != EINVAL) {
         return fail("sendfile was not EINVAL");
     }
+    held();
     if (syscall(SYS_splice, 999, NULL, null, NULL, 16, 0) != -1 || errno != EBADF) {
         return fail("splice from a closed descriptor was not EBADF");
     }
+    held();
     close(null);
     close(p[0]);
     close(p[1]);
@@ -1027,10 +1153,14 @@ static int adjusts(void)
                             tx.tick != 10000 || tx.tolerance != (500L << 16))) {
         return fail("adjtimex did not read an unsynchronized clock with its 10 ms tick");
     }
+    if (!probe_native()) {
+        held();
+    }
     memset(&tx, 0, sizeof tx);
     if (clock_adjtime(CLOCK_MONOTONIC, &tx) != -1 || errno != EOPNOTSUPP) {
         return fail("clock_adjtime of CLOCK_MONOTONIC was not EOPNOTSUPP");
     }
+    held();
     return 0;
 }
 
@@ -1054,18 +1184,23 @@ static int advises(void)
     if (listxattr(file, v, sizeof v) != 0 || flistxattr(fd, v, sizeof v) != 0) {
         return fail("listxattr of a regular file was not an empty list");
     }
+    held();
     if (getxattr(file, "user.x", v, sizeof v) != -1 || errno != EOPNOTSUPP) {
         return fail("getxattr of a regular file was not EOPNOTSUPP");
     }
+    held();
     if (lsetxattr("/nonexistent", "user.x", "1", 1, 0) != -1 || errno != ENOENT) {
         return fail("lsetxattr of a missing file was not ENOENT");
     }
+    held();
     if (readahead(fd, 0, 4096) != 0 || posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL) != 0) {
         return fail("readahead and posix_fadvise of a regular file did not return 0");
     }
+    held();
     if (posix_fadvise(p[0], 0, 0, POSIX_FADV_NORMAL) != ESPIPE) {
         return fail("posix_fadvise of a pipe was not ESPIPE");
     }
+    held();
     close(fd);
     close(p[0]);
     close(p[1]);
@@ -1085,6 +1220,7 @@ static int reserves_shm(void)
         st.st_blocks != 16) {
         return fail("posix_fallocate in /dev/shm did not make the range's pages");
     }
+    held();
     close(fd);
     unlink("/dev/shm/callsmusl.fallocate");
     return 0;
@@ -1107,23 +1243,29 @@ static int reserves(void)
     if (posix_fallocate(fd, 0, 4096) != EOPNOTSUPP) {
         return fail("posix_fallocate of a file open for writing was not EOPNOTSUPP");
     }
+    held();
     if (posix_fallocate(ro, 0, 4096) != EBADF) {
         return fail("posix_fallocate of a file open for reading was not EBADF");
     }
+    held();
     if (posix_fallocate(fd, 0, 0) != EINVAL) {
         return fail("posix_fallocate of no bytes was not EINVAL");
     }
+    held();
     if (posix_fallocate(p[1], 0, 4096) != ESPIPE) {
         return fail("posix_fallocate of a pipe was not ESPIPE");
     }
+    held();
     if (fallocate(ro, 0x100, 0, 4096) != -1 || errno != EOPNOTSUPP) {
         return fail("fallocate with a mode Linux does not take was not EOPNOTSUPP first");
     }
+    held();
     close(p[1]);
     p[1] = open("/proc/self/oom_score_adj", O_WRONLY);
     if (p[1] < 0 || posix_fallocate(p[1], 0, 4096) != EOPNOTSUPP) {
         return fail("posix_fallocate of a /proc file open for writing was not EOPNOTSUPP");
     }
+    held();
     unlink("/tmp/callsmusl.fallocate");
     close(fd);
     close(ro);
@@ -1223,6 +1365,7 @@ static int cpu_ptimers(void)
         cur.it_value.tv_sec != 0 || cur.it_value.tv_nsec > 10000000) {
         return fail("timer_gettime of a timer of processor time");
     }
+    held();
     timer_delete(proc_timer);
     timer_delete(thread_timer);
     sigprocmask(SIG_SETMASK, &mask, NULL);
@@ -1231,6 +1374,7 @@ static int cpu_ptimers(void)
     if (usr1s < 3 || usr2s < 3) {
         return fail("the timers of processor time did not each post three signals");
     }
+    held();
     return 0;
 }
 
@@ -1256,6 +1400,7 @@ static int cputimers(void)
     if (getitimer(ITIMER_PROF, &cur) != 0 || cur.it_interval.tv_usec != 10000) {
         return fail("getitimer of ITIMER_PROF did not report its interval");
     }
+    held();
     do {
         spin_user();
         times(&t);
@@ -1267,6 +1412,7 @@ static int cputimers(void)
     if (vtalrms < 3 || profs < 3) {
         return fail("ITIMER_VIRTUAL and ITIMER_PROF did not each post three signals");
     }
+    held();
     return cpu_ptimers();
 }
 
@@ -1289,17 +1435,21 @@ static int devmems(void)
     if (pread(fd, low, sizeof low, 0xF0000) != (ssize_t)sizeof low) {
         return fail("pread of the first megabyte of /dev/mem");
     }
+    held();
     if (pread(fd, low, sizeof low, 0x2000000) != -1 || errno != EPERM ||
         mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0x2000000) != MAP_FAILED || errno != EPERM) {
         return fail("/dev/mem gave a frame of RAM");
     }
+    held();
     if (mmap(NULL, 4096, PROT_READ, MAP_PRIVATE, fd, 0xFEE00000) != MAP_FAILED || errno != EINVAL) {
         return fail("a private mapping of /dev/mem was not EINVAL");
     }
+    held();
     apic = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0xFEE00000);
     if (apic == MAP_FAILED || (apic[0x30 / 4] & 0xFF) == 0) {
         return fail("the local APIC's version through a mapping of /dev/mem");
     }
+    held();
     munmap((void *)apic, 4096);
     close(fd);
     return 0;
@@ -1320,17 +1470,21 @@ static int klogs(void)
     if (klogctl(10, NULL, 0) != 16384) {
         return fail("klogctl's size of the ring");
     }
+    held();
     n = klogctl(3, ring, sizeof ring);
     if (n <= 0 || ring[0] != '<' || ring[n - 1] != '\n') {
         return fail("klogctl's read of the whole ring was not whole records");
     }
+    held();
     if (klogctl(5, NULL, 0) != 0 || klogctl(3, ring, sizeof ring) != 0) {
         return fail("klogctl's read after a clear gave records from before it");
     }
+    held();
     n = (int)readlink("/dev/log", link, sizeof link - 1);
     if (n != 12 || memcmp(link, "/var/run/log", 12) != 0) {
         return fail("/dev/log is not a link to /var/run/log");
     }
+    held();
     return 0;
 }
 
@@ -1450,6 +1604,7 @@ static int freezes(int fd)
     if (fstat(state, &st) != 0 || (st.st_mode & 0777) != 0644) {
         return unfreeze(spinner, state, "the mode fstat gives /sys/power/state's descriptor");
     }
+    held();
     before = cpu_ticks(spinner);
     if (ioctl(fd, RTC_WKALM_RD, &back) != 0 || back.pending) {
         return unfreeze(spinner, state, "the wake alarm was already pending before suspend");
@@ -1463,9 +1618,11 @@ static int freezes(int fd)
     if (!woke) {
         return fail("suspend to idle returned before the wake alarm");
     }
+    held();
     if (after - before > 10) {
         return fail("a process ran while a suspend to idle held the processes");
     }
+    held();
     return 0;
 }
 
@@ -1492,32 +1649,129 @@ static int rtcs(void)
         errno != EINVAL) {
         return fail("a wake alarm in the past or two days ahead was taken");
     }
+    held();
     if (wake_in(fd, 2, &w) != 0 || ioctl(fd, RTC_WKALM_RD, &back) != 0 || !back.enabled ||
         back.tm[0] != w.tm[0] || back.tm[1] != w.tm[1]) {
         return fail("a wake alarm two seconds ahead did not read back");
     }
+    held();
     if (read(fd, &data, sizeof data) != (ssize_t)sizeof data || !(data & 0x20) || data >> 8 < 1) {
         return fail("a read of /dev/rtc0 did not end at the alarm with RTC_AF");
     }
+    held();
     state = open("/sys/class/rtc/rtc0/device/power/wakeup", O_RDONLY);
     if (state < 0 || read(state, text, sizeof text) != 8 || memcmp(text, "enabled\n", 8) != 0) {
         return fail("the clock may not wake the machine");
     }
+    held();
     close(state);
     status = freezes(fd);
     close(fd);
     return status;
 }
 
+/** Plan each assertion of `ids`, `n` of them. */
+static void plan_rows(const char *const *ids, unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++) {
+        plan_row(ids[i]);
+    }
+}
+
+#define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
+
+/**
+ * Begin the report, with the branch of the architecture, and plan its
+ * assertions in the order they are checked; a native run reports `adjtimex`
+ * not run.
+ */
+static void plan(void)
+{
+    static const char *const before[] = {"sigtimedwait-pending",
+                                         "sigtimedwait-eagain",
+                                         "sigtimedwait-thread-first",
+                                         "sigtimedwait-far",
+                                         "zombie-kill",
+                                         "zombie-esrch",
+                                         "mlock",
+                                         "mlockall",
+                                         "mlock-gap",
+                                         "mincore",
+                                         "getcpu",
+                                         "personality"};
+    static const char *const messages[] = {"sendmmsg", "recvmmsg"};
+    static const char *const middle[] = {"clock-gettime64",
+                                         "time-call",
+                                         "close-range-cloexec",
+                                         "close-range-below",
+                                         "close-range-einval-flag",
+                                         "close-range-backward",
+                                         "close-range-end",
+                                         "splice-einval",
+                                         "tee-einval",
+                                         "sendfile-einval",
+                                         "splice-ebadf",
+                                         "fallocate-krffs",
+                                         "fallocate-ebadf",
+                                         "fallocate-einval",
+                                         "fallocate-espipe",
+                                         "fallocate-mode",
+                                         "fallocate-proc",
+                                         "fallocate-shm"};
+    static const char *const after[] = {
+        "clock-adjtime",      "listxattr",         "getxattr",
+        "lsetxattr-enoent",   "readahead-fadvise", "fadvise-espipe",
+        "noctty-session",     "maxrss-self",       "maxrss-child",
+        "udp-refused",        "setgid-file",       "setgid-dir",
+        "privacy-other-root", "privacy-own-maps",  "privacy-dumpable",
+        "timer-si-timer",     "timer-overrun",     "timer-delete",
+        "sigqueue",           "rt-sigqueueinfo",   "pty-nonblock-eagain",
+        "pty-writer-sleeps",  "pty-64k",           "pty-whole-lines",
+        "signalfd-eagain",    "signalfd-read",     "itimer-interval",
+        "itimer-signals",     "ptimer-gettime",    "ptimer-signals",
+        "devmem-low",         "devmem-ram-eperm",  "devmem-private-einval",
+        "devmem-apic",        "klog-size",         "klog-records",
+        "klog-clear",         "dev-log-link",      "rtc-alarm-refused",
+        "rtc-alarm-readback", "rtc-read-af",       "rtc-wakeup-enabled",
+        "power-state-mode",   "freeze-wakes",      "freeze-holds"};
+
+    report_begin(report_case(environ, "guest.default.callsmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    PLAN(before);
+#if defined __x86_64__
+    plan_row("ids-unsigned");
+#endif
+    PLAN(messages);
+#if defined __x86_64__
+    plan_row("recvmmsg-wide-count");
+    plan_row("socket-wide-domain");
+#endif
+    PLAN(middle);
+    if (probe_native()) {
+        report_notrun("adjtimex", "the machine's NTP client has adjusted the clock");
+    } else {
+        plan_row("adjtimex");
+    }
+    PLAN(after);
+}
+
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    plan();
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
         reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
         privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems() ||
         klogs() || rtcs()) {
         return 1;
     }
+    report_end();
     printf("CALLSMUSL OK\n");
     return 0;
 }

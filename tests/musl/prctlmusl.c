@@ -46,6 +46,22 @@
  * "PRCTLMUSL FAIL (detail)" and exits 1 at the first failure. User and group
  * 1000 are the NEW of 1000 when a native run gives `ids=OLD:NEW,...`
  * (tests/native/Readme.md), which it passes on to the helper.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, comes from
+ * the run with no mode alone and has an assertion for each row in order, a
+ * setup step joined to the row after it: `name-basename`, `name-cut`,
+ * `name-stat`, `name-short-padded`, `name-exec`, `dumpable-start`,
+ * `dumpable-thread`, `dumpable-values`, `dumpable-einval`, `pdeath-start`,
+ * `pdeath-kept`, `pdeath-einval`, `pdeath-not-inherited`, `pdeath-uid-clears`,
+ * `pdeath-gid-clears`, `pdeath-grandchild-set`, `pdeath-delivered`,
+ * `nnp-start`, `nnp-get-einval`, `nnp-set-einval`, `nnp-suid-plain`,
+ * `unknown-option-einval`, `exe-link-renamed`, `exe-exec-runs-copy`,
+ * `exe-name-removed`, `exe-open-unnamed`, `exit-copy-ends`, `exit-lets-go`,
+ * `subreaper-start`, `subreaper-set`, `subreaper-efault`, `subreaper-fork`,
+ * `subreaper-exec`, `children-self-enoent`, `children-one`, `children-thread`,
+ * `orphan-adopted`, `zombie-adopted`, `children-orphan`, `orphan-reaped`,
+ * `orphan-usage`, `children-empty`, `subreaper-clear` and `orphan-to-init`. The
+ * first failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -67,6 +83,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The unprivileged user and group, 1000 or its native NEW. */
 #define OTHER_ID ((unsigned)probe_id(1000))
@@ -83,10 +100,53 @@ static int report_fd = -1;
 #define EXIT_MOUNT "/tmp/prctlmusl.mnt"
 #define EXIT_COPY  "/tmp/prctlmusl.mnt/prctlmusl"
 
+/* The assertions of etude's report in the order they are checked, more than
+ * probe_report.h's path holds, and how many are planned and reported. */
+static const char *rows[48];
+static int rows_planned, rows_reported;
+
+/** Add the assertion `id` to the end of the planned rows. */
+static void plan_row(const char *id)
+{
+    rows[rows_planned++] = id;
+}
+
+/** Report that the next planned row held. */
+static void held(void)
+{
+    report_pass(rows[rows_reported++]);
+}
+
+/** In the process that began the report, report that the next planned row
+ * failed with `why`, that those after it were not run, and the report's
+ * end; after the end, nothing. */
+static void stop(const char *why)
+{
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    if (rows_reported < rows_planned) {
+        report_fail(rows[rows_reported++], why);
+    }
+    while (rows_reported < rows_planned) {
+        report_notrun(rows[rows_reported++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report the planned rows before the one at index `row` held. */
+static void held_to(int row)
+{
+    while (rows_reported < row && rows_reported < rows_planned) {
+        held();
+    }
+}
+
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("PRCTLMUSL FAIL (%s)\n", what);
+    stop(what);
 
     return 1;
 }
@@ -157,6 +217,7 @@ static int names(void)
     if (prctl(PR_GET_NAME, name, 0, 0, 0) != 0 || strcmp(name, "prctlmusl") != 0) {
         return fail("the program name is not the exec's basename");
     }
+    held();
     if (prctl(PR_SET_NAME, "renamed-probe-too-long", 0, 0, 0) != 0) {
         return fail("PR_SET_NAME was refused");
     }
@@ -164,6 +225,7 @@ static int names(void)
     if (prctl(PR_GET_NAME, name, 0, 0, 0) != 0 || memcmp(name, "renamed-probe-t", 16) != 0) {
         return fail("the name was not cut to 15 bytes and read back with its NUL");
     }
+    held();
     fd = open("/proc/self/stat", O_RDONLY);
     n = fd >= 0 ? read(fd, stat, sizeof(stat) - 1) : -1;
     if (fd >= 0) {
@@ -176,15 +238,18 @@ static int names(void)
     if (strstr(stat, "(renamed-probe-t)") == NULL) {
         return fail("/proc/self/stat does not show the new name");
     }
+    held();
     if (prctl(PR_SET_NAME, "prctlmusl", 0, 0, 0) != 0) {
         return fail("the name could not be set back");
     }
     if (padded_name() != 0) {
         return fail("a short name set after a longer one was not read back padded with NULs");
     }
+    held();
     if (in_child(exec_name) != 0) {
         return fail("an exec left the end of a longer name after the program name");
     }
+    held();
     return 0;
 }
 
@@ -218,6 +283,7 @@ static int dumpable(void)
     if (prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1) {
         return fail("a process does not start dumpable");
     }
+    held();
     if (pipe(flag_pipe) != 0 || pthread_create(&t, NULL, read_dumpable, NULL) != 0) {
         return fail("the thread that reads the dumpable flag");
     }
@@ -225,15 +291,18 @@ static int dumpable(void)
         pthread_join(t, &seen) != 0 || (long)seen != 0 || prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0) {
         return fail("a running thread did not see the dumpable flag another thread cleared");
     }
+    held();
     close(flag_pipe[0]);
     close(flag_pipe[1]);
     if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 || prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 0 ||
         prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) != 1) {
         return fail("the dumpable flag did not take 0 and 1");
     }
+    held();
     if (prctl(PR_SET_DUMPABLE, 2, 0, 0, 0) != -1 || errno != EINVAL) {
         return fail("a dumpable value of 2 was not refused with EINVAL");
     }
+    held();
     return 0;
 }
 
@@ -347,23 +416,29 @@ static int parent_death(void)
     if (prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) != 0 || sig != 0) {
         return fail("a process starts with a parent-death signal");
     }
+    held();
     if (prctl(PR_SET_PDEATHSIG, SIGUSR2, 0, 0, 0) != 0 ||
         prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) != 0 || sig != SIGUSR2) {
         return fail("the parent-death signal was not kept");
     }
+    held();
     if (prctl(PR_SET_PDEATHSIG, 65, 0, 0, 0) != -1 || errno != EINVAL) {
         return fail("a parent-death signal of 65 was not refused with EINVAL");
     }
+    held();
     if (in_child(no_inherited_signal) != 0) {
         return fail("a child inherited the parent-death signal");
     }
+    held();
     prctl(PR_SET_PDEATHSIG, 0, 0, 0, 0);
     if (in_child(moved_uid) != 0) {
         return fail("a move of the effective uid alone kept the signal or the dumpable flag");
     }
+    held();
     if (in_child(moved_gid) != 0) {
         return fail("a move of the effective gid alone kept the signal or the dumpable flag");
     }
+    held();
     if (pipe(report) != 0) {
         return fail("pipe failed");
     }
@@ -371,11 +446,13 @@ static int parent_death(void)
     if (in_child(parent_that_dies) != 0) {
         return fail("the grandchild did not set its parent-death signal");
     }
+    held();
     pfd.fd = report[0];
     pfd.events = POLLIN;
     if (poll(&pfd, 1, 10000) != 1 || read(report[0], &c, 1) != 1 || c != 'D') {
         return fail("a grandchild did not receive its parent-death signal");
     }
+    held();
     close(report[0]);
     close(report[1]);
     return 0;
@@ -429,19 +506,24 @@ static int no_new_privs(void)
     if (prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) != 0) {
         return fail("a process starts with no_new_privs");
     }
+    held();
     if (prctl(PR_GET_NO_NEW_PRIVS, 1, 0, 0, 0) != -1 || errno != EINVAL) {
         return fail("PR_GET_NO_NEW_PRIVS with an argument was not refused with EINVAL");
     }
+    held();
     if (prctl(PR_SET_NO_NEW_PRIVS, 0, 0, 0, 0) != -1 || errno != EINVAL ||
         prctl(PR_SET_NO_NEW_PRIVS, 1, 1, 0, 0) != -1 || errno != EINVAL) {
         return fail("PR_SET_NO_NEW_PRIVS with other arguments was not refused with EINVAL");
     }
+    held();
     if (in_child(unprivileged_exec) != 0) {
         return fail("a set-user-ID exec under no_new_privs did not run as its caller");
     }
+    held();
     if (prctl(1000, 0, 0, 0, 0) != -1 || errno != EINVAL) {
         return fail("an unknown option was not refused with EINVAL");
     }
+    held();
     return 0;
 }
 
@@ -547,8 +629,8 @@ static int exe_ran(void)
  * that renames itself reads its new path from the link and runs itself, not
  * the script put at its old path, through the link; the image that runs
  * removes the copy's name and still reaches the copy through the link. The
- * copy's exit status says which step failed. Returns 0, or 1 after the
- * failure is printed.
+ * copy's exit status says which step failed, and so which of the four rows
+ * of etude's report failed. Returns 0, or 1 after the failure is printed.
  */
 static int exe_follows(void)
 {
@@ -563,6 +645,8 @@ static int exe_follows(void)
         "an exec of /proc/self/exe ran the file put at the program's old path",
         "the copy of the probe ended another way",
     };
+    static const unsigned char rows_of_steps[] = {0, 0, 0, 0, 3, 1, 2, 1, 0};
+    int base = rows_reported;
     int status = 0;
     pid_t child;
 
@@ -583,8 +667,10 @@ static int exe_follows(void)
     unlink(EXE_COPY);
     unlink(EXE_MOVED);
     if (WEXITSTATUS(status) != 0) {
+        held_to(base + rows_of_steps[WEXITSTATUS(status)]);
         return fail(steps[WEXITSTATUS(status)]);
     }
+    held_to(base + 4);
     return 0;
 }
 
@@ -633,9 +719,11 @@ static int exit_lets_go(void)
     if (!ended) {
         return fail("the copy of the probe on the tmpfs did not end with 0");
     }
+    held();
     if (!freed) {
         return fail("an ended child's program kept its file system busy until the reap");
     }
+    held();
     return 0;
 }
 
@@ -969,7 +1057,7 @@ static int adoption_rows(void)
 /**
  * Run as S, once every child is reaped: clear the mark, and check that the
  * orphans of a second M do not come to S. Returns 0, or the step that
- * failed, 7, 17 or 18.
+ * failed, 17, 18 or 19.
  */
 static int cleared_rows(void)
 {
@@ -983,7 +1071,7 @@ static int cleared_rows(void)
         return 17;
     }
     if (orphan_start(&o) != 0 || orphan_end_middle(&o, &r) != 0) {
-        return 7;
+        return 19;
     }
     orphan_close(&o);
     if (r.parent == getpid() || waitpid(-1, &status, WNOHANG) != -1 || errno != ECHILD) {
@@ -1009,7 +1097,9 @@ static int subreaper_rows(void)
 
 /**
  * Check the child subreaper mark and the children file in a child S
- * (`subreaper_rows`). Returns 0, or 1 after the failure is printed.
+ * (`subreaper_rows`), whose exit status says which step failed, and so which
+ * of the sixteen rows of etude's report failed. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int subreaper(void)
 {
@@ -1033,14 +1123,56 @@ static int subreaper(void)
         "the children file was not empty once every child was reaped",
         "PR_SET_CHILD_SUBREAPER of 0 did not clear the mark",
         "an orphan came to a process whose mark was cleared",
+        "the processes of an orphan row did not start or report",
         "the child subreaper ended another way",
     };
+    static const unsigned char rows_of_steps[] = {0, 0, 1,  2,  3,  4,  5,  6,  6,  7, 8,
+                                                  8, 9, 10, 11, 12, 13, 14, 15, 15, 0};
+    int base = rows_reported;
     int status = in_child(subreaper_rows);
 
-    if (status < 0 || status > 19) {
-        status = 19;
+    if (status < 0 || status > 20) {
+        status = 20;
     }
+    held_to(base + (status != 0 ? rows_of_steps[status] : 16));
     return status != 0 ? fail(steps[status]) : 0;
+}
+
+/** Plan each assertion of `ids`, `n` of them. */
+static void plan_rows(const char *const *ids, unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++) {
+        plan_row(ids[i]);
+    }
+}
+
+#define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
+
+/** Begin the report and plan its assertions in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {
+        "name-basename",         "name-cut",          "name-stat",
+        "name-short-padded",     "name-exec",         "dumpable-start",
+        "dumpable-thread",       "dumpable-values",   "dumpable-einval",
+        "pdeath-start",          "pdeath-kept",       "pdeath-einval",
+        "pdeath-not-inherited",  "pdeath-uid-clears", "pdeath-gid-clears",
+        "pdeath-grandchild-set", "pdeath-delivered",  "nnp-start",
+        "nnp-get-einval",        "nnp-set-einval",    "nnp-suid-plain",
+        "unknown-option-einval", "exe-link-renamed",  "exe-exec-runs-copy",
+        "exe-name-removed",      "exe-open-unnamed",  "exit-copy-ends",
+        "exit-lets-go",          "subreaper-start",   "subreaper-set",
+        "subreaper-efault",      "subreaper-fork",    "subreaper-exec",
+        "children-self-enoent",  "children-one",      "children-thread",
+        "orphan-adopted",        "zombie-adopted",    "children-orphan",
+        "orphan-reaped",         "orphan-usage",      "children-empty",
+        "subreaper-clear",       "orphan-to-init"};
+
+    report_begin(report_case(environ, "guest.default.prctlmusl"));
+    PLAN(ids);
 }
 
 int main(int argc, char **argv)
@@ -1061,10 +1193,12 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "subreaper-kept") == 0) {
         return subreaper_kept();
     }
+    plan();
     if (names() != 0 || dumpable() != 0 || parent_death() != 0 || no_new_privs() != 0 ||
         exe_follows() != 0 || exit_lets_go() != 0 || subreaper() != 0) {
         return 1;
     }
+    report_end();
     printf("PRCTLMUSL OK\n");
 
     return 0;

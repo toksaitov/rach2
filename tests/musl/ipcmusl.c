@@ -52,6 +52,17 @@
  *
  * Prints `IPCMUSL OK` and exits 0 on success, and prints
  * `IPCMUSL FAIL (detail)` and exits 1 otherwise.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order, a setup step joined to the row after it:
+ * the segment's `shm-*`, the set's `sem-*`, the queue's `msg-*`, a `cut-*`
+ * for each interrupted wait, the POSIX queue's `mq-*` and its files'
+ * `mqueue-*`, and on x86-64 `oversized-enomem` and `oversized-heap`. The
+ * branch of the group `arch` says which ran: `x86-64`, with
+ * `sem-wide-count`, `msg-wide-capacity` and the two `oversized-*`, or
+ * `i686`, with the three `cut-direct-*`. A native run reports
+ * `oversized-heap` not run. The first failure fails its assertion and leaves
+ * the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -75,16 +86,55 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The longest wait, in seconds, for another process to be seen asleep or
  * waiting on a semaphore: a bound that ends a wait the kernel never
  * satisfies, far past a correct one. */
 #define ASLEEP_BOUND 20
 
+/* The assertions of etude's report in the order they are checked, more than
+ * probe_report.h's path holds, and how many are planned and reported. */
+static const char *rows[48];
+static int rows_planned, rows_reported;
+
+/** Add the assertion `id` to the end of the planned rows. */
+static void plan_row(const char *id)
+{
+    rows[rows_planned++] = id;
+}
+
+/** Report that the next planned row held. */
+static void held(void)
+{
+    report_pass(rows[rows_reported++]);
+}
+
+/** In the process that began the report, report that the next planned row
+ * failed with `why`, that those after it were not run, and the report's
+ * end; after the end, nothing. */
+static void stop(const char *why)
+{
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    if (rows_reported < rows_planned) {
+        report_fail(rows[rows_reported++], why);
+    }
+    while (rows_reported < rows_planned) {
+        report_notrun(rows[rows_reported++], "an earlier check failed");
+    }
+    report_end();
+}
+
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
-    printf("IPCMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[160];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("IPCMUSL FAIL (%s)\n", why);
+    stop(why);
     return 1;
 }
 
@@ -147,24 +197,29 @@ static int shm_rows(void)
     if (child_status(child) != 0) {
         return fail("a child attaches the segment, reads it and counts three attachments");
     }
+    held();
     snprintf(key, sizeof(key), " %10d  ", id);
     if (!file_has("/proc/self/maps", "/SYSV00000000 (deleted)") ||
         !file_has("/proc/sysvipc/shm", key)) {
         return fail("/proc/self/maps and /proc/sysvipc/shm name the segment");
     }
+    held();
     if (shmctl(id, IPC_RMID, NULL) != 0 || shmctl(id, IPC_STAT, &ds) != 0 ||
         !(ds.shm_perm.mode & 01000) || ds.shm_nattch != 1 || strcmp(p, "from the parent") != 0) {
         return fail("a segment removed while attached is kept, marked SHM_DEST");
     }
+    held();
     if (shmdt(p) != 0 || shmctl(id, IPC_STAT, &ds) != -1 || errno != EINVAL) {
         return fail("its last detach frees it");
     }
+    held();
     id = (int)syscall(SYS_shmget, IPC_PRIVATE, 4096, IPC_CREAT | 0600);
     ro = id < 0 ? (void *)-1 : (char *)syscall(SYS_shmat, id, 0, SHM_RDONLY);
     if (ro == (void *)-1 || mprotect(ro, 4096, PROT_READ | PROT_WRITE) != -1 || errno != EACCES ||
         syscall(SYS_shmdt, ro) != 0 || shmctl(id, IPC_RMID, NULL) != 0) {
         return fail("the direct calls, and a read-only attachment mprotect cannot make writable");
     }
+    held();
     return 0;
 }
 
@@ -202,9 +257,13 @@ static int oversized_rows(void)
             return fail("a segment of 16 TiB is refused with ENOMEM");
         }
     }
+    held();
     after = heap_used();
     if (!probe_native() && (before == 0 || after > before + 4096)) {
         return fail("a thousand refused segments leave the kernel's heap as it was");
+    }
+    if (!probe_native()) {
+        held();
     }
     return 0;
 }
@@ -235,6 +294,7 @@ static int sem_wide_count(int id)
         semctl(id, 0, GETVAL) != 0) {
         return fail("a count of operations past 32 bits is not E2BIG, or ran");
     }
+    held();
     return 0;
 }
 #endif
@@ -283,9 +343,11 @@ static int sem_waiters(int id)
     if (await_waiter(id, child) != 0) {
         return fail("a child's semop on a semaphore of 0 did not wait");
     }
+    held();
     if (semop(id, &give, 1) != 0 || child_status(child) != 0 || semctl(id, 1, GETVAL) != 1) {
         return fail("a waiter let through, and a child's SEM_UNDO undone at its exit");
     }
+    held();
     child = fork();
     if (child == 0) {
         _exit(semop(id, &wait0, 1) == -1 && errno == EIDRM ? 0 : 1);
@@ -293,9 +355,11 @@ static int sem_waiters(int id)
     if (await_waiter(id, child) != 0) {
         return fail("a child's semop did not wait for the set's removal");
     }
+    held();
     if (semctl(id, 0, IPC_RMID) != 0 || child_status(child) != 0) {
         return fail("removing the set wakes its waiter with EIDRM");
     }
+    held();
     return 0;
 }
 
@@ -317,13 +381,16 @@ static int sem_rows(void)
         all[1] != 1) {
         return fail("semget, SETVAL and GETALL");
     }
+    held();
     if (semctl(id, 0, IPC_STAT, &ds) != 0 || ds.sem_nsems != 2 || ds.sem_ctime < now - 60 ||
         ds.sem_ctime > now + 60) {
         return fail("IPC_STAT of a set of two did not give its count and its change time");
     }
+    held();
     if (semop(id, &take, 1) != -1 || errno != EAGAIN) {
         return fail("a decrement past 0 with IPC_NOWAIT is EAGAIN");
     }
+    held();
 #if defined __x86_64__
     if (sem_wide_count(id) != 0) {
         return 1;
@@ -333,6 +400,7 @@ static int sem_rows(void)
     if (semtimedop(id, &take, 1, &ts) != -1 || errno != EAGAIN) {
         return fail("one with a timeout is EAGAIN after it");
     }
+    held();
     return sem_waiters(id);
 }
 
@@ -362,10 +430,12 @@ static int msg_rows(void)
         msgrcv(id, &m, sizeof(m.text), 0, 0) != 12 || m.type != 2) {
         return fail("a negative type takes the lowest, type 0 the first");
     }
+    held();
     if (msgrcv(id, &m, 4, 1, 0) != -1 || errno != E2BIG || msgrcv(id, &m, 4, 1, MSG_NOERROR) != 4 ||
         memcmp(m.text, "firs", 4) != 0) {
         return fail("a longer message is E2BIG unless MSG_NOERROR cuts it");
     }
+    held();
 #if defined __x86_64__
     m.type = 3;
     strcpy(m.text, "eight b");
@@ -373,11 +443,13 @@ static int msg_rows(void)
         strcmp(m.text, "eight b") != 0) {
         return fail("a capacity past 32 bits is not cut to its low word");
     }
+    held();
 #endif
     if (msgrcv(id, &m, sizeof(m.text), 0, IPC_NOWAIT) != -1 || errno != ENOMSG ||
         msgctl(id, IPC_RMID, NULL) != 0) {
         return fail("an empty queue with IPC_NOWAIT is ENOMSG");
     }
+    held();
     return 0;
 }
 
@@ -448,25 +520,26 @@ static int seen_asleep(pid_t pid)
 #define CUT_SND 1
 #define CUT_RCV 2
 
-/* One System V wait a handler with SA_RESTART interrupts: its kind, and
- * whether it is made by syscall() with the direct call rather than by musl,
- * and with a timeout. */
+/* One System V wait a handler with SA_RESTART interrupts: its name, its
+ * assertion, its kind, and whether it is made by syscall() with the direct
+ * call rather than by musl, and with a timeout. */
 struct cut_wait {
     const char *name;
+    const char *id;
     int kind;
     int direct;
     int timed;
 };
 
 static const struct cut_wait cut_waits[] = {
-    {"semop", CUT_SEM, 0, 0},
-    {"semtimedop", CUT_SEM, 0, 1},
-    {"msgsnd", CUT_SND, 0, 0},
-    {"msgrcv", CUT_RCV, 0, 0},
+    {"semop", "cut-semop", CUT_SEM, 0, 0},
+    {"semtimedop", "cut-semtimedop", CUT_SEM, 0, 1},
+    {"msgsnd", "cut-msgsnd", CUT_SND, 0, 0},
+    {"msgrcv", "cut-msgrcv", CUT_RCV, 0, 0},
 #if !defined __x86_64__
-    {"the direct semtimedop_time64", CUT_SEM, 1, 1},
-    {"the direct msgsnd", CUT_SND, 1, 0},
-    {"the direct msgrcv", CUT_RCV, 1, 0},
+    {"the direct semtimedop_time64", "cut-direct-semtimedop", CUT_SEM, 1, 1},
+    {"the direct msgsnd", "cut-direct-msgsnd", CUT_SND, 1, 0},
+    {"the direct msgrcv", "cut-direct-msgrcv", CUT_RCV, 1, 0},
 #endif
 };
 
@@ -557,6 +630,7 @@ static int cut_row(const struct cut_wait *w)
     int id, err, status;
     long n;
     pid_t pid;
+    char why[160];
 
     id = w->kind == CUT_SEM ? semget(IPC_PRIVATE, 1, IPC_CREAT | 0600)
                             : msgget(IPC_PRIVATE, IPC_CREAT | 0600);
@@ -584,19 +658,26 @@ static int cut_row(const struct cut_wait *w)
         return fail("removing the object of an interrupted wait");
     }
     if (WEXITSTATUS(status) == 2) {
-        printf("IPCMUSL FAIL (%s was never seen asleep)\n", w->name);
+        snprintf(why, sizeof(why), "%s was never seen asleep", w->name);
+        printf("IPCMUSL FAIL (%s)\n", why);
+        stop(why);
         return 1;
     }
     if (usr1_runs != 1 || WEXITSTATUS(status) != 0) {
-        printf("IPCMUSL FAIL (the handler that cut %s did not run once)\n", w->name);
+        snprintf(why, sizeof(why), "the handler that cut %s did not run once", w->name);
+        printf("IPCMUSL FAIL (%s)\n", why);
+        stop(why);
         return 1;
     }
     if (n != -1 || err != EINTR) {
-        printf("IPCMUSL FAIL (%s cut by a handler with SA_RESTART returned %ld, errno %d, "
-               "not EINTR)\n",
-               w->name, n, err);
+        snprintf(why, sizeof(why),
+                 "%s cut by a handler with SA_RESTART returned %ld, errno %d, not EINTR", w->name,
+                 n, err);
+        printf("IPCMUSL FAIL (%s)\n", why);
+        stop(why);
         return 1;
     }
+    held();
     return 0;
 }
 
@@ -657,13 +738,16 @@ static int mq_fd_file(mqd_t q, const struct stat *st)
         fst.st_mode != st->st_mode || fst.st_nlink != 1 || fst.st_size != 4) {
         return fail("fstat of a queue's descriptor gives its file's stat");
     }
+    held();
     if (!fd_link_is(q, "/ipcfiles")) {
         return fail("a queue's /proc/self/fd link reads /NAME");
     }
+    held();
     if (mq_unlink("/ipcfiles") != 0 || !fd_link_is(q, "/ipcfiles (deleted)") ||
         fstat(q, &fst) != 0 || fst.st_nlink != 0 || fst.st_ino != st->st_ino) {
         return fail("an unlinked queue's link reads /NAME (deleted)");
     }
+    held();
     return 0;
 }
 
@@ -689,9 +773,11 @@ static int mq_files(void)
         (st.st_mode & 0777) != 0600 || st.st_size != 4) {
         return fail("/dev/mqueue gives the queue's file its mode and size");
     }
+    held();
     if (!file_has("/dev/mqueue/ipcfiles", "QSIZE:4 ")) {
         return fail("the queue's file reads as its status line");
     }
+    held();
     dir = opendir("/dev/mqueue");
     while (dir && (d = readdir(dir)) != NULL) {
         listed |= strcmp(d->d_name, "ipcfiles") == 0;
@@ -702,11 +788,13 @@ static int mq_files(void)
     if (!listed) {
         return fail("/dev/mqueue lists the queue");
     }
+    held();
     q2 = mq_open("/ipcfiles2", O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
     if (q2 == (mqd_t)-1 || mq_close(q2) != 0 || unlink("/dev/mqueue/ipcfiles2") != 0 ||
         mq_open("/ipcfiles2", O_RDWR) != (mqd_t)-1 || errno != ENOENT) {
         return fail("unlinking a queue's file takes its name");
     }
+    held();
     if (mq_fd_file(q, &st) != 0) {
         return 1;
     }
@@ -745,12 +833,14 @@ static int mq_rows(void)
     if (mq_receive(q, buf, sizeof(buf), &prio) != 4 || prio != 5 || memcmp(buf, "high", 4) != 0) {
         return fail("the higher priority first");
     }
+    held();
     for (i = 0; i < 3; i++) {
         mq_send(q, "x", 1, 0);
     }
     if (mq_send(q, "x", 1, 0) != -1 || errno != EAGAIN) {
         return fail("a full queue with O_NONBLOCK is EAGAIN");
     }
+    held();
     while (mq_receive(q, buf, sizeof(buf), NULL) > 0) {
     }
     attr.mq_flags = 0;
@@ -764,6 +854,7 @@ static int mq_rows(void)
         errno != ETIMEDOUT) {
         return fail("an empty queue with a timeout is ETIMEDOUT");
     }
+    held();
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = on_mq;
     sa.sa_flags = SA_SIGINFO;
@@ -776,21 +867,86 @@ static int mq_rows(void)
         mq_code != SI_MESGQ || mq_value != 42) {
         return fail("mq_notify's signal with SI_MESGQ and its value");
     }
+    held();
     pfd.fd = q;
     pfd.events = POLLIN;
     if (poll(&pfd, 1, 0) != 1 || !(pfd.revents & POLLIN)) {
         return fail("poll reports a message");
     }
+    held();
     if (mq_close(q) != 0 || mq_unlink("/ipcmusl") != 0 ||
         mq_open("/ipcmusl", O_RDWR) != (mqd_t)-1 || errno != ENOENT) {
         return fail("the name goes with mq_unlink");
     }
+    held();
     return 0;
+}
+
+/** Plan each assertion of `ids`, `n` of them. */
+static void plan_rows(const char *const *ids, unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++) {
+        plan_row(ids[i]);
+    }
+}
+
+#define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
+
+/**
+ * Begin the report, with the branch of the architecture, and plan its
+ * assertions in the order they are checked; a native run reports the
+ * comparison of the kernel's heap not run.
+ */
+static void plan(void)
+{
+    static const char *const shm[] = {"shm-child", "shm-proc", "shm-removed-kept",
+                                      "shm-last-detach", "shm-direct-readonly"};
+    static const char *const sem[] = {"sem-values", "sem-stat", "sem-nowait"};
+    static const char *const sem_msg[] = {
+        "sem-timeout",       "sem-waiter-blocks", "sem-waiter-undo", "sem-removal-blocks",
+        "sem-removal-eidrm", "msg-order",         "msg-e2big"};
+    static const char *const mq[] = {
+        "mq-priority", "mq-full-eagain", "mq-timeout",     "mq-notify",     "mq-poll",
+        "mq-unlink",   "mqueue-file",    "mqueue-status",  "mqueue-listed", "mqueue-unlink-file",
+        "mq-fstat",    "mq-fd-link",     "mq-deleted-link"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.ipcmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    PLAN(shm);
+    PLAN(sem);
+#if defined __x86_64__
+    plan_row("sem-wide-count");
+#endif
+    PLAN(sem_msg);
+#if defined __x86_64__
+    plan_row("msg-wide-capacity");
+#endif
+    plan_row("msg-enomsg");
+    for (i = 0; i < sizeof(cut_waits) / sizeof(cut_waits[0]); i++) {
+        plan_row(cut_waits[i].id);
+    }
+    PLAN(mq);
+#if defined __x86_64__
+    plan_row("oversized-enomem");
+    if (probe_native()) {
+        report_notrun("oversized-heap", "the machine's services allocate from the heap meanwhile");
+    } else {
+        plan_row("oversized-heap");
+    }
+#endif
 }
 
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    plan();
     if (shm_rows() || sem_rows() || msg_rows() || cut_rows() || mq_rows() || mq_files()) {
         return 1;
     }
@@ -799,6 +955,7 @@ int main(int argc, char **argv)
         return 1;
     }
 #endif
+    report_end();
     printf("IPCMUSL OK\n");
     return 0;
 }

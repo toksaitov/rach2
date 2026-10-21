@@ -72,6 +72,47 @@
  * (tests/native/Readme.md), the row of a /proc/PID/mem descriptor leaves out
  * its comparison of MemFree, since the machine's services move free memory
  * meanwhile.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, comes from
+ * the run with no argument alone and has an assertion for each row in order, a
+ * setup step joined to the row after it: `traced-stop`, `peekdata`, `pokedata`,
+ * `proc-mem-read`, `proc-mem-hole`, `getregs`, `fpregs`, `singlestep`,
+ * `breakpoint-reached`, `breakpoint-ip`, `breakpoint-restore`,
+ * `poked-word-read`, `ended-mem-live-read`, `ended-mem-child-exits`,
+ * `ended-meminfo`, `ended-mem-read-zero`, `ended-mem-freed`, `setoptions`,
+ * `debugreg-peekuser`, `dr7-kernel-einval`, `dr7-last-user`,
+ * `dr7-bit12-einval`, `getpid-entry`, `getpid-exit`, `exec-waitid`,
+ * `exec-event`, `exec-mem-empty`, `exec-runs`, `changes-getpid-entry`,
+ * `changes-write-entry`, `changes-exit`, `changes-getppid`,
+ * `changes-write-result`, `changes-write-not-run`, `kill-entry-stop`,
+ * `kill-entry-sigkill`, `kill-entry-no-write`, `restart-read-entry`,
+ * `restart-read-eintr`, `restart-signal`, `restart-cancelled`, `attach-stops`,
+ * `detach`, `detach-runs-on`, `seize-stopped-event`, `seize-detach`,
+ * `seize-stays-stopped`, `seize-sigcont-runs`, `listen-group-stop`,
+ * `listen-interrupt`, `listen-cont-before`, `listen-sigcont-stop`,
+ * `listen-delivery-eio`, `listen-second-sigstop`, `listen-second-group-stop`,
+ * `listen-cont-during`, `listen-second-sigcont`, `listen-runs-on`,
+ * `interrupt-stops`, `interrupt-read-restarted`, `fork-event`,
+ * `fork-child-event-stop`, `fork-child-ends`, `fork-parent-ends`,
+ * `leader-signal-wakes`, `leader-signal-taken`, `thread-attach`,
+ * `thread-usage`, `thread-child-ends`, `tracer-seize`, `tracer-first`,
+ * `tracer-then-parent`, `tracer-sees-end`, `tracer-echild`, `killed-sigchld`,
+ * `killed-sigchld-info`, `killed-wait-status`, `step-syscall-trap`,
+ * `step-syscall-result`, `step-next-trap`, `step-next-one`,
+ * `entry-bad-stack-returns`, `entry-bad-stack-result`, `copy-watch-trap`,
+ * `copy-watch-result`, `poll-watch-trap`, `poll-watch-eintr`,
+ * `poll-watch-returns`, `sigwait-watch`, `interrupt-pause-stop`,
+ * `listen-interrupt-before-instruction`, `tp-set-readback` and
+ * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`, `setoptions-wide-einval`,
+ * `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`, `tp-arch-get-fs`,
+ * `tp-peekuser-fs`, `tp-arch-prctl-errors`, `tp-arch-set-eperm`,
+ * `tp-pokeuser-eio`, `tp-setregs-eio`, `tp-setregset-eio` and
+ * `tp-refused-kept`; i386 adds `tp-get-thread-area`, `tp-entries-unused`,
+ * `tp-entries-write-back`, `tp-entries-no-base` and
+ * `tp-entries-outside-einval`. The branch of the group `arch`, `i686` or
+ * `x86-64`, says which ran. A native run reports `ended-mem-freed` not run. The
+ * first failure fails its assertion and leaves the rest not run, though
+ * `ended-mem-read-zero` and `ended-mem-freed` are both reported.
  */
 
 #define _GNU_SOURCE
@@ -96,6 +137,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /*
  * The fields of each architecture's user_regs_struct the rows read: the
@@ -137,10 +179,87 @@ typedef struct user_fpxregs_struct fxregs_t;
 /* The word the parent reads and changes in its traced child. */
 static volatile long target = 1234;
 
-/** Report one failed check with errno and return 1, the failure status. */
+/* The assertions of etude's report in the order they are checked, more than
+ * probe_report.h's path holds, and how many are planned and reported. A run
+ * of one named row plans none. */
+static const char *rows[112];
+static int rows_planned, rows_reported;
+
+/** Add the assertion `id` to the end of the planned rows. */
+static void plan_row(const char *id)
+{
+    rows[rows_planned++] = id;
+}
+
+/** Report that the next planned row held, when one is left. */
+static void held(void)
+{
+    if (rows_reported < rows_planned) {
+        report_pass(rows[rows_reported++]);
+    }
+}
+
+/** Report the planned rows before the one at index `row` held. */
+static void held_to(int row)
+{
+    while (rows_reported < row && rows_reported < rows_planned) {
+        held();
+    }
+}
+
+/** Report that the next planned row held, and return 0, for a chain of
+ * checks joined by `||`. */
+static int passed(void)
+{
+    held();
+    return 0;
+}
+
+/** Return 1 in the process that began the report before its end, and 0
+ * elsewhere. */
+static int reporting(void)
+{
+    return report_owner != 0 && !report_ended && report_getpid() == report_owner;
+}
+
+/** Report that the next planned row failed with `why`. */
+static void missed(const char *why)
+{
+    if (reporting() && rows_reported < rows_planned) {
+        report_fail(rows[rows_reported++], why);
+    }
+}
+
+/** Report the rows not yet reported not run, and the report's end. */
+static void stop(void)
+{
+    if (!reporting()) {
+        return;
+    }
+    while (rows_reported < rows_planned) {
+        report_notrun(rows[rows_reported++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Print one failed check with errno, report it on the next planned row and
+ * return 1, the failure status. */
+static int miss(const char *what)
+{
+    char why[200];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("PTRACEMUSL FAIL (%s)\n", why);
+    missed(why);
+    return 1;
+}
+
+/** Report one failed check with errno, and the rows after it not run, and
+ * return 1, the failure status. */
 static int fail(const char *what)
 {
-    printf("PTRACEMUSL FAIL (%s: errno %d)\n", what, errno);
+    miss(what);
+    stop();
     return 1;
 }
 
@@ -211,34 +330,42 @@ static int memory_and_registers(void)
     if (!stopped_by(pid, SIGSTOP)) {
         return fail("the child was not reported stopped");
     }
+    held();
     errno = 0;
     word = ptrace(PTRACE_PEEKDATA, pid, (void *)&target, NULL);
     if (errno != 0 || word != 1234) {
         return fail("PEEKDATA");
     }
+    held();
     if (ptrace(PTRACE_POKEDATA, pid, (void *)&target, (void *)5678L) != 0) {
         return fail("POKEDATA");
     }
+    held();
     snprintf(path, sizeof(path), "/proc/%d/mem", (int)pid);
     fd = open(path, O_RDONLY);
     if (fd < 0 || pread(fd, &word, sizeof(int), (off_t)(uintptr_t)&target) != sizeof(int) ||
         (int)word != 5678) {
         return fail("/proc/PID/mem");
     }
+    held();
     close(fd);
     if (into_hole(path, page) != 0) {
         return 1;
     }
+    held();
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_CS(regs) != USER_CS) {
         return fail("GETREGS");
     }
+    held();
     if (ptrace(PTRACE_GETFX, pid, NULL, &fpx) != 0 || fpx.cwd == 0) {
         return fail("GETFPXREGS");
     }
+    held();
     if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP) ||
         ptrace(PTRACE_GETREGS, pid, NULL, &after) != 0 || R_IP(after) == R_IP(regs)) {
         return fail("SINGLESTEP");
     }
+    held();
 
     {
         long text = ptrace(PTRACE_PEEKTEXT, pid, (void *)marked, NULL);
@@ -248,20 +375,24 @@ static int memory_and_registers(void)
             ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP)) {
             return fail("the breakpoint was not reached");
         }
+        held();
         if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
             (uintptr_t)R_IP(regs) != (uintptr_t)marked + 1) {
             return fail("the stop was not just past the breakpoint");
         }
+        held();
         R_IP(regs) = (uintptr_t)marked;
         if (ptrace(PTRACE_POKETEXT, pid, (void *)marked, (void *)text) != 0 ||
             ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
             ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
             return fail("putting the text back");
         }
+        held();
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the traced child did not finish with the word the parent wrote");
     }
+    held();
     return 0;
 }
 
@@ -279,10 +410,12 @@ static int exec_event(pid_t pid)
         si.si_status != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
         return fail("waitid's si_status of the exec event");
     }
+    held();
     if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) ||
         status >> 8 != (SIGTRAP | (PTRACE_EVENT_EXEC << 8))) {
         return fail("the exec event");
     }
+    held();
     return 0;
 }
 
@@ -314,17 +447,21 @@ static int debug_bounds(pid_t pid)
     if (debug_set(pid, 0, 0x1000) != 0 || debug_set(pid, 7, 0x1) != -1 || errno != EINVAL) {
         return fail("an execute breakpoint on a kernel address was not refused");
     }
+    held();
     if (debug_set(pid, 0, LAST_USER_WORD) != 0 ||
         debug_set(pid, 7, 0x1 | 0x1UL << 16 | 0x3UL << 18) != 0 || debug_set(pid, 7, 0) != 0) {
         return fail("a breakpoint ending at the last user address was refused");
     }
+    held();
     if (debug_set(pid, 7, 0x1000) != -1 || errno != EINVAL) {
         return fail("DR7 with reserved bit 12 was not refused");
     }
+    held();
 #if defined __x86_64__
     if (debug_set(pid, 7, 0x1UL << 32) != -1 || errno != EINVAL) {
         return fail("DR7 with reserved bit 32 was not refused");
     }
+    held();
 #endif
     return 0;
 }
@@ -345,6 +482,7 @@ static int debug_and_options(pid_t pid)
             0x1000) {
         return fail("a debug register through POKEUSER and PEEKUSER");
     }
+    held();
     if (debug_bounds(pid) != 0) {
         return 1;
     }
@@ -352,6 +490,7 @@ static int debug_and_options(pid_t pid)
     if (ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)(1UL << 32)) != -1 || errno != EINVAL) {
         return fail("PTRACE_SETOPTIONS accepted an upper option bit");
     }
+    held();
 #endif
     return 0;
 }
@@ -373,11 +512,13 @@ static int getpid_stops(pid_t pid)
             break;
         }
     }
+    held();
     if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGTRAP | 0x80) ||
         ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || R_NR(regs) != SYS_getpid ||
         (long)R_RET(regs) != pid) {
         return fail("the exit stop of getpid");
     }
+    held();
     return 0;
 }
 
@@ -406,6 +547,7 @@ static int syscalls_and_exec(void)
                (void *)(long)(PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACEEXEC)) != 0) {
         return fail("PTRACE_SETOPTIONS");
     }
+    held();
     if (debug_and_options(pid) != 0 || getpid_stops(pid) != 0) {
         return 1;
     }
@@ -420,11 +562,13 @@ static int syscalls_and_exec(void)
     if (mem < 0 || pread(mem, &word, sizeof(word), (off_t)(uintptr_t)&target) != 0) {
         return fail("a /proc/PID/mem descriptor opened before the exec");
     }
+    held();
     close(mem);
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 6) {
         return fail("the exec'd program");
     }
+    held();
     return 0;
 }
 
@@ -477,11 +621,13 @@ static int syscall_changes(void)
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_getpid, &regs) != 0) {
         return fail("the entry stop of getpid");
     }
+    held();
 #if defined __x86_64__
     regs.ds = 0x18;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != -1 || errno != EIO) {
         return fail("the kernel's data selector was taken for DS");
     }
+    held();
     regs.ds = 0x2b;
 #endif
     R_NR(regs) = SYS_getppid;
@@ -489,10 +635,12 @@ static int syscall_changes(void)
         syscall_entry(pid, SYS_write, &regs) != 0) {
         return fail("the entry stop of write");
     }
+    held();
 #if defined __x86_64__
     if (regs.ds != 0x2b) {
         return fail("a DS selector set by SETREGS was not kept");
     }
+    held();
 #endif
     R_NR(regs) = -1;
     R_RET(regs) = 42;
@@ -501,13 +649,20 @@ static int syscall_changes(void)
         !WIFEXITED(status)) {
         return fail("the child whose calls were changed did not exit");
     }
+    held();
     if (WEXITSTATUS(status) != 0) {
+        if (WEXITSTATUS(status) != 2) {
+            held();
+        }
         return fail(WEXITSTATUS(status) == 2 ? "getpid changed to getppid ran as getpid"
                                              : "a write changed to -1 did not return 42");
     }
+    held();
+    held();
     if (read(p[0], &c, 1) != 0) {
         return fail("a write changed to -1 was run");
     }
+    held();
     close(p[0]);
     return 0;
 }
@@ -554,20 +709,24 @@ static int restart_cancelled(void)
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_read, &regs) != 0) {
         return fail("the entry stop of read");
     }
+    held();
     if (ptrace(PTRACE_SYSCALL, pid, NULL, NULL) != 0 || kill(pid, SIGUSR1) != 0 ||
         !stopped_by(pid, SIGTRAP) || ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
         R_NR(regs) != SYS_read || (long)R_RET(regs) != -EINTR) {
         return fail("the exit stop of the interrupted read");
     }
+    held();
     R_NR(regs) = -1;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGUSR1) ||
         ptrace(PTRACE_CONT, pid, NULL, (void *)SIGUSR1) != 0 || write(p[1], "x", 1) != 1) {
         return fail("the signal of the interrupted read");
     }
+    held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("a read whose restart the tracer cancelled was restarted");
     }
+    held();
     close(p[0]);
     close(p[1]);
     return 0;
@@ -597,12 +756,15 @@ static int attach(void)
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGSTOP)) {
         return fail("PTRACE_ATTACH");
     }
+    held();
     if (ptrace(PTRACE_DETACH, pid, NULL, NULL) != 0 || write(p[1], "g", 1) != 1) {
         return fail("PTRACE_DETACH");
     }
+    held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the process did not run on after the detach");
     }
+    held();
     close(p[1]);
     return 0;
 }
@@ -651,8 +813,8 @@ static long mem_free_kib(void)
  * still open, a read through it must return 0 and the free memory /proc/meminfo
  * reports must be back within 8 MiB of what it was before the fork: the child's
  * address space went at its end, as Linux's exit_mm drops it, and the
- * descriptor keeps only its record. Returns 0, or 1 after the failure is
- * printed.
+ * descriptor keeps only its record. Both of the last two checks are reported,
+ * as both may fail. Returns 0, or 1 after the failure is printed.
  */
 static int mem_after_end(void)
 {
@@ -695,10 +857,12 @@ static int mem_after_end(void)
         write(go[1], "g", 1) != 1) {
         return abandon(pid, "a child whose memory was opened");
     }
+    held();
     if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOWAIT) != 0 || si.si_code != CLD_EXITED ||
         si.si_status != 0) {
         return abandon(pid, "the child that touched 16 MiB");
     }
+    held();
     got = pread(fd, &word, sizeof(word), (off_t)(uintptr_t)&target);
     after = mem_free_kib();
     close(fd);
@@ -708,11 +872,19 @@ static int mem_after_end(void)
     if (before < 0 || after < 0) {
         return fail("/proc/meminfo");
     }
+    held();
     if (got != 0) {
-        rc = fail("a /proc/PID/mem read reached a child that had ended");
+        rc = miss("a /proc/PID/mem read reached a child that had ended");
+    } else {
+        held();
     }
     if (!probe_native() && after < before - 8192) {
-        rc = fail("a /proc/PID/mem descriptor kept the memory of a child that ended");
+        rc = miss("a /proc/PID/mem descriptor kept the memory of a child that ended");
+    } else if (!probe_native()) {
+        held();
+    }
+    if (rc != 0) {
+        stop();
     }
     return rc;
 }
@@ -866,9 +1038,11 @@ static int stopped_leader(void)
     if (i == 1000) {
         return abandon(pid, "a process signal did not wake the thread beside the stopped one");
     }
+    held();
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 5) {
         return fail("the thread beside the stopped one did not take the signal");
     }
+    held();
     return 0;
 }
 
@@ -969,14 +1143,17 @@ static int traced_thread_usage(void)
         ptrace(PTRACE_CONT, (pid_t)got[0], NULL, NULL) != 0 || write(go_pipe[1], "g", 1) != 1) {
         return abandon(pid, "attaching to the child's second thread");
     }
+    held();
     memset(&ru, 0xFF, sizeof(ru));
     if (syscall(SYS_wait4, got[0], &status, __WALL, &ru) != got[0] || !WIFEXITED(status) ||
         ru.utime_sec * 100 + ru.utime_usec / 10000 < got[1]) {
         return abandon(pid, "a traced thread's end lacks the reaped children's time");
     }
+    held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the child with the traced thread");
     }
+    held();
     return 0;
 }
 
@@ -1012,13 +1189,15 @@ static int tracer_side(pid_t c, int to_m, int from_m)
  * child, which a second child traces, ends with 9. Its parent's wait does not
  * reap it while the tracer has not seen the end; once the tracer's wait has
  * reported it, the parent reaps it with its status, and the tracer's next
- * wait answers ECHILD rather than waiting on a tracee that is gone.
+ * wait answers ECHILD rather than waiting on a tracee that is gone. The
+ * tracer's exit status says which step failed: 4 is the wait after the end.
  * Returns 0, or 1 after the failure is printed.
  */
 static int tracer_first(void)
 {
     int to_c[2], to_m[2], to_x[2], status = 0, i;
     pid_t c, x, got = 0;
+    char why[64];
     char ch;
 
     if (pipe(to_c) != 0) {
@@ -1046,6 +1225,7 @@ static int tracer_first(void)
         kill(x, SIGKILL);
         return abandon(c, "the second child did not seize the first");
     }
+    held();
     if (await_state(c, 'Z') != 'Z') {
         kill(x, SIGKILL);
         waitpid(x, &status, 0);
@@ -1055,6 +1235,7 @@ static int tracer_first(void)
         kill(x, SIGKILL);
         return fail("the parent reaped a child before its tracer saw its end");
     }
+    held();
     for (i = 0; i < 1000 && (got = waitpid(c, &status, WNOHANG)) == 0; i++) {
         usleep(10000);
     }
@@ -1062,6 +1243,7 @@ static int tracer_first(void)
         kill(x, SIGKILL);
         return fail("the parent did not reap the child once its tracer saw the end");
     }
+    held();
     for (i = 0; i < 1000 && waitpid(x, &status, WNOHANG) == 0; i++) {
         usleep(10000);
     }
@@ -1072,9 +1254,17 @@ static int tracer_first(void)
         return abandon(x, "the tracer's wait after the end did not return");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        printf("PTRACEMUSL FAIL (the tracer's step %d)\n", WEXITSTATUS(status));
+        snprintf(why, sizeof(why), "the tracer's step %d", WEXITSTATUS(status));
+        printf("PTRACEMUSL FAIL (%s)\n", why);
+        if (WEXITSTATUS(status) == 4) {
+            held();
+        }
+        missed(why);
+        stop();
         return 1;
     }
+    held();
+    held();
     return 0;
 }
 
@@ -1105,13 +1295,16 @@ static int killed_at_entry(void)
     if (!stopped_by(pid, SIGSTOP) || syscall_entry(pid, SYS_write, &regs) != 0) {
         return abandon(pid, "the entry stop of the write to kill");
     }
+    held();
     kill(pid, SIGKILL);
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         return fail("the tracee killed at an entry stop did not end by SIGKILL");
     }
+    held();
     if (read(p[0], &c, 1) != 0) {
         return fail("a write the tracee was killed at the entry of ran");
     }
+    held();
     close(p[0]);
     return 0;
 }
@@ -1140,16 +1333,20 @@ static int attach_stopped(void)
         !WIFSTOPPED(status) || status >> 8 != (SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
         return abandon(pid, "seizing a stopped process did not stop it for the tracer");
     }
+    held();
     if (ptrace(PTRACE_DETACH, pid, NULL, NULL) != 0) {
         return abandon(pid, "PTRACE_DETACH of the seized process");
     }
+    held();
     if (await_state(pid, 'T') != 'T' || waitpid(pid, &status, WNOHANG) != 0) {
         return abandon(pid, "the detached process ran while its stop was in effect");
     }
+    held();
     kill(pid, SIGCONT);
     if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the seized process did not run on after the detach");
     }
+    held();
     return 0;
 }
 
@@ -1189,16 +1386,18 @@ static int listen_first(pid_t pid)
                 "PTRACE_SEIZE of the stopped process") ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "the seize of the stopped process was not a group stop") ||
+        passed() ||
         granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL), "PTRACE_LISTEN of the group stop") ||
         granted(pid, ptrace(PTRACE_INTERRUPT, pid, NULL, NULL), "PTRACE_INTERRUPT of the listen") ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "PTRACE_INTERRUPT did not end PTRACE_LISTEN") ||
-        granted(pid, kill(pid, SIGCONT), "the SIGCONT before the second listen") ||
+        passed() || granted(pid, kill(pid, SIGCONT), "the SIGCONT before the second listen") ||
         granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL), "the second PTRACE_LISTEN") ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "PTRACE_LISTEN after the stop ended made no new event stop") ||
+        passed() ||
         granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL), "PTRACE_CONT of the event stop") ||
-        expect_stop(pid, SIGCONT, "the SIGCONT made no signal-delivery stop")) {
+        expect_stop(pid, SIGCONT, "the SIGCONT made no signal-delivery stop") || passed()) {
         return 1;
     }
     return 0;
@@ -1215,19 +1414,22 @@ static int listen_second(pid_t pid)
     if (ptrace(PTRACE_LISTEN, pid, NULL, NULL) != -1 || errno != EIO) {
         return abandon(pid, "PTRACE_LISTEN of a signal-delivery stop was taken");
     }
+    held();
     if (granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL), "PTRACE_CONT of the SIGCONT's stop") ||
-        expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") ||
+        expect_stop(pid, SIGSTOP, "the second SIGSTOP made no signal-delivery stop") || passed() ||
         granted(pid, ptrace(PTRACE_CONT, pid, NULL, (void *)(long)SIGSTOP),
                 "PTRACE_CONT with the second SIGSTOP") ||
         expect_stop(pid, SIGSTOP | (PTRACE_EVENT_STOP << 8),
                     "the second stop was not a group stop") ||
+        passed() ||
         granted(pid, ptrace(PTRACE_LISTEN, pid, NULL, NULL), "PTRACE_LISTEN of the second stop") ||
         granted(pid, kill(pid, SIGCONT), "the SIGCONT during the listen") ||
         expect_stop(pid, SIGTRAP | (PTRACE_EVENT_STOP << 8),
                     "the stop's end during PTRACE_LISTEN made no new event stop") ||
+        passed() ||
         granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL),
                 "PTRACE_CONT of the second event stop") ||
-        expect_stop(pid, SIGCONT, "the second SIGCONT made no signal-delivery stop") ||
+        expect_stop(pid, SIGCONT, "the second SIGCONT made no signal-delivery stop") || passed() ||
         granted(pid, ptrace(PTRACE_CONT, pid, NULL, NULL), "PTRACE_CONT to the process's end")) {
         return 1;
     }
@@ -1260,6 +1462,7 @@ static int listen_and_continue(void)
     if (ptrace(PTRACE_SEIZE, pid, NULL, (void *)(1UL << 32)) != -1 || errno != EINVAL) {
         return abandon(pid, "PTRACE_SEIZE accepted an upper option bit");
     }
+    held();
 #endif
     if (listen_first(pid) != 0 || listen_second(pid) != 0) {
         return 1;
@@ -1267,6 +1470,7 @@ static int listen_and_continue(void)
     if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the listened-to process did not run on");
     }
+    held();
     return 0;
 }
 
@@ -1306,12 +1510,14 @@ static int interrupt_read(void)
         !WIFSTOPPED(status) || status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
         return abandon(pid, "PTRACE_INTERRUPT did not stop a tracee blocked in a read");
     }
+    held();
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || write(p[1], "g", 1) != 1) {
         return abandon(pid, "resuming the interrupted tracee");
     }
     if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the interrupted read was not restarted");
     }
+    held();
     close(p[1]);
     return 0;
 }
@@ -1351,11 +1557,13 @@ static int seized_fork(void)
         }
         ptrace(PTRACE_CONT, pid, NULL, NULL);
     }
+    held();
     ptrace(PTRACE_GETEVENTMSG, pid, NULL, &child);
     if (child == 0 || wait_within((pid_t)child, &status) != (pid_t)child || !WIFSTOPPED(status) ||
         status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
         return abandon(pid, "the child of a seized fork did not first stop with SIGTRAP");
     }
+    held();
     if (ptrace(PTRACE_CONT, (pid_t)child, NULL, NULL) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
         return abandon(pid, "resuming the seized process and its child");
@@ -1363,12 +1571,14 @@ static int seized_fork(void)
     if (wait_within((pid_t)child, &status) != (pid_t)child || !WIFEXITED(status)) {
         return abandon(pid, "the child of the seized process did not run to its end");
     }
+    held();
     while (wait_within(pid, &status) == pid && WIFSTOPPED(status)) {
         ptrace(PTRACE_CONT, pid, NULL, (void *)(long)WSTOPSIG(status));
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the seized process did not reap its child and end");
     }
+    held();
     return 0;
 }
 
@@ -1405,12 +1615,15 @@ static int killed_tracee(void)
     if (kill(pid, SIGKILL) != 0 || sigtimedwait(&chld, &si, &bound) != SIGCHLD) {
         return fail("no SIGCHLD came of the killed tracee");
     }
+    held();
     if (si.si_code != CLD_KILLED || si.si_status != SIGKILL || si.si_pid != pid) {
         return fail("the SIGCHLD of a killed tracee was not CLD_KILLED with SIGKILL");
     }
+    held();
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGKILL) {
         return fail("the killed tracee was not reported killed by SIGKILL");
     }
+    held();
     sigprocmask(SIG_UNBLOCK, &chld, NULL);
     return 0;
 }
@@ -1499,6 +1712,7 @@ static int interrupt_listening(pid_t pid)
             return abandon(pid, "listening interrupt ran a user instruction before stopping");
         }
     }
+    held();
     finish_register_child(pid);
     return 0;
 }
@@ -1528,6 +1742,7 @@ static int listen_user_return(void)
                     "initial interrupt made no event stop")) {
         return 1;
     }
+    held();
     return interrupt_listening(pid);
 }
 
@@ -1556,19 +1771,21 @@ static int step_system_call(void)
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_SETOPTIONS, pid, NULL, (void *)PTRACE_O_TRACESYSGOOD) != 0 ||
         ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "syscall step did not trap") ||
+        expect_stop(pid, SIGTRAP, "syscall step did not trap") || passed() ||
         ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 ||
         (unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 41 ||
         (unsigned long)R_RET(regs) != (unsigned long)pid || info.si_code != TRAP_TRACE) {
         return abandon(pid, "syscall step ran the next instruction or lost its result");
     }
+    held();
     if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "step after syscall did not trap") ||
+        expect_stop(pid, SIGTRAP, "step after syscall did not trap") || passed() ||
         ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
         (unsigned long)R_IP(regs) != (unsigned long)step_next || R_BX(regs) != 42) {
         return abandon(pid, "step after syscall did not execute exactly one instruction");
     }
+    held();
     finish_register_child(pid);
     return 0;
 }
@@ -1597,12 +1814,13 @@ static int entry_system_call(void)
     R_SP(regs) = 1;
     if (ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "syscall on an invalid user stack did not return") ||
+        expect_stop(pid, SIGTRAP, "syscall on an invalid user stack did not return") || passed() ||
         ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
         (unsigned long)R_IP(regs) != (unsigned long)step_next + 1 || R_BX(regs) != 42 ||
         (unsigned long)R_RET(regs) != (unsigned long)pid) {
         return abandon(pid, "syscall entry lost its frame or result");
     }
+    held();
     finish_register_child(pid);
     return 0;
 }
@@ -1750,12 +1968,13 @@ static int watched_copy(void)
     }
     if (debug_set(pid, 0, (unsigned long)&byte) != 0 || debug_set(pid, 7, 0x10001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "kernel copy did not trap") ||
+        expect_stop(pid, SIGTRAP, "kernel copy did not trap") || passed() ||
         ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
         debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
         wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "watched kernel copy lost its trap or result");
     }
+    held();
     return 0;
 }
 
@@ -1786,15 +2005,17 @@ static int watched_poll(void)
     }
     if (debug_set(pid, 0, (unsigned long)&pfd.fd) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "watched infinite poll did not trap") ||
+        expect_stop(pid, SIGTRAP, "watched infinite poll did not trap") || passed() ||
         ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
         ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 || (long)R_RET(regs) != -EINTR) {
         return abandon(pid, "watched poll lost its trap or EINTR result");
     }
+    held();
     if (debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
         wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "watched poll did not return EINTR");
     }
+    held();
     return 0;
 }
 
@@ -1847,6 +2068,7 @@ static int watched_sigwait(void)
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "watched sigwait did not take SIGTRAP with TRAP_HWBKPT");
     }
+    held();
     return 0;
 }
 
@@ -1932,6 +2154,7 @@ static int refused_bases(pid_t pid, unsigned long fs, unsigned long gs)
     struct user_regs_struct regs, high;
     struct iovec iov;
     unsigned long now_fs, now_gs;
+    int base = rows_reported;
     unsigned int i;
 
     if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
@@ -1942,17 +2165,20 @@ static int refused_bases(pid_t pid, unsigned long fs, unsigned long gs)
             errno != EPERM ||
             ptrace(PTRACE_ARCH_PRCTL, pid, (void *)refused[i], (void *)ARCH_SET_GS) != -1 ||
             errno != EPERM) {
+            held_to(base);
             return abandon(pid, "ARCH_SET_FS or ARCH_SET_GS took a base past user space");
         }
         if (ptrace(PTRACE_POKEUSER, pid, USER_WORD(fs_base), (void *)refused[i]) != -1 ||
             errno != EIO ||
             ptrace(PTRACE_POKEUSER, pid, USER_WORD(gs_base), (void *)refused[i]) != -1 ||
             errno != EIO) {
+            held_to(base + 1);
             return abandon(pid, "POKEUSER took a base past user space");
         }
         high = regs;
         high.fs_base = refused[i];
         if (ptrace(PTRACE_SETREGS, pid, NULL, &high) != -1 || errno != EIO) {
+            held_to(base + 2);
             return abandon(pid, "SETREGS took an FS base past user space");
         }
         high = regs;
@@ -1960,12 +2186,15 @@ static int refused_bases(pid_t pid, unsigned long fs, unsigned long gs)
         iov.iov_base = &high;
         iov.iov_len = sizeof(high);
         if (ptrace(PTRACE_SETREGSET, pid, (void *)NT_PRSTATUS, &iov) != -1 || errno != EIO) {
+            held_to(base + 3);
             return abandon(pid, "SETREGSET took a GS base past user space");
         }
     }
+    held_to(base + 4);
     if (bases_of(pid, &now_fs, &now_gs) != 0 || now_fs != fs || now_gs != gs) {
         return abandon(pid, "a refused base changed the bases");
     }
+    held();
     return 0;
 }
 
@@ -1999,15 +2228,18 @@ static int thread_pointer(void)
     if (bases_of(pid, &fs, &gs) != 0 || fs != (unsigned long)pthread_self()) {
         return abandon(pid, "ARCH_GET_FS did not read the thread pointer");
     }
+    held();
     errno = 0;
     peek = (unsigned long)ptrace(PTRACE_PEEKUSER, pid, USER_WORD(fs_base), NULL);
     if (errno != 0 || peek != fs) {
         return abandon(pid, "PEEKUSER of fs_base did not read the thread pointer");
     }
+    held();
     if (ptrace(PTRACE_ARCH_PRCTL, pid, NULL, (void *)ARCH_GET_FS) != -1 || errno != EFAULT ||
         ptrace(PTRACE_ARCH_PRCTL, pid, NULL, (void *)0x1005) != -1 || errno != EINVAL) {
         return abandon(pid, "PTRACE_ARCH_PRCTL took a bad address or code");
     }
+    held();
     if (refused_bases(pid, fs, gs) != 0) {
         return 1;
     }
@@ -2017,10 +2249,12 @@ static int thread_pointer(void)
         gs != (unsigned long)gs_block) {
         return abandon(pid, "a base set did not read back");
     }
+    held();
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the tracee did not run with the bases set");
     }
+    held();
     return 0;
 }
 #else
@@ -2046,26 +2280,32 @@ struct tp_desc {
 static int other_entries(pid_t pid)
 {
     struct tp_desc d;
+    int base = rows_reported;
     unsigned int i;
 
     for (i = TLS_ENTRY + 1; i <= TLS_ENTRY + 2; i++) {
         if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)i, &d) != 0 || d.entry_number != i ||
             d.base_addr != 0 || d.limit != 0 ||
             (d.flags & 0x7Fu) != (UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT)) {
+            held_to(base);
             return abandon(pid, "an entry beside the thread pointer's did not read as unused");
         }
         if (ptrace(PTRACE_SET_THREAD_AREA, pid, (void *)i, &d) != 0) {
+            held_to(base + 1);
             return abandon(pid, "an unused entry could not be written back");
         }
         d.base_addr = 0x1000;
         if (ptrace(PTRACE_SET_THREAD_AREA, pid, (void *)i, &d) != -1 || errno != EINVAL) {
+            held_to(base + 2);
             return abandon(pid, "an entry beside the thread pointer's took a base");
         }
     }
+    held_to(base + 3);
     if (ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY - 1), &d) != -1 || errno != EINVAL ||
         ptrace(PTRACE_GET_THREAD_AREA, pid, (void *)(TLS_ENTRY + 3), &d) != -1 || errno != EINVAL) {
         return abandon(pid, "an entry outside 6 to 8 was not EINVAL");
     }
+    held();
     return 0;
 }
 
@@ -2099,6 +2339,7 @@ static int thread_pointer(void)
         d.entry_number != TLS_ENTRY || d.base_addr != (unsigned int)pthread_self()) {
         return abandon(pid, "PTRACE_GET_THREAD_AREA did not read the thread pointer");
     }
+    held();
     if (other_entries(pid) != 0) {
         return 1;
     }
@@ -2108,10 +2349,12 @@ static int thread_pointer(void)
         back.base_addr != (unsigned int)tp_copy) {
         return abandon(pid, "a thread pointer set did not read back");
     }
+    held();
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the tracee did not run with the thread pointer set");
     }
+    held();
     return 0;
 }
 #endif
@@ -2151,6 +2394,161 @@ static int second_rows(void)
            watched_poll() || watched_sigwait() || listen_user_return() || thread_pointer();
 }
 
+/* The assertions after `ended-mem-freed`, in the order they are checked. */
+static const char *const later_rows[] = {
+    "setoptions",
+    "debugreg-peekuser",
+    "dr7-kernel-einval",
+    "dr7-last-user",
+    "dr7-bit12-einval",
+#if defined __x86_64__
+    "dr7-bit32-einval",
+    "setoptions-wide-einval",
+#endif
+    "getpid-entry",
+    "getpid-exit",
+    "exec-waitid",
+    "exec-event",
+    "exec-mem-empty",
+    "exec-runs",
+    "changes-getpid-entry",
+#if defined __x86_64__
+    "ds-kernel-eio",
+#endif
+    "changes-write-entry",
+#if defined __x86_64__
+    "ds-kept",
+#endif
+    "changes-exit",
+    "changes-getppid",
+    "changes-write-result",
+    "changes-write-not-run",
+    "kill-entry-stop",
+    "kill-entry-sigkill",
+    "kill-entry-no-write",
+    "restart-read-entry",
+    "restart-read-eintr",
+    "restart-signal",
+    "restart-cancelled",
+    "attach-stops",
+    "detach",
+    "detach-runs-on",
+    "seize-stopped-event",
+    "seize-detach",
+    "seize-stays-stopped",
+    "seize-sigcont-runs",
+#if defined __x86_64__
+    "seize-wide-einval",
+#endif
+    "listen-group-stop",
+    "listen-interrupt",
+    "listen-cont-before",
+    "listen-sigcont-stop",
+    "listen-delivery-eio",
+    "listen-second-sigstop",
+    "listen-second-group-stop",
+    "listen-cont-during",
+    "listen-second-sigcont",
+    "listen-runs-on",
+    "interrupt-stops",
+    "interrupt-read-restarted",
+    "fork-event",
+    "fork-child-event-stop",
+    "fork-child-ends",
+    "fork-parent-ends",
+    "leader-signal-wakes",
+    "leader-signal-taken",
+    "thread-attach",
+    "thread-usage",
+    "thread-child-ends",
+    "tracer-seize",
+    "tracer-first",
+    "tracer-then-parent",
+    "tracer-sees-end",
+    "tracer-echild",
+    "killed-sigchld",
+    "killed-sigchld-info",
+    "killed-wait-status",
+    "step-syscall-trap",
+    "step-syscall-result",
+    "step-next-trap",
+    "step-next-one",
+    "entry-bad-stack-returns",
+    "entry-bad-stack-result",
+    "copy-watch-trap",
+    "copy-watch-result",
+    "poll-watch-trap",
+    "poll-watch-eintr",
+    "poll-watch-returns",
+    "sigwait-watch",
+    "interrupt-pause-stop",
+    "listen-interrupt-before-instruction",
+#if defined __x86_64__
+    "tp-arch-get-fs",
+    "tp-peekuser-fs",
+    "tp-arch-prctl-errors",
+    "tp-arch-set-eperm",
+    "tp-pokeuser-eio",
+    "tp-setregs-eio",
+    "tp-setregset-eio",
+    "tp-refused-kept",
+#else
+    "tp-get-thread-area",
+    "tp-entries-unused",
+    "tp-entries-write-back",
+    "tp-entries-no-base",
+    "tp-entries-outside-einval",
+#endif
+    "tp-set-readback",
+    "tp-tracee-runs",
+};
+
+/**
+ * Begin the report, with the branch of the architecture, and plan its
+ * assertions in the order they are checked; a native run reports
+ * `ended-mem-freed` not run.
+ */
+static void plan(void)
+{
+    static const char *const first[] = {
+        "traced-stop",
+        "peekdata",
+        "pokedata",
+        "proc-mem-read",
+        "proc-mem-hole",
+        "getregs",
+        "fpregs",
+        "singlestep",
+        "breakpoint-reached",
+        "breakpoint-ip",
+        "breakpoint-restore",
+        "poked-word-read",
+        "ended-mem-live-read",
+        "ended-mem-child-exits",
+        "ended-meminfo",
+        "ended-mem-read-zero",
+    };
+    unsigned int i;
+
+    report_begin(report_case(environ, "guest.default.ptracemusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    for (i = 0; i < sizeof(first) / sizeof(first[0]); i++) {
+        plan_row(first[i]);
+    }
+    if (probe_native()) {
+        report_notrun("ended-mem-freed", "the machine's services move free memory");
+    } else {
+        plan_row("ended-mem-freed");
+    }
+    for (i = 0; i < sizeof(later_rows) / sizeof(later_rows[0]); i++) {
+        plan_row(later_rows[i]);
+    }
+}
+
 int main(int argc, char **argv)
 {
     unsigned int i;
@@ -2171,9 +2569,11 @@ int main(int argc, char **argv)
     if (probe_words() != 0) {
         return fail("unexpected argument count");
     }
+    plan();
     if (first_rows() || second_rows()) {
         return 1;
     }
+    report_end();
     printf("PTRACEMUSL OK\n");
     return 0;
 }

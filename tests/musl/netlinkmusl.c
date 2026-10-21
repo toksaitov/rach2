@@ -44,6 +44,22 @@
  *
  * It prints "NETLINKMUSL OK" and exits 0 on success, or prints "NETLINKMUSL
  * FAIL (detail: errno N)" and exits 1 at the first failure.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order, a setup step joined to the row after it:
+ * `socket-port-pid`, `second-port`, `bind-eaddrinuse`, `dump-links`,
+ * `dump-addrs`, `dump-routes`, `getlink-one`, `getlink-enodev`,
+ * `newaddr-einval`, `addr-eexist`, `addr-del`, `addr-restore`,
+ * `default-route-add`, `default-route-del`, `link-up`, `mtu-eopnotsupp`,
+ * `delneigh-enoent`, `route-get-local`, `route-get-unicast`, `rule-dump`,
+ * `qdisc-dump`, `second-addr`, `neigh-permanent`, `neigh-forget`, `route-add`,
+ * `proc-net-route`, `route-del`, `route-enetunreach`, `route-on-link`,
+ * `padded-dump`, `peek-trunc`, `cut-trunc`, `nametoindex`, `ifconf-length`,
+ * `ifconf-buffer`, `uevent-silent` and `eprotonosupport`. A native run reports
+ * the changes, `addr-eexist` to `delneigh-enoent` and `second-addr` to
+ * `route-on-link`, not run, and a first link with no address leaves the four
+ * lookups, `route-get-local` to `qdisc-dump`, not run. The first failure fails
+ * its assertion and leaves the rest not run.
  */
 
 #include <arpa/inet.h>
@@ -58,6 +74,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* Linux's netlink ABI, which the musl build has no uapi headers for:
  * <linux/netlink.h> and <linux/rtnetlink.h>, the parts used here. */
@@ -167,10 +184,56 @@ struct rtattr {
 #define PAYLOAD(h, body) ((int)(h)->nlmsg_len - NLMSG_HDRLEN - (int)NLMSG_ALIGN(sizeof(body)))
 #define FIRST_RTA(p)     ((struct rtattr *)((char *)(p) + NLMSG_ALIGN(sizeof(*(p)))))
 
+/* The assertions of etude's report in the order they are checked, more than
+ * probe_report.h's path holds, and how many are planned and reported. */
+static const char *rows[40];
+static int rows_planned, rows_reported;
+
+/** Add the assertion `id` to the end of the planned rows. */
+static void plan_row(const char *id)
+{
+    rows[rows_planned++] = id;
+}
+
+/** Report that the next planned row held. */
+static void held(void)
+{
+    report_pass(rows[rows_reported++]);
+}
+
+/** In the process that began the report, report that the next planned row
+ * failed with `why`, that those after it were not run, and the report's
+ * end; after the end, nothing. */
+static void stop(const char *why)
+{
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    if (rows_reported < rows_planned) {
+        report_fail(rows[rows_reported++], why);
+    }
+    while (rows_reported < rows_planned) {
+        report_notrun(rows[rows_reported++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report the next `n` planned rows not run, for `why`. */
+static void skip(int n, const char *why)
+{
+    while (n-- > 0 && rows_reported < rows_planned) {
+        report_notrun(rows[rows_reported++], why);
+    }
+}
+
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
-    printf("NETLINKMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[160];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("NETLINKMUSL FAIL (%s)\n", why);
+    stop(why);
     return 1;
 }
 
@@ -389,6 +452,7 @@ static int route_socket(int *out)
         me.nl_family != AF_NETLINK || me.nl_pad != 0 || me.nl_pid != (unsigned int)getpid()) {
         return fail("the first socket's port id is not the process ID");
     }
+    held();
     port = me.nl_pid;
     second = socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
     memset(&me, 0, sizeof me);
@@ -397,6 +461,7 @@ static int route_socket(int *out)
         getsockname(second, (struct sockaddr *)&me, &len) != 0 || me.nl_pid == port) {
         return fail("a second socket's port id");
     }
+    held();
     close(second);
     second = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
     memset(&me, 0, sizeof me);
@@ -405,6 +470,7 @@ static int route_socket(int *out)
     if (bind(second, (struct sockaddr *)&me, sizeof me) != -1 || errno != EADDRINUSE) {
         return fail("a bind of a port id another socket has was not EADDRINUSE");
     }
+    held();
     close(second);
     return 0;
 }
@@ -424,23 +490,31 @@ static int requests(int fd)
     if (links == 0) {
         return fail("no link");
     }
-    if (links < 0 || dump(fd, RTM_GETADDR, 2) < 0) {
+    if (links < 0) {
         return 1;
     }
+    held();
+    if (dump(fd, RTM_GETADDR, 2) < 0) {
+        return 1;
+    }
+    held();
     if (dump(fd, RTM_GETROUTE, 3) < 1) {
         return fail("no route");
     }
+    held();
     memset(&ifi, 0, sizeof ifi);
     ifi.ifi_index = first_index;
     if (request(fd, RTM_GETLINK, 0, 4, &ifi, sizeof ifi) != 0 ||
         one_answer(fd, &index, &error) != RTM_NEWLINK || index != first_index) {
         return fail("RTM_GETLINK of the first link");
     }
+    held();
     ifi.ifi_index = 9999;
     if (request(fd, RTM_GETLINK, 0, 5, &ifi, sizeof ifi) != 0 ||
         one_answer(fd, &index, &error) != NLMSG_ERROR || error != -ENODEV) {
         return fail("RTM_GETLINK of no link was not ENODEV");
     }
+    held();
     memset(&ifa, 0, sizeof ifa);
     ifa.ifa_family = AF_INET;
     ifa.ifa_index = (unsigned int)first_index;
@@ -448,6 +522,7 @@ static int requests(int fd)
         one_answer(fd, &index, &error) != NLMSG_ERROR || error != -EINVAL) {
         return fail("RTM_NEWADDR with no address was not EINVAL");
     }
+    held();
     return 0;
 }
 
@@ -506,14 +581,17 @@ static int address_changes(int fd)
     if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 40, body, len) != -EEXIST) {
         return fail("RTM_NEWADDR of the address the link has was not EEXIST");
     }
+    held();
     if (ask(fd, RTM_DELADDR, 0, 41, body, len) != 0 || ioctl_addr(first_index, &now) != 0 ||
         now.s_addr != 0) {
         return fail("RTM_DELADDR did not take the address away");
     }
+    held();
     if (ask(fd, RTM_NEWADDR, NLM_F_CREATE | NLM_F_EXCL, 42, body, len) != 0 ||
         ioctl_addr(first_index, &now) != 0 || now.s_addr != addr.s_addr) {
         return fail("RTM_NEWADDR did not give the address back");
     }
+    held();
     return 0;
 }
 
@@ -549,11 +627,13 @@ static int route_changes(int fd)
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 45, body, len) != -EEXIST) {
         return fail("RTM_NEWROUTE of the default route, then again");
     }
+    held();
     if (ask(fd, RTM_DELROUTE, 0, 46, body, len) != 0 ||
         ask(fd, RTM_DELROUTE, 0, 47, body, len) != -ESRCH ||
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 48, body, len) != 0) {
         return fail("RTM_DELROUTE of the default route, then again, and setting it back");
     }
+    held();
     (void)net;
     memset(&ifi, 0, sizeof ifi);
     ifi.ifi_index = first_index;
@@ -564,10 +644,12 @@ static int route_changes(int fd)
     if (ask(fd, RTM_NEWLINK, 0, 50, body, len) != 0) {
         return fail("RTM_NEWLINK setting the link up");
     }
+    held();
     attr32(body, &len, IFLA_MTU, &mtu);
     if (ask(fd, RTM_NEWLINK, 0, 51, body, len) != -EOPNOTSUPP) {
         return fail("RTM_NEWLINK of an MTU of 9000 was not EOPNOTSUPP");
     }
+    held();
     memset(ndm, 0, sizeof ndm);
     ndm[0] = AF_INET;
     memcpy(ndm + 4, &first_index, 4);
@@ -577,6 +659,7 @@ static int route_changes(int fd)
     if (ask(fd, RTM_DELNEIGH, 0, 52, body, len) != -ENOENT) {
         return fail("RTM_DELNEIGH of a neighbour the cache does not have was not ENOENT");
     }
+    held();
     return 0;
 }
 
@@ -625,13 +708,16 @@ static int table_routes(int fd)
         ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 61, body, len) != -EEXIST) {
         return fail("RTM_NEWROUTE of another network through the gateway, then again");
     }
+    held();
     if (!file_has("/proc/net/route", "\t0000630A\t0202000A\t0003\t0\t0\t0\t0000FFFF")) {
         return fail("/proc/net/route did not list the route added");
     }
+    held();
     if (ask(fd, RTM_DELROUTE, 0, 62, body, len) != 0 ||
         ask(fd, RTM_DELROUTE, 0, 63, body, len) != -ESRCH) {
         return fail("RTM_DELROUTE of the route added, then again");
     }
+    held();
     len = sizeof rtm;
     attr32(body, &len, RTA_DST, &net);
     attr32(body, &len, RTA_GATEWAY, &far);
@@ -639,6 +725,7 @@ static int table_routes(int fd)
     if (ask(fd, RTM_NEWROUTE, NLM_F_CREATE | NLM_F_EXCL, 64, body, len) != -ENETUNREACH) {
         return fail("RTM_NEWROUTE through a gateway no subnet has was not ENETUNREACH");
     }
+    held();
     len = sizeof rtm;
     attr32(body, &len, RTA_DST, &net);
     attr32(body, &len, RTA_OIF, &oif);
@@ -648,6 +735,7 @@ static int table_routes(int fd)
         got_gw != 0 || ask(fd, RTM_DELROUTE, 0, 74, body, len) != 0) {
         return fail("a route on the link to another network, which ip route get takes");
     }
+    held();
     return 0;
 }
 
@@ -682,6 +770,7 @@ static int table_changes(int fd)
         ask(fd, RTM_DELADDR, 0, 68, body, len) != -EADDRNOTAVAIL) {
         return fail("a second address added, a local route, and taken away");
     }
+    held();
     memcpy(ndm + 4, &first_index, 4);
     memcpy(ndm + 8, &state, 2);
     memcpy(body, ndm, sizeof ndm);
@@ -701,12 +790,14 @@ static int table_changes(int fd)
         return fail("a neighbour set by hand as permanent, in /proc/net/arp with 0x6 "
                     "in lowercase");
     }
+    held();
     len = sizeof ndm;
     attr32(body, &len, NDA_DST, &neigh);
     if (ask(fd, RTM_DELNEIGH, 0, 70, body, len) != 0 ||
         ask(fd, RTM_DELNEIGH, 0, 71, body, len) != -ENOENT) {
         return fail("forgetting the permanent neighbour, then again");
     }
+    held();
     return table_routes(fd);
 }
 
@@ -771,23 +862,28 @@ static int lookups(int fd)
     unsigned int gw;
 
     if (ioctl_addr(first_index, &own) != 0) {
-        return 0; /* a machine with no address has nothing to look up */
+        skip(4, "the first link has no address to look up");
+        return 0;
     }
     if (route_get(fd, 20, own, &type, &oif, &gw) != 0 || type != RTN_LOCAL ||
         oif != (int)if_nametoindex("lo")) {
         return fail("ip route get of the machine's own address was not a local route on lo");
     }
+    held();
     other.s_addr = own.s_addr ^ htonl(1);
     if (route_get(fd, 21, other, &type, &oif, &gw) != 0 || type != RTN_UNICAST ||
         oif != first_index) {
         return fail("ip route get of a neighbour was not a unicast route on the first link");
     }
+    held();
     if (dump(fd, RTM_GETRULE, 22) != 3) {
         return fail("ip rule did not list Linux's three rules");
     }
+    held();
     if (dump(fd, RTM_GETQDISC, 23) < 1) {
         return fail("tc qdisc listed nothing");
     }
+    held();
     return 0;
 }
 
@@ -822,8 +918,12 @@ static int padded(int fd)
             return fail("the dump of a request with zeros after it");
         }
         for (h = (struct nlmsghdr *)buf; NLMSG_OK(h, n); h = NLMSG_NEXT(h, n)) {
+            if (h->nlmsg_type == NLMSG_DONE && routes == 0) {
+                return fail("the dump of a request with zeros after it");
+            }
             if (h->nlmsg_type == NLMSG_DONE) {
-                return routes > 0 ? 0 : fail("the dump of a request with zeros after it");
+                held();
+                return 0;
             }
             routes += h->nlmsg_type == RTM_NEWROUTE && h->nlmsg_seq == 8;
         }
@@ -856,12 +956,14 @@ static int truncation(int fd)
     if (whole <= (ssize_t)sizeof buf) {
         return fail("MSG_PEEK and MSG_TRUNC did not give the answer's length");
     }
+    held();
     iov.iov_base = buf;
     iov.iov_len = sizeof buf;
     n = recvmsg(fd, &msg, 0);
     if (n != (ssize_t)sizeof buf || !(msg.msg_flags & MSG_TRUNC)) {
         return fail("an answer longer than the buffer was not cut with MSG_TRUNC");
     }
+    held();
     return 0;
 }
 
@@ -879,11 +981,13 @@ static int interfaces(void)
     if (if_nametoindex(first_name) != (unsigned int)first_index) {
         return fail("if_nametoindex of the first link");
     }
+    held();
     memset(&ifc, 0, sizeof ifc);
     if (s < 0 || ioctl(s, SIOCGIFCONF, &ifc) != 0 || ifc.ifc_len <= 0 ||
         ifc.ifc_len % (int)sizeof(struct ifreq) != 0) {
         return fail("SIOCGIFCONF with no buffer");
     }
+    held();
     want = ifc.ifc_len;
     ifc.ifc_len = sizeof reqs;
     ifc.ifc_req = reqs;
@@ -891,6 +995,7 @@ static int interfaces(void)
         reqs[0].ifr_addr.sa_family != AF_INET) {
         return fail("SIOCGIFCONF with a buffer");
     }
+    held();
     close(s);
     return 0;
 }
@@ -918,19 +1023,81 @@ static int uevents(void)
     if (poll(&pf, 1, 0) != 0 || recv(fd, &c, 1, 0) != -1 || errno != EAGAIN) {
         return fail("a socket of NETLINK_KOBJECT_UEVENT heard something");
     }
+    held();
     close(fd);
     if (socket(AF_NETLINK, SOCK_RAW, 99) != -1 || errno != EPROTONOSUPPORT) {
         return fail("a netlink protocol the kernel has not was not EPROTONOSUPPORT");
     }
+    held();
     return 0;
 }
 
-int main(int argc, char **argv)
+/** Plan each assertion of `ids`, `n` of them. */
+static void plan_rows(const char *const *ids, unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++) {
+        plan_row(ids[i]);
+    }
+}
+
+#define PLAN(ids) plan_rows(ids, sizeof(ids) / sizeof(ids[0]))
+
+/** Plan each assertion of `ids`, `n` of them, or with `left_out` report each
+ * not run. */
+static void plan_changes(const char *const *ids, unsigned n, int left_out)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++) {
+        if (left_out) {
+            report_notrun(ids[i], "a native run leaves out the changes");
+        } else {
+            plan_row(ids[i]);
+        }
+    }
+}
+
+#define PLAN_CHANGES(ids) plan_changes(ids, sizeof(ids) / sizeof(ids[0]), probe_native())
+
+/**
+ * Begin the report and plan its assertions in the order they are checked; a
+ * native run reports those of the changes not run. `envp` is the
+ * environment, which gives the case.
+ */
+static void plan(char **envp)
+{
+    static const char *const before[] = {"socket-port-pid", "second-port",    "bind-eaddrinuse",
+                                         "dump-links",      "dump-addrs",     "dump-routes",
+                                         "getlink-one",     "getlink-enodev", "newaddr-einval"};
+    static const char *const changes[] = {"addr-eexist",       "addr-del",          "addr-restore",
+                                          "default-route-add", "default-route-del", "link-up",
+                                          "mtu-eopnotsupp",    "delneigh-enoent"};
+    static const char *const lookups[] = {"route-get-local", "route-get-unicast", "rule-dump",
+                                          "qdisc-dump"};
+    static const char *const table[] = {"second-addr",       "neigh-permanent", "neigh-forget",
+                                        "route-add",         "proc-net-route",  "route-del",
+                                        "route-enetunreach", "route-on-link"};
+    static const char *const after[] = {"padded-dump",   "peek-trunc",     "cut-trunc",
+                                        "nametoindex",   "ifconf-length",  "ifconf-buffer",
+                                        "uevent-silent", "eprotonosupport"};
+
+    report_begin(report_case(envp, "guest.default.netlinkmusl"));
+    PLAN(before);
+    PLAN_CHANGES(changes);
+    PLAN(lookups);
+    PLAN_CHANGES(table);
+    PLAN(after);
+}
+
+int main(int argc, char **argv, char **envp)
 {
     int changes;
     int fd;
 
     probe_args(argc, argv);
+    plan(envp);
     changes = !probe_native();
     if (route_socket(&fd) || requests(fd) ||
         (changes && (address_changes(fd) || route_changes(fd))) || lookups(fd) ||
@@ -939,6 +1106,7 @@ int main(int argc, char **argv)
         return 1;
     }
     close(fd);
+    report_end();
     printf("NETLINKMUSL OK\n");
     return 0;
 }

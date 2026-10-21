@@ -69,6 +69,19 @@
  * The program runs as root. It prints `DIRENTMUSL OK`, followed by
  * " (links)" when the file system has symbolic links, and exits 0 on success,
  * and prints `DIRENTMUSL FAIL (detail)` and exits 1 otherwise.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row, a setup step joined to the row after it, in the
+ * groups of `groups`, each checked in order until one fails; the groups of
+ * `own_dir_rows` from `root_rows` on run whether or not one before failed,
+ * and a row of a group not reached is not run. The calls of `dir_end_calls`
+ * have a row each in the probe's own directory, `own-*`, and in /dev/shm,
+ * `shm-*`. Three groups of branches say which rows ran: `arch`, `i686` with
+ * `proc-self-dot-old` or `x86-64` without it; `dir`, `given` with
+ * `root-bin-types` or `default` without it; and `links`, `links` with
+ * `own-link-followed` and `own-link-unlink-enotdir`, or `none`, for a file
+ * system with no symbolic links. A failure before the probe has tried a
+ * symbolic link reports no branch of `links`.
  */
 
 #define _GNU_SOURCE
@@ -88,6 +101,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The renameat2 flag, which musl does not declare. */
 #define RENAME_NOREPLACE 1
@@ -95,10 +109,178 @@
 /* The directory the probe makes, and its entries. */
 static char base[256], file[300], sub[300], link_name[300];
 
+/*
+ * A group of rows of etude's report, checked in order until one fails: its
+ * assertions in order, how many of them the run has, and how many are
+ * reported. The groups of `own_dir_rows` from `root_rows` on each run
+ * whether or not one before failed.
+ */
+struct group {
+    const char *const *ids;
+    int n;
+    int reported;
+};
+
+/* The group whose rows the probe checks now. */
+static struct group *current;
+
+/** Make `g` the group whose rows the probe checks now. */
+static void group_start(struct group *g)
+{
+    current = g;
+}
+
+/** In the process that began the report, report that the current group's
+ * next row held. */
+static void held(void)
+{
+    if (report_getpid() == report_owner && current->reported < current->n) {
+        report_pass(current->ids[current->reported++]);
+    }
+}
+
+/** In the process that began the report, report that the current group's
+ * next row failed with `why`, and the rest of the group not run. */
+static void stop(const char *why)
+{
+    struct group *g = current;
+
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    if (g->reported < g->n) {
+        report_fail(g->ids[g->reported++], why);
+    }
+    while (g->reported < g->n) {
+        report_notrun(g->ids[g->reported++], "an earlier check failed");
+    }
+}
+
+/* The groups of rows, in the order the probe checks them. */
+static const char *const start_ids[] = {"symlink-or-eperm",   "own-dir-types",    "proc-self-dot",
+#if !defined __x86_64__
+                                        "proc-self-dot-old",
+#endif
+                                        "file-slash-enotdir", "file-dot-enotdir", "own-rewind",
+                                        "own-seekdir",        "proc-self-rewind"};
+static const char *const root_ids[] = {"root-ebusy", "root-eexist", "root-bind"};
+static const char *const synth_ids[] = {"proc-dot-rename", "dev-noreplace", "synth-new-slash"};
+static const char *const taken_ids[] = {"synth-taken"};
+static const char *const unreadable_ids[] = {"unreadable-taken"};
+static const char *const devices_ids[] = {"device-enotdir"};
+static const char *const own_ids[] = {"own-open-enotdir",
+                                      "own-access-enotdir",
+                                      "own-chmod-enotdir",
+                                      "own-chown-enotdir",
+                                      "own-truncate-enotdir",
+                                      "own-utimensat-enotdir",
+                                      "own-readlink-enotdir",
+                                      "own-statfs-enotdir",
+                                      "own-link-from-enotdir",
+                                      "own-creat-ends",
+                                      "own-creat-eisdir",
+                                      "own-link-to-ends",
+                                      "own-symlink-to-ends",
+                                      "own-link-onto-eexist",
+                                      "own-mknod-ends",
+                                      "own-mkdir-dot",
+                                      "own-creat-directory-einval",
+                                      "own-path-creat-directory",
+                                      "own-unlink-ends",
+                                      "own-rmdir-dot",
+                                      "own-rename-dot",
+                                      "own-rename-slash",
+                                      "own-noreplace-eexist",
+                                      "own-unlinkat-dot",
+                                      "own-renameat-dot",
+                                      "own-execve-ends",
+                                      "own-script-interp-slash",
+                                      "own-elf-interp",
+                                      "own-bind-ends",
+                                      "own-connect-slash",
+                                      "own-umount-slash",
+                                      "own-link-followed",
+                                      "own-link-unlink-enotdir"};
+static const char *const shm_ids[] = {"shm-open-enotdir",
+                                      "shm-access-enotdir",
+                                      "shm-chmod-enotdir",
+                                      "shm-chown-enotdir",
+                                      "shm-truncate-enotdir",
+                                      "shm-utimensat-enotdir",
+                                      "shm-readlink-enotdir",
+                                      "shm-statfs-enotdir",
+                                      "shm-link-from-enotdir",
+                                      "shm-creat-ends",
+                                      "shm-creat-eisdir",
+                                      "shm-link-to-ends",
+                                      "shm-symlink-to-ends",
+                                      "shm-link-onto-eexist",
+                                      "shm-mknod-ends",
+                                      "shm-mkdir-dot",
+                                      "shm-creat-directory-einval",
+                                      "shm-path-creat-directory",
+                                      "shm-unlink-ends",
+                                      "shm-rmdir-dot",
+                                      "shm-rename-dot",
+                                      "shm-rename-slash",
+                                      "shm-noreplace-eexist",
+                                      "shm-unlinkat-dot",
+                                      "shm-renameat-dot",
+                                      "shm-execve-ends",
+                                      "shm-script-interp-slash",
+                                      "shm-elf-interp",
+                                      "shm-bind-ends",
+                                      "shm-connect-slash",
+                                      "shm-umount-slash",
+                                      "shm-link-followed",
+                                      "shm-link-unlink-enotdir"};
+static const char *const types_ids[] = {"dev-types", "proc-types"};
+static const char *const given_ids[] = {"root-bin-types"};
+static const char *const texts_ids[] = {"cpuinfo",     "self-mounts",     "loadavg",
+                                        "no-proc-0",   "inotify-watches", "core-pattern",
+                                        "proc-sys-cwd"};
+
+#define GROUP(ids) {ids, (int)(sizeof(ids) / sizeof(ids[0])), 0}
+
+static struct group group_start_rows = GROUP(start_ids);
+static struct group group_root = GROUP(root_ids);
+static struct group group_synth = GROUP(synth_ids);
+static struct group group_taken = GROUP(taken_ids);
+static struct group group_unreadable = GROUP(unreadable_ids);
+static struct group group_devices = GROUP(devices_ids);
+static struct group group_own = GROUP(own_ids);
+static struct group group_shm = GROUP(shm_ids);
+static struct group group_types = GROUP(types_ids);
+static struct group group_given = GROUP(given_ids);
+static struct group group_texts = GROUP(texts_ids);
+
+/* Every group, for the rows `finish` reports not run. */
+static struct group *const groups[] = {
+    &group_start_rows, &group_root, &group_synth, &group_taken, &group_unreadable, &group_devices,
+    &group_own,        &group_shm,  &group_types, &group_given, &group_texts};
+
+/* The rows of `link_ends`, the last of `dir_end_calls`, which the probe's own
+ * directory has only where the file system has symbolic links. */
+#define LINK_ROWS 2
+
+/** Report every row not yet reported not run, and end the report. */
+static void finish(void)
+{
+    unsigned i;
+
+    for (i = 0; i < sizeof(groups) / sizeof(groups[0]); i++) {
+        while (groups[i]->reported < groups[i]->n) {
+            report_notrun(groups[i]->ids[groups[i]->reported++], "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("DIRENTMUSL FAIL (%s)\n", what);
+    stop(what);
 
     return 1;
 }
@@ -191,21 +373,25 @@ static int dir_ends(const char *file)
     if (lstat("/proc/self/.", &st) != 0 || !S_ISDIR(st.st_mode)) {
         return fail("lstat of /proc/self/. did not reach the directory");
     }
+    held();
 #if !defined __x86_64__
     memset(old, 0, sizeof(old));
     if (syscall(SYS_lstat, "/proc/self/.", old) != 0 ||
         !S_ISDIR((mode_t)(old[8] | (old[9] << 8)))) {
         return fail("the old lstat of /proc/self/. did not reach the directory");
     }
+    held();
 #endif
     snprintf(path, sizeof(path), "%s/", file);
     if (stat(path, &st) != -1 || errno != ENOTDIR || lstat(path, &st) != -1 || errno != ENOTDIR) {
         return fail("a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     snprintf(path, sizeof(path), "%s/.", file);
     if (lstat(path, &st) != -1 || errno != ENOTDIR) {
         return fail("a file named with a last . was not ENOTDIR");
     }
+    held();
     return 0;
 }
 
@@ -340,32 +526,41 @@ static int lookup_ends(const struct ends *p)
         !fd_refused(open(p->fs, O_PATH), ENOTDIR)) {
         return fail("open of a file named with a trailing slash or a last . was not ENOTDIR");
     }
+    held();
     if (!refused(access(p->fs, F_OK), ENOTDIR)) {
         return fail("access of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(chmod(p->fs, 0644), ENOTDIR)) {
         return fail("chmod of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(chown(p->fs, (uid_t)-1, (gid_t)-1), ENOTDIR) ||
         !refused(lchown(p->fs, (uid_t)-1, (gid_t)-1), ENOTDIR)) {
         return fail("chown or lchown of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(truncate(p->fs, 0), ENOTDIR)) {
         return fail("truncate of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(utimensat(AT_FDCWD, p->fs, NULL, 0), ENOTDIR)) {
         return fail("utimensat of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(readlink(p->fs, buf, sizeof(buf)), ENOTDIR) ||
         !refused(readlink(p->ss, buf, sizeof(buf)), EINVAL)) {
         return fail("readlink of a name with a trailing slash was not ENOTDIR or EINVAL");
     }
+    held();
     if (!refused(statfs(p->fs, &sf), ENOTDIR)) {
         return fail("statfs of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(link(p->fs, p->n), ENOTDIR)) {
         return fail("link from a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     return 0;
 }
 
@@ -387,10 +582,12 @@ static int create_dir_pair(const struct ends *p)
         lstat(p->n, &st) == 0) {
         return fail("an open with O_CREAT and O_DIRECTORY was not EINVAL");
     }
+    held();
     fd = open(p->s, O_PATH | O_CREAT | O_DIRECTORY, 0644);
     if (fd < 0) {
         return fail("an open with O_PATH, O_CREAT and O_DIRECTORY did not name the directory");
     }
+    held();
     close(fd);
     return 0;
 }
@@ -420,28 +617,35 @@ static int make_ends(const struct ends *p)
         lstat(p->n, &st) == 0) {
         return fail("an open with O_CREAT of a path that names a directory by its end");
     }
+    held();
     if (!fd_refused(open(p->s, O_RDONLY | O_CREAT, 0644), EISDIR) ||
         !fd_refused(open("/proc", O_RDONLY | O_CREAT, 0644), EISDIR)) {
         return fail("an open with O_CREAT of an existing directory was not EISDIR");
     }
+    held();
     if (!refused(link(p->f, p->ns), ENOENT) || !refused(link(p->f, p->sdot), EEXIST)) {
         return fail("link to a new name with a trailing slash or a last .");
     }
+    held();
     if (!refused(symlink("f", p->ns), ENOENT) || !refused(symlink("f", p->sdot), EEXIST)) {
         return fail("symlink to a new name with a trailing slash or a last .");
     }
+    held();
     if (!refused(symlink("f", p->f), EEXIST) || !refused(link(p->f, p->s), EEXIST)) {
         return fail("symlink or link onto a name that exists was not EEXIST");
     }
+    held();
     if (!refused(mknod(p->ns, S_IFIFO | 0644, 0), ENOENT) ||
         !refused(mknod(p->sdot, S_IFIFO | 0644, 0), EEXIST) ||
         !refused(mknod(p->fdot, S_IFIFO | 0644, 0), ENOTDIR)) {
         return fail("mknod of a new name with a trailing slash or a last .");
     }
+    held();
     if (!refused(mkdir(p->sdot, 0755), EEXIST) || !refused(mkdir("/proc/.", 0755), EEXIST) ||
         !refused(mkdir(p->ndot, 0755), ENOENT) || lstat(p->n, &st) == 0) {
         return fail("mkdir of a path whose last name is .");
     }
+    held();
     return create_dir_pair(p);
 }
 
@@ -464,24 +668,29 @@ static int remove_ends(const struct ends *p)
         !refused(unlink(p->sdot), EISDIR) || lstat(p->f, &st) != 0) {
         return fail("unlink of a file named with a trailing slash or of a last .");
     }
+    held();
     if (!refused(rmdir(p->edot), EINVAL) || !refused(rmdir(p->edotdot), ENOTEMPTY) ||
         lstat(p->e, &st) != 0) {
         return fail("rmdir of a directory's . or ..");
     }
+    held();
     if (!refused(rename(p->sdot, p->n), EBUSY) || !refused(rename(p->f, p->sdot), EBUSY) ||
         !refused(rename(p->sdotdot, p->n), EBUSY)) {
         return fail("rename of a name whose last component is . or ..");
     }
+    held();
     if (!refused(rename(p->fs, p->n), ENOTDIR) || !refused(rename(p->f, p->ns), ENOTDIR) ||
         lstat(p->f, &st) != 0) {
         return fail("rename of a file named with a trailing slash");
     }
+    held();
     if (!refused(syscall(SYS_renameat2, AT_FDCWD, p->fs, AT_FDCWD, p->s, RENAME_NOREPLACE),
                  EEXIST) ||
         !refused(syscall(SYS_renameat2, AT_FDCWD, p->f, AT_FDCWD, p->ss, RENAME_NOREPLACE),
                  EEXIST)) {
         return fail("a RENAME_NOREPLACE rename onto a name that exists was not EEXIST first");
     }
+    held();
     return 0;
 }
 
@@ -507,9 +716,11 @@ static int at_ends(const char *dir, const struct ends *p)
     if (!removed) {
         return fail("unlinkat with AT_REMOVEDIR of a directory's . or .. through a descriptor");
     }
+    held();
     if (!renamed) {
         return fail("renameat of a name whose last component is . or .. through a descriptor");
     }
+    held();
     return 0;
 }
 
@@ -662,6 +873,7 @@ static int interp_ends(const struct ends *p)
     if (!ok) {
         return fail("an ELF image whose PT_INTERP names a directory by its end was not refused");
     }
+    held();
     return 0;
 }
 
@@ -681,6 +893,7 @@ static int exec_ends(const struct ends *p)
         !exec_refused(p->ss, EACCES) || !exec_refused(p->sdot, EACCES)) {
         return fail("execve of a path that names a directory by its end was not ENOTDIR or EACCES");
     }
+    held();
     fd = open(p->x, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     ok = fd >= 0 &&
          write(fd, slash_script, sizeof(slash_script) - 1) == (ssize_t)(sizeof(slash_script) - 1);
@@ -692,6 +905,7 @@ static int exec_ends(const struct ends *p)
     if (!ok) {
         return fail("a script whose interpreter has a trailing slash was not ENOTDIR");
     }
+    held();
     return interp_ends(p);
 }
 
@@ -726,12 +940,15 @@ static int socket_ends(const struct ends *p)
     if (!bound) {
         return fail("a bind to a name ending in a slash or . was not refused as on Linux");
     }
+    held();
     if (!connected) {
         return fail("connect to a socket named with a trailing slash was not ENOTDIR");
     }
+    held();
     if (!refused(umount2(p->fs, 0), ENOTDIR)) {
         return fail("umount2 of a file named with a trailing slash was not ENOTDIR");
     }
+    held();
     return 0;
 }
 
@@ -764,10 +981,12 @@ static int link_ends(const struct ends *p)
     if (!ok) {
         return fail("a symbolic link to a directory named with a trailing slash was not followed");
     }
+    held();
     if (!refused(unlink(p->lds), ENOTDIR) || !refused(rename(p->lds, p->n), ENOTDIR) ||
         lstat(p->ld, &st) != 0 || !S_ISLNK(st.st_mode)) {
         return fail("unlink or rename of a link named with a trailing slash was not ENOTDIR");
     }
+    held();
     return 0;
 }
 
@@ -866,10 +1085,12 @@ static int root_rows(void)
         !refused(rename(file, "/"), EBUSY)) {
         return fail("rmdir or rename of the root was not EBUSY");
     }
+    held();
     if (!refused(link(file, "/"), EEXIST) || !refused(symlink("f", "/"), EEXIST) ||
         !refused(mknod("/", S_IFIFO | 0644, 0), EEXIST)) {
         return fail("link, symlink or mknod with the root as the new name was not EEXIST");
     }
+    held();
     s = socket(AF_UNIX, SOCK_STREAM, 0);
     bound = s >= 0 && refused(bind_path(s, "/"), EADDRINUSE);
     if (s >= 0) {
@@ -878,6 +1099,7 @@ static int root_rows(void)
     if (!bound) {
         return fail("a bind to the root was not EADDRINUSE");
     }
+    held();
     return 0;
 }
 
@@ -903,12 +1125,14 @@ static int synth_name_rows(void)
                  EEXIST)) {
         return fail("a rename of a last . or .. in /proc was not EBUSY or EEXIST");
     }
+    held();
     if (!refused(syscall(SYS_renameat2, AT_FDCWD, file, AT_FDCWD, "/dev", RENAME_NOREPLACE),
                  EEXIST) ||
         !refused(syscall(SYS_renameat2, AT_FDCWD, "/proc", AT_FDCWD, "/dev", RENAME_NOREPLACE),
                  EEXIST)) {
         return fail("a rename onto the mount point /dev under RENAME_NOREPLACE was not EEXIST");
     }
+    held();
     s = socket(AF_UNIX, SOCK_STREAM, 0);
     made = s < 0 || !refused(symlink("x", "/proc/nonexistent/"), ENOENT) ||
            !refused(symlink("x", "/proc/meminfo/"), EEXIST) ||
@@ -923,6 +1147,7 @@ static int synth_name_rows(void)
     if (made) {
         return fail("a new name in /dev or /proc with a trailing slash was not ENOENT or EEXIST");
     }
+    held();
     return 0;
 }
 
@@ -949,6 +1174,7 @@ static int synth_taken_rows(void)
     if (!taken) {
         return fail("a name that exists in /dev or /proc was not EEXIST before EROFS or EXDEV");
     }
+    held();
     return 0;
 }
 
@@ -978,6 +1204,7 @@ static int unreadable_taken_rows(void)
         WEXITSTATUS(status) != 0) {
         return fail("a name in /proc whose link the caller may not read was not EEXIST");
     }
+    held();
     return 0;
 }
 
@@ -996,6 +1223,7 @@ static int device_ends(void)
         !fd_refused(open("/fb", O_RDONLY | O_DIRECTORY), ENOTDIR)) {
         return fail("an open of /fb or /mouse as a directory was not ENOTDIR");
     }
+    held();
     return 0;
 }
 
@@ -1020,19 +1248,32 @@ static int own_dir_rows(void)
         return 1;
     }
     seek = rewinds(base);
+    if (seek == 2) {
+        held();
+    }
     if (seek != 0) {
         return fail(seek == 1 ? "rewinddir of the probe's own directory"
                               : "seekdir of the probe's own directory to a place telldir gave");
     }
+    held();
+    held();
     if (rewinds("/proc/self") != 0) {
         return fail("rewinddir and seekdir of /proc/self");
     }
+    held();
+    group_start(&group_root);
     rc = root_rows();
+    group_start(&group_synth);
     rc |= synth_name_rows();
+    group_start(&group_taken);
     rc |= synth_taken_rows();
+    group_start(&group_unreadable);
     rc |= unreadable_taken_rows();
+    group_start(&group_devices);
     rc |= device_ends();
+    group_start(&group_own);
     rc |= dir_end_calls(base, 0);
+    group_start(&group_shm);
     return rc | shm_dir_end_calls();
 }
 
@@ -1102,6 +1343,7 @@ static int proc_texts(void)
         strncmp(buf, "processor\t: 0\n", 14) != 0 || !strstr(buf, "\nflags\t\t:")) {
         return fail("/proc/cpuinfo is not a record of processor 0 with its flags");
     }
+    held();
     {
         char mounts[4096];
 
@@ -1109,6 +1351,7 @@ static int proc_texts(void)
             slurp("/proc/self/mounts", buf, sizeof(buf)) <= 0 || strcmp(buf, mounts) != 0) {
             return fail("/proc/self/mounts is not /proc/mounts");
         }
+        held();
     }
     {
         unsigned running = 0, total = 0, last = 0;
@@ -1122,22 +1365,27 @@ static int proc_texts(void)
             return fail("/proc/loadavg is not three loads, the running and all tasks, and the "
                         "last process ID");
         }
+        held();
         if (stat("/proc/0", &st) == 0 || errno != ENOENT || type_of("/proc", "0") != -1) {
             return fail("/proc has a process 0");
         }
+        held();
     }
     if (slurp("/proc/sys/fs/inotify/max_user_watches", buf, sizeof(buf)) < 0 ||
         strcmp(buf, "8192\n") != 0) {
         return fail("/proc/sys/fs/inotify/max_user_watches");
     }
+    held();
     if (slurp("/proc/sys/kernel/core_pattern", buf, sizeof(buf)) < 0 ||
         strcmp(buf, "core\n") != 0) {
         return fail("/proc/sys/kernel/core_pattern is not the name of a core file, core");
     }
+    held();
     if (chdir("/proc/sys/kernel") != 0 || !getcwd(cwd, sizeof(cwd)) ||
         strcmp(cwd, "/proc/sys/kernel") != 0 || chdir("/") != 0) {
         return fail("a working directory in /proc/sys");
     }
+    held();
     return 0;
 }
 
@@ -1166,14 +1414,17 @@ static int name_files(const char *dir)
     return 0;
 }
 
-int main(int argc, char **argv)
+/**
+ * Make the probe's directory, in the directory argument when `given`, and
+ * check what it lists, then the rows of `own_dir_rows`. Reports the branch
+ * of the group `links`, whether the file system has symbolic links, which
+ * `*links` receives. Returns 0, or 1 once the failure is reported.
+ */
+static int own_rows(int given, int *links)
 {
-    int given;
-    int links;
     int fd;
 
-    probe_args(argc, argv);
-    given = probe_words() > 0;
+    group_start(&group_start_rows);
     if (name_files(given ? probe_word(1) : "/") != 0) {
         return fail("the working directory");
     }
@@ -1183,25 +1434,41 @@ int main(int argc, char **argv)
         return fail("make the directory");
     }
     close(fd);
-    links = symlink("f", link_name) == 0;
-    if (!links && (given || errno != EPERM)) {
+    *links = symlink("f", link_name) == 0;
+    if (!*links && (given || errno != EPERM)) {
         tidy();
         return fail("a symbolic link where the file system has them");
     }
+    held();
+    report_branch("links", *links ? "links" : "none");
+    group_own.n = *links ? group_own.n : group_own.n - LINK_ROWS;
     if (type_of(base, "f") != DT_REG || type_of(base, "s") != DT_DIR ||
-        (links && type_of(base, "l") != DT_LNK) || !types_agree(base, 0)) {
+        (*links && type_of(base, "l") != DT_LNK) || !types_agree(base, 0)) {
         tidy();
         return fail("the probe's own directory");
     }
+    held();
     if (own_dir_rows() != 0) {
         tidy();
         return 1;
     }
     tidy();
+    return 0;
+}
+
+/**
+ * Check the types /dev and /proc list, those of the root and /bin when the
+ * directory is `given`, and the texts of /proc (`proc_texts`). Returns 0, or
+ * 1 once the failure is reported.
+ */
+static int system_rows(int given)
+{
+    group_start(&group_types);
     if (type_of("/dev", "null") != DT_CHR || !types_agree("/dev", 0) ||
         !types_agree("/dev/pts", 1)) {
         return fail("/dev");
     }
+    held();
     if (type_of("/proc", "self") != DT_LNK || type_of("/proc", "meminfo") != DT_REG ||
         type_of("/proc", "cpuinfo") != DT_REG || type_of("/proc", "sys") != DT_DIR ||
         type_of("/proc", "net") != DT_DIR || !types_agree("/proc", 1) ||
@@ -1210,10 +1477,40 @@ int main(int argc, char **argv)
         !types_agree("/proc/net", 0)) {
         return fail("/proc");
     }
+    held();
+    group_start(&group_given);
     if (given && (!types_agree("/", 0) || !types_agree("/bin", 0))) {
         return fail("the root and /bin");
     }
-    if (proc_texts() != 0) {
+    if (given) {
+        held();
+    }
+    group_start(&group_texts);
+    return proc_texts();
+}
+
+int main(int argc, char **argv)
+{
+    int given;
+    int links = 0;
+    int rc;
+
+    probe_args(argc, argv);
+    given = probe_words() > 0;
+    report_begin(report_case(environ, "guest.default.direntmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    report_branch("dir", given ? "given" : "default");
+    group_given.n = given ? 1 : 0;
+    rc = own_rows(given, &links);
+    if (rc == 0) {
+        rc = system_rows(given);
+    }
+    finish();
+    if (rc != 0) {
         return 1;
     }
     printf("DIRENTMUSL OK%s\n", links ? " (links)" : "");
