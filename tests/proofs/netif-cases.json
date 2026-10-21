@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "proof": "netif-cases",
+  "summary": "the cases of the netif, netif-e1000 and addressed suites on i686, against kernel faults in the routes, the classful mask, the netlink link dump, the order and refusal of the cards, and the address in force, each of which some case must fail",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/network/route.c",
+    "rach2/sys/network/netconf.c",
+    "rach2/sys/network/socket/netlink.c",
+    "rach2/sys/network/driver/netdev.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 sh tests/proofs/guest.sh make rach2 && ARCH=i686 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 RACH2_WORKERS=4 exec tests/run netif netif-e1000 addressed"
+    ],
+    "bound_s": 7200
+  },
+  "faults": [
+    {
+      "name": "absent-route",
+      "summary": "a removal of a route the table does not have succeeds, so a DHCP client's loop of removals never ends",
+      "edits": [
+        {
+          "file": "rach2/sys/network/route.c",
+          "find": "            return 0;\n        }\n    }\n    return -ESRCH;\n}",
+          "replace": "            return 0;\n        }\n    }\n    return 0;\n}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: netif: machine.netif.probe: evidence: ",
+          "run: netif-e1000: machine.netif-e1000.probe: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "classful",
+      "summary": "an address below 128.0.0.0 takes the mask of a class C network in place of class A's",
+      "edits": [
+        {
+          "file": "rach2/sys/network/netconf.c",
+          "find": "    if (top < 128u) {\n        return 0xFF000000u;\n",
+          "replace": "    if (top < 128u) {\n        return 0xFFFFFF00u;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: netif: machine.netif.unaddressed: evidence: ",
+          "run: netif-e1000: machine.netif-e1000.unaddressed: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "link-running",
+      "summary": "the netlink link dump reports a card that is down as running when its link is",
+      "edits": [
+        {
+          "file": "rach2/sys/network/socket/netlink.c",
+          "find": "int running = nd->up && netdev_running(nd);",
+          "replace": "int running = netdev_running(nd);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: netif: machine.netif.twocards: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "driver-order",
+      "summary": "the driver table tries the e1000 before the RTL8139, so the RTL8139 is not eth0",
+      "edits": [
+        {
+          "file": "rach2/sys/network/driver/netdev.c",
+          "find": "{&rtl8139_netdev, &e1000_netdev, &rtl8168_netdev}",
+          "replace": "{&e1000_netdev, &rtl8139_netdev, &rtl8168_netdev}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: netif: machine.netif.twomodels: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "refused-card",
+      "summary": "rach2.nicfail=0 refuses the second card that comes up and not the first",
+      "edits": [
+        {
+          "file": "rach2/sys/network/driver/netdev.c",
+          "find": "found++ == fail_at;",
+          "replace": "found++ == fail_at + 1;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: netif: machine.netif.refused: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "address-in-force",
+      "summary": "the address in force is one more than the boot line's, so the machine sends from 10.0.2.78",
+      "edits": [
+        {
+          "file": "rach2/sys/network/netconf.c",
+          "find": "    net_ip_addr = ip;\n    net_ip_mask = mask;\n    net_ip_gateway = gw;",
+          "replace": "    net_ip_addr = ip + 1;\n    net_ip_mask = mask;\n    net_ip_gateway = gw;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: addressed: machine.addressed.pingtest: evidence: "
+        ]
+      }
+    }
+  ]
+}
