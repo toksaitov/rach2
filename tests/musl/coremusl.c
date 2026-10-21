@@ -448,8 +448,9 @@ static int short_check(pid_t child, size_t limit)
  * end, holes excepted: the ELF header, a program header for the notes and
  * one for each region, the notes, and each page of a readable region that
  * is in memory, the pages `core_write` does not leave as holes. The regions
- * come from /proc/self/maps and the pages from mincore. Returns 0 when
- * either cannot be read.
+ * come from /proc/self/maps and the pages from mincore. Each page of code is
+ * read first, so that the calls made after the count bring in no page the
+ * count left out. Returns 0 when either cannot be read.
  */
 static uint32_t dump_bytes(void)
 {
@@ -473,6 +474,9 @@ static uint32_t dump_bytes(void)
         unsigned long at;
 
         regions++;
+        for (at = start; line[1] == 'r' && line[3] == 'x' && at < end; at += 4096ul) {
+            (void)*(volatile const char *)at;
+        }
         for (at = start; line[1] == 'r' && at < end; at += sizeof(in_core) * 4096ul) {
             unsigned long n = (end - at) / 4096ul;
             unsigned long i;
