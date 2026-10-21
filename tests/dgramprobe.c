@@ -230,13 +230,12 @@ static void fail(const char *what)
 /* The report's assertions, one for each row, in the order the probe checks
  * them. */
 static const char *const rows[] = {
-    "no-peer-refused", "connected-write", "source-port", "peer-only",
-    "outsider-refused", "peer-after-outsider", "not-socket", "unspec-disconnect",
-    "unspec-stream", "packet-connect", "packet-binding", "reuse-both",
-    "reuse-reply", "reuse-close", "low-port", "connect-beside-bound",
-    "broadcast-refused", "broadcast-sent", "options-read-back", "bind-device-name",
-    "bind-device-ifreq"
-};
+    "no-peer-refused",   "connected-write",     "source-port",       "peer-only",
+    "outsider-refused",  "peer-after-outsider", "not-socket",        "unspec-disconnect",
+    "unspec-stream",     "packet-connect",      "packet-binding",    "reuse-both",
+    "reuse-reply",       "reuse-close",         "low-port",          "connect-beside-bound",
+    "broadcast-refused", "broadcast-sent",      "options-read-back", "bind-device-name",
+    "bind-device-ifreq"};
 
 static uint8_t sa[16];
 static uint8_t buf[64];

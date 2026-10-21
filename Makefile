@@ -677,7 +677,8 @@ $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # The machine scenarios that also link the reader of a probe's report on the
 # console (tests/cases/machine/console_report.c), for the cases whose probe
 # runs inside the machine and reports there.
-PROBE_SCENARIOS = build/tests/cases/machine/raw_scenario \
+PROBE_SCENARIOS = build/tests/cases/machine/dgram_scenario \
+                  build/tests/cases/machine/raw_scenario \
                   build/tests/cases/machine/socket_scenario
 $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                     tests/cases/machine/console_report.c tests/cases/machine/console_report.h \

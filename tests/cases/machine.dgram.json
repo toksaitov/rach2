@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.dgram",
+  "summary": "A datagram socket as a DHCP client uses it, connected to one peer, sharing a port and broadcasting, on the rtl8139",
+  "cases": [
+    {
+      "case_id": "machine.dgram.dgramprobe",
+      "behavior": "dgramprobe passes each row at the debug shell, refusing a datagram the host sends from outside through the forward, and its broadcast to 255.255.255.255 at port 7500 is on the wire of the rtl8139",
+      "units": ["dgram", "dgramprobe", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"outsider": "outsider", "guest_port": 7502, "broadcast_port": 7500}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dgram_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine when the scenario did not power it off"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image to the debug shell"},
+        {"step_id": "dgramprobe", "stage": "execute", "machine": "guest",
+         "does": "run dgramprobe at the debug shell, send it a datagram from the host with hostpeer send through the forward when it prints DGRAMPROBE OUTSIDE, and take its report from the console"},
+        {"step_id": "poweroff", "stage": "execute", "machine": "guest",
+         "does": "power the machine off at the debug shell and wait for its end, which makes the capture whole"},
+        {"step_id": "broadcast", "stage": "execute",
+         "does": "run pcapcheck bcast on the capture of the card for the broadcast to 255.255.255.255 at port 7500"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "rtl8139", "forwards": [{"protocol": "udp", "port": 0, "guest_port": 7502}]}],
+                  "boot_options": [], "captures": ["net0"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "no-peer-refused", "checks": "a write on a datagram socket with no peer answers EDESTADDRREQ", "source": "scenario"},
+        {"assertion_id": "connected-write", "checks": "a connected socket writes to its peer without an address, and the peer receives the bytes written", "source": "scenario"},
+        {"assertion_id": "source-port", "checks": "a connected socket has a source port for a reply", "source": "scenario"},
+        {"assertion_id": "peer-only", "checks": "a connected socket receives its peer's reply and not a third local socket's datagram, which is counted as refused", "source": "scenario"},
+        {"assertion_id": "outsider-refused", "checks": "a connected socket does not receive the datagram the host sends through the forward after DGRAMPROBE OUTSIDE, which is counted as refused", "source": "scenario"},
+        {"assertion_id": "peer-after-outsider", "checks": "the socket that refused the outsider still receives its peer", "source": "scenario"},
+        {"assertion_id": "not-socket", "checks": "a connect on the console's descriptor answers ENOTSOCK", "source": "scenario"},
+        {"assertion_id": "unspec-disconnect", "checks": "a two-byte AF_UNSPEC connect disconnects a datagram socket, and a later write answers EDESTADDRREQ", "source": "scenario"},
+        {"assertion_id": "unspec-stream", "checks": "a two-byte AF_UNSPEC connect of a stream socket answers EAFNOSUPPORT", "source": "scenario"},
+        {"assertion_id": "packet-connect", "checks": "a connect of each of eight packet sockets answers EOPNOTSUPP", "source": "scenario"},
+        {"assertion_id": "packet-binding", "checks": "after the eight packet sockets a datagram socket still binds a port", "source": "scenario"},
+        {"assertion_id": "reuse-both", "checks": "a second bind of a bound port answers EADDRINUSE until both sockets set SO_REUSEADDR", "source": "scenario"},
+        {"assertion_id": "reuse-reply", "checks": "of two sockets on one port, the reply goes to the one connected to the sender, and the listener does not take it", "source": "scenario"},
+        {"assertion_id": "reuse-close", "checks": "closing one of two sockets on a port leaves the other bound", "source": "scenario"},
+        {"assertion_id": "low-port", "checks": "uid 1000 binding port 68 answers EACCES", "source": "scenario"},
+        {"assertion_id": "connect-beside-bound", "checks": "a connect beside eight bound sockets answers 0 or EAGAIN", "source": "scenario"},
+        {"assertion_id": "broadcast-refused", "checks": "a send to 255.255.255.255 and to the subnet's broadcast answers EACCES without SO_BROADCAST", "source": "scenario"},
+        {"assertion_id": "broadcast-sent", "checks": "with SO_BROADCAST set, a send to 255.255.255.255 at port 7500 is sent", "source": "scenario"},
+        {"assertion_id": "options-read-back", "checks": "SO_BROADCAST and SO_REUSEADDR read back as set", "source": "scenario"},
+        {"assertion_id": "bind-device-name", "checks": "SO_BINDTODEVICE takes eth0 by name, answers ENODEV for eth9, and unbinds with an empty name", "source": "scenario"},
+        {"assertion_id": "bind-device-ifreq", "checks": "SO_BINDTODEVICE takes the whole struct ifreq that BusyBox sends, and reads back as the name", "source": "scenario"},
+        {"assertion_id": "powered-off", "checks": "the machine powers off at the debug shell's command after the probe, so that the capture is whole", "source": "scenario"},
+        {"assertion_id": "broadcast-on-wire", "checks": "pcapcheck bcast finds the probe's broadcast datagram to 255.255.255.255 at port 7500 in the capture of the card", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "hostpeer", "node": "tests/system/hostpeer", "per_architecture": false},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "dgram_scenario", "node": "tests/cases/machine/dgram_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case sends a datagram through the forward of QEMU's user network to the guest's port 7502 and finds the probe's broadcast in QEMU's capture of the card; tests/native/probes.cases runs the probe's rows natively"}
+    }
+  ]
+}
