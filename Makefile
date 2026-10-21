@@ -705,12 +705,14 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
-# The network scenarios share netcase.c.
+# The network scenarios share netcase.c, and so does the install scenario,
+# which logs in and types at the console as they do.
 NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
                 build/tests/cases/machine/metal_scenario build/tests/cases/machine/netconsole_scenario \
                 build/tests/cases/machine/dhcp_scenario \
                 build/tests/cases/machine/menu_scenario \
-                build/tests/cases/machine/drill_scenario
+                build/tests/cases/machine/drill_scenario \
+                build/tests/cases/machine/install_scenario
 $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)

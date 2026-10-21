@@ -1,0 +1,428 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.install",
+  "summary": "The machine builds, installs, tries, commits, loses and repairs its own kernel on a GRUB disk, and the environment blocks of the interruption matrix boot the slot each selects; the program is tests/cases/machine/install_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.install.loop",
+      "behavior": "the machine installs its own kernel, twice: on a GRUB disk booted with no -kernel, root edits a marker into the banner in /src/rach2, builds the kernel there, installs it as a one-boot trial, which a commit refuses, reboots into it, commits it and finds it again after a cold boot; the candidate corrupted at the extent bootctl names boots the fallback, which repairs it, and the repair is committed; then environment blocks the host writes select the fallback for a destroyed header and a complete old value, and the candidate for a complete new value",
+      "units": [
+        "install"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "passes": "2",
+          "markers": "IKMA, IKMB",
+          "matrix": "a destroyed header, saved_entry=fallback, and next_entry=candidate"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "install_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "install-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "p1-build",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the copy of the disk as the build left it through SeaBIOS and GRUB, log in at the console as root, read the slot, edit the marker IKMA into the banner in /src/rach2, build the kernel with make -f guest.mk, install it with bootctl kernel, try bootctl commit, and type reboot -f, which ends the boot with a reset"
+        },
+        {
+          "step_id": "p1-trial",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy, the trial, read its banner and its slot, commit it with bootctl commit and type poweroff -f, which ends the boot with a shutdown"
+        },
+        {
+          "step_id": "p1-cold",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy cold, read its banner and its slot, write zeros over the candidate's first sector through /dev/bootpart at the sector bootctl status names, and type reboot -f"
+        },
+        {
+          "step_id": "p1-fallback",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy, which GRUB must start from the fallback slot, read its banner and its slot, install the kernel again from /src/rach2 with bootctl kernel, and type reboot -f"
+        },
+        {
+          "step_id": "p1-repaired",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy, the repaired candidate, read its banner and its slot, commit it and type poweroff -f"
+        },
+        {
+          "step_id": "p2-build",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the copy of the disk as pass 1 left it through SeaBIOS and GRUB, log in at the console as root, read the slot, edit the marker IKMB into the banner in /src/rach2, build the kernel with make -f guest.mk, install it with bootctl kernel, try bootctl commit, and type reboot -f, which ends the boot with a reset"
+        },
+        {
+          "step_id": "p2-trial",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy, the trial, read its banner and its slot, commit it with bootctl commit and type poweroff -f, which ends the boot with a shutdown"
+        },
+        {
+          "step_id": "p2-cold",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy cold, read its banner and its slot, write zeros over the candidate's first sector through /dev/bootpart at the sector bootctl status names, and type reboot -f"
+        },
+        {
+          "step_id": "p2-fallback",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy, which GRUB must start from the fallback slot, read its banner and its slot, install the kernel again from /src/rach2 with bootctl kernel, and type reboot -f"
+        },
+        {
+          "step_id": "p2-repaired",
+          "stage": "execute",
+          "machine": "install",
+          "does": "boot the same copy, the repaired candidate, read its banner and its slot, commit it and type poweroff -f"
+        },
+        {
+          "step_id": "matrix-header",
+          "stage": "execute",
+          "machine": "install",
+          "does": "overwrite the copy's environment block with 512 bytes of 0xDE and 512 of 0xAD, boot it to its login prompt and end it with QMP's quit"
+        },
+        {
+          "step_id": "matrix-old",
+          "stage": "execute",
+          "machine": "install",
+          "does": "write a complete environment block whose saved_entry is fallback into the copy, boot it to its login prompt and end it with QMP's quit"
+        },
+        {
+          "step_id": "matrix-new",
+          "stage": "execute",
+          "machine": "install",
+          "does": "write a complete environment block whose saved_entry is fallback and next_entry is candidate into the copy, boot it to its login prompt and end it with QMP's quit"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "install",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "install-disk",
+                "bus": "ide"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "env-block",
+          "checks": "the disk has a sector that begins with `# GRUB Environment Block`, the block the matrix's boots write",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-candidate",
+          "checks": "the first boot of pass 1, on the disk as the build left it, has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-edited",
+          "checks": "`Rach2 Booting` edited to `Rach2 Bt IKMA` in /src/rach2/sys/arch/x86/boot.c leaves one line with `Rach2 Bt IKMA`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-built",
+          "checks": "make -f guest.mk in /src/rach2 builds the kernel on the machine and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-installed",
+          "checks": "bootctl kernel kernel installs the kernel built as a one-boot trial and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-armed",
+          "checks": "bootctl commit exits 1 while the trial is armed and has not booted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-trial-marker",
+          "checks": "the boot after reboot -f prints IKMA in the kernel's banner before its login prompt, so the kernel built on the machine runs",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-trial-candidate",
+          "checks": "the trial boot has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-trial-commit",
+          "checks": "bootctl commit on the trial boot prints `bootctl: committed` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-cold-marker",
+          "checks": "the cold boot after poweroff -f prints IKMA before its login prompt, so the saved default held",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-cold-candidate",
+          "checks": "the cold boot has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-corrupt",
+          "checks": "bootctl status names the candidate's first sector, and dd writes zeros over that sector of /dev/bootpart and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-fallback",
+          "checks": "the boot after the corruption has rach2.slot=fallback in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-fallback-unmarked",
+          "checks": "the fallback boot's console has no IKMA up to the line that gives its slot, so the corrupted candidate did not run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-repair",
+          "checks": "bootctl kernel kernel, run in /src/rach2 on the fallback boot, installs the kernel again and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-repaired-marker",
+          "checks": "the boot after the repair prints IKMA before its login prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-repaired-candidate",
+          "checks": "the repaired boot has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p1-repair-commit",
+          "checks": "bootctl commit on the repaired boot prints `bootctl: committed` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-candidate",
+          "checks": "the first boot of pass 2, on the disk as pass 1 left it, has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-edited",
+          "checks": "`IKMA` edited to `IKMB` in /src/rach2/sys/arch/x86/boot.c leaves one line with `IKMB`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-built",
+          "checks": "make -f guest.mk in /src/rach2 builds the kernel on the machine and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-installed",
+          "checks": "bootctl kernel kernel installs the kernel built as a one-boot trial and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-armed",
+          "checks": "bootctl commit exits 1 while the trial is armed and has not booted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-trial-marker",
+          "checks": "the boot after reboot -f prints IKMB in the kernel's banner before its login prompt, so the kernel built on the machine runs",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-trial-candidate",
+          "checks": "the trial boot has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-trial-commit",
+          "checks": "bootctl commit on the trial boot prints `bootctl: committed` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-cold-marker",
+          "checks": "the cold boot after poweroff -f prints IKMB before its login prompt, so the saved default held",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-cold-candidate",
+          "checks": "the cold boot has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-corrupt",
+          "checks": "bootctl status names the candidate's first sector, and dd writes zeros over that sector of /dev/bootpart and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-fallback",
+          "checks": "the boot after the corruption has rach2.slot=fallback in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-fallback-unmarked",
+          "checks": "the fallback boot's console has no IKMB up to the line that gives its slot, so the corrupted candidate did not run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-repair",
+          "checks": "bootctl kernel kernel, run in /src/rach2 on the fallback boot, installs the kernel again and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-repaired-marker",
+          "checks": "the boot after the repair prints IKMB before its login prompt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-repaired-candidate",
+          "checks": "the repaired boot has rach2.slot=candidate in /proc/cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "p2-repair-commit",
+          "checks": "bootctl commit on the repaired boot prints `bootctl: committed` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "header-fallback",
+          "checks": "with the environment block overwritten so that nothing in it reads as a header or a variable, the machine boots to its login prompt and prints no IKMB, the fallback",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "old-fallback",
+          "checks": "with a complete block whose saved_entry is fallback, the machine boots to its login prompt and prints no IKMB",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "new-candidate",
+          "checks": "with a complete block whose saved_entry is fallback and next_entry is candidate, the machine prints IKMB before its login prompt, the candidate",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 13
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 2400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1200000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 600000000,
+            "ceiling_us": 1800000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 240000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "install-disk",
+          "node": "tests/cases/machine/install.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "install_scenario",
+          "node": "tests/cases/machine/install_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "each pass reboots the machine into the kernel it installed and boots it cold, and the matrix's boots take environment blocks the host writes into the disk between them"
+      }
+    }
+  ]
+}

@@ -498,6 +498,19 @@ $(MENU_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(OS_REAL_SMALL
 	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
+# The disk of tests/cases/machine.install.json, the GRUB disk around the
+# architecture's kernel on an MBR, with the recovery kernel and its image on
+# partition 2 and the os-real root above on partition 3.
+$(ARCH_CASE_DIR)/install.disk: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) \
+                               tools/image/mkdisk_grub.sh $(DISK_TOOLS) $(GRUB_FILES) | rach2
+	@mkdir -p $(@D)
+	RACH2_DISK_TABLE=mbr \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=96 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
 run-install: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)

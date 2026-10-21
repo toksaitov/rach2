@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "proof": "install",
+  "summary": "the case of tests/run install under etude, against a bootctl that commits a trial that has not booted, a GRUB menu that boots a trial without consuming it, and a kernel whose raw writes of /dev/bootpart land one sector past the one asked",
+  "tree": "shared",
+  "sources": [
+    "utils/bootslot.c",
+    "tools/image/mkdisk_grub.sh",
+    "rach2/sys/fs/devfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/install.disk"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make components && sh tests/proofs/guest.sh exec ${WORK} sh -c 'exec make -s \"$ARCH_BUILD/tests/cases/machine/install.disk\" \"ARCH=$ARCH\" </dev/null' && sh tests/proofs/guest.sh copy ${WORK} tests/cases/machine/install.disk"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run install </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "armed-commit",
+      "summary": "bootctl commits a candidate whose trial is armed and has not booted",
+      "edits": [
+        {
+          "file": "utils/bootslot.c",
+          "find": "        } else {\n            return fail(err, errlen,\n                        \"an installed candidate has not booted; boot it \"",
+          "replace": "        } else {\n            consumed = 1;\n            (void)fail(err, errlen,\n                        \"an installed candidate has not booted; boot it \""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: install: FAIL",
+          "assert p1-armed fail",
+          "assert p2-armed fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "unconsumed-trial",
+      "summary": "the GRUB menu boots the candidate for next_entry=candidate and leaves the variable set, so the trial is never consumed",
+      "edits": [
+        {
+          "file": "tools/image/mkdisk_grub.sh",
+          "find": "    set default=candidate\n    set next_entry=\n    save_env next_entry\n",
+          "replace": "    set default=candidate\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: install: FAIL",
+          "assert p1-trial-commit fail",
+          "assert p1-repair-commit fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "bootpart-shift",
+      "summary": "a raw write of /dev/bootpart lands one sector past the one asked, so the slot bootctl writes does not read back",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "        if (block_request(part, 1, lba + done, chunk, batch) != 0) {",
+          "replace": "        if (block_request(part, 1, lba + done + 1, chunk, batch) != 0) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: install: FAIL",
+          "assert p1-installed fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}
