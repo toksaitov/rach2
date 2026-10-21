@@ -80,7 +80,7 @@
       "progress": [
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
       ],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 6442450944, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
@@ -124,7 +124,7 @@
       "progress": [
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
       ],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1200000000, "ceiling_us": 2400000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2400000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
@@ -192,7 +192,7 @@
       "progress": [
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 6}
       ],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 14400000000, "ceiling_us": 28800000000}, "gap": {"floor_us": 1000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 14400000000, "ceiling_us": 28800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 805306368, "disk_bytes": 2147483648, "locks": [], "ports": 1, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
@@ -268,7 +268,7 @@
       "progress": [
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
       ],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},

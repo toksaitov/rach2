@@ -36,7 +36,7 @@
       "progress": [
         {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
       ],
-      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 21600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 300000000, "ceiling_us": 1200000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 21600000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 300000000, "ceiling_us": 1200000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
