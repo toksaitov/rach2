@@ -19,3 +19,12 @@ file 0755 /blockprobe build/tests/blockprobe
 file 0755 /fdstale build/tests/fdstale
 file 0755 /bootprobe build/tests/bootprobe
 file 0755 /procprobe build/tests/procprobe
+
+# stressprobe, the program of guest.stress and guest.stress-ahci: 33 MiB of
+# files written, synced and read back through a page cache of at most 8 MiB.
+file 0755 /stressprobe build/tests/stressprobe
+
+# ahciprobe, the program of guest.queue.fault, whose root is a copy of this
+# disk with a FAT32 partition after the KRFFS one: blockprobe on the root
+# beside raw reads of that partition.
+file 0755 /ahciprobe build/tests/ahciprobe

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.diskfull",
+  "summary": "A file system with no room left refuses a write with ENOSPC and gives the space back when the file goes; the program is tests/diskfull.c",
+  "cases": [
+    {
+      "case_id": "guest.diskfull.diskfull",
+      "behavior": "a file written on the test image's root until a write is refused is refused with ENOSPC after bytes were written, and once it is removed a block can be written again",
+      "units": ["diskfull"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}},
+      "execution": {"program": "diskfull", "stdin": null, "role": "ordinary", "privileges": "root, which writes the root directory", "isolation": [], "children": "none", "cleanup": "it removes its file on every path but a failed unlink; the root is the boot's own"},
+      "assertions": [
+        {"assertion_id": "filled", "checks": "the file on the root is created, bytes are written to it, and a write within 32 MiB is refused", "source": "program"},
+        {"assertion_id": "enospc", "checks": "the refusal is ENOSPC, not EIO or another error", "source": "program"},
+        {"assertion_id": "space-returned", "checks": "once the file is removed, a new file takes a block of 4 KiB written whole", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "diskfull", "node": "tests/diskfull", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "exhaustion", "reason": "the probe fills the root file system of the machine it runs on; tests/native/probes.cases runs it in a private root of 16 MiB"}
+    }
+  ]
+}

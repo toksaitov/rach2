@@ -576,6 +576,9 @@ $(DRILL_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-em
 # fsync pushed the write through the cache to the disk, since the file would
 # otherwise be gone.
 PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
+$(PERSIST_DISK): krffs/manifests/persist-test.manifest $(MANIFEST_DEPS_persist_test) $(MKDISK) \
+                 $(IMAGE_TOOLS) | preflight krffs tests
+	$(MKDISK) krffs/manifests/persist-test.manifest $@ 64 48
 run-persist: rach2 tests krffs $(HARNESS)
 	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
@@ -754,6 +757,12 @@ $(MOUNT_CLAIM_DISK): $(MOUNT_TEST_DISK) $(MKMBR)
 # console: every line read, no request quarantined by its deadline, and the
 # longest delays it saw, from `/proc/stat`, printed.
 LOAD_DISK = $(IMAGES_DIR)/load-test.disk
+$(LOAD_DISK): $(MKMBR)
+	@mkdir -p $(@D)
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=16 2>/dev/null
+	$(MKMBR) --lba $@.tmp 2048:28672:0c >/dev/null
+	mformat -i $@.tmp@@1048576 -F -T 28672 -v LOAD ::
+	mv $@.tmp $@
 run-load: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/load.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)
 
@@ -1338,6 +1347,29 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(GROWSET
 # `tests/run queue`: real AHCI reads, interrupts, ext2 batch writes and
 # fallback root faults beside raw reads; controlled host models test deadlines.
 QUEUE_DIR = $(IMAGES_DIR)/queue
+$(QUEUE_DIR)/slow.disk $(QUEUE_DIR)/fast.disk: $(MKMBR)
+	@mkdir -p $(@D)
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=8 2>/dev/null
+	$(MKMBR) --lba $@.tmp 2048:14336:0c >/dev/null
+	mformat -i $@.tmp@@1048576 -F -T 14336 ::
+	mv $@.tmp $@
+$(QUEUE_DIR)/root.disk: $(ETUDE_DISK) $(MKMBR)
+	@mkdir -p $(@D)
+	cp $(ETUDE_DISK) $@.tmp
+	$(MKMBR) --lba $@.tmp 2048:98304:7f 100352:28672:0c >/dev/null
+	mformat -i $@.tmp@@51380224 -F -T 28672 ::
+	mv $@.tmp $@
+$(QUEUE_DIR)/late.disk: $(MKMBR)
+	@mkdir -p $(@D)
+	rm -f $@.vol
+	. tools/setup/e2fsprogs_path.sh && E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 \
+	    -O sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize \
+	    $@.vol 6M >/dev/null
+	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $@.vol; \
+	  dd if=/dev/zero bs=1048576 count=1 2>/dev/null; } > $@.tmp
+	rm -f $@.vol
+	$(MKMBR) --lba $@.tmp 2048:12288:83 >/dev/null
+	mv $@.tmp $@
 run-queue: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/queue.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)
 # `tests/run persist-ahci`: fsync durability across a reboot with the disk on

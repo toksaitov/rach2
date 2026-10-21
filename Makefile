@@ -345,6 +345,7 @@ MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.ma
 MANIFEST_DEPS_etude_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/etude-disk.manifest)
 MANIFEST_DEPS_shutdown_test := $(shell $(MANIFEST_DEPS) krffs/manifests/shutdown-test.manifest)
 MANIFEST_DEPS_disk_test := $(shell $(MANIFEST_DEPS) krffs/manifests/disk-test.manifest)
+MANIFEST_DEPS_persist_test := $(shell $(MANIFEST_DEPS) krffs/manifests/persist-test.manifest)
 MANIFEST_DEPS_doom_test := $(shell $(MANIFEST_DEPS) krffs/manifests/doom-test.manifest)
 # The targets that build what os-real's manifest stages, and grub-test's,
 # which is os-real's with two more files. Every rule that stages either names
@@ -356,7 +357,7 @@ MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
     $(MANIFEST_DEPS_etude_disk) $(MANIFEST_DEPS_shutdown_test) $(MANIFEST_DEPS_disk_test) \
-    $(MANIFEST_DEPS_doom_test))
+    $(MANIFEST_DEPS_persist_test) $(MANIFEST_DEPS_doom_test))
 STAGED_IN_MANIFESTS = $(filter $(ARCH_MUSL)/% $(TCC_STAGE)/%,$(MANIFEST_INPUTS))
 MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter $(ARCH_MUSL)/%,$(STAGED_IN_MANIFESTS)))
 TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter $(TCC_STAGE)/%,$(STAGED_IN_MANIFESTS)))
@@ -696,6 +697,8 @@ $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # console (tests/cases/machine/console_report.c), for the cases whose probe
 # runs inside the machine and reports there.
 PROBE_SCENARIOS = build/tests/cases/machine/dgram_scenario \
+                  build/tests/cases/machine/load_scenario \
+                  build/tests/cases/machine/persist_scenario \
                   build/tests/cases/machine/raw_scenario \
                   build/tests/cases/machine/socket_scenario
 $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \

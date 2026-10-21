@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.load",
+  "summary": "The machine under load while lines are typed at its console: every line read and no disk request quarantined; the scenario is machine/load_scenario.c and the probe tests/loadprobe.c",
+  "cases": [
+    {
+      "case_id": "machine.load.lag",
+      "behavior": "six spinners, two writers syncing a FAT32 volume on a disk behind the lag device, a pinger and a console reader run at once; the reader takes every line typed and no request is quarantined by its deadline",
+      "units": ["load", "loadprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /loadprobe", "lines": 6}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "load_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["load-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image with the copy of the disk to the debug shell"},
+        {"step_id": "load", "stage": "execute", "machine": "guest", "does": "run loadprobe at the debug shell, type six lines, each once the reader says it took the one before, take the report from the console and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "load-disk", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue", "rach2.blocklag=1"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "mounted", "checks": "the FAT32 volume of /dev/disk0p1 mounts on /lo", "source": "scenario"},
+        {"assertion_id": "started", "checks": "the report pipe and the ten load processes are made", "source": "scenario"},
+        {"assertion_id": "killed", "checks": "every load process ends by the kill, and none exits by itself", "source": "scenario"},
+        {"assertion_id": "latencies", "checks": "/proc/stat has the longest delays of the timer, the disk and the console", "source": "scenario"},
+        {"assertion_id": "lines", "checks": "the reader takes each of the six lines typed at the console", "source": "scenario"},
+        {"assertion_id": "no-quarantine", "checks": "/proc/disk counts no request quarantined by its deadline under the load", "source": "scenario"},
+        {"assertion_id": "unmounted", "checks": "the volume unmounts and /lo is removed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "load-disk", "node": "images/load-test.disk", "per_architecture": true},
+        {"name": "load_scenario", "node": "tests/cases/machine/load_scenario", "per_architecture": false}
+      ],
+      "timing": [{"kind": "injected_delay", "where": "rach2/sys/block/lag.c:101", "assumes": "rach2.blocklag=1 holds each request of the disk one tick before its answer, and the case judges only that no request was quarantined after it; the disk keeps the guest's flushes from the host, so that the host's disk adds nothing to the deadline", "uncertainty_us": null}],
+      "native": {"plan": "none", "class": "input", "reason": "the case types lines at the console of the machine under load; tests/native/probes.cases runs the probe with its lines on a pseudo-terminal"}
+    },
+    {
+      "case_id": "machine.load.polled",
+      "behavior": "the first writer alone, without its syncs, and the console reader, on a disk the ATA driver reads and writes on its data port with interrupts off; the writer gives way at each tick, so that the reader takes every line",
+      "units": ["load", "loadprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /loadprobe Wnr", "lines": 6}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "load_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["load-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image with the copy of the disk to the debug shell"},
+        {"step_id": "load", "stage": "execute", "machine": "guest", "does": "run loadprobe Wnr at the debug shell, type six lines, each once the reader says it took the one before, take the report from the console and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": ["load-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.rescue", "rach2.atapio"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "mounted", "checks": "the FAT32 volume of /dev/disk0p1 mounts on /lo", "source": "scenario"},
+        {"assertion_id": "started", "checks": "the report pipe and the ten load processes are made", "source": "scenario"},
+        {"assertion_id": "killed", "checks": "every load process ends by the kill, and none exits by itself", "source": "scenario"},
+        {"assertion_id": "latencies", "checks": "/proc/stat has the longest delays of the timer, the disk and the console", "source": "scenario"},
+        {"assertion_id": "lines", "checks": "the reader takes each of the six lines typed at the console", "source": "scenario"},
+        {"assertion_id": "no-quarantine", "checks": "/proc/disk counts no request quarantined by its deadline under the load", "source": "scenario"},
+        {"assertion_id": "unmounted", "checks": "the volume unmounts and /lo is removed", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "load-disk", "node": "images/load-test.disk", "per_architecture": true},
+        {"name": "load_scenario", "node": "tests/cases/machine/load_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "input", "reason": "the case types lines at the console of the machine under load; tests/native/probes.cases runs the probe with its lines on a pseudo-terminal"}
+    }
+  ]
+}

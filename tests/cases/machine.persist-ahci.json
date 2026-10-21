@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.persist-ahci",
+  "summary": "fsync takes a write through the page cache to a disk on an AHCI controller, so that it survives a power cut; the scenario is machine/persist_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.persist-ahci.fsync",
+      "behavior": "a file written and synced on a KRFFS root mounted from a disk on a port of an AHCI controller reads back in the next boot of the disk, after the first was cut off",
+      "units": ["persist-ahci", "persistprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"write": "exec /persistprobe write", "read": "exec /persistprobe read"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "persist_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["persist-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "write", "stage": "execute", "machine": "fixture", "does": "boot the copy, run persistprobe write at the debug shell, take its report from the console and end the machine with QMP's quit"},
+        {"step_id": "read", "stage": "execute", "machine": "fixture", "does": "boot the same copy again, run persistprobe read at the debug shell, take its report from the console and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "persist-disk", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.fsdisk", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "absent", "checks": "the first boot finds no /persist.txt on the root before it writes", "source": "scenario"},
+        {"assertion_id": "written", "checks": "the first boot creates /persist.txt and writes the marker whole", "source": "scenario"},
+        {"assertion_id": "synced", "checks": "fsync of the file and sync return 0", "source": "scenario"},
+        {"assertion_id": "cut", "checks": "the first boot runs until QMP's quit ends it, so that no unmount wrote the disk after the probe", "source": "scenario"},
+        {"assertion_id": "found", "checks": "the second boot of the same copy opens /persist.txt", "source": "scenario"},
+        {"assertion_id": "whole", "checks": "the read gives the marker's length", "source": "scenario"},
+        {"assertion_id": "marker", "checks": "the bytes read are the marker the first boot wrote", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "persist-disk", "node": "images/persist-test.disk", "per_architecture": true},
+        {"name": "persist_scenario", "node": "tests/cases/machine/persist_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case cuts the machine off between two boots of one disk, whose root the kernel mounts from the disk on AHCI"}
+    }
+  ]
+}

@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.queue",
+  "summary": "Reads and writes through the interrupt-driven AHCI driver, and page faults of a root on AHCI beside raw reads of the same port; the program is tests/ahciprobe.c",
+  "cases": [
+    {
+      "case_id": "guest.queue.read",
+      "behavior": "two disks on two ports of one AHCI controller each read in chunks by a process of its own complete through the driver's message-signalled interrupts",
+      "units": ["queue", "ahciprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["read"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "queue-slow", "bus": "ahci"}, {"name": "queue-fast", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}},
+      "execution": {"program": "ahciprobe", "stdin": null, "role": "ordinary", "privileges": "root, which reads the disks' nodes", "isolation": [{"fixture": "disk", "names": ["queue-slow", "queue-fast"]}], "children": "reaped", "cleanup": "nothing; the readers are reaped, and the disks are the attempt's private copies"},
+      "assertions": [
+        {"assertion_id": "both-read", "checks": "a child reads 1 MiB of /dev/disk0p1 and another 256 KiB of /dev/disk1p1, in chunks of 32 KiB, and each exits 0", "source": "program"},
+        {"assertion_id": "interrupts", "checks": "the controller's line of /proc/interrupts counts at least 16 completions", "source": "program"},
+        {"assertion_id": "messages", "checks": "the driver says it takes the controller's messages on a vector", "source": "executor", "record": "ahci: interrupts: messages on vector"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 33554432, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ahciprobe", "node": "tests/ahciprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "queue-slow", "node": "images/queue/slow.disk", "per_architecture": true},
+        {"name": "queue-fast", "node": "images/queue/fast.disk", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case's disks are on an AHCI controller of QEMU's, arranged and made for it"}
+    },
+    {
+      "case_id": "guest.queue.fault",
+      "behavior": "page faults of a KRFFS root on a port of an AHCI controller, from blockprobe, complete beside raw reads of a second partition of the same disk, and a fault's polled command finishes a queued read it finds active",
+      "units": ["queue", "ahciprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["fault"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "queue-root", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=disk", "rach2.rescue"]}},
+      "execution": {"program": "ahciprobe", "stdin": null, "role": "ordinary", "privileges": "root, which writes the root directory", "isolation": [{"fixture": "disk", "names": ["queue-root"]}], "children": "reaped", "cleanup": "blockprobe removes its files and is reaped; the disk is the attempt's private copy"},
+      "assertions": [
+        {"assertion_id": "counter", "checks": "/proc/disk has the count disk-drains", "source": "program"},
+        {"assertion_id": "raw-reads", "checks": "every read of /dev/disk0p2 in chunks of 32 KiB while blockprobe runs succeeds", "source": "program"},
+        {"assertion_id": "blockprobe", "checks": "blockprobe, run on the root beside the raw reads, exits 0", "source": "program"},
+        {"assertion_id": "drained", "checks": "disk-drains has risen: a fault's polled command found a raw read active on the port and finished it first", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ahciprobe", "node": "tests/ahciprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "queue-root", "node": "images/queue/root.disk", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case's disks are on an AHCI controller of QEMU's, arranged and made for it, the root on its first port"}
+    },
+    {
+      "case_id": "guest.queue.write",
+      "behavior": "a batch of 1280 KiB written to an ext2 volume on a port of an AHCI controller syncs, reads back byte for byte, and leaves the mount writable",
+      "units": ["queue", "ahciprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": ["write"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "queue-late", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}},
+      "execution": {"program": "ahciprobe", "stdin": null, "role": "ordinary", "privileges": "root, which writes the root directory", "isolation": [{"fixture": "disk", "names": ["queue-late"]}], "children": "none", "cleanup": "it unmounts the volume and removes /late; the disk is the attempt's private copy"},
+      "assertions": [
+        {"assertion_id": "mounted", "checks": "the ext2 volume of /dev/disk0p1 mounts on /late", "source": "program"},
+        {"assertion_id": "written", "checks": "late.bin is created and 1280 KiB are written to it in one call", "source": "program"},
+        {"assertion_id": "synced", "checks": "the sync after the batch returns 0", "source": "program"},
+        {"assertion_id": "read-back", "checks": "late.bin reads back whole, every block of 4 KiB as written", "source": "program"},
+        {"assertion_id": "writable", "checks": "a second file is made on the volume after the batch, which a mount that went read-only refuses, and the next sync returns 0", "source": "program"},
+        {"assertion_id": "unmounted", "checks": "the volume unmounts and /late is removed", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 33554432, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ahciprobe", "node": "tests/ahciprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "queue-late", "node": "images/queue/late.disk", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case's disks are on an AHCI controller of QEMU's, arranged and made for it"}
+    }
+  ]
+}
