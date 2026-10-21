@@ -173,7 +173,7 @@ fault digest 'the streams give the sizes and digests of the output sent'
 fault total 'each stream gives the bytes it carried beyond those sent'
 fault orphan "an orphaned attempt's end is lost"
 fault immediate "an orphaned attempt's cleanup is confirmed once its processes have ended"
-fault leaderless 'an orphaned attempt whose first process has ended has its group killed'
+fault leaderless 'an orphaned attempt whose first process was reaped has its group killed'
 fault boot 'an orphaned attempt of another boot is settled with nothing killed'
 fault session "a group of another session is not taken for an orphaned attempt's"
 fault complete 'a run whose record lost part of its end is answered with the whole end'

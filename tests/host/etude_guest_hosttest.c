@@ -107,15 +107,15 @@ static void end_guest(void)
     guest = -1;
 }
 
-/* The processes that hold the groups of check_unrelated_groups, or -1. */
-static long holders[2] = {-1, -1};
+/* The processes that hold the groups of check_group_records, or -1. */
+static long holders[3] = {-1, -1, -1};
 
 /** Kill the processes that hold the groups made by make_group(). */
 static void end_groups(void)
 {
     int i;
 
-    for (i = 0; i < 2; i++) {
+    for (i = 0; i < 3; i++) {
         if (holders[i] > 0)
             kill((pid_t)holders[i], SIGKILL);
         holders[i] = -1;
@@ -999,37 +999,49 @@ static int settled_confirmed(const char *token)
 
 /** A killed etude-guest whose attempt's first process ends after it, and
  * leaves a process in the attempt's group: the next etude-guest kills what
- * is left of the group and confirms the cleanup. */
+ * is left of the group and confirms the cleanup. A FIFO releases the first
+ * process after etude-guest ends; another, opened after the member starts,
+ * reports its exit even while its new parent has not reaped it. */
 static void check_orphan_group(void)
 {
     static const char leaving[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
                                   "echo $$ > \"$MARKS.leader\"\nsleep 60 &\n"
-                                  "echo $! > \"$MARKS.member\"\necho ready\n"
-                                  "while kill -0 $PPID 2>/dev/null; do sleep 1; done\n";
+                                  "echo $! > \"$MARKS.member\"\n"
+                                  "exec 8> \"$MARKS.leader-open\"\necho ready\n"
+                                  "read release < \"$MARKS.release\"\n";
     struct got g;
     char inv[65];
     char c[24];
-    long long until;
+    char path[600];
     long leader;
     long member;
     int open_end;
+    int leader_end;
+    int release;
 
+    snprintf(path, sizeof(path), "%s/marks.release", work);
+    CHECK(mkfifo(path, 0600) == 0, "the first process's release FIFO is made");
+    release = open(path, O_RDWR | O_NONBLOCK);
+    CHECK(release >= 0, "the first process's release FIFO is open");
     start_guest("--stdio", (char *)NULL);
     hello(ETUDE_FRAME_STDIO_MAX);
     put_case("leaving", leaving, "00000000000000d9", "ordinary", 60000, inv);
     open_end = watch("marks.open");
+    leader_end = watch("marks.leader-open");
     send_cmd(ETUDE_CMD_RUN, new_cmd(c), "00000000000000d9", inv, (char *)NULL);
     CHECK(expect(&g, ETUDE_EV_STARTED, 5000) == 0,
           "the attempt whose first process leaves its group starts");
     CHECK(wait_ready() == 0, "the attempt says it is ready");
     leader = read_pid("marks.leader");
     member = read_pid("marks.member");
+    CHECK(alive(leader) && alive(member), "the first process and its group member run");
     end_guest();
-    until = now_ms() + 10000;
-    while (alive(leader) && now_ms() < until)
-        poll(NULL, 0, 20);
-    CHECK(leader > 0 && !alive(leader) && alive(member),
+    CHECK(release >= 0 && write(release, "exit\n", 5) == 5,
+          "the first process is released after etude-guest ends");
+    CHECK(all_gone(leader_end, 10000) && alive(member),
           "the first process ends after etude-guest and leaves a process in its group");
+    if (release >= 0)
+        close(release);
     start_guest("--stdio", (char *)NULL);
     hello(ETUDE_FRAME_STDIO_MAX);
     CHECK(settled_confirmed("00000000000000d9"),
@@ -1126,30 +1138,40 @@ static int orphan_record(const char *token, long child, const char *bootid)
  * by a record of another boot; and a group of this boot whose first process
  * has ended and whose second is in another session. The next etude-guest
  * settles each attempt, kills neither group, and confirms each cleanup.
+ * A third group has its own session and a record of this boot: its first
+ * process has been reaped, so cleanup must find and kill the group without
+ * finding that process.
  */
-static void check_unrelated_groups(void)
+static void check_group_records(void)
 {
     char another[ETUDE_FRAME_TOKEN_LEN + 1];
-    long group[2] = {0, 0};
-    int fd[2];
+    long group[3] = {0, 0, 0};
+    int fd[3];
 
     fd[0] = watch("group.boot");
     fd[1] = watch("group.session");
+    fd[2] = watch("group.reaped");
     holders[0] = make_group("group.boot", 1, &group[0]);
     holders[1] = make_group("group.session", 0, &group[1]);
-    CHECK(holders[0] > 0 && holders[1] > 0 && still_open(fd[0]) && still_open(fd[1]),
-          "two groups whose first processes have ended are made");
+    holders[2] = make_group("group.reaped", 1, &group[2]);
+    CHECK(holders[0] > 0 && holders[1] > 0 && holders[2] > 0 && still_open(fd[0]) &&
+              still_open(fd[1]) && still_open(fd[2]),
+          "three groups whose first processes have been reaped are made");
     start_guest("--stdio", (char *)NULL);
     hello(ETUDE_FRAME_STDIO_MAX);
     snprintf(another, sizeof(another), "%s", boot);
     another[0] = another[0] == '0' ? '1' : '0';
     CHECK(orphan_record("00000000000000da", group[0], another) == 0 &&
-              orphan_record("00000000000000db", group[1], boot) == 0,
+              orphan_record("00000000000000db", group[1], boot) == 0 &&
+              orphan_record("00000000000000dc", group[2], boot) == 0,
           "the records of the orphaned attempts are made");
     CHECK(settled_confirmed("00000000000000da") && still_open(fd[0]),
           "an orphaned attempt of another boot is settled with nothing killed");
     CHECK(settled_confirmed("00000000000000db") && still_open(fd[1]),
           "a group of another session is not taken for an orphaned attempt's");
+    CHECK(settled_confirmed("00000000000000dc"),
+          "an orphaned attempt whose first process was reaped has its group killed");
+    CHECK(all_gone(fd[2], 2000), "cleanup ends the group whose first process was reaped");
     bye(0);
     end_groups();
     CHECK(all_gone(fd[0], 2000) && all_gone(fd[1], 2000), "the groups made here are ended");
@@ -1616,7 +1638,7 @@ int main(int argc, char **argv)
     check_interruptions();
     check_orphan();
     check_orphan_group();
-    check_unrelated_groups();
+    check_group_records();
     check_unfinished_end();
     check_record_first();
     check_stdio_damage();
