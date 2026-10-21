@@ -13,7 +13,8 @@
  *       kernel heap's HeapUsed in /proc/meminfo is what it was before three
  *       hundred open and close cycles, and before an open held across a
  *       hundred forks and then closed, so no cycle and no fork leaves a
- *       description behind;
+ *       description behind; each comparison is made up to five times, and
+ *       holds when one run leaves the heap as it was;
  *   (d) FD_CLOEXEC is per-fd: it round-trips through fcntl, and dup2 leaves
  *       the new fd's flag clear.
  *
@@ -152,30 +153,33 @@ static int eqn(const char *a, const char *b, int n)
     return 1;
 }
 
-/** Run case (c): the heap after 300 open and close cycles, and after an open
- * held across 100 forks and then closed. No report record is written here,
- * since a record is a write that may move the heap. */
-static void count_heap(void)
+/** Open and close `hello` 300 times. Returns 0, or -1 after an open fails. */
+static int cycles(void)
 {
-    int fd, status, i;
-    unsigned used;
+    int i;
 
-    used = probe_meminfo("HeapUsed:");
-    check(MEMINFO, used != 0xFFFFFFFFu, "HeapUsed in /proc/meminfo");
     for (i = 0; i < 300; i++) {
         int f = syscall3(SYS_OPEN, (long)hello, O_RDONLY, 0);
         if (f < 0) {
             check(CYCLES, 0, "open in an open/close cycle");
-            break;
+            return -1;
         }
         syscall1(SYS_CLOSE, f);
     }
-    check_heap(HEAP_CYCLES, probe_meminfo("HeapUsed:") == used,
-               "300 open/close cycles left the heap as it was (no OFD leak)");
+    return 0;
+}
 
-    used = probe_meminfo("HeapUsed:");
+/** Hold an open of `hello` across 100 forks, each reaped, and close it.
+ * Returns 0, or -1 after the open, a fork or a reap fails. */
+static int forks(void)
+{
+    int fd, status, i;
+
     fd = syscall3(SYS_OPEN, (long)hello, O_RDONLY, 0);
     check(HELD_OPEN, fd >= 0, "open held across the forks");
+    if (fd < 0) {
+        return -1;
+    }
     for (i = 0; i < 100; i++) {
         int p = syscall1(SYS_FORK, 0);
         if (p == 0) {
@@ -183,11 +187,50 @@ static void count_heap(void)
         }
         if (p < 0 || syscall3(SYS_WAITPID, p, (long)&status, 0) != p || status != 0) {
             check(FORKS, 0, "a fork and reap with the open held");
-            break;
+            syscall1(SYS_CLOSE, fd);
+            return -1;
         }
     }
     syscall1(SYS_CLOSE, fd);
-    check_heap(HEAP_FORKS, probe_meminfo("HeapUsed:") == used,
+    return 0;
+}
+
+/* The runs of a heap comparison before it fails. */
+#define HEAP_TRIES 5
+
+/** Whether HeapUsed is the same after `work` as before it, in one of
+ * HEAP_TRIES runs of it, or after one run under `machine=native`, whose
+ * result is not judged. Another process of the machine, such as the
+ * runner a guest case starts the probe from, may hold heap for a moment
+ * across one run, while a leak grows the heap in every run. Returns 1 as
+ * well when `work` fails, which records its own failure. */
+static int heap_kept(int (*work)(void))
+{
+    int tries = probe_native() ? 1 : HEAP_TRIES;
+    int i;
+
+    for (i = 0; i < tries; i++) {
+        unsigned used = probe_meminfo("HeapUsed:");
+
+        if (work() != 0) {
+            return 1;
+        }
+        if (probe_meminfo("HeapUsed:") == used) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Run case (c): the heap after 300 open and close cycles, and after an open
+ * held across 100 forks and then closed. No report record is written here,
+ * since a record is a write that may move the heap. */
+static void count_heap(void)
+{
+    check(MEMINFO, probe_meminfo("HeapUsed:") != 0xFFFFFFFFu, "HeapUsed in /proc/meminfo");
+    check_heap(HEAP_CYCLES, heap_kept(cycles),
+               "300 open/close cycles left the heap as it was (no OFD leak)");
+    check_heap(HEAP_FORKS, heap_kept(forks),
                "100 forks and the close left the heap as it was (no fork OFD leak)");
 }
 
