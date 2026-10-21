@@ -40,7 +40,7 @@
       ],
       "fails": {
         "lines": [
-          "guest.pools.live: failure: ptys failed"
+          "@etude 1 assert ptys fail forty ptys at once"
         ]
       }
     },
@@ -56,7 +56,7 @@
       ],
       "fails": {
         "lines": [
-          "guest.pools.heap: failure: pipe-heap failed"
+          "@etude 1 assert pipe-heap fail a thousand pipes made and closed changed the heap in three tries"
         ]
       }
     }
