@@ -860,6 +860,41 @@
           ": guest: the plan's items are of the domain qemu: "
         ]
       }
+    },
+    {
+      "name": "kernel",
+      "summary": "the manifest's reader is not given -n NAME, so a guest case boots rach2/kernel",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "o->members[i].suite, o->arch, o->kernel) != 0)",
+          "replace": "o->members[i].suite, o->arch, NULL) != 0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": kernel: the case of rach2/kernel passed on rach2-fixture/kernel: ",
+          ": kernel: one machine booted rach2-fixture/kernel under -n: "
+        ]
+      }
+    },
+    {
+      "name": "kernelnode",
+      "summary": "-n NAME replaces the kernel of a guest case that boots a node other than rach2/kernel",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": " &&\n            strcmp(node, \"rach2/kernel\") == 0)\n",
+          "replace": ")\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": kernel: the cases of another node booted it under -n: "
+        ]
+      }
     }
   ]
 }

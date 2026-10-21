@@ -78,8 +78,12 @@
  * `qemu`; rngprobe passes on `qemu64` with its branch `fail-closed`; a boot
  * past its stage's bound is stopped and incomplete;
  * each machine is given its profile's processor, which a wrapper of QEMU
- * records; and the run's store of artifacts is removed at its end. A missing
- * QEMU or image fails the test.
+ * records; and the run's store of artifacts is removed at its end. The set
+ * runs with `-n fixture`: the case whose profile boots the node
+ * `rach2/kernel`, which the fixture makes a file that does not boot, boots
+ * `rach2-fixture/kernel` in its place and passes, and the cases that boot
+ * another node boot it, each kernel told by its digest in the preparation's
+ * record and in QEMU's command line. A missing QEMU or image fails the test.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -322,7 +326,8 @@ static const struct {
 
 /* The form of a guest case of a fixture manifest: the tree's rngprobe on
  * the test image, under the processor profile `cpu`, with its boot stage
- * bounded in milliseconds, which casecheck accepts. */
+ * bounded in milliseconds and its kernel built as a node, which casecheck
+ * accepts. */
 static const char guest_form[] =
     "{\"case_id\": \"%s\", \"behavior\": \"The random devices give bytes from a trusted source "
     "or refuse to read without one\",\n"
@@ -369,7 +374,7 @@ static const char guest_form[] =
     "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 0, \"loop_devices\": 0},\n"
     " \"prepare\": [{\"name\": \"rngprobe\", \"node\": \"guest/rngprobe\", \"per_architecture\": "
     "true},\n"
-    "  {\"name\": \"kernel\", \"node\": \"guest/kernel\", \"per_architecture\": true},\n"
+    "  {\"name\": \"kernel\", \"node\": \"%s\", \"per_architecture\": true},\n"
     "  {\"name\": \"etude-guest\", \"node\": \"guest/etude-guest\", \"per_architecture\": true},\n"
     "  {\"name\": \"test-image\", \"node\": \"guest/test.krffs\", \"per_architecture\": true}],\n"
     " \"timing\": [], \"native\": {\"plan\": \"native\", \"fixtures\": [{\"fixture\": "
@@ -380,16 +385,21 @@ struct gcase {
     const char *id;
     const char *cpu;  /* its processor profile */
     unsigned boot_ms; /* the bound of its boot */
+    const char *node; /* the node of its kernel */
 };
 
-/* The family `guest`: rngprobe with and without a random source, and a
- * boot bounded far below what the boot takes. */
-static const struct gcase guest_cases[] = {{"fixture.guest.rng", "max", 60000},
-                                           {"fixture.guest.closed", "qemu64", 60000},
-                                           {"fixture.guest.boot", "qemu64", 200}};
+/* The family `guest`: rngprobe with and without a random source, a boot
+ * bounded far below what the boot takes, and rngprobe on the kernel of the
+ * node `rach2/kernel`, which `-n` replaces. */
+static const struct gcase guest_cases[] = {
+    {"fixture.guest.rng", "max", 60000, "guest/kernel"},
+    {"fixture.guest.closed", "qemu64", 60000, "guest/kernel"},
+    {"fixture.guest.boot", "qemu64", 200, "guest/kernel"},
+    {"fixture.guest.named", "qemu64", 60000, "rach2/kernel"}};
 
 /* The family `badguest`, whose one case the refused manifests change. */
-static const struct gcase badguest_cases[] = {{"fixture.badguest.one", "max", 60000}};
+static const struct gcase badguest_cases[] = {
+    {"fixture.badguest.one", "max", 60000, "guest/kernel"}};
 
 /* The manifests of `badguest` that the driver refuses, each its case with
  * the text `from` made `to`. */
@@ -451,6 +461,7 @@ struct run {
     const char *unset;  /* a variable the driver runs without, or NULL */
     const char *var;    /* a variable the driver runs with, or NULL */
     const char *arch;   /* the architecture, or NULL for i686 */
+    const char *kernel; /* the NAME of `-n NAME`, or NULL */
     int nojudge;        /* the driver is given no casecheck */
     int guest;          /* it runs guest cases, on the real QEMU */
     pid_t pid;
@@ -856,7 +867,7 @@ static int guest_text(char *buf, size_t size, const char *family, const struct g
                  family);
     for (i = 0; k >= 0 && (size_t)k < size && i < n; i++) {
         len = (size_t)k;
-        k = snprintf(buf + len, size - len, guest_form, c[i].id, c[i].cpu, c[i].boot_ms);
+        k = snprintf(buf + len, size - len, guest_form, c[i].id, c[i].cpu, c[i].boot_ms, c[i].node);
         k = k < 0 ? k : (int)len + k;
         if (k >= 0 && (size_t)k < size && i + 1 < n)
             k += snprintf(buf + k, size - (size_t)k, ",\n");
@@ -920,7 +931,10 @@ static int make_cases(void)
 /**
  * Give in `out` the rules that link the guest cases' artifacts, the nodes
  * `guest/NAME`, to the tree's build of their architecture, which the
- * fixture's preparation makes; 0, or -1 when they do not fit.
+ * fixture's preparation makes, and the rule of `-n fixture`'s kernel,
+ * `rach2-fixture/kernel`: a copy of the tree's kernel with a line after
+ * its end, which no loader reads, so that its digest is its own; 0, or -1
+ * when they do not fit.
  */
 static int guest_rules(char *out, size_t size)
 {
@@ -940,7 +954,12 @@ static int guest_rules(char *out, size_t size)
             return -1;
         used += (size_t)k;
     }
-    return 0;
+    k = snprintf(out + used, size - used,
+                 ".PHONY: fixture-kernel\nfixture-kernel:\n\t@mkdir -p %s/rach2-fixture && "
+                 "cp %s/rach2/kernel %s/rach2-fixture/kernel && echo fixture >> "
+                 "%s/rach2-fixture/kernel\n",
+                 dir, guest_build, dir, dir);
+    return k < 0 || (size_t)k >= size - used ? -1 : 0;
 }
 
 /** Make the fixture tree, with its run lock held by this process, runutil's
@@ -1024,6 +1043,7 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     memset(o, 0, sizeof(*o));
     o->tree = tree;
     o->arch = r->arch != NULL ? r->arch : "i686";
+    o->kernel = r->kernel;
     o->program = self;
     o->casecheck = r->nojudge ? NULL : casecheck;
     o->members = r->members;
@@ -1866,7 +1886,7 @@ static const char *guest_store(const struct run *r, char *out, size_t size)
  * each case whose workspace was kept, for a row that failed. */
 static void show_guest(const struct run *r)
 {
-    static const char *const ids[] = {"rng", "boot"};
+    static const char *const ids[] = {"rng", "boot", "named"};
     static char text[OUT_LEN];
     char path[PATH_LEN * 2];
     size_t i;
@@ -1885,27 +1905,68 @@ static void show_guest(const struct run *r)
 }
 
 /**
- * A suite run by guest cases on the real QEMU: rngprobe on the processor
- * `max` and `qemu64`, whose features decide its branch, and a boot that
- * runs past its stage's bound.
+ * Give in `hex` the digest of `goal` in the preparation's record of run `r`,
+ * from its line `file DIGEST SIZE INODE MTIME PATH`; 0, or -1 when it has
+ * none.
+ */
+static int record_digest(const struct run *r, const char *goal, char hex[65])
+{
+    static char text[OUT_LEN];
+    char path[PATH_LEN], want[PATH_LEN];
+    const char *at, *line;
+
+    fix_format(path, sizeof(path), "%s/prepare.record", r->results);
+    fix_format(want, sizeof(want), " %s\n", goal);
+    if (read_text(path, text, sizeof(text)) <= 0)
+        return -1;
+    for (at = strstr(text, want); at != NULL; at = strstr(at + 1, want)) {
+        for (line = at; line > text && line[-1] != '\n'; line--)
+            continue;
+        if (sscanf(line, "file %64[0-9a-f] ", hex) == 1 && strlen(hex) == 64)
+            return 0;
+    }
+    return -1;
+}
+
+/** Count the lines of `text` that have `word`. */
+static int lines_with(const char *text, const char *word)
+{
+    const char *at = strstr(text, word);
+    int n = 0;
+
+    while (at != NULL) {
+        n++;
+        at = strchr(at, '\n');
+        at = at != NULL ? strstr(at, word) : NULL;
+    }
+    return n;
+}
+
+/**
+ * A suite run by guest cases on the real QEMU with `-n fixture`: rngprobe
+ * on the processor `max` and `qemu64`, whose features decide its branch, a
+ * boot that runs past its stage's bound, and rngprobe on the kernel that
+ * replaces the node `rach2/kernel`.
  */
 static void test_guest(void)
 {
     static const struct etude_legacy_member m[] = {{"guest", 0, 0, 0, "cases/guest/guest.json"}};
     static struct run r;
     static char text[OUT_LEN];
-    char path[PATH_LEN * 2];
-    int before = fails;
+    const char *dir = strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64" : "build";
+    char path[PATH_LEN * 2], goal[PATH_LEN], other[PATH_LEN], hex[65] = "", hex2[65] = "";
+    int before = fails, named, own;
 
     r.name = "guest";
     r.members = m;
     r.n = 1;
     r.arch = guest_arch;
+    r.kernel = "fixture";
     r.guest = 1;
     set_run(&r);
     CHECK(r.status == 1, "guest: the boot past its bound fails the run");
     CHECK(r.read == 0, "guest: the history is whole");
-    CHECK(count_kind(&r.h, "attempt") == 3, "guest: an attempt of each case");
+    CHECK(count_kind(&r.h, "attempt") == 4, "guest: an attempt of each case");
     CHECK(case_is(&r, "fixture.guest.rng", guest_arch, 0, "pass", NULL),
           "guest: rngprobe passed on max");
     CHECK(results_has(&r, "fixture.guest.rng.r0",
@@ -1924,6 +1985,15 @@ static void test_guest(void)
     CHECK(read_text(path, text, sizeof(text)) > 0 && strstr(text, "-cpu max,") != NULL &&
               strstr(text, "-cpu qemu64,") != NULL,
           "guest: each machine has its profile's processor");
+    CHECK(case_is(&r, "fixture.guest.named", guest_arch, 0, "pass", NULL),
+          "kernel: the case of rach2/kernel passed on rach2-fixture/kernel");
+    fix_format(goal, sizeof(goal), "%s/rach2-fixture/kernel", dir);
+    fix_format(other, sizeof(other), "%s/guest/kernel", dir);
+    named = record_digest(&r, goal, hex) == 0 ? lines_with(text, hex) : -1;
+    own =
+        record_digest(&r, other, hex2) == 0 && strcmp(hex, hex2) != 0 ? lines_with(text, hex2) : -1;
+    CHECK(named == 1, "kernel: one machine booted rach2-fixture/kernel under -n");
+    CHECK(own == 3, "kernel: the cases of another node booted it under -n");
     CHECK(results_has(&r, "fixture.guest.rng.r0", "\"placement\":\"qemu\"") &&
               results_has(&r, "fixture.guest.rng.r0",
                           "\"termination\":{\"end\":\"exited\",\"value\":0,\"observed_by\":"
