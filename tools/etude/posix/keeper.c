@@ -461,6 +461,7 @@ static int keeper_launch(struct keeper *kp)
     }
     if (kp->pid == 0)
         case_child(a, go[0], status[1]);
+    posix_untrack_runner();
     kp->alive = 1;
     close(go[0]);
     close(status[1]);

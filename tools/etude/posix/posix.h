@@ -64,6 +64,14 @@ uint64_t posix_now_us(void);
 void posix_close_others(const int *keep, int n);
 
 /**
+ * Clear GitHub Actions' process marker in a forked cleanup supervisor.
+ * Its orphan sweep must leave this process alive to confirm cleanup.
+ * Overwrite the inherited bytes: unsetenv alone leaves Linux's
+ * /proc/PID/environ unchanged. Call after forking any tracked case.
+ */
+void posix_untrack_runner(void);
+
+/**
  * Move descriptor `fd` to one numbered 3 or above, closed on exec.
  *
  * @return the new descriptor, or -1.

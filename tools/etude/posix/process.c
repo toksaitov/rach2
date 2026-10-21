@@ -28,6 +28,20 @@
 
 #include "posix.h"
 
+extern char **environ;
+
+void posix_untrack_runner(void)
+{
+    static const char key[] = "RUNNER_TRACKING_ID=";
+    char **p;
+
+    for (p = environ; *p != NULL; p++)
+        if (strncmp(*p, key, sizeof(key) - 1) == 0) {
+            char *value = *p + sizeof(key) - 1;
+            memset(value, 0, strlen(value));
+        }
+}
+
 uint64_t posix_now_us(void)
 {
     struct timespec ts;

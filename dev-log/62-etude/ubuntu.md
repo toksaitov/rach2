@@ -17,8 +17,8 @@ T56 enrolled the testing PC's Ubuntu endpoint for #645 on 2026-10-20. The initia
 | Admitted disk | 171798691840 bytes (160 GiB) |
 | Admission wait and execution bounds | 20400 seconds each |
 | Executable cache | `/var/cache/rach2-etude` |
-| Version key | `24bbfa8b7cf08a83f5328304c6b7e727cf694c37c91cdeebdafe3234026a6845` |
-| Bridge SHA-256 | `116e7355bd9b0c24280f50045c7e92a48de40650afd6cf3cb8a9b3508efb45e3` |
+| Version key | `faf830e7b2ab178941c403f13774eca2505ae4e87c8071c18be7165711fde7f6` |
+| Bridge SHA-256 | `589ea49204d4a93c641b5ebaed6c88f15485741d64e04524b18ad73a92aed7ab` |
 | Make wrapper | `/usr/local/libexec/rach2/etude-bin/make`, from `tools/etude/make.sh` |
 | Make wrapper SHA-256 | `b8ac1aedc0794258e09666c3611642d61cfaf1458935726e2923d448c28f53fa` |
 | Launch script SHA-256 | `1d60c013dddaf06ddb2cbfd6de7b0d6ff645225a22ad306b50c5bcf812b2b5b2` |
@@ -44,3 +44,7 @@ The private deployment, access, drain and activation evidence is under `/var/lib
 The first launcher kept asking for `alone` and the site's full capacity after enrollment. On 2026-10-20 ten requests waited behind one while the 24 admitted processors had a load average of 0.4. Issue #792 corrects the launcher and installs the make wrapper before enabling shared admission, so old preparation binaries cannot run an unbounded build beside another account's tests. The policy, bridge, capacity and account access stay unchanged. Earlier running and queued claims retain their original reservations and finish in order.
 
 On 2026-10-21, `testing` and `toksaitov-m` ran their `host` suites concurrently within `tests/run style host`. The ledger recorded two running claims while both status records contained running `legacy.host` attempts. The reservations were four processors and 6 GiB for `testing`, eight processors and 10.5 GiB for `toksaitov-m`, and 40 GiB of disk each. An installed `alone` command stayed queued without executing while these tests ran, and ran after the shared claims ended. The host-tool build, every style case and all 226 host checks passed. The claim snapshots, status records and logs are under `/var/lib/rach2-etude/enrollment/792-shared/`.
+
+## CI cancellation
+
+On 2026-10-22, #820 replaced the policy's bridge with the cached version above after the build, style checks, host suite and `etude-runner-cleanup` proof passed. An installed launch checked the [process markers](../../tools/etude/Readme.md#installed-launch-admission) and left no claim. Earlier jobs kept their previous bridge. The private record is under `/var/lib/rach2-etude/enrollment/820-cleanup/`.

@@ -191,6 +191,7 @@ static void holder(const struct etude_bridge_spec *s, int wake, int out, long ow
     uint64_t until = posix_now_us() + (uint64_t)s->wait_ms * 1000;
     ssize_t n;
 
+    posix_untrack_runner();
     setsid();
     posix_close_others(keep, 2);
     signal(SIGPIPE, SIG_IGN);

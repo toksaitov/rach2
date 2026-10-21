@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "proof": "etude-runner-cleanup",
+  "summary": "A CI orphan sweep leaves cleanup supervisors alive until their claim and locks are released",
+  "tree": "private",
+  "sources": [
+    "tests/host/etude_bridge_hosttest.c",
+    "tools/etude/posix/etude_bridge.c",
+    "tools/etude/posix/bridge.c",
+    "tools/etude/posix/keeper.c",
+    "tools/etude/posix/process.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_bridge_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tools/etude/include -I tools/etude/posix -I utils -I tests/host -I tests/host/compat ${SRC}/tests/host/etude_bridge_hosttest.c ${SRC}/tools/etude/posix/bridge.c tools/etude/ledger.c tools/etude/capture.c utils/sha256.c tools/etude/posix/exec.c ${SRC}/tools/etude/posix/keeper.c ${SRC}/tools/etude/posix/process.c -o ${WORK}/etude_bridge_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_bridge_hosttest"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "tracked-keeper",
+      "summary": "The keeper keeps the job marker and is killed by the runner",
+      "edits": [
+        {
+          "file": "tools/etude/posix/keeper.c",
+          "find": "    posix_untrack_runner();\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-bridge-test: fail: runner keeper unmarked:",
+          "etude-bridge-test: fail: runner sweep releases claim:"
+        ]
+      }
+    },
+    {
+      "name": "tracked-holder",
+      "summary": "The holder keeps the job marker and is killed by the runner",
+      "edits": [
+        {
+          "file": "tools/etude/posix/bridge.c",
+          "find": "    posix_untrack_runner();\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-bridge-test: fail: runner holder unmarked:",
+          "etude-bridge-test: fail: runner holder confirms cleanup:"
+        ]
+      }
+    },
+    {
+      "name": "unset-only",
+      "summary": "Removing the libc entry leaves the initial environment visible to the runner",
+      "edits": [
+        {
+          "file": "tools/etude/posix/process.c",
+          "find": "            memset(value, 0, strlen(value));",
+          "replace": "            (void)value;\n            unsetenv(\"RUNNER_TRACKING_ID\");"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-bridge-test: fail: runner keeper unmarked:",
+          "etude-bridge-test: fail: runner holder unmarked:"
+        ]
+      }
+    }
+  ]
+}

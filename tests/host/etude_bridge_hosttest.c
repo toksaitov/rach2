@@ -228,6 +228,178 @@ static void ports(struct etude_ledger *l, const char *ledger)
 }
 
 #if defined(__linux__)
+/* The running processes of the fixture job's admission claim. */
+struct runner_claim {
+    long keeper, process;
+    int found;
+};
+
+/** Note whether the fixture job still has an admission claim. */
+static int runner_visit(const struct etude_ledger_claim *c, void *ctx)
+{
+    struct runner_claim *q = ctx;
+
+    if (strcmp(c->id, "runner-cleanup") == 0)
+        q->found = 1;
+    return 0;
+}
+
+/** Read the fixture's registered processes from the ledger's durable file. */
+static void runner_processes(const char *ledger, struct runner_claim *q)
+{
+    char path[4096], line[1024], role[16];
+    int own = 0;
+    long pid;
+    FILE *f;
+
+    snprintf(path, sizeof(path), "%s/claims", ledger);
+    f = fopen(path, "r");
+    if (f == NULL)
+        return;
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "claim ", 6) == 0)
+            own = strcmp(line, "claim runner-cleanup\n") == 0;
+        if (!own || sscanf(line, "process %15s %ld", role, &pid) != 2)
+            continue;
+        if (strcmp(role, "keeper") == 0)
+            q->keeper = pid;
+        if (strcmp(role, "case") == 0)
+            q->process = pid;
+    }
+    fclose(f);
+}
+
+/** Read the fixture's marker as the runner does, from /proc/PID/environ. */
+static int runner_tracks(long pid)
+{
+    char path[64], *entry = NULL;
+    size_t cap = 0;
+    FILE *f;
+    int found = 0;
+
+    snprintf(path, sizeof(path), "/proc/%ld/environ", pid);
+    f = fopen(path, "r");
+    if (f == NULL)
+        return -1;
+    while (getdelim(&entry, &cap, '\0', f) >= 0)
+        if (strcmp(entry, "RUNNER_TRACKING_ID=etude-bridge-fixture") == 0)
+            found = 1;
+    if (ferror(f))
+        found = -1;
+    free(entry);
+    fclose(f);
+    return found;
+}
+
+/** Execute a fixture job with the runner marker in its initial environment. */
+static pid_t runner_worker(const char *self, const char *ledger, const char *ready,
+                           const char *blocked, int fd)
+{
+    pid_t worker = fork();
+
+    if (worker == 0) {
+        close(fd);
+        setenv("RUNNER_TRACKING_ID", "etude-bridge-fixture", 1);
+        unsetenv("RACH2_PORT_OFFSET");
+        unsetenv("SSH_TEST_PORT");
+        execl(self, self, "--runner-worker", "-p", "-d", fix_dir(), ledger, "runner-cleanup",
+              "test", "shared", "1,15,1", "10,20,10", "20", "/bin/sh", "-c",
+              "test \"$RUNNER_TRACKING_ID\" = etude-bridge-fixture || exit 90; "
+              "printf . > \"$1\"; cat \"$2\"",
+              "sh", ready, blocked, (char *)NULL);
+        _exit(99);
+    }
+    active_worker = worker;
+    return worker;
+}
+
+/** Apply the runner's kill rule before the controller's loss starts cleanup. */
+static void runner_sweep(pid_t worker, pid_t holder, const struct runner_claim *q)
+{
+    long targets[4] = {q->keeper, holder, q->process, worker};
+    int i;
+
+    for (i = 0; i < 4; i++)
+        if (targets[i] > 0 && runner_tracks(targets[i]) == 1)
+            kill((pid_t)targets[i], SIGKILL);
+}
+
+/** End fixture processes and remove its private claim after a failed sweep. */
+static void runner_dispose(struct etude_ledger *l, const struct runner_claim *q)
+{
+    if (q->keeper > 0)
+        kill((pid_t)q->keeper, SIGKILL);
+    if (q->process > 0)
+        kill((pid_t)-q->process, SIGKILL);
+    if (l != NULL) {
+        if (q->found)
+            etude_ledger_drop(l, "runner-cleanup");
+        etude_ledger_close(l);
+    }
+}
+
+/**
+ * Sweep a job's marked processes after its case is ready. Its keeper and
+ * lock holder must survive, end the case and release the admission claim.
+ */
+static void runner_cleanup(const char *self, const char *ledger)
+{
+    const char *ready = fix_path("runner-ready");
+    const char *blocked = fix_path("runner-blocked");
+    struct runner_claim q = {0, 0, 0};
+    struct etude_ledger *l;
+    struct etude_pid id;
+    struct pollfd p;
+    pid_t worker, holder, reaped = 0;
+    int fd, host, st, i;
+    char c;
+
+    CHECK(mkfifo(ready, 0600) == 0 && mkfifo(blocked, 0600) == 0, "runner fixtures");
+    fd = open(ready, O_RDWR | O_NONBLOCK);
+    worker = runner_worker(self, ledger, ready, blocked, fd);
+    p.fd = fd;
+    p.events = POLLIN;
+    p.revents = 0;
+    CHECK(poll(&p, 1, 10000) == 1 && read(fd, &c, 1) == 1, "runner case ready");
+    l = etude_ledger_open(ledger);
+    runner_processes(ledger, &q);
+    CHECK(l != NULL && etude_ledger_list(l, runner_visit, &q) == 0 && q.found && q.keeper > 0 &&
+              q.process > 0,
+          "runner processes registered");
+    host = lock_file("rach2-host.lock");
+    holder = (pid_t)locked_by(host, F_RDLCK);
+    if (holder > 0)
+        remember(holder);
+    CHECK(holder > 0 && runner_tracks(holder) == 0, "runner holder unmarked");
+    CHECK(q.keeper > 0 && runner_tracks(q.keeper) == 0, "runner keeper unmarked");
+    CHECK(worker > 0 && runner_tracks(worker) == 1 && q.process > 0 &&
+              runner_tracks(q.process) == 1,
+          "runner controller and case marked");
+    runner_sweep(worker, holder, &q);
+    CHECK(waitpid(worker, &st, 0) == worker, "runner controller reaped");
+    active_worker = 0;
+    for (i = 0; holder > 0 && i < 1000; i++) {
+        reaped = waitpid(holder, &st, WNOHANG);
+        if (reaped != 0)
+            break;
+        poll(NULL, 0, 10);
+    }
+    CHECK(reaped == holder && WIFEXITED(st) && WEXITSTATUS(st) == 0,
+          "runner holder confirms cleanup");
+    if (reaped == holder)
+        forget(holder);
+    q.found = 0;
+    CHECK(l != NULL && etude_ledger_list(l, runner_visit, &q) == 0 && !q.found,
+          "runner sweep releases claim");
+    CHECK(q.keeper > 0 && q.process > 0 && etude_process_state(q.keeper, &id) == 0 &&
+              etude_process_state(q.process, &id) == 0,
+          "runner sweep leaves no case");
+    runner_dispose(l, &q);
+    CHECK(lock_try(host, F_WRLCK) == 0, "runner sweep releases locks");
+    close(host);
+    close(fd);
+}
+
 /** A killed controller keeps the locks until its keeper has ended the case. */
 static void lost_controller(const char *ledger)
 {
@@ -560,12 +732,14 @@ static void missing_program(const char *ledger)
 }
 
 /** Exercise the bridge with private locks, without using host admission. */
-int main(void)
+int main(int argc, char **argv)
 {
     struct etude_ledger *l;
     const char *ledger;
     struct etude_bridge *b;
 
+    if (argc > 1 && strcmp(argv[1], "--runner-worker") == 0)
+        return bridge_main(argc - 1, argv + 1);
     atexit(cleanup_test);
     signal(SIGTERM, interrupted);
     signal(SIGINT, interrupted);
@@ -589,6 +763,7 @@ int main(void)
     wrapper(ledger);
     missing_program(ledger);
 #if defined(__linux__)
+    runner_cleanup(argv[0], ledger);
     lost_controller(ledger);
     abandoned(ledger);
 #endif
