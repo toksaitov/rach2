@@ -421,10 +421,9 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_T
 	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
 # `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
-# disk holding nothing, booted by the firmware, its root found as disk 1.
-BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
-run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_TEST_EXT2) $(MANIFEST_PARTS_os_real) $(HARNESS)
-	sh tests/system/suites/bootorder.sh $(BOOT_KERNEL) $(HARNESS) $(BOOTORDER_DISK)
+# disk holding nothing, booted by the firmware, its root found as disk 1. It
+# is the case of tests/cases/machine.bootorder.json, which etude runs, and has
+# no target here.
 # The GRUB disk of its case, which the case's preparation names: the GRUB
 # disk around the kernel, on an MBR, its root the grub-test tree as an ext2
 # partition, which mkdisk_grub.sh requires of every disk, and rach2.disk=ahci
