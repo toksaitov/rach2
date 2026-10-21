@@ -1563,19 +1563,17 @@ run-fakeapi: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR
 # proved against the host's Codex at the pinned version, in a fresh home and
 # a network namespace with only a loopback interface: Codex reads a file,
 # runs a command, edits a file and commits, over a WebSocket and then over
-# the HTTPS fallback, and the server refuses a wrong tool result. No machine
-# is booted.
-run-codexapi: $(DEADLINE) $(RUNUTIL)
-	sh tests/system/suites/codexapi.sh $(IMAGES_DIR)/codexapi-test
+# the HTTPS fallback, and the server refuses a wrong tool result. They are
+# the cases of tests/cases/host.codexapi.json, which etude runs, and have no
+# target here.
 
 # `tests/run museapi`: the Responses protocol of Meta's Model API in the fake
 # API server, proved against Muse Code at the pinned version, fetched and
 # checked against Meta's digest, in a fresh home and a network namespace with
 # only a loopback interface: Muse reads a file, runs a command, edits a file
-# and commits, and the server refuses a wrong tool result. No machine is
-# booted.
-run-museapi: $(DEADLINE) $(RUNUTIL)
-	sh tests/system/suites/museapi.sh $(IMAGES_DIR)/museapi-test
+# and commits, and the server refuses a wrong tool result. They are the cases
+# of tests/cases/host.museapi.json, which etude runs, and have no target
+# here.
 
 # `tests/run agents`: the agents layer on the x86-64 GNU system, and the
 # tests of the project's loops there, each row run over OpenSSH as the test

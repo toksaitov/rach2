@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "codexapi",
-  "summary": "the codexapi suite on x86-64 against two faults in the fake API server's Responses protocol; the server is Python and runs as it is, so nothing is built",
+  "summary": "the codexapi cases against two faults in the fake API server's Responses protocol; the server is Python and runs as it is, so nothing is built",
   "tree": "shared",
   "sources": [
     "tests/system/fakeapi/proto_responses.py"
@@ -21,7 +21,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "ARCH=x86_64 exec sh tests/proofs/guest.sh run codexapi 'codexapi-test: PASS'"
+      "ARCH=x86_64 exec sh tests/proofs/guest.sh run codexapi 'run: codexapi: PASS'"
     ],
     "bound_s": 1800
   },
@@ -38,7 +38,7 @@
       ],
       "fails": {
         "lines": [
-          "codexapi-test: FAIL: the server did not refuse a wrong tool result"
+          "host.codexapi.refusal: failure: refused failed"
         ]
       }
     },
@@ -54,7 +54,7 @@
       ],
       "fails": {
         "lines": [
-          "codexapi-test: FAIL: codex exec ended with status"
+          "host.codexapi.exchange: failure: exit failed: codex exec ended with status"
         ]
       }
     }

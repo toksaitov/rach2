@@ -99,7 +99,7 @@ session_end() {
 }
 
 # session_env TERM: print the environment of the session, a variable to a
-# line: that of the codexapi suite's Codex, with TERM, the session bus BUS,
+# line: that of the codexapi cases' Codex, with TERM, the session bus BUS,
 # and MARK, which every process Codex starts inherits.
 session_env() {
     printf '%s\n' PATH=/usr/bin:/bin "HOME=$SESSION/home" LANG=C.UTF-8 "TERM=$1" \

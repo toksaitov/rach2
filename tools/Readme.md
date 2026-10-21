@@ -50,7 +50,7 @@ The Windows section prepares a machine for etude: QEMU for Windows, whose accele
     sh tools/setup/build_host_tool.sh e2fsprogs /usr/local
     sh tools/setup/build_host_tool.sh mandoc /usr/local
 
-`unshare` and `ip`, which make the network namespaces of `tests/run codexapi`, and exfatprogs, which `tests/run large` uses, have no Windows port; macOS lacks the first two as well.
+`unshare` and `ip`, which make the network namespaces of `tests/run codexapi` and `tests/run museapi`, and exfatprogs, which `tests/run large` uses, have no Windows port; macOS lacks the first two as well.
 
 #### Rach2
 
@@ -64,12 +64,12 @@ The suites, the sets and the analyses run on the testing host, a Windows machine
 
 WSL's `/etc/sysctl.d/60-rach2-compaction.conf` sets `vm.compaction_proactiveness = 20`, applied at once with `sudo sysctl --system` and at boot by systemd. Background compaction maintains contiguous free memory for the Hyper-V socket channels that `wsl.exe` opens. Without it, fragmented memory caused 512 KiB channel allocations to fail despite gigabytes free, and commands from Windows SSH failed with `Wsl/Service/WSAETIMEDOUT`. The setting uses some CPU in `kcompactd` while memory is fragmented.
 
-The `codexapi` suite runs the host's Codex at the version the suite pins, in a network namespace that `unshare` (util-linux) and `ip` (iproute2) make. Codex comes from npm:
+The `codexapi` cases run the host's Codex at the version their program pins, in a network namespace that `unshare` (util-linux) and `ip` (iproute2) make. Codex comes from npm:
 
     sudo apt install nodejs npm
     sudo npm install -g @openai/codex@0.162.1
 
-The `museapi` suite fetches Muse Code itself with curl, 376 MB once, into `build/downloads/muse/` of the tree it runs in.
+The preparation of the `museapi` cases fetches Muse Code itself with curl, 376 MB once, into `build/downloads/muse/` of the tree it runs in.
 
 Each person has an account in WSL named after their GitHub login, with a clone of their own, and logs in by key as `ssh rach2`, an alias for port 2227 of `auca.space`, which Windows forwards to the ssh server in WSL; that server refuses passwords. The top of the account's `.bashrc`, which bash reads for a command sent over ssh too, sets `RACH2_QEMU_ACCEL=tcg`, `WSL_DISTRO_NAME` and the PowerShell directory on `PATH`, which `tests/run` needs to ask Windows for the free space. Two GitHub Actions runners, `rach2-ci-1` and `rach2-ci-2`, run as the user `ghrunner`, each with its own directory and checkout, and take the jobs labelled `rach2`; their `.env` and `.path` set the same accelerator and Windows access. Each runner's checkout also has the shareware Doom WAD at `ports/doom/doom1.wad`, which `sh ports/doom/fetch_wad.sh` verifies there; the `doom` suite and the Doom rows of `uefi` need it, Git does not track it, and it stays because every workflow checks out with `clean: false`. The owner's copy of the tree is `/home/testing/rach2`, and each of the owner's worker loops has one of its own beside it; they are reached as `ssh testing` through [testing.sh](dev/testing.sh).
 

@@ -16,8 +16,8 @@
 set -u
 SEED=${1:?seed}
 CHAN=/dev/ttyS1
-# The version of Codex that the codexapi suite runs,
-# tests/system/suites/codexapi.sh.
+# The version of Codex that the codexapi cases run,
+# tests/cases/host/agentapi.sh.
 CODEX_VERSION=0.162.1
 PACKAGES='util-linux iproute2 exfatprogs dosfstools e2fsprogs python3 openssl git
 curl wget ca-certificates nodejs npm build-essential gawk bison flex m4 perl

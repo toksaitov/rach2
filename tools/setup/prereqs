@@ -148,7 +148,7 @@ need ip
 probe ip -V
 admin apt-get install -y iproute2
 
-# The codexapi suite runs the version of Codex its script names.
+# The codexapi cases run the version of Codex their program names.
 need codex
 probe codex --version
 admin apt-get install -y nodejs npm

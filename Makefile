@@ -465,6 +465,13 @@ build/tests/cases/host/%: tests/cases/host/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
 
+# Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
+# tests/system/fakeapi/fetch_muse.sh downloads it once into
+# build/downloads/muse/ and checks it against Meta's digest, and this name is
+# a link to the file it checked.
+build/downloads/muse/muse: tests/system/fakeapi/fetch_muse.sh $(SHA256TOOL)
+	f=$$(sh tests/system/fakeapi/fetch_muse.sh) && ln -f "$$f" $@
+
 # The byte scanner (tools/verify/asciiscan.c) the text checks run, the host
 # check (tools/setup/hostcheck.c) `tests/run` compiles for itself before a
 # build, and the TCP transfer measurer (tools/dev/machine_net.c). They are

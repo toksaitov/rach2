@@ -18,7 +18,7 @@
 # but for the Linux-only commands named below, which etude's tooling machine
 # must provide, with what the machine itself needs named on macos and
 # windows; and the Codex version of the linux recipe and of the tooling
-# machine is the one the codexapi suite runs.
+# machine is the one the codexapi cases run.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored before the rows run again at the
@@ -50,10 +50,11 @@ FIX=$work/fix
 export FIX
 
 # The Linux-only commands, which macos and windows do not install: unshare
-# and ip make the network namespaces of the codexapi suite, which runs Codex
-# in one, and exfatprogs has no Windows port. On those platforms etude's
-# tooling machine supplies them (tools/etude/tooling/tools), and the
-# commands it runs on the host are named in their recipes.
+# and ip make the network namespaces of the codexapi and museapi cases, which
+# run Codex and Muse in them, and exfatprogs has no Windows port. On those
+# platforms etude's tooling machine supplies them
+# (tools/etude/tooling/tools), and the commands it runs on the host are named
+# in their recipes.
 linux_only_macos='unshare ip codex'
 linux_only_windows='unshare ip codex mkfs.exfat fsck.exfat'
 tooling_needs='qemu-system-x86_64 qemu-img curl mformat mmd mcopy'
@@ -387,12 +388,12 @@ coverage()
         done < "$work/required"
     done
     names rach2 | grep -qx cc || echo 'coverage: rach2 lacks cc' >> "$work/why"
-    version=$(sed -n 's/^CODEX_VERSION=//p' "$repo/tests/system/suites/codexapi.sh")
+    version=$(sed -n 's/^CODEX_VERSION=//p' "$repo/tests/cases/host/agentapi.sh")
     sh "$repo/tools/setup/prereq.sh" --list --platform linux |
         grep -q "	admin	npm install -g @openai/codex@$version\$" ||
-        echo "coverage: linux does not install Codex $version, the codexapi suite's" >> "$work/why"
+        echo "coverage: linux does not install Codex $version, the codexapi cases'" >> "$work/why"
     grep -qx "CODEX_VERSION=$version" "$repo/tools/etude/tooling/provision.sh" ||
-        echo "coverage: the tooling machine does not install Codex $version, the codexapi suite's" >> "$work/why"
+        echo "coverage: the tooling machine does not install Codex $version, the codexapi cases'" >> "$work/why"
     grep -o 'tools/setup/[a-z_]*\.sh' "$repo/tools/setup/prereqs" | sort -u | while read -r script; do
         [ -f "$repo/$script" ] || echo "coverage: the recipe runs $script, which is missing" >> "$work/why"
     done
