@@ -286,7 +286,8 @@
         "qemu": {"$ref": "#/$defs/qemu"},
         "console": {"enum": ["serial", "none"]},
         "helper": {"type": "boolean"},
-        "qmp": {"type": "boolean"}
+        "qmp": {"type": "boolean"},
+        "critical": {"$ref": "#/$defs/text"}
       }
     },
     "service": {

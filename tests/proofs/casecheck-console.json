@@ -21,7 +21,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "d=$TMPDIR/selftest && mkdir -p $d/fixtures && cp tools/etude/fixtures/console-*.txt tools/etude/fixtures/console-case.json tools/etude/fixtures/report-pass.out tools/etude/fixtures/report-rng.out tools/etude/fixtures/report-absent.out tools/etude/fixtures/attempt-survivor.out $d/fixtures/ && grep -e ' -k ' -e 'console-case' tools/etude/fixtures/expect > $d/fixtures/expect && ln -s \"$PWD/tools/etude/schemas\" $d/schemas && ${WORK}/casecheck --selftest $d/fixtures; s=$?; rm -rf $d; exit $s"
+      "d=$TMPDIR/selftest && mkdir -p $d/fixtures && cp tools/etude/fixtures/console-*.txt tools/etude/fixtures/console-case.json tools/etude/fixtures/report-pass.out tools/etude/fixtures/report-rng.out tools/etude/fixtures/report-absent.out tools/etude/fixtures/attempt-survivor.out $d/fixtures/ && grep -e ' -k ' -e 'console-case' tools/etude/fixtures/expect | grep -v ' -k ./consoles/' > $d/fixtures/expect && ln -s \"$PWD/tools/etude/schemas\" $d/schemas && ${WORK}/casecheck --selftest $d/fixtures; s=$?; rm -rf $d; exit $s"
     ],
     "bound_s": 60,
     "fail_prefix": "casecheck selftest: line "
@@ -33,8 +33,8 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "        } else if (strcmp(args[i], \"-k\") == 0 && q->console == NULL) {\n",
-          "replace": "        } else if (0) {\n"
+          "find": "    for (; i + 1 < n && (same(args[i], \"-f\") || same(args[i], \"-k\")); i += 2) {\n",
+          "replace": "    for (; i + 1 < n && same(args[i], \"-f\"); i += 2) {\n"
         }
       ],
       "fails": {
@@ -50,8 +50,8 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "    if (q.n < 4 || q.n > 5 || q.console != NULL) {\n",
-          "replace": "    if (q.n < 4 || q.n > 5) {\n"
+          "find": "    if (q.nconsoles > 0) {\n        finding(NULL, 0, \"report: -k",
+          "replace": "    if (0) {\n        finding(NULL, 0, \"report: -k"
         }
       ],
       "fails": {
@@ -68,7 +68,7 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "    if (q.console != NULL && !same(q.arg[3], \"qemu\")) {\n",
+          "find": "    if (q.nconsoles > 0 && !same(q.arg[3], \"qemu\")) {\n",
           "replace": "    if (0) {\n"
         }
       ],
@@ -86,8 +86,8 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "    if (q.console != NULL && (console = read_file(q.console, &console_len)) == NULL) {\n",
-          "replace": "    if (q.console != NULL && (console = read_file(q.console, &console_len)) == NULL && 0) {\n"
+          "find": "        if (j.console[j.nconsoles] == NULL) {\n            free_consoles(&j);\n            return 2;\n        }\n",
+          "replace": "        if (j.console[j.nconsoles] == NULL) {\n            q.nconsoles = j.nconsoles;\n            break;\n        }\n"
         }
       ],
       "fails": {
@@ -123,8 +123,8 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "        if ((i > 0 && c[i - 1] != '\\n') || memcmp(c + i, \"<2>[\", 4) != 0) {\n",
-          "replace": "        if (memcmp(c + i, \"<2>[\", 4) != 0) {\n"
+          "find": "            if ((i > 0 && c[i - 1] != '\\n') || memcmp(c + i, \"<2>[\", 4) != 0) {\n",
+          "replace": "            if (memcmp(c + i, \"<2>[\", 4) != 0) {\n"
         }
       ],
       "fails": {
@@ -142,8 +142,8 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "        if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&\n",
-          "replace": "        if (0 && close != NULL && (size_t)(c + end - close) >= 9 &&\n"
+          "find": "            if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&\n",
+          "replace": "            if (0 && close != NULL && (size_t)(c + end - close) >= 9 &&\n"
         }
       ],
       "fails": {
@@ -178,8 +178,8 @@
       "edits": [
         {
           "file": "tools/etude/judge.c",
-          "find": "        if (j->console[i] == s[0] && memcmp(j->console + i, s, n) == 0) {\n",
-          "replace": "        if (0) {\n"
+          "find": "            if (c[i] == s[0] && memcmp(c + i, s, n) == 0) {\n",
+          "replace": "            if (0) {\n"
         }
       ],
       "fails": {

@@ -55,6 +55,9 @@ struct rec {
 };
 
 /* A report being judged against its case. */
+/* The most consoles, each a -k, that `attempt` takes. */
+#define CONSOLES_MAX 64
+
 struct judging {
     const struct json *c;
     const char *input;
@@ -68,8 +71,12 @@ struct judging {
     const char *how[32];     /* "feature" or "report", or NULL for neither */
     int reported[32];        /* the group's branch record was read */
     struct jbuf *texts;      /* an open JSON array of the errors, or NULL */
-    const char *console;     /* the machine's console, or NULL for none */
-    size_t console_len;
+    int nconsoles;           /* the consoles of the -k options, 0 for none */
+    /* Each console's file, `MACHINE.N.console` for a machine case, and its
+     * bytes, from malloc. */
+    const char *console_file[CONSOLES_MAX];
+    char *console[CONSOLES_MAX];
+    size_t console_len[CONSOLES_MAX];
 };
 
 static int same(const char *a, const char *b)
@@ -753,37 +760,41 @@ static const struct etude_processor *placed_processor(const struct json *c, cons
 }
 
 /* The arguments of `report` and `attempt`: the processor's features and
- * the console, then the manifest, the case, the architecture, the placement
- * and the rest. */
+ * the machines' consoles, then the manifest, the case, the architecture,
+ * the placement and the rest. */
 struct request {
     char *features[64]; /* each `NAME=present` or `NAME=absent` of a -f */
     int nfeatures;
-    const char *console; /* the file of a -k, or NULL */
+    char *consoles[CONSOLES_MAX]; /* each console file of a -k */
+    int nconsoles;
     char **arg;
     int n;
 };
 
 /**
  * Takes the -f and -k options of `args` into `q`, and the arguments after
- * them.
+ * them. Returns 0, or -1 after a finding for more of either than it keeps.
  */
-static void read_request(char **args, int n, struct request *q)
+static int read_request(char **args, int n, struct request *q)
 {
     int i = 0;
 
     q->nfeatures = 0;
-    q->console = NULL;
-    for (; i + 1 < n; i += 2) {
-        if (strcmp(args[i], "-f") == 0 && q->nfeatures < 64) {
+    q->nconsoles = 0;
+    for (; i + 1 < n && (same(args[i], "-f") || same(args[i], "-k")); i += 2) {
+        if (same(args[i], "-f") ? q->nfeatures == 64 : q->nconsoles == CONSOLES_MAX) {
+            finding(NULL, 0, "more than 64 options %s", args[i]);
+            return -1;
+        }
+        if (same(args[i], "-f")) {
             q->features[q->nfeatures++] = args[i + 1];
-        } else if (strcmp(args[i], "-k") == 0 && q->console == NULL) {
-            q->console = args[i + 1];
         } else {
-            break;
+            q->consoles[q->nconsoles++] = args[i + 1];
         }
     }
     q->arg = args + i;
     q->n = n - i;
+    return 0;
 }
 
 /**
@@ -869,8 +880,14 @@ int judge_report(struct cases *set, char **args, int n)
     enum attempt result;
     int status;
 
-    read_request(args, n, &q);
-    if (q.n < 4 || q.n > 5 || q.console != NULL) {
+    if (read_request(args, n, &q) != 0) {
+        return 2;
+    }
+    if (q.nconsoles > 0) {
+        finding(NULL, 0, "report: -k is an option of attempt, which judges the kernel's records");
+        return 2;
+    }
+    if (q.n < 4 || q.n > 5) {
         return 2;
     }
     status = open_case(set, &q, &j);
@@ -1412,15 +1429,55 @@ static void put_assertion(struct jbuf *b, const char *id, const char *source, in
 }
 
 /**
- * Returns 1 when the console of `j`, NUL bytes and all, has the text `s`,
- * and 0 when not or when `s` is NULL or empty.
+ * Returns 1 when a console of `j`, NUL bytes and all, has the text `s`, and
+ * 0 when none has or when `s` is NULL or empty.
  */
 static int console_has(const struct judging *j, const char *s)
 {
     size_t n = s != NULL ? strlen(s) : 0, i;
+    const char *c;
+    int k;
 
-    for (i = 0; n > 0 && i + n <= j->console_len; i++) {
-        if (j->console[i] == s[0] && memcmp(j->console + i, s, n) == 0) {
+    for (k = 0; n > 0 && k < j->nconsoles; k++) {
+        c = j->console[k];
+        for (i = 0; i + n <= j->console_len[k]; i++) {
+            if (c[i] == s[0] && memcmp(c + i, s, n) == 0) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/**
+ * Returns the `critical` text that the machine of the console `path`,
+ * `DIR/MACHINE.N.console`, declares in the case `c`, or NULL for none.
+ */
+static const char *machine_critical(const struct json *c, const char *path)
+{
+    const struct json *machines = json_member(c, "machines");
+    const char *base = strrchr(path, '/') != NULL ? strrchr(path, '/') + 1 : path;
+    const char *dot = strchr(base, '.');
+    const char *id;
+    size_t i;
+
+    for (i = 0; dot != NULL && machines != NULL && i < machines->count; i++) {
+        id = json_text(machines->item[i], "machine_id");
+        if (id != NULL && strlen(id) == (size_t)(dot - base) &&
+            strncmp(id, base, strlen(id)) == 0) {
+            return json_text(machines->item[i], "critical");
+        }
+    }
+    return NULL;
+}
+
+/** Returns 1 when the `n` bytes at `s` have the text `t`, and 0 when not. */
+static int line_has(const char *s, size_t n, const char *t)
+{
+    size_t k = strlen(t), i;
+
+    for (i = 0; k > 0 && i + k <= n; i++) {
+        if (memcmp(s + i, t, k) == 0) {
             return 1;
         }
     }
@@ -1428,29 +1485,40 @@ static int console_has(const struct judging *j, const char *s)
 }
 
 /**
- * Copies into `out` the first record of the console of `j` at the kernel's
- * level 2, KLOG_CRIT, which only a panic and a fault of the kernel use: a
- * line that begins `<2>[`. With `panics` set, a record of the subsystem
- * `panic` is passed by. Returns 1 when there is one, and 0 when not.
+ * Copies into `out` the first record of a console of `j`, in the order
+ * given, at the kernel's level 2, KLOG_CRIT, which only a panic and a fault
+ * of the kernel use: a line that begins `<2>[`. A line with the text that
+ * the console's machine declares as `critical` is passed by, and with
+ * `panics` set, so is a record of the subsystem `panic`. Returns 1 when
+ * there is one, and 0 when not.
  */
 static int console_fault(const struct judging *j, int panics, char *out, size_t size)
 {
-    const char *c = j->console, *close;
-    size_t i, end;
+    const char *c, *close, *allowed;
+    size_t i, end, len;
+    int k;
 
-    for (i = 0; i + 4 <= j->console_len; i++) {
-        if ((i > 0 && c[i - 1] != '\n') || memcmp(c + i, "<2>[", 4) != 0) {
-            continue;
+    for (k = 0; k < j->nconsoles; k++) {
+        c = j->console[k];
+        len = j->console_len[k];
+        allowed = machine_critical(j->c, j->console_file[k]);
+        for (i = 0; i + 4 <= len; i++) {
+            if ((i > 0 && c[i - 1] != '\n') || memcmp(c + i, "<2>[", 4) != 0) {
+                continue;
+            }
+            for (end = i; end < len && c[end] != '\r' && c[end] != '\n'; end++) {
+            }
+            close = memchr(c + i, ']', end - i);
+            if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&
+                memcmp(close, "] panic: ", 9) == 0) {
+                continue;
+            }
+            if (allowed != NULL && line_has(c + i, end - i, allowed)) {
+                continue;
+            }
+            snprintf(out, size, "the console has %.*s", (int)(end - i), c + i);
+            return 1;
         }
-        for (end = i; end < j->console_len && c[end] != '\r' && c[end] != '\n'; end++) {
-        }
-        close = memchr(c + i, ']', end - i);
-        if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&
-            memcmp(close, "] panic: ", 9) == 0) {
-            continue;
-        }
-        snprintf(out, size, "the console has %.*s", (int)(end - i), c + i);
-        return 1;
     }
     return 0;
 }
@@ -1473,7 +1541,7 @@ static int declared_outcome(const struct judging *j, const struct json *a, const
     if (!required(j, a)) {
         return -1;
     }
-    if (same(json_text(a, "source"), "executor") && j->console != NULL) {
+    if (same(json_text(a, "source"), "executor") && j->nconsoles > 0) {
         if (console_has(j, json_text(a, "record"))) {
             return OUTCOME_PASS;
         }
@@ -1500,9 +1568,9 @@ static int declared_outcome(const struct judging *j, const struct json *a, const
 /**
  * Appends the assertions an attempt of the case requires, which ended as
  * `e`, placed `placement` with its report in `state`: the declared ones in
- * the manifest's order, then the executor's. With the console, `etude.kernel`
- * fails for its first record of a panic or a fault of the kernel, passing by
- * a panic when the termination expects one, and passes when it has none.
+ * the manifest's order, then the executor's. With the consoles,
+ * `etude.kernel` fails for their first record of a panic or a fault of the
+ * kernel that console_fault does not pass by, and passes when they have none.
  */
 static void put_assertions(struct jbuf *b, const struct judging *j, const struct ending *e,
                            const char *placement, const char *state)
@@ -1525,7 +1593,7 @@ static void put_assertions(struct jbuf *b, const struct judging *j, const struct
     outcome = detail == NULL ? OUTCOME_PASS : OUTCOME_FAIL;
     put_assertion(b, "etude.termination", "executor", e->value < 0 ? OUTCOME_MISSING : outcome,
                   detail);
-    if (kernel_read(j->c, placement) && j->console != NULL) {
+    if (kernel_read(j->c, placement) && j->nconsoles > 0) {
         outcome =
             console_fault(j, same(json_text(json_member(j->c, "termination"), "end"), "panic"),
                           fault, sizeof fault);
@@ -1592,14 +1660,17 @@ static void put_branches(struct jbuf *b, const struct judging *j)
 
 /**
  * Appends the termination of the end `e` of an attempt placed `placement`,
- * and what observed it.
+ * and what observed it: the host process of a host case or of a machine
+ * case's scenario, and etude-guest otherwise.
  */
 static void put_termination(struct jbuf *b, const struct judging *j, const struct ending *e,
                             const char *placement)
 {
     char why[200], value[16];
     const char *detail = ending_detail(j, e, why, sizeof why);
-    const char *by = same(placement, "host") ? "host_process" : "etude_guest";
+    const char *by = same(placement, "host") || same(json_text(j->c, "domain"), "machine")
+                         ? "host_process"
+                         : "etude_guest";
 
     snprintf(value, sizeof value, "%d", e->value);
     jbuf_puts(b, "{\"end\":");
@@ -1691,17 +1762,26 @@ static int recheck(const struct cases *set, const char *text)
     return result;
 }
 
+/** Frees the consoles that `j` has read. */
+static void free_consoles(struct judging *j)
+{
+    while (j->nconsoles > 0) {
+        free(j->console[--j->nconsoles]);
+    }
+}
+
 /**
  * Gives the results document of one attempt. `args` are those of `report`,
  * with the output's file required, then the run's, the attempt's and the
- * item's identities, the end and, for exited and signaled, its value; a
- * `-k CONSOLE` among the options gives the console of the machine of an
- * attempt placed `qemu`, from which the executor's assertions are decided.
- * Judges the output's records as `report` does, without printing the
- * judgement, and prints the document as one line. Returns 0 when the
- * attempt passed, 1 when it failed and 3 when it is incomplete; 2, with no
- * document, for a usage fault, a file that cannot be read, a case not in the
- * manifest, a placement it cannot have or a console of another placement.
+ * item's identities, the end and, for exited and signaled, its value; each
+ * `-k CONSOLE` among the options gives a console of a machine of an attempt
+ * placed `qemu`, `MACHINE.N.console` for a machine case, and the consoles
+ * decide the executor's assertions. Judges the output's records as `report`
+ * does, without printing the judgement, and prints the document as one
+ * line. Returns 0 when the attempt passed, 1 when it failed and 3 when it is
+ * incomplete; 2, with no document, for a usage fault, a file that cannot be
+ * read, a case not in the manifest, a placement it cannot have or a console
+ * of another placement.
  */
 int judge_attempt(struct cases *set, char **args, int n)
 {
@@ -1709,12 +1789,10 @@ int judge_attempt(struct cases *set, char **args, int n)
     struct request q;
     struct judging j;
     struct ending e;
-    char *console = NULL;
-    size_t console_len = 0;
     int i, result = -1;
 
-    read_request(args, n, &q);
-    if (q.n < 9 || q.n > 10 || read_ending(q.arg + 8, q.n - 8, &e) != 0) {
+    if (read_request(args, n, &q) != 0 || q.n < 9 || q.n > 10 ||
+        read_ending(q.arg + 8, q.n - 8, &e) != 0) {
         return 2;
     }
     for (i = 5; i < 8; i++) {
@@ -1726,21 +1804,24 @@ int judge_attempt(struct cases *set, char **args, int n)
     if (open_case(set, &q, &j) != 0) {
         return 2;
     }
-    if (q.console != NULL && !same(q.arg[3], "qemu")) {
+    if (q.nconsoles > 0 && !same(q.arg[3], "qemu")) {
         finding(NULL, 0, "attempt: -k gives a QEMU machine's console, and %s is placed %s",
                 q.arg[1], q.arg[3]);
         return 2;
     }
-    if (q.console != NULL && (console = read_file(q.console, &console_len)) == NULL) {
-        return 2;
+    for (; j.nconsoles < q.nconsoles; j.nconsoles++) {
+        j.console_file[j.nconsoles] = q.consoles[j.nconsoles];
+        j.console[j.nconsoles] = read_file(q.consoles[j.nconsoles], &j.console_len[j.nconsoles]);
+        if (j.console[j.nconsoles] == NULL) {
+            free_consoles(&j);
+            return 2;
+        }
     }
-    j.console = console;
-    j.console_len = console_len;
     jbuf_puts(&texts, "[");
     j.texts = &texts;
     if (judge_text(&j, q.arg[4]) != 0) {
         jbuf_free(&texts);
-        free(console);
+        free_consoles(&j);
         return 2;
     }
     jbuf_puts(&texts, "]");
@@ -1757,7 +1838,7 @@ int judge_attempt(struct cases *set, char **args, int n)
         say_text(doc.data);
     }
     free(j.rec);
-    free(console);
+    free_consoles(&j);
     jbuf_free(&texts);
     jbuf_free(&doc);
     return result < 0 ? 2 : result == ATTEMPT_PASS ? 0 : result == ATTEMPT_FAILURE ? 1 : 3;

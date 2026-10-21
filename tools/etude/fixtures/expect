@@ -212,6 +212,14 @@
 3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"stopped","source":"scenario","outcome":"missing","detail":"nothing reported it"}
 3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-scenario.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"marker-survives","source":"scenario","outcome":"pass","detail":null}
 1 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./attempt-machine.out run-1 attempt-1 item-1 exited 0 | "errors":["stopped was never reported"
+0 attempt -k ./consoles/vm.1.console -k ./consoles/vm.2.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"pass","detail":null}
+0 attempt -k ./consoles/vm.1.console -k ./consoles/vm.2.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | "observed_by":"host_process"
+1 attempt -k ./consoles/vm.1.console -k ./consoles/vm.3.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"fail","detail":"the console has <2>[    0.500000] panic: page fault at 0x00000000"}
+1 attempt -k ./consoles/vm.3.console -k ./consoles/vm.2.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | "detail":"the console has <2>[    0.500000] panic: page fault
+3 attempt ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console and does not read the kernel's log"}
+2 attempt -k ./consoles/vm.1.console -k ./consoles/absent.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | cannot read
+2 attempt -k ./consoles/vm.1.console ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | -k gives a QEMU machine's console, and fixture.attempt.scan is placed host
+2 report -k ./consoles/vm.1.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out | -k is an option of attempt
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 256 | the end exited takes a value of 0 to 255
 2 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled -1 | the end signaled takes a value of 0 to 255
