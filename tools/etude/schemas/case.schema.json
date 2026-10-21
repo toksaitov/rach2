@@ -181,6 +181,7 @@
             "media": {"enum": ["disk", "cdrom"]},
             "serial": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"},
             "discard": {"type": "boolean"},
+            "flush": {"type": "boolean"},
             "boot": {"type": "boolean"},
             "size_bytes": {"$ref": "#/$defs/positive"},
             "base": {"$ref": "#/$defs/name"},

@@ -113,6 +113,23 @@
       }
     },
     {
+      "name": "flush",
+      "summary": "a disk's flush is not given to the launcher",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "        m->disks[i].unsafe = d.unsafe;\n",
+          "replace": "        m->disks[i].unsafe = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "media: no `assert drives pass`"
+        ]
+      }
+    },
+    {
       "name": "serial",
       "summary": "a disk's serial is not given to the launcher",
       "edits": [

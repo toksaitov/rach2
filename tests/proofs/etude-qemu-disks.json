@@ -262,13 +262,31 @@
       }
     },
     {
+      "name": "unsafe",
+      "summary": "a disk without flushes is attached with them",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "    const char *flush = d->unsafe ? \",cache=unsafe\" : \"\";\n",
+          "replace": "    const char *flush = \"\";\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ],
+        "only": true
+      }
+    },
+    {
       "name": "ide-index",
       "summary": "a disk on IDE takes the place of its position in the profile, counting the NVMe disks before it",
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "media=%s%s\", type,\n                 (*ide)++,",
-          "replace": "media=%s%s\", type,\n                 (unsigned)n,"
+          "find": "media=%s%s%s\", type,\n                 (*ide)++,",
+          "replace": "media=%s%s%s\", type,\n                 (unsigned)n,"
         }
       ],
       "fails": {

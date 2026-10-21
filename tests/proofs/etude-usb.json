@@ -48,8 +48,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "\"file=%%s,format=%s,if=none,id=%s%s\", type, d->id,",
-          "replace": "\"file=%%s,format=%s,if=ide,id=%s%s\", type, d->id,"
+          "find": "\"file=%%s,format=%s,if=none,id=%s%s%s\", type, d->id,",
+          "replace": "\"file=%%s,format=%s,if=ide,id=%s%s%s\", type, d->id,"
         }
       ],
       "fails": {

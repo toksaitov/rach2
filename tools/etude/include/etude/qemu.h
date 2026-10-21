@@ -125,6 +125,8 @@ struct etude_qemu_disk {
     int boot;           /* the firmware boots this disk first; one disk at most,
                            and none on ETUDE_BUS_DEVICE */
     int qcow2;          /* the file is a qcow2 overlay over a raw base, not raw */
+    int unsafe;         /* the guest's flushes are not passed to the file, QEMU's
+                           cache=unsafe */
 };
 
 /* The most disks of a profile, of which four at most are on IDE and six on

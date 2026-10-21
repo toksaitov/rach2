@@ -875,27 +875,28 @@ static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, 
                      unsigned *ide, unsigned *ahci)
 {
     const char *discard = d->discard ? ",discard=unmap,detect-zeroes=unmap" : "";
+    const char *flush = d->unsafe ? ",cache=unsafe" : "";
     const char *type = d->qcow2 ? "qcow2" : "raw";
     const char *boot = d->boot ? ",bootindex=0" : "";
-    char format[128], id[32], device[128];
+    char format[192], id[32], device[128];
 
     if (d->bus == ETUDE_BUS_DEVICE) {
-        snprintf(format, sizeof(format), "file=%%s,format=%s,if=none,id=%s%s", type, d->id,
-                 discard);
+        snprintf(format, sizeof(format), "file=%%s,format=%s,if=none,id=%s%s%s", type, d->id,
+                 discard, flush);
         add(l, 0, "-drive");
         add(l, 1, format, d->path);
         return;
     }
     if (d->bus == ETUDE_BUS_IDE && !d->boot && d->serial == NULL) {
-        snprintf(format, sizeof(format), "file=%%s,format=%s,if=ide,index=%u,media=%s%s", type,
-                 (*ide)++, d->cdrom ? "cdrom,readonly=on" : "disk", discard);
+        snprintf(format, sizeof(format), "file=%%s,format=%s,if=ide,index=%u,media=%s%s%s", type,
+                 (*ide)++, d->cdrom ? "cdrom,readonly=on" : "disk", discard, flush);
         add(l, 0, "-drive");
         add(l, 1, format, d->path);
         return;
     }
     snprintf(id, sizeof(id), "etude-disk%u", (unsigned)n);
-    snprintf(format, sizeof(format), "file=%%s,format=%s,if=none,id=%s%s%s", type, id,
-             d->cdrom ? ",media=cdrom,readonly=on" : "", discard);
+    snprintf(format, sizeof(format), "file=%%s,format=%s,if=none,id=%s%s%s%s", type, id,
+             d->cdrom ? ",media=cdrom,readonly=on" : "", discard, flush);
     add(l, 0, "-drive");
     add(l, 1, format, d->path);
     add(l, 0, "-device");

@@ -48,7 +48,7 @@
  * report becomes the scenario's, and an etude-guest killed in the middle of a
  * run is a lost end. A media row boots a machine twice with the same empty
  * sparse disk of 4 TiB on NVMe, a CD whose medium is the artifact's object and
- * an empty disk on AHCI, and the stand-in says the drives it was given; the
+ * an empty disk on AHCI without flushes, and the stand-in lists its drives; the
  * disks are removed after the pass. A boot whose profile records its second
  * card's frames gives the scenario the file the stand-in wrote for that card,
  * removed after a pass and kept after a failure. A machine's first card has a
@@ -152,13 +152,14 @@ static int fails;
 #define TICK_MS        2
 #define TICKS_MAX      65536
 
-/* The media rows' empty disk, 4 TiB as the uefi suite's, on NVMe, and their
- * CD, whose medium is the artifact `disk`. */
+/* The media rows' empty disk, 4 TiB as the uefi suite's, on NVMe, their CD,
+ * whose medium is the artifact `disk`, and an empty disk on AHCI whose
+ * flushes QEMU keeps from the host. */
 #define BIG_BYTES (UINT64_C(4) << 40)
 #define MEDIA_DISKS                                                                         \
     "[{\"name\": \"big\", \"bus\": \"nvme\", \"serial\": \"rach2big\", \"discard\": true, " \
     "\"size_bytes\": 4398046511104}, {\"name\": \"disk\", \"media\": \"cdrom\"}, "          \
-    "{\"name\": \"blank\", \"bus\": \"ahci\", \"size_bytes\": 1048576}]"
+    "{\"name\": \"blank\", \"bus\": \"ahci\", \"size_bytes\": 1048576, \"flush\": false}]"
 
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
@@ -1785,9 +1786,9 @@ static int scenario_real_peer(struct etude_case *c)
 /**
  * Run the media rows: a machine whose disks are an empty sparse disk of 4 TiB
  * on NVMe, a CD whose medium is the artifact `disk` and an empty disk of 1 MiB
- * on AHCI. Under the stand-in the machine boots twice, each time with the same
- * empty disk, and says the arguments it was given; under the real QEMU the
- * kernel finds the disk's size.
+ * on AHCI without flushes. Under the stand-in the machine boots twice, each
+ * time with the same empty disk, and says the arguments it was given; under
+ * the real QEMU the kernel finds the disk's size.
  */
 static int scenario_media(struct etude_case *c, int real)
 {
@@ -1818,15 +1819,15 @@ static int scenario_media(struct etude_case *c, int real)
         if (real)
             fix_format(text, sizeof(text), ": namespace 1: 4194304 MiB");
         else
-            fix_format(
-                text, sizeof(text),
-                "fake: device ich9-ahci,id=etude-ahci\r\n"
-                "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
-                "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
-                "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
-                "media=cdrom,readonly=on\r\nfake: drive file=%s,format=raw,if=none,"
-                "id=etude-disk2\r\nfake: device ide-hd,drive=etude-disk2,bus=etude-ahci.0\r\n",
-                big != NULL ? big : "", cd != NULL ? cd : "", blank != NULL ? blank : "");
+            fix_format(text, sizeof(text),
+                       "fake: device ich9-ahci,id=etude-ahci\r\n"
+                       "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
+                       "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
+                       "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
+                       "media=cdrom,readonly=on\r\nfake: drive file=%s,format=raw,if=none,"
+                       "id=etude-disk2,cache=unsafe\r\nfake: device ide-hd,drive=etude-disk2,"
+                       "bus=etude-ahci.0\r\n",
+                       big != NULL ? big : "", cd != NULL ? cd : "", blank != NULL ? blank : "");
         etude_assert(c, ids[boot][1], etude_console_wait(m, text, 0, &at) == ETUDE_OK, text);
         at = wait_for(c, m, ids[boot][2], "Type 'help'", at);
         wait_for(c, m, ids[boot][2], shell, at);

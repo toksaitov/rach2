@@ -1288,22 +1288,25 @@ static void disk_line(const struct etude_qemu_profile *p, const struct etude_qem
 static void test_disk_lines(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
 {
     static const struct etude_qemu_disk mixed[] = {
-        {"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0, 0},
-        {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-        {"/d/a1", ETUDE_BUS_AHCI, 0, NULL, 1, NULL, 1, 0},
-        {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
-    static const struct etude_qemu_disk cd[] = {{"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-                                                {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 1, 0},
-                                                {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-                                                {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
-    static const struct etude_qemu_disk nvme[] = {{"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1, 0},
-                                                  {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
-    static const struct etude_qemu_disk q35[] = {{"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-                                                 {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 1, 0},
-                                                 {"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0, 0},
-                                                 {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-                                                 {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
+        {"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0, 0, 0},
+        {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
+        {"/d/a1", ETUDE_BUS_AHCI, 0, NULL, 1, NULL, 1, 0, 0},
+        {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
+    static const struct etude_qemu_disk cd[] = {
+        {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
+        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 1, 0, 0},
+        {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
+    static const struct etude_qemu_disk nvme[] = {
+        {"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1, 0, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
+    static const struct etude_qemu_disk q35[] = {
+        {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
+        {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 1, 0, 0},
+        {"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0, 0, 0},
+        {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
     struct etude_qemu_profile b = *p;
 
     b.firmware = ETUDE_FIRMWARE_SEABIOS;
@@ -1491,19 +1494,19 @@ static void test_smbios(const struct etude_qemu_profile *p, const struct etude_q
 static void test_argv(void)
 {
     static const struct etude_qemu_disk disks[] = {
-        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
-        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL, 0, 0},
-        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL, 0, 0},
-        {"/d/grow,1.qcow2", ETUDE_BUS_IDE, 0, "GROWTEST", 1, NULL, 0, 1},
-        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 0, 0},
-        {"/d/n.qcow2", ETUDE_BUS_NVME, 0, "rach2.n-1", 0, NULL, 0, 1},
-        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
+        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 1},
+        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL, 0, 0, 0},
+        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL, 0, 0, 0},
+        {"/d/grow,1.qcow2", ETUDE_BUS_IDE, 0, "GROWTEST", 1, NULL, 0, 1, 0},
+        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 0, 0, 0},
+        {"/d/n.qcow2", ETUDE_BUS_NVME, 0, "rach2.n-1", 0, NULL, 0, 1, 1},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0, 0}};
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
     static const char *const want =
         "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S "
         "-cpu qemu64,rdrand=off,rdseed=off,xsave=off,avx=off -smp 2 "
         "-m 268435456B -kernel /k/kernel -initrd /k/test.krffs "
-        "-drive file=/d/one,,two.img,format=raw,if=ide,index=0,media=disk "
+        "-drive file=/d/one,,two.img,format=raw,if=ide,index=0,media=disk,cache=unsafe "
         "-drive file=/d/big,,img,format=raw,if=none,id=etude-disk1,discard=unmap,"
         "detect-zeroes=unmap -device nvme,drive=etude-disk1,serial=rach2big "
         "-drive file=/d/b.img,format=raw,if=ide,index=1,media=disk,discard=unmap,"
@@ -1511,7 +1514,7 @@ static void test_argv(void)
         "-drive file=/d/grow,,1.qcow2,format=qcow2,if=none,id=etude-disk3,discard=unmap,"
         "detect-zeroes=unmap -device ide-hd,drive=etude-disk3,bus=ide.1,unit=0,serial=GROWTEST "
         "-drive file=/d/r.iso,format=raw,if=ide,index=3,media=cdrom,readonly=on "
-        "-drive file=/d/n.qcow2,format=qcow2,if=none,id=etude-disk5 "
+        "-drive file=/d/n.qcow2,format=qcow2,if=none,id=etude-disk5,cache=unsafe "
         "-device nvme,drive=etude-disk5,serial=rach2.n-1 "
         "-netdev user,id=net0 -device rtl8139,netdev=net0 -netdev user,id=net1 "
         "-device e1000,netdev=net1 -vga std -device ahci "
@@ -2143,7 +2146,8 @@ static void test_usb(void)
         "rdrand=off,rdseed=off,xsave=off,avx=off -smp 1 -m 268435456B -machine i8042=off "
         "-kernel /k/kernel -initrd /k/test.krffs "
         "-drive file=/d/stick,,one.img,format=raw,if=none,id=stick "
-        "-drive file=/d/lun1.img,format=raw,if=none,id=lun1,discard=unmap,detect-zeroes=unmap "
+        "-drive file=/d/lun1.img,format=raw,if=none,id=lun1,discard=unmap,detect-zeroes=unmap,"
+        "cache=unsafe "
         "-device qemu-xhci,id=xhci,msi=on -device usb-hub,id=hub1,bus=xhci.0,port=1 "
         "-device usb-kbd,bus=xhci.0,port=1.2 "
         "-device usb-storage,bus=xhci.0,drive=stick,bootindex=0 "
@@ -2154,7 +2158,7 @@ static void test_usb(void)
         "-append rach2.usbdisk";
     struct etude_qemu_disk disks[] = {
         {.path = "/d/stick,one.img", .bus = ETUDE_BUS_DEVICE, .id = "stick"},
-        {.path = "/d/lun1.img", .bus = ETUDE_BUS_DEVICE, .id = "lun1", .discard = 1},
+        {.path = "/d/lun1.img", .bus = ETUDE_BUS_DEVICE, .id = "lun1", .discard = 1, .unsafe = 1},
         {.path = NULL}};
     struct etude_qemu_device d[] = {
         {.model = "qemu-xhci", .id = "xhci", .properties = msi},
