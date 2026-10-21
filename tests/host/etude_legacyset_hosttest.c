@@ -90,8 +90,9 @@
  * keeps a console in its workspace as the case's identity says, with one
  * argument, its invocation. The invocation gives each artifact's digest in the
  * run's store under the evidence, which the run removes at its end, the case's
- * tool and the stand-in for QEMU found on the path, the accelerator, each
- * step's bound and the cleanup's, and the workspace as its scratch. A clean
+ * tool and the stand-in for QEMU found on the path, the accelerator, the
+ * x86-64 firmware that `RACH2_OVMF_CODE` names, each step's bound and the
+ * cleanup's, and the workspace as its scratch. A clean
  * console passes, and so does one with the critical record that the case's
  * machine declares; a console with a panic fails at the panic's line, and keeps
  * the workspace with its console; a scenario whose report stops short and that
@@ -2271,7 +2272,9 @@ static void test_machine(void)
     r.name = "machine";
     r.members = m;
     r.n = 1;
+    setenv("RACH2_OVMF_CODE", "/firmware/OVMF_CODE_4M.fd", 1);
     set_run(&r);
+    unsetenv("RACH2_OVMF_CODE");
     CHECK(r.status == 1, "machine: a case did not pass");
     CHECK(r.read == 0, "machine: the history is whole");
     CHECK(count_kind(&r.h, "attempt") == 5, "machine: an attempt of each case");
@@ -2324,6 +2327,9 @@ static void test_machine(void)
               invocation_has(&r, "fixture.machine.clean.r0", "\"steps\":{\"boot\":20000000}") &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"cleanup_us\":7000000"),
           "invocation: the tools, the accelerator and the bounds");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0",
+                         "\"ovmf_i686\":null,\"ovmf_x86_64\":\"/firmware/OVMF_CODE_4M.fd\""),
+          "invocation: the firmware RACH2_OVMF_CODE names");
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"ports\":[9400,9401]") &&
               invocation_has(&r, "fixture.machine.allowed.r0", "\"ports\":[9402]") &&
               invocation_has(&r, "fixture.machine.panic.r0", "\"ports\":[]"),
@@ -2815,6 +2821,7 @@ int main(int argc, char **argv)
     setenv("ARCH", "i686", 1);
     setenv("ETUDE_SEED", "99", 1);
     unsetenv("RACH2_DEADLINES");
+    unsetenv("RACH2_OVMF_CODE");
     unsetenv("FIXTURE_BREAK");
     make_tree();
     if (argc == 2 && strcmp(argv[1], "--guest-only") == 0) {

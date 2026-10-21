@@ -2063,9 +2063,10 @@ static int on_path(const char *name, char *out, size_t size)
 
 /**
  * Write the scenario invocation of machine case member `m`, whose artifacts
- * are published, for the emulators `qemu` of i686 and x86-64: each step's
- * bound is the case's gap, and its cleanup's bound is the manifest's, or the
- * case's grace when it gives none.
+ * are published, for the emulators `qemu` of i686 and x86-64 and the x86-64
+ * OVMF code image that `RACH2_OVMF_CODE` names, none when it is unset or
+ * empty: each step's bound is the case's gap, and its cleanup's bound is the
+ * manifest's, or the case's grace when it gives none.
  *
  * @return 0, or -1 with the reason in `why`.
  */
@@ -2075,6 +2076,7 @@ static int write_invocation(const struct set *x, const struct member *m, char qe
     const struct legacy_case *k = m->k;
     const struct json *tools = json_member(json_member(k->json, "requirements"), "tools");
     const struct json *steps = json_member(k->json, "steps");
+    const char *ovmf = getenv("RACH2_OVMF_CODE");
     struct cmp_text d = {NULL, 0, 0, 0};
     char path[PATH_LEN];
     size_t i;
@@ -2121,8 +2123,12 @@ static int write_invocation(const struct set *x, const struct member *m, char qe
     string(&d, qemu[0]);
     cmp_printf(&d, ",\"qemu_x86_64\":");
     string(&d, qemu[1]);
-    cmp_printf(&d, ",\"ovmf_i686\":null,\"ovmf_x86_64\":null,\"boundary_lazy\":%s},\"steps\":{",
-               x->boundary_lazy ? "true" : "false");
+    cmp_printf(&d, ",\"ovmf_i686\":null,\"ovmf_x86_64\":");
+    if (ovmf != NULL && *ovmf != '\0')
+        string(&d, ovmf);
+    else
+        cmp_printf(&d, "null");
+    cmp_printf(&d, ",\"boundary_lazy\":%s},\"steps\":{", x->boundary_lazy ? "true" : "false");
     for (i = 0; steps != NULL && steps->type == JSON_ARRAY && i < steps->count; i++) {
         cmp_printf(&d, i > 0 ? "," : "");
         string(&d, json_text(steps->item[i], "step_id"));

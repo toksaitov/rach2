@@ -1,7 +1,8 @@
 # shellcheck shell=sh disable=SC2034 # the variables are the callers'
 # ovmf_path.sh: find OVMF, QEMU's UEFI firmware for x86-64, which the suites
-# that boot by UEFI give QEMU. Sourced by doctor.sh and by those suites, so
-# the report and the suites look in the same places. It sets OVMF_CODE to the
+# that boot by UEFI give QEMU. Sourced by doctor.sh, by those suites and by
+# tests/run, which gives it to etude's machine cases, so the report and the
+# tests look in the same places. It sets OVMF_CODE to the
 # firmware's code image and OVMF_VARS to the template of its variable store,
 # each empty when no file is found, and OVMF_PATH and OVMF_ARGS to the code
 # image and the arguments that give it to qemu-system-x86_64: the code as the

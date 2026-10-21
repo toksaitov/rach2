@@ -793,6 +793,11 @@ fi
 # The accelerator the suites' machines run on, which etude-legacy's QEMU
 # shims give every machine, as set_accel chose it.
 export RACH2_QEMU_ACCEL
+# The x86-64 firmware that the machine cases booted by UEFI take, found where
+# the suites that boot by UEFI look for it (tools/setup/ovmf_path.sh).
+# shellcheck source=tools/setup/ovmf_path.sh
+. "$REPO/tools/setup/ovmf_path.sh"
+[ -z "$OVMF_CODE" ] || { RACH2_OVMF_CODE=$OVMF_CODE; export RACH2_OVMF_CODE; }
 
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.

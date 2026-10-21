@@ -1017,6 +1017,23 @@
       }
     },
     {
+      "name": "machine-ovmf-none",
+      "summary": "a machine case's invocation names no firmware though RACH2_OVMF_CODE names one",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (ovmf != NULL && *ovmf != '\\0')\n",
+          "replace": "    if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": invocation: the firmware RACH2_OVMF_CODE names"
+        ]
+      }
+    },
+    {
       "name": "machine-ports-none",
       "summary": "a machine case's invocation gives none of the ports it declares",
       "edits": [
@@ -1108,8 +1125,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "               x->boundary_lazy ? \"true\" : \"false\");\n",
-          "replace": "               \"false\");\n"
+          "find": "x->boundary_lazy ? \"true\" : \"false\");\n",
+          "replace": "\"false\");\n"
         }
       ],
       "fails": {
@@ -1125,8 +1142,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "               x->boundary_lazy ? \"true\" : \"false\");\n",
-          "replace": "               \"true\");\n"
+          "find": "x->boundary_lazy ? \"true\" : \"false\");\n",
+          "replace": "\"true\");\n"
         }
       ],
       "fails": {
