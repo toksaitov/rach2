@@ -80,7 +80,7 @@ bootpart|qemu|full|bootpart-test*,bootpart.*,bootpart-*,bootpart/*,wide-test*
 loopdev|qemu,mformat,mcopy,mtype,mke2fs|full
 tcc|qemu|full
 make|qemu|full
-smp|qemu|full||512
+smp|qemu|full||640
 clock|qemu|full||384|x86_64
 host|qemu|full||384
 noentropy|qemu|full

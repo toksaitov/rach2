@@ -1028,13 +1028,12 @@ run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 # munmap across them and sleeps on the last, the debug shell's preemption test
 # and its ring-3 payload on two, an NMI on two that must stop the machine as a
 # fault of the machine, and a parallel build on the installed system that runs
-# on every one of four (see tests/system/suites/smp.sh).
-SMP_TEST_DISK = $(IMAGES_DIR)/smp-test.disk
-run-smp: $(DEMO_CREDS) rach2 tests krffs test-image $(MANIFEST_PARTS_os_real) $(HARNESS)
-	@mkdir -p $(IMAGES_DIR)
-	$(MKDISK) krffs/manifests/os-real.manifest $(SMP_TEST_DISK) 64 48
-	sh tests/system/suites/smp.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(SMP_TEST_DISK) \
-	    "`cat krffs/rach2_test_password`"
+# on every one of four. They are the machine cases of
+# tests/cases/machine.smp.json, which etude runs, and have no target here. The
+# build case boots a private copy of this disk of os-real.
+$(IMAGES_DIR)/smp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                             $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
 # `tests/run make`: the machine building a program on itself, and the claim a
 # compiler alone cannot make: that a second build does nothing, that touching
 # one source rebuilds one object, and that the answer survives a reboot. Two

@@ -661,7 +661,8 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/doom_scenario \
                       build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/reset_scenario \
-                      build/tests/cases/machine/shutdown_scenario
+                      build/tests/cases/machine/shutdown_scenario \
+                      build/tests/cases/machine/smp_scenario
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
                  build/tests/cases/machine/diskdiag_scenario \
                  build/tests/cases/machine/diskrate_scenario

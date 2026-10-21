@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.smp",
+  "summary": "The kernel on one processor, on four and on two of four, each finding its processors and passing smpmusl's stress across them, the debug shell's preemption test and ring-3 payload on two, an NMI on two that stops the machine as a fault of the machine, and a parallel build on the installed system that runs on every one of four",
+  "cases": [
+    {
+      "case_id": "machine.smp.smpmusl-1",
+      "behavior": "On one processor, smpmusl finds one by every query a program can make, and fork, exec, pipes, futexes, munmap and a sleep run on it",
+      "units": ["smp", "tests/musl/smpmusl.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 1, "found": 1, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image on 1 processor, run smpmusl 1 from the debug shell and wait for the shell"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 1 online of 1", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "smpmusl 1 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "said-ok", "checks": "smpmusl says SMPMUSL OK (1 processor) and never SMPMUSL FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 2400000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case gives the machine exactly one processor, which the firmware's tables list"}
+    },
+    {
+      "case_id": "machine.smp.smpmusl-4",
+      "behavior": "On four processors, smpmusl finds four by every query a program can make, and a stress of fork, exec, pipes, futexes and munmap runs across them, with a page unmapped on one processor and read on another and a sleep on the last that does not end early",
+      "units": ["smp", "tests/musl/smpmusl.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 4, "found": 4, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image on 4 processors, run smpmusl 4 from the debug shell and wait for the shell"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 4, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 4 online of 4", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "smpmusl 4 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "said-ok", "checks": "smpmusl says SMPMUSL OK (4 processors) and never SMPMUSL FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 2400000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 4000, "cpu_ceiling_millis": 4000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "firmware", "reason": "the case gives the machine exactly four processors, which the firmware's tables list"}
+    },
+    {
+      "case_id": "machine.smp.maxcpus-2",
+      "behavior": "On four processors with maxcpus=2 on the boot line, the kernel starts two, and smpmusl finds two and runs its stress across them",
+      "units": ["smp", "tests/musl/smpmusl.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 4, "found": 2, "memory_mib": 128, "maxcpus": 2}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "fixture", "does": "boot the test image on 4 processors with maxcpus=2, run smpmusl 2 from the debug shell and wait for the shell"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 4, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue", "maxcpus=2"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "smpmusl 2 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "said-ok", "checks": "smpmusl says SMPMUSL OK (2 processors) and never SMPMUSL FAIL", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 2400000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 4000, "cpu_ceiling_millis": 4000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case boots a kernel with maxcpus=2 on a machine of exactly four processors"}
+    },
+    {
+      "case_id": "machine.smp.preempt",
+      "behavior": "On two processors, the debug shell's preemption test runs two kernel threads bound to the shell's processor, and the tick preempts each so that both print",
+      "units": ["sched", "rach2/kernel.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "preempt", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors, run preempt at the debug shell and wait for the shell's prompt"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "ended", "checks": "the test prints its counts and the debug shell's prompt comes back", "source": "scenario"},
+        {"assertion_id": "passed", "checks": "the test says Preemptive scheduling test passed! and never test FAILED", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the test is a command of the kernel's debug shell, which only a rescue boot starts"}
+    },
+    {
+      "case_id": "machine.smp.usermode",
+      "behavior": "On two processors, the debug shell's ring-3 payload writes its greeting through a system call and exits, and the shell comes back",
+      "units": ["sched", "rach2/kernel.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "usermode", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors, run usermode at the debug shell and wait for the shell"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "exit", "checks": "the payload returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "wrote", "checks": "the payload writes Hello from ring 3! before its exit", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the payload is a command of the kernel's debug shell, which only a rescue boot starts"}
+    },
+    {
+      "case_id": "machine.smp.nmi",
+      "behavior": "An NMI on both of two processors at the debug shell is a fault of the machine: the first processor to take it reports it and panics, the other stops without a word, and both halt",
+      "units": ["isr", "panic"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 2, "memory_mib": 128, "qmp": "inject-nmi"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "nmi", "stage": "execute", "machine": "fixture", "does": "boot the test image on two processors, raise an NMI on both through QMP's inject-nmi, wait for the panic, look at the processors and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "panic", "records": ["hardware fault: non-maskable interrupt", "the machine reported a fault"]}}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 2 online of 2", "source": "scenario"},
+        {"assertion_id": "reported", "checks": "the kernel says isr: hardware fault: non-maskable interrupt", "source": "scenario"},
+        {"assertion_id": "panicked", "checks": "the kernel panics saying the machine reported a fault, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
+        {"assertion_id": "one-report", "checks": "no second record of a hardware fault follows the first", "source": "scenario"},
+        {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 1200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the NMI is raised on every processor through QEMU's monitor, and the panic stops the machine"}
+    },
+    {
+      "case_id": "machine.smp.build",
+      "behavior": "The installed system on four processors counts four, compiles the staged ish sources four times over with every compile at once, and every processor's user ticks in /proc/stat grow within five rounds of the build",
+      "units": ["smp", "sched", "/proc/stat"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"processors": 4, "memory_mib": 512, "objects": 16, "rounds": 5, "account": "test"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "smp_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["smp-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot a copy of the os-real disk on four processors and wait for the console's login prompt"},
+        {"step_id": "login", "stage": "execute", "machine": "fixture", "does": "log in at the console as the test account with its password"},
+        {"step_id": "nproc", "stage": "execute", "machine": "fixture", "does": "require nproc to print 4, in the guest"},
+        {"step_id": "build", "stage": "execute", "machine": "fixture", "does": "define the build and its check as shell functions, and build the ish sources four times over, up to five rounds, until every processor's user ticks grew"},
+        {"step_id": "grew", "stage": "execute", "machine": "fixture", "does": "check in the guest that every processor's user ticks grew, and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["smp-disk"], "cpu": "max", "processors": 4, "memory_bytes": 536870912, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "online", "checks": "the kernel says smp: processors: 4 online of 4", "source": "scenario"},
+        {"assertion_id": "login", "checks": "the test account logs in at the console with its password and reaches the shell's prompt", "source": "scenario"},
+        {"assertion_id": "nproc", "checks": "nproc prints 4, which the guest checks", "source": "scenario"},
+        {"assertion_id": "sixteen", "checks": "the parallel build makes its sixteen objects, which the guest counts", "source": "scenario"},
+        {"assertion_id": "grew", "checks": "the user column of each of the four cpuN lines of /proc/stat grew across the build, and none stalled, which awk in the guest judges", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "gap": {"floor_us": 1000000, "initial_us": 1200000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 4000, "cpu_ceiling_millis": 4000, "memory_bytes": 671088640, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "smp-disk", "node": "images/smp-test.disk", "per_architecture": true},
+        {"name": "test-password", "node": "tests/cases/credentials/rach2_test_password", "per_architecture": false},
+        {"name": "smp_scenario", "node": "tests/cases/machine/smp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case boots a private copy of the installed system's disk on exactly four processors"}
+    }
+  ]
+}

@@ -585,7 +585,7 @@ The record of a preparation lists the files that `etude-legacy` built or found f
     tree /home/testing/rach2
     arch i686
     kernel build/rach2/kernel
-    suite smp run-smp
+    suite tcc run-tcc
     file 5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03 2716672 1838212 1760960000123456789 build/rach2/kernel
 
 `tree` is the tree's root, `arch` the architecture, `kernel` the kernel the suites boot, and a `suite` line has a suite's name and the target of the Makefile whose prerequisites are its artifacts. A `file` line has a regular file's SHA-256, its size in bytes, its inode, its modification time in nanoseconds since the epoch, and its path from the tree's root. An artifact that is a directory, such as a staging tree, must exist and is not listed. The values of the example are illustrations.

@@ -242,7 +242,7 @@ The catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver put fault
 
 Other suites ([the suites](../../../tests/system/suites.md)):
 
-* `tests/run smp` boots one processor, four, and two of four, and on each runs `tests/musl/smpmusl.c`, which finds the processors and runs a stress of fork, exec, pipes, futexes and `munmap` across them. On two processors it also runs the debug shell's preemption test and ring-3 payload and raises an NMI, which must stop the machine, and it runs a parallel build on four (`tests/system/suites/smp.sh`).
+* `tests/run smp` boots one processor, four, and two of four, and on each runs `tests/musl/smpmusl.c`, which finds the processors and runs a stress of fork, exec, pipes, futexes and `munmap` across them. On two processors it also runs the debug shell's preemption test and ring-3 payload and raises an NMI, which must stop the machine, and it runs a parallel build on four whose every processor must count user time. Each boot is a machine case of [`tests/cases/machine.smp.json`](../../../tests/cases/machine.smp.json); `tests/proofs/smp-cases.json` proves them with `maxcpus=` ignored, a tick that does not preempt a kernel thread, and an NMI that does not stop the machine.
 * `tests/run fpu` checks that a process's floating-point state is its own across switches.
 * `tests/run exitline` checks that the plain process-exit line is printed under the debug shell and nowhere else.
 * `tests/run memory` includes the overrun of a kernel stack ([the architectures' Readme](../arch/Readme.md)).
