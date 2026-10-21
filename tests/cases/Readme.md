@@ -1,6 +1,6 @@
 # Etude's cases
 
-This directory has the case manifests of the suites that etude runs as cases, one family to a file, `FAMILY.json`, and the programs of their host cases under `host/`. A manifest says what each case runs, what it asserts and how it ends, in the contract that [etude's Readme](../../tools/etude/Readme.md#cases) gives. The suite of a family is the last part of its identity, split at dots: `host.style.json`, the family `host.style`, is `tests/run style`, the source checks of the tree, whose program is [`host/style.sh`](host/style.sh). `host.codexapi.json` and `host.museapi.json` are `tests/run codexapi` and `tests/run museapi`, the fake API server proved against Codex and Muse Code, whose program is [`host/agentapi.sh`](host/agentapi.sh). The other suites are still the `run-` targets of [`system/suites.mk`](../system/suites.mk).
+This directory has the case manifests of the suites that etude runs as cases, one family to a file, `FAMILY.json`, and the programs of their host cases under `host/`. A manifest says what each case runs, what it asserts and how it ends, in the contract that [etude's Readme](../../tools/etude/Readme.md#cases) gives. The suite of a family is the last part of its identity, split at dots: `host.style.json`, the family `host.style`, is `tests/run style`, the source checks of the tree, whose program is [`host/style.sh`](host/style.sh). `host.codexapi.json` and `host.museapi.json` are `tests/run codexapi` and `tests/run museapi`, the fake API server proved against Codex and Muse Code, whose program is [`host/agentapi.sh`](host/agentapi.sh). `host.imagerace.json` is `tests/run imagerace`, how `krffs/mkimage.sh` publishes an image when two builds of it run at once or one is stopped, and the prerequisites that keep an image current, whose program is [`host/imagerace.sh`](host/imagerace.sh). The other suites are still the `run-` targets of [`system/suites.mk`](../system/suites.mk).
 
 ## Running
 
@@ -8,6 +8,7 @@ This directory has the case manifests of the suites that etude runs as cases, on
 
     sh tests/cases/host/style.sh conventions
     sh tests/cases/host/agentapi.sh codex exchange
+    ARCH=x86_64 sh tests/cases/host/imagerace.sh prerequisites
 
 The Muse cases also need Muse Code, which `make build/downloads/muse/muse` fetches.
 
@@ -17,10 +18,12 @@ A host case's program is the node its `prepare` names, which the preparation bui
 
 The API cases declare `host_api` `linux`, since `agentapi.sh` runs itself again in a user, network and PID namespace of its own, which `unshare` and `ip` make; on a host that is not Linux, etude places such a case in its tooling machine ([Cases](../../tools/etude/Readme.md#cases)). The program is the namespace's first process, so the agent, the server and whatever they started end when it does, and it reads the namespace's `/proc` to report any that outlived the agent. The Muse cases also prepare `build/downloads/muse/muse`, which the root `Makefile` links to the Muse Code that [`fetch_muse.sh`](../system/fakeapi/fetch_muse.sh) downloads and checks against Meta's digest.
 
+The `imagerace` cases `concurrent`, `interrupted` and `restage` build their images in a private tree under `TMPDIR`, running `krffs/mkimage.sh` from the root of the tree as the root `Makefile` does. The first two put shims of `dd`, `sed`, `grep`, `mv` and `touch` first on the build's path. A shim whose arguments name the image under test is a step of the build: it counts the step, stops the build with SIGTERM at the step the case chose, or holds the touch of the temporary image until the other build has made its own. `prerequisites` asks the tree's own make about the shared images and writes a marker below the build tree's `tests/system`, which it removes; `probe` runs [`imagerace_probe.sh`](../system/imagerace_probe.sh), which copies the makefiles into a directory of its own under `build/tests/system`.
+
 ## Adding tests
 
 A new case goes into its family's manifest with a new `case_id`, and a new assertion with a new `assertion_id`; changing what an identity means takes a new one. The program reports each assertion the manifest lists for the branches it chooses, and nothing else. A new family takes a row in `tests/registry` whose name is the last part of its identity, a sentence `` `tests/run NAME`: `` in `system/suites.mk` with no target under it, and the suite's line in `system/suites.md`, which `tests/run inventory` prints. `tests/run style` refuses a row that has both a target and a family, and a manifest that is at fault.
 
 ## Tests
 
-`tests/run style` checks the manifests with `casecheck` and the programs with ShellCheck, and runs [`style_cases_test.sh`](../system/style_cases_test.sh), which requires a planted source fault and a planted manifest fault each to fail its case. [`verify_temp_test.sh`](../system/verify_temp_test.sh) requires `style.sh` to keep its logs in a private directory of each run. The catalogues `codexapi.json` and `museapi.json` of `tests/proofs/` prove the API cases with faults in the fake API server and in `agentapi.sh`, as [Fault proofs](../system/Readme.md#fault-proofs) lists them.
+`tests/run style` checks the manifests with `casecheck` and the programs with ShellCheck, and runs [`style_cases_test.sh`](../system/style_cases_test.sh), which requires a planted source fault and a planted manifest fault each to fail its case. [`verify_temp_test.sh`](../system/verify_temp_test.sh) requires `style.sh` to keep its logs in a private directory of each run. The catalogues `codexapi.json` and `museapi.json` of `tests/proofs/` prove the API cases with faults in the fake API server and in `agentapi.sh`, `imagerace-publish.json` the `concurrent` and `interrupted` cases with faults in `krffs/mkimage.sh`, and `imagerace.json` the `probe` case with a fault in a copy of the root Makefile, as [Fault proofs](../system/Readme.md#fault-proofs) lists them.

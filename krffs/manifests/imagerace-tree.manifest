@@ -1,4 +1,5 @@
-# The second image of `tests/run imagerace`: the programs of one directory
-# the suite makes, staged to check that a changed program restages the image
-# and that a file made beside the programs does not.
+# The image of the private trees of the `imagerace` cases
+# (tests/cases/host/imagerace.sh): the programs of one directory. Each case
+# stages a copy, under the name the set-id allowlist knows, whose `exec-dir`
+# line names the bin directory of the case's own tree in place of this one.
 exec-dir 0755 / build/tests/system/imagerace.tree/bin

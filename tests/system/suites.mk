@@ -2151,19 +2151,16 @@ run-drive: $(HARNESS)
 	@./tests/system/drivetest.sh
 
 # `tests/run imagerace`: two builds of one image at the same moment, as a
-# parallel run of the suites can make them, both of which must finish and
-# leave the image whole. No machine is booted; the image is built twice and
-# read.
+# parallel run of the suites can make them, and builds stopped at each step
+# of publishing one, none of which may leave an image mixed with another
+# build's files or out of date. They are the cases of
+# tests/cases/host.imagerace.json, which etude runs, and have no target here.
+
 # `tests/run krffscheck`: what the offline checker says about images broken on
 # purpose. No machine is booted.
 KRFFSCHECK_DIR = $(IMAGES_DIR)/krffscheck
 run-krffscheck: krffs
 	sh tests/system/krffscheck.sh build/krffs/mkfs.krffs build/krffs/fsck.krffs $(KRFFSCHECK_DIR)
-
-IMAGERACE_IMAGE = $(IMAGES_DIR)/imagerace-test.krffs
-run-imagerace: $(TEST_IMAGE) $(OS_REAL_IMAGE) $(DEMO_CREDS) krffs rach2 tests utils musl-programs $(IMAGE_TOOLS)
-	sh tests/system/imagerace.sh krffs/manifests/test.manifest $(IMAGERACE_IMAGE) 12 \
-	    $(TEST_IMAGE) $(OS_REAL_IMAGE)
 
 # The eight network suites again on the second card. Each is the first-card
 # target with `NIC=e1000`, which picks the tagged files and the second set of

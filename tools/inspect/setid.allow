@@ -213,8 +213,8 @@ manifest cred-persist-test
 sentinel /creddisk 0755:0:0
 init none
 
-# The tree `tests/run imagerace` builds for itself: one program, staged to
-# prove that a changed source reaches the image through exactly its target.
+# The private trees of the `imagerace` cases: one program, or two, staged to
+# prove that an image is published whole and restaged when a program changes.
 manifest imagerace-tree
 sentinel /prog 0755:0:0
 init none
