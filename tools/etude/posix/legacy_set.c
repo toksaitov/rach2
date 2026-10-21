@@ -2196,6 +2196,7 @@ static void publish(struct set *x)
             continue;
         if (opened && publish_member(x, m, qemu, why, sizeof(why)) == 0)
             continue;
+        asked(&m->c);
         came_out(&m->c, INCOMPLETE, 1, "%s", why);
         not_run(x, &m->c, INCOMPLETE, m->c.reason, 1);
         write_attempt(x, m);
