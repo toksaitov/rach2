@@ -104,12 +104,21 @@ static void wait_for_word(void)
     syscall3(SYS_READ, ack_fd, (long)&byte, 1);
 }
 
+/** A holder that could not make an object: write "x" to `report`, so that
+ * the parent stops at once while the other holders still hold theirs, and
+ * exit with `status`. */
+static void give_up(int report, int status)
+{
+    syscall3(SYS_WRITE, report, (long)"x", 1);
+    sys_exit(status);
+}
+
 /**
  * A holder's half: open `count` objects of `kind` (0 a pipe, 1 a pty master,
  * 2 a datagram socket, 3 a child that waits for the word), write "h" to
- * `report`, wait for the word, reap any children, and exit 0. It exits 2
- * when a pipe fails and 3 when another object or a fork fails. `count` is
- * at most 8 for pipes and 16 for the others.
+ * `report`, wait for the word, reap any children, and exit 0. It gives up
+ * with status 2 when a pipe fails and 3 when another object or a fork fails.
+ * `count` is at most 8 for pipes and 16 for the others.
  */
 static void hold(int kind, int count, int report)
 {
@@ -124,7 +133,7 @@ static void hold(int kind, int count, int report)
 
             pair[0] = pair[1] = -1;
             if (syscall1(SYS_PIPE, (long)pair) != 0) {
-                sys_exit(2);
+                give_up(report, 2);
             }
             fd = pair[0];
             fds[i * 2 + 1] = pair[1];
@@ -136,7 +145,7 @@ static void hold(int kind, int count, int report)
             int pid = syscall1(SYS_FORK, 0);
 
             if (pid < 0) {
-                sys_exit(3);
+                give_up(report, 3);
             }
             if (pid == 0) {
                 wait_for_word();
@@ -145,7 +154,7 @@ static void hold(int kind, int count, int report)
             fd = pid;
         }
         if (fd < 0) {
-            sys_exit(3);
+            give_up(report, 3);
         }
         fds[kind == 0 ? i * 2 : i] = fd;
     }
@@ -188,7 +197,6 @@ static void crossed(int kind, int per_child, const char *what)
             hold(kind, per_child, report[1]);
         }
     }
-    /* A holder that dies unheard is then end of input on the reads below. */
     syscall1(SYS_CLOSE, report[1]);
     for (i = 0; i < 8; i++) {
         if (syscall3(SYS_READ, report[0], (long)&byte, 1) != 1 || byte != 'h') {
