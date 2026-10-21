@@ -23,4 +23,4 @@ A new case goes into its family's manifest with a new `case_id`, and a new asser
 
 ## Tests
 
-`tests/run style` checks the manifests with `casecheck` and the programs with ShellCheck, and runs [`style_cases_test.sh`](../system/style_cases_test.sh), which requires a planted source fault and a planted manifest fault each to fail its case. [`verify_temp_test.sh`](../system/verify_temp_test.sh) requires `style.sh` to keep its logs in a private directory of each run.
+`tests/run style` checks the manifests with `casecheck` and the programs with ShellCheck, and runs [`style_cases_test.sh`](../system/style_cases_test.sh), which requires a planted source fault and a planted manifest fault each to fail its case. [`verify_temp_test.sh`](../system/verify_temp_test.sh) requires `style.sh` to keep its logs in a private directory of each run. The catalogues `codexapi.json` and `museapi.json` of `tests/proofs/` prove the API cases with faults in the fake API server and in `agentapi.sh`, as [Fault proofs](../system/Readme.md#fault-proofs) lists them.

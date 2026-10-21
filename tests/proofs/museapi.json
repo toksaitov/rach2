@@ -1,19 +1,21 @@
 {
   "schema_version": 1,
   "proof": "museapi",
-  "summary": "the museapi cases against two faults in the fake API server's Responses protocol; the server is Python and runs as it is, so nothing is built",
+  "summary": "the museapi cases against faults in the fake API server's Responses protocol and in the cases' program; the server and the program are scripts, which the build copies",
   "tree": "shared",
   "sources": [
-    "tests/system/fakeapi/proto_responses.py"
+    "tests/system/fakeapi/proto_responses.py",
+    "tests/cases/host/agentapi.sh"
   ],
   "artifacts": [
-    "${WORK}/proto_responses.py"
+    "${WORK}/proto_responses.py",
+    "${WORK}/agentapi.sh"
   ],
   "build": {
     "argv": [
       "/bin/sh",
       "-c",
-      "cp tests/system/fakeapi/proto_responses.py ${WORK}/"
+      "cp tests/system/fakeapi/proto_responses.py tests/cases/host/agentapi.sh ${WORK}/"
     ],
     "bound_s": 60
   },
@@ -55,6 +57,22 @@
       "fails": {
         "lines": [
           "host.museapi.exchange: failure: exit failed: muse exec ended with status"
+        ]
+      }
+    },
+    {
+      "name": "other-key",
+      "summary": "Muse is given another key than the one the requests are judged by",
+      "edits": [
+        {
+          "file": "tests/cases/host/agentapi.sh",
+          "find": "META_API_KEY=\"$KEY\"",
+          "replace": "META_API_KEY=\"$KEY-other\""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "host.museapi.exchange: failure: credentials failed"
         ]
       }
     }

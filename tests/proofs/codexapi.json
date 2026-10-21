@@ -1,19 +1,21 @@
 {
   "schema_version": 1,
   "proof": "codexapi",
-  "summary": "the codexapi cases against two faults in the fake API server's Responses protocol; the server is Python and runs as it is, so nothing is built",
+  "summary": "the codexapi cases against faults in the fake API server's Responses protocol and in the cases' program; the server and the program are scripts, which the build copies",
   "tree": "shared",
   "sources": [
-    "tests/system/fakeapi/proto_responses.py"
+    "tests/system/fakeapi/proto_responses.py",
+    "tests/cases/host/agentapi.sh"
   ],
   "artifacts": [
-    "${WORK}/proto_responses.py"
+    "${WORK}/proto_responses.py",
+    "${WORK}/agentapi.sh"
   ],
   "build": {
     "argv": [
       "/bin/sh",
       "-c",
-      "cp tests/system/fakeapi/proto_responses.py ${WORK}/"
+      "cp tests/system/fakeapi/proto_responses.py tests/cases/host/agentapi.sh ${WORK}/"
     ],
     "bound_s": 60
   },
@@ -55,6 +57,70 @@
       "fails": {
         "lines": [
           "host.codexapi.exchange: failure: exit failed: codex exec ended with status"
+        ]
+      }
+    },
+    {
+      "name": "other-key",
+      "summary": "Codex is given another key than the one the requests are judged by",
+      "edits": [
+        {
+          "file": "tests/cases/host/agentapi.sh",
+          "find": "TERM=dumb FAKEAPI_KEY=\"$KEY\"",
+          "replace": "TERM=dumb FAKEAPI_KEY=\"$KEY-other\""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "host.codexapi.exchange: failure: credentials failed"
+        ]
+      }
+    },
+    {
+      "name": "second-interface",
+      "summary": "the case's network namespace has a dummy interface beside its loopback",
+      "edits": [
+        {
+          "file": "tests/cases/host/agentapi.sh",
+          "find": "'ip link set lo up &&",
+          "replace": "'ip link set lo up && ip link add rach2x type dummy &&"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "host.codexapi.refusal: failure: isolated failed: the namespace has the interfaces lo rach2x"
+        ]
+      }
+    },
+    {
+      "name": "process-left",
+      "summary": "a process started in the clone outlives the case's agent and server",
+      "edits": [
+        {
+          "file": "tests/cases/host/agentapi.sh",
+          "find": "    cp \"$FIXTURE/check.sh\" \"$FIXTURE/greeting.txt\" \"$tree/\" || return 1",
+          "replace": "    (cd \"$tree\" && exec tail -f /dev/null) &\n    cp \"$FIXTURE/check.sh\" \"$FIXTURE/greeting.txt\" \"$tree/\" || return 1"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "host.codexapi.refusal: failure: cleanup failed: processes outlive the case"
+        ]
+      }
+    },
+    {
+      "name": "scratch-left",
+      "summary": "the work directory, with the homes, the clones and the authority's key, is not removed",
+      "edits": [
+        {
+          "file": "tests/cases/host/agentapi.sh",
+          "find": "    [ -z \"$work\" ] || rm -rf \"$work\"\n    if",
+          "replace": "    if"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "host.codexapi.refusal: failure: cleanup failed: "
         ]
       }
     }
