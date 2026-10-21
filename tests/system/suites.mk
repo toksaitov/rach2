@@ -1297,10 +1297,9 @@ PARTS_DATA_DISKS = $(addprefix $(CASE_DIR)/parts/,c.disk gpt.disk gpt-nombr.disk
 $(PARTS_DATA_DISKS) &: tests/system/parts_disks.sh $(MKMBR) $(MKGPT)
 	sh tests/system/parts_disks.sh shared $(CASE_DIR)/parts
 # `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
-# together with the root on each in turn, and a disk past 128 GiB.
-BUS_DIR = $(IMAGES_DIR)/bus
-run-bus: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/bus.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(BUS_DIR)
+# together with the root on each in turn, and a disk past 128 GiB. They are
+# the cases of tests/cases/machine.bus.json, which etude runs, and have no
+# target here.
 # The disks of its cases, which the cases' preparation names. The four IDE
 # drives, of 16, 20, 24 and 28 MiB, each have one empty FAT32 partition from
 # sector 2048 to the end and an MBR id of their own, and hold data alone. The
