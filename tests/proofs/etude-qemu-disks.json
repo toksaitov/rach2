@@ -309,7 +309,8 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": ovmf: "
+          ": ovmf: ",
+          ": i686 on x86-64 ovmf: "
         ],
         "only": true
       }
@@ -327,7 +328,8 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": ovmf: "
+          ": ovmf: ",
+          ": i686 on x86-64 ovmf: "
         ],
         "only": true
       }
