@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "proof": "etude-boundary-site",
+  "summary": "the launcher refuses the lazy boundary profile at a site that has not enabled it, and reserves the profile's whole 4 GiB, each fault in a private copy of qemu_profile.c found by the memory rows",
+  "tree": "private",
+  "sources": [
+    "tools/etude/qemu_profile.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_qemu_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host -I tools/etude/include -I tools/etude/posix tests/host/etude_qemu_hosttest.c tools/etude/posix/qemu.c tools/etude/capture.c tools/etude/history_json.c ${SRC}/tools/etude/qemu_profile.c tools/etude/processor.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c -o ${WORK}/etude_qemu_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_qemu_hosttest",
+      "--memory"
+    ],
+    "bound_s": 30,
+    "fail_prefix": "etude-qemu-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "unproved-site",
+      "summary": "the lazy boundary profile is given QEMU at a site that has not enabled it",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "    if (boundary(p) && !s->boundary_lazy)\n        return ENOTSUP;\n",
+          "replace": "    if (0)\n        return ENOTSUP;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "unproved site backing refused"
+        ]
+      }
+    },
+    {
+      "name": "half-reservation",
+      "summary": "the boundary profile reserves 1 GiB for guest pages in place of 2 GiB",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "        m.resident_bytes = ETUDE_BIGMEM_RESIDENT;\n",
+          "replace": "        m.resident_bytes = ETUDE_BIGMEM_RESIDENT / 2;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "boundary memory amounts"
+        ]
+      }
+    }
+  ]
+}
