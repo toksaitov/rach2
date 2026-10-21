@@ -24,7 +24,9 @@
  * and the relay with SIGTERM passes; one under a stop signal is stopped, with
  * its work removed. A target that fails fails. A record that changed, a suite
  * it does not list, no port block, a tree not held, and a wrong count of
- * processors or accelerator are refused with no work made.
+ * processors or accelerator are refused with no work made. Automatic KVM
+ * selection refuses a path that passes the permission check but cannot be
+ * opened for reading and writing; an explicit TCG request still runs.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -604,6 +606,24 @@ static void refused(const char *record, const char *suite, const char *row, cons
     show(&r, before);
 }
 
+/** Refuse an unusable KVM path with its open error and the TCG remedy. */
+static void test_kvm_open(const char *record)
+{
+    char why[512];
+
+    CHECK(access(tree, R_OK | W_OK) == 0, "kvm: the permission check passes");
+    setenv("RACH2_KVM_DEVICE", tree, 1);
+    unsetenv("RACH2_QEMU_ACCEL");
+    fix_format(why, sizeof(why),
+               "%s cannot be opened for reading and writing: %s; "
+               "set RACH2_QEMU_ACCEL=tcg to run under the emulator",
+               tree, strerror(EISDIR));
+    refused(record, "pass", "kvm: an unusable device is refused", why);
+    setenv("RACH2_QEMU_ACCEL", "tcg", 1);
+    test_pass(record);
+    unsetenv("RACH2_KVM_DEVICE");
+}
+
 /** The requests refused before anything runs. */
 static void test_refused(const char *record)
 {
@@ -653,6 +673,7 @@ int main(void)
     test_busy(record);
     test_fail(record);
     test_stop(record);
+    test_kvm_open(record);
     test_refused(record);
     if (fails != 0)
         return 1;

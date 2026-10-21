@@ -30,6 +30,23 @@
   },
   "faults": [
     {
+      "name": "kvm-open",
+      "summary": "KVM is selected by permissions without opening the device",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy.c",
+          "find": "        int fd = open(kvm, O_RDWR);\n",
+          "replace": "        int fd = access(kvm, R_OK | W_OK) == 0 ? open(\"/dev/null\", O_RDWR) : -1;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": kvm: an unusable device is refused: "
+        ]
+      }
+    },
+    {
       "name": "settle",
       "summary": "runutil does not look at the suite's machines once the suite has ended",
       "edits": [

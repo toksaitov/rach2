@@ -1894,8 +1894,8 @@ static const char *accel_without_kvm(void)
 /**
  * Take QEMU's accelerator and the machines' processors as tests/run takes
  * them: RACH2_QEMU_ACCEL when it is set; else KVM when its device,
- * RACH2_KVM_DEVICE or /dev/kvm, can be read and written, HVF on an x86 Mac
- * that offers it, and the emulator otherwise; and RACH2_CPUS, 2 when it is
+ * RACH2_KVM_DEVICE or /dev/kvm, opens for reading and writing, HVF on an x86
+ * Mac that offers it, and the emulator otherwise; and RACH2_CPUS, 2 when it is
  * unset. A KVM device this user cannot open is refused, since the suites'
  * bounds were set under KVM. 0, or 2 after a refusal.
  */
@@ -1910,15 +1910,20 @@ static int run_machine(struct prep *p, struct run *r)
         if (strcmp(accel, "kvm") != 0 && strcmp(accel, "hvf") != 0 && strcmp(accel, "tcg") != 0)
             return refuse(p, "RACH2_QEMU_ACCEL must be kvm, hvf or tcg");
         r->accel = accel;
-    } else if (access(kvm, R_OK | W_OK) == 0) {
-        r->accel = "kvm";
-    } else if (access(kvm, F_OK) == 0) {
-        return refuse(p,
-                      "%s exists but this user cannot read and write it; add the user to its "
-                      "group, or set RACH2_QEMU_ACCEL=tcg to run under the emulator",
-                      kvm);
     } else {
-        r->accel = accel_without_kvm();
+        int fd = open(kvm, O_RDWR);
+
+        if (fd >= 0) {
+            close(fd);
+            r->accel = "kvm";
+        } else if (errno != ENOENT) {
+            return refuse(p,
+                          "%s cannot be opened for reading and writing: %s; "
+                          "set RACH2_QEMU_ACCEL=tcg to run under the emulator",
+                          kvm, strerror(errno));
+        } else {
+            r->accel = accel_without_kvm();
+        }
     }
     if (cpus == NULL || *cpus == '\0')
         cpus = "2";
