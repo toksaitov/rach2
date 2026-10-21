@@ -194,8 +194,10 @@ struct etude_legacy_set_opts {
  * A member with `cases` is run by the host and guest cases of its manifest
  * that run on `o->arch` or on none, each repetition of each a member of its
  * own that keeps the suite's `serial`. Their artifacts are goals of the
- * preparation. Each runs in a workspace of its own under `o->evidence`,
- * under the case's initial bounds, with a claim of the case's resources: a
+ * preparation; with `o->kernel`, the kernel that a guest case boots from the
+ * node `rach2/kernel` is `rach2-KERNEL/kernel` in its place. Each runs in a
+ * workspace of its own under `o->evidence`, under the case's initial
+ * bounds, with a claim of the case's resources: a
  * host case's program with ETUDE_TREE naming the tree, and a guest case's
  * program on a machine of its QEMU profile, through etude-guest, with the
  * memory the launcher reserves for the machine as its claim. `o->casecheck`

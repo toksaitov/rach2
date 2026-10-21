@@ -2447,7 +2447,7 @@ static int check_cases(struct set *x)
         if (o->members[i].cases == NULL)
             continue;
         if (legacy_manifest_read(&x->manifests[i], x->tree, o->members[i].cases,
-                                 o->members[i].suite, o->arch) != 0)
+                                 o->members[i].suite, o->arch, o->kernel) != 0)
             return refuse(x, x->manifests[i].why);
         for (k = 0; k < x->manifests[i].ncases; k++)
             x->n += (size_t)x->manifests[i].cases[k].reps;

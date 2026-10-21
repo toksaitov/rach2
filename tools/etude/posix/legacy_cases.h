@@ -27,7 +27,9 @@ struct legacy_case {
     int scratch;        /* its isolation has the `scratch` fixture */
     int guest;          /* it is of the domain `guest`, placed under QEMU */
     char **goals;       /* its prepare artifacts as make goals of the tree,
-                           `build/NODE` or `build/x86_64/NODE`, from malloc */
+                           `build/NODE` or `build/x86_64/NODE`, with a guest
+                           case's `rach2/kernel` as `rach2-NAME/kernel`
+                           under `-n NAME`, from malloc */
     const char **names; /* each goal's artifact name, beside `goals` */
     size_t ngoals;
     size_t program;    /* the index of the goal its program names */
@@ -72,11 +74,15 @@ struct legacy_manifest {
  * caller frees `m` with legacy_manifest_free whether or not the manifest
  * was taken.
  *
+ * With `kernel`, the NAME of `-n NAME`, a guest case whose QEMU profile
+ * boots the node `rach2/kernel` is given the goal of `rach2-NAME/kernel` for
+ * it in place of that node's; a case that boots another node keeps it.
+ *
  * @return 0 with `m` filled; -1 with the reason in `m->why`, which begins
  *         with the manifest's path.
  */
 int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char *path,
-                         const char *suite, const char *arch);
+                         const char *suite, const char *arch, const char *kernel);
 
 /** Free what `m` holds. */
 void legacy_manifest_free(struct legacy_manifest *m);

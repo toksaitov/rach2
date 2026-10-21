@@ -437,12 +437,16 @@ static int bounds_of(struct legacy_manifest *m, struct legacy_case *k)
 /**
  * Take the artifacts of case `k`'s `prepare` as make goals of the tree on
  * the run's architecture `arch`, and find the one its program names; 0, or
- * -1 after a refusal.
+ * -1 after a refusal. With `kernel`, the kernel a guest case boots from the
+ * node `rach2/kernel` is the goal of the node `rach2-KERNEL/kernel`.
  */
-static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char *arch)
+static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char *arch,
+                    const char *kernel)
 {
     const struct json *prep = typed(k->json, "prepare", JSON_ARRAY), *a, *per;
     const char *program = json_text(typed(k->json, "execution", JSON_OBJECT), "program");
+    const char *boots = json_text(
+        typed(typed(k->json, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT), "kernel");
     const char *node, *name, *dir;
     size_t i;
     int found = 0;
@@ -460,7 +464,12 @@ static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char
         if (node == NULL || name == NULL || per == NULL)
             return refuse(m, "%s: an artifact of the case is malformed", k->case_id);
         dir = per->integer && strcmp(arch, "x86_64") == 0 ? "build/x86_64" : "build";
-        if ((k->goals[k->ngoals] = text_of("%s/%s", dir, node)) == NULL)
+        if (kernel != NULL && k->guest && boots != NULL && strcmp(name, boots) == 0 &&
+            strcmp(node, "rach2/kernel") == 0)
+            k->goals[k->ngoals] = text_of("%s/rach2-%s/kernel", dir, kernel);
+        else
+            k->goals[k->ngoals] = text_of("%s/%s", dir, node);
+        if (k->goals[k->ngoals] == NULL)
             return refuse(m, "memory ran out");
         k->names[k->ngoals] = name;
         if (!found && strcmp(name, program) == 0) {
@@ -476,9 +485,9 @@ static int goals_of(struct legacy_manifest *m, struct legacy_case *k, const char
 }
 
 /** Take case `c` of `m`, whose item is of `item_arch`, on the run's
- * architecture `arch`; 0, or -1 after a refusal. */
+ * architecture `arch` with the kernel `kernel`; 0, or -1 after a refusal. */
 static int take_case(struct legacy_manifest *m, const struct json *c, const char *item_arch,
-                     const char *arch)
+                     const char *arch, const char *kernel)
 {
     struct legacy_case *k = &m->cases[m->ncases++];
 
@@ -487,7 +496,7 @@ static int take_case(struct legacy_manifest *m, const struct json *c, const char
     if ((k->case_id = json_text(c, "case_id")) == NULL)
         return refuse(m, "a case has no identity");
     if (needs_of(m, k) != 0 || workload_of(m, k) != 0 || bounds_of(m, k) != 0 ||
-        goals_of(m, k, arch) != 0 || (k->guest && guest_of(m, k, arch) != 0))
+        goals_of(m, k, arch, kernel) != 0 || (k->guest && guest_of(m, k, arch) != 0))
         return -1;
     workload_document(c, item_arch, &k->workload);
     inventory_document(c, &k->inventory);
@@ -496,7 +505,7 @@ static int take_case(struct legacy_manifest *m, const struct json *c, const char
 }
 
 int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char *path,
-                         const char *suite, const char *arch)
+                         const char *suite, const char *arch, const char *kernel)
 {
     const struct json *cases;
     const char *where;
@@ -523,7 +532,7 @@ int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char
         return refuse(m, "memory ran out");
     for (i = 0; i < cases->count; i++)
         if ((where = runs_on(cases->item[i], arch)) != NULL &&
-            take_case(m, cases->item[i], where, arch) != 0)
+            take_case(m, cases->item[i], where, arch, kernel) != 0)
             return -1;
     if (m->ncases == 0)
         return refuse(m, "no case of it runs on %s", arch);
