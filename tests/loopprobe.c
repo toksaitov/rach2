@@ -32,12 +32,22 @@
  * loopback datagram of the machine moves, no datagram dropped in the bulk
  * transfer and no round trip left for the timer by an idle machine.
  *
- * Prints "LOOPPROBE OK" and exits 0 on success. Freestanding; direct system
- * calls (probe.h).
+ * Prints "LOOPPROBE OK" and exits 0 on success.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `steps` lists them: the setup a
+ * check needs, such as its sockets, is part of its assertion, and so is
+ * every round of a loop that checks one claim. A failure fails the
+ * assertion of its check and leaves those after it not run; one in a helper
+ * shared by several checks, such as a read of /proc/stat, fails the first
+ * assertion of the case it came in. Given `machine=native`, `bulk-no-drop`
+ * and `pingpong-idle` are not run. Freestanding; direct system calls
+ * (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -156,12 +166,251 @@ static void print_u32(uint32_t v)
     }
 }
 
-/** Print "LOOPPROBE FAIL (`what`)" and exit 1. */
+/* The probe's checks in the order it makes them: the detail each failure
+ * prints, and its assertion. Consecutive steps of one assertion are one
+ * row. */
+static const struct step {
+    const char *label;
+    const char *id;
+} steps[] = {
+    {"a socket to learn the local address", "loopback-address"},
+    {"connecting to learn the local address", "loopback-address"},
+    {"getsockname to learn the local address", "loopback-address"},
+    {"a socket connected to 127.0.0.1 does not report 127.0.0.1", "loopback-address"},
+    {"a socket to learn the local address", "interface-address"},
+    {"connecting to learn the local address", "interface-address"},
+    {"getsockname to learn the local address", "interface-address"},
+    {"the local address read back as a loopback or a zero address", "interface-address"},
+    {"udp socket", "udp-payload"},
+    {"udp bind", "udp-payload"},
+    {"udp sendto", "udp-payload"},
+    {"udp payload", "udp-payload"},
+    {"udp source not 127.0.0.1", "udp-source-address"},
+    {"udp source port", "udp-source-port"},
+    {"udp empty sendto", "udp-empty-payload"},
+    {"udp empty payload", "udp-empty-payload"},
+    {"udp empty source not 127.0.0.1", "udp-empty-source-address"},
+    {"udp empty source port", "udp-empty-source-port"},
+    {"udp sendto after empty", "udp-after-empty"},
+    {"udp payload after empty", "udp-after-empty"},
+    {"udp drained socket not empty", "udp-drained"},
+    {"udp socket for the recvfrom with no length", "nolen-efault"},
+    {"udp bind for the recvfrom with no length", "nolen-efault"},
+    {"udp sendto for the recvfrom with no length", "nolen-efault"},
+    {"a recvfrom with an address and no length was not EFAULT", "nolen-efault"},
+    {"udp sendto after the recvfrom with no length", "nolen-datagram-kept"},
+    {"a recvfrom refused with EFAULT took the datagram", "nolen-datagram-kept"},
+    {"udp socket for the peek", "udp-peek-copies"},
+    {"udp bind for the peek", "udp-peek-copies"},
+    {"udp sendto for the peek", "udp-peek-copies"},
+    {"a udp peek did not copy the datagram", "udp-peek-copies"},
+    {"a second udp peek did not find the datagram and its sender", "udp-peek-again"},
+    {"a udp receive after a peek did not take the datagram", "udp-receive-after-peek"},
+    {"a udp receive after a peek left the datagram queued", "udp-peek-dequeued"},
+    {"tcp sockets for the peek", "tcp-peek-copies"},
+    {"tcp bind for the peek", "tcp-peek-copies"},
+    {"tcp listen for the peek", "tcp-peek-copies"},
+    {"tcp connect for the peek", "tcp-peek-copies"},
+    {"tcp accept for the peek", "tcp-peek-copies"},
+    {"tcp write for the peek", "tcp-peek-copies"},
+    {"a tcp peek of one byte did not copy it", "tcp-peek-copies"},
+    {"a tcp read after a peek did not start at the byte peeked", "tcp-read-after-peek"},
+    {"tcp listener socket", "tcp-connect"},
+    {"tcp bind", "tcp-connect"},
+    {"tcp listen", "tcp-connect"},
+    {"tcp client socket", "tcp-connect"},
+    {"tcp connect", "tcp-connect"},
+    {"tcp accept", "tcp-connect"},
+    {"tcp client write", "tcp-client-to-server"},
+    {"tcp server read", "tcp-client-to-server"},
+    {"tcp server write", "tcp-server-to-client"},
+    {"tcp client read", "tcp-server-to-client"},
+    {"tcp getpeername", "tcp-peer-address"},
+    {"tcp peer not 127.0.0.1", "tcp-peer-address"},
+    {"tcp peer port", "tcp-peer-port"},
+    {"immediate-close listener", "accept-close-connects"},
+    {"immediate-close bind", "accept-close-connects"},
+    {"immediate-close listen", "accept-close-connects"},
+    {"immediate-close fork", "accept-close-connects"},
+    {"immediate-close client", "accept-close-connects"},
+    {"immediate-close connect", "accept-close-connects"},
+    {"immediate-close eof", "accept-close-eof"},
+    {"immediate-close child", "accept-close-child"},
+    {"bulk listener socket", "bulk-connect"},
+    {"bulk bind", "bulk-connect"},
+    {"bulk listen", "bulk-connect"},
+    {"bulk client socket", "bulk-connect"},
+    {"bulk connect", "bulk-connect"},
+    {"bulk accept", "bulk-connect"},
+    {"bulk client non-blocking", "bulk-connect"},
+    {"bulk server non-blocking", "bulk-connect"},
+    {"a poll of the bulk transfer returned without a ready descriptor", "bulk-arrives"},
+    {"the bulk connection reported an error", "bulk-arrives"},
+    {"a bulk write that poll said had room wrote nothing", "bulk-arrives"},
+    {"the bulk connection ended before the transfer arrived", "bulk-arrives"},
+    {"bulk bytes came back wrong", "bulk-arrives"},
+    {"a transfer larger than the loopback ring did not arrive whole", "bulk-arrives"},
+    {"the loopback ring refused a datagram during the transfer", "bulk-no-drop"},
+    {"the loopback ring was never pressed in this boot", "bulk-ring-pressed"},
+    {"pipes for the round-trip calibration", "pipe-calibration"},
+    {"fork for the round-trip calibration", "pipe-calibration"},
+    {"writing to the child in the round-trip calibration", "pipe-calibration"},
+    {"reading from the child in the round-trip calibration", "pipe-calibration"},
+    {"the calibration child did not finish", "pipe-calibration"},
+    {"ping-pong listener socket", "pingpong-connect"},
+    {"ping-pong bind", "pingpong-connect"},
+    {"ping-pong listen", "pingpong-connect"},
+    {"ping-pong fork", "pingpong-connect"},
+    {"ping-pong accept", "pingpong-connect"},
+    {"ping-pong write", "pingpong-rounds"},
+    {"ping-pong read", "pingpong-rounds"},
+    {"the ping-pong child did not finish", "pingpong-child"},
+    {"a local round trip waited for the timer with nothing running", "pingpong-idle"},
+    {"bound listener socket", "bind-missing-address"},
+    {"a bind to an address the machine lacks was not refused", "bind-missing-address"},
+    {"bind to 127.0.0.1", "bound-listen"},
+    {"listen on 127.0.0.1", "bound-listen"},
+    {"bound client socket", "bound-not-at-interface"},
+    {"a listener bound to 127.0.0.1 took a connection to the interface address",
+     "bound-not-at-interface"},
+    {"bound client socket", "bound-at-loopback"},
+    {"connect to a listener bound to 127.0.0.1", "bound-at-loopback"},
+    {"accept on 127.0.0.1", "bound-at-loopback"},
+    {"refused socket", "closed-port-refused"},
+    {"closed port not refused", "closed-port-refused"},
+    {"bound-port listen socket", "second-bind-before-listen"},
+    {"bound-port listen bind", "second-bind-before-listen"},
+    {"second listener socket", "second-bind-before-listen"},
+    {"a second bind before any listen was refused", "second-bind-before-listen"},
+    {"bound-port listen", "second-listener-refused"},
+    {"second listener on one port not refused", "second-listener-refused"},
+    {"late bind socket", "live-port-bind-refused"},
+    {"binding a live listener's port was not reported", "live-port-bind-refused"},
+    {"unbound listener socket", "unbound-listener-ephemeral"},
+    {"unbound listener refused", "unbound-listener-ephemeral"},
+    {"unbound listener given no ephemeral port", "unbound-listener-ephemeral"},
+    {"port 0 socket", "port-zero-ephemeral"},
+    {"bind to port 0", "port-zero-ephemeral"},
+    {"bind to port 0 given no ephemeral port", "port-zero-ephemeral"},
+    {"restart socket", "restart-on-port"},
+    {"a port a closed session still has could not be bound", "restart-on-port"},
+    {"a server could not restart on its own last session's port", "restart-on-port"},
+    {"bound-port client socket", "client-bound-port"},
+    {"bound-port client bind", "client-bound-port"},
+    {"bound-port connect", "client-bound-port"},
+    {"bound-port accept", "client-bound-port"},
+    {"the peer port is not the one the client bound", "client-bound-port"},
+    {"duplicate pairing socket", "duplicate-pairing-refused"},
+    {"duplicate pairing bind", "duplicate-pairing-refused"},
+    {"a repeated local-remote pairing was not refused", "duplicate-pairing-refused"},
+    {"fork for the shutdown wake", "shutdown-wakes-reader"},
+    {"the reader was never seen asleep before the shutdown", "shutdown-wakes-reader"},
+    {"shutdown under a sleeping reader", "shutdown-wakes-reader"},
+    {"the reader did not end after the shutdown", "shutdown-wakes-reader"},
+    {"a reader asleep through a shutdown did not read the end of input", "shutdown-wakes-reader"},
+    {"shutdown of the client", "shutdown-epipe"},
+    {"a send after shutdown is not EPIPE", "shutdown-epipe"},
+    {"a blocking read after shutdown is not the end of input", "shutdown-blocking-eof"},
+    {"nonblocking after shutdown", "shutdown-nonblocking-eof"},
+    {"a nonblocking read after shutdown is not the end of input", "shutdown-nonblocking-eof"},
+    {"fresh stream socket", "never-connected-enotconn"},
+    {"nonblocking on the fresh socket", "never-connected-enotconn"},
+    {"a read of a stream that never connected is not ENOTCONN", "never-connected-enotconn"},
+    {"simultaneous sockets", "simultaneous-open"},
+    {"simultaneous bind a", "simultaneous-open"},
+    {"simultaneous bind b", "simultaneous-open"},
+    {"simultaneous nonblock", "simultaneous-open"},
+    {"simultaneous connect a", "simultaneous-open"},
+    {"simultaneous connect b", "simultaneous-open"},
+    {"crossing SYNs in flight at once opened no connection that carries data",
+     "simultaneous-open"}};
+
+#define STEPS ((int)(sizeof(steps) / sizeof(steps[0])))
+
+/* The first step of the case running, the first step not yet reported, and
+ * the process that writes the report. */
+static int step_floor, step_next, report_pid;
+
+/** Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The first step of the row of step `i`. */
+static int row_start(int i)
+{
+    while (i > 0 && same(steps[i - 1].id, steps[i].id)) {
+        i--;
+    }
+    return i;
+}
+
+/** The step labelled `label` from `step_floor` on, or `step_floor` when no
+ * step there has it. */
+static int step_of(const char *label)
+{
+    int i;
+
+    for (i = step_floor; i < STEPS; i++) {
+        if (same(steps[i].label, label)) {
+            return i;
+        }
+    }
+    return step_floor;
+}
+
+/** Begin the steps of the row whose step `label` names: the case, or the
+ * part of one, that runs next. */
+static void rows_enter(const char *label)
+{
+    step_floor = row_start(step_of(label));
+}
+
+/**
+ * Report the rows not yet reported: held before the row of step `failed`,
+ * that row failed with `why`, and the rest not run, or every row held when
+ * `failed` is STEPS; then the report's end. Given `machine=native`, the rows
+ * of the machine's counts are not run.
+ */
+static void rows_report(int failed, const char *why)
+{
+    int row = failed < STEPS ? row_start(failed) : STEPS;
+    int i;
+
+    for (i = step_next; i < STEPS; i++) {
+        if (i > 0 && same(steps[i - 1].id, steps[i].id)) {
+            continue;
+        }
+        if (probe_native() &&
+            (same(steps[i].id, "bulk-no-drop") || same(steps[i].id, "pingpong-idle"))) {
+            report_notrun(steps[i].id, "machine=native leaves out the machine's loopback counts");
+        } else if (i < row) {
+            report_pass(steps[i].id);
+        } else if (i == row) {
+            report_fail(steps[i].id, why);
+        } else {
+            report_notrun(steps[i].id, "an earlier check failed");
+        }
+    }
+    step_next = STEPS;
+    report_end();
+}
+
+/** Print "LOOPPROBE FAIL (`what`)", report the row of the step `what` names
+ * when this is the process that writes the report, and exit 1. */
 static void fail(const char *what)
 {
     print("LOOPPROBE FAIL (");
     print(what);
     print(")\n");
+    if (syscall0(SYS_GETPID) == report_pid) {
+        rows_report(step_of(what), what);
+    }
     sys_exit(1);
 }
 
@@ -243,6 +492,7 @@ static void learn_addresses(void)
     source_for(me, 127, 0, 0, 1);
     if (!mem_eq(me + 4, loop_ip, 4))
         fail("a socket connected to 127.0.0.1 does not report 127.0.0.1");
+    rows_enter("the local address read back as a loopback or a zero address");
     source_for(me, 192, 0, 2, 1);
     own_ip[0] = me[4];
     own_ip[1] = me[5];
@@ -1198,6 +1448,7 @@ static void tcp_bound_loopback(void)
     if (socketcall(SC_CONNECT, args) != -ECONNREFUSED)
         fail("a listener bound to 127.0.0.1 took a connection to the interface address");
     sys_close(cs);
+    rows_enter("connect to a listener bound to 127.0.0.1");
 
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
@@ -1724,20 +1975,35 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.loopprobe"));
+    report_pid = syscall0(SYS_GETPID);
     take_ports();
     learn_addresses();
+    rows_enter("udp socket");
     udp_loop();
+    rows_enter("udp socket for the recvfrom with no length");
     udp_no_length();
+    rows_enter("udp socket for the peek");
     udp_peek();
+    rows_enter("tcp sockets for the peek");
     tcp_peek();
+    rows_enter("tcp listener socket");
     tcp_loop();
+    rows_enter("immediate-close listener");
     tcp_accept_close();
+    rows_enter("bulk listener socket");
     tcp_loop_bulk();
+    rows_enter("pipes for the round-trip calibration");
     tcp_loop_pingpong();
+    rows_enter("bound listener socket");
     tcp_bound_loopback();
+    rows_enter("refused socket");
     tcp_refused();
+    rows_enter("bound-port listen socket");
     tcp_ports();
+    rows_enter("simultaneous sockets");
     tcp_simultaneous();
+    rows_report(STEPS, 0);
     print("LOOPPROBE OK\n");
     sys_exit(0);
 }
