@@ -12,16 +12,18 @@
  * KRFFS partition and not in the 1 MiB gap after the MBR, where GRUB's core
  * image is and where the kernel publishes /dev/grubcore.
  *
- * `mkfixture wide DISK` builds a sparse disk of 260 GiB. The raw disk
- * windows seek and transfer through a 64-bit offset, and every other test
- * image is tens of megabytes, too small to tell that offset from a 32-bit
- * one. A disk of a few gigabytes
- * would pass with an offset of 33 bits; the far marker of this one, at 258
- * GiB, needs 39, and an offset cut to fewer misses it. Two 512-byte markers
- * are written, one at 5 GiB and one at 258 GiB (byte j of the marker at
- * offset k is (j * 7 + 3 + k / GiB) & 0xff), and an MBR signature with no
- * partitions, so that discovery runs and publishes no boot partition. The
- * file is sparse, so all of it costs kilobytes.
+ * `mkfixture wide DISK` writes the wide disk of bootprobe, a sparse disk of
+ * 260 GiB. The raw disk windows seek and transfer through a 64-bit offset,
+ * and every other test image is tens of megabytes, too small to tell that
+ * offset from a 32-bit one. A disk of a few gigabytes would pass with an
+ * offset of 33 bits; the far marker of this one, at 258 GiB, needs 39, and
+ * an offset cut to fewer misses it. Two 512-byte markers are written, one at
+ * 5 GiB and one at 258 GiB (byte j of the marker at offset k is
+ * (j * 7 + 3 + k / GiB) & 0xff), and an MBR signature with no partitions, so
+ * that discovery runs and publishes no boot partition. DISK is made when it
+ * does not exist; an existing one, such as the empty disk of that size that
+ * the wide case of tests/cases/machine.bootpart.json declares, keeps its
+ * other bytes. The file is sparse, so all of it costs kilobytes.
  *
  * `mkfixture auth DISK` builds the disk of the authority cases
  * (tests/cases/guest.authority.json): 4 GiB of zeros, sparse, with an MBR
@@ -120,17 +122,19 @@ static int make_boot(const char *path)
     return 0;
 }
 
-/** `mkfixture wide PATH`: create the sparse wide disk at `path`; 0, or 1
- * having said why. */
+/** `mkfixture wide PATH`: write the sparse wide disk at `path`, making it
+ * when it does not exist; 0, or 1 having said why. */
 static int make_wide(const char *path)
 {
     unsigned char marker[SECTOR];
     const uint64_t at[2] = {WIDE_NEAR, WIDE_FAR};
-    FILE *f = fopen(path, "wb");
+    FILE *f = fopen(path, "r+b");
     int i, j;
 
+    if (f == NULL)
+        f = fopen(path, "wb");
     if (f == NULL) {
-        fprintf(stderr, "mkfixture: wide: cannot create %s\n", path);
+        fprintf(stderr, "mkfixture: wide: cannot open %s\n", path);
         return 1;
     }
     if (fseeko(f, (off_t)WIDE_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF) {

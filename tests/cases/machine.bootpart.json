@@ -1,0 +1,719 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bootpart",
+  "summary": "/proc/cmdline and the level-one disk devices, /dev/bootpart, /dev/grubcore and /dev/disk0: bootprobe at the kernel's debug shell in one boot for each arrangement of the boot disk, under tests/cases/machine/bootpart_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bootpart.absent",
+      "behavior": "on a disk whose MBR has one KRFFS partition and no FAT-typed entry 1, the kernel publishes no /dev/bootpart: stat64 and open of it give ENOENT",
+      "units": [
+        "bootpart",
+        "bootprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "disk": "krffs/mkdisk.sh of disk-test.manifest, 64 MiB with a KRFFS partition of 48 MiB at LBA 2048"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "bootpart_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "absent-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "bootpart",
+          "does": "boot the kernel to its debug shell"
+        },
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "bootpart",
+          "does": "run exec /bootprobe at the debug shell, with no mode on the command line, and read its report and its last line"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "bootpart",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "absent-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "cmdline",
+          "checks": "bootprobe's report: /proc/cmdline opens and reads, ends with a newline, has rach2.fsdisk exactly when the boot asks for a disk root, its descriptor reads back /proc/cmdline through /proc/self/fd, and stat64 and fstat64 agree on mode 0100444 and inode 0x101",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "proc-listing",
+          "checks": "bootprobe's report: getdents64 of /proc lists cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "absent",
+          "checks": "bootprobe's report: stat64 and open of /dev/bootpart each give ENOENT",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "token",
+          "checks": "bootprobe's last line, after its report, is BOOTPROBE ABSENT OK, so no check of the run failed and it did not print BOOTPROBE FAILED",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "absent-disk",
+          "node": "tests/cases/machine/bootpart/absent.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "bootpart_scenario",
+          "node": "tests/cases/machine/bootpart_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case is the kernel's discovery of the boot disk's partition table at boot, on a disk laid out for it"
+      }
+    },
+    {
+      "case_id": "machine.bootpart.fixture",
+      "behavior": "on a disk whose MBR has a FAT-typed entry 1 of 1024 sectors at LBA 102400, filled with a known pattern, /dev/bootpart is that partition: a 0600 character device by stat64 and fstat64, sector 5 has the pattern, SEEK_END is the partition's size, a read at or past the end gives 0, a write past it ENOSPC, an unaligned count or offset EINVAL, sector 7 written reads back, and an open by uid 1000 gives EACCES",
+      "units": [
+        "bootpart",
+        "bootprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "disk": "the absent case's disk after mkfixture boot: a FAT-typed entry 1 of 1024 sectors at LBA 102400 with byte j of sector k (k * 7 + j) & 0xff, and the KRFFS entry moved to slot 2"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "bootpart_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "fixture-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "bootpart",
+          "does": "boot the kernel to its debug shell"
+        },
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "bootpart",
+          "does": "run exec /bootprobe at the debug shell, with rach2.bootprobe=fixture on the command line, and read its report and its last line"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "bootpart",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "fixture-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk",
+              "rach2.rescue",
+              "rach2.bootprobe=fixture"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "cmdline",
+          "checks": "bootprobe's report: /proc/cmdline opens and reads, ends with a newline, has rach2.fsdisk exactly when the boot asks for a disk root, its descriptor reads back /proc/cmdline through /proc/self/fd, and stat64 and fstat64 agree on mode 0100444 and inode 0x101",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "proc-listing",
+          "checks": "bootprobe's report: getdents64 of /proc lists cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fixture",
+          "checks": "bootprobe's report: every check of /dev/bootpart in the fixture mode holds, from its mode by both stat paths to the refusal of an unprivileged open",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "token",
+          "checks": "bootprobe's last line, after its report, is BOOTPROBE OK, so no check of the run failed and it did not print BOOTPROBE FAILED",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "fixture-disk",
+          "node": "tests/cases/machine/bootpart/fixture.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "bootpart_scenario",
+          "node": "tests/cases/machine/bootpart_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case writes the boot partition of a disk laid out for it, which on the Lenovo is the accepted system's"
+      }
+    },
+    {
+      "case_id": "machine.bootpart.ramroot",
+      "behavior": "a machine that mounts a RAM image and no disk file system still has /dev/bootpart and /dev/grubcore as 0600 devices; grubcore spans LBA 1 to 2047 and no more, reads at the end give 0, writes at and across the end ENOSPC, an unaligned offset or count EINVAL, a descriptor kept across a drop of privilege still seeks and reads but its write gives EPERM, and a new unprivileged open EACCES",
+      "units": [
+        "bootpart",
+        "bootprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "disk": "the fixture case's disk, with the test image as the RAM root"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "bootpart_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "fixture-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "bootpart",
+          "does": "boot the kernel to its debug shell"
+        },
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "bootpart",
+          "does": "run exec /bootprobe at the debug shell of the RAM root, with rach2.bootprobe=ramroot on the command line, and read its report and its last line"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "bootpart",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [
+              "fixture-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue",
+              "rach2.bootprobe=ramroot"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "cmdline",
+          "checks": "bootprobe's report: /proc/cmdline opens and reads, ends with a newline, has rach2.fsdisk exactly when the boot asks for a disk root, its descriptor reads back /proc/cmdline through /proc/self/fd, and stat64 and fstat64 agree on mode 0100444 and inode 0x101",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "proc-listing",
+          "checks": "bootprobe's report: getdents64 of /proc lists cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ramroot",
+          "checks": "bootprobe's report: every check of /dev/bootpart and /dev/grubcore in the RAM-root mode holds",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "token",
+          "checks": "bootprobe's last line, after its report, is BOOTPROBE RAMROOT OK, so no check of the run failed and it did not print BOOTPROBE FAILED",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "fixture-disk",
+          "node": "tests/cases/machine/bootpart/fixture.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "bootpart_scenario",
+          "node": "tests/cases/machine/bootpart_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case writes the boot loader's gap of a disk laid out for it, which on the Lenovo holds the accepted system's GRUB"
+      }
+    },
+    {
+      "case_id": "machine.bootpart.wide",
+      "behavior": "on a sparse disk of 260 GiB over AHCI, /dev/disk0's 64-bit offset reaches every byte: a seek to the end gives the whole size, the sectors at 5 GiB and 258 GiB have their markers, SEEK_CUR crosses 4 GiB both ways, a seek before the start gives EINVAL, a duplicate shares the offset, and on i686 the 32-bit lseek past 4 GiB gives EOVERFLOW and still works below",
+      "units": [
+        "bootpart",
+        "bootprobe"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "disk": "an empty disk of 279172874240 bytes, 260 GiB, on AHCI, with byte j of the sector at k GiB (j * 7 + 3 + k) & 0xff at 5 GiB and 258 GiB"
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "bootpart_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the empty disk, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "markers",
+          "stage": "execute",
+          "does": "write the markers at 5 GiB and 258 GiB and an MBR signature into the empty disk with mkfixture wide"
+        },
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "bootpart",
+          "does": "boot the kernel to its debug shell"
+        },
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "bootpart",
+          "does": "run exec /bootprobe at the debug shell of the RAM root, with rach2.bootprobe=wide on the command line, and read its report and its last line"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "bootpart",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [
+              {
+                "name": "wide-disk",
+                "bus": "ahci",
+                "size_bytes": 279172874240
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.disk=ahci",
+              "rach2.rescue",
+              "rach2.diskdiag",
+              "rach2.bootprobe=wide"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "cmdline",
+          "checks": "bootprobe's report: /proc/cmdline opens and reads, ends with a newline, has rach2.fsdisk exactly when the boot asks for a disk root, its descriptor reads back /proc/cmdline through /proc/self/fd, and stat64 and fstat64 agree on mode 0100444 and inode 0x101",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "proc-listing",
+          "checks": "bootprobe's report: getdents64 of /proc lists cmdline",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "wide",
+          "checks": "bootprobe's report: every check of /dev/disk0 in the wide mode holds, the markers at 5 GiB and 258 GiB among them",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "token",
+          "checks": "bootprobe's last line, after its report, is BOOTPROBE WIDE OK, so no check of the run failed and it did not print BOOTPROBE FAILED",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "mkfixture",
+          "node": "tests/system/mkfixture",
+          "per_architecture": false
+        },
+        {
+          "name": "bootpart_scenario",
+          "node": "tests/cases/machine/bootpart_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs a disk of 260 GiB on AHCI with markers past 4 GiB that the host writes, which the Lenovo has none of"
+      }
+    }
+  ]
+}

@@ -374,6 +374,25 @@ run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
 	    $(AHCI_ATTACH) \
 	    --timeout 180 --ok "BOOTPROBE WIDE OK" probe=bootprobe
+# The disks of the bootpart cases, tests/cases/machine.bootpart.json, made for
+# each architecture, since their root holds tests/bootprobe: the disk that
+# mkdisk.sh makes of disk-test.manifest, with one KRFFS partition, and that
+# disk after `mkfixture boot` has given it a FAT-typed entry 1 of known bytes.
+# The wide case's disk of 260 GiB is an empty disk of its machine, into which
+# the scenario has mkfixture write the markers.
+BOOTPART_ABSENT_DISK = $(ARCH_CASE_DIR)/bootpart/absent.disk
+BOOTPART_FIXTURE_DISK = $(ARCH_CASE_DIR)/bootpart/fixture.disk
+$(BOOTPART_ABSENT_DISK): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
+                         build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
+                         | preflight krffs tests
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	$(MKDISK) krffs/manifests/disk-test.manifest $@.tmp 64 48
+	mv $@.tmp $@
+$(BOOTPART_FIXTURE_DISK): $(BOOTPART_ABSENT_DISK) $(MKFIXTURE)
+	cp $(BOOTPART_ABSENT_DISK) $@.tmp
+	$(MKFIXTURE) boot $@.tmp || { rm -f $@.tmp; exit 1; }
+	mv $@.tmp $@
 # `tests/run grub`: the machine replacing its own boot loader. The post-MBR gap
 # holds two core-image tails and LBA 1 selects between them, so a replacement
 # writes the tail not in use, reads it back, and only then rewrites that one

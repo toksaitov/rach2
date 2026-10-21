@@ -730,10 +730,12 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
-# The network and process scenarios that read a probe's console report.
+# The network, process and disk scenarios that read a probe's console
+# report.
 NETPROBE_SCENARIOS = build/tests/cases/machine/netif_scenario \
                      build/tests/cases/machine/login_scenario build/tests/cases/machine/account_scenario \
-                     build/tests/cases/machine/procfiles_scenario build/tests/cases/machine/credpersist_scenario
+                     build/tests/cases/machine/procfiles_scenario build/tests/cases/machine/credpersist_scenario \
+                     build/tests/cases/machine/bootpart_scenario
 $(NETPROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                        tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
                        tests/cases/machine/console_report.c tests/cases/machine/console_report.h \

@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "proof": "bootpart",
+  "summary": "the cases of tests/run bootpart under etude, against a /dev/bootpart listed while it is not published, a raw window whose writes are not bounded at its end, a /dev/grubcore that reaches the first sector of partition 1, and a raw seek that keeps its offset in 32 bits",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/devfs.c",
+    "rach2/sys/syscall.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run bootpart </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "listed-unpublished",
+      "summary": "/dev/bootpart is in /dev whether or not the boot disk's table qualified entry 1, so stat and open find it on a disk with no boot partition",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "        return bootpart.present;\n",
+          "replace": "        return 1;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootpart: FAIL",
+          "run: bootpart: machine.bootpart.absent: evidence: ",
+          "assert absent fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "end-unbounded",
+      "summary": "a write of a raw window is not judged against the window's end before it goes down, so a write at or past the end reaches the driver and fails there with EIO, or lands past the window",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "    if (lba >= total || (uint64_t)want > total - lba) {\n        return -ENOSPC;\n    }\n",
+          "replace": "    (void)total;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootpart: FAIL",
+          "run: bootpart: machine.bootpart.fixture: evidence: ",
+          "run: bootpart: machine.bootpart.ramroot: evidence: ",
+          "assert fixture fail",
+          "assert ramroot fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "gap-past-end",
+      "summary": "/dev/grubcore on an MBR disk is published over LBA 1 through 2048, one sector into partition 1, in place of the gap that ends at LBA 2047",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/devfs.c",
+          "find": "                         MBR_GAP_END_LBA - MBR_GAP_FIRST_LBA);\n",
+          "replace": "                         MBR_GAP_END_LBA);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootpart: FAIL",
+          "run: bootpart: machine.bootpart.ramroot: evidence: ",
+          "assert ramroot fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "seek-32",
+      "summary": "a seek of a raw window keeps the low 32 bits of the offset it resolves, so the end of the 260 GiB disk and its markers at 5 GiB and 258 GiB are out of reach",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall.c",
+          "find": "        *out = base + (uint64_t)delta;\n",
+          "replace": "        *out = (uint32_t)(base + (uint64_t)delta);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootpart: FAIL",
+          "run: bootpart: machine.bootpart.wide: evidence: ",
+          "assert wide fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}
