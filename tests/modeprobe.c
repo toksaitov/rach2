@@ -49,7 +49,10 @@
  * signal in the low bits and would otherwise decode as exit 0, scoring a
  * crashed child as a passing one. Prints "MODEPROBE OK" and exits 0 only when
  * every case passed; any failure names the step and the answer it got, and
- * exits 1. Freestanding; direct system calls (probe.h).
+ * exits 1. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check `checks` lists; a failure,
+ * the children's included, leaves the checks after it not run.
+ * Freestanding; direct system calls (probe.h).
  *
  * Needs: to start as root, which it uses to empty its own supplementary group
  * list before anything else; a child that drops to uid 1000 with root's group
@@ -69,6 +72,7 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -186,6 +190,339 @@ static void puto(u32 v)
     puts_(&buf[i]);
 }
 
+/* The checks, one assertion each, in the order the probe makes them, and
+ * the step each prints when it fails. The steps of `mint`, `copy_file`,
+ * `run_helper`, `stat_path` and the removals are not here: they belong to
+ * the check after the last one that held, as do `FIXTURES`, `COPY_HELPER`
+ * and `REMOVE_FIXTURES`, which name them. */
+enum {
+    ENTER_DIR,
+    EMPTY_GROUPS,
+    MINT_GROW,
+    CLOSE_GROW,
+    MINT_BLOCKER,
+    CLOSE_BLOCKER,
+    GIVE_GROW,
+    ARM_GROW,
+    GROW_MODE,
+    FIXTURES,
+    MINT_DIR,
+    ARM_DIR,
+    DIR_MODE,
+    MINT_FDIR,
+    ARM_FDIR,
+    FDIR_MODE,
+    BASELINE,
+    WRITE_ROOT,
+    ROOT_WRITE_KEEPS,
+    CHOWN_AWAY,
+    CHOWN_CLEARS,
+    CHOWN_OWNER,
+    CHOWN_DIR,
+    CHOWN_DIR_KEEPS,
+    OPEN_FCHOWN,
+    FCHOWN_AWAY,
+    CLOSE_FCHOWN,
+    FCHOWN_CLEARS,
+    FCHOWN_OWNER,
+    OPEN_FDIR,
+    FCHOWN_DIR,
+    CLOSE_FDIR,
+    FCHOWN_DIR_KEEPS,
+    FCHOWN_DIR_OWNER,
+    OPEN_FSGID,
+    FCHOWN_FSGID,
+    CLOSE_FSGID,
+    FCHOWN_SGID_CLEARS,
+    FCHOWN_SGID_OWNER,
+    OPEN_FSGID645,
+    FCHOWN_FSGID645,
+    CLOSE_FSGID645,
+    FCHOWN_SGID645_KEEPS,
+    FCHOWN_SGID645_OWNER,
+    USER_CHILD,
+    USER_DROP_GIDS,
+    USER_DROP_UIDS,
+    NOCHG_CHOWN,
+    NOCHG_KEEPS,
+    SAMEIDS_CHOWN,
+    SAMEIDS_KEEPS,
+    WRITE_INPLACE,
+    INPLACE_CLEARS,
+    WRITE_GROW,
+    GROW_CLEARS,
+    GROW_SIZE,
+    OPEN_TRUNC,
+    CLOSE_TRUNC,
+    TRUNC_CLEARS,
+    TRUNC_SIZE,
+    CREAT_EXISTING,
+    CLOSE_CREAT,
+    CREAT_CLEARS,
+    CREAT_SIZE,
+    WRITE_SGID,
+    SGID_CLEARS,
+    CHMOD_SGID,
+    CHMOD_SGID_KEEPS,
+    WRITE_SGID645,
+    SGID645_KEEPS,
+    WRITE_PLAIN,
+    PLAIN_KEPT,
+    OPEN_FNOCHG,
+    FNOCHG_FCHOWN,
+    FNOCHG_KEEPS,
+    FNOCHG_OWNER,
+    FNOCHG_TIMES,
+    FSAMEIDS_FCHOWN,
+    FSAMEIDS_KEEPS,
+    FSAMEIDS_TIMES,
+    CLOSE_FNOCHG,
+    GIVE_GROUP,
+    GROUP_CLEARS,
+    GROUP_STORED,
+    REFUSE_CHOWN,
+    REFUSE_KEEPS,
+    REFUSE_OWNER,
+    REFUSE_TIMES,
+    COPY_HELPER,
+    ARM_COPY,
+    GIVE_COPY,
+    COPY_KEEPS,
+    ESC_CHILD,
+    ESC_DROP_GIDS,
+    ESC_DROP_UIDS,
+    OPEN_COPY,
+    READ_COPY,
+    CLOSE_COPY,
+    REOPEN_COPY,
+    REWRITE_COPY,
+    CLOSE_REWRITTEN,
+    COPY_WRITE_KEEPS,
+    EXEC_02700,
+    CHMOD_02710,
+    CHMOD_02710_STRIPS,
+    EXEC_0710,
+    REMOVE_FIXTURES,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"enter-dir", "enter the directory named on the command line"},
+    {"empty-groups", "empty the supplementary group list"},
+    {"mint-grow", "mint the relocation fixture"},
+    {"close-grow", "close the relocation fixture"},
+    {"mint-blocker", "mint the blocker behind it"},
+    {"close-blocker", "close the blocker"},
+    {"give-grow", "give the relocation fixture away"},
+    {"arm-grow", "arm the relocation fixture"},
+    {"grow-mode", "the relocation fixture did not take its mode"},
+    {"fixtures", "mint the fixtures"},
+    {"mint-dir", "mint the directory"},
+    {"arm-dir", "arm the directory"},
+    {"dir-mode", "the directory did not take its mode"},
+    {"mint-fdir", "mint the descriptor's directory"},
+    {"arm-fdir", "arm the descriptor's directory"},
+    {"fdir-mode", "the descriptor's directory did not take its mode"},
+    {"baseline", "the 04755 baseline"},
+    {"write-root", "write as root"},
+    {"root-write-keeps", "a privileged write took the bit"},
+    {"chown-away", "chown a setuid file away"},
+    {"chown-clears", "a chown kept setuid"},
+    {"chown-owner", "a chown did not store the owner"},
+    {"chown-dir", "chown the directory away"},
+    {"chown-dir-keeps", "a chown took a directory's setuid"},
+    {"open-fchown", "open the file to be chowned by descriptor"},
+    {"fchown-away", "fchown a setuid file away"},
+    {"close-fchown", "close the file chowned by descriptor"},
+    {"fchown-clears", "an fchown kept setuid"},
+    {"fchown-owner", "an fchown did not store the owner"},
+    {"open-fdir", "open the directory to be chowned by descriptor"},
+    {"fchown-dir", "fchown the directory away"},
+    {"close-fdir", "close the directory chowned by descriptor"},
+    {"fchown-dir-keeps", "an fchown took a directory's setuid"},
+    {"fchown-dir-owner", "an fchown did not store a directory's owner"},
+    {"open-fsgid", "open the 02755 file"},
+    {"fchown-fsgid", "fchown the 02755 file away"},
+    {"close-fsgid", "close the 02755 file"},
+    {"fchown-sgid-clears", "an fchown kept setgid with group-execute"},
+    {"fchown-sgid-owner", "an fchown did not store the 02755 file's owner"},
+    {"open-fsgid645", "open the 02645 file"},
+    {"fchown-fsgid645", "fchown the 02645 file away"},
+    {"close-fsgid645", "close the 02645 file"},
+    {"fchown-sgid645-keeps", "an fchown took setgid without group-execute"},
+    {"fchown-sgid645-owner", "an fchown did not store the 02645 file's owner"},
+    {"user-child", "the uid-1000 child"},
+    {"user-drop-gids", "drop the gids"},
+    {"user-drop-uids", "drop the uids"},
+    {"nochg-chown", "chown(-1, -1) on a root-owned setuid file"},
+    {"nochg-keeps", "a no-change chown disarmed the file"},
+    {"sameids-chown", "chown(0, 0) on a root-owned setuid file"},
+    {"sameids-keeps", "naming the ids it already had disarmed the file"},
+    {"write-inplace", "write in place"},
+    {"inplace-clears", "an in-place write kept setuid"},
+    {"write-grow", "write past the node"},
+    {"grow-clears", "a relocating write kept setuid"},
+    {"grow-size", "the relocating write lost bytes"},
+    {"open-trunc", "open with O_TRUNC"},
+    {"close-trunc", "close the truncated file"},
+    {"trunc-clears", "O_TRUNC kept setuid"},
+    {"trunc-size", "O_TRUNC left bytes behind"},
+    {"creat-existing", "creat an existing set-id file"},
+    {"close-creat", "close the recreated file"},
+    {"creat-clears", "creat kept setuid"},
+    {"creat-size", "creat left bytes behind"},
+    {"write-sgid", "write the 02755 file"},
+    {"sgid-clears", "a write kept setgid with group-execute"},
+    {"chmod-sgid", "chmod the 02755 file back"},
+    {"chmod-sgid-keeps", "chmod took setgid from a caller inside the group"},
+    {"write-sgid645", "write the 02645 file"},
+    {"sgid645-keeps", "a write took setgid without group-execute"},
+    {"write-plain", "write the plain file"},
+    {"plain-kept", "a write disturbed a plain mode"},
+    {"open-fnochg", "open the root-owned setuid file"},
+    {"fnochg-fchown", "fchown(-1, -1) on a root-owned setuid file"},
+    {"fnochg-keeps", "a no-change fchown disarmed the file"},
+    {"fnochg-owner", "a no-change fchown moved the owner"},
+    {"fnochg-times", "a no-change fchown moved the times"},
+    {"fsameids-fchown", "fchown(0, 0) on a root-owned setuid file"},
+    {"fsameids-keeps", "naming the ids it already had, through a descriptor, disarmed the file"},
+    {"fsameids-times", "a no-change fchown by name moved the times"},
+    {"close-fnochg", "close the root-owned setuid file"},
+    {"give-group", "give a file its owner's group"},
+    {"group-clears", "a permitted group change kept the set-id bits"},
+    {"group-stored", "a permitted group change did not store the group"},
+    {"refuse-chown", "give a file away as its unprivileged owner"},
+    {"refuse-keeps", "a refused chown took the set-id bits"},
+    {"refuse-owner", "a refused chown moved the owner"},
+    {"refuse-times", "a refused chown moved the times"},
+    {"copy-helper", "copy the staged helper"},
+    {"arm-copy", "arm the helper copy"},
+    {"give-copy", "give the helper copy away"},
+    {"copy-keeps", "the chown took setgid without group-execute"},
+    {"esc-child", "the escalation child"},
+    {"esc-drop-gids", "drop the gids"},
+    {"esc-drop-uids", "drop the uids"},
+    {"open-copy", "open the copy to read a byte"},
+    {"read-copy", "read a byte of the copy"},
+    {"close-copy", "close the copy"},
+    {"reopen-copy", "reopen the copy to write it back"},
+    {"rewrite-copy", "rewrite a byte of the copy"},
+    {"close-rewritten", "close the rewritten copy"},
+    {"copy-write-keeps", "a write took setgid without group-execute"},
+    {"exec-02700", "exec the 02700 copy"},
+    {"chmod-02710", "chmod the copy 02710"},
+    {"chmod-02710-strips", "chmod stored setgid for a caller outside the group"},
+    {"exec-0710", "exec the 02710 copy"},
+    {"remove-fixtures", "remove the fixtures"},
+};
+
+/* The last check that held, an index of `checks`, or -1 before the first. */
+static int at = -1;
+
+/* Why a check was left out, or NULL for one that was made: the directory is
+ * entered only when an argument names it, and the group list emptied only
+ * by root. */
+static const char *skip_why[CHECKS];
+
+/* In a child, the write end of the pipe on which it tells its parent the
+ * check it reached; -1 in the parent. */
+static int child_fd = -1;
+
+/* The step of a child's failed check, which the parent reports for it. */
+static const char *child_step;
+
+/** Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The check whose step is `step`: the last one that held, or the first of
+ * the checks after it; -1 for a step that is no check's. */
+static int find(const char *step)
+{
+    int i;
+
+    if (at >= 0 && same(checks[at].text, step)) {
+        return at;
+    }
+    for (i = at + 1; i < CHECKS; i++) {
+        if (same(checks[i].text, step)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Record that the check of `step`, if it is one, held. */
+static void held(const char *step)
+{
+    int i = find(step);
+
+    if (i >= 0) {
+        at = i;
+    }
+}
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with `why`, those after it as not run, a check
+ * left out as not run with its reason, and the report's end; with `check`
+ * CHECKS, every check that was made held. */
+static void report_at(int check, const char *why)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (skip_why[i] != 0) {
+            report_notrun(checks[i].id, skip_why[i]);
+        } else if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** End the process at the failed step `step`, a check's or one inside the
+ * check after the last that held: a child tells its parent which check
+ * failed, and the process that began the report reports it. Exits 1. */
+static void stop(const char *step)
+{
+    int i = child_step != 0 ? -1 : find(step);
+
+    if (i < 0) {
+        i = at + 1 < CHECKS ? at + 1 : CHECKS - 1;
+    }
+    if (child_fd >= 0) {
+        syscall3(SYS_WRITE, child_fd, (long)&i, (int)sizeof(i));
+    }
+    report_at(i, child_step != 0 ? child_step : step);
+    syscall1(SYS_EXIT, 1);
+}
+
+/** End a child whose rows held: tell its parent the last check that held,
+ * and exit 0. */
+static void child_done(void)
+{
+    if (child_fd >= 0) {
+        syscall3(SYS_WRITE, child_fd, (long)&at, (int)sizeof(at));
+    }
+    syscall1(SYS_EXIT, 0);
+}
+
 /** Print "MODEPROBE FAIL: ", the step and the answer it got, and exit 1. */
 static void fail(const char *step, int got)
 {
@@ -194,7 +531,7 @@ static void fail(const char *step, int got)
     puts_(" (got ");
     putd(got);
     puts_(")\n");
-    syscall1(SYS_EXIT, 1);
+    stop(step);
 }
 
 /** Fail at `step` unless the answer `got` is exactly `want`: an errno, not
@@ -204,6 +541,7 @@ static void want_eq(const char *step, int got, int want)
     if (got != want) {
         fail(step, got);
     }
+    held(step);
 }
 
 /** Fail at `step` unless the call succeeded, which for open is a descriptor
@@ -213,6 +551,7 @@ static void want_ok(const char *step, int got)
     if (got < 0) {
         fail(step, got);
     }
+    held(step);
 }
 
 /* The one stat buffer: the kernel writes it, the readers below read it. */
@@ -245,8 +584,9 @@ static void want_mode(const char *step, const char *path, u32 mode)
         puts_(" not ");
         puto(mode);
         puts_(")\n");
-        syscall1(SYS_EXIT, 1);
+        stop(step);
     }
+    held(step);
 }
 
 /* The stored times of the last stat, for the rows that must leave them alone:
@@ -293,6 +633,7 @@ static void want_times_kept(const char *step, const char *path)
         *(unsigned long *)(statbuf + KSTAT_CTIME_NSEC) != kept_ctime_ns) {
         fail(step, (int)*(unsigned long *)(statbuf + KSTAT_CTIME));
     }
+    held(step);
 }
 
 /** Fail at `step` unless `path` is owned by `uid`:`gid`, which a chown row
@@ -307,6 +648,7 @@ static void want_owner(const char *step, const char *path, u32 uid, u32 gid)
     if (*(u32 *)(statbuf + KSTAT_GID) != gid) {
         fail(step, (int)*(u32 *)(statbuf + KSTAT_GID));
     }
+    held(step);
 }
 
 /** Fail at `step` unless the stored size of `path` is `size`: only its low
@@ -321,6 +663,7 @@ static void want_size(const char *step, const char *path, u32 size)
     if (got != size) {
         fail(step, (int)got);
     }
+    held(step);
 }
 
 /* The bytes every write in this probe emits; the content never matters, only
@@ -525,7 +868,7 @@ static void user_child(void)
     want_owner("a refused chown moved the owner", REFUSED, user, user);
     want_times_kept("a refused chown moved the times", REFUSED);
 
-    syscall1(SYS_EXIT, 0);
+    child_done();
 }
 
 /**
@@ -563,27 +906,65 @@ static void escalation_child(void)
     want_mode("chmod stored setgid for a caller outside the group", SGID0, 0710);
     want_eq("exec the 02710 copy", run_helper(SGID0, "plain"), 0);
 
-    syscall1(SYS_EXIT, 0);
+    child_done();
+}
+
+/** Wait for the child `pid` of `run_child` into `*status`, and read from
+ * `fd`, unless it is -1, the check the child reached: -1 when it said none.
+ * Returns what the wait returned. */
+static int reap_child(int pid, int *status, int fd)
+{
+    int reaped = syscall3(SYS_WAITPID, pid, (long)status, 0);
+    int reached = -1;
+
+    if (fd >= 0) {
+        if (syscall3(SYS_READ, fd, (long)&reached, (int)sizeof(reached)) != (int)sizeof(reached) ||
+            reached < 0 || reached >= CHECKS) {
+            reached = -1;
+        }
+        syscall1(SYS_CLOSE, fd);
+    }
+    if (reached >= 0 && reaped == pid && WIFEXITED(*status) && WEXITSTATUS(*status) == 0) {
+        at = reached;
+    } else if (reached >= 0) {
+        at = reached - 1;
+        child_step = checks[reached].text;
+    }
+    return reaped;
 }
 
 /** Run one child to completion and require a clean exit 0. WIFEXITED comes
  * first: a signal death has the signal in the low bits and would otherwise
- * decode as exit 0. The child has already named the case it failed. */
+ * decode as exit 0. The child has already named the case it failed, and
+ * tells the parent its check on a pipe, so that the report fails that check
+ * and holds those before it. */
 static void run_child(void (*body)(void), const char *what)
 {
     int pid, status = 0;
     int reaped;
+    int fds[2] = {-1, -1};
 
+    held(what);
+    if (syscall1(SYS_PIPE, (long)fds) != 0) {
+        fds[0] = fds[1] = -1;
+    }
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail(what, pid);
     }
     if (pid == 0) {
+        if (fds[0] >= 0) {
+            syscall1(SYS_CLOSE, fds[0]);
+        }
+        child_fd = fds[1];
         body();
         /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);
     }
-    reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    if (fds[1] >= 0) {
+        syscall1(SYS_CLOSE, fds[1]);
+    }
+    reaped = reap_child(pid, &status, fds[0]);
     if (reaped != pid) {
         fail(what, reaped);
     }
@@ -593,11 +974,86 @@ static void run_child(void (*body)(void), const char *what)
         puts_(": died by signal ");
         putd(status & 0x7F);
         puts_("\n");
-        syscall1(SYS_EXIT, 1);
+        stop(what);
     }
     if (WEXITSTATUS(status) != 0) {
         fail(what, WEXITSTATUS(status));
     }
+}
+
+/**
+ * Root's own half: a privileged writer keeps the bit, while a chown takes it
+ * from a file and not from a directory, asked by the same identity, and the
+ * same through a descriptor, where 02755 loses its setgid bit and 02645
+ * keeps it. Exits 1 at the first case that fails.
+ */
+static void root_rows(void)
+{
+    int fd;
+
+    want_mode("the 04755 baseline", ROOTSUID, 04755);
+    write_bytes("write as root", ROOTSUID, 8);
+    want_mode("a privileged write took the bit", ROOTSUID, 04755);
+
+    want_eq("chown a setuid file away", syscall3(SYS_CHOWN, (long)CHOWNED, user, user), 0);
+    want_mode("a chown kept setuid", CHOWNED, 0755);
+    want_owner("a chown did not store the owner", CHOWNED, user, user);
+    want_eq("chown the directory away", syscall3(SYS_CHOWN, (long)DIRSUID, user, user), 0);
+    want_mode("a chown took a directory's setuid", DIRSUID, 04755);
+
+    fd = syscall3(SYS_OPEN, (long)FCHOWNED, O_WRONLY, 0);
+    want_ok("open the file to be chowned by descriptor", fd);
+    want_eq("fchown a setuid file away", syscall3(SYS_FCHOWN, fd, user, user), 0);
+    want_eq("close the file chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown kept setuid", FCHOWNED, 0755);
+    want_owner("an fchown did not store the owner", FCHOWNED, user, user);
+
+    fd = syscall3(SYS_OPEN, (long)FDIRSUID, O_RDONLY | O_DIRECTORY, 0);
+    want_ok("open the directory to be chowned by descriptor", fd);
+    want_eq("fchown the directory away", syscall3(SYS_FCHOWN, fd, user, user), 0);
+    want_eq("close the directory chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown took a directory's setuid", FDIRSUID, 04755);
+    want_owner("an fchown did not store a directory's owner", FDIRSUID, user, user);
+
+    fd = syscall3(SYS_OPEN, (long)FSGIDX, O_WRONLY, 0);
+    want_ok("open the 02755 file", fd);
+    want_eq("fchown the 02755 file away", syscall3(SYS_FCHOWN, fd, user, user), 0);
+    want_eq("close the 02755 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown kept setgid with group-execute", FSGIDX, 0755);
+    want_owner("an fchown did not store the 02755 file's owner", FSGIDX, user, user);
+
+    fd = syscall3(SYS_OPEN, (long)FSGIDNOX, O_WRONLY, 0);
+    want_ok("open the 02645 file", fd);
+    want_eq("fchown the 02645 file away", syscall3(SYS_FCHOWN, fd, user, user), 0);
+    want_eq("close the 02645 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
+    want_mode("an fchown took setgid without group-execute", FSGIDNOX, 02645);
+    want_owner("an fchown did not store the 02645 file's owner", FSGIDNOX, user, user);
+}
+
+/** Remove every fixture, the directories last; exits 1 at the first removal
+ * that fails. */
+static void remove_fixtures(void)
+{
+    want_eq("remove the baseline file", syscall3(SYS_UNLINK, (long)ROOTSUID, 0, 0), 0);
+    want_eq("remove the chowned file", syscall3(SYS_UNLINK, (long)CHOWNED, 0, 0), 0);
+    want_eq("remove the no-change file", syscall3(SYS_UNLINK, (long)NOCHG, 0, 0), 0);
+    want_eq("remove the in-place file", syscall3(SYS_UNLINK, (long)INPLACE, 0, 0), 0);
+    want_eq("remove the relocation fixture", syscall3(SYS_UNLINK, (long)GROW, 0, 0), 0);
+    want_eq("remove the blocker", syscall3(SYS_UNLINK, (long)BLOCKER, 0, 0), 0);
+    want_eq("remove the truncated file", syscall3(SYS_UNLINK, (long)TRUNCME, 0, 0), 0);
+    want_eq("remove the recreated file", syscall3(SYS_UNLINK, (long)CREATME, 0, 0), 0);
+    want_eq("remove the 02755 file", syscall3(SYS_UNLINK, (long)SGIDX, 0, 0), 0);
+    want_eq("remove the 02645 file", syscall3(SYS_UNLINK, (long)SGIDNOX, 0, 0), 0);
+    want_eq("remove the plain file", syscall3(SYS_UNLINK, (long)PLAIN, 0, 0), 0);
+    want_eq("remove the helper copy", syscall3(SYS_UNLINK, (long)SGID0, 0, 0), 0);
+    want_eq("remove the file chowned by descriptor", syscall3(SYS_UNLINK, (long)FCHOWNED, 0, 0), 0);
+    want_eq("remove the descriptor's 02755 file", syscall3(SYS_UNLINK, (long)FSGIDX, 0, 0), 0);
+    want_eq("remove the descriptor's 02645 file", syscall3(SYS_UNLINK, (long)FSGIDNOX, 0, 0), 0);
+    want_eq("remove the descriptor's no-change file", syscall3(SYS_UNLINK, (long)FNOCHG, 0, 0), 0);
+    want_eq("remove the group-change file", syscall3(SYS_UNLINK, (long)GIVEGRP, 0, 0), 0);
+    want_eq("remove the refused file", syscall3(SYS_UNLINK, (long)REFUSED, 0, 0), 0);
+    want_eq("remove the directory", syscall3(SYS_RMDIR, (long)DIRSUID, 0, 0), 0);
+    want_eq("remove the descriptor's directory", syscall3(SYS_RMDIR, (long)FDIRSUID, 0, 0), 0);
 }
 
 PROBE_SP_ENTRY;
@@ -643,13 +1099,18 @@ void probe_main(unsigned long *sp)
     int fd;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.modeprobe"));
     user = (u32)probe_id(1000);
     if (probe_word(1) != 0) {
         want_eq("enter the directory named on the command line",
                 syscall3(SYS_CHDIR, (long)probe_word(1), 0, 0), 0);
+    } else {
+        skip_why[ENTER_DIR] = "no directory argument";
     }
     if (syscall3(SYS_GETEUID, 0, 0, 0) == 0) {
         want_eq("empty the supplementary group list", syscall3(SYS_SETGROUPS, 0, 0, 0), 0);
+    } else {
+        skip_why[EMPTY_GROUPS] = "not started as root";
     }
 
     fd = syscall3(SYS_CREAT, (long)GROW, 0644, 0);
@@ -685,43 +1146,7 @@ void probe_main(unsigned long *sp)
     want_eq("arm the descriptor's directory", syscall3(SYS_CHMOD, (long)FDIRSUID, 04755, 0), 0);
     want_mode("the descriptor's directory did not take its mode", FDIRSUID, 04755);
 
-    want_mode("the 04755 baseline", ROOTSUID, 04755);
-    write_bytes("write as root", ROOTSUID, 8);
-    want_mode("a privileged write took the bit", ROOTSUID, 04755);
-
-    want_eq("chown a setuid file away", syscall3(SYS_CHOWN, (long)CHOWNED, user, user), 0);
-    want_mode("a chown kept setuid", CHOWNED, 0755);
-    want_owner("a chown did not store the owner", CHOWNED, user, user);
-    want_eq("chown the directory away", syscall3(SYS_CHOWN, (long)DIRSUID, user, user), 0);
-    want_mode("a chown took a directory's setuid", DIRSUID, 04755);
-
-    fd = syscall3(SYS_OPEN, (long)FCHOWNED, O_WRONLY, 0);
-    want_ok("open the file to be chowned by descriptor", fd);
-    want_eq("fchown a setuid file away", syscall3(SYS_FCHOWN, fd, user, user), 0);
-    want_eq("close the file chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    want_mode("an fchown kept setuid", FCHOWNED, 0755);
-    want_owner("an fchown did not store the owner", FCHOWNED, user, user);
-
-    fd = syscall3(SYS_OPEN, (long)FDIRSUID, O_RDONLY | O_DIRECTORY, 0);
-    want_ok("open the directory to be chowned by descriptor", fd);
-    want_eq("fchown the directory away", syscall3(SYS_FCHOWN, fd, user, user), 0);
-    want_eq("close the directory chowned by descriptor", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    want_mode("an fchown took a directory's setuid", FDIRSUID, 04755);
-    want_owner("an fchown did not store a directory's owner", FDIRSUID, user, user);
-
-    fd = syscall3(SYS_OPEN, (long)FSGIDX, O_WRONLY, 0);
-    want_ok("open the 02755 file", fd);
-    want_eq("fchown the 02755 file away", syscall3(SYS_FCHOWN, fd, user, user), 0);
-    want_eq("close the 02755 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    want_mode("an fchown kept setgid with group-execute", FSGIDX, 0755);
-    want_owner("an fchown did not store the 02755 file's owner", FSGIDX, user, user);
-
-    fd = syscall3(SYS_OPEN, (long)FSGIDNOX, O_WRONLY, 0);
-    want_ok("open the 02645 file", fd);
-    want_eq("fchown the 02645 file away", syscall3(SYS_FCHOWN, fd, user, user), 0);
-    want_eq("close the 02645 file", syscall3(SYS_CLOSE, fd, 0, 0), 0);
-    want_mode("an fchown took setgid without group-execute", FSGIDNOX, 02645);
-    want_owner("an fchown did not store the 02645 file's owner", FSGIDNOX, user, user);
+    root_rows();
 
     run_child(user_child, "the uid-1000 child");
 
@@ -732,27 +1157,8 @@ void probe_main(unsigned long *sp)
 
     run_child(escalation_child, "the escalation child");
 
-    want_eq("remove the baseline file", syscall3(SYS_UNLINK, (long)ROOTSUID, 0, 0), 0);
-    want_eq("remove the chowned file", syscall3(SYS_UNLINK, (long)CHOWNED, 0, 0), 0);
-    want_eq("remove the no-change file", syscall3(SYS_UNLINK, (long)NOCHG, 0, 0), 0);
-    want_eq("remove the in-place file", syscall3(SYS_UNLINK, (long)INPLACE, 0, 0), 0);
-    want_eq("remove the relocation fixture", syscall3(SYS_UNLINK, (long)GROW, 0, 0), 0);
-    want_eq("remove the blocker", syscall3(SYS_UNLINK, (long)BLOCKER, 0, 0), 0);
-    want_eq("remove the truncated file", syscall3(SYS_UNLINK, (long)TRUNCME, 0, 0), 0);
-    want_eq("remove the recreated file", syscall3(SYS_UNLINK, (long)CREATME, 0, 0), 0);
-    want_eq("remove the 02755 file", syscall3(SYS_UNLINK, (long)SGIDX, 0, 0), 0);
-    want_eq("remove the 02645 file", syscall3(SYS_UNLINK, (long)SGIDNOX, 0, 0), 0);
-    want_eq("remove the plain file", syscall3(SYS_UNLINK, (long)PLAIN, 0, 0), 0);
-    want_eq("remove the helper copy", syscall3(SYS_UNLINK, (long)SGID0, 0, 0), 0);
-    want_eq("remove the file chowned by descriptor", syscall3(SYS_UNLINK, (long)FCHOWNED, 0, 0), 0);
-    want_eq("remove the descriptor's 02755 file", syscall3(SYS_UNLINK, (long)FSGIDX, 0, 0), 0);
-    want_eq("remove the descriptor's 02645 file", syscall3(SYS_UNLINK, (long)FSGIDNOX, 0, 0), 0);
-    want_eq("remove the descriptor's no-change file", syscall3(SYS_UNLINK, (long)FNOCHG, 0, 0), 0);
-    want_eq("remove the group-change file", syscall3(SYS_UNLINK, (long)GIVEGRP, 0, 0), 0);
-    want_eq("remove the refused file", syscall3(SYS_UNLINK, (long)REFUSED, 0, 0), 0);
-    want_eq("remove the directory", syscall3(SYS_RMDIR, (long)DIRSUID, 0, 0), 0);
-    want_eq("remove the descriptor's directory", syscall3(SYS_RMDIR, (long)FDIRSUID, 0, 0), 0);
-
+    remove_fixtures();
+    report_at(CHECKS, 0);
     puts_("MODEPROBE OK\n");
     syscall1(SYS_EXIT, 0);
 }
