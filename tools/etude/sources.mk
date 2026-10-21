@@ -88,6 +88,14 @@ ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
                    tools/etude/history.c tools/etude/history_json.c \
                    tools/etude/history_collect.c utils/sha256.c
 
+# libetude-case, the library of etude's machine scenarios, with its main.
+ETUDE_CASE_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c \
+                 tools/etude/serial.c tools/etude/processor.c tools/etude/posix/qemu.c \
+                 tools/etude/qemu_profile.c tools/etude/posix/exec.c \
+                 tools/etude/posix/keeper.c tools/etude/posix/process.c \
+                 tools/etude/posix/store.c tools/etude/capture.c \
+                 tools/etude/history_json.c tools/etude/guest/wire.c utils/sha256.c
+
 # etude-load, the load fixture of shuffled and loaded repetitions on Linux
 # and macOS.
 ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c

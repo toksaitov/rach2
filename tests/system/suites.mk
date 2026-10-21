@@ -1011,6 +1011,20 @@ $(INSTALL_TEST_STICK): $(RECOVERY_ISO) $(INSTALLER_DISK) $(INSTALLER_EXT2) \
                        $(SHA256TOOL)
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(INSTALLER_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(INSTALLER_EXT2)
+# The images of etude's repair and growth cases (tests/cases/machine.installer.json
+# and the manifests of installer-repair, installer-rehearse and grow), under
+# names that do not change with the recovery system's key, since a case's
+# preparation names its artifacts by a fixed node. Each is a link to the image.
+CASE_IMAGES = $(IMAGES_DIR)/cases
+CASE_IMAGE_LINKS = $(CASE_IMAGES)/install-stick.img $(CASE_IMAGES)/sealed.disk \
+                   $(CASE_IMAGES)/recovery.iso $(CASE_IMAGES)/recovery.krffs
+$(CASE_IMAGES)/install-stick.img: $(INSTALL_STICK)
+$(CASE_IMAGES)/sealed.disk: $(SEALED_DISK)
+$(CASE_IMAGES)/recovery.iso: $(RECOVERY_ISO)
+$(CASE_IMAGES)/recovery.krffs: $(RECOVERY_IMAGE)
+$(CASE_IMAGE_LINKS):
+	@mkdir -p $(@D)
+	ln -f $< $@
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.

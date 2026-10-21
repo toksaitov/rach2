@@ -489,6 +489,16 @@ $(CASE_PASSWORDS): build/tests/cases/credentials/%: krffs/shadow
 	@mkdir -p $(@D)
 	cp krffs/$* $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
 
+# The scenarios of etude's machine cases (tests/cases/machine), each a program
+# of its own linked with libetude-case and the scenarios' console driver.
+CASE_DRIVE = tests/cases/machine/drive.c
+build/tests/cases/machine/%: tests/cases/machine/%.c $(CASE_DRIVE) tests/cases/machine/drive.h \
+                             $(ETUDE_CASE_SRC) tools/etude/include/etude/scenario.h \
+                             tools/etude/include/etude/qemu.h tools/etude/serial.h utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude -Itools/etude/include \
+	    -Itools/etude/guest -Iutils -Itests/cases/machine
+
 # Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
 # tests/system/fakeapi/fetch_muse.sh downloads it once into
 # build/downloads/muse/ and checks it against Meta's digest, and this name is
