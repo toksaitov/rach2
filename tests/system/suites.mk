@@ -722,13 +722,11 @@ run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
 	    --timeout 60 --ok "CREDDISK OK (read back)" \
 	    "expect=Type 'help'" "send=exec /creddisk" until=15
-# `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown. A
-# crashed boot (killed after mounting) leaves the on-disk dirty bit set for
-# fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
+# `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown.
+# Its cases (tests/cases/machine.crash.json) boot copies of this disk and read
+# the flag with fsck.krffs. Its own image, so that it cannot race
 # another suite on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
-# The same disk as a file target, which the cases of machine.crash
-# (tests/cases/machine.crash.json) take as their artifact.
 $(CRASH_TEST_IMAGE): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
                      build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs tests
 	$(MKDISK) krffs/manifests/disk-test.manifest $@ 64 48
@@ -1379,13 +1377,9 @@ run-e1000: rach2 tests krffs test-image $(HARNESS)
 	    "expect=no supported network card" \
 	    "expect=Type 'help'"
 # `tests/run reset`: each reset mechanism on its own. The kernel tries three,
-# most of the machine first, and the order was chosen for a laptop whose chipset
-# register may not act; the risk in that choice is that only the first one is
-# ever exercised, and nobody finds out the later ones do not work until the
-# machine they were written for refuses to restart. So each is booted with the
-# ones before it left out, and each must still restart the machine.
-run-reset: rach2 tests krffs test-image $(HARNESS)
-	sh tests/system/suites/reset.sh $(BOOT_KERNEL) $(TEST_IMAGE)
+# most of the machine first, and each case of tests/cases/machine.reset.json
+# boots the kernel and the test image with the ones before it left out, so
+# that each must still restart the machine.
 # `tests/run diskdiag`: a disk read without being mounted and without being
 # written. Three boots of one freshly built image: the ordinary kernel mounting
 # it, which must change it (otherwise the comparisons below prove nothing); the
@@ -1804,21 +1798,16 @@ run-ssh: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(PTYDRIVE)
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`" \
 	    $(SSH_TEST_PORT) $(NIC)
 # `tests/run shutdown`: userland stopping the machine, on a disk fixture, with
-# every claim of a stop asserted on the QEMU process ending, and every claim of
-# a halt on the processors halted in QEMU's monitor, rather than on a token,
-# every image checked by offline fsck afterwards, and init killed on four
-# processors leaving all four halted with interrupts off and the disk dirty.
+# every claim of a stop asserted on QEMU's event, and every claim of a halt on
+# the processors halted in QEMU's monitor, rather than on a token, every disk
+# checked by offline fsck afterwards, and init killed on four processors
+# leaving all four halted with interrupts off and the disk dirty. Its cases
+# (tests/cases/machine.shutdown.json) boot copies of this disk.
 SHUTDOWN_TEST_DISK = $(IMAGES_DIR)/shutdown-test.disk
-# The same disk as a file target, which the cases of machine.shutdown
-# (tests/cases/machine.shutdown.json) take as their artifact.
 $(SHUTDOWN_TEST_DISK): $(DEMO_CREDS) krffs/manifests/shutdown-test.manifest \
                        $(MANIFEST_DEPS_shutdown_test) $(MKDISK) build/krffs/mkfs.krffs \
                        build/krffs/stageimage.krffs | preflight krffs utils busybox
 	$(MKDISK) krffs/manifests/shutdown-test.manifest $@ 64 48
-run-shutdown: $(DEMO_CREDS) rach2 utils krffs busybox $(RUNUTIL)
-	$(MKDISK) krffs/manifests/shutdown-test.manifest $(SHUTDOWN_TEST_DISK) 64 48
-	sh tests/system/suites/shutdown.sh $(BOOT_KERNEL) $(SHUTDOWN_TEST_DISK) \
-	    build/krffs/fsck.krffs "`cat krffs/rach2_demo_password`"
 # `tests/run login`: prove the console cannot fall back to an unauthenticated
 # shell. Two images differing only in the init they declare, neither staging
 # /bin/login, plus a rescue boot of the real image, which is the way back into
@@ -1883,9 +1872,6 @@ run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-i
 	sh tests/system/suites/exitline.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
 	    $(HARNESS_KERNEL)
-run-crash: rach2 tests krffs $(RUNUTIL)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(CRASH_TEST_IMAGE) 64 48
-	sh tests/system/suites/crash.sh $(BOOT_KERNEL) $(CRASH_TEST_IMAGE) build/krffs/fsck.krffs
 # `tests/run stress`: prove an on-disk KRFFS larger than the page cache works.
 # Boots a 64 MB disk with a 48 MB partition and runs stressprobe, which writes
 # and re-reads 33 MiB through the page cache, which holds at most 8 MiB. The run

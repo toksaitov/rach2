@@ -15,9 +15,9 @@
  * The RAM image never sets the flag, and stat reports the root with a fixed
  * `S_IFDIR | 0755`, so neither can show a cleared flag. The probe runs on a
  * disk-backed root booted dirty and makes each call below that comes near
- * the root node's mode; the crash suite (tests/system/suites/crash.sh) then
- * kills QEMU and requires the offline `fsck.krffs` still to report "not
- * cleanly unmounted".
+ * the root node's mode; the case machine.crash.dirtyprobe
+ * (tests/cases/machine.crash.json) then ends QEMU and requires the offline
+ * `fsck.krffs` still to report "not cleanly unmounted".
  *
  * Each call is followed by sync(2). The page cache is write-back, so a
  * clear left in a dirty frame when QEMU is killed would not reach the disk,

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "run_id": "example-run-qemu",
   "attempt_id": "example-attempt-shutdown-i686",
-  "manifest": "tools/etude/schemas/case.machine.example.json",
+  "manifest": "tests/cases/machine.shutdown.json",
   "case_id": "machine.shutdown.poweroff",
   "architecture": "i686",
   "store": "/var/tmp/etude/store",

@@ -11,8 +11,8 @@
 # because one phase checks a refusal: a `halt` run by an account other than
 # root must be refused by the kernel's check of signal permission.
 #
-# tests/system/suites/shutdown.sh boots it. Host paths are relative to the
-# repository root, where mkdisk.sh runs.
+# The cases of tests/cases/machine.shutdown.json boot copies of it. Host
+# paths are relative to the repository root, where mkdisk.sh runs.
 
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox

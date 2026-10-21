@@ -620,6 +620,25 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
 
+# The machine scenarios of etude's cases (tests/cases/machine/), each linked
+# with libetude-case, the library that gives it its `main`. They are host
+# programs, the same for both architectures, which a case's `prepare` names
+# as tests/cases/machine/NAME.
+MACHINE_SCENARIOS = build/tests/cases/machine/crash_scenario \
+                    build/tests/cases/machine/reset_scenario \
+                    build/tests/cases/machine/shutdown_scenario
+ETUDE_CASE_LIB_HDRS = tools/etude/include/etude/scenario.h tools/etude/include/etude/contract.h \
+                      tools/etude/include/etude/qemu.h tools/etude/include/etude/exec.h \
+                      tools/etude/include/etude/artifact.h tools/etude/include/etude/processor.h \
+                      tools/etude/include/etude/report.h tools/etude/posix/posix.h tools/etude/posix/store.h tools/etude/serial.h \
+                      tools/etude/capture.h tools/etude/history_json.h utils/sha256.h
+$(MACHINE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                      tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
+                      $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Iutils
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1338,7 +1357,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
-             $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE)
+             $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
+             $(MACHINE_SCENARIOS)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
