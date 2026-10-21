@@ -1287,8 +1287,8 @@ static void smaps_large_rows(void)
     long at = probe_mmap(0, len, 0, 0x22 | 0x4000, -1, 0);
     int n;
 
+    check("smaps-64tib-reserve", !sys_failed(at), "a region of 64 TiB is reserved");
     if (sys_failed(at)) {
-        check("smaps-64tib-reserve", 0, "a region of 64 TiB is reserved");
         return;
     }
     n = slurp("/proc/self/smaps", text, (int)sizeof(text));
