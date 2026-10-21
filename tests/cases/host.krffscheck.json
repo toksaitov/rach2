@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "family_id": "host.krffscheck",
+  "summary": "What the offline checker fsck.krffs says about KRFFS images broken on purpose, booting nothing; the program is tests/cases/host/krffscheck.sh",
+  "cases": [
+    {
+      "case_id": "host.krffscheck.fresh",
+      "behavior": "a fresh image made by mkfs.krffs is clean, under --strict and without it",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a fresh image passes, strict or not"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["fresh"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "strict", "checks": "fsck.krffs --strict passes a fresh image", "source": "program"},
+        {"assertion_id": "plain", "checks": "fsck.krffs passes a fresh image", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.repairable",
+      "behavior": "a wrong backward link at a node, a wrong one at the root and the dirty flag are each refused under --strict, repaired without it, and clean after the repair",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a wrong backward link, at a node and at the root, and the dirty flag: refused strict, repaired, then clean"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["repairable"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "backlink-refused", "checks": "fsck.krffs --strict refuses an image with a node's backward link that names the wrong node", "source": "program"},
+        {"assertion_id": "backlink-repaired", "checks": "fsck.krffs repairs a node's backward link that names the wrong node and exits 0", "source": "program"},
+        {"assertion_id": "backlink-clean", "checks": "the repaired image of a node's backward link that names the wrong node passes fsck.krffs --strict", "source": "program"},
+        {"assertion_id": "rootlink-refused", "checks": "fsck.krffs --strict refuses an image with the root's backward link that names the wrong node", "source": "program"},
+        {"assertion_id": "rootlink-repaired", "checks": "fsck.krffs repairs the root's backward link that names the wrong node and exits 0", "source": "program"},
+        {"assertion_id": "rootlink-clean", "checks": "the repaired image of the root's backward link that names the wrong node passes fsck.krffs --strict", "source": "program"},
+        {"assertion_id": "dirty-refused", "checks": "fsck.krffs --strict refuses an image with the dirty flag set in the root's mode", "source": "program"},
+        {"assertion_id": "dirty-repaired", "checks": "fsck.krffs repairs the dirty flag set in the root's mode and exits 0", "source": "program"},
+        {"assertion_id": "dirty-clean", "checks": "the repaired image of the dirty flag set in the root's mode passes fsck.krffs --strict", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.fatal",
+      "behavior": "a bad signature and a data size larger than its node are refused under --strict and without it, and the image is left as it was",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a bad signature and a data size larger than its node are refused either way, and the image is left as it was"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["fatal"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "magic-strict", "checks": "fsck.krffs --strict refuses a node whose signature is wrong", "source": "program"},
+        {"assertion_id": "magic-refused", "checks": "fsck.krffs refuses a node whose signature is wrong", "source": "program"},
+        {"assertion_id": "magic-unchanged", "checks": "the image with a node whose signature is wrong has the same bytes after both runs", "source": "program"},
+        {"assertion_id": "datasize-strict", "checks": "fsck.krffs --strict refuses the root whose data size is its node's whole size", "source": "program"},
+        {"assertion_id": "datasize-refused", "checks": "fsck.krffs refuses the root whose data size is its node's whole size", "source": "program"},
+        {"assertion_id": "datasize-unchanged", "checks": "the image with the root whose data size is its node's whole size has the same bytes after both runs", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.sizes",
+      "behavior": "a root of size zero, a node smaller than a header and one larger than the region are refused under --strict and without it, and the image is left as it was",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a root of no size, a node smaller than a header and one larger than the region are refused either way"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["sizes"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "zerosize-strict", "checks": "fsck.krffs --strict refuses a root whose size is zero", "source": "program"},
+        {"assertion_id": "zerosize-refused", "checks": "fsck.krffs refuses a root whose size is zero", "source": "program"},
+        {"assertion_id": "zerosize-unchanged", "checks": "the image with a root whose size is zero has the same bytes after both runs", "source": "program"},
+        {"assertion_id": "smallsize-strict", "checks": "fsck.krffs --strict refuses a node whose size is 8, less than a header", "source": "program"},
+        {"assertion_id": "smallsize-refused", "checks": "fsck.krffs refuses a node whose size is 8, less than a header", "source": "program"},
+        {"assertion_id": "smallsize-unchanged", "checks": "the image with a node whose size is 8, less than a header has the same bytes after both runs", "source": "program"},
+        {"assertion_id": "hugesize-strict", "checks": "fsck.krffs --strict refuses a node whose size is 2^40, past the region", "source": "program"},
+        {"assertion_id": "hugesize-refused", "checks": "fsck.krffs refuses a node whose size is 2^40, past the region", "source": "program"},
+        {"assertion_id": "hugesize-unchanged", "checks": "the image with a node whose size is 2^40, past the region has the same bytes after both runs", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.free",
+      "behavior": "a free node whose data length is larger than the node, what a split leaves between the size it publishes and the length it writes, is accepted, as the kernel accepts it",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a free node whose length is larger than the node is accepted, as the kernel accepts it"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["free"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "accepted", "checks": "fsck.krffs --strict passes an image whose free node's data length is the node's whole size", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.dirdup",
+      "behavior": "a file that took a directory's name and parent, as an interrupted rename leaves it, is refused under --strict, and the repair keeps the directory with its children whatever the sizes say",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a file that took a directory's name loses it, and the directory keeps its children"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["dirdup"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "refused", "checks": "fsck.krffs --strict refuses an image with one name on a file and a directory", "source": "program"},
+        {"assertion_id": "repaired", "checks": "fsck.krffs repairs the repeated name and exits 0", "source": "program"},
+        {"assertion_id": "directory-kept", "checks": "readfile.krffs reads /sub/inner.txt from the repaired image, so the directory kept its name", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.prefixes",
+      "behavior": "every prefix of the stores of a create, a growth, a growth by less than a header, a shrink, a create beside another file, a removal and a name on two nodes, made in the order rach2/sys/fs/krffs.Readme.md fixes on an image with poisoned free space, leaves an image that fsck.krffs accepts or repairs into one --strict passes, with one node of each name, the longer of two copies, every file present and no bytes nobody wrote",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: every stop inside each mutating operation leaves an image the check accepts or repairs"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["prefixes"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "prefix-create", "checks": "every prefix of a create", "source": "program"},
+        {"assertion_id": "prefix-grow", "checks": "every prefix of a growth past a header", "source": "program"},
+        {"assertion_id": "prefix-nudge", "checks": "every prefix of a growth by less than a header", "source": "program"},
+        {"assertion_id": "prefix-shrink", "checks": "every prefix of a shrink", "source": "program"},
+        {"assertion_id": "prefix-beside", "checks": "every prefix of a create beside another file", "source": "program"},
+        {"assertion_id": "prefix-remove", "checks": "every prefix of a removal", "source": "program"},
+        {"assertion_id": "prefix-twonodes", "checks": "every prefix of a move that leaves one name on two nodes", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "host.krffscheck.orders",
+      "behavior": "each of five rules of the update protocol put back to front leaves a prefix that the checks of the prefixes case refuse, which shows that those checks can fail",
+      "units": ["krffscheck", "`tests/system/krffscheck.sh`: a wrong order of the stores is caught"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["orders"], "inputs": {"image_mib": 4}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "dd", "cksum", "sed"], "features": {}},
+      "execution": {"program": "krffscheck", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its images and their logs under its scratch directory, which the program removes after a pass"},
+      "assertions": [
+        {"assertion_id": "order-split", "checks": "a split published before the tail header was written is caught", "source": "program"},
+        {"assertion_id": "order-length", "checks": "a length published before the bytes it counts is caught", "source": "program"},
+        {"assertion_id": "order-nudge", "checks": "a growth of less than a header that split first is caught", "source": "program"},
+        {"assertion_id": "order-shrink", "checks": "a shrink published before the free header was written is caught", "source": "program"},
+        {"assertion_id": "order-copy", "checks": "a copy freed before the node it replaces was published is caught", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "krffscheck", "node": "tests/cases/host/krffscheck", "per_architecture": false},
+        {"name": "mkfs.krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
+        {"name": "fsck.krffs", "node": "krffs/fsck.krffs", "per_architecture": false},
+        {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    }
+  ]
+}

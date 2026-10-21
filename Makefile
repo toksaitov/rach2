@@ -392,13 +392,13 @@ $(ARCH_BUILD)/ish/ish: ask-the-sub-make
 # links build/ish/ish.o with the host cc.
 $(CURDIR)/$(ARCH_BUILD)/ish/ish: $(ARCH_BUILD)/ish/ish
 	+@:
-# One of the three krffs tools runs the sub-make and the other two wait for
+# One of the four krffs tools runs the sub-make and the other three wait for
 # it. A rule with several targets is a rule for each target, so one rule for
-# all three would run three sub-makes of one directory at once in a clean
+# all four would run four sub-makes of one directory at once in a clean
 # build.
 build/krffs/mkfs.krffs: ask-the-sub-make | check-libc
 	@$(MAKE) --no-print-directory -C krffs $(if $(ARCH_SUFFIX),MUSL_CRYPT=../$(MUSL_CRYPT_SRC))
-build/krffs/stageimage.krffs build/krffs/fsck.krffs: build/krffs/mkfs.krffs
+build/krffs/stageimage.krffs build/krffs/fsck.krffs build/krffs/readfile.krffs: build/krffs/mkfs.krffs
 	@:
 
 # A staged file waits for its component, then make reads its time again.
