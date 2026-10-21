@@ -2595,7 +2595,9 @@
         {"assertion_id": "exec-0710", "checks": "The copy runs suidhelper plain to exit 0.", "source": "program"},
         {"assertion_id": "remove-fixtures", "checks": "Every fixture is removed.", "source": "program"}
       ],
-      "branches": [],
+      "branches": [
+        {"group_id": "dir", "decided_by": "report", "alternatives": [{"alternative_id": "given", "when": null, "assertions": ["enter-dir"]}, {"alternative_id": "none", "when": null, "assertions": []}]}
+      ],
       "termination": {"end": "exited", "value": 0},
       "progress": [],
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},

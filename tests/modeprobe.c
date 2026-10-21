@@ -50,8 +50,10 @@
  * crashed child as a passing one. Prints "MODEPROBE OK" and exits 0 only when
  * every case passed; any failure names the step and the answer it got, and
  * exits 1. Writes etude's report records (probe_report.h) for the case
- * ETUDE_CASE names, an assertion for each check `checks` lists; a failure,
- * the children's included, leaves the checks after it not run.
+ * ETUDE_CASE names, an assertion for each check `checks` lists, and the
+ * branch `dir`, `given` when an argument names a directory to enter and
+ * `none`, without `enter-dir`, when none does; a failure, the children's
+ * included, leaves the checks after it not run.
  * Freestanding; direct system calls (probe.h).
  *
  * Needs: to start as root, which it uses to empty its own supplementary group
@@ -422,10 +424,12 @@ static const struct {
 /* The last check that held, an index of `checks`, or -1 before the first. */
 static int at = -1;
 
-/* Why a check was left out, or NULL for one that was made: the directory is
- * entered only when an argument names it, and the group list emptied only
- * by root. */
+/* Why a check was left out, or NULL for one that was made: the group list
+ * is emptied only by root. */
 static const char *skip_why[CHECKS];
+
+/* Whether an argument named a directory to enter, the branch `dir`. */
+static int dir_given;
 
 /* In a child, the write end of the pipe on which it tells its parent the
  * check it reached; -1 in the parent. */
@@ -474,7 +478,8 @@ static void held(const char *step)
 /** In the process that began the report, report every check before `check`
  * as held, `check` as failed with `why`, those after it as not run, a check
  * left out as not run with its reason, and the report's end; with `check`
- * CHECKS, every check that was made held. */
+ * CHECKS, every check that was made held. `enter-dir` is in the branch
+ * `given` alone. */
 static void report_at(int check, const char *why)
 {
     int i;
@@ -482,7 +487,11 @@ static void report_at(int check, const char *why)
     if (report_ended || report_getpid() != report_owner) {
         return;
     }
+    report_branch("dir", dir_given ? "given" : "none");
     for (i = 0; i < CHECKS; i++) {
+        if (i == ENTER_DIR && !dir_given) {
+            continue;
+        }
         if (skip_why[i] != 0) {
             report_notrun(checks[i].id, skip_why[i]);
         } else if (i < check) {
@@ -1101,11 +1110,10 @@ void probe_main(unsigned long *sp)
     probe_args((int)sp[0], (char **)(sp + 1));
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.modeprobe"));
     user = (u32)probe_id(1000);
-    if (probe_word(1) != 0) {
+    dir_given = probe_word(1) != 0;
+    if (dir_given) {
         want_eq("enter the directory named on the command line",
                 syscall3(SYS_CHDIR, (long)probe_word(1), 0, 0), 0);
-    } else {
-        skip_why[ENTER_DIR] = "no directory argument";
     }
     if (syscall3(SYS_GETEUID, 0, 0, 0) == 0) {
         want_eq("empty the supplementary group list", syscall3(SYS_SETGROUPS, 0, 0, 0), 0);
