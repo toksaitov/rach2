@@ -1116,6 +1116,7 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
     p.disks = json_member(qemu, "disks")->count ? disk : NULL;
     p.devices = json_member(qemu, "devices")->count ? device : NULL;
     p.no_i8042 = i8042 != NULL && !i8042->integer;
+    p.q35 = same(json_text(qemu, "machine"), "q35");
     if (options->count != 0)
         boot[0] = options->item[0]->string;
     if (options->count > 1)

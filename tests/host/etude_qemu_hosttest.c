@@ -1241,8 +1241,10 @@ static void disk_line(const struct etude_qemu_profile *p, const struct etude_qem
 
 /**
  * Check the command lines of disks on IDE and AHCI in one profile, the
- * second AHCI disk booted first; of a CD on IDE booted first; and of a disk
- * on NVMe booted first. `p` has the direct firmware.
+ * second AHCI disk booted first; of a CD on IDE booted first; of a disk
+ * on NVMe booted first; and of the q35 machine, whose disks on IDE are on
+ * the ports of its own AHCI, the second booted first. `p` has the direct
+ * firmware.
  */
 static void test_disk_lines(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
 {
@@ -1258,6 +1260,11 @@ static void test_disk_lines(const struct etude_qemu_profile *p, const struct etu
                                                 {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
     static const struct etude_qemu_disk nvme[] = {{"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1, 0},
                                                   {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
+    static const struct etude_qemu_disk q35[] = {{"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+                                                 {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 1, 0},
+                                                 {"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0, 0},
+                                                 {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+                                                 {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
     struct etude_qemu_profile b = *p;
 
     b.firmware = ETUDE_FIRMWARE_SEABIOS;
@@ -1279,6 +1286,15 @@ static void test_disk_lines(const struct etude_qemu_profile *p, const struct etu
     disk_line(&b, site, nvme,
               "-m 268435456B -drive file=/d/n,format=raw,if=none,id=etude-disk0 "
               "-device nvme,drive=etude-disk0,serial=s,bootindex=0 -netdev");
+    b.q35 = 1;
+    disk_line(&b, site, q35,
+              "-m 268435456B -machine q35 -device ich9-ahci,id=etude-ahci "
+              "-drive file=/d/i0,format=raw,if=ide,index=0,media=disk "
+              "-drive file=/d/i1,format=raw,if=none,id=etude-disk1 "
+              "-device ide-hd,drive=etude-disk1,bus=ide.1,unit=0,bootindex=0 "
+              "-drive file=/d/a0,format=raw,if=none,id=etude-disk2 "
+              "-device ide-hd,drive=etude-disk2,bus=etude-ahci.0 "
+              "-drive file=/d/i2,format=raw,if=ide,index=2,media=disk -netdev");
 }
 
 /** Check the disks the launcher attaches together, and those it refuses. */
@@ -2214,6 +2230,9 @@ static void test_memory(void)
     p.no_i8042 = 1;
     CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs the 8042");
     p.no_i8042 = 0;
+    p.q35 = 1;
+    CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs the PC");
+    p.q35 = 0;
     p.boot_options = NULL;
     CHECK(etude_qemu_memory(&p, &memory) == EINVAL, "boundary needs rescue boot");
     p.memory_profile = "file";

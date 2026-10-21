@@ -159,6 +159,8 @@ struct etude_qemu_profile {
                                                 above 1023, `port_count` of them */
     size_t port_count;
     int no_i8042;                              /* the machine has no 8042 */
+    int q35;                                   /* the machine is q35, whose AHCI
+                                                  at 0:31.2 has the disks on IDE */
     const struct etude_qemu_capture *captures; /* NULL for none; each card
                                                   at most once */
 };
@@ -182,8 +184,8 @@ struct etude_qemu_memory {
  * Resolve the memory reservation of profile `p` into `out`. Ordinary guests
  * reserve all configured RAM and 128 MiB of overhead. bigmem-boundary-v1
  * admits only the x86-64 rescue boot at 72 GiB, with one processor, no
- * devices or disks, the 8042, and the max-nopdpe1gb processor
- * profile. Its only guest command is `exec /memprobe total`.
+ * devices or disks, the default PC with its 8042, and the max-nopdpe1gb
+ * processor profile. Its only guest command is `exec /memprobe total`.
  *
  * @return 0, or EINVAL for another profile or an unsafe boundary profile,
  *         EOVERFLOW when the reservation cannot be represented.

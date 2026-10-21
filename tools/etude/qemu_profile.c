@@ -839,10 +839,12 @@ static void add_audio(struct line *l, const char *card, const char *path)
  * from 0; `*ide` counts the places of the IDE controllers taken before it,
  * and `*ahci` the ports of the ich9-ahci. A disk on IDE that boots first or
  * has a serial is a device of its own, since only a device takes a boot index
- * or a serial.
+ * or a serial. On the q35 machine, `q35` true, the places on IDE are the ports
+ * of its own AHCI, the buses `ide.0` to `ide.5` of one unit each, where the
+ * PC's two IDE channels have two units each.
  */
-static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, unsigned *ide,
-                     unsigned *ahci)
+static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, int q35,
+                     unsigned *ide, unsigned *ahci)
 {
     const char *discard = d->discard ? ",discard=unmap,detect-zeroes=unmap" : "";
     const char *type = d->qcow2 ? "qcow2" : "raw";
@@ -877,7 +879,7 @@ static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, 
         snprintf(device, sizeof(device), "ide-hd,drive=%s,bus=etude-ahci.%u", id, (*ahci)++);
     } else {
         snprintf(device, sizeof(device), "%s,drive=%s,bus=ide.%u,unit=%u%s%s",
-                 d->cdrom ? "ide-cd" : "ide-hd", id, *ide / 2, *ide % 2,
+                 d->cdrom ? "ide-cd" : "ide-hd", id, q35 ? *ide : *ide / 2, q35 ? 0u : *ide % 2,
                  d->serial != NULL ? ",serial=" : "", d->serial != NULL ? d->serial : "");
         (*ide)++;
     }
@@ -938,7 +940,7 @@ int etude_qemu_memory(const struct etude_qemu_profile *p, struct etude_qemu_memo
             strcmp(p->cpu, "max-nopdpe1gb") != 0 || p->processors != 1 ||
             p->memory_bytes != ETUDE_BIGMEM_CONFIGURED || p->firmware != ETUDE_FIRMWARE_DIRECT ||
             p->initrd == NULL || p->audio != NULL || disk_count(p->disks) != 0 ||
-            device_count(p->devices) != 0 || p->no_i8042 || count(p->boot_options) != 1 ||
+            device_count(p->devices) != 0 || p->no_i8042 || p->q35 || count(p->boot_options) != 1 ||
             strcmp(p->boot_options[0], "rach2.rescue") != 0)
             return EINVAL;
         m.resident_bytes = ETUDE_BIGMEM_RESIDENT;
@@ -1087,6 +1089,10 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 0, "-overcommit");
         add(&l, 0, "mem-lock=off");
     }
+    if (p->q35) {
+        add(&l, 0, "-machine");
+        add(&l, 0, "q35");
+    }
     if (p->no_i8042) {
         add(&l, 0, "-machine");
         add(&l, 0, "i8042=off");
@@ -1104,7 +1110,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     }
     add_ahci(&l, p);
     for (i = 0; i < disk_count(p->disks); i++)
-        add_disk(&l, &p->disks[i], i, &ide, &ahci);
+        add_disk(&l, &p->disks[i], i, p->q35, &ide, &ahci);
     add_audio(&l, p->audio, audio);
     for (i = 0; i < device_count(p->devices); i++)
         add_device(&l, p, &p->devices[i], &nics);

@@ -432,8 +432,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "*ide / 2, *ide % 2",
-          "replace": "*ide % 2, *ide / 2"
+          "find": "q35 ? *ide : *ide / 2, q35 ? 0u : *ide % 2",
+          "replace": "q35 ? *ide : *ide % 2, q35 ? 0u : *ide / 2"
         }
       ],
       "fails": {
@@ -532,6 +532,40 @@
           ": a disk that boots first beside -kernel: "
         ],
         "only": true
+      }
+    },
+    {
+      "name": "q35-machine",
+      "summary": "a profile of the q35 machine boots QEMU's default PC",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "    if (p->q35) {\n        add(&l, 0, \"-machine\");\n        add(&l, 0, \"q35\");\n    }\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ]
+      }
+    },
+    {
+      "name": "q35-unit",
+      "summary": "a disk on IDE of the q35 machine that boots first is put on the PC's IDE channel and unit",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "q35 ? *ide : *ide / 2, q35 ? 0u : *ide % 2",
+          "replace": "*ide / 2, *ide % 2"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ]
       }
     }
   ]

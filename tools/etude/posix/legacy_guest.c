@@ -311,6 +311,7 @@ static int make_profile(struct legacy_guest *g)
     p->devices = g->devices;
     p->boot_options = g->options;
     p->no_i8042 = i8042 != NULL && i8042->type == JSON_BOOLEAN && !i8042->integer;
+    p->q35 = json_text(q, "machine") != NULL && strcmp(json_text(q, "machine"), "q35") == 0;
     return 0;
 }
 

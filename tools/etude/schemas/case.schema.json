@@ -105,6 +105,7 @@
           {"$ref": "#/$defs/name"}, {"$ref": "#/$defs/device"}
         ]}},
         "boot_options": {"type": "array", "items": {"type": "string", "pattern": "^[!-~]+$"}},
+        "machine": {"enum": ["pc", "q35"]},
         "i8042": {"type": "boolean"},
         "captures": {"type": "array", "items": {"type": "string", "pattern": "^net[1-9]?[0-9]$"}, "uniqueItems": true}
       }

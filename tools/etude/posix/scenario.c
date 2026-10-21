@@ -1462,6 +1462,7 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     p.audio = jtext(qp, "audio");
     p.firmware = firmware_of(jtext(qp, "firmware"));
     p.no_i8042 = jbool(qp, "i8042") == 0;
+    p.q35 = jtext(qp, "machine") != NULL && strcmp(jtext(qp, "machine"), "q35") == 0;
     if (n <= DISKS_MAX &&
         devices_of(eh_json_get(qp, "devices"), devices, DEVICES_MAX, NULL, 0) == 0 &&
         strings(eh_json_get(qp, "boot_options"), options, OPTIONS_MAX) == 0) {
@@ -1667,6 +1668,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->boot_options = m->options;
     p->firmware = firmware_of(firmware);
     p->no_i8042 = jbool(qp, "i8042") == 0;
+    p->q35 = jtext(qp, "machine") != NULL && strcmp(jtext(qp, "machine"), "q35") == 0;
     if (p->kernel == NULL || (jtext(qp, "initrd") != NULL && p->initrd == NULL)) {
         diag("machine %s: its kernel or RAM image is not an artifact that checks", m->decl->id);
         return ETUDE_REFUSED;
