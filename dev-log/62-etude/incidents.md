@@ -11,6 +11,7 @@ The faults that the process showed while phase #589 converted the suites to etud
 
 * Admission to the host is first in, first out, by reserved memory and processors, and a run of the scripted suites reserves the whole host. Through the night every worker's check waited 20 to 96 minutes behind another's (#792), and an interactive check of #780 had the whole host for over ninety minutes in the afternoon.
 * At 22:19 a bisection of #816, whose cause was known by then, had the host while the repair's check and #672's check waited behind it. It was cancelled at 22:24.
+* On the night of the 21st the host ran few tests at once while its processors were mostly idle: six or more checks waited at a load of 5 to 7 on 24 processors. Each claim reserved processors and disk as well as memory, though a run's guests use a small part of the processors it is counted for, and every shell command, such as a proof, reserved the whole host. From 01:13 on the 22nd the host admits claims by their memory alone, and from 01:29 a shell command takes an ordinary run's share (#829); the queue emptied, and eight or nine runs went at once. The new bridge was installed with a directory that only root could read, and every launch was refused from 01:07 to 01:08.
 
 ## The critical task, #672
 
@@ -56,4 +57,5 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * #817: ci reads the failed suites whatever the order of the summaries.
 * #814: the manager, to be redesigned around the phase's progress.
 * #824: ci's core runs take at most half the testing host.
+* #829: the testing host admits claims by memory alone, and a shell command takes an ordinary run's share; an installed bridge is made readable by every account and tried as the testing account and as ci's before the site is switched to it.
 * Admission to the testing host still has no priority for the critical task or for a repair of core.
