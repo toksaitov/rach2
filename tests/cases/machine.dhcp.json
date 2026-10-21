@@ -1,0 +1,1235 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.dhcp",
+  "summary": "The machine taking an address it was not told, on the RTL8139, with BusyBox's udhcpc through ifup and os-simple's own dhcpc through netup, each case a boot of its own that tests/cases/machine/dhcp_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.dhcp.lease",
+      "behavior": "os-real booted with no address on the RTL8139 takes the lease of 192.168.90.20 with ifup -a, with its mask, broadcast address and name server, reaches the gateway by IP and by ARP, and sends a packet off the subnet to the gateway",
+      "units": ["dhcp", "udhcpc", "ifup", "arping", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-real with rach2.ip=none on 192.168.90.0/24, its card's frames recorded, and log in as root at the console"
+        },
+        {"step_id": "unset", "stage": "execute", "machine": "guest", "does": "ask ifconfig whether eth0 has no address"},
+        {
+          "step_id": "ifup",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run ifup -a and read the lease, the address, the broadcast address, the mask and /etc/resolv.conf"
+        },
+        {
+          "step_id": "reach",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "ping the gateway, arping it and an address nothing answers, read the ARP cache, and ping 10.9.9.9, which is off the subnet"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "guest",
+          "does": "end the machine through QMP and run pcapcheck bcast on its card's frames for the route to 10.9.9.9"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "192.168.90.0/24",
+                "host": "192.168.90.2",
+                "dhcpstart": "192.168.90.20",
+                "dns": "192.168.90.3"
+              }
+            ],
+            "boot_options": ["rach2.ip=none"],
+            "captures": ["net0"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "unset",
+          "checks": "eth0 has the address 0.0.0.0 before userland configures it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lease",
+          "checks": "ifup -a exits 0, udhcpc says `lease of 192.168.90.20 obtained`, and the kernel says `net: eth0: IPv4 192.168.90.20/`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lease-applied",
+          "checks": "ifconfig shows the address 192.168.90.20, the broadcast address 192.168.90.255 and the mask 255.255.255.0, and /etc/resolv.conf names 192.168.90.3",
+          "source": "scenario"
+        },
+        {"assertion_id": "peer", "checks": "a ping of the gateway, 192.168.90.2, is answered", "source": "scenario"},
+        {
+          "assertion_id": "arping-reply",
+          "checks": "arping -f of the gateway exits 0 with `Received 1 response`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "arping-silent",
+          "checks": "arping of 192.168.90.9, which nothing answers, ends at its deadline with status 1 and `Received 0 response`, which needs the interval timer",
+          "source": "scenario"
+        },
+        {"assertion_id": "arp-cached", "checks": "the gateway is in the ARP cache", "source": "scenario"},
+        {
+          "assertion_id": "routed-on-wire",
+          "checks": "pcapcheck finds the packet for 10.9.9.9 sent to the gateway's hardware address, which is what the leased default route means",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own with a DHCP server, and reads QEMU's capture of the card; the Lenovo's lease is checked by the release's metal_accept.sh"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.disk",
+      "behavior": "two boots of one os-real disk each take the lease with ifup -a, so the record of the first boot's interfaces in /var/run does not survive into the second",
+      "units": ["dhcp", "ifup", "init"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["dhcp-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot-1",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the copy of the os-real disk with rach2.ip=none and log in as root at the console"
+        },
+        {
+          "step_id": "lease-1",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run ifup -a and ask ifconfig for the leased address"
+        },
+        {
+          "step_id": "poweroff-1",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "power the machine off with poweroff -f and wait for its end"
+        },
+        {
+          "step_id": "boot-2",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the same copy of the disk again and log in as root"
+        },
+        {
+          "step_id": "lease-2",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run ifup -a and ask ifconfig for the leased address"
+        },
+        {
+          "step_id": "poweroff-2",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "power the machine off with poweroff -f and wait for its end"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": ["dhcp-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "192.168.90.0/24",
+                "host": "192.168.90.2",
+                "dhcpstart": "192.168.90.20",
+                "dns": "192.168.90.3"
+              }
+            ],
+            "boot_options": ["rach2.fsdisk", "rach2.ip=none"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "first-lease",
+          "checks": "the first boot's ifup -a exits 0, the kernel says `net: eth0: IPv4 192.168.90.20/`, and ifconfig shows the address",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "second-lease",
+          "checks": "the second boot of the same disk takes the lease again in the same way",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 6}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "dhcp-disk", "node": "images/dhcp-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case boots a copy of an os-real disk twice on QEMU's user network with a DHCP server of its own"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.unattended",
+      "behavior": "the metal image booted with no address takes its lease with nobody at the console, before its SSH server, which answers through the forward from the leased address",
+      "units": ["dhcp", "rach2-metal", "udhcpc", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the metal image with rach2.ip=none, its card's frames recorded, and type nothing; wait for the kernel's line of the leased address and the login prompt"
+        },
+        {
+          "step_id": "server",
+          "stage": "execute",
+          "does": "run sshpeer wait on the port forwarded to the guest's port 22, until the SSH server answers"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "guest",
+          "does": "end the machine through QMP and run pcapcheck bcast on its card's frames"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "metal-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "192.168.90.0/24",
+                "host": "192.168.90.2",
+                "dhcpstart": "192.168.90.20",
+                "dns": "192.168.90.3",
+                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]
+              }
+            ],
+            "boot_options": ["rach2.ip=none"],
+            "captures": ["net0"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "lease",
+          "checks": "the kernel says `net: eth0: IPv4 192.168.90.20/` with nothing typed",
+          "source": "scenario"
+        },
+        {"assertion_id": "login-prompt", "checks": "the console asks for a login", "source": "scenario"},
+        {
+          "assertion_id": "server-answers",
+          "checks": "the guest's SSH server sends its identification through the forward to the leased address",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lease-on-wire",
+          "checks": "pcapcheck finds the client's broadcast to port 67 and packets sent from 192.168.90.20",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 1,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "metal-image", "node": "images/rach2-metal.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own with a DHCP server, and reads QEMU's capture of the card; the Lenovo's lease is checked by the release's metal_accept.sh"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.no-lease",
+      "behavior": "the metal image booted with no address on a card that reaches no DHCP server keeps its console login, and its client goes to the background to keep asking",
+      "units": ["dhcp", "rach2-metal", "udhcpc"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the metal image with rach2.ip=none on a card whose hub has nothing else on it, and log in as root at the console"
+        },
+        {
+          "step_id": "background",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "wait at the shell until /var/log/services says that the client went to the background"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "metal-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "rtl8139", "hub": true}],
+            "boot_options": ["rach2.ip=none"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "console-login",
+          "checks": "root logs in at the console while the network has no server",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "client-backgrounded",
+          "checks": "the service log says `no lease, forking to background`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "metal-image", "node": "images/rach2-metal.krffs", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case puts the card on a hub of QEMU's with nothing else on it, a network with no DHCP server"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.kept",
+      "behavior": "the metal image told its address on the command line, on a network with a DHCP server, keeps that address: init runs no client",
+      "units": ["dhcp", "rach2-metal", "init"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot the metal image with rach2.ip=192.168.90.50/24 and log in as root at the console"
+        },
+        {
+          "step_id": "kept",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "wait at the shell until init has started the SSH server, then ask ifconfig for eth0's address"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "metal-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "192.168.90.0/24",
+                "host": "192.168.90.2",
+                "dhcpstart": "192.168.90.20",
+                "dns": "192.168.90.3"
+              }
+            ],
+            "boot_options": ["rach2.ip=192.168.90.50/24", "rach2.gateway=192.168.90.2"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "address-kept",
+          "checks": "once the SSH server runs, eth0 still holds 192.168.90.50",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "metal-image", "node": "images/rach2-metal.krffs", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own with a DHCP server that would hand out another address"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.simple",
+      "behavior": "os-simple's netup and dhcpc take the lease of 10.90.0.20 on a /16 with its mask and name server, refuse a second client, and give the address up and take it again when the client is stopped",
+      "units": ["dhcp", "dhcpc", "netup", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-simple with rach2.ip=none on 10.90.0.0/16, its card's frames recorded, and log in as root at the console"
+        },
+        {
+          "step_id": "lease",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run netup -a, ping the gateway, read /etc/resolv.conf, run netup -a again, and ping 10.200.0.1, which is off the subnet"
+        },
+        {
+          "step_id": "release",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "stop the client with dhcpc -k, ping the gateway, run netup -a, and ping the gateway again"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "guest",
+          "does": "end the machine through QMP and run pcapcheck bcast on its card's frames"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-simple",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "10.90.0.0/16",
+                "host": "10.90.0.2",
+                "dhcpstart": "10.90.0.20",
+                "dns": "10.90.0.3"
+              }
+            ],
+            "boot_options": ["rach2.ip=none"],
+            "captures": ["net0"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "lease",
+          "checks": "netup -a prints `lease of 10.90.0.20 netmask 255.255.0.0`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "peer",
+          "checks": "at least one of four pings of the gateway is answered",
+          "source": "scenario"
+        },
+        {"assertion_id": "resolver", "checks": "/etc/resolv.conf has `nameserver 10.90.0.3`", "source": "scenario"},
+        {
+          "assertion_id": "held",
+          "checks": "a second netup -a says that a client `is already holding it`",
+          "source": "scenario"
+        },
+        {"assertion_id": "off-subnet", "checks": "none of four pings of 10.200.0.1 is answered", "source": "scenario"},
+        {
+          "assertion_id": "released",
+          "checks": "dhcpc -i eth0 -k makes the kernel say `net: eth0: IPv4 none` and says that it stopped the client",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "address-gone",
+          "checks": "none of four pings of the gateway is answered once the client has stopped",
+          "source": "scenario"
+        },
+        {"assertion_id": "lease-again", "checks": "netup -a takes the lease of 10.90.0.20 again", "source": "scenario"},
+        {
+          "assertion_id": "peer-again",
+          "checks": "at least one of four pings of the gateway is answered again",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "routed-on-wire",
+          "checks": "pcapcheck finds packets sent from 10.90.0.20, and the packet for 10.200.0.1 sent to the gateway's hardware address, which only the leased /16 gives",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-simple", "node": "images/os-simple.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own, a /16 with a DHCP server, and reads QEMU's capture of the card"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.simple-static",
+      "behavior": "os-simple moves off DHCP to the fixed address of /etc/network/interfaces: netup refuses while the client holds the interface, the client lets go when stopped, and the fixed address and its route are then in force",
+      "units": ["dhcp", "dhcpc", "netup", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-simple with rach2.ip=none on 10.90.0.0/16, its card's frames recorded, and log in as root at the console"
+        },
+        {"step_id": "lease", "stage": "execute", "machine": "guest", "does": "run netup -a for the lease"},
+        {
+          "step_id": "static",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "copy the static stanza over /etc/network/interfaces, run netup -a, stop the client with dhcpc -k, run netup -a again, and ping the gateway and 10.200.0.1"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "guest",
+          "does": "end the machine through QMP and run pcapcheck bcast on its card's frames"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-simple",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "10.90.0.0/16",
+                "host": "10.90.0.2",
+                "dhcpstart": "10.90.0.20",
+                "dns": "10.90.0.3"
+              }
+            ],
+            "boot_options": ["rach2.ip=none"],
+            "captures": ["net0"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "lease",
+          "checks": "netup -a prints `lease of 10.90.0.20 netmask 255.255.0.0`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused-while-held",
+          "checks": "with the static stanza in place, netup -a says that the client `is holding it with a lease`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "released",
+          "checks": "dhcpc -i eth0 -k makes the kernel say `net: eth0: IPv4 none` and says that it stopped the client",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "static-applied",
+          "checks": "netup -a says `configured from /etc/network/interfaces`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "peer",
+          "checks": "at least one of four pings of the gateway is answered",
+          "source": "scenario"
+        },
+        {"assertion_id": "off-subnet", "checks": "none of four pings of 10.200.0.1 is answered", "source": "scenario"},
+        {
+          "assertion_id": "routed-on-wire",
+          "checks": "pcapcheck finds packets sent from 10.90.0.50, and the packet for 10.200.0.1 sent to the gateway's hardware address, the route the stanza asks for",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-simple", "node": "images/os-simple.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own, a /16 with a DHCP server, and reads QEMU's capture of the card"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.real-static",
+      "behavior": "os-real's ifup applies the fixed address, mask and gateway of a static stanza on a /16, where the mask differs from the classful one",
+      "units": ["dhcp", "ifup", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-real with rach2.ip=none on 10.90.0.0/16, its card's frames recorded, and log in as root at the console"
+        },
+        {
+          "step_id": "static",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "write a static stanza for 10.90.0.50/16 to /etc/network/interfaces, run ifup -a, ask ifconfig for the address and the mask, ping the gateway, and ping 10.200.0.1"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "guest",
+          "does": "end the machine through QMP and run pcapcheck bcast on its card's frames"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "10.90.0.0/16",
+                "host": "10.90.0.2",
+                "dhcpstart": "10.90.0.20",
+                "dns": "10.90.0.3"
+              }
+            ],
+            "boot_options": ["rach2.ip=none"],
+            "captures": ["net0"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "static-applied",
+          "checks": "ifup -a exits 0 and the kernel says `net: eth0: IPv4 10.90.0.50/`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "address-and-mask",
+          "checks": "ifconfig shows 10.90.0.50 with the mask 255.255.0.0, and the gateway answers a ping",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "routed-on-wire",
+          "checks": "pcapcheck finds packets sent from 10.90.0.50, and the packet for 10.200.0.1 sent to the gateway's hardware address",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own, a /16 with a DHCP server, and reads QEMU's capture of the card"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.renew",
+      "behavior": "os-simple's dhcpc, with its lease capped at 20 seconds, renews it twice from one exchange rather than asking again",
+      "units": ["dhcp", "dhcpc"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-simple with rach2.ip=none on 10.90.0.0/16 and log in as root at the console"
+        },
+        {
+          "step_id": "renew",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run dhcpc -i eth0 -l 20 in the foreground and wait for its second renewal"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-simple",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "net": "10.90.0.0/16",
+                "host": "10.90.0.2",
+                "dhcpstart": "10.90.0.20",
+                "dns": "10.90.0.3"
+              }
+            ],
+            "boot_options": ["rach2.ip=none"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "renewed", "checks": "the client prints `renewed for 20 seconds` twice", "source": "scenario"},
+        {
+          "assertion_id": "one-exchange",
+          "checks": "the console has exactly one `asking for an address`, so each renewal was a renewal and not a new lease",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-simple", "node": "images/os-simple.krffs", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives the card a user network of its own with a DHCP server whose lease the client caps at 20 seconds"
+      }
+    },
+    {
+      "case_id": "machine.dhcp.two-networks",
+      "behavior": "os-real with two e1000 cards on two networks takes a lease on each, and its SSH server answers through both from the address each card holds",
+      "units": ["dhcp", "e1000", "udhcpc", "ifup", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "dhcp_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine if it still runs, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "guest",
+          "does": "boot os-real with rach2.ip=none and two e1000 cards, each card's frames recorded, and log in as root at the console"
+        },
+        {
+          "step_id": "leases",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "run ifup -a for eth0 and udhcpc -i eth1 -n -q for eth1, and ask ifconfig for both addresses"
+        },
+        {
+          "step_id": "server",
+          "stage": "execute",
+          "machine": "guest",
+          "does": "start dropbear on port 22, run sshpeer wait on the port forwarded to each card, and read the server's record of each connection on the console"
+        },
+        {
+          "step_id": "capture",
+          "stage": "capture",
+          "machine": "guest",
+          "does": "end the machine through QMP and run pcapcheck bcast on each card's frames"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "guest",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "net": "192.168.90.0/24",
+                "host": "192.168.90.2",
+                "dhcpstart": "192.168.90.20",
+                "dns": "192.168.90.3",
+                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.7.0/24",
+                "host": "10.0.7.2",
+                "dhcpstart": "10.0.7.20",
+                "dns": "10.0.7.3",
+                "forwards": [{"protocol": "tcp", "port": 1, "guest_port": 22}]
+              }
+            ],
+            "boot_options": ["rach2.ip=none"],
+            "captures": ["net0", "net1"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "first-lease",
+          "checks": "ifup -a exits 0 with `lease of 192.168.90.20 obtained`, and the kernel says `net: eth0: IPv4 192.168.90.20/`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "second-lease",
+          "checks": "udhcpc -i eth1 exits 0 with `lease of 10.0.7.20 obtained`, and the kernel says `net: eth1: IPv4 10.0.7.20/`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "two-leases",
+          "checks": "ifconfig shows 192.168.90.20 on eth0 and 10.0.7.20 on eth1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dropbear",
+          "checks": "dropbear starts on port 22 and runs in the background",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first-answers",
+          "checks": "the server answers through the first card's forward and records a connection from 192.168.90.2",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "second-answers",
+          "checks": "the server answers through the second card's forward and records a connection from 10.0.7.2",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "first-on-wire",
+          "checks": "pcapcheck finds packets sent from 192.168.90.20 on the first network",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "second-on-wire",
+          "checks": "pcapcheck finds packets sent from 10.0.7.20 on the second network",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 540000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 360000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 33554432,
+        "locks": [],
+        "ports": 2,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "dhcp_scenario", "node": "tests/cases/machine/dhcp_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the case gives each card a user network of its own with a DHCP server, and reads QEMU's capture of each card"
+      }
+    }
+  ]
+}

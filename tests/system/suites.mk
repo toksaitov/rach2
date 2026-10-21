@@ -1601,6 +1601,12 @@ $(IMAGES_DIR)/ssh-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MA
                              $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
 
+# The disk of the dhcp family's `disk` case (tests/cases/machine.dhcp.json): a
+# disk of os-real, of which the case boots one private copy twice.
+$(IMAGES_DIR)/dhcp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                              $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+
 # `tests/run shutdown`: userland stopping the machine, on a disk fixture, with
 # every claim of a stop asserted on QEMU's event, and every claim of a halt on
 # the processors halted in QEMU's monitor, rather than on a token, every disk
