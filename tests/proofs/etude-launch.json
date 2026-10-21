@@ -101,7 +101,7 @@
         {
           "file": "tools/etude/launch.sh",
           "find": "    resources=$processors,$memory,$disk",
-          "replace": "    resources=$cpu,$memory,$disk"
+          "replace": "    resources=$processors,$site_memory,$disk"
         }
       ],
       "fails": {

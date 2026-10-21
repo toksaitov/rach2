@@ -27,6 +27,8 @@ no-wait|posix/etude_bridge.c|        if (seconds != 0 && e == EAGAIN && !stopped
 stop-as-refusal|posix/etude_bridge.c|    result(record, stopped ? "stopped" : "refused", stopped ? stopped : -1);|    result(record, "refused", -1);|stop recorded
 incomplete-as-exit|posix/etude_bridge.c|    else if (rc < 0)|    else if (rc < -1)|incomplete recorded
 status-as-refusal|posix/etude_bridge.c|        result(q.record, "exited", rc);|        result(q.record, "refused", -1);|command status kept apart
+processors-judged|posix/etude_bridge.c|    while (etude_ledger_admit(l, id, account, res + 1, 1, cap + 1, 1, seconds != 0) != 0) {|    while (etude_ledger_admit(l, id, account, res, 2, cap, 2, seconds != 0) != 0) {|processors and disk not judged
+disk-judged|posix/etude_bridge.c|    while (etude_ledger_admit(l, id, account, res + 1, 1, cap + 1, 1, seconds != 0) != 0) {|    while (etude_ledger_admit(l, id, account, res + 1, 2, cap + 1, 2, seconds != 0) != 0) {|processors and disk not judged
 EOF
 }
 

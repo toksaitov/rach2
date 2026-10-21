@@ -87,7 +87,7 @@ def rows(root, repo, sources):
                ETUDE_STATE=str(root / "private-state"),
                PATH=str(bin) + os.pathsep + env["PATH"],
                RACH2_WORKERS="2", RACH2_MEMORY_MIB="96", RACH2_CPUS="2",
-               EXPECT_CPU="4000", EXPECT_MEMORY="5368709120", EXPECT_DISK="42949672960")
+               EXPECT_MEMORY="5368709120")
     # The command must already have a durable, registered reservation and
     # the matching port and host locks when its first instruction executes.
     write(observer, '''#!/usr/bin/env python3
@@ -97,9 +97,8 @@ ledger = Path(os.environ["ETUDE_LAUNCH_LEDGER"])
 text = (ledger / "claims").read_text()
 assert text.count("claim ") == 1, text
 assert "process case " in text and "state running" in text, text
-for resource, key in (("cpu_millis", "EXPECT_CPU"), ("memory_bytes", "EXPECT_MEMORY"),
-                      ("disk_bytes", "EXPECT_DISK")):
-    assert f"resource {resource} {os.environ[key]}\\n" in text, text
+assert "resource cpu_millis " not in text and "resource disk_bytes " not in text, text
+assert f"resource memory_bytes {os.environ['EXPECT_MEMORY']}\\n" in text, text
 assert os.environ["RACH2_WORKERS"] == "2"
 assert os.environ["RACH2_MEMORY_MIB"] == "96"
 offset = int(os.environ["RACH2_PORT_OFFSET"])
@@ -142,11 +141,11 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
     clear()
 
     for flags, jobs in ((["-j", "7"], 7), (["-j16"], 16)):
-        env.update(EXPECT_CPU=str(jobs * 1000), EXPECT_MEMORY=str((jobs + 1) * 1073741824))
+        env.update(EXPECT_MEMORY=str((jobs + 1) * 1073741824))
         run([str(launcher), "build", real_make, *flags, "ARG=two words"], env, tree)
         saw()
         clear()
-    env.update(EXPECT_CPU="4000", EXPECT_MEMORY="5368709120")
+    env.update(EXPECT_MEMORY="5368709120")
 
     # An older preparation's unbounded make is limited before it executes.
     stage = "job-limit"
@@ -176,7 +175,6 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
 
     # The real worker entry must claim before even its helper compilation.
     stage = "worker"
-    env["EXPECT_CPU"] = "2000"
     shutil.copyfile(sources / "tests/run", tree / "tests/run")
     write(bin / "cc", f"#!/bin/sh\n{observe}\nexit 19\n", executable=True)
     run(["sh", "tests/run", "style"], env, tree, status=1)
@@ -185,13 +183,12 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
 
     # CI admits its build and each test step separately.
     stage = "ci"
-    env["EXPECT_CPU"] = "4000"
     write(bin / "make", f"#!/bin/sh\nexec '{launcher}' build {observe}\n", executable=True)
     write(tree / "tests/run", f'''#!/bin/sh
 if [ -z "${{ETUDE_ADMITTED:-}}" ]; then
     exec '{launcher}' legacy sh "$0" "$@"
 fi
-EXPECT_CPU=2000 {observe} || exit 3
+{observe} || exit 3
 for name do
     [ "$name" != core ] || name=default
     echo "run: $name: PASS in 0s"
@@ -205,7 +202,7 @@ done
     # Owner commands admit their build and test steps independently,
     # preserving quoting, standard input and the command's own status.
     stage = "owner"
-    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
+    env.update(EXPECT_MEMORY="103079215104")
     testing = root / "owner/tools/dev/testing.sh"
     testing.parent.mkdir(parents=True)
     shutil.copyfile(sources / "tools/dev/testing.sh", testing)
@@ -235,7 +232,7 @@ exec '{runutil}' ports '{locks}' 2 '{sys.executable}' '{observer}'
 ''',
           executable=True)
     result = root / "result"
-    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
+    env.update(EXPECT_MEMORY="103079215104")
     with (locks / "rach2-ports.0").open("r+") as occupied:
         fcntl.lockf(occupied, fcntl.LOCK_EX)
         run([str(launcher), "-r", str(result), "legacy", str(program)], env, tree)
@@ -247,10 +244,10 @@ exec '{runutil}' ports '{locks}' 2 '{sys.executable}' '{observer}'
     # Bisection wraps an old checkout whose entries do not admit themselves,
     # and uses the installed site before a private machine record.
     stage = "bisection"
-    env.update(EXPECT_CPU="4000", EXPECT_MEMORY="5368709120", EXPECT_DISK="42949672960")
+    env.update(EXPECT_MEMORY="5368709120")
     write(bin / "make", f"#!/bin/sh\nexec {observe}\n", executable=True)
     write(tree / "tests/run", f'''#!/bin/sh
-EXPECT_CPU=2000 {observe} || exit 3
+{observe} || exit 3
 for name do
     echo "run: $name: PASS in 0s"
 done
@@ -276,7 +273,7 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     # A command nested in an admitted owner command reuses its claim and
     # still supplies the separate result that bisection reads.
     stage = "nested"
-    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
+    env.update(EXPECT_MEMORY="103079215104")
     nested = f"{observe} && '{launcher}' -r '{result}' legacy '{sys.executable}' '{observer}'"
     run([str(launcher), "build", "/bin/sh", "-c", nested], env, tree)
     assert result.read_text() == "exited 0\n"
@@ -354,7 +351,7 @@ while not pathlib.Path(os.environ["TEST_RELEASE"]).exists():
             text = (ledger / "claims").read_text()
             assert text.count("state running") == 2, text
             assert "account account-0\n" in text and "account account-1\n" in text, text
-            assert text.count("resource cpu_millis 2000\n") == 2, text
+            assert text.count("resource memory_bytes 5368709120\n") == 2, text
             assert ready[0].read_text() != ready[1].read_text()
             child_env = dict(env, TEST_ACCOUNT="account-exclusive", TEST_READY=str(ready[2]),
                              TEST_RELEASE=str(exclusive_release),
@@ -372,7 +369,7 @@ while not pathlib.Path(os.environ["TEST_RELEASE"]).exists():
             until(ready[2].exists)
             text = (ledger / "claims").read_text()
             assert text.count("state running") == 1, text
-            assert "resource cpu_millis 24000\n" in text, text
+            assert "resource memory_bytes 103079215104\n" in text, text
             exclusive_release.touch()
             output, _ = children[2].communicate(timeout=10)
             assert children[2].returncode == 0, output
@@ -391,7 +388,7 @@ while not pathlib.Path(os.environ["TEST_RELEASE"]).exists():
     # A later launch waits behind the first claim and a cancellation must
     # stop its process before capacity is released.
     stage = "cancellation"
-    env.update(EXPECT_CPU="24000", EXPECT_MEMORY="103079215104", EXPECT_DISK="171798691840")
+    env.update(EXPECT_MEMORY="103079215104")
     ready = root / "ready"
     release = root / "release"
     waiting = root / "waiting.py"

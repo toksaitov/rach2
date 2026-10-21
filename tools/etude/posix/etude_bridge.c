@@ -187,6 +187,13 @@ static int refused(const char *record)
  * Admit claim `id`, asking again each second for up to `seconds` while the
  * request waits in the ledger, and once without waiting when `seconds` is 0.
  *
+ * The claim takes the memory of `res` within that of `cap`, the second
+ * amount of each, and no processors or disk. A test's guests use a small part
+ * of the processors its launcher counts for it, and runs that share too few
+ * processors only slow each other, where runs that share too little memory
+ * fail; the free space that `make` and `tests/run` require before they start
+ * guards the disk.
+ *
  * @return 0 once admitted; -1 with errno set when refused, ETIMEDOUT at the
  *         bound and EINTR after a stop signal, with no request left waiting.
  */
@@ -197,7 +204,7 @@ static int admit(struct etude_ledger *l, const char *id, const char *account,
     uint64_t until = posix_now_us() + (uint64_t)seconds * 1000000;
     int e;
 
-    while (etude_ledger_admit(l, id, account, res, 3, cap, 3, seconds != 0) != 0) {
+    while (etude_ledger_admit(l, id, account, res + 1, 1, cap + 1, 1, seconds != 0) != 0) {
         e = errno;
         if (seconds != 0 && e == EAGAIN && !stopped && posix_now_us() < until) {
             sleep(1);

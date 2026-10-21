@@ -650,6 +650,30 @@ static void waiting(struct etude_ledger *l, const char *ledger)
     CHECK(etude_ledger_finish(l, "holding", ETUDE_CLEANUP_CONFIRMED) == 0, "hold ended");
 }
 
+/** Hold nine of ten processors, one unit of memory and nine of ten of disk. */
+static void busy(struct etude_ledger *l)
+{
+    struct etude_ledger_res res[] = {{"cpu_millis", 9}, {"memory_bytes", 1}, {"disk_bytes", 9}};
+    struct etude_ledger_res cap[] = {{"cpu_millis", 10}, {"memory_bytes", 20}, {"disk_bytes", 10}};
+    CHECK(etude_ledger_admit(l, "busy", "test", res, 3, cap, 3, 0) == 0, "busy");
+}
+
+/**
+ * A claim takes memory alone, so a command runs beside claims that hold more
+ * of the processors and the disk than the capacity has left.
+ */
+static void processors(struct etude_ledger *l, const char *ledger)
+{
+    char *args[] = {"etude-bridge", "-d",   (char *)fix_dir(), (char *)ledger,
+                    "beside-busy",  "test", "shared",          "5,1,5",
+                    "10,20,10",     "5",    "/bin/sh",         "-c",
+                    "exit 0",       NULL};
+
+    busy(l);
+    CHECK(bridge_status(bridge_child(args)) == 0, "processors and disk not judged");
+    CHECK(etude_ledger_finish(l, "busy", ETUDE_CLEANUP_CONFIRMED) == 0, "busy ended");
+}
+
 /** A command killed by a signal fails, and its result is incomplete. */
 static void incomplete(const char *ledger)
 {
@@ -758,6 +782,7 @@ int main(int argc, char **argv)
     exclusive(l, ledger);
     ports(l, ledger);
     waiting(l, ledger);
+    processors(l, ledger);
     etude_ledger_close(l);
     incomplete(ledger);
     wrapper(ledger);
