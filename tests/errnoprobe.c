@@ -7,11 +7,17 @@
  * returns the specific errno Linux would (-ENOENT, -EBADF, -EFAULT). Prints
  * "All errno checks passed!" and exits 0 only if every check matches.
  *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each errno: `enosys`, `enoent`, `ebadf` and
+ * `efault`, each failed with the first of its calls that returned another
+ * result.
+ *
  * Freestanding; direct system calls (probe.h), so the test sees the raw -errno
  * the kernel returns (a libc caller would negate it into a positive errno).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -98,6 +104,7 @@ static void expect(long got, int want_errno, const char *label)
         put_long(got);
         puts_("\n");
         fails++;
+        report_miss(label);
     }
 }
 
@@ -117,19 +124,23 @@ void probe_main(unsigned long *sp)
     static const char missing[] = "/no_such_file_errnoprobe";
     char rbuf[16];
 
-    (void)sp;
-
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.errnoprobe"));
     puts_("errnoprobe: starting\n");
 
+    report_part("enosys");
     expect(syscall3(NR_UNIMPL, 0, 0, 0), ENOSYS, "unimpl(" NR_UNIMPL_TEXT ")");
     expect(syscall3(909, 0, 0, 0), ENOSYS, "outofrange(909)");
 
+    report_part("enoent");
     expect(syscall3(SYS_OPEN, (long)missing, 0, 0), ENOENT, "open(missing)");
 
+    report_part("ebadf");
     expect(syscall3(SYS_CLOSE, 999, 0, 0), EBADF, "close(999)");
     expect(syscall3(SYS_READ, 999, (long)rbuf, (int)sizeof(rbuf)), EBADF, "read(999)");
 
+    report_part("efault");
     expect(syscall3(SYS_WRITEV, STDOUT, -4096L, 1), EFAULT, "writev(bad iov)");
+    report_finish();
 
     if (fails == 0) {
         puts_("All errno checks passed!\n");

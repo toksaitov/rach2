@@ -1,11 +1,14 @@
 /**
  * Minimal ELF probe: prints "Hello from ELF!" and exits.
  *
- * Exercises the ELF loader and the write and exit syscalls. Freestanding;
- * direct system calls (probe.h).
+ * Exercises the ELF loader and the write and exit syscalls. Writes etude's
+ * report records (probe_report.h) for the case ETUDE_CASE names, with one
+ * assertion, `write`: the write of the line returned its length.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -32,20 +35,31 @@ static size_t strlen(const char *s)
     return len;
 }
 
-/** Write `s` and a newline to standard output. */
-static void puts(const char *s)
+/** Write `s` and a newline to standard output; 1 when each write wrote all
+ * its bytes. */
+static int puts(const char *s)
 {
-    sys_write(STDOUT_FILENO, s, strlen(s));
-    sys_write(STDOUT_FILENO, "\n", 1);
+    int n = (int)strlen(s);
+
+    return (sys_write(STDOUT_FILENO, s, n) == n) & (sys_write(STDOUT_FILENO, "\n", 1) == 1);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
- * The program's entry, where the kernel starts it with the stack pointer at
- * argc and the argv pointers above it; this probe reads neither, prints a
- * fixed line and exits 0.
+ * The program's entry, which `_start` calls with the initial stack: it reads
+ * the environment for the case's identity, prints a fixed line and exits 0.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
-    puts("Hello from ELF!");
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.hello"));
+    if (puts("Hello from ELF!")) {
+        report_pass("write");
+    } else {
+        report_fail("write", "the write of the line fell short");
+    }
+    report_end();
     sys_exit(0);
 }

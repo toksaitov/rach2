@@ -20,6 +20,12 @@
  * child that stops writes none. A probe that goes on past a failed check
  * reports that assertion with `report_missed` and continues.
  *
+ * A probe that counts its failures and goes on divides its checks into
+ * parts, one assertion each. `report_part` begins a part, ending the one
+ * before it; `report_miss` records that a check of the open part failed,
+ * keeping the first reason; and `report_finish` ends the open part and the
+ * report. A part is held when none of its checks failed.
+ *
  * The records are written beside the probe's own lines, such as "RNGPROBE
  * OK", which tests/run's suites read and etude does not.
  */
@@ -194,6 +200,71 @@ static __inline__ void report_stop(const char *why)
     while (report_path_at < report_path_len) {
         report_notrun(report_path[report_path_at++], "an earlier check failed");
     }
+    report_end();
+}
+
+/* The open part's assertion, whether a check of it failed, and the first
+ * reason given. */
+static const char *report_part_id;
+static int report_part_failed;
+static char report_part_why[ETUDE_REPORT_LINE_MAX];
+
+/** In the process that began the report, report the open part's assertion:
+ * held unless one of its checks failed. */
+static __inline__ void report_part_end(void)
+{
+    if (report_part_id == 0 || report_getpid() != report_owner) {
+        return;
+    }
+    if (report_part_failed) {
+        report_fail(report_part_id, report_part_why);
+    } else {
+        report_pass(report_part_id);
+    }
+    report_part_id = 0;
+}
+
+/** End the open part, and begin the part whose assertion is `id`. */
+static __inline__ void report_part(const char *id)
+{
+    report_part_end();
+    report_part_id = id;
+    report_part_failed = 0;
+    report_part_why[0] = '\0';
+}
+
+/** Record that a check of the open part failed; `why` says which, and the
+ * first reason of the part is the one reported, without the spaces at its
+ * ends, which a record's detail cannot have. */
+static __inline__ void report_miss(const char *why)
+{
+    int n = 0;
+
+    if (report_part_failed) {
+        return;
+    }
+    report_part_failed = 1;
+    while (*why == ' ') {
+        why++;
+    }
+    report_put(report_part_why, &n, why);
+    while (n > 0 && report_part_why[n - 1] == ' ') {
+        n--;
+    }
+    if (n == 0) {
+        report_put(report_part_why, &n, "a check failed");
+    }
+    report_part_why[n] = '\0';
+}
+
+/** In the process that began the report, end the open part and the report;
+ * after the end, nothing. */
+static __inline__ void report_finish(void)
+{
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    report_part_end();
     report_end();
 }
 
