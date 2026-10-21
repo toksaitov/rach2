@@ -1225,51 +1225,8 @@ dhcp-stack: dhcp-card
 	    echo "dhcp-test: a lease on each interface and the server answering through both: OK"'
 endif
 .PHONY: dhcp-card dhcp-stack
-# `tests/run netconsole`: the kernel log on the wire. The laptop the sealed disk
-# goes into has no serial port, so the boot log has to leave over Ethernet or
-# not at all. QEMU's filter-dump writes every frame the guest sends to a libpcap
-# file; the boot below asks for netconsole on the command line, and the checker
-# holds the frames to the header's contract and requires a line printed before
-# the network device came up, which is what proves the pre-transmit buffer was
-# carried rather than dropped.
-#
-# Each expected text carries the `] ` that ends a record's prefix, so what is
-# required is a whole record reassembled from the frames, not a fragment of
-# one. The two rejected texts are the shell's: a prompt and its banner are
-# console output, and netconsole carries the log to whoever is on the segment,
-# which a person typing at a prompt did not agree to.
-NETCONSOLE_PCAP = $(IMAGES_DIR)/netconsole$(NIC_TAG).pcap
-NETCONSOLE_STOP_PCAP = $(IMAGES_DIR)/netconsole-stop$(NIC_TAG).pcap
-run-netconsole: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
-	@rm -f $(NETCONSOLE_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=nc0,netdev=net0,file=$(NETCONSOLE_PCAP) \
-	    --append "rach2.netconsole" \
-	    --timeout 90 --ok "Type 'help'" "expect=Type 'help'"
-	$(PCAPCHECK) netconsole $(NETCONSOLE_PCAP) --min-frames 4 \
-	    --expect "] boot: Initializing system components" \
-	    --expect "] net: ready:" \
-	    --expect "] netconsole: broadcast" \
-	    --reject "Type 'help'" \
-	    --reject "> "
-# And the other end of a netconsole session: the machine stopping. The card is
-# silenced on the way out, so where that happens decides what a remote reader
-# is told. The contract is that the goodbye line reaches the wire and nothing
-# `power_stop` prints after it does, which only a capture can show: a line that
-# was never sent and a line that was sent and missed look the same from inside.
-	@rm -f $(NETCONSOLE_STOP_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=nc1,netdev=net0,file=$(NETCONSOLE_STOP_PCAP) \
-	    --append "rach2.netconsole" \
-	    --timeout 90 --ok "Stopping the system" \
-	    "expect=Type 'help'" "send=poweroff" until=15 --must-exit
-	$(PCAPCHECK) netconsole $(NETCONSOLE_STOP_PCAP) --min-frames 4 \
-	    --expect "Stopping the system. Goodbye!" \
-	    --reject "powering off"
+# `tests/run netconsole`: the kernel log on the wire, the cases of
+# tests/cases/machine.netconsole.json.
 # `tests/run e1000`: the network path on the other emulated card, and the probe
 # order that decides which card a machine with more than one of them gets, the
 # cases of tests/cases/machine.e1000.json, each a boot of its own.
@@ -1986,9 +1943,8 @@ run-netif-e1000:
 run-dgram-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-dgram
 
-# `tests/run netconsole-e1000`: the netconsole suite on the e1000 card.
-run-netconsole-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-netconsole
+# `tests/run netconsole-e1000`: the netconsole suite on the e1000 card, the
+# cases of tests/cases/machine.netconsole-e1000.json.
 
 # `tests/run raw-e1000`: the raw suite's card half on the e1000 card. Its case
 # is in tests/cases/machine.raw-e1000.json, which etude runs, and has no target
