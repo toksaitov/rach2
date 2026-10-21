@@ -199,8 +199,8 @@
         {"name": "teststick", "node": "images/install-test-stick.img", "per_architecture": true},
         {"name": "image", "node": "images/installer-test.disk", "per_architecture": true},
         {"name": "keyless", "node": "images/cases/recovery-keyless.krffs", "per_architecture": true},
-        {"name": "demo_key", "node": "tests/cases/fixtures/demo-ed25519", "per_architecture": false},
-        {"name": "password", "node": "tests/cases/fixtures/demo-password", "per_architecture": false},
+        {"name": "demo_key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
         {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
         {"name": "ptydrive", "node": "tests/system/ptydrive", "per_architecture": false},
         {"name": "installer_install", "node": "tests/cases/machine/installer_install", "per_architecture": false}
