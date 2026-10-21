@@ -711,6 +711,16 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
+# The network scenarios that also read a probe's report on the console.
+NETPROBE_SCENARIOS = build/tests/cases/machine/netif_scenario
+$(NETPROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                       tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
+                       tests/cases/machine/console_report.c tests/cases/machine/console_report.h \
+                       $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
 # The USB scenarios share usbcase.c.
 USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario
 $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
@@ -1451,7 +1461,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
              $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
-             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(USB_SCENARIOS) \
+             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
+             $(USB_SCENARIOS) \
              build/tests/cases/machine/sshpeer
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)

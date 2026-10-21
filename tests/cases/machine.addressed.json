@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.addressed",
+  "summary": "The address the boot line gives the machine, found in what the machine sends",
+  "cases": [
+    {
+      "case_id": "machine.addressed.pingtest",
+      "behavior": "the machine takes the address rach2.ip gives it, 10.0.2.77, and pingtest passes; the capture of the rtl8139 has a packet sent from that address and an ARP request sent as it",
+      "units": ["addressed", "pingtest", "tests/system/checkers/pcapcheck.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"address": "10.0.2.77/24", "gateway": "10.0.2.2"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "netif_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine when the scenario did not power it off"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image with rach2.ip=10.0.2.77/24 and rach2.gateway=10.0.2.2 to the debug shell"},
+        {"step_id": "pingtest", "stage": "execute", "machine": "guest",
+         "does": "run pingtest at the debug shell and take its report from the console"},
+        {"step_id": "poweroff", "stage": "execute", "machine": "guest",
+         "does": "power the machine off at the debug shell and wait for its end, which makes the capture whole"},
+        {"step_id": "capture", "stage": "execute",
+         "does": "run pcapcheck bcast on the capture of the card for a packet sent from 10.0.2.77 and an ARP request sent as 10.0.2.77"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "rtl8139"}],
+                  "boot_options": ["rach2.ip=10.0.2.77/24", "rach2.gateway=10.0.2.2"], "captures": ["net0"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "gateway-replies", "checks": "three pings to the gateway each get a reply", "source": "scenario"},
+        {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails", "source": "scenario"},
+        {"assertion_id": "child-in-ping", "checks": "the child writes its byte just before its ping, and /proc shows it asleep in the call", "source": "scenario"},
+        {"assertion_id": "busy", "checks": "while the child is in its call, the parent's ping of the loopback address answers EBUSY", "source": "scenario"},
+        {"assertion_id": "progress", "checks": "the parent's clock readings while the child waits span some time, so the wait sleeps", "source": "scenario"},
+        {"assertion_id": "child-length", "checks": "the child reports the length of its call through the pipe", "source": "scenario"},
+        {"assertion_id": "child-exit", "checks": "the child is reaped and exited normally", "source": "scenario"},
+        {"assertion_id": "child-etimedout", "checks": "the child's ping returned ETIMEDOUT", "source": "scenario"},
+        {"assertion_id": "wait-floor", "checks": "the child's call lasted at least 3990 ms, the kernel's four hundred ticks", "source": "scenario"},
+        {"assertion_id": "release", "checks": "after the reap the parent's loopback ping returns a round-trip time of 0 or more", "source": "scenario"},
+        {"assertion_id": "data-size", "checks": "a data ping of 1473 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "scenario"},
+        {"assertion_id": "powered-off", "checks": "the machine powers off at the debug shell's command after pingtest, so that the capture is whole", "source": "scenario"},
+        {"assertion_id": "sent-as-address", "checks": "pcapcheck bcast finds in the capture of the card a packet sent from 10.0.2.77 and an ARP request sent as 10.0.2.77", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "pcapcheck", "node": "tests/system/pcapcheck", "per_architecture": false},
+        {"name": "netif_scenario", "node": "tests/cases/machine/netif_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the address is given on the boot line, and pcapcheck reads QEMU's capture of the card's frames; tests/native/probes.cases runs pingtest's rows natively"}
+    }
+  ]
+}

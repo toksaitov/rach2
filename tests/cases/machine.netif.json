@@ -1,0 +1,395 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.netif",
+  "summary": "The interface ioctls by which a program reads and changes the machine's network configuration, on the rtl8139, and two cards in one machine, each case a boot of its own that tests/cases/machine/netif_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.netif.probe",
+      "behavior": "netifprobe passes each row at the debug shell of a machine with QEMU's address on the rtl8139: the interface ioctls, a change of address that aborts the connections open across it, the interface taken down, which drops the datagram the host sends, and brought up, which receives the next, and the routes",
+      "units": ["netif", "netifprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"guest_port": 9999, "down": "down", "up": "up"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "netif_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image to the debug shell"},
+        {"step_id": "netifprobe", "stage": "execute", "machine": "guest",
+         "does": "run netifprobe at the debug shell, send it a datagram from the host with hostpeer send through the forward when it prints NETIFPROBE DOWN and again when it prints NETIFPROBE UP, and take its report from the console"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "rtl8139", "forwards": [{"protocol": "udp", "port": 0, "guest_port": 9999}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "raw-descriptor", "checks": "the raw descriptor that BusyBox's DHCP client asks the interface through, AF_INET, SOCK_RAW and IPPROTO_RAW, opens", "source": "scenario"},
+        {"assertion_id": "raw-protocol-refused", "checks": "a raw socket for TCP, a protocol the stack does not carry, answers EPROTONOSUPPORT", "source": "scenario"},
+        {"assertion_id": "index", "checks": "eth0 has index 1, and SIOCGIFINDEX of eth9 answers ENODEV", "source": "scenario"},
+        {"assertion_id": "name-from-index", "checks": "SIOCGIFNAME of index 1 gives eth0, and of index 7 answers ENODEV", "source": "scenario"},
+        {"assertion_id": "hardware-address", "checks": "SIOCGIFHWADDR of eth0 gives an Ethernet address that is not all zeros", "source": "scenario"},
+        {"assertion_id": "address-read", "checks": "SIOCGIFADDR of eth0 reads its address", "source": "scenario"},
+        {"assertion_id": "booted-address", "checks": "the address is 10.0.2.15, the one QEMU's user network gives", "source": "scenario"},
+        {"assertion_id": "netmask", "checks": "the netmask reads back as 255.255.255.0", "source": "scenario"},
+        {"assertion_id": "broadcast", "checks": "the broadcast address is the subnet's, 10.0.2.255", "source": "scenario"},
+        {"assertion_id": "mtu", "checks": "the MTU is 1500", "source": "scenario"},
+        {"assertion_id": "flags", "checks": "the flags have IFF_UP or IFF_BROADCAST, IFF_MULTICAST and IFF_RUNNING", "source": "scenario"},
+        {"assertion_id": "query-refusals", "checks": "the query descriptor refuses bind, connect, listen, read and write with EOPNOTSUPP, and a poll of it reports POLLERR at once", "source": "scenario"},
+        {"assertion_id": "self-connection", "checks": "a TCP connection to the machine's own 10.0.2.15 at port 7400 opens and is accepted, to be held across the change of address", "source": "scenario"},
+        {"assertion_id": "set-needs-root", "checks": "a child at uid 1000 that sets the address is answered EPERM", "source": "scenario"},
+        {"assertion_id": "address-set", "checks": "the address 192.168.90.20 and the mask 255.255.255.0 are set, and the address reads back", "source": "scenario"},
+        {"assertion_id": "reset-once", "checks": "after the change a write to one end of the held connection and a read of the other answer ENETRESET, and SO_ERROR then reads 0", "source": "scenario"},
+        {"assertion_id": "listener-survives", "checks": "the listener accepts a second connection, to the new address", "source": "scenario"},
+        {"assertion_id": "same-address-no-reset", "checks": "the same address and mask set again leave the second connection's SO_ERROR 0", "source": "scenario"},
+        {"assertion_id": "classful-mask", "checks": "the address 172.16.1.2 set alone takes the classful mask 255.255.0.0", "source": "scenario"},
+        {"assertion_id": "reset-not-rearmed", "checks": "that later change leaves the first connection's SO_ERROR 0, and 192.168.90.20/24 is set again", "source": "scenario"},
+        {"assertion_id": "gateway-before-down", "checks": "with 10.0.2.15/24 set again the gateway answers a ping, and a datagram socket binds port 9999", "source": "scenario"},
+        {"assertion_id": "down-flags", "checks": "eth0 taken down with SIOCSIFFLAGS reads neither IFF_UP nor IFF_RUNNING", "source": "scenario"},
+        {"assertion_id": "down-no-ping", "checks": "the gateway does not answer a ping while eth0 is down", "source": "scenario"},
+        {"assertion_id": "down-no-datagram", "checks": "the datagram the host sends after NETIFPROBE DOWN raises eth0's receive drops in /proc/net/dev within 30 seconds, and the socket receives nothing", "source": "scenario"},
+        {"assertion_id": "up-again", "checks": "with eth0 brought back up the gateway answers a ping", "source": "scenario"},
+        {"assertion_id": "reset-nonblocking", "checks": "a nonblocking read of the second connection, open across the change back to 10.0.2.15, answers ENETRESET", "source": "scenario"},
+        {"assertion_id": "up-datagram", "checks": "the datagram the host sends after NETIFPROBE UP reaches the socket", "source": "scenario"},
+        {"assertion_id": "invalid-addresses", "checks": "with 192.168.90.20/24 set again, the addresses 0.1.2.3, 240.1.2.3 and 224.0.0.1 answer EINVAL", "source": "scenario"},
+        {"assertion_id": "default-route", "checks": "a default route through 192.168.90.1 is taken", "source": "scenario"},
+        {"assertion_id": "gateway-off-subnet", "checks": "a default route through 10.0.2.2, off the subnet, answers ENETUNREACH", "source": "scenario"},
+        {"assertion_id": "other-route", "checks": "a route to 10.10.10.0/24 is added and removed", "source": "scenario"},
+        {"assertion_id": "gatewayless-default", "checks": "a default route with no gateway answers EINVAL and keeps the gateway, whose removal then succeeds", "source": "scenario"},
+        {"assertion_id": "unknown-device-route", "checks": "a route added or removed for eth9 answers ENODEV", "source": "scenario"},
+        {"assertion_id": "own-subnet-route", "checks": "the route to the machine's own subnet is added, and its removal answers EOPNOTSUPP", "source": "scenario"},
+        {"assertion_id": "default-removed", "checks": "the default route is removed", "source": "scenario"},
+        {"assertion_id": "absent-removal", "checks": "a second removal of the default route answers ESRCH", "source": "scenario"},
+        {"assertion_id": "waiting-address", "checks": "192.168.1.0 is accepted and not in force until the mask 255.255.0.0 makes it a host, and then the mask 255.255.255.0 answers EINVAL", "source": "scenario"},
+        {"assertion_id": "refused-mask-clears", "checks": "192.168.1.0 set on a machine with no address, refused the mask 255.255.255.0, leaves the machine with no address", "source": "scenario"},
+        {"assertion_id": "restored", "checks": "10.0.2.15/24 and the default route through 10.0.2.2 are set again, and the gateway answers a ping", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "hostpeer", "node": "tests/system/hostpeer", "per_architecture": false},
+        {"name": "netif_scenario", "node": "tests/cases/machine/netif_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the probe changes the machine's address, flags and routes and takes its interface down, which would cut a running machine off from its network, and the host sends its datagrams through the forward of QEMU's user network; tests/native/probes.cases runs the probe's queries natively"}
+    },
+    {
+      "case_id": "machine.netif.unaddressed",
+      "behavior": "netifprobe configures a machine booted with rach2.ip=none on the rtl8139 from nothing: an address, then a mask, then a default route, after which the gateway answers",
+      "units": ["netif", "netifprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_option": "rach2.ip=none"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "netif_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image with rach2.ip=none to the debug shell"},
+        {"step_id": "netifprobe", "stage": "execute", "machine": "guest",
+         "does": "run netifprobe at the debug shell and take its report from the console"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": ["rtl8139"],
+                  "boot_options": ["rach2.ip=none"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "raw-descriptor", "checks": "the raw descriptor that BusyBox's DHCP client asks the interface through, AF_INET, SOCK_RAW and IPPROTO_RAW, opens", "source": "scenario"},
+        {"assertion_id": "raw-protocol-refused", "checks": "a raw socket for TCP, a protocol the stack does not carry, answers EPROTONOSUPPORT", "source": "scenario"},
+        {"assertion_id": "index", "checks": "eth0 has index 1, and SIOCGIFINDEX of eth9 answers ENODEV", "source": "scenario"},
+        {"assertion_id": "name-from-index", "checks": "SIOCGIFNAME of index 1 gives eth0, and of index 7 answers ENODEV", "source": "scenario"},
+        {"assertion_id": "hardware-address", "checks": "SIOCGIFHWADDR of eth0 gives an Ethernet address that is not all zeros", "source": "scenario"},
+        {"assertion_id": "address-read", "checks": "SIOCGIFADDR of eth0 reads its address", "source": "scenario"},
+        {"assertion_id": "no-netmask", "checks": "a machine with no address reports the netmask 0", "source": "scenario"},
+        {"assertion_id": "address-from-nothing", "checks": "the address 10.0.2.15 is set on the machine that has none", "source": "scenario"},
+        {"assertion_id": "classful-from-nothing", "checks": "the address set alone takes the classful mask 255.0.0.0", "source": "scenario"},
+        {"assertion_id": "mask-after-address", "checks": "the mask 255.255.255.0 set after it leaves the address as it was", "source": "scenario"},
+        {"assertion_id": "route-from-nothing", "checks": "a default route through 10.0.2.2 is set", "source": "scenario"},
+        {"assertion_id": "gateway-from-nothing", "checks": "the gateway answers a ping from the machine configured from nothing", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "netif_scenario", "node": "tests/cases/machine/netif_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the machine boots with rach2.ip=none, and the probe configures its one interface from nothing"}
+    },
+    {
+      "case_id": "machine.netif.twocards",
+      "behavior": "two e1000s on two networks are two interfaces, each with its own station address and address, the second's given by rach2.ifaddr, and pingtest and `netifprobe second` pass",
+      "units": ["netif", "pingtest", "netifprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"second_network": "10.0.3.0/24", "second_address": "10.0.3.5/24"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "netif_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image with two e1000s to the debug shell"},
+        {"step_id": "pingtest", "stage": "execute", "machine": "guest",
+         "does": "run pingtest at the debug shell and take its report from the console"},
+        {"step_id": "netifprobe-second", "stage": "execute", "machine": "guest",
+         "does": "run `netifprobe second` at the debug shell and take its report from the console"},
+        {"step_id": "log", "stage": "execute",
+         "does": "find the two cards' lines in the boot log, read from the console up to the end of the last report"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "e1000"}, {"model": "e1000", "net": "10.0.3.0/24"}],
+                  "boot_options": ["rach2.ifaddr=52:54:00:12:34:57,10.0.3.5/24,10.0.3.2"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "gateway-replies", "checks": "three pings to the gateway each get a reply", "source": "scenario"},
+        {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails", "source": "scenario"},
+        {"assertion_id": "child-in-ping", "checks": "the child writes its byte just before its ping, and /proc shows it asleep in the call", "source": "scenario"},
+        {"assertion_id": "busy", "checks": "while the child is in its call, the parent's ping of the loopback address answers EBUSY", "source": "scenario"},
+        {"assertion_id": "progress", "checks": "the parent's clock readings while the child waits span some time, so the wait sleeps", "source": "scenario"},
+        {"assertion_id": "child-length", "checks": "the child reports the length of its call through the pipe", "source": "scenario"},
+        {"assertion_id": "child-exit", "checks": "the child is reaped and exited normally", "source": "scenario"},
+        {"assertion_id": "child-etimedout", "checks": "the child's ping returned ETIMEDOUT", "source": "scenario"},
+        {"assertion_id": "wait-floor", "checks": "the child's call lasted at least 3990 ms, the kernel's four hundred ticks", "source": "scenario"},
+        {"assertion_id": "release", "checks": "after the reap the parent's loopback ping returns a round-trip time of 0 or more", "source": "scenario"},
+        {"assertion_id": "data-size", "checks": "a data ping of 1473 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "scenario"},
+        {"assertion_id": "raw-descriptor", "checks": "the raw descriptor that the interfaces are asked through, AF_INET, SOCK_RAW and IPPROTO_RAW, opens", "source": "scenario"},
+        {"assertion_id": "gateways", "checks": "each card's gateway, 10.0.2.2 and 10.0.3.2, answers a ping", "source": "scenario"},
+        {"assertion_id": "second-down", "checks": "eth1 is up, and taken down with SIOCSIFFLAGS reads neither IFF_UP nor IFF_RUNNING", "source": "scenario"},
+        {"assertion_id": "first-stays-up", "checks": "eth0 stays up, and the gateway 10.0.2.2 still answers a ping", "source": "scenario"},
+        {"assertion_id": "link-dump-down", "checks": "the netlink link dump reports eth1 neither up nor running and eth0 up and running", "source": "scenario"},
+        {"assertion_id": "second-back-up", "checks": "eth1 is brought back up, and the link dump reports it up", "source": "scenario"},
+        {"assertion_id": "proc-net-dev", "checks": "/proc/net/dev names eth0 and eth1", "source": "scenario"},
+        {"assertion_id": "bind-device", "checks": "SO_BINDTODEVICE takes eth1 and reads it back, answers ENODEV for eth9 and keeps eth1, and clears with an empty name", "source": "scenario"},
+        {"assertion_id": "invalid-accept", "checks": "accept on a stream socket that never listened and on a datagram socket answers EINVAL", "source": "scenario"},
+        {"assertion_id": "tcp-second-address", "checks": "both ends of a TCP connection to 10.0.3.5 have that address, and accept on either answers EINVAL", "source": "scenario"},
+        {"assertion_id": "packet-names", "checks": "getsockname of a packet socket bound to no interface reports none and no hardware address, and of those bound to eth0 and eth1 the interface and its card's Ethernet address", "source": "scenario"},
+        {"assertion_id": "packet-second-arp", "checks": "an ARP request for 10.0.3.2 sent through the packet socket bound to eth1 is answered on eth1, over Ethernet, to this machine or to everyone", "source": "scenario"},
+        {"assertion_id": "packet-first-only", "checks": "the packet socket bound to eth0 is given nothing that arrived on another interface", "source": "scenario"},
+        {"assertion_id": "eth0-e1000", "checks": "the boot log has `net: eth0: e1000`: the first card became eth0", "source": "scenario"},
+        {"assertion_id": "eth1-e1000", "checks": "the boot log has `net: eth1: e1000`: the second card became eth1", "source": "scenario"},
+        {"assertion_id": "stations-differ", "checks": "the station addresses of the lines `net: eth0: e1000, station` and `net: eth1: e1000, station` differ", "source": "scenario"},
+        {"assertion_id": "eth1-by-station", "checks": "the boot log has `net: eth1: configured by its station address`", "source": "scenario"},
+        {"assertion_id": "eth1-address", "checks": "the boot log has `net: eth1: IPv4 10.0.3.5/24, gateway 10.0.3.2`, which rach2.ifaddr gives the second card's station address", "source": "scenario"},
+        {"assertion_id": "eth0-address", "checks": "the boot log has `net: eth0: IPv4 10.0.2.15/24`: the first card kept its own address", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "netif_scenario", "node": "tests/cases/machine/netif_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the machine has two e1000s, each on a user network of QEMU's, and an address given on the boot line"}
+    },
+    {
+      "case_id": "machine.netif.twomodels",
+      "behavior": "an e1000 in the first slot and an RTL8139 in the second are eth1 and eth0, each with the address rach2.ifaddr gives its station address, and pingtest passes, its pings leaving by the e1000, which is on the gateway's network",
+      "units": ["netif", "pingtest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"rtl8139_address": "10.0.3.5/24", "e1000_address": "10.0.2.15/24"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "netif_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image with an e1000 and an RTL8139 to the debug shell"},
+        {"step_id": "pingtest", "stage": "execute", "machine": "guest",
+         "does": "run pingtest at the debug shell and take its report from the console"},
+        {"step_id": "log", "stage": "execute",
+         "does": "find the two cards' lines in the boot log, read from the console up to the end of the last report"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "e1000", "mac": "52:54:00:12:34:56"}, {"model": "rtl8139", "net": "10.0.3.0/24", "mac": "52:54:00:12:34:58"}],
+                  "boot_options": ["rach2.ifaddr=52:54:00:12:34:58,10.0.3.5/24,10.0.3.2", "rach2.ifaddr=52:54:00:12:34:56,10.0.2.15/24,10.0.2.2"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "gateway-replies", "checks": "three pings to the gateway each get a reply", "source": "scenario"},
+        {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails", "source": "scenario"},
+        {"assertion_id": "child-in-ping", "checks": "the child writes its byte just before its ping, and /proc shows it asleep in the call", "source": "scenario"},
+        {"assertion_id": "busy", "checks": "while the child is in its call, the parent's ping of the loopback address answers EBUSY", "source": "scenario"},
+        {"assertion_id": "progress", "checks": "the parent's clock readings while the child waits span some time, so the wait sleeps", "source": "scenario"},
+        {"assertion_id": "child-length", "checks": "the child reports the length of its call through the pipe", "source": "scenario"},
+        {"assertion_id": "child-exit", "checks": "the child is reaped and exited normally", "source": "scenario"},
+        {"assertion_id": "child-etimedout", "checks": "the child's ping returned ETIMEDOUT", "source": "scenario"},
+        {"assertion_id": "wait-floor", "checks": "the child's call lasted at least 3990 ms, the kernel's four hundred ticks", "source": "scenario"},
+        {"assertion_id": "release", "checks": "after the reap the parent's loopback ping returns a round-trip time of 0 or more", "source": "scenario"},
+        {"assertion_id": "data-size", "checks": "a data ping of 1473 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "scenario"},
+        {"assertion_id": "rtl8139-eth0", "checks": "the boot log has `net: eth0: RTL8139`: the driver table tries the RTL8139 first, though it is the second card", "source": "scenario"},
+        {"assertion_id": "e1000-eth1", "checks": "the boot log has `net: eth1: e1000`", "source": "scenario"},
+        {"assertion_id": "rtl8139-address", "checks": "the boot log has `net: eth0: IPv4 10.0.3.5/24, gateway 10.0.3.2`, which rach2.ifaddr gives the RTL8139's station address", "source": "scenario"},
+        {"assertion_id": "e1000-address", "checks": "the boot log has `net: eth1: IPv4 10.0.2.15/24, gateway 10.0.2.2`, which rach2.ifaddr gives the e1000's station address", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "netif_scenario", "node": "tests/cases/machine/netif_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the machine has an e1000 and an RTL8139, each on a user network of QEMU's, and their addresses given on the boot line"}
+    },
+    {
+      "case_id": "machine.netif.refused",
+      "behavior": "the first of two e1000s, refused at its bring-up by rach2.nicfail=0, leaves one interface, and pingtest passes through it",
+      "units": ["netif", "pingtest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_option": "rach2.nicfail=0"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "netif_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image with two e1000s and rach2.nicfail=0 to the debug shell"},
+        {"step_id": "pingtest", "stage": "execute", "machine": "guest",
+         "does": "run pingtest at the debug shell and take its report from the console"},
+        {"step_id": "log", "stage": "execute",
+         "does": "find the cards' lines in the boot log, read from the console up to the end of the last report"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct",
+                  "devices": [{"model": "e1000", "mac": "52:54:00:12:34:56"}, {"model": "e1000", "mac": "52:54:00:12:34:57"}],
+                  "boot_options": ["rach2.nicfail=0"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "gateway-replies", "checks": "three pings to the gateway each get a reply", "source": "scenario"},
+        {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails", "source": "scenario"},
+        {"assertion_id": "child-in-ping", "checks": "the child writes its byte just before its ping, and /proc shows it asleep in the call", "source": "scenario"},
+        {"assertion_id": "busy", "checks": "while the child is in its call, the parent's ping of the loopback address answers EBUSY", "source": "scenario"},
+        {"assertion_id": "progress", "checks": "the parent's clock readings while the child waits span some time, so the wait sleeps", "source": "scenario"},
+        {"assertion_id": "child-length", "checks": "the child reports the length of its call through the pipe", "source": "scenario"},
+        {"assertion_id": "child-exit", "checks": "the child is reaped and exited normally", "source": "scenario"},
+        {"assertion_id": "child-etimedout", "checks": "the child's ping returned ETIMEDOUT", "source": "scenario"},
+        {"assertion_id": "wait-floor", "checks": "the child's call lasted at least 3990 ms, the kernel's four hundred ticks", "source": "scenario"},
+        {"assertion_id": "release", "checks": "after the reap the parent's loopback ping returns a round-trip time of 0 or more", "source": "scenario"},
+        {"assertion_id": "data-size", "checks": "a data ping of 1473 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the boot log has `net: eth0: refused: rach2.nicfail=0`", "source": "scenario"},
+        {"assertion_id": "one-interface", "checks": "the boot log has one line `net: ethN: e1000, station`, the second card's alone", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "netif_scenario", "node": "tests/cases/machine/netif_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "the machine has two e1000s, and the boot line refuses the first"}
+    }
+  ]
+}
