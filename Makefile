@@ -468,11 +468,6 @@ build/tests/cases/host/%: tests/cases/host/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
 
-# The guest programs that etude's guest cases (tests/cases/guest.*.json) name
-# in their preparation, each a file the `tests` sub-make builds for ARCH. The
-# rule has no recipe of its own, so that the sub-make has one route.
-$(ARCH_BUILD)/tests/poolprobe: tests ;
-
 # Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
 # tests/system/fakeapi/fetch_muse.sh downloads it once into
 # build/downloads/muse/ and checks it against Meta's digest, and this name is
