@@ -882,13 +882,16 @@ for suite in "$@"; do
     fi
 done > "$WORK/selection"
 # The driver's ledger is the run's own: the machine's admission is the claim
-# the run holds already, the installed launcher's or the caller's. Its limits
-# give the pool's width and memory budget: WORKERS suites of the processors
-# a claim takes, which is half a processor for each of a machine's
-# RACH2_CPUS, and MEMORY_MIB of guest memory beside the 128 MiB a claim adds
-# for each QEMU. A suite larger than the budget runs alone.
-claim_cpu=$((RACH2_CPUS * 500))
-capacity="$((WORKERS * claim_cpu)),$(((MEMORY_MIB + WORKERS * 128) * 1048576)),$((WORKERS * 1073741824))"
+# the run has already, the installed launcher's or the caller's, which counts
+# memory alone. The ledger bounds the pool by its width, WORKERS, and by
+# MEMORY_MIB of guest memory beside the 128 MiB a claim adds for each QEMU;
+# a suite larger than the memory budget runs alone. Processors and disk are
+# shared among the machine's runs, so neither keeps the pool below its width:
+# the ledger has room for WORKERS machines of RACH2_CPUS processors each, and
+# its disk is the free space of the build tree.
+free_kib=$(df -Pk "$REPO/build/tests" 2>/dev/null | awk 'NR == 2 { print $4 }')
+case "$free_kib" in ''|*[!0-9]*|0) free_kib=$((WORKERS * 1048576)) ;; esac
+capacity="$((WORKERS * RACH2_CPUS * 1000)),$(((MEMORY_MIB + WORKERS * 128) * 1048576)),$((free_kib * 1024))"
 # A set that boots no machine holds no port block, and its suites take the
 # table's ports as they are, as suites.mk reads an unset offset.
 [ -n "${RACH2_PORT_OFFSET:-}" ] || { RACH2_PORT_OFFSET=0; export RACH2_PORT_OFFSET; }
