@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "clock",
-  "summary": "the clock suite on x86-64, its one architecture, with the rule that counts one tick for each interrupt",
+  "summary": "the clock suite's case on x86-64, its one architecture, against the rule that counts one tick for each interrupt; the scenario times no line, so the judgment does not depend on when a line arrives",
   "tree": "shared",
   "sources": [
     "rach2/sys/arch/x86/pit.c"
@@ -21,14 +21,14 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "ARCH=x86_64 exec sh tests/proofs/guest.sh run clock 'clock-test: ok: both clocks kept the host'"
+      "ARCH=x86_64 RACH2_WORKERS=4 exec tests/run clock"
     ],
     "bound_s": 1800
   },
   "faults": [
     {
       "name": "one-per-interrupt",
-      "summary": "timer_tick_clock counts one tick for each interrupt once the reference keeps time, so that the host's stops lose the ticks that fell due",
+      "summary": "timer_tick_clock counting one tick for each interrupt once the reference keeps time, so that the host's stops lose the ticks that fell due, which the case finds as a drift of the guest's monotonic clock",
       "edits": [
         {
           "file": "rach2/sys/arch/x86/pit.c",
@@ -37,8 +37,9 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "CLOCKLOAD FAIL (clock drift)"
+          "run: clock: machine.clock.clockload: evidence: "
         ]
       }
     }

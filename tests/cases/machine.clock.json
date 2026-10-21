@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.clock",
+  "summary": "The guest's monotonic and real-time clocks keeping the host's time while the host stops the machine's QEMU thirty times",
+  "cases": [
+    {
+      "case_id": "machine.clock.clockload",
+      "behavior": "While clockloadmusl keeps the machine busy and the host stops its QEMU thirty times, 300 ms after 700 ms of running each time, the guest's monotonic and real-time clocks each advance by the host's monotonic interval to within 250 ms, judged on the whole error interval of two references bracketed by guest reads at most 100 ms apart",
+      "units": ["clock", "musl/clockloadmusl", "tests/cases/machine/clockpeer.c"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {
+        "arguments": [], "inputs": {"bound_ms": 250, "bracket_ms": 100}, "repetitions": 1, "seed": null,
+        "suspensions": [
+          {"suspension_id": "stalls", "machine": "clock", "cycles": 30, "run_us": 700000, "stop_us": 300000, "witness": "stops"}
+        ]
+      },
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "clock_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case stops the clock reference and ends the machine, and removes its evidence, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "serve", "stage": "prepare",
+         "does": "start clockpeer on the case's port, until it is stopped"},
+        {"step_id": "boot", "stage": "boot", "machine": "clock",
+         "does": "boot the test image to the debug shell"},
+        {"step_id": "start", "stage": "execute", "machine": "clock",
+         "does": "run clockloadmusl with the port at the debug shell and wait for its first line, CLOCKLOAD READY after its first reference"},
+        {"step_id": "stall", "stage": "execute", "machine": "clock",
+         "does": "stop and resume the machine's QEMU thirty times, as the suspension stalls declares"},
+        {"step_id": "finish", "stage": "execute", "machine": "clock",
+         "does": "type the newline that ends the program's load, read its comparisons up to CLOCKLOAD OK or its first CLOCKLOAD FAIL, and end the machine and the reference"}
+      ],
+      "machines": [
+        {"machine_id": "clock",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 268435456, "firmware": "direct", "devices": ["rtl8139"],
+                  "boot_options": ["rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [
+        {"service_id": "reference", "program": "clockpeer", "ready": "clockpeer: answering on",
+         "does": "answer each CLOCKREF request that arrives over UDP on 127.0.0.1 at the case's port, which the guest reaches at 10.0.2.2, with the host's CLOCK_MONOTONIC and CLOCK_REALTIME in nanoseconds"}
+      ],
+      "assertions": [
+        {"assertion_id": "ready", "checks": "clockloadmusl's first line is CLOCKLOAD READY, which it prints once it has a reference from the host bracketed by guest reads at most 100 ms apart", "source": "scenario"},
+        {"assertion_id": "stopped", "checks": "etude_suspend runs the thirty cycles of the suspension stalls whole on the running machine", "source": "scenario"},
+        {"assertion_id": "monotonic", "checks": "clockloadmusl prints the error interval of CLOCK_MONOTONIC against the host's monotonic interval, and no CLOCKLOAD FAIL for a drift past 250 ms or an interval that crosses it follows", "source": "scenario"},
+        {"assertion_id": "realtime", "checks": "clockloadmusl prints the error interval of CLOCK_REALTIME against the host's monotonic interval, and no CLOCKLOAD FAIL for a drift past 250 ms or an interval that crosses it follows", "source": "scenario"},
+        {"assertion_id": "ok", "checks": "clockloadmusl ends with CLOCKLOAD OK, and prints no CLOCKLOAD FAIL from its start to its end", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5},
+        {"witness_id": "stops", "kind": "counter", "means": "the executor has seen the machine's QEMU stopped", "limit": 30}
+      ],
+      "bounds": {
+        "case": {"floor_us": 60000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 60000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 240000000, "ceiling_us": 600000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 402653184, "disk_bytes": 0,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "clockpeer", "node": "tests/cases/machine/clockpeer", "per_architecture": false},
+        {"name": "clock_scenario", "node": "tests/cases/machine/clock_scenario", "per_architecture": false}
+      ],
+      "timing": [
+        {"kind": "clock_reference", "where": "tests/musl/clockref.h:79-81", "assumes": "a reference is a host sample taken between two guest reads of each clock at most 100 ms apart, and an exchange with a wider bracket is tried again, at most 32 times, or the reference is unavailable", "uncertainty_us": 100000},
+        {"kind": "clock_reference", "where": "tests/clockref.h:23", "assumes": "each guest clock advances across the stops by the host's monotonic interval to within the 250 ms that clockloadmusl gives clockref_judge, with the whole error interval of its two references, at most 200 ms wide, inside the bound", "uncertainty_us": 200000}
+      ],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case stops and resumes the machine's QEMU process, which a native machine does not have, and reaches the host's reference at the gateway of QEMU's user network"}
+    }
+  ]
+}

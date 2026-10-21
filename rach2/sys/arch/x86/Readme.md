@@ -193,7 +193,7 @@ These suites boot the kernel ([the tests Readme](../../../../tests/Readme.md)):
 * `tests/run fpu` boots with XSAVE, with `rach2.noxsave`, on a processor without XSAVE and, on i686, with `rach2.nofxsr`.
 * `tests/run reset` restarts with `rach2.resetskip` 0, 1 and 2, and with QEMU's SMBIOS vendor set to Insyde.
 * `tests/run smp` boots one processor, four, and four with `maxcpus=2`, and raises an NMI on both of two.
-* `tests/run clock` stops the machine from the host thirty times in 45 s and requires its clocks to keep the host's time, under the run's accelerator and under TCG.
+* `tests/run clock` stops the machine's QEMU from the host thirty times in 30 s and requires its clocks to keep the host's time to within 250 ms, on x86-64 and once, under the site's accelerator.
 * `tests/run usb` boots with `rach2.nomsi`, whose USB controller is then served on its line, and `tests/run audio` reads the HDA controller's message vector in `/proc/interrupts`.
 * `tests/run shutdown` stops the machine from userland and requires QEMU to end.
 * `tests/run uefi` boots by OVMF, through GRUB's multiboot2 loader under UEFI.

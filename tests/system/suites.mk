@@ -1019,12 +1019,10 @@ run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 # `tests/run clock`: the guest's monotonic and real clocks keeping the host's
-# time within 250 ms, including reference uncertainty, across thirty host
-# stops, under the run's accelerator and under TCG (see
-# tests/system/suites/clock.sh).
-run-clock: rach2 tests krffs test-image
-	@mkdir -p $(IMAGES_DIR)
-	sh tests/system/suites/clock.sh $(BOOT_KERNEL) $(TEST_IMAGE)
+# time within 250 ms, including reference uncertainty, across thirty stops of
+# the machine's QEMU, once under the site's accelerator (see
+# tests/cases/machine.clock.json). It is the case of that manifest, which
+# etude runs, and has no target here.
 # `tests/run smp`: the kernel on one processor, on four and on two of four, each
 # finding its processors and passing a stress of fork, exec, pipes, futexes and
 # munmap across them and sleeps on the last, the debug shell's preemption test

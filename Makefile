@@ -655,6 +655,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # audio and Doom cases, also link tests/cases/machine/lifecycle.c, which they
 # share.
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
+                      build/tests/cases/machine/clock_scenario \
                       build/tests/cases/machine/crash_scenario \
                       build/tests/cases/machine/default_scenario \
                       build/tests/cases/machine/doom_scenario \
@@ -737,6 +738,11 @@ $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # The host's side of the network cases' connections that are not logins: a
 # wait for the guest's SSH server, and the ssh cases' flood.
 build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
+
+# The clock case's reference, which answers the guest with the host's clocks.
+build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
 
@@ -1467,7 +1473,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) \
-             build/tests/cases/machine/sshpeer
+             build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
