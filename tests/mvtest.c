@@ -16,10 +16,15 @@
  * probe reads the root's type by statfs(2) of `/`, prints it, and fails the
  * row on a root that is neither.
  *
- * Freestanding; direct system calls (probe.h).
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each test: `create`, `exists`, `rename`,
+ * `old-gone`, `new-exists`, `enoent`, `dir-rename`, the answer the root's
+ * type owes, `eisdir`, `ebusy-root` and `overwrite`; a failed first creation
+ * leaves the others not run. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -159,23 +164,41 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &ones, 1);
 }
 
+/* The counts of the tests that passed and failed. */
+static int passed, failed;
+
+/** Print `good` and count a test that passed when `ok`; otherwise print
+ * `bad`, count a test that failed, and fail the open part for `why`. */
+static void verdict(int ok, const char *good, const char *bad, const char *why)
+{
+    if (ok) {
+        puts(good);
+        passed++;
+    } else {
+        puts(bad);
+        report_miss(why);
+        failed++;
+    }
+}
+
 /**
  * Test 7: a rename over an existing file replaces it. The destination is
  * made with bytes of its own, and after the rename it must read back the
  * source's five bytes, "moved", with the source's name gone. Both names are
- * removed afterwards; 1 when the row passed.
+ * removed afterwards.
  */
-static int overwrite_row(void)
+static void overwrite_row(void)
 {
     char got[16];
     int fd, result, n = -1;
 
+    report_part("overwrite");
     print("Test 7: create \"mvtest_dest.tmp\"... ");
     fd = sys_creat("mvtest_dest.tmp", S_IRUSR | S_IWUSR);
     if (fd < 0) {
-        puts("FAILED (can't create dest file)");
+        verdict(0, "", "FAILED (can't create dest file)", "creat of mvtest_dest.tmp failed");
         sys_unlink("mvtest_new.tmp");
-        return 0;
+        return;
     }
     sys_write(fd, "stale bytes", 11);
     sys_close(fd);
@@ -192,28 +215,153 @@ static int overwrite_row(void)
     }
     sys_unlink("mvtest_new.tmp");
     sys_unlink("mvtest_dest.tmp");
-    if (result == 0 && n == 5 && got[0] == 'm' && got[1] == 'o' && got[2] == 'v' && got[3] == 'e' &&
-        got[4] == 'd' && fd < 0) {
-        puts("OK (the destination has the source's bytes)");
-        return 1;
-    }
-    puts("FAILED (the destination is not the source, or both names remain)");
-    return 0;
+    verdict(result == 0 && n == 5 && got[0] == 'm' && got[1] == 'o' && got[2] == 'v' &&
+                got[3] == 'e' && got[4] == 'd' && fd < 0,
+            "OK (the destination has the source's bytes)",
+            "FAILED (the destination is not the source, or both names remain)",
+            "the destination is not the source, or both names remain");
 }
 
-/**
- * ELF entry point: run the rename tests and exit 0 only if all pass. A row
- * removes the names it made, and a failed row the names a wrong answer may
- * have made, such as the destination of a rename whose source was missing.
- */
-PROBE_START void _start(void)
+/** Tests 2 to 5: the created file opens, is renamed, and is found by its
+ * new name and not by its old one. */
+static void name_rows(void)
 {
     int fd;
-    int result;
-    int root = root_is_ext2();
-    int passed = 0;
-    int failed = 0;
 
+    report_part("exists");
+    print("Test 2: open(\"mvtest_old.tmp\") to verify... ");
+    fd = sys_open("mvtest_old.tmp", O_RDONLY);
+    if (fd >= 0) {
+        sys_close(fd);
+    }
+    verdict(fd >= 0, "OK (file exists)", "FAILED (file not found)",
+            "open of mvtest_old.tmp failed before the rename");
+
+    report_part("rename");
+    print("Test 3: rename(\"mvtest_old.tmp\", \"mvtest_new.tmp\")... ");
+    verdict(sys_rename("mvtest_old.tmp", "mvtest_new.tmp") == 0, "OK", "FAILED",
+            "rename of mvtest_old.tmp to mvtest_new.tmp failed");
+
+    report_part("old-gone");
+    print("Test 4: open(\"mvtest_old.tmp\") should fail... ");
+    fd = sys_open("mvtest_old.tmp", O_RDONLY);
+    if (fd >= 0) {
+        sys_close(fd);
+    }
+    verdict(fd < 0, "OK (old name gone)", "FAILED (old name still exists)",
+            "the old name still opened after the rename");
+
+    report_part("new-exists");
+    print("Test 5: open(\"mvtest_new.tmp\")... ");
+    fd = sys_open("mvtest_new.tmp", O_RDONLY);
+    if (fd >= 0) {
+        sys_close(fd);
+    }
+    verdict(fd >= 0, "OK (new name exists)", "FAILED (new name not found)",
+            "the new name did not open after the rename");
+}
+
+/** Test 6b: a directory's rename gives the answer of the root's type
+ * `root`, as `root_is_ext2` gives it. */
+static void dir_row(int root)
+{
+    int result;
+
+    report_part("dir-rename");
+    print("Test 6b: rename of a directory, the answer this root owes... ");
+    if (root == -1) {
+        verdict(0, "", "FAILED (the root is neither krffs nor ext2)",
+                "the root is neither krffs nor ext2");
+    } else if (sys_mkdir("mvtest.dir", 0755) == 0) {
+        int dir_rename_refused = !root;
+
+        result = sys_rename("mvtest.dir", "mvtest.dir2");
+        verdict(dir_rename_refused ? (result == -EPERM) : (result == 0), "OK",
+                "FAILED (wrong errno)",
+                dir_rename_refused ? "rename of a directory on krffs was not EPERM"
+                                   : "rename of a directory on ext2 failed");
+        sys_rmdir("mvtest.dir");
+        sys_rmdir("mvtest.dir2");
+    } else {
+        verdict(0, "", "FAILED (mkdir fixture failed)", "mkdir of mvtest.dir failed");
+    }
+}
+
+/** Tests 6 to 6d: a missing source is ENOENT, a directory's rename gives
+ * the answer of the root's type `root`, a directory under a plain source is
+ * EISDIR, and the root as a source EBUSY. */
+static void errno_rows(int root)
+{
+    int fd, result;
+
+    report_part("enoent");
+    print("Test 6: rename(\"nonexistent\", \"other\") == -ENOENT... ");
+    result = sys_rename("nonexistent", "other");
+    if (result != -ENOENT) {
+        sys_unlink("other");
+    }
+    verdict(result == -ENOENT, "OK", "FAILED (wrong errno)",
+            "rename of a missing source was not ENOENT");
+
+    dir_row(root);
+
+    report_part("eisdir");
+    print("Test 6c: rename(file, a directory) == -EISDIR... ");
+    if (sys_mkdir("mvtest.dst", 0755) == 0) {
+        fd = sys_creat("mvtest.src", S_IRUSR | S_IWUSR);
+        if (fd >= 0) {
+            sys_close(fd);
+            result = sys_rename("mvtest.src", "mvtest.dst");
+            verdict(result == -EISDIR, "OK", "FAILED (wrong errno)",
+                    "rename of a file over a directory was not EISDIR");
+            sys_unlink("mvtest.src");
+        } else {
+            verdict(0, "", "FAILED (creat fixture failed)", "creat of mvtest.src failed");
+        }
+        sys_rmdir("mvtest.dst");
+    } else {
+        verdict(0, "", "FAILED (mkdir fixture failed)", "mkdir of mvtest.dst failed");
+    }
+
+    report_part("ebusy-root");
+    print("Test 6d: rename(\"/\", \"mvtest.x\") == -EBUSY... ");
+    verdict(sys_rename("/", "mvtest.x") == -EBUSY, "OK", "FAILED (wrong errno)",
+            "rename of / was not EBUSY");
+}
+
+/* The assertions after `create`, which a failed creation leaves not run. */
+static const char *const after_create[] = {"exists",     "rename",     "old-gone",
+                                           "new-exists", "enoent",     "dir-rename",
+                                           "eisdir",     "ebusy-root", "overwrite"};
+
+/** Report the assertion `create` failed and those after it not run. */
+static void report_no_file(void)
+{
+    unsigned int i;
+
+    report_fail("create", "creat or write of mvtest_old.tmp failed");
+    for (i = 0; i < sizeof(after_create) / sizeof(after_create[0]); i++) {
+        report_notrun(after_create[i], "the test file was not created");
+    }
+    report_end();
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * The probe, which `_start` calls with the initial stack: run the rename
+ * tests and exit 0 only if all pass. A row removes the names it made, and a
+ * failed row the names a wrong answer may have made, such as the destination
+ * of a rename whose source was missing.
+ */
+void probe_main(unsigned long *sp)
+{
+    int fd;
+    int root = root_is_ext2();
+
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.mvtest"));
     puts("Rename syscall test starting...");
     if (root == 1) {
         puts("mvtest: the root is ext2");
@@ -230,127 +378,18 @@ PROBE_START void _start(void)
         puts("OK");
         sys_close(fd);
         passed++;
+        report_pass("create");
     } else {
         puts("FAILED (can't create test file)");
         failed++;
+        report_no_file();
         goto results;
     }
 
-    print("Test 2: open(\"mvtest_old.tmp\") to verify... ");
-    fd = sys_open("mvtest_old.tmp", O_RDONLY);
-    if (fd >= 0) {
-        puts("OK (file exists)");
-        sys_close(fd);
-        passed++;
-    } else {
-        puts("FAILED (file not found)");
-        failed++;
-    }
-
-    print("Test 3: rename(\"mvtest_old.tmp\", \"mvtest_new.tmp\")... ");
-    result = sys_rename("mvtest_old.tmp", "mvtest_new.tmp");
-    if (result == 0) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED");
-        failed++;
-    }
-
-    print("Test 4: open(\"mvtest_old.tmp\") should fail... ");
-    fd = sys_open("mvtest_old.tmp", O_RDONLY);
-    if (fd < 0) {
-        puts("OK (old name gone)");
-        passed++;
-    } else {
-        puts("FAILED (old name still exists)");
-        sys_close(fd);
-        failed++;
-    }
-
-    print("Test 5: open(\"mvtest_new.tmp\")... ");
-    fd = sys_open("mvtest_new.tmp", O_RDONLY);
-    if (fd >= 0) {
-        puts("OK (new name exists)");
-        sys_close(fd);
-        passed++;
-    } else {
-        puts("FAILED (new name not found)");
-        failed++;
-    }
-
-    print("Test 6: rename(\"nonexistent\", \"other\") == -ENOENT... ");
-    result = sys_rename("nonexistent", "other");
-    if (result == -ENOENT) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED (wrong errno)");
-        sys_unlink("other");
-        failed++;
-    }
-
-    print("Test 6b: rename of a directory, the answer this root owes... ");
-    if (root == -1) {
-        puts("FAILED (the root is neither krffs nor ext2)");
-        failed++;
-    } else if (sys_mkdir("mvtest.dir", 0755) == 0) {
-        int dir_rename_refused = !root;
-
-        result = sys_rename("mvtest.dir", "mvtest.dir2");
-        if (dir_rename_refused ? (result == -EPERM) : (result == 0)) {
-            puts("OK");
-            passed++;
-        } else {
-            puts("FAILED (wrong errno)");
-            failed++;
-        }
-        sys_rmdir("mvtest.dir");
-        sys_rmdir("mvtest.dir2");
-    } else {
-        puts("FAILED (mkdir fixture failed)");
-        failed++;
-    }
-
-    print("Test 6c: rename(file, a directory) == -EISDIR... ");
-    if (sys_mkdir("mvtest.dst", 0755) == 0) {
-        fd = sys_creat("mvtest.src", S_IRUSR | S_IWUSR);
-        if (fd >= 0) {
-            sys_close(fd);
-            result = sys_rename("mvtest.src", "mvtest.dst");
-            if (result == -EISDIR) {
-                puts("OK");
-                passed++;
-            } else {
-                puts("FAILED (wrong errno)");
-                failed++;
-            }
-            sys_unlink("mvtest.src");
-        } else {
-            puts("FAILED (creat fixture failed)");
-            failed++;
-        }
-        sys_rmdir("mvtest.dst");
-    } else {
-        puts("FAILED (mkdir fixture failed)");
-        failed++;
-    }
-
-    print("Test 6d: rename(\"/\", \"mvtest.x\") == -EBUSY... ");
-    result = sys_rename("/", "mvtest.x");
-    if (result == -EBUSY) {
-        puts("OK");
-        passed++;
-    } else {
-        puts("FAILED (wrong errno)");
-        failed++;
-    }
-
-    if (overwrite_row()) {
-        passed++;
-    } else {
-        failed++;
-    }
+    name_rows();
+    errno_rows(root);
+    overwrite_row();
+    report_finish();
 
 results:
     puts("");

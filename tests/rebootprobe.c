@@ -23,9 +23,11 @@
  *
  * Prints "REBOOTPROBE OK" at the end, which also shows that nothing here
  * stopped the machine. Writes etude's report records (probe_report.h) for
- * the case ETUDE_CASE names, with the assertions `accepted`, the four calls
- * that return 0, `einval`, the five that return -EINVAL, and `eperm`, the
- * unprivileged child's refused power-off.
+ * the case ETUDE_CASE names, an assertion for each call: `disable-cad`,
+ * `disable-cad-magic-a`, `disable-cad-magic-b` and `disable-cad-magic-c`,
+ * which return 0; `enable-cad`, `kexec`, `no-magic1`, `no-magic2` and
+ * `wrong-magic2`, which return -EINVAL; and `eperm`, the unprivileged
+ * child's refused power-off.
  *
  * Freestanding; direct system calls (probe.h).
  */
@@ -146,12 +148,15 @@ static void print_num(int n)
 
 static int failures;
 
-/** Require `got` to equal `want`, naming the case. */
-static void expect(const char *what, int got, int want)
+/** Require `got` to equal `want`, naming the case `what`, whose assertion
+ * is `id`. */
+static void expect(const char *id, const char *what, int got, int want)
 {
+    report_part(id);
     if (got == want) {
         return;
     }
+    report_miss(what);
     print("REBOOTPROBE FAIL: ");
     print(what);
     print(": got ");
@@ -160,7 +165,6 @@ static void expect(const char *what, int got, int want)
     print_num(want);
     puts("");
     failures++;
-    report_miss(what);
 }
 
 void probe_main(unsigned long *sp);
@@ -181,18 +185,21 @@ void probe_main(unsigned long *sp)
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.rebootprobe"));
     puts("reboot(2) probe starting...");
 
-    report_part("accepted");
-    expect("disable-cad with the usual magic", sys_reboot(MAGIC1, MAGIC2, CMD_CAD_OFF), 0);
-    expect("disable-cad with alternate magic a", sys_reboot(MAGIC1, MAGIC2A, CMD_CAD_OFF), 0);
-    expect("disable-cad with alternate magic b", sys_reboot(MAGIC1, MAGIC2B, CMD_CAD_OFF), 0);
-    expect("disable-cad with alternate magic c", sys_reboot(MAGIC1, MAGIC2C, CMD_CAD_OFF), 0);
+    expect("disable-cad", "disable-cad with the usual magic",
+           sys_reboot(MAGIC1, MAGIC2, CMD_CAD_OFF), 0);
+    expect("disable-cad-magic-a", "disable-cad with alternate magic a",
+           sys_reboot(MAGIC1, MAGIC2A, CMD_CAD_OFF), 0);
+    expect("disable-cad-magic-b", "disable-cad with alternate magic b",
+           sys_reboot(MAGIC1, MAGIC2B, CMD_CAD_OFF), 0);
+    expect("disable-cad-magic-c", "disable-cad with alternate magic c",
+           sys_reboot(MAGIC1, MAGIC2C, CMD_CAD_OFF), 0);
 
-    report_part("einval");
-    expect("enable-cad", sys_reboot(MAGIC1, MAGIC2, CMD_CAD_ON), WANT_EINVAL);
-    expect("kexec", sys_reboot(MAGIC1, MAGIC2, CMD_KEXEC), WANT_EINVAL);
-    expect("no first magic", sys_reboot(0, MAGIC2, CMD_CAD_OFF), WANT_EINVAL);
-    expect("no second magic", sys_reboot(MAGIC1, 0, CMD_CAD_OFF), WANT_EINVAL);
-    expect("wrong second magic", sys_reboot(MAGIC1, MAGIC2 + 1, CMD_CAD_OFF), WANT_EINVAL);
+    expect("enable-cad", "enable-cad", sys_reboot(MAGIC1, MAGIC2, CMD_CAD_ON), WANT_EINVAL);
+    expect("kexec", "kexec", sys_reboot(MAGIC1, MAGIC2, CMD_KEXEC), WANT_EINVAL);
+    expect("no-magic1", "no first magic", sys_reboot(0, MAGIC2, CMD_CAD_OFF), WANT_EINVAL);
+    expect("no-magic2", "no second magic", sys_reboot(MAGIC1, 0, CMD_CAD_OFF), WANT_EINVAL);
+    expect("wrong-magic2", "wrong second magic", sys_reboot(MAGIC1, MAGIC2 + 1, CMD_CAD_OFF),
+           WANT_EINVAL);
 
     report_part("eperm");
     child = sys_fork();

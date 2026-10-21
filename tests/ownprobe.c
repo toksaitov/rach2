@@ -19,10 +19,9 @@
  *
  * Prints "OWNPROBE OK" and exits 0 on success; prints the failing step and
  * exits 1 otherwise. Writes etude's report records (probe_report.h) for the
- * case ETUDE_CASE names, an assertion for each section of rows: `create`,
- * `chown-root`, `euid-create`, `owner-rules`, `kill-eperm` and `sigcont` in
- * the child, whose exit status gives the section that failed, and
- * `saved-uid` and `cleanup` in the parent. Freestanding; direct system
+ * case ETUDE_CASE names, an assertion for each row, as `row_id` lists them:
+ * the child's, whose exit status gives the row that failed, and the
+ * parent's `saved-uid` and `cleanup`. Freestanding; direct system
  * calls (probe.h).
  */
 
@@ -72,12 +71,71 @@ static void puts_(const char *s)
     syscall3(SYS_WRITE, STDOUT, (long)s, (int)slen(s));
 }
 
-/* The child's section of rows, from 1, whose number its exit status gives
- * when a row of it fails; 0 in the parent, which exits 1. */
-static int child_section;
+/* The assertions, a row each, in the order the probe checks them: the
+ * child's, then the parent's. */
+enum {
+    R_CREAT,
+    R_CREAT_UMASK,
+    R_CREAT_OWNER,
+    R_MKDIR_UMASK,
+    R_CHOWN_ROOT,
+    R_FCHOWN_ROOT,
+    R_CHOWN_DIR_ROOT,
+    R_EUID_OUT,
+    R_EUID_CREAT,
+    R_CHMOD_UNMASKED,
+    R_EUID_BACK,
+    R_DROP,
+    R_CHMOD_OWNER,
+    R_FCHMOD_OWNER,
+    R_CHOWN_UID_EPERM,
+    R_CHGRP_OWN,
+    R_CHGRP_FOREIGN_EPERM,
+    R_CHMOD_NONOWNER_EPERM,
+    R_FCHMOD_DIR,
+    R_KILL_PARENT_EPERM,
+    R_KILL_SELF,
+    R_SIGTERM_EPERM,
+    R_SIGCONT_SESSION,
+    R_SIGCONT_ACROSS,
+    R_SAVED_UID,
+    R_CLEANUP,
+    R_COUNT
+};
+
+static const char *const row_id[R_COUNT] = {"creat",
+                                            "creat-umask",
+                                            "creat-owner",
+                                            "mkdir-umask",
+                                            "chown-root",
+                                            "fchown-root",
+                                            "chown-dir-root",
+                                            "euid-out",
+                                            "euid-creat",
+                                            "chmod-unmasked",
+                                            "euid-back",
+                                            "drop",
+                                            "chmod-owner",
+                                            "fchmod-owner",
+                                            "chown-uid-eperm",
+                                            "chgrp-own",
+                                            "chgrp-foreign-eperm",
+                                            "chmod-nonowner-eperm",
+                                            "fchmod-dir",
+                                            "kill-parent-eperm",
+                                            "kill-self",
+                                            "sigterm-eperm",
+                                            "sigcont-session",
+                                            "sigcont-across",
+                                            "saved-uid",
+                                            "cleanup"};
+
+/* The child's row, whose index plus 1 its exit status gives when the row
+ * fails; -1 in the parent, which exits 1. */
+static int child_row = -1;
 
 /** Print "OWNPROBE FAIL: `step`", end the report at the assertion that
- * `step` fails, and exit: 1, or in the child the number of its section. */
+ * `step` fails, and exit: 1, or in the child its row's index plus 1. */
 static void fail(const char *step)
 {
     report_stop(step);
@@ -85,7 +143,7 @@ static void fail(const char *step)
     puts_(step);
     puts_("\n");
     cleanup();
-    syscall3(SYS_EXIT, child_section != 0 ? child_section : 1, 0, 0);
+    syscall3(SYS_EXIT, child_row >= 0 ? child_row + 1 : 1, 0, 0);
 }
 
 /** The 32-bit field at `offset`, one of probe.h's KSTAT_ offsets, of the
@@ -112,25 +170,29 @@ static u32 gid_of(const char *path)
     return stat_field(path, KSTAT_GID);
 }
 
-/** Section 1, as root under umask 027: creation of `/own.txt` and `/own.d`
- * with the masked modes and root's ids; the descriptor of `/own.txt`. */
+/** The rows of creation, as root under umask 027: `/own.txt` and `/own.d`
+ * are made with the masked modes and root's ids; the descriptor of
+ * `/own.txt`. */
 static int create_rows(void)
 {
     int fd;
 
-    child_section = 1;
     /* umask 027 turns 0666 into 0640 and 0777 into 0750, the creator's. */
     syscall3(SYS_UMASK, 027, 0, 0);
     fd = syscall3(SYS_CREAT, (long)"/own.txt", 0666, 0);
+    child_row = R_CREAT;
     if (fd < 0) {
         fail("creat");
     }
+    child_row = R_CREAT_UMASK;
     if ((stat_field("/own.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("umask on creat");
     }
+    child_row = R_CREAT_OWNER;
     if (stat_field("/own.txt", KSTAT_UID) != 0 || stat_field("/own.txt", KSTAT_GID) != 0) {
         fail("creation owner not root");
     }
+    child_row = R_MKDIR_UMASK;
     if (syscall3(SYS_MKDIR, (long)"/own.d", 0777, 0) != 0 ||
         (stat_field("/own.d", KSTAT_MODE) & 0777) != 0750) {
         fail("umask on mkdir");
@@ -138,59 +200,64 @@ static int create_rows(void)
     return fd;
 }
 
-/** Section 2: chown and fchown as root, on `/own.txt` by its descriptor `fd`
+/** The rows of chown and fchown as root, on `/own.txt` by its descriptor `fd`
  * as well, and on `/own.d`. */
 static void chown_rows(int fd)
 {
-    child_section = 2;
     /* chown: a uid change is root's; the stored ids come back from stat. */
+    child_row = R_CHOWN_ROOT;
     if (syscall3(SYS_CHOWN, (long)"/own.txt", ID(1000), ID(1000)) != 0 ||
         uid_of("/own.txt") != ID(1000) || gid_of("/own.txt") != ID(1000)) {
         fail("chown as root");
     }
+    child_row = R_FCHOWN_ROOT;
     if (syscall3(SYS_FCHOWN, fd, ID(1000), ID(2000)) != 0 || gid_of("/own.txt") != ID(2000)) {
         fail("fchown as root");
     }
+    child_row = R_CHOWN_DIR_ROOT;
     if (syscall3(SYS_CHOWN, (long)"/own.d", ID(1000), ID(1000)) != 0) {
         fail("chown dir as root");
     }
 }
 
-/** Section 3: with the effective uid 1000 and the real uid 0, a new file is
- * 1000's under the mask, and chmod is not masked. */
+/** The rows of an excursion: with the effective uid 1000 and the real uid
+ * 0, a new file is 1000's under the mask, and chmod is not masked. */
 static void euid_rows(void)
 {
-    child_section = 3;
     /* Real uid 0, effective 1000: the file is 1000's; chmod is not masked. */
+    child_row = R_EUID_OUT;
     if (syscall3(SYS_SETREUID, (int)KEEP, ID(1000), 0) != 0) {
         fail("excursion out");
     }
+    child_row = R_EUID_CREAT;
     if (syscall3(SYS_CREAT, (long)"/own.d/e.txt", 0666, 0) < 0 ||
         stat_field("/own.d/e.txt", KSTAT_UID) != ID(1000) ||
         (stat_field("/own.d/e.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("creation stamps euid under umask");
     }
+    child_row = R_CHMOD_UNMASKED;
     if (syscall3(SYS_CHMOD, (long)"/own.d/e.txt", 0666, 0) != 0 ||
         (stat_field("/own.d/e.txt", KSTAT_MODE) & 0777) != 0666) {
         fail("chmod is not masked");
     }
+    child_row = R_EUID_BACK;
     if (syscall3(SYS_SETREUID, (int)KEEP, 0, 0) != 0) {
         fail("excursion back");
     }
 }
 
-/** Section 4: as uid 1000 with the supplementary group 3000, the owner's
- * chmod, fchmod by `fd` and on a directory's descriptor, and chgrp to its
- * own group; a uid change, a chgrp to a foreign group and a non-owner's
- * chmod are EPERM. */
+/** The rows of the owner's rules, as uid 1000 with the supplementary group
+ * 3000: the owner's chmod, fchmod by `fd` and on a directory's descriptor,
+ * and chgrp to its own group; a uid change, a chgrp to a foreign group and a
+ * non-owner's chmod are EPERM. */
 static void owner_rows(int fd)
 {
     u32 groups[1];
     int dfd;
 
-    child_section = 4;
     /* Drop to 1000 with supplementary group 3000 for the rules below. */
     groups[0] = ID(3000);
+    child_row = R_DROP;
     if (syscall3(SYS_SETGROUPS, 1, (long)groups, 0) != 0 ||
         syscall3(SYS_SETRESGID, ID(1000), ID(1000), ID(1000)) != 0 ||
         syscall3(SYS_SETRESUID, ID(1000), ID(1000), ID(1000)) != 0) {
@@ -198,31 +265,38 @@ static void owner_rows(int fd)
     }
 
     /* chmod: the owner may; fchmod agrees; a uid change stays root's. */
+    child_row = R_CHMOD_OWNER;
     if (syscall3(SYS_CHMOD, (long)"/own.txt", 0600, 0) != 0 ||
         (stat_field("/own.txt", KSTAT_MODE) & 0777) != 0600) {
         fail("chmod as owner");
     }
+    child_row = R_FCHMOD_OWNER;
     if (syscall3(SYS_FCHMOD, fd, 0640, 0) != 0 ||
         (stat_field("/own.txt", KSTAT_MODE) & 0777) != 0640) {
         fail("fchmod as owner");
     }
+    child_row = R_CHOWN_UID_EPERM;
     if (syscall3(SYS_CHOWN, (long)"/own.txt", 0, KEEP) != -EPERM) {
         fail("chown uid as non-root not EPERM");
     }
     /* chgrp: the owner, to an own group only. */
+    child_row = R_CHGRP_OWN;
     if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, ID(3000)) != 0 ||
         stat_field("/own.txt", KSTAT_GID) != ID(3000)) {
         fail("owner chgrp to own group");
     }
+    child_row = R_CHGRP_FOREIGN_EPERM;
     if (syscall3(SYS_CHOWN, (long)"/own.txt", KEEP, ID(4000)) != -EPERM) {
         fail("owner chgrp to foreign group not EPERM");
     }
     /* A non-owner may not chmod: /hello.txt is root's, the caller 1000. */
+    child_row = R_CHMOD_NONOWNER_EPERM;
     if (syscall3(SYS_CHMOD, (long)"/hello.txt", 0777, 0) != -EPERM) {
         fail("chmod as non-owner not EPERM");
     }
     /* fchmod on a descriptor of /own.d, the caller's directory. */
     dfd = syscall3(SYS_OPEN, (long)"/own.d", 0, 0);
+    child_row = R_FCHMOD_DIR;
     if (dfd < 0) {
         fail("open own dir");
     }
@@ -233,32 +307,35 @@ static void owner_rows(int fd)
     syscall3(SYS_CLOSE, dfd, 0, 0);
 }
 
-/** Sections 5 and 6, as uid 1000: kill of the root parent is EPERM and of
+/** The rows of kill, as uid 1000: kill of the root parent is EPERM and of
  * itself succeeds; SIGCONT reaches the parent within the session and is
  * EPERM after setsid. */
 static void kill_rows(void)
 {
     int ppid = syscall3(SYS_GETPPID, 0, 0, 0);
 
-    child_section = 5;
     /* kill: the parent is root's, so uid 1000 gets EPERM; itself, 0. */
+    child_row = R_KILL_PARENT_EPERM;
     if (syscall3(SYS_KILL, ppid, 0, 0) != -EPERM) {
         fail("kill root parent not EPERM");
     }
+    child_row = R_KILL_SELF;
     if (syscall3(SYS_KILL, syscall3(SYS_GETPID, 0, 0, 0), 0, 0) != 0) {
         fail("kill self probe");
     }
+    child_row = R_SIGTERM_EPERM;
     if (syscall3(SYS_KILL, ppid, SIGTERM, 0) != -EPERM) {
         fail("SIGTERM to the root parent not EPERM");
     }
 
-    child_section = 6;
     /* SIGCONT passes within the session, as a shell resumes a su job. */
+    child_row = R_SIGCONT_SESSION;
     if (syscall3(SYS_KILL, ppid, SIGCONT, 0) != 0) {
         fail("SIGCONT to the root parent in our session");
     }
 
     /* Out of the session, SIGCONT is EPERM too. */
+    child_row = R_SIGCONT_ACROSS;
     if (syscall3(SYS_SETSID, 0, 0, 0) < 0) {
         fail("setsid");
     }
@@ -272,7 +349,7 @@ static void kill_rows(void)
  * stays root: creation under umask 027 by root and by an effective uid of
  * 1000, chown as root, then as uid 1000 with the supplementary group 3000
  * chmod, fchmod, chown and chgrp, and kill. Exits 0, or fails the probe
- * with the number of the section whose row failed.
+ * with the index plus 1 of the row that failed.
  *
  * kill of the root parent is EPERM and of the child itself succeeds, which
  * shows that the uid drop took. SIGCONT reaches the parent within the
@@ -292,18 +369,15 @@ static void child_main(void)
     syscall3(SYS_EXIT, 0, 0, 0);
 }
 
-/* The number of the child's sections, each an assertion. */
-#define CHILD_SECTIONS 6
-
-/** Report the child's sections from its wait status `status`, which `got`,
- * the result of waitpid, gives: those before a failed section held, and the
- * failed one fails, with the parent's step "child walk" printed. */
+/** Report the child's rows from its wait status `status`, which `got`, the
+ * result of waitpid, gives: those before a failed row held, and the failed
+ * one fails, with the parent's step "child walk" printed. */
 static void child_verdict(int got, int pid, int status)
 {
     int i, code = (status >> 8) & 0xFF;
 
     if (got == pid && status == 0) {
-        for (i = 0; i < CHILD_SECTIONS; i++) {
+        for (i = 0; i < R_SAVED_UID; i++) {
             report_held();
         }
         return;
@@ -312,13 +386,13 @@ static void child_verdict(int got, int pid, int status)
         report_stop("waitpid of the child failed");
     } else if ((status & 0x7F) != 0) {
         report_stop("the child was killed by a signal");
-    } else if (code >= 1 && code <= CHILD_SECTIONS) {
+    } else if (code >= 1 && code <= R_SAVED_UID) {
         for (i = 1; i < code; i++) {
             report_held();
         }
         report_stop("a row of the child failed; its OWNPROBE FAIL line names it");
     } else {
-        report_stop("the child exited with a status no section gives");
+        report_stop("the child exited with a status no row gives");
     }
     fail("child walk");
 }
@@ -339,18 +413,13 @@ PROBE_SP_ENTRY;
  */
 void probe_main(unsigned long *sp)
 {
-    int pid, status = 0;
+    int i, pid, status = 0;
 
     probe_args((int)sp[0], (char **)(sp + 1));
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.ownprobe"));
-    report_plan("create");
-    report_plan("chown-root");
-    report_plan("euid-create");
-    report_plan("owner-rules");
-    report_plan("kill-eperm");
-    report_plan("sigcont");
-    report_plan("saved-uid");
-    report_plan("cleanup");
+    for (i = 0; i < R_COUNT; i++) {
+        report_plan(row_id[i]);
+    }
     fixture_owner = syscall1(SYS_GETPID, 0);
     syscall3(SYS_UMASK, 022, 0, 0);
     pid = syscall3(SYS_FORK, 0, 0, 0);
