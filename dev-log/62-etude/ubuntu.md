@@ -16,6 +16,7 @@ T56 enrolled the testing PC's Ubuntu endpoint for #645 on 2026-10-20. The initia
 | Admitted memory | 103079215104 bytes (96 GiB) |
 | Admitted disk | 171798691840 bytes (160 GiB) |
 | Admission wait and execution bounds | 20400 seconds each |
+| Lazy boundary memory | `boundary_lazy bigmem-boundary-v1`, after the acceptance below |
 | Executable cache | `/var/cache/rach2-etude` |
 | Version key | `899cec0163aa1538449c9959b2117535ce1052abc789cdce68a44d3dc97fdb79` |
 | Bridge SHA-256 | `bb5943179c9fcd17c1f351e3e7ab595eb56d62d53fc7957f197b5e23290fc04b` |
@@ -52,3 +53,7 @@ On 2026-10-22, #820 replaced the policy's bridge with the cached version above a
 ## Memory admission
 
 On 2026-10-22, #829 replaced the bridge with the cached version above, which admits each claim by its memory alone, and the launch script with the one above, which gives a shell command an ordinary run's share of the host and accepts the site field `boundary_lazy` of #827. The first bridge of #829, active from 01:13 to 01:47 UTC+6, was built from a tree without #820's change, and in those minutes ci's cleanup supervisors kept GitHub Actions' process marker; the bridge above has both changes. Before each switch the new build directory was made readable by every account and the bridge was run as `testing` and as `ghrunner`. Claims admitted by an earlier bridge kept their reservations and finished in order. The private record is under `/var/lib/rach2-etude/enrollment/829-memory/`.
+
+## Lazy boundary memory
+
+On 2026-10-22 the site passed the acceptance of the lazy 72 GiB boundary profile of #827, and its policy has had the line `boundary_lazy bigmem-boundary-v1` since 03:34 UTC+6 (#840). The command was `ARCH=x86_64 build/tests/host-suite/etude_qemu_hosttest --boundary` at 00a9ecdca, in the copy `/home/testing/rach2-mac-h5`, under a claim of the installed launcher, `RACH2_WORKERS=1 RACH2_MEMORY_MIB=4096 etude-launch build sh -c ...`, which reserves 6272 MiB, more than the profile's 4 GiB. QEMU was configured with 77309411328 bytes of guest memory and its resident peak was 182071296 bytes, against a resident allowance of 2147483648 bytes and an overhead of 2147483648 bytes, with no disk backing. The host's available memory was 119013 MiB before and 122848 MiB after, `vm.overcommit_memory` was 0, and swap in use stayed at 615 MiB. The claim left the ledger when the test ended, and a launch after the change ran under the new policy.
