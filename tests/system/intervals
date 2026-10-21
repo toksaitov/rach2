@@ -9,7 +9,6 @@ tests/system/suites/drill.sh: the service log is read every second for recovery'
 tests/system/suites/drill.sh: the service log is read every three seconds for the lease
 tests/system/suites/fakeapi.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answers
-tests/system/suites/procfiles.sh: the guest's table is read every second for the host's connection
 tests/system/suites/sealed.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/selfbuild.sh: the self-built server is asked every second until it answers
 tests/system/suites/servicelog.sh: the guest polls the log's size each second until init bounds it

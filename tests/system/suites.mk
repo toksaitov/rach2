@@ -78,7 +78,6 @@ AGENTSACCEPT_PORT     := $(call port,2303)
 AGENTSACCEPT_API_PORT := $(call port,2304)
 SEALED_PORT     := $(call port,2297)
 DRILL_PORT      := $(call port,2298)
-PROCFILES_PORT  := $(call port,2299)
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 # The suites' wall-clock limit tool (see its rule below).
@@ -360,7 +359,6 @@ run-diskfull: rach2 tests krffs test-image $(HARNESS)
 BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
 WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
 FD_HOSTTEST = build/tests/host/fd_hosttest
-FDLOCK_IMAGE = $(IMAGES_DIR)/fdlock-test.disk
 FD_HOSTTEST_SOURCES = tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
                      rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
 $(FD_HOSTTEST): $(FD_HOSTTEST_SOURCES) rach2/sys/proc/process.c
@@ -376,21 +374,7 @@ $(FD_HOSTTEST): $(FD_HOSTTEST_SOURCES) rach2/sys/proc/process.c
 # concurrent raw offsets. The raw boot is under the lag, so its disk keeps
 # the guest's flushes from the host (cache=unsafe), as tests/system/Readme.md
 # says.
-run-fdlock: rach2 tests krffs $(FD_HOSTTEST) $(MKFIXTURE) $(HARNESS)
-	$(FD_HOSTTEST)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(FDLOCK_IMAGE) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) --net hubport,id=net0,hubid=0 \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(FDLOCK_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 120 --ok "FDSTALE OK" --never "FDSTALE FAIL" \
-	    --log $(FDLOCK_IMAGE).orphan.log probe=fdstale
-	$(MKFIXTURE) boot $(FDLOCK_IMAGE)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --net hubport,id=net0,hubid=0 \
-	    --append "rach2.fsdisk rach2.rescue rach2.diskdiag rach2.blocklag=10 rach2.bootprobe=shared" \
-	    --drive "file=$(FDLOCK_IMAGE),format=raw,if=ide,index=0,media=disk,cache=unsafe" \
-	    --timeout 90 --ok "BOOTPROBE SHARED OK" --never "FAIL" \
-	    --log $(FDLOCK_IMAGE).raw.log probe=bootprobe
-
+# Its cases are tests/cases/guest.fdlock.json, with no target here.
 run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
 	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
 	$(HARNESS) --kernel $(BOOT_KERNEL) \
@@ -603,24 +587,8 @@ run-persist: rach2 tests krffs $(HARNESS)
 # with the modes and owners they inherited, and reports the lock the cut-off
 # writer left rather than breaking it. The third reads back the release itself:
 # a lock whose removal stayed in the page cache would still be there.
+# Its cases are tests/cases/machine.cred-persist.json, with no target here.
 CRED_PERSIST_DISK = $(IMAGES_DIR)/cred-persist-test.disk
-run-cred-persist: rach2 musl-programs krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/cred-persist-test.manifest $(CRED_PERSIST_DISK) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 60 --ok "CREDDISK OK (wrote)" \
-	    "expect=Type 'help'" "send=exec /creddisk" until=15
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 60 --ok "CREDDISK OK (released)" \
-	    "expect=Type 'help'" "send=exec /creddisk" until=15
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(CRED_PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 60 --ok "CREDDISK OK (read back)" \
-	    "expect=Type 'help'" "send=exec /creddisk" until=15
 # `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown.
 # Its cases (tests/cases/machine.crash.json) boot copies of this disk and read
 # the flag with fsck.krffs. Its own image, so that it cannot race
@@ -1027,13 +995,8 @@ $(METAL_INSTALLED) &: tests/system/metal_installed_disks.sh tests/system/accept/
 # authenticate from an unprivileged account, since root's `su` asks for no
 # password and would pass over a wrong hash and an unusable set-id `passwd`
 # alike.
+# Its cases are tests/cases/machine.account.json, with no target here.
 ACCOUNT_TEST_DISK = $(IMAGES_DIR)/account-test.disk
-run-account: $(DEMO_CREDS) rach2 krffs ish $(MANIFEST_PARTS_os_real) os-simple-image $(HARNESS) $(RUNUTIL)
-	$(MKDISK) krffs/manifests/os-real.manifest $(ACCOUNT_TEST_DISK) 64 48
-	sh tests/system/suites/account.sh $(BOOT_KERNEL) $(ACCOUNT_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`" real
-	sh tests/system/suites/account.sh $(BOOT_KERNEL) $(OS_SIMPLE_IMAGE) \
-	    "`cat krffs/rach2_demo_password`" simple
 # `tests/run doom`: the Doom port on a disk root, refused without its WAD,
 # drawing with a zone sized from the machine's free memory, playing a demo
 # to its end and recording one through fopen. Its case
@@ -1143,13 +1106,9 @@ $(SHUTDOWN_TEST_DISK): $(DEMO_CREDS) krffs/manifests/shutdown-test.manifest \
 # shell. Two images differing only in the init they declare, neither staging
 # /bin/login, plus a rescue boot of the real image, which is the way back into
 # one that will not offer a prompt.
+# Its cases are tests/cases/machine.login.json, with no target here.
 LOGIN_TEST_STRICT = $(IMAGES_DIR)/login-test-strict.krffs
 LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
-run-login: $(DEMO_CREDS) rach2 utils krffs busybox os-real-image $(RUNUTIL)
-	$(MKIMAGE) krffs/manifests/login-test-strict.manifest $(LOGIN_TEST_STRICT) 10
-	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $(LOGIN_TEST_SHELL) 10
-	sh tests/system/suites/login.sh $(BOOT_KERNEL) $(LOGIN_TEST_STRICT) \
-	    $(LOGIN_TEST_SHELL) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`"
 # `tests/run man`: the manual pages on the machine. Boots os-real, logs in and
 # reads rach2(7) through a pipe, which must be the staged page byte for byte,
 # and on the console under the pager, whose first and last lines must appear;
@@ -1163,12 +1122,7 @@ run-man: $(DEMO_CREDS) rach2 rach2-recovery krffs busybox os-real-image rach2-re
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
 # `uptime` on the real image, each of which fails when a /proc file it reads is
 # missing.
-PROCFILES_DISK = $(IMAGES_DIR)/procfiles-test.disk
-run-procfiles: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HOSTPEER) $(RUNUTIL)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(PROCFILES_DISK) 64 48
-	sh tests/system/suites/procfiles.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
-	    $(PROCFILES_DISK) $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" $(OS_REAL_MIB) \
-	    $(PROCFILES_PORT)
+# Its cases are tests/cases/machine.procfiles.json, with no target here.
 # `tests/run exitline`: the plain process-exit line is printed under the debug
 # shell and nowhere else. Four boots: an init image that must stay quiet while a
 # forked program runs, the test image that must still print it for a child and a
