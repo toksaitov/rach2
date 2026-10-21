@@ -36,7 +36,13 @@
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
  *
  * The program runs as root. It prints `PERMMUSL OK` and exits 0, or prints
- * `PERMMUSL FAIL (detail)` and exits 1. Linked against the ported musl.
+ * `PERMMUSL FAIL (detail)` and exits 1. etude's report (probe_report.h), for
+ * the case ETUDE_CASE names, has an assertion for each row in order:
+ * `fsync`, `fsync-ebadf`, `link-eperm`, `chmod`, `chmod-enoent`, `chown`,
+ * `chmod-restore`, `setid`, `seteuid-excursion`, `cwd-below`, `drop`,
+ * `read-other`, `write-other-eacces`, `create-root-eacces` and
+ * `dot-search`. The first failure fails its assertion and leaves the rest
+ * not run. Linked against the ported musl.
  */
 
 #define _GNU_SOURCE /* setresuid */
@@ -49,6 +55,7 @@
 #include <sys/wait.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The directory the dot rows make, in /dev/shm, which anyone may write. */
 #define DOT_DIR "/dev/shm/permmusl.d"
@@ -69,6 +76,7 @@ static int dot_search_rows(void)
 
     if (mkdir(DOT_DIR, 0700) != 0 || chmod(DOT_DIR, 0600) != 0) {
         printf("PERMMUSL FAIL (make a directory in /dev/shm: %s)\n", strerror(errno));
+        report_stop("make a directory in /dev/shm");
         return 1;
     }
     ok = stat(DOT_DIR "/.", &st) == -1 && errno == EACCES;
@@ -83,6 +91,7 @@ static int dot_search_rows(void)
     rmdir(DOT_DIR);
     if (!ok) {
         printf("PERMMUSL FAIL (a last . looked up without search permission on its directory)\n");
+        report_stop("a last . looked up without search permission on its directory");
         return 1;
     }
     return 0;
@@ -108,6 +117,7 @@ static int cwd_rows(void)
         mkdir(CWD_DIR "/other", 0755) != 0 ||
         (fd = open(CWD_DIR "/in/f", O_CREAT | O_WRONLY, 0644)) < 0) {
         printf("PERMMUSL FAIL (make the working-directory rows' tree: %s)\n", strerror(errno));
+        report_stop("make the working-directory rows' tree");
         return 1;
     }
     close(fd);
@@ -130,6 +140,7 @@ static int cwd_rows(void)
     rmdir(CWD_DIR);
     if (pid < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         printf("PERMMUSL FAIL (a file of the working directory below an unsearchable one)\n");
+        report_stop("a file of the working directory below an unsearchable one");
         return 1;
     }
     return 0;
@@ -148,106 +159,181 @@ static int deny_rows(void)
 
     if (setgid(PERM_ID) != 0 || setuid(PERM_ID) != 0) {
         printf("PERMMUSL FAIL (drop to 1000)\n");
+        report_stop("drop to 1000");
         return 1;
     }
+    report_held();
     fd = open("/hello.txt", O_RDONLY);
     if (fd < 0) {
         printf("PERMMUSL FAIL (read 0644 as other)\n");
+        report_stop("read 0644 as other");
         return 1;
     }
+    report_held();
     close(fd);
     if (open("/hello.txt", O_WRONLY) != -1 || errno != EACCES) {
         printf("PERMMUSL FAIL (write 0644 as other not EACCES)\n");
+        report_stop("write 0644 as other not EACCES");
         return 1;
     }
+    report_held();
     if (open("/denied.musl", O_CREAT | O_WRONLY, 0644) != -1 || errno != EACCES) {
         printf("PERMMUSL FAIL (create in / not EACCES)\n");
+        report_stop("create in / not EACCES");
         return 1;
     }
+    report_held();
     return dot_search_rows();
 }
 
-int main(int argc, char **argv)
+/**
+ * Check `chmod` and `chown` of the staged /hello.txt as root, and put back
+ * its mode for the drop that `deny_rows` makes. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int owner_rows(void)
 {
-    int fd;
     struct stat st;
-
-    probe_args(argc, argv);
-
-    /* fsync */
-    fd = open("/etc/motd", O_RDONLY);
-    if (fd < 0) {
-        printf("PERMMUSL FAIL (open motd: %s)\n", strerror(errno));
-        return 1;
-    }
-    if (fsync(fd) != 0) {
-        printf("PERMMUSL FAIL (fsync valid: %s)\n", strerror(errno));
-        return 1;
-    }
-    close(fd);
-    if (fsync(4096) != -1 || errno != EBADF) {
-        printf("PERMMUSL FAIL (fsync bad fd not EBADF)\n");
-        return 1;
-    }
-
-    /* link */
-    if (link("/etc/motd", "/etc/motd.link") != -1 || errno != EPERM) {
-        printf("PERMMUSL FAIL (link not EPERM: %s)\n", strerror(errno));
-        return 1;
-    }
 
     /* chmod */
     if (chmod("/hello.txt", 0600) != 0) {
         printf("PERMMUSL FAIL (chmod: %s)\n", strerror(errno));
+        report_stop("chmod");
         return 1;
     }
     if (stat("/hello.txt", &st) != 0 || (st.st_mode & 0777) != 0600) {
         printf("PERMMUSL FAIL (chmod not reflected: 0%o)\n", (unsigned)(st.st_mode & 0777));
+        report_stop("chmod not reflected");
         return 1;
     }
+    report_held();
     if (chmod("/no_such_file", 0644) != -1 || errno != ENOENT) {
         printf("PERMMUSL FAIL (chmod missing not ENOENT)\n");
+        report_stop("chmod missing not ENOENT");
         return 1;
     }
+    report_held();
 
     /* chown */
     if (chown("/hello.txt", 0, 0) != 0) {
         printf("PERMMUSL FAIL (chown 0:0: %s)\n", strerror(errno));
+        report_stop("chown 0:0");
         return 1;
     }
     if (chown("/hello.txt", PERM_ID, PERM_ID) != 0 || stat("/hello.txt", &st) != 0 ||
         st.st_uid != PERM_ID || st.st_gid != PERM_ID) {
         printf("PERMMUSL FAIL (chown 1000:1000 round trip)\n");
+        report_stop("chown 1000:1000 round trip");
         return 1;
     }
     if (chown("/hello.txt", 0, 0) != 0) {
         printf("PERMMUSL FAIL (chown back to root)\n");
+        report_stop("chown back to root");
         return 1;
     }
+    report_held();
     /* Restore the staged 0644 before the drop below counts on it. */
     if (chmod("/hello.txt", 0644) != 0) {
         printf("PERMMUSL FAIL (restore 0644)\n");
+        report_stop("restore 0644");
+        return 1;
+    }
+    report_held();
+    return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {"fsync",
+                                      "fsync-ebadf",
+                                      "link-eperm",
+                                      "chmod",
+                                      "chmod-enoent",
+                                      "chown",
+                                      "chmod-restore",
+                                      "setid",
+                                      "seteuid-excursion",
+                                      "cwd-below",
+                                      "drop",
+                                      "read-other",
+                                      "write-other-eacces",
+                                      "create-root-eacces",
+                                      "dot-search"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.permmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
+}
+
+int main(int argc, char **argv)
+{
+    int fd;
+
+    probe_args(argc, argv);
+    plan();
+
+    /* fsync */
+    fd = open("/etc/motd", O_RDONLY);
+    if (fd < 0) {
+        printf("PERMMUSL FAIL (open motd: %s)\n", strerror(errno));
+        report_stop("open motd");
+        return 1;
+    }
+    if (fsync(fd) != 0) {
+        printf("PERMMUSL FAIL (fsync valid: %s)\n", strerror(errno));
+        report_stop("fsync valid");
+        return 1;
+    }
+    report_held();
+    close(fd);
+    if (fsync(4096) != -1 || errno != EBADF) {
+        printf("PERMMUSL FAIL (fsync bad fd not EBADF)\n");
+        report_stop("fsync bad fd not EBADF");
+        return 1;
+    }
+    report_held();
+
+    /* link */
+    if (link("/etc/motd", "/etc/motd.link") != -1 || errno != EPERM) {
+        printf("PERMMUSL FAIL (link not EPERM: %s)\n", strerror(errno));
+        report_stop("link not EPERM");
+        return 1;
+    }
+    report_held();
+
+    if (owner_rows() != 0) {
         return 1;
     }
 
     /* seteuid, setegid and setresuid: a root caller's change and return. */
     if (seteuid(0) != 0 || setegid(0) != 0 || setresuid(0, 0, 0) != 0) {
         printf("PERMMUSL FAIL (seteuid/setegid/setresuid 0: %s)\n", strerror(errno));
+        report_stop("seteuid/setegid/setresuid 0");
         return 1;
     }
+    report_held();
     if (seteuid(1) != 0 || geteuid() != 1 || seteuid(0) != 0) {
         printf("PERMMUSL FAIL (seteuid excursion)\n");
+        report_stop("seteuid excursion");
         return 1;
     }
+    report_held();
 
     if (cwd_rows() != 0) {
         return 1;
     }
+    report_held();
 
     /* The deny paths through libc, last: the drop is for good. */
     if (deny_rows() != 0) {
         return 1;
     }
+    report_held();
+    report_end();
 
     printf("PERMMUSL OK\n");
     return 0;

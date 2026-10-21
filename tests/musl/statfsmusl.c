@@ -11,7 +11,13 @@
  * anonymous inode file system.
  *
  * Prints `STATFSMUSL OK` and exits 0 on success, and prints
- * `STATFSMUSL FAIL (detail)` and exits 1 otherwise.
+ * `STATFSMUSL FAIL (detail)` and exits 1 otherwise. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each descriptor in order: `root`, `fifo`, `proc`, `proc-self`,
+ * `proc-self-fd`, `dev`, `dev-pts`, `sys`, `pty`, `dev-log`, `pipe`,
+ * `inet-socket`, `unix-socket`, `namespace`, `mqueue`, `eventfd` and
+ * `epoll`. The first failure fails its assertion with the row and errno and
+ * leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -27,6 +33,8 @@
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 /* The FIFO and the message queue the rows make and remove. */
 #define FIFO_PATH  "/tmp/statfsmusl.fifo"
@@ -45,7 +53,11 @@
 /** Report one failed check with errno and return 1, the failure status. */
 static int fail(const char *what)
 {
-    printf("STATFSMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[96];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("STATFSMUSL FAIL (%s)\n", why);
+    report_stop(why);
     return 1;
 }
 
@@ -93,6 +105,7 @@ static int path_rows(void)
     if (!agrees("/", O_RDONLY | O_DIRECTORY, 0)) {
         return fail("the root");
     }
+    report_held();
     unlink(FIFO_PATH);
     if (mkfifo(FIFO_PATH, 0600) != 0) {
         return fail("make the FIFO");
@@ -102,25 +115,32 @@ static int path_rows(void)
         unlink(FIFO_PATH);
         return fail("a FIFO");
     }
+    report_held();
     unlink(FIFO_PATH);
     if (!agrees("/proc", O_RDONLY | O_DIRECTORY, PROC_MAGIC)) {
         return fail("/proc");
     }
+    report_held();
     if (!agrees("/proc/self", O_RDONLY | O_DIRECTORY, PROC_MAGIC)) {
         return fail("/proc/self");
     }
+    report_held();
     if (!agrees("/proc/self/fd", O_RDONLY | O_DIRECTORY, PROC_MAGIC)) {
         return fail("/proc/self/fd");
     }
+    report_held();
     if (!agrees("/dev", O_RDONLY | O_DIRECTORY, DEVFS_MAGIC)) {
         return fail("/dev");
     }
+    report_held();
     if (!agrees("/dev/pts", O_RDONLY | O_DIRECTORY, DEVFS_MAGIC)) {
         return fail("/dev/pts");
     }
+    report_held();
     if (!agrees("/sys", O_RDONLY | O_DIRECTORY, SYSFS_MAGIC)) {
         return fail("/sys");
     }
+    report_held();
     master = posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
         (slave = ptsname(master)) == NULL) {
@@ -131,6 +151,7 @@ static int path_rows(void)
         close(master);
         return fail("a pty master and slave");
     }
+    report_held();
     close(master);
     fd = open("/dev/log", O_PATH | O_NOFOLLOW);
     got = fd < 0 ? -1L : fd_magic(fd);
@@ -140,6 +161,7 @@ static int path_rows(void)
     if (got != DEVFS_MAGIC) {
         return fail("the link /dev/log");
     }
+    report_held();
     return 0;
 }
 
@@ -163,6 +185,7 @@ static int pathless_rows(void)
     if (!ok) {
         return fail("a pipe");
     }
+    report_held();
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     got = fd < 0 ? -1L : fd_magic(fd);
     if (fd >= 0) {
@@ -171,6 +194,7 @@ static int pathless_rows(void)
     if (got != SOCKFS_MAGIC) {
         return fail("an Internet socket");
     }
+    report_held();
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
         return fail("make an AF_UNIX pair");
     }
@@ -180,6 +204,7 @@ static int pathless_rows(void)
     if (!ok) {
         return fail("an AF_UNIX socket");
     }
+    report_held();
     fd = open("/proc/self/ns/net", O_RDONLY);
     got = fd < 0 ? -1L : fd_magic(fd);
     if (fd >= 0) {
@@ -188,6 +213,7 @@ static int pathless_rows(void)
     if (got != NSFS_MAGIC) {
         return fail("a namespace file");
     }
+    report_held();
     mq_unlink(QUEUE_NAME);
     q = mq_open(QUEUE_NAME, O_CREAT | O_EXCL | O_RDWR, 0600, NULL);
     if (q == (mqd_t)-1) {
@@ -200,6 +226,7 @@ static int pathless_rows(void)
     if (got != MQUEUE_MAGIC || mount != MQUEUE_MAGIC) {
         return fail("a message queue");
     }
+    report_held();
     fd = eventfd(0, 0);
     got = fd < 0 ? -1L : fd_magic(fd);
     if (fd >= 0) {
@@ -208,6 +235,7 @@ static int pathless_rows(void)
     if (got != ANON_MAGIC) {
         return fail("an eventfd");
     }
+    report_held();
     fd = epoll_create1(0);
     got = fd < 0 ? -1L : fd_magic(fd);
     if (fd >= 0) {
@@ -216,14 +244,26 @@ static int pathless_rows(void)
     if (got != ANON_MAGIC) {
         return fail("an epoll set");
     }
+    report_held();
     return 0;
 }
 
 int main(void)
 {
+    static const char *const plan[] = {
+        "root",        "fifo",      "proc",   "proc-self", "proc-self-fd", "dev",
+        "dev-pts",     "sys",       "pty",    "dev-log",   "pipe",         "inet-socket",
+        "unix-socket", "namespace", "mqueue", "eventfd",   "epoll"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.statfsmusl"));
+    for (i = 0; i < sizeof(plan) / sizeof(plan[0]); i++) {
+        report_plan(plan[i]);
+    }
     if (path_rows() != 0 || pathless_rows() != 0) {
         return 1;
     }
+    report_end();
     printf("STATFSMUSL OK\n");
     return 0;
 }

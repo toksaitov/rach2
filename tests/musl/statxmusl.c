@@ -16,7 +16,13 @@
  * path without AT_EMPTY_PATH.
  *
  * Prints `STATXMUSL OK` and exits 0 on success, and prints
- * `STATXMUSL FAIL (detail)` and exits 1 otherwise.
+ * `STATXMUSL FAIL (detail)` and exits 1 otherwise. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each row in order: `file`, `wide-time` on x86-64 alone, `directory`,
+ * `fifo`, `dev-null`, `proc-self`, `pipe`, `cwd`, `sync-flag`,
+ * `refused-flags` and `refused-paths`; the branch of the group `arch`,
+ * `x86-64` or `i686`, says whether `wide-time` ran. The first failure fails
+ * its assertion with the row and errno and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -29,6 +35,8 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 #define FILE_PATH "/tmp/statxmusl.f"
 #define FIFO_PATH "/tmp/statxmusl.p"
@@ -86,7 +94,11 @@ typedef int32_t ksec_t;
 /** Report one failed check and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
-    printf("STATXMUSL FAIL (%s: errno %d)\n", what, errno);
+    char why[96];
+
+    snprintf(why, sizeof(why), "%s: errno %d", what, errno);
+    printf("STATXMUSL FAIL (%s)\n", why);
+    report_stop(why);
     return 1;
 }
 
@@ -158,6 +170,7 @@ static int regular_file(void)
         sx.stx_size != 5 || (sx.stx_mode & 07777) != 0640) {
         return fail("a regular file's attributes");
     }
+    report_held();
 #if defined __x86_64__
     {
         struct timespec past[2] = {{(time_t)1 << 31, 0}, {(time_t)1 << 31, 0}};
@@ -168,6 +181,7 @@ static int regular_file(void)
             return fail("statx of a time past 2^31 seconds");
         }
     }
+    report_held();
 #endif
     return 0;
 }
@@ -190,39 +204,72 @@ static int kinds(void)
     if (agree(AT_FDCWD, "/tmp", 0, &tmp, "a directory") || !S_ISDIR(tmp.stx_mode)) {
         return fail("a directory's type");
     }
+    report_held();
     unlink(FIFO_PATH);
     if (mkfifo(FIFO_PATH, 0600) != 0 || agree(AT_FDCWD, FIFO_PATH, 0, &sx, "a FIFO") ||
         !S_ISFIFO(sx.stx_mode)) {
         return fail("a FIFO's type");
     }
+    report_held();
     if (agree(AT_FDCWD, "/dev/null", 0, &sx, "/dev/null") || !S_ISCHR(sx.stx_mode) ||
         sx.stx_rdev_major != 1 || sx.stx_rdev_minor != 3) {
         return fail("/dev/null's numbers");
     }
+    report_held();
     if (agree(AT_FDCWD, "/proc/self", AT_SYMLINK_NOFOLLOW, &sx, "/proc/self unfollowed") ||
         !S_ISLNK(sx.stx_mode) || agree(AT_FDCWD, "/proc/self", 0, &sx, "/proc/self") ||
         !S_ISDIR(sx.stx_mode)) {
         return fail("/proc/self followed and not");
     }
+    report_held();
     if (pipe(fds) != 0 || agree(fds[0], "", AT_EMPTY_PATH, &sx, "a pipe") ||
         !S_ISFIFO(sx.stx_mode)) {
         return fail("a pipe by its descriptor");
     }
+    report_held();
     close(fds[0]);
     close(fds[1]);
     if (chdir("/tmp") != 0 || agree(AT_FDCWD, "", AT_EMPTY_PATH, &sx, "the working directory") ||
         sx.stx_ino != tmp.stx_ino) {
         return fail("the working directory by an empty path");
     }
+    report_held();
     if (agree(AT_FDCWD, "statxmusl.f", AT_STATX_DONT_SYNC, &sx, "a sync flag") ||
         sx.stx_size != 5) {
         return fail("a relative path with a sync flag");
     }
+    report_held();
     return 0;
+}
+
+/** Begin the report, with the branch of the architecture, and plan its
+ * assertions. */
+static void plan(void)
+{
+    static const char *const ids[] = {"file",      "wide-time",     "directory",    "fifo",
+                                      "dev-null",  "proc-self",     "pipe",         "cwd",
+                                      "sync-flag", "refused-flags", "refused-paths"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.statxmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+#if !defined __x86_64__
+        if (strcmp(ids[i], "wide-time") == 0) {
+            continue;
+        }
+#endif
+        report_plan(ids[i]);
+    }
 }
 
 int main(void)
 {
+    plan();
     if (kinds()) {
         return 1;
     }
@@ -231,10 +278,13 @@ int main(void)
         !refused(FILE_PATH, 0, 0x80000000u, EINVAL)) {
         return fail("a flag or mask statx does not take");
     }
+    report_held();
     if (!refused("/tmp/statxmusl.none", 0, STATX_BASIC_STATS, ENOENT) ||
         !refused("", 0, STATX_BASIC_STATS, ENOENT)) {
         return fail("a missing file or an empty path");
     }
+    report_held();
+    report_end();
     unlink(FILE_PATH);
     unlink(FIFO_PATH);
     printf("STATXMUSL OK\n");

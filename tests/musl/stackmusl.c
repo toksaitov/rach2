@@ -18,6 +18,11 @@
  *
  * The unprivileged caller is user and group 1000, or the NEW of 1000 when a
  * native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each check in order: `initial`, `kept`, `einval`,
+ * `inherit`, `eperm`, `exec-deep` and `exec-segv`. The first failure fails
+ * its assertion and leaves the rest not run; the `deep` half writes none.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -30,6 +35,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define MIB (1024UL * 1024UL)
 
@@ -39,6 +45,7 @@ static const char *const SELF = "/musl/stackmusl";
 static int fail(const char *what)
 {
     printf("STACKMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -139,17 +146,29 @@ int main(int argc, char *argv[])
         return deep(strtoul(argv[2], NULL, 10) * 1024UL) == 1 ? 0 : 3;
     }
 
+    report_begin(report_case(environ, "guest.default.stackmusl"));
+    report_plan("initial");
+    report_plan("kept");
+    report_plan("einval");
+    report_plan("inherit");
+    report_plan("eperm");
+    report_plan("exec-deep");
+    report_plan("exec-segv");
+
     if (getrlimit(RLIMIT_STACK, &rl) != 0 || rl.rlim_cur != 8 * MIB ||
         rl.rlim_max != RLIM_INFINITY) {
         return fail("the stack limit does not start at 8 MiB soft and unlimited hard");
     }
+    report_held();
     if (set_stack(16 * MIB, RLIM_INFINITY) != 0 || getrlimit(RLIMIT_STACK, &rl) != 0 ||
         rl.rlim_cur != 16 * MIB) {
         return fail("a stack limit of 16 MiB was not kept");
     }
+    report_held();
     if (set_stack(32 * MIB, 16 * MIB) != -1 || errno != EINVAL) {
         return fail("a soft limit past the hard one was not refused with EINVAL");
     }
+    report_held();
     pid = fork();
     if (pid == 0) {
         _exit(getrlimit(RLIMIT_STACK, &rl) == 0 && rl.rlim_cur == 16 * MIB ? 0 : 1);
@@ -158,6 +177,7 @@ int main(int argc, char *argv[])
         WEXITSTATUS(status) != 0) {
         return fail("a child did not inherit the stack limit");
     }
+    report_held();
     pid = fork();
     if (pid == 0) {
         _exit(unprivileged());
@@ -166,6 +186,7 @@ int main(int argc, char *argv[])
         WEXITSTATUS(status) != 0) {
         return fail("an unprivileged caller raised its hard stack limit");
     }
+    report_held();
 
     status = run_deep(16 * MIB, 12);
     if (status < 0 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -175,11 +196,14 @@ int main(int argc, char *argv[])
                  status);
         return fail(detail);
     }
+    report_held();
     status = run_deep(256 * 1024, 1);
     if (status < 0 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
         return fail("1 MiB of stack under a 256 KiB limit did not die of SIGSEGV");
     }
 
+    report_held();
+    report_end();
     printf("STACKMUSL OK\n");
 
     return 0;

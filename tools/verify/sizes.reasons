@@ -561,8 +561,6 @@ tests/musl/passwdmusl.c:check_concurrent nesting 5 a test's rows, each a case, r
 tests/musl/passwdmusl.c:check_refusals complexity 55 a test's rows, each a case, read as one table
 tests/musl/passwdmusl.c:check_refusals lines 258 a test's rows, each a case, read as one table
 
-tests/musl/permmusl.c:main complexity 32 a test's rows, each a case, read as one table
-
 tests/musl/preadmusl.c:file_rows complexity 30 a test's rows, each a case, read as one table
 
 tests/musl/ptracemusl.c:memory_and_registers complexity 32 a test's rows, each a case, read as one table

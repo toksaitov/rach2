@@ -19,7 +19,11 @@
  * read it; a helper that is uid 1000, tracing such a child, must get EIO
  * from PTRACE_PEEKTEXT at the exec's stop. The parent relays each status.
  *
- * Prints "SUIDMUSL OK" on success, "SUIDMUSL FAIL ..." otherwise. Linked
+ * Prints "SUIDMUSL OK" on success, "SUIDMUSL FAIL ..." otherwise. etude's
+ * report (probe_report.h), for the case ETUDE_CASE names, comes from the
+ * parent alone and has an assertion for each row in order: `exec`,
+ * `traced-root`, `traced-user`, `clone-fs`, `xonly` and `xonly-peek`. The
+ * first failure fails its assertion and leaves the rest not run. Linked
  * against the ported musl.
  *
  * Uid and gid 1000 are the NEW of 1000 when a native run gives
@@ -36,6 +40,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 #include <sys/auxv.h>
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
@@ -270,30 +275,50 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "xonly") == 0) {
         return run_xonly();
     }
+    report_begin(report_case(environ, "guest.default.suidmusl"));
+    report_plan("exec");
+    report_plan("traced-root");
+    report_plan("traced-user");
+    report_plan("clone-fs");
+    report_plan("xonly");
+    report_plan("xonly-peek");
     if (exec_copy(SUID_COPY, "child", 0) != 0) {
         printf("SUIDMUSL FAIL (child status)\n");
+        report_stop("child status");
         return 1;
     }
+    report_held();
     if (exec_copy(SUID_COPY, "child", 1) != 0) {
         printf("SUIDMUSL FAIL (the exec traced by root)\n");
+        report_stop("the exec traced by root");
         return 1;
     }
+    report_held();
     if (as_user(traced_row) != 0) {
         printf("SUIDMUSL FAIL (the exec traced by uid 1000)\n");
+        report_stop("the exec traced by uid 1000");
         return 1;
     }
+    report_held();
     if (as_user(shared_row) != 0) {
         printf("SUIDMUSL FAIL (the exec whose directories uid 1000 shares)\n");
+        report_stop("the exec whose directories uid 1000 shares");
         return 1;
     }
+    report_held();
     if (exec_copy(XONLY_COPY, "xonly", 0) != 0) {
         printf("SUIDMUSL FAIL (the execute-only copy)\n");
+        report_stop("the execute-only copy");
         return 1;
     }
+    report_held();
     if (as_user(xonly_peek_row) != 0) {
         printf("SUIDMUSL FAIL (a uid 1000 tracer read the execute-only copy)\n");
+        report_stop("a uid 1000 tracer read the execute-only copy");
         return 1;
     }
+    report_held();
+    report_end();
     printf("SUIDMUSL OK\n");
     return 0;
 }

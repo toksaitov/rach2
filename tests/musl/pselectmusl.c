@@ -17,7 +17,14 @@
  * the probe asleep, ends the wait the same way.
  *
  * Prints `PSELECTMUSL OK` and exits 0 on success, and prints
- * `PSELECTMUSL FAIL (detail)` and exits 1 otherwise.
+ * `PSELECTMUSL FAIL (detail)` and exits 1 otherwise. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each row in order: `sets-ready`, with the setup of the handler and the
+ * pipes, `mask-restored`, `timeout-zero`, `einval-nsec`, `einval-negative`,
+ * `einval-count`, `einval-mask-size`, `pending-eintr`, `handler-mask`,
+ * `mask-after-handler`, `blocked-timeout`, `still-pending`,
+ * `delivered-on-unblock`, `sleep-seen`, with the fork, and `sleep-eintr`.
+ * The first failure fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -30,6 +37,8 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 static volatile sig_atomic_t hits; /* SIGUSR1's handler has run this often */
 static sigset_t seen;              /* the mask the handler last ran under */
@@ -46,6 +55,7 @@ static void on_usr1(int sig)
 static int fail(const char *what)
 {
     printf("PSELECTMUSL FAIL (%s)\n", what);
+    report_stop(what);
     return 1;
 }
 
@@ -134,9 +144,11 @@ static int set_rows(int full[2], int empty[2])
         FD_ISSET(empty[0], &r) || !FD_ISSET(full[1], &w) || FD_ISSET(full[0], &e)) {
         return fail("the sets come back with the ready descriptors alone");
     }
+    report_held();
     if (!blocks_only(0)) {
         return fail("the call's mask is gone after a descriptor ends it");
     }
+    report_held();
 
     FD_ZERO(&r);
     FD_SET(empty[0], &r);
@@ -144,6 +156,7 @@ static int set_rows(int full[2], int empty[2])
     if (pselect(empty[0] + 1, &r, NULL, NULL, &ts, NULL) != 0 || FD_ISSET(empty[0], &r)) {
         return fail("a timeout with nothing ready is 0 and clears the set");
     }
+    report_held();
     return 0;
 }
 
@@ -158,21 +171,25 @@ static int refusal_rows(void)
     if (!refused(pselect(0, NULL, NULL, NULL, &ts, NULL), EINVAL)) {
         return fail("a timeout of 10^9 nanoseconds is EINVAL");
     }
+    report_held();
     ts.tv_sec = -1;
     ts.tv_nsec = 0;
     if (!refused(pselect(0, NULL, NULL, NULL, &ts, NULL), EINVAL)) {
         return fail("a negative timeout is EINVAL");
     }
+    report_held();
     ts.tv_sec = 0;
     if (!refused(pselect(-1, NULL, NULL, NULL, &ts, NULL), EINVAL)) {
         return fail("a negative count is EINVAL");
     }
+    report_held();
     sigemptyset(&mask);
     sigarg[0] = (long)&mask;
     sigarg[1] = 4;
     if (!refused(syscall(SYS_pselect6, 0L, 0L, 0L, 0L, raw_ts, sigarg), EINVAL)) {
         return fail("a mask of 4 bytes is EINVAL");
     }
+    report_held();
     return 0;
 }
 
@@ -199,12 +216,15 @@ static int pending_rows(int empty[2])
     if (!refused(pselect(empty[0] + 1, &r, NULL, NULL, &ts, &mask), EINTR) || hits != 1) {
         return fail("a pending signal the mask unblocks ends the wait");
     }
+    report_held();
     if (!sigismember(&seen, SIGUSR2) || !sigismember(&seen, SIGUSR1)) {
         return fail("the handler runs under the call's mask");
     }
+    report_held();
     if (!blocks_only(SIGUSR1)) {
         return fail("the mask before the call is back after the handler");
     }
+    report_held();
 
     kill(getpid(), SIGUSR1);
     FD_ZERO(&r);
@@ -216,14 +236,17 @@ static int pending_rows(int empty[2])
     if (pselect(empty[0] + 1, &r, NULL, NULL, &ts, &mask) != 0 || hits != 1) {
         return fail("a mask that blocks the pending signal keeps the wait");
     }
+    report_held();
     sigpending(&pending);
     if (!sigismember(&pending, SIGUSR1) || !blocks_only(SIGUSR1)) {
         return fail("the signal stays pending and blocked after the timeout");
     }
+    report_held();
     block_only(0);
     if (hits != 2) {
         return fail("the signal is delivered once the process unblocks it");
     }
+    report_held();
     return 0;
 }
 
@@ -262,11 +285,30 @@ static int sleep_row(int empty[2])
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the child saw the probe asleep in pselect");
     }
+    report_held();
     if (rc != -1 || errno != EINTR || hits != 1 || !blocks_only(SIGUSR1)) {
         return fail("a signal sent during the wait ends it");
     }
+    report_held();
     block_only(0);
     return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {"sets-ready",           "mask-restored",   "timeout-zero",
+                                      "einval-nsec",          "einval-negative", "einval-count",
+                                      "einval-mask-size",     "pending-eintr",   "handler-mask",
+                                      "mask-after-handler",   "blocked-timeout", "still-pending",
+                                      "delivered-on-unblock", "sleep-seen",      "sleep-eintr"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.pselectmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
 }
 
 int main(void)
@@ -274,6 +316,7 @@ int main(void)
     struct sigaction sa;
     int full[2], empty[2];
 
+    plan();
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_usr1;
     sigemptyset(&sa.sa_mask);
@@ -285,6 +328,7 @@ int main(void)
         sleep_row(empty) != 0) {
         return 1;
     }
+    report_end();
     printf("PSELECTMUSL OK\n");
     return 0;
 }

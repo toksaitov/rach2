@@ -40,7 +40,14 @@
  * kernel's tables.
  *
  * It prints "SPAWNMUSL OK" and exits 0 on success, or prints "SPAWNMUSL FAIL
- * (detail)" and exits 1 at the first failure.
+ * (detail)" and exits 1 at the first failure. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for each
+ * check in order: `system-status`, with the canary's allocation,
+ * `system-zero`, `popen-line`, `pclose-status`, `stack-canary`,
+ * `heap-canary`, `spawn-enoent`, `spawn-no-child`, `popen-silent`,
+ * `pclose-exit-7`, `system-rounds`, with the first count of descriptors,
+ * `popen-rounds`, `rounds-fds` and `rounds-children`. The first failure
+ * fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -52,6 +59,8 @@
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 #define CANARY_BYTES 512
 #define CANARY_VALUE 0x5A
@@ -65,6 +74,7 @@ static int fail(const char *what)
     free(heap_canary);
     heap_canary = NULL;
     printf("SPAWNMUSL FAIL (%s)\n", what);
+    report_stop(what);
 
     return 1;
 }
@@ -133,6 +143,7 @@ static int check_rounds(void)
             return fail(detail);
         }
     }
+    report_held();
     for (round = 0; round < 20; round++) {
         pipe = popen("/bin/echo x", "r");
         if (pipe == NULL || fgets(line, sizeof(line), pipe) == NULL) {
@@ -151,29 +162,26 @@ static int check_rounds(void)
             return fail("pclose reported a failure for a command that worked");
         }
     }
+    report_held();
     if (open_fds() != fds) {
         return fail("the rounds of system() and popen() left descriptors open");
     }
+    report_held();
     if (waitpid(-1, NULL, WNOHANG) != -1 || errno != ECHILD) {
         return fail("the rounds of system() and popen() left a child");
     }
+    report_held();
 
     return 0;
 }
 
-int main(void)
+/**
+ * Check that `system` reports a command's exit through the wait encoding,
+ * 3 and then 0. Returns 0, or 1 after the failure is printed.
+ */
+static int system_rows(void)
 {
-    unsigned char stack_canary[CANARY_BYTES];
-    char line[128];
-    FILE *pipe;
     int status;
-
-    memset(stack_canary, CANARY_VALUE, sizeof(stack_canary));
-    heap_canary = malloc(CANARY_BYTES);
-    if (heap_canary == NULL) {
-        return fail("out of memory");
-    }
-    memset(heap_canary, CANARY_VALUE, CANARY_BYTES);
 
     /* A command runs, and its status comes back through the wait encoding. */
     status = system("exit 3");
@@ -188,11 +196,50 @@ int main(void)
 
         return fail(detail);
     }
+    report_held();
 
     /* A command that succeeds reports zero. */
     status = system("exit 0");
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("a command that succeeds did not report success");
+    }
+    report_held();
+    return 0;
+}
+
+/** Begin the report and plan its assertions, in the order they are
+ * checked. */
+static void plan(void)
+{
+    static const char *const ids[] = {
+        "system-status", "system-zero",  "popen-line",     "pclose-status",  "stack-canary",
+        "heap-canary",   "spawn-enoent", "spawn-no-child", "popen-silent",   "pclose-exit-7",
+        "system-rounds", "popen-rounds", "rounds-fds",     "rounds-children"};
+    unsigned i;
+
+    report_begin(report_case(environ, "guest.default.spawnmusl"));
+    for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
+        report_plan(ids[i]);
+    }
+}
+
+int main(void)
+{
+    unsigned char stack_canary[CANARY_BYTES];
+    char line[128];
+    FILE *pipe;
+    int status;
+
+    plan();
+    memset(stack_canary, CANARY_VALUE, sizeof(stack_canary));
+    heap_canary = malloc(CANARY_BYTES);
+    if (heap_canary == NULL) {
+        return fail("out of memory");
+    }
+    memset(heap_canary, CANARY_VALUE, CANARY_BYTES);
+
+    if (system_rows() != 0) {
+        return 1;
     }
 
     /* Output comes back, and pclose reports the status. */
@@ -210,20 +257,24 @@ int main(void)
 
         return fail("popen() read back the wrong line");
     }
+    report_held();
     status = pclose(pipe);
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("pclose() did not report the command's status");
     }
+    report_held();
 
     /* The parent's stack and heap are unchanged. */
     if (!canary_intact(stack_canary, sizeof(stack_canary))) {
         return fail("the parent's stack was written by the spawn");
     }
+    report_held();
     if (!canary_intact(heap_canary, CANARY_BYTES)) {
         return fail("the parent's heap was written by the spawn");
     }
     free(heap_canary);
     heap_canary = NULL;
+    report_held();
 
     /* A spawn that fails: ENOENT through the error pipe, and no child. */
     {
@@ -242,10 +293,12 @@ int main(void)
 
             return fail(detail);
         }
+        report_held();
         if (waitpid(-1, &status, WNOHANG) > 0) {
             return fail("a failed spawn left a child to be reaped");
         }
     }
+    report_held();
 
     /* A command that fails through popen reports its status. */
     pipe = popen("exit 7", "r");
@@ -257,6 +310,7 @@ int main(void)
 
         return fail("a command that only exits printed something");
     }
+    report_held();
     status = pclose(pipe);
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
         char detail[80];
@@ -266,10 +320,12 @@ int main(void)
 
         return fail(detail);
     }
+    report_held();
 
     if (check_rounds() != 0) {
         return 1;
     }
+    report_end();
 
     printf("SPAWNMUSL OK\n");
 
