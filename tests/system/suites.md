@@ -79,7 +79,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `diskdiag` (full tier; needs qemu, ssh; 128 MiB): a disk read without being mounted and without being written.
 * `e1000` (core tier; needs qemu; 128 MiB): the network path on the other emulated card, and the probe order that decides which card a machine with more than one of them gets, the cases of tests/cases/machine.e1000.json, each a boot of its own.
 * `disk-ahci` (core tier; needs qemu; 128 MiB): the disk suite's page-cache integrity check with the disk on an AHCI controller.
-* `grub` (core tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the machine replacing its own boot loader.
+* `grub` (core tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine replacing its own boot loader.
 * `disk-q35` (full tier; needs qemu; 128 MiB): the same disk proof on the q35 machine, whose AHCI controller is built in at 0:31.2, function 2 of the multi-function device 31.
 * `doom` (full tier; needs qemu; 128 MiB): the Doom port on a disk root, refused without its WAD, drawing with a zone sized from the machine's free memory, playing a demo to its end and recording one through fopen.
 * `disk` (core tier; needs qemu; 128 MiB): the disk-backed page-cache integrity check.

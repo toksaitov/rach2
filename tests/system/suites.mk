@@ -393,19 +393,18 @@ $(BOOTPART_FIXTURE_DISK): $(BOOTPART_ABSENT_DISK) $(MKFIXTURE)
 	cp $(BOOTPART_ABSENT_DISK) $@.tmp
 	$(MKFIXTURE) boot $@.tmp || { rm -f $@.tmp; exit 1; }
 	mv $@.tmp $@
-# `tests/run grub`: the machine replacing its own boot loader. The post-MBR gap
-# holds two core-image tails and LBA 1 selects between them, so a replacement
-# writes the tail not in use, reads it back, and only then rewrites that one
-# sector. Sector 0, which carries the partition table, is never written.
+# `tests/run grub`: the machine replacing its own boot loader. It is the case
+# of tests/cases/machine.grub.json, which etude runs, and has no target here.
+# The gap after the MBR has two core-image tails and LBA 1 selects between
+# them, so a replacement writes the tail not in use, reads it back, and only
+# then rewrites that one sector; sector 0, which has the partition table, is
+# never written. The case's three boots of one GRUB disk install the two
+# marked cores in turn, and every boot's marker must be the core the boot
+# before it installed. The marker comes from inside the running core, because
+# reading the pointer back would prove only bytes at rest.
 #
-# Two core images are built with a marker embedded in each and staged into the
-# root through os-real's optional-file lines, then installed in turn; every
-# boot's marker must be the image the boot before it installed. The marker comes
-# from inside the running core, because reading the pointer back would prove
-# only bytes at rest.
-GRUB_TEST_DISK = $(IMAGES_DIR)/grub-test.disk
-# The root this disk boots is an ext2 root made from grub-test.manifest, which
-# has what the guest commands this suite types expect.
+# The disk's root is an ext2 root made from grub-test.manifest, which has what
+# the commands the case types expect, and the bootorder suite boots it too.
 # The two marked cores the root's manifest stages. They have rules of their
 # own, and the root waits for them, so that the root stages the pair this
 # build made.
@@ -426,19 +425,6 @@ $(GRUB_CORE_B): $(GRUB_CORE_DEPS) vendor/grub/disk-core-b.img
 GRUB_TEST_EXT2 = $(IMAGES_DIR)/grub-test.ext2
 $(GRUB_TEST_EXT2): $(DEMO_CREDS) $(GRUB_CORE_A) $(GRUB_CORE_B) krffs/manifests/grub-test.manifest $(MANIFEST_DEPS_grub_test) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/grub-test.manifest $@ 48
-run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_TEST_EXT2) $(MANIFEST_PARTS_os_real) $(RUNUTIL) $(DISK_TOOLS)
-	@mkdir -p $(IMAGES_DIR)
-	sed -e '/^#/d' -e '/^$$/d' -e '\|^file 0644 /core-[ab]\.img|d' \
-	    krffs/manifests/grub-test.manifest > $(IMAGES_DIR)/grub-test.manifest.stripped
-	sed -e '/^#/d' -e '/^$$/d' krffs/manifests/os-real.manifest \
-	    | diff - $(IMAGES_DIR)/grub-test.manifest.stripped
-	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_EXT2_MB=48 \
-	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
-	RACH2_DISK_RECOVERY_MB=8 \
-	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(GRUB_TEST_DISK)
-	sh tests/system/suites/grub.sh $(GRUB_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`"
 # The disk of the grub case, tests/cases/machine.grub.json: the GRUB disk
 # around the kernel, on an MBR, with the grub-test root. The recipe first
 # requires grub-test.manifest, less its comments and its two core lines, to

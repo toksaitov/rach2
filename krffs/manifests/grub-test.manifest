@@ -2,9 +2,9 @@
 # of `tests/run grub` and `bootorder`, the `/core-?.img` lines at the end.
 # They are not in os-real because the system image must not depend on
 # whether a test ran, and the marked cores are products of the test build.
-# The rest of this file is os-real's: the grub suite compares the directives
-# of the two before it builds, so a change made to one and not the other
-# stops the suite.
+# The rest of this file is os-real's: the rule of the grub case's disk in
+# tests/system/suites.mk compares the directives of the two before it makes
+# the disk, so a change made to one and not the other stops the case.
 #
 # /bin: the shell and the programs. BusyBox is staged at /bin/busybox, the
 # path compiled into it, which standalone ash runs again for an applet, and
