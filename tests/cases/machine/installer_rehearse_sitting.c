@@ -263,7 +263,7 @@ static void saved_digest(const struct range *r, char hex[65])
         (size_t)snprintf(mark, sizeof(mark), "range %" PRIu64 " %" PRIu64 "\n", r->start, r->count);
 
     sha256_init(&h);
-    sha256_update(&h, mark, n);
+    sha256_update(&h, (const unsigned char *)mark, n);
     for (left = r->count * 512 - n; left > 0; left -= n) {
         n = left < sizeof(zeros) ? (size_t)left : sizeof(zeros);
         sha256_update(&h, zeros, n);
