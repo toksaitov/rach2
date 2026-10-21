@@ -7,8 +7,8 @@
  * then it unmounts cleanly. `fatwriteprobe readback`, on the next boot,
  * mounts the volume and requires every byte and name; the host reads the
  * same volume with mtools and the check. `fatwriteprobe crash` rewrites
- * two hundred files until the machine is killed, and says so before it
- * starts, which is where the suite kills it; `fatwriteprobe repair` mounts
+ * two hundred files until the machine is killed, and says so once the first
+ * is written, which is where the case kills it; `fatwriteprobe repair` mounts
  * what that left, which runs the check, and counts what survived. A second
  * argument names the type to mount in place of `vfat`, as the exfat suite
  * runs the same modes with `exfat`. `fatwriteprobe write-readback` is `write`
@@ -267,14 +267,16 @@ static void mode_readback(void)
 }
 
 /**
- * The `crash` mode: mount the volume writable, print FATWRITE WRITING, and
- * rewrite the files f000 to f199, 1 KiB each, round and round until the
- * machine is killed, so that the kill lands inside a write sequence however
- * long the harness waits.
+ * The `crash` mode: mount the volume writable and rewrite the files f000 to
+ * f199, 1 KiB each, round and round until the machine is killed, so that the
+ * kill lands inside a write sequence however long the case waits. It prints
+ * FATWRITE WRITING once f000 is written: the volume is then marked dirty,
+ * which the first metadata write of a vfat mount does, and the file is on
+ * the medium, which the repair mode requires.
  */
 static void mode_crash(void)
 {
-    int i;
+    int i, said = 0;
     static char name[32];
 
     fill_pattern();
@@ -282,7 +284,6 @@ static void mode_crash(void)
     if (do_mount(volume, FW, 0, 0) != 0) {
         fail("the writable mount for the crash");
     }
-    puts("FATWRITE WRITING");
     for (i = 0;; i = (i + 1) % 200) {
         name[0] = 'f';
         name[1] = 'w';
@@ -298,6 +299,10 @@ static void mode_crash(void)
             if (rc != 0) {
                 fail_n("a file of the crash sequence", rc);
             }
+        }
+        if (!said) {
+            puts("FATWRITE WRITING");
+            said = 1;
         }
     }
 }
