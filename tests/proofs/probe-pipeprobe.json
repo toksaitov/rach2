@@ -97,6 +97,23 @@
           "default-probe: fail: pipeprobe did not pass"
         ]
       }
+    },
+    {
+      "name": "pipe-ring-leaked",
+      "summary": "the row that fails with: 100 pipe/close cycles left the heap as it was, from a ring left on close",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/pipe.c",
+          "find": "    kfree(p->buf);\n    kfree(p);\n",
+          "replace": "    kfree(p);\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "FAIL: 100 pipe/close cycles left the heap as it was",
+          "default-probe: fail: pipeprobe did not pass"
+        ]
+      }
     }
   ]
 }

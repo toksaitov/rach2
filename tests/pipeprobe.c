@@ -11,8 +11,13 @@
  *       (with the signal caught) returns -EPIPE;
  *   (d) blocking across a fork: a writer of more than one buffer blocks until
  *       the forked reader drains it, and every byte arrives intact;
- *   (e) a hundred pipes made and closed in turn each succeed, and leave
- *       the kernel heap's HeapUsed in /proc/meminfo as it was before them;
+ *   (e) a hundred pipes made, written a byte and closed in turn each
+ *       succeed, and leave the kernel heap's HeapUsed in /proc/meminfo as
+ *       it was before them. The heap is shared with etude's guest agent and
+ *       the kernel's own work, whose allocations may be live at either
+ *       reading, so the hundred cycles are tried up to five times and the
+ *       check holds when one try leaves the heap exactly as it was; a leak
+ *       of a pipe or of its ring on close changes the heap at every try;
  *   (f) identity: the link /proc/self/fd gives for a pipe end is exactly
  *       `pipe:[N]`, the two ends of one pipe give the same N and two pipes
  *       different ones, and fstat reports N as the inode, the high word of
@@ -37,8 +42,7 @@
  *
  * Given `machine=native` (probe_args.h), the probe leaves out the heap's
  * comparison of (e), since the kernel's heap is shared with every process of
- * a machine that is already up; the hundred pipes are still made and
- * closed.
+ * a machine that is already up; the pipes are still made and closed.
  *
  * Prints "PIPEPROBE OK" and exits with the count of the checks that failed.
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
@@ -58,6 +62,9 @@
 #define F_GETPIPE_SZ  1032
 
 #define O_NONBLOCK 04000
+
+#define CYCLES      100 /* pipes made and closed in one try of case (e) */
+#define CYCLE_TRIES 5   /* tries of case (e) before its heap check fails */
 
 #define EAGAIN      11
 #define EPIPE       32
@@ -220,7 +227,7 @@ static const struct {
     {"wrote-whole", "parent wrote the whole buffer (blocked through full)"},
     {"child-intact", "child read every byte intact"},
     {"heapused", "HeapUsed in /proc/meminfo"},
-    {"cycle-pipes", "pipe() in a pipe/close cycle"},
+    {"cycle-pipes", "pipe() and a one-byte write in a pipe/close cycle"},
     {"heap-kept", "100 pipe/close cycles left the heap as it was (no pipe leak)"},
     {"two-pipes", "two pipes open"},
     {"link-read", "a pipe end has a link to read"},
@@ -456,24 +463,66 @@ static void case_blocking(void)
     check(CHILD_INTACT, exited_zero(pid));
 }
 
-/** Case (e): a hundred pipes made and closed leave HeapUsed as it was. */
-static void case_cycles(void)
+/** Sleep for `ms` milliseconds (nanosleep(2)). */
+static void nap(long ms)
 {
-    unsigned used;
+    long ts[2];
+
+    ts[0] = ms / 1000;
+    ts[1] = (ms % 1000) * 1000000L;
+    /* interval: a try that changed the heap is followed by a pause */
+    (void)syscall2(SYS_NANOSLEEP, (long)ts, 0);
+}
+
+/**
+ * One try of case (e): CYCLES pipes made in turn, each written one byte, so
+ * that it has a ring, and closed. HeapUsed is read into `before` and `after`
+ * around them. Returns 1 when every pipe was made and written.
+ */
+static int cycle_once(unsigned *before, unsigned *after)
+{
     int i;
 
-    used = probe_meminfo("HeapUsed:");
-    check(HEAPUSED, used != 0xFFFFFFFFu);
-    for (i = 0; i < 100; i++) {
+    *before = probe_meminfo("HeapUsed:");
+    for (i = 0; i < CYCLES; i++) {
         int q[2];
+        int w;
+
         if (do_pipe(q) != 0) {
             break;
         }
+        w = wr(q[1], "x", 1);
         syscall1(SYS_CLOSE, q[0]);
         syscall1(SYS_CLOSE, q[1]);
+        if (w != 1) {
+            break;
+        }
     }
-    check(CYCLE_PIPES, i == 100);
-    check_heap(HEAP_KEPT, probe_meminfo("HeapUsed:") == used);
+    *after = probe_meminfo("HeapUsed:");
+    return i == CYCLES;
+}
+
+/**
+ * Case (e): a hundred pipes made, written and closed leave HeapUsed as it
+ * was, in one of CYCLE_TRIES tries. A try whose readings differ is followed,
+ * after a pause of 10 ms for work in flight to finish, by the next.
+ */
+static void case_cycles(void)
+{
+    unsigned before = 0xFFFFFFFFu;
+    unsigned after = 0;
+    int made = 1;
+    int tries;
+
+    for (tries = 0; tries < CYCLE_TRIES && made && before != after; tries++) {
+        if (tries > 0) {
+            nap(10);
+        }
+        made = cycle_once(&before, &after);
+    }
+    check(HEAPUSED, before != 0xFFFFFFFFu);
+    check(CYCLE_PIPES, made);
+    check_heap(HEAP_KEPT, before != 0xFFFFFFFFu && before == after);
 }
 
 /** Case (f) for one pipe end `fd`: its link is exactly `pipe:[N]` and fstat
