@@ -26,6 +26,10 @@
  * the rows, prints "CAPMUSL OK" and exits 0 on success, or prints "CAPMUSL
  * FAIL (detail)" and exits 1 at the first failure. User 1000 is the NEW of
  * 1000 when a native run gives `ids=OLD:NEW,...` (tests/native/Readme.md).
+ * The rows write etude's report records (../probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check `checks` lists, the rows of
+ * `dropped_rows` among them; a failure leaves the checks after it not run.
+ * An exec row's image writes none.
  */
 
 #define _GNU_SOURCE
@@ -50,6 +54,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* _LINUX_CAPABILITY_VERSION_3, whose data is two cap_data: bits 0-31, 32-63. */
 #define VERSION_3 0x20080522u
@@ -83,10 +88,100 @@ static const char *const dropped_rows[] = {
 /* The stack of the process that shares an exec's directories. */
 static char sharer_stack[16384];
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    ROOT_ALL,
+    NO_DATA,
+    UNKNOWN_VERSION,
+    VERSION_ENDS_PAGE,
+    PARTIAL_SET,
+    MAKE_SECRET,
+    DROPPED_CHILD,
+    GIVE_UP,
+    NONE_LEFT,
+    STATUS_NONE,
+    LOW_PORT,
+    SECRET_REFUSED,
+    TAKE_BACK,
+    FORK_NONE,
+    PARENT_MEM,
+    PARENT_SEIZE,
+    PARENT_ROBUST,
+    CHMOD_ROOT_NODE,
+    EXEC_ALL,
+    EXEC_UNDUMPABLE,
+    EXEC_NNP,
+    EXEC_SHARED,
+    EXEC_KEPT,
+    TRACEME,
+    TRACEME_LEADER,
+    OWN_EXE,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"root-all", "root does not have every capability"},
+    {"no-data", "an unknown version with no data was not 0 with version 3 written back"},
+    {"unknown-version", "an unknown version was not EINVAL"},
+    {"version-ends-page", "a header whose version ends a page was not asked the version alone"},
+    {"partial-set", "a set between none and all was not EINVAL"},
+    {"secret", "the file only user 1000 may read"},
+    {"dropped-child", "a child could not report"},
+    {"give-up", "capset with every set empty failed"},
+    {"none-left", "a thread that gave up its capabilities still has them"},
+    {"status-none", "/proc/self/status did not show the capabilities given up"},
+    {"low-port", "a thread without capabilities bound a port below 1024"},
+    {"secret-refused", "a thread without capabilities read a file only another user may"},
+    {"take-back", "a thread without capabilities took them back"},
+    {"fork-none", "a fork of a thread without capabilities has them"},
+    {"parent-mem", "a thread without capabilities opened the memory of a process that has them"},
+    {"parent-seize", "a thread without capabilities attached to a process that has them"},
+    {"parent-robust",
+     "a thread without capabilities read the robust list of a process that has them"},
+    {"chmod-root-node",
+     "a thread without capabilities could not change the mode of a node root owns"},
+    {"exec-all", "an exec as root did not give the capabilities back"},
+    {"exec-undumpable", "an exec that gave the capabilities back left the image dumpable"},
+    {"exec-nnp", "an exec under no_new_privs gave the capabilities back"},
+    {"exec-shared", "an exec whose directories another process shares gave the capabilities back"},
+    {"exec-kept", "an exec that regained nothing cleared the parent-death signal"},
+    {"traceme", "a child with capabilities made a parent without them its tracer"},
+    {"traceme-leader", "a privileged child made its tracer a parent whose live thread was not"},
+    {"own-exe", "a thread without capabilities could not read its own process's exe link"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("CAPMUSL FAIL (%s)\n", what);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("CAPMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -570,22 +665,22 @@ static int call_rows(void)
     struct cap_data d[2];
 
     if (get_caps(d) != 0 || !all_of(d)) {
-        return fail("root does not have every capability");
+        return fail(ROOT_ALL);
     }
     if (syscall(SYS_capget, h, NULL) != 0 || h[0] != VERSION_3) {
-        return fail("an unknown version with no data was not 0 with version 3 written back");
+        return fail(NO_DATA);
     }
     h[0] = 0x12345678u;
     if (syscall(SYS_capget, h, d) != -1 || errno != EINVAL) {
-        return fail("an unknown version was not EINVAL");
+        return fail(UNKNOWN_VERSION);
     }
     if (!version_ends_page()) {
-        return fail("a header whose version ends a page was not asked the version alone");
+        return fail(VERSION_ENDS_PAGE);
     }
     memset(d, 0, sizeof(d));
     d[0].effective = d[0].permitted = 1;
     if (set_caps(d) != -1 || errno != EINVAL) {
-        return fail("a set between none and all was not EINVAL");
+        return fail(PARTIAL_SET);
     }
     return 0;
 }
@@ -597,28 +692,28 @@ static int call_rows(void)
 static int later_rows(void)
 {
     if (!exec_finds(0, 0, "all")) {
-        return fail("an exec as root did not give the capabilities back");
+        return fail(EXEC_ALL);
     }
     if (!exec_finds(0, 0, "undumpable")) {
-        return fail("an exec that gave the capabilities back left the image dumpable");
+        return fail(EXEC_UNDUMPABLE);
     }
     if (!exec_finds(1, 0, "none")) {
-        return fail("an exec under no_new_privs gave the capabilities back");
+        return fail(EXEC_NNP);
     }
     if (!exec_finds(0, 1, "none")) {
-        return fail("an exec whose directories another process shares gave the capabilities back");
+        return fail(EXEC_SHARED);
     }
     if (!nothing_regained()) {
-        return fail("an exec that regained nothing cleared the parent-death signal");
+        return fail(EXEC_KEPT);
     }
     if (!traceme_refused()) {
-        return fail("a child with capabilities made a parent without them its tracer");
+        return fail(TRACEME);
     }
     if (!traceme_leader_ended_refused()) {
-        return fail("a privileged child made its tracer a parent whose live thread was not");
+        return fail(TRACEME_LEADER);
     }
     if (!own_exe_readable()) {
-        return fail("a thread without capabilities could not read its own process's exe link");
+        return fail(OWN_EXE);
     }
     return 0;
 }
@@ -631,21 +726,23 @@ int main(int argc, char **argv)
     if (probe_words() > 0) {
         return judge_image(probe_word(1), probe_word(2));
     }
+    report_begin(report_case(environ, "guest.default.capmusl"));
     if (call_rows() != 0) {
         return 1;
     }
     if (!make_secret()) {
-        return fail("the file only user 1000 may read");
+        return fail(MAKE_SECRET);
     }
     row = in_dropped_child();
     unlink(SECRET);
     if (row != 0) {
-        return fail(dropped_rows[row]);
+        return fail(DROPPED_CHILD + row - 1);
     }
     if (later_rows() != 0) {
         return 1;
     }
 
+    report_at(CHECKS);
     printf("CAPMUSL OK\n");
 
     return 0;

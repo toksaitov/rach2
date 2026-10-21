@@ -22,7 +22,9 @@
  * a negative count fails with EINVAL.
  *
  * Prints `READVMUSL OK` and exits 0 on success, and prints
- * `READVMUSL FAIL (detail)` and exits 1 otherwise.
+ * `READVMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists; a failure leaves the checks after it not run.
  */
 
 #define _GNU_SOURCE
@@ -39,12 +41,158 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
+#include "../probe_report.h"
+
 #define SCRATCH "/readvmusl.tmp"
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    LINE_PIPE,
+    FDOPEN,
+    FGETS,
+    FGETS_LINE,
+    SECOND_LINE,
+    BLOCK_PIPE,
+    FDOPEN_BLOCK,
+    FREAD,
+    FREAD_BYTES,
+    WALK_FILE,
+    FILE_TOTAL,
+    FILE_ORDER,
+    EMPTY_FILE,
+    EMPTY_BUFFER,
+    EMPTY_AROUND,
+    SHORT_FILE,
+    SHORT_EOF,
+    WALK_PIPE,
+    PIPE_HELD,
+    PIPE_ORDER,
+    LIVE_PIPE,
+    LIVE_WRITE,
+    LIVE_STOP,
+    REFUSAL_PIPE,
+    OUTSIDE_WINDOW,
+    UNMAPPED,
+    INPUT_KEPT,
+    EDGE_PIPE,
+    EMPTY_BUFFERS,
+    CLOSED_FD,
+    COUNT_PIPE,
+    NO_BUFFERS,
+    NEGATIVE_COUNT,
+    DGRAM_SOCKET,
+    DGRAM_BIND,
+    DGRAM_SEND,
+    DGRAM_FILL,
+    DGRAM_ORDER,
+    DGRAM_SEND_2,
+    DGRAM_TRUNCATE,
+    DGRAM_TRUNCATED_BYTES,
+    DGRAM_SEND_ALIAS,
+    DGRAM_ALIAS,
+    DGRAM_SEND_3,
+    DGRAM_NEXT,
+    PTY_MASTER,
+    PTY_UNLOCK,
+    PTY_SLAVE,
+    PTY_WRITE,
+    TTY_ONE_LINE,
+    TTY_LINE,
+    SHARED_FORK,
+    SHARED_WAIT,
+    SHARED_PAGE,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"line-pipe", "could not make the pipe the buffered read uses"},
+    {"fdopen", "fdopen"},
+    {"fgets", "fgets read nothing, which is the defect this probe exists for"},
+    {"fgets-line", "fgets returned something other than the line written"},
+    {"second-line", "the second buffered line did not arrive"},
+    {"block-pipe", "could not make the pipe the block read uses"},
+    {"fdopen-block", "fdopen for the block read"},
+    {"fread", "fread did not return the bytes that were written"},
+    {"fread-bytes", "fread returned the wrong bytes"},
+    {"walk-file", "could not make the file the walk uses"},
+    {"file-total", "readv across three buffers of a file did not return the total"},
+    {"file-order", "readv filled the buffers out of order"},
+    {"empty-file", "could not make the file the empty-buffer case uses"},
+    {"empty-buffer", "a zero-length buffer stopped the walk"},
+    {"empty-around", "the buffers around the empty one hold the wrong bytes"},
+    {"short-file", "could not make the file the short case uses"},
+    {"short-eof", "end of file did not stop the walk"},
+    {"walk-pipe", "could not make the pipe the walk uses"},
+    {"pipe-held", "readv of a pipe stopped before the bytes it held ran out"},
+    {"pipe-order", "readv of a pipe filled the wrong buffer"},
+    {"live-pipe", "could not make the pipe the live-writer case uses"},
+    {"live-write", "could not write the live-writer pipe"},
+    {"live-stop", "readv did not stop at the bytes a live writer had written"},
+    {"refusal-pipe", "could not make the pipe the refusal case uses"},
+    {"outside-window", "an address outside the user window was not refused"},
+    {"unmapped", "an unmapped address inside the user window was not refused"},
+    {"input-kept", "the refused readv had already taken the input"},
+    {"edge-pipe", "could not make the pipe the edge cases use"},
+    {"empty-buffers", "readv of empty buffers did not return 0"},
+    {"closed-fd", "readv of empty buffers on a closed fd was not refused"},
+    {"count-pipe", "could not make the pipe the count case uses"},
+    {"no-buffers", "readv of no buffers did not return 0"},
+    {"negative-count", "a negative count was not refused with EINVAL"},
+    {"dgram-socket", "could not make the datagram socket"},
+    {"dgram-bind", "could not bind the datagram socket to a port"},
+    {"dgram-send", "could not send the datagram"},
+    {"dgram-fill", "one datagram did not fill the buffers it reached"},
+    {"dgram-order", "the datagram arrived out of order across the buffers"},
+    {"dgram-send-2", "could not send the second datagram"},
+    {"dgram-truncate", "a datagram past the end of the buffers did not stop there"},
+    {"dgram-truncated-bytes", "the truncated datagram has the wrong bytes"},
+    {"dgram-send-alias", "could not send the aliasing datagram"},
+    {"dgram-alias", "the aliasing readv did not even fill the first buffer"},
+    {"dgram-send-3", "could not send the third datagram"},
+    {"dgram-next", "a read after a truncated datagram saw the wrong message"},
+    {"pty-master", "could not open a pty master"},
+    {"pty-unlock", "could not unlock the pty"},
+    {"pty-slave", "could not open the pty slave"},
+    {"pty-write", "could not write the two lines"},
+    {"tty-one-line", "readv of a terminal took more than the line it asked for"},
+    {"tty-line", "readv of a terminal returned something other than the line"},
+    {"shared-fork", "fork for the shared-page case"},
+    {"shared-wait", "waiting for the shared-page child"},
+    {"shared-page", "a readv into a page inherited through fork did not deliver"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("READVMUSL FAIL (%s)\n", what);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("READVMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -109,49 +257,49 @@ static int check_buffered(void)
 
     fd = pipe_holding("a line through stdio\nsecond\n");
     if (fd < 0) {
-        return fail("could not make the pipe the buffered read uses");
+        return fail(LINE_PIPE);
     }
     stream = fdopen(fd, "r");
     if (!stream) {
         close(fd);
 
-        return fail("fdopen");
+        return fail(FDOPEN);
     }
     if (!fgets(line, sizeof(line), stream)) {
         fclose(stream);
 
-        return fail("fgets read nothing, which is the defect this probe exists for");
+        return fail(FGETS);
     }
     if (strcmp(line, "a line through stdio\n") != 0) {
         fclose(stream);
 
-        return fail("fgets returned something other than the line written");
+        return fail(FGETS_LINE);
     }
     if (!fgets(line, sizeof(line), stream) || strcmp(line, "second\n") != 0) {
         fclose(stream);
 
-        return fail("the second buffered line did not arrive");
+        return fail(SECOND_LINE);
     }
     fclose(stream);
 
     fd = pipe_holding("0123456789abcdef");
     if (fd < 0) {
-        return fail("could not make the pipe the block read uses");
+        return fail(BLOCK_PIPE);
     }
     stream = fdopen(fd, "r");
     if (!stream) {
         close(fd);
 
-        return fail("fdopen for the block read");
+        return fail(FDOPEN_BLOCK);
     }
     if (fread(block, 1, sizeof(block), stream) != sizeof(block)) {
         fclose(stream);
 
-        return fail("fread did not return the bytes that were written");
+        return fail(FREAD);
     }
     fclose(stream);
     if (memcmp(block, "0123456789abcdef", sizeof(block)) != 0) {
-        return fail("fread returned the wrong bytes");
+        return fail(FREAD_BYTES);
     }
 
     return 0;
@@ -173,7 +321,7 @@ static int check_file(void)
 
     fd = file_holding("AAAABBBBCCCC");
     if (fd < 0) {
-        return fail("could not make the file the walk uses");
+        return fail(WALK_FILE);
     }
     parts[0].iov_base = one;
     parts[0].iov_len = sizeof(one);
@@ -184,38 +332,38 @@ static int check_file(void)
     got = readv(fd, parts, 3);
     close(fd);
     if (got != 12) {
-        return fail("readv across three buffers of a file did not return the total");
+        return fail(FILE_TOTAL);
     }
     if (memcmp(one, "AAAA", 4) != 0 || memcmp(two, "BBBB", 4) != 0 ||
         memcmp(three, "CCCC", 4) != 0) {
-        return fail("readv filled the buffers out of order");
+        return fail(FILE_ORDER);
     }
 
     /* A zero-length buffer in the middle is skipped, not treated as an end. */
     fd = file_holding("XXXXYYYY");
     if (fd < 0) {
-        return fail("could not make the file the empty-buffer case uses");
+        return fail(EMPTY_FILE);
     }
     parts[1].iov_len = 0;
     got = readv(fd, parts, 3);
     close(fd);
     if (got != 8) {
-        return fail("a zero-length buffer stopped the walk");
+        return fail(EMPTY_BUFFER);
     }
     if (memcmp(one, "XXXX", 4) != 0 || memcmp(three, "YYYY", 4) != 0) {
-        return fail("the buffers around the empty one hold the wrong bytes");
+        return fail(EMPTY_AROUND);
     }
 
     /* End of file stops the walk instead of reporting an error. */
     fd = file_holding("ZZZZ");
     if (fd < 0) {
-        return fail("could not make the file the short case uses");
+        return fail(SHORT_FILE);
     }
     parts[1].iov_len = sizeof(two);
     got = readv(fd, parts, 3);
     close(fd);
     if (got != 4) {
-        return fail("end of file did not stop the walk");
+        return fail(SHORT_EOF);
     }
 
     unlink(SCRATCH);
@@ -245,7 +393,7 @@ static int check_stream(void)
 
     fd = pipe_holding("AAAABBBB");
     if (fd < 0) {
-        return fail("could not make the pipe the walk uses");
+        return fail(WALK_PIPE);
     }
     parts[0].iov_base = one;
     parts[0].iov_len = sizeof(one);
@@ -254,26 +402,26 @@ static int check_stream(void)
     got = readv(fd, parts, 2);
     close(fd);
     if (got != 8) {
-        return fail("readv of a pipe stopped before the bytes it held ran out");
+        return fail(PIPE_HELD);
     }
     if (memcmp(one, "AAAA", 4) != 0 || memcmp(two, "BBBB", 4) != 0) {
-        return fail("readv of a pipe filled the wrong buffer");
+        return fail(PIPE_ORDER);
     }
 
     if (pipe(ends) != 0) {
-        return fail("could not make the pipe the live-writer case uses");
+        return fail(LIVE_PIPE);
     }
     if (write(ends[1], "LIVE", 4) != 4) {
         close(ends[0]);
         close(ends[1]);
 
-        return fail("could not write the live-writer pipe");
+        return fail(LIVE_WRITE);
     }
     got = readv(ends[0], parts, 2);
     close(ends[0]);
     close(ends[1]);
     if (got != 4) {
-        return fail("readv did not stop at the bytes a live writer had written");
+        return fail(LIVE_STOP);
     }
 
     return 0;
@@ -313,7 +461,7 @@ static int check_datagram(void)
 
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
-        return fail("could not make the datagram socket");
+        return fail(DGRAM_SOCKET);
     }
     memset(&me, 0, sizeof(me));
     me.sin_family = AF_INET;
@@ -322,12 +470,12 @@ static int check_datagram(void)
         getsockname(fd, (struct sockaddr *)&me, &melen) != 0) {
         close(fd);
 
-        return fail("could not bind the datagram socket to a port");
+        return fail(DGRAM_BIND);
     }
     if (sendto(fd, "AAAABBBBCC", 10, 0, (struct sockaddr *)&me, sizeof(me)) != 10) {
         close(fd);
 
-        return fail("could not send the datagram");
+        return fail(DGRAM_SEND);
     }
 
     parts[0].iov_base = one;
@@ -340,31 +488,31 @@ static int check_datagram(void)
     if (got != 10) {
         close(fd);
 
-        return fail("one datagram did not fill the buffers it reached");
+        return fail(DGRAM_FILL);
     }
     if (memcmp(one, "AAAA", 4) != 0 || memcmp(two, "BBBB", 4) != 0 || memcmp(three, "CC", 2) != 0) {
         close(fd);
 
-        return fail("the datagram arrived out of order across the buffers");
+        return fail(DGRAM_ORDER);
     }
 
     /* A datagram longer than the buffers. */
     if (sendto(fd, "0123456789", 10, 0, (struct sockaddr *)&me, sizeof(me)) != 10) {
         close(fd);
 
-        return fail("could not send the second datagram");
+        return fail(DGRAM_SEND_2);
     }
     parts[1].iov_len = 2;
     got = readv(fd, parts, 2);
     if (got != 6) {
         close(fd);
 
-        return fail("a datagram past the end of the buffers did not stop there");
+        return fail(DGRAM_TRUNCATE);
     }
     if (memcmp(one, "0123", 4) != 0 || memcmp(two, "45", 2) != 0) {
         close(fd);
 
-        return fail("the truncated datagram has the wrong bytes");
+        return fail(DGRAM_TRUNCATED_BYTES);
     }
 
     /* A buffer that aliases the vector list. */
@@ -382,7 +530,7 @@ static int check_datagram(void)
             (ssize_t)sizeof(payload)) {
             close(fd);
 
-            return fail("could not send the aliasing datagram");
+            return fail(DGRAM_SEND_ALIAS);
         }
         alias[0].iov_base = sink;
         alias[0].iov_len = sizeof(sink);
@@ -394,7 +542,7 @@ static int check_datagram(void)
         if (got < 4) {
             close(fd);
 
-            return fail("the aliasing readv did not even fill the first buffer");
+            return fail(DGRAM_ALIAS);
         }
     }
 
@@ -402,14 +550,14 @@ static int check_datagram(void)
     if (sendto(fd, "TAIL", 4, 0, (struct sockaddr *)&me, sizeof(me)) != 4) {
         close(fd);
 
-        return fail("could not send the third datagram");
+        return fail(DGRAM_SEND_3);
     }
     parts[0].iov_len = sizeof(one);
     parts[1].iov_len = sizeof(two);
     got = readv(fd, parts, 2);
     close(fd);
     if (got != 4 || memcmp(one, "TAIL", 4) != 0) {
-        return fail("a read after a truncated datagram saw the wrong message");
+        return fail(DGRAM_NEXT);
     }
 
     return 0;
@@ -437,24 +585,24 @@ static int check_terminal(void)
 
     master = posix_openpt(O_RDWR | O_NOCTTY);
     if (master < 0) {
-        return fail("could not open a pty master");
+        return fail(PTY_MASTER);
     }
     if (grantpt(master) != 0 || unlockpt(master) != 0) {
         close(master);
 
-        return fail("could not unlock the pty");
+        return fail(PTY_UNLOCK);
     }
     slave = open(ptsname(master), O_RDWR | O_NOCTTY);
     if (slave < 0) {
         close(master);
 
-        return fail("could not open the pty slave");
+        return fail(PTY_SLAVE);
     }
     if (write(master, "one\n", 4) != 4 || write(master, "two\n", 4) != 4) {
         close(slave);
         close(master);
 
-        return fail("could not write the two lines");
+        return fail(PTY_WRITE);
     }
 
     parts[0].iov_base = one;
@@ -468,10 +616,10 @@ static int check_terminal(void)
     close(master);
     signal(SIGHUP, SIG_DFL);
     if (got != 4) {
-        return fail("readv of a terminal took more than the line it asked for");
+        return fail(TTY_ONE_LINE);
     }
     if (memcmp(one, "one\n", 4) != 0) {
-        return fail("readv of a terminal returned something other than the line");
+        return fail(TTY_LINE);
     }
 
     return 0;
@@ -501,25 +649,25 @@ static int check_edges(void)
     /* A bad address in the second buffer, below the window and inside it. */
     fd = pipe_holding("KEEPTHIS");
     if (fd < 0) {
-        return fail("could not make the pipe the refusal case uses");
+        return fail(REFUSAL_PIPE);
     }
     parts[1].iov_base = (void *)0x10;
     parts[1].iov_len = sizeof(rest);
     if (readv(fd, parts, 2) != -1 || errno != EFAULT) {
         close(fd);
 
-        return fail("an address outside the user window was not refused");
+        return fail(OUTSIDE_WINDOW);
     }
     parts[1].iov_base = (void *)0x30000000;
     if (readv(fd, parts, 2) != -1 || errno != EFAULT) {
         close(fd);
 
-        return fail("an unmapped address inside the user window was not refused");
+        return fail(UNMAPPED);
     }
     if (read(fd, rest, sizeof(rest)) != 8 || memcmp(rest, "KEEPTHIS", 8) != 0) {
         close(fd);
 
-        return fail("the refused readv had already taken the input");
+        return fail(INPUT_KEPT);
     }
     close(fd);
 
@@ -529,33 +677,33 @@ static int check_edges(void)
     parts[1].iov_len = 0;
     fd = pipe_holding("Q");
     if (fd < 0) {
-        return fail("could not make the pipe the edge cases use");
+        return fail(EDGE_PIPE);
     }
     got = readv(fd, parts, 2);
     if (got != 0) {
         close(fd);
 
-        return fail("readv of empty buffers did not return 0");
+        return fail(EMPTY_BUFFERS);
     }
     close(fd);
     if (readv(fd, parts, 2) != -1 || errno != EBADF) {
-        return fail("readv of empty buffers on a closed fd was not refused");
+        return fail(CLOSED_FD);
     }
 
     parts[0].iov_len = sizeof(one);
     fd = pipe_holding("Q");
     if (fd < 0) {
-        return fail("could not make the pipe the count case uses");
+        return fail(COUNT_PIPE);
     }
     if (readv(fd, parts, 0) != 0) {
         close(fd);
 
-        return fail("readv of no buffers did not return 0");
+        return fail(NO_BUFFERS);
     }
     if (readv(fd, parts, -1) != -1 || errno != EINVAL) {
         close(fd);
 
-        return fail("a negative count was not refused with EINVAL");
+        return fail(NEGATIVE_COUNT);
     }
     close(fd);
 
@@ -588,7 +736,7 @@ static int check_shared(void)
     memset(inherited, 'x', 4096);
     child = fork();
     if (child < 0) {
-        return fail("fork for the shared-page case");
+        return fail(SHARED_FORK);
     }
     if (child == 0) {
         fd = file_holding("COPYONWRITE");
@@ -606,10 +754,10 @@ static int check_shared(void)
         _exit(memcmp(inherited, "COPYONWRITE", 11) == 0 ? 0 : 4);
     }
     if (waitpid(child, &status, 0) != child) {
-        return fail("waiting for the shared-page child");
+        return fail(SHARED_WAIT);
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("a readv into a page inherited through fork did not deliver");
+        return fail(SHARED_PAGE);
     }
     unlink(SCRATCH);
 
@@ -621,7 +769,10 @@ static int check_shared(void)
  */
 int main(void)
 {
-    int rc = check_buffered();
+    int rc;
+
+    report_begin(report_case(environ, "guest.default.readvmusl"));
+    rc = check_buffered();
 
     if (rc == 0) {
         rc = check_file();
@@ -642,6 +793,7 @@ int main(void)
         rc = check_shared();
     }
     if (rc == 0) {
+        report_at(CHECKS);
         printf("READVMUSL OK\n");
     }
 

@@ -29,6 +29,9 @@
  * exit, and be respawned into the same failure.
  *
  * Prints "LOGINMUSL OK" on success and "LOGINMUSL FAIL (detail)" otherwise.
+ * Writes etude's report records (../probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check `checks` lists, those of the two refused
+ * scripts once each; a failure leaves the checks after it not run.
  *
  * A native run gives `ids=OLD:NEW,...` (tests/native/Readme.md) and a private
  * root whose account files and home have `probe` at the NEW of 1000; the
@@ -52,6 +55,7 @@
 
 #include "pwauth.h"
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define LOGIN_PATH "/login"
 #define ETC_PASSWD "/etc/passwd"
@@ -67,10 +71,96 @@
 static const char *Databases[3] = {ETC_PASSWD, ETC_SHADOW, ETC_GROUP};
 static char Snapshot[3][4096];
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    MUST_BE_ROOT,
+    DATABASES,
+    RUN_LOGIN,
+    PROMPT,
+    IDENTITY,
+    ADMITTED,
+    NORMAL_EXIT,
+    REFUSAL_REPORTED,
+    NO_SHELL,
+    NAME_NOT_REPEATED,
+    STAGE_EMPTY,
+    EMPTY_REFUSED,
+    STOP_PIPES,
+    STOP_FORK,
+    STOP,
+    STOPPED_REPORTED,
+    CONTINUE,
+    CONTINUED_ENDS,
+    CONTINUED_LOGS_IN,
+    PTY_OPEN,
+    PTY_MODES,
+    PTY_WRECK,
+    PTY_FORK,
+    WRECKED_USABLE,
+    CANONICAL,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"root", "the probe must run as root"},
+    {"databases", "cannot read the databases"},
+    {"run-login", "could not run login"},
+    {"prompt", "login did not ask who was there"},
+    {"identity", "login did not hand over the account's identity"},
+    {"admitted", "login admitted a caller who proved nothing"},
+    {"normal-exit", "login did not exit normally when it refused"},
+    {"refusal-reported", "login did not report a refusal"},
+    {"no-shell", "a refused login still exec'd the account's shell"},
+    {"name-not-repeated", "login repeated an unknown name back at the prompt"},
+    {"stage-empty", "could not stage an account with an empty password field"},
+    {"empty-refused", "login admitted an account whose password field is empty"},
+    {"stop-pipes", "could not make the pipes the stop case needs"},
+    {"stop-fork", "could not fork a login to stop"},
+    {"stop", "could not stop the login"},
+    {"stopped-reported", "a stopped login was not reported as stopped"},
+    {"continue", "could not continue the stopped login"},
+    {"continued-ends", "the continued login did not run to an ordinary end"},
+    {"continued-logs-in", "a login that was stopped and continued never came back"},
+    {"pty-open", "could not open a pty to wreck"},
+    {"pty-modes", "the pty has no modes to read"},
+    {"pty-wreck", "could not leave the pty the way a session can"},
+    {"pty-fork", "could not fork a login onto the wrecked pty"},
+    {"wrecked-usable", "login could not be used on a terminal a session had wrecked"},
+    {"canonical", "login did not put the terminal back into canonical mode"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("LOGINMUSL FAIL (%s)\n", what);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("LOGINMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -284,15 +374,15 @@ static int check_login(void)
     restore_databases();
     status = run_login(PROBE_USER "\n" PROBE_PASS "\n", said, sizeof(said));
     if (status < 0) {
-        return fail("could not run login");
+        return fail(RUN_LOGIN);
     }
     if (strstr(said, "rach2 login:") == NULL) {
-        return fail("login did not ask who was there");
+        return fail(PROMPT);
     }
     snprintf(wanted, sizeof(wanted), "uid=%d euid=%d suid=%d gid=%d egid=%d sgid=%d arg0=-idreport",
              PROBE_UID, PROBE_UID, PROBE_UID, PROBE_UID, PROBE_UID, PROBE_UID);
     if (strstr(said, wanted) == NULL) {
-        return fail("login did not hand over the account's identity");
+        return fail(IDENTITY);
     }
 
     return 0;
@@ -324,19 +414,19 @@ static int check_refusals(void)
         restore_databases();
         status = run_login(scripts[which], said, sizeof(said));
         if (status == 0) {
-            return fail("login admitted a caller who proved nothing");
+            return fail(ADMITTED);
         }
         if (status < 0) {
-            return fail("login did not exit normally when it refused");
+            return fail(NORMAL_EXIT);
         }
         if (strstr(said, "incorrect") == NULL) {
-            return fail("login did not report a refusal");
+            return fail(REFUSAL_REPORTED);
         }
         if (strstr(said, "uid=") != NULL) {
-            return fail("a refused login still exec'd the account's shell");
+            return fail(NO_SHELL);
         }
         if (which == 1 && strstr(said, "nosuchaccount") != NULL) {
-            return fail("login repeated an unknown name back at the prompt");
+            return fail(NAME_NOT_REPEATED);
         }
     }
 
@@ -344,13 +434,13 @@ static int check_refusals(void)
     restore_databases();
     if (slurp(ETC_SHADOW, staged, sizeof(staged)) < 0 || set_hash(staged, PROBE_USER, "") != 0 ||
         spill(ETC_SHADOW, staged, 0600) != 0) {
-        return fail("could not stage an account with an empty password field");
+        return fail(STAGE_EMPTY);
     }
     status = run_login(PROBE_USER "\n\n"
                                   "\n\n\n\n",
                        said, sizeof(said));
     if (status <= 0 || strstr(said, "uid=") != NULL) {
-        return fail("login admitted an account whose password field is empty");
+        return fail(EMPTY_REFUSED);
     }
     restore_databases();
 
@@ -391,7 +481,7 @@ static int check_wedges(void)
 
     /* A stopped login. */
     if (pipe(in) != 0 || pipe(out) != 0) {
-        return fail("could not make the pipes the stop case needs");
+        return fail(STOP_PIPES);
     }
     child = fork();
     if (child == 0) {
@@ -406,25 +496,25 @@ static int check_wedges(void)
     close(in[0]);
     close(out[1]);
     if (child < 0) {
-        return fail("could not fork a login to stop");
+        return fail(STOP_FORK);
     }
     if (kill(child, SIGSTOP) != 0) {
         kill(child, SIGKILL);
         (void)waitpid(child, &status, 0);
 
-        return fail("could not stop the login");
+        return fail(STOP);
     }
     if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status)) {
         kill(child, SIGKILL);
         (void)waitpid(child, &status, 0);
 
-        return fail("a stopped login was not reported as stopped");
+        return fail(STOPPED_REPORTED);
     }
     if (kill(child, SIGCONT) != 0) {
         kill(child, SIGKILL);
         (void)waitpid(child, &status, 0);
 
-        return fail("could not continue the stopped login");
+        return fail(CONTINUE);
     }
     (void)write(in[1], PROBE_USER "\n", strlen(PROBE_USER) + 1);
     (void)write(in[1], PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
@@ -448,10 +538,10 @@ static int check_wedges(void)
     }
     close(out[0]);
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
-        return fail("the continued login did not run to an ordinary end");
+        return fail(CONTINUED_ENDS);
     }
     if (strstr(said, "uid=") == NULL) {
-        return fail("a login that was stopped and continued never came back");
+        return fail(CONTINUED_LOGS_IN);
     }
 
     /* A terminal left as `stty -icanon -echo min 0` leaves it. */
@@ -462,13 +552,13 @@ static int check_wedges(void)
         int sane;
 
         if (openpty(&master, &slave, NULL, NULL, NULL) != 0) {
-            return fail("could not open a pty to wreck");
+            return fail(PTY_OPEN);
         }
         if (tcgetattr(slave, &wrecked) != 0) {
             close(master);
             close(slave);
 
-            return fail("the pty has no modes to read");
+            return fail(PTY_MODES);
         }
         wrecked.c_lflag &= ~(tcflag_t)(ICANON | ECHO);
         wrecked.c_cc[VMIN] = 0;
@@ -477,7 +567,7 @@ static int check_wedges(void)
             close(master);
             close(slave);
 
-            return fail("could not leave the pty the way a session can");
+            return fail(PTY_WRECK);
         }
         child = fork();
         if (child == 0) {
@@ -492,7 +582,7 @@ static int check_wedges(void)
             close(master);
             close(slave);
 
-            return fail("could not fork a login onto the wrecked pty");
+            return fail(PTY_FORK);
         }
         sane = 0;
         {
@@ -516,7 +606,7 @@ static int check_wedges(void)
                 close(master);
                 close(slave);
 
-                return fail("login could not be used on a terminal a session had wrecked");
+                return fail(WRECKED_USABLE);
             }
         }
         kill(child, SIGKILL);
@@ -524,7 +614,7 @@ static int check_wedges(void)
         close(master);
         close(slave);
         if (!sane) {
-            return fail("login did not put the terminal back into canonical mode");
+            return fail(CANONICAL);
         }
     }
 
@@ -541,16 +631,13 @@ int main(int argc, char **argv)
     int rc;
 
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.loginmusl"));
     if (getuid() != 0) {
-        printf("LOGINMUSL FAIL (the probe must run as root)\n");
-
-        return 1;
+        return fail(MUST_BE_ROOT);
     }
     for (i = 0; i < 3; i++) {
         if (slurp(Databases[i], Snapshot[i], sizeof(Snapshot[i])) < 0) {
-            printf("LOGINMUSL FAIL (cannot read the databases)\n");
-
-            return 1;
+            return fail(DATABASES);
         }
     }
     rc = check_login();
@@ -562,6 +649,7 @@ int main(int argc, char **argv)
     }
     restore_databases();
     if (rc == 0) {
+        report_at(CHECKS);
         printf("LOGINMUSL OK\n");
     }
 
