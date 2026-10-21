@@ -49,7 +49,7 @@ if out=$(sh tools/inspect/check_recovery.sh "$KERNEL" "$AUTH" 2>&1); then
     status=0
 else
     printf '%s\n' "$out"
-    detail=$(printf '%s' "$out" | tail -n 1 | tr -c ' -~' '?' | cut -c1-160)
+    detail=$(printf '%s' "$out" | tail -n 1 | tr -c ' -~' '?' | sed 's/^ *//' | cut -c1-160 | sed 's/ *$//')
     [ -n "$detail" ] || detail="check_recovery.sh failed and printed nothing"
     printf '@etude 1 assert banner fail %s\n' "$detail"
     status=1
