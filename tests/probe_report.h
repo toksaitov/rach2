@@ -40,9 +40,9 @@
 static int report_records;
 
 /* The planned path: its assertions, the next of them, and the process that
- * began the report. */
+ * began the report; and whether the report has ended. */
 static const char *report_path[32];
-static int report_path_len, report_path_at, report_owner;
+static int report_path_len, report_path_at, report_owner, report_ended;
 
 /** Append `s` to the record `line`, which has `*n` bytes, as room allows. */
 static __inline__ void report_put(char *line, int *n, const char *s)
@@ -157,6 +157,7 @@ static __inline__ void report_end(void)
     char count[12];
 
     report_record(ETUDE_REPORT_END, report_decimal(count, report_records), 0, 0);
+    report_ended = 1;
 }
 
 /** Add the assertion `id` to the end of the planned path. */
@@ -173,10 +174,10 @@ static __inline__ void report_held(void)
 
 /** In the process that began the report, report that the path's next
  * assertion failed with `why`, that those after it were not run, and the
- * report's end. */
+ * report's end; after the end, nothing. */
 static __inline__ void report_stop(const char *why)
 {
-    if (report_owner == 0 || report_getpid() != report_owner) {
+    if (report_owner == 0 || report_ended || report_getpid() != report_owner) {
         return;
     }
     if (report_path_at < report_path_len) {
