@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bootorder",
+  "summary": "A GRUB disk that is not the first disk on its bus: on the second AHCI port behind a blank disk, booted by SeaBIOS, its root found as disk 1; the program is tests/cases/machine/bootorder_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bootorder.behind",
+      "behavior": "the GRUB disk on AHCI port 1 behind a blank disk on port 0, booted by SeaBIOS, boots to the login prompt with the blank disk numbered disk 0, itself disk 1, and its root found by the disk's MBR id on its third partition, /dev/disk1p3",
+      "units": ["bootorder"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"blank_bytes": 8388608, "root": "MBRID=1acef00d,3"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootorder_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["bootorder-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' files, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "behind", "does": "boot the GRUB disk on AHCI port 1 through SeaBIOS and GRUB, with the blank disk on port 0, read the kernel's records of the two disks and of the root, wait for the login prompt, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "behind", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "blank", "bus": "ahci", "size_bytes": 8388608}, {"name": "bootorder-disk", "bus": "ahci", "boot": true}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-disk1", "checks": "the kernel's first record of the root says root: MBRID=1acef00d,3: /dev/disk1p3, ext2, the third partition of the GRUB disk as disk 1", "source": "scenario"},
+        {"assertion_id": "blank-disk0", "checks": "the kernel says disk: disk0: ahci 0: 16384 sectors, so the blank disk on port 0 is disk 0", "source": "scenario"},
+        {"assertion_id": "grub-disk1", "checks": "the kernel says disk: disk1: ahci 1: , so the GRUB disk on port 1 is disk 1", "source": "scenario"},
+        {"assertion_id": "login", "checks": "the machine reaches the login prompt, login:, on that root", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bootorder-disk", "node": "tests/cases/machine/bootorder/bootorder.disk", "per_architecture": true},
+        {"name": "bootorder_scenario", "node": "tests/cases/machine/bootorder_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case is the firmware booting a GRUB disk on the second AHCI port behind a blank one, an arrangement of disks the Lenovo's one disk cannot give"}
+    }
+  ]
+}

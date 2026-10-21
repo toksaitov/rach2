@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "proof": "bootorder",
+  "summary": "the case of tests/run bootorder under etude, against an AHCI driver that takes its ports from the last to the first, a root search that looks at disk 0 alone, and a GRUB disk whose menu names the root by the node of the first disk's third partition in place of the disk's MBR id",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/block/ahci.c",
+    "rach2/kernel.c",
+    "tools/image/mkdisk_grub.sh"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/mkdisk_grub.sh"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel && cp tools/image/mkdisk_grub.sh ${WORK}/"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run bootorder </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "ports-reversed",
+      "summary": "the AHCI driver takes its ports from the last to the first, so the kernel numbers the GRUB disk on port 1 disk 0",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "    for (p = 0; p < 32; ++p) {\n        uint32_t ssts, sig;",
+          "replace": "    for (p = 31; p >= 0; --p) {\n        uint32_t ssts, sig;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootorder: FAIL",
+          "assert root-disk1 fail",
+          "assert blank-disk0 fail",
+          "assert grub-disk1 fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "root-on-disk0",
+      "summary": "the root search looks at disk 0 alone, the blank disk, so the root on disk 1 is not found",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    for (i = 0; i < disk_count(); i++) {",
+          "replace": "    for (i = 0; i < disk_count() && i < 1; i++) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootorder: FAIL",
+          "assert root-disk1 fail",
+          "assert login fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "root-by-node",
+      "summary": "the menu names the root /dev/disk0p3, the first disk's third partition, in place of the GRUB disk's MBR id",
+      "edits": [
+        {
+          "file": "tools/image/mkdisk_grub.sh",
+          "find": "CANDIDATE_ROOT=\"$DISK_IDENTITY,3 rach2.rootfstype=ext2\"\nFALLBACK_ROOT=\"$DISK_IDENTITY,3 rach2.rootfstype=ext2\"",
+          "replace": "CANDIDATE_ROOT=\"/dev/disk0p3 rach2.rootfstype=ext2\"\nFALLBACK_ROOT=\"/dev/disk0p3 rach2.rootfstype=ext2\""
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootorder: FAIL",
+          "assert root-disk1 fail",
+          "assert login fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

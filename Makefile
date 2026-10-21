@@ -657,6 +657,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # arrangement cases, also link tests/cases/machine/lifecycle.c, which they
 # share.
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
+                      build/tests/cases/machine/bootorder_scenario \
                       build/tests/cases/machine/bus_scenario \
                       build/tests/cases/machine/clock_scenario \
                       build/tests/cases/machine/crash_scenario \

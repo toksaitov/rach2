@@ -125,7 +125,7 @@ diskpolicy|qemu|full
 console|qemu|core
 fpu|qemu|core
 socket|qemu|core
-bootorder|qemu,mformat,mmd,mcopy|full
+bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 reset|qemu|core
 netconsole-e1000|qemu|full
 disks|qemu,mformat,mtype|core

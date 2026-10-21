@@ -425,6 +425,22 @@ run-grub: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_T
 BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
 run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_TEST_EXT2) $(MANIFEST_PARTS_os_real) $(HARNESS)
 	sh tests/system/suites/bootorder.sh $(BOOT_KERNEL) $(HARNESS) $(BOOTORDER_DISK)
+# The GRUB disk of its case, which the case's preparation names: the GRUB
+# disk around the kernel, on an MBR, its root the grub-test tree as an ext2
+# partition, which mkdisk_grub.sh requires of every disk, and rach2.disk=ahci
+# on each entry's line. The blank disk in front of it is an empty disk of the
+# case.
+BOOTORDER_CASE_DISK = $(ARCH_CASE_DIR)/bootorder/bootorder.disk
+$(BOOTORDER_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-embed.cfg \
+                        $(KERNEL) $(GRUB_TEST_EXT2) $(DISK_TOOLS) $(GRUB_FILES) \
+                        | rach2 krffs $(MANIFEST_PARTS_os_real)
+	@mkdir -p $(@D)
+	RACH2_DISK_TABLE=mbr \
+	RACH2_DISK_APPEND="rach2.disk=ahci" \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=48 \
+	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
 # cannot. It is the case of tests/cases/machine.menu.json, which etude runs,
 # and has no target here: four boots of one GRUB disk, a two-entry menu staged
