@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.diskpolicy",
+  "summary": "The read-only kernel does not write the disk it boots, shown on the disk's bytes after a boot of each kernel, and the check that reads the policy off a kernel refuses the wrong one; the programs are tests/cases/host/diskpolicy.sh and tests/cases/machine/diskpolicy_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.diskpolicy.check",
+      "behavior": "tools/inspect/check_diskpolicy.sh accepts the read-write kernel as read-write and the read-only kernel as read-only, and refuses each offered as the other and an empty file",
+      "units": ["diskpolicy", "check_diskpolicy.sh"],
+      "domain": "host",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "make"], "features": {}},
+      "execution": {"program": "diskpolicy", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [], "children": "reaped", "cleanup": "nothing: it only reads the kernels"},
+      "assertions": [
+        {"assertion_id": "read-write", "checks": "the check accepts the read-write kernel as read-write", "source": "program"},
+        {"assertion_id": "read-only", "checks": "the check accepts the read-only kernel as read-only", "source": "program"},
+        {"assertion_id": "read-write-refused", "checks": "the check refuses the read-write kernel offered as read-only", "source": "program"},
+        {"assertion_id": "read-only-refused", "checks": "the check refuses the read-only kernel offered as read-write", "source": "program"},
+        {"assertion_id": "empty-refused", "checks": "the check refuses an empty file offered as read-only", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}, "gap": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}, "stages": {}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 134217728, "disk_bytes": 1048576, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "diskpolicy", "node": "tests/cases/host/diskpolicy", "per_architecture": false},
+        {"name": "binfind", "node": "tools/inspect/binfind", "per_architecture": false},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "host"}
+    },
+    {
+      "case_id": "machine.diskpolicy.bytes",
+      "behavior": "a boot of the read-write kernel mounts the disk and changes its bytes, and the same boot of the read-only kernel reports its policy, refuses a command by name and leaves its copy of the disk byte for byte as it was",
+      "units": ["diskpolicy", "rach2/sys/block/diskcmd.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "diskpolicy_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["rw-disk", "ro-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the two copies of the disk, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "readwrite", "stage": "execute", "machine": "readwrite",
+         "does": "boot the read-write kernel on a copy of the disk to its debug shell, end it with QMP's quit, and compare the copy with the disk"},
+        {"step_id": "readonly", "stage": "execute", "machine": "readonly",
+         "does": "boot the read-only kernel on another copy of the disk to its debug shell, end it with QMP's quit, and compare the copy with the disk"}
+      ],
+      "machines": [
+        {"machine_id": "readwrite",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "rw-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk", "rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "readonly",
+         "qemu": {"kernel": "metal-kernel", "initrd": null, "disks": [{"name": "ro-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk", "rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "rw-mounted", "checks": "the read-write kernel says krffs: mounted: before its debug shell greets", "source": "scenario"},
+        {"assertion_id": "rw-changed", "checks": "the read-write boot leaves its copy different from the disk, since the mount sets the dirty flag; without it the read-only half could not tell the kernels apart", "source": "scenario"},
+        {"assertion_id": "ro-policy", "checks": "the read-only kernel says disk: policy: read-only", "source": "scenario"},
+        {"assertion_id": "ro-refused", "checks": "the read-only kernel says refused: command, so it reached a write and stopped it", "source": "scenario"},
+        {"assertion_id": "ro-unchanged", "checks": "the read-only boot leaves its copy byte for byte the disk", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 450000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 400000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 536870912, "disk_bytes": 134217728,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "metal-kernel", "node": "rach2-metal/kernel", "per_architecture": true},
+        {"name": "rw-disk", "node": "images/etude-disk.disk", "per_architecture": true},
+        {"name": "ro-disk", "node": "images/etude-disk.disk", "per_architecture": true},
+        {"name": "diskpolicy_scenario", "node": "tests/cases/machine/diskpolicy_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the read-only kernel's proof is the disk's bytes after a boot of each kernel, read off a copy the host compares"}
+    }
+  ]
+}

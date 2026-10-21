@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "ata-rate",
-  "summary": "ata_hosttest.c's two write-count rows, which the diskrate suite runs, with faults in ata.c",
+  "summary": "ata_hosttest.c's two write-count rows, which tests/run host runs, with faults in ata.c",
   "tree": "private",
   "sources": [
     "rach2/sys/block/ata.c"

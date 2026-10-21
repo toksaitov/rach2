@@ -1455,12 +1455,8 @@ run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIX
 
 # `tests/run diskrate`: the storage paths timed in the machine and held under
 # bounds: the raw device, a file on exFAT and on FAT32 written and read, two
-# hundred small files, and a raw read piped into a hash.
-DISKRATE_DIR = $(IMAGES_DIR)/diskrate
-run-diskrate: $(DEMO_CREDS) rach2 tests krffs os-real-image test-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS) rach2-recovery $(RECOVERY_IMAGE)
-	sh tests/system/suites/diskrate.sh $(BOOT_KERNEL) $(OS_REAL_IMAGE) $(HARNESS) $(DISKRATE_DIR) \
-	    "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(MKMBR) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) \
-	    $(TEST_IMAGE)
+# hundred small files, and a raw read piped into a hash. It is the cases of
+# tests/cases/machine.diskrate.json, which etude runs, and has no target here.
 
 # The grow set (tools/inspect/growset.c), for `tests/run grow`: the sectors
 # a grow writes, checked against what the grow in QEMU changed. The tool
@@ -1612,12 +1608,11 @@ run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATF
 run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # `tests/run diskpolicy`: the read-only kernel does not write the disk, shown on
-# the bytes rather than on a return value. The same disk is booted with each
-# kernel; the ordinary one must change it, which is what makes the other half
-# mean anything, and the metal one must refuse a command by name and leave the
-# image untouched.
-run-diskpolicy: rach2 rach2-metal $(HARNESS)
-	sh tests/system/suites/diskpolicy.sh $(BOOT_KERNEL) $(METAL_KERNEL)
+# the bytes rather than on a return value. It is the cases of
+# tests/cases/machine.diskpolicy.json, which etude runs, and has no target
+# here: copies of one disk are booted with each kernel; the ordinary one must
+# change its copy, which is what makes the other half mean anything, and the
+# metal one must refuse a command by name and leave its copy untouched.
 # `tests/run metal`: unattended SSH on the metal image and acceptance of an
 # installed ext2 root. The RAM boot checks server restart, authentication,
 # transfers, mounts and USB writes. Four serial boots check the installed

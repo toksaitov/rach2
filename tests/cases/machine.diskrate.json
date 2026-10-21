@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.diskrate",
+  "summary": "The storage paths timed in the machine and judged by the counts the kernel keeps, never by their times, and the emulator's cost of a read buffer in a page of executed code; the programs are tests/cases/machine/diskrate_scenario.c and tests/placeprobe.c",
+  "cases": [
+    {
+      "case_id": "machine.diskrate.storage",
+      "behavior": "files on exFAT and FAT32, small writes, two hundred small files, a raw read and a raw read through a pipe on three IDE disks with bus-master DMA, a USB stick and an AHCI disk written and read raw, each row moving its bytes within the commands, status reads and cache hits that its path takes, with no command quarantined; the times are printed for the record",
+      "units": ["diskrate", "rach2/sys/block/ata.c", "rach2/sys/block/ahci.c", "rach2/sys/fs/exfat", "rach2/sys/fs/fat"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"raw_mib": 256, "exfat_mib": 256, "fat_mib": 256, "stick_mib": 16, "ahci_mib": 64}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["dd", "mformat"], "features": {}},
+      "execution": {
+        "program": "diskrate_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the five empty disks, which it keeps after a failure; the scenario removes the exFAT volume it copies into its disk"
+      },
+      "steps": [
+        {"step_id": "volumes", "stage": "prepare",
+         "does": "make an exFAT volume with the fixture builder and a FAT32 one with mformat in two empty disks, each behind an MBR partition at sector 2048"},
+        {"step_id": "paths", "stage": "execute", "machine": "paths",
+         "does": "boot os-real on the raw, exFAT and FAT32 disks, log in as root at the console and type the rows, reading the disk's counters before and after each"},
+        {"step_id": "stick", "stage": "execute", "machine": "stick",
+         "does": "boot the recovery system with an empty USB stick and write and read 4 MiB of it raw"},
+        {"step_id": "ahci", "stage": "execute", "machine": "ahci",
+         "does": "boot the recovery system with an empty AHCI disk and write and read 32 MiB of it raw"}
+      ],
+      "machines": [
+        {"machine_id": "paths",
+         "qemu": {"kernel": "kernel", "initrd": "os-real",
+                  "disks": [{"name": "raw", "bus": "ide", "size_bytes": 268435456},
+                            {"name": "exfat", "bus": "ide", "size_bytes": 268435456},
+                            {"name": "fat", "bus": "ide", "size_bytes": 268435456}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.diskdiag"]},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "stick",
+         "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image",
+                  "disks": [{"name": "stick", "bus": "device", "id": "stick", "size_bytes": 16777216}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct",
+                  "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick"}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "ahci",
+         "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image",
+                  "disks": [{"name": "ahci", "bus": "ahci", "size_bytes": 67108864}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.disk=ahci"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "dma", "checks": "the ATA driver says that each of the three IDE disks, primary master, primary slave and secondary master, selected bus-master DMA", "source": "scenario"},
+        {"assertion_id": "row-rawread", "checks": "128 MiB read from the raw disk in 1 MiB calls, dd reporting every byte", "source": "scenario"},
+        {"assertion_id": "row-pipehash", "checks": "64 MiB read raw through a pipe into sha256sum, three times, dd reporting every byte", "source": "scenario"},
+        {"assertion_id": "row-exwrite", "checks": "64 MiB written into a file on exFAT in 1 MiB calls and synced", "source": "scenario"},
+        {"assertion_id": "row-exread", "checks": "the exFAT file read whole twice, cold and from the cache", "source": "scenario"},
+        {"assertion_id": "row-fatwrite", "checks": "64 MiB written into a file on FAT32 in 1 MiB calls and synced", "source": "scenario"},
+        {"assertion_id": "row-fatread", "checks": "the FAT32 file read whole twice, cold and from the cache", "source": "scenario"},
+        {"assertion_id": "row-exsmall", "checks": "16 MiB written on exFAT in 4 KiB calls and synced", "source": "scenario"},
+        {"assertion_id": "row-fatsmall", "checks": "16 MiB written on FAT32 in 4 KiB calls and synced", "source": "scenario"},
+        {"assertion_id": "row-exfiles", "checks": "two hundred files of 32 KiB written on exFAT and synced, the last of the full size", "source": "scenario"},
+        {"assertion_id": "polls-boot", "checks": "from the boot's first counters to its last, disk commands and at most 100 status reads a command, which a driver that spins in place of sleeping passes by orders of magnitude", "source": "scenario"},
+        {"assertion_id": "polls-exwrite", "checks": "the exFAT write's commands take at most 100 status reads each", "source": "scenario"},
+        {"assertion_id": "polls-fatwrite", "checks": "the FAT32 write's commands take at most 100 status reads each", "source": "scenario"},
+        {"assertion_id": "polls-exsmall", "checks": "the exFAT small writes' commands take at most 100 status reads each", "source": "scenario"},
+        {"assertion_id": "polls-fatsmall", "checks": "the FAT32 small writes' commands take at most 100 status reads each", "source": "scenario"},
+        {"assertion_id": "counts-exwrite", "checks": "the exFAT write takes disk commands, at most 9300, and at most 400000 cache hits", "source": "scenario"},
+        {"assertion_id": "counts-exread", "checks": "the exFAT reads take disk commands, at most 9300, and at most 400000 cache hits", "source": "scenario"},
+        {"assertion_id": "counts-fatread", "checks": "the FAT32 reads take disk commands, at most 14800, and at most 1300000 cache hits", "source": "scenario"},
+        {"assertion_id": "counts-fatwrite", "checks": "the FAT32 write takes disk commands, at most 14800, and at most 1300000 cache hits", "source": "scenario"},
+        {"assertion_id": "counts-exsmall", "checks": "the exFAT small writes take disk commands, at most 82000, and at most 120000 cache hits", "source": "scenario"},
+        {"assertion_id": "counts-fatsmall", "checks": "the FAT32 small writes take disk commands, at most 99600, and at most 350000 cache hits", "source": "scenario"},
+        {"assertion_id": "counts-exfiles", "checks": "the exFAT files take disk commands, at most 35500, and at most 65000 cache hits", "source": "scenario"},
+        {"assertion_id": "stick-same", "checks": "the 128 numbered pieces written raw to the stick in 32 KiB requests read back the same in 32 KiB requests", "source": "scenario"},
+        {"assertion_id": "stick-write-commands", "checks": "the stick's write takes exactly 128 commands, one a piece", "source": "scenario"},
+        {"assertion_id": "stick-write-held", "checks": "the stick's write quarantines no command", "source": "scenario"},
+        {"assertion_id": "stick-read-commands", "checks": "the stick's read in 32 KiB requests takes exactly 128 commands", "source": "scenario"},
+        {"assertion_id": "stick-read-held", "checks": "the stick's read in 32 KiB requests quarantines no command", "source": "scenario"},
+        {"assertion_id": "stick-big-commands", "checks": "the stick's read in 512 KiB requests takes exactly 8 commands", "source": "scenario"},
+        {"assertion_id": "stick-big-held", "checks": "the stick's read in 512 KiB requests quarantines no command", "source": "scenario"},
+        {"assertion_id": "stick-big-same", "checks": "the 512 KiB reads read what the 32 KiB reads read", "source": "scenario"},
+        {"assertion_id": "ahci-pattern", "checks": "a pattern of 1 MiB is written raw to the AHCI disk in 32 calls", "source": "scenario"},
+        {"assertion_id": "ahci-write-commands", "checks": "32 copies of the pattern in 1 MiB calls take exactly 96 commands, a read, a write and a flush each", "source": "scenario"},
+        {"assertion_id": "ahci-write-held", "checks": "the AHCI copies quarantine no command", "source": "scenario"},
+        {"assertion_id": "ahci-read-commands", "checks": "32 MiB read in 1 MiB calls take exactly 32 commands", "source": "scenario"},
+        {"assertion_id": "ahci-read-held", "checks": "the AHCI read in 1 MiB calls quarantines no command", "source": "scenario"},
+        {"assertion_id": "ahci-small-commands", "checks": "32 MiB read in 32 KiB calls take exactly 1024 commands", "source": "scenario"},
+        {"assertion_id": "ahci-small-held", "checks": "the AHCI read in 32 KiB calls quarantines no command", "source": "scenario"},
+        {"assertion_id": "ahci-same", "checks": "both reads of the AHCI disk give the 32 copies of the pattern", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 10000000, "initial_us": 1800000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 2147483648, "disk_bytes": 1073741824,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "recovery-image", "node": "images/etude-recovery.krffs", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "diskrate_scenario", "node": "tests/cases/machine/diskrate_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "card", "reason": "it counts the commands of QEMU's IDE, USB and AHCI controllers on empty disks of its own, which the Lenovo's disk is not"}
+    },
+    {
+      "case_id": "machine.diskrate.placement",
+      "behavior": "32 MiB read through a pipe into a buffer whose first page holds executed code, and into one that holds none, three runs each, every read copied whole; the times are printed for a person, since what they measure is the emulator's store path",
+      "units": ["diskrate", "placeprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"bytes": 33554432, "runs": 6}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}},
+      "execution": {"program": "placeprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "it reaps each writer; a failed read exits with its writer unreaped, which then dies of SIGPIPE"},
+      "assertions": [
+        {"assertion_id": "apart", "checks": "neither buffer shares a page with the program's code, from _start to etext", "source": "program"},
+        {"assertion_id": "executable", "checks": "the near buffer's first page runs the ret written into it", "source": "program"},
+        {"assertion_id": "runs", "checks": "each of the six runs reads 32 MiB, no read failing and every read's first and last byte copied, and its writer writes it all", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "placeprobe", "node": "tests/placeprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    }
+  ]
+}

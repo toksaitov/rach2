@@ -471,7 +471,7 @@ build/tests/cases/host/%: tests/cases/host/%.sh
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
 
 # The demo credentials that etude's machine cases use as artifacts, such as
-# the key of tests/cases/machine.diskdiag.json: copies readable by their
+# the password of tests/cases/machine.diskrate.json: copies readable by their
 # owner alone, since krffs/rach2_demo_password is made by gen_demo_password.sh
 # beside krffs/shadow.
 build/tests/cases/credentials/rach2_demo_ed25519: krffs/rach2_demo_ed25519
@@ -644,18 +644,27 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # The machine scenarios of etude's cases (tests/cases/machine/), each linked
 # with libetude-case, the library that gives it its `main`. They are host
 # programs, the same for both architectures, which a case's `prepare` names
-# as tests/cases/machine/NAME.
-MACHINE_SCENARIOS = build/tests/cases/machine/crash_scenario \
-                    build/tests/cases/machine/reset_scenario \
-                    build/tests/cases/machine/shutdown_scenario
+# as tests/cases/machine/NAME. The lifecycle scenarios also link
+# tests/cases/machine/lifecycle.c, which they share.
+LIFECYCLE_SCENARIOS = build/tests/cases/machine/crash_scenario \
+                      build/tests/cases/machine/reset_scenario \
+                      build/tests/cases/machine/shutdown_scenario
+DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
+                 build/tests/cases/machine/diskrate_scenario
+MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS)
 ETUDE_CASE_LIB_HDRS = tools/etude/include/etude/scenario.h tools/etude/include/etude/contract.h \
                       tools/etude/include/etude/qemu.h tools/etude/include/etude/exec.h \
                       tools/etude/include/etude/artifact.h tools/etude/include/etude/processor.h \
                       tools/etude/include/etude/report.h tools/etude/posix/posix.h tools/etude/posix/store.h tools/etude/serial.h \
                       tools/etude/capture.h tools/etude/history_json.h utils/sha256.h
-$(MACHINE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
-                      tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
-                      $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+$(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                        tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
+                        $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Iutils
+$(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils

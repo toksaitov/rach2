@@ -163,6 +163,8 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `pools.json`: the `pools` cases, against a kernel that refuses a pty past the thirty-second, which fails `guest.pools.live`, and one that frees a pipe's ring and not the pipe, which fails `guest.pools.heap`.
 * `krffscheck.json`: the `krffscheck` cases, against an `fsck.krffs` that calls an image with the dirty flag clean under `--strict`, and one that refuses a free node whose data length is larger than the node.
 * `subset.json`: the `subset` cases, against a kernel that starts the audio probe after `rach2.noaudio` left it out, one that ignores `rach2.nousb`, one that leaves the mouse out on every boot, and a `bootlogprobe` that asks syslog(2) for none of the ring.
+* `diskpolicy.json`: the `diskpolicy` cases, against a read-only policy that allows every command, and a `check_diskpolicy.sh` that takes either banner for the one asked and never looks for the other.
+* `diskrate.json`: the `diskrate` cases, against an exFAT driver that walks every cluster chain from its start, an AHCI driver that finishes a write without its flush, and a pipe that copies one byte fewer than a large read reports.
 * `agents-accept.json`: the `agentsaccept` suite's resized terminal, with Claude Code alone, against a kernel whose pseudo-terminal master sends no `SIGWINCH` when the window size is set.
 * `ntpd.json`: the `gnu` suite's ntpd row, against a configuration that names no server and an SNTP server that answers with the host's own time.
 * `exe.json`: the `gnu` suite's bash row, against an `execve` that names the program by the path it was given, links and all, in `/proc/PID/exe`.
