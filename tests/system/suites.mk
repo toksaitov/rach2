@@ -77,7 +77,6 @@ AGENTS_API_PORT := $(call port,2302)
 AGENTSACCEPT_PORT     := $(call port,2303)
 AGENTSACCEPT_API_PORT := $(call port,2304)
 SEALED_PORT     := $(call port,2297)
-DRILL_PORT      := $(call port,2298)
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 # The suites' wall-clock limit tool (see its rule below).
@@ -528,43 +527,32 @@ run-sealed: $(DEMO_CREDS) $(SEALED_DISK) $(DEADLINE) $(ELFCHECK) $(BINFIND) $(MK
 	sh tests/system/suites/sealed.sh $(SEALED_DISK) \
 	    "`cat krffs/rach2_demo_password`" $(SEALED_PORT)
 # `tests/run drill`: the recovery drill, boots of one disk that carries the same
-# three partitions the sealed disk has. The everyday kernel must refuse to write
-# its own disk and be shown to have written nothing; a root destroyed with the
-# machine stopped must stop the boot; the recovery entry must come up from
-# partition 3, take an address and answer SSH with nothing typed at the console;
-# the whole root partition must arrive through one `ssh` pipe and hash
-# identically when read back through the same device; the machine must then boot
-# from it; a recovery payload that will not load must fall back to partition 1;
-# and a disk whose boot partition is destroyed must still reach recovery through
-# the core image's own configuration. The disk is small so the drill is quick.
+# three partitions the sealed disk has. It is the cases of
+# tests/cases/machine.drill.json, which etude runs, and has no target here: the
+# everyday kernel refuses to write its own disk and is shown to have written
+# nothing; a root destroyed with the machine stopped stops the boot; the
+# recovery entry comes up from partition 2, takes an address and answers SSH
+# with nothing typed at the console; the whole root partition arrives through
+# one `ssh` pipe and the disk then has the image's bytes; the machine boots from
+# it; a recovery payload that will not load falls back to partition 1; recovery
+# on a network with no DHCP server takes its fixed address; and a disk whose
+# boot partition is destroyed still reaches recovery through the core image's
+# own configuration. The disk is small so the drill is quick.
 #
-# Its entries carry `rach2.diskdiag`, which is what publishes /dev/disk0 on an
+# Its entries have `rach2.diskdiag`, which is what publishes /dev/disk0 on an
 # everyday kernel: the refusal is worth proving on a machine that has the device
-# rather than on one where the node is simply absent. The sealed disk carries no
+# rather than on one where the node is simply absent. The sealed disk has no
 # such flag, so there the everyday entries have no whole-disk node at all, and
-# the recovery build publishes its own whatever the command line says.
-# The drill disk's root, the os-simple system as an ext2 root of 16 MiB: the
-# root the everyday kernel must refuse to write, that is destroyed, that
-# recovery rewrites through the pipe, and that the last boot mounts again.
+# the recovery build publishes its own whatever the command line says. They
+# also have `rach2.ip=none`, so that recovery takes its address from a DHCP
+# server or, with none, its fixed one.
+# The os-simple system as an ext2 volume of 16 MiB: the drill disk's root, which
+# the everyday kernel must refuse to write, that is destroyed, that recovery
+# rewrites through the pipe, and that a later boot mounts again. The parts and
+# selfbuild suites use it too.
 OS_SIMPLE_EXT2 = $(IMAGES_DIR)/os-simple.ext2
 $(OS_SIMPLE_EXT2): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_DEPS_os_simple) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-setid
 	sh tools/image/mkext2.sh krffs/manifests/os-simple.manifest $@ 16
-DRILL_DISK = $(IMAGES_DIR)/drill-test.disk
-run-drill: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image utils krffs check-setid $(BINFIND) $(MKMBR) $(HARNESS) $(OS_SIMPLE_EXT2) $(RUNUTIL) $(DISK_TOOLS) $(SHA256TOOL)
-	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_EXT2_MB=16 \
-	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
-	RACH2_DISK_APPEND="rach2.diskdiag" \
-	RACH2_DISK_DHCP_APPEND="rach2.ip=none" \
-	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
-	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(DRILL_DISK)
-	sh tests/system/suites/drill.sh $(DRILL_DISK) \
-	    "`cat krffs/rach2_demo_password`" $(DRILL_PORT) $(RECOVERY_IMAGE)
-# The disk of the drill's cases, tests/cases/machine.drill.json, made as
-# the old drill disk is made.
 DRILL_CASE_DISK = $(ARCH_CASE_DIR)/drill/drill.disk
 $(DRILL_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-embed.cfg $(KERNEL) \
                     $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_SIMPLE_EXT2) $(DISK_TOOLS) $(GRUB_FILES)

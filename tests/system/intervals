@@ -3,8 +3,6 @@
 # refuses a sleep without one. A person reads this list.
 tests/system/agents/codex.sh: the pane is read every second until the screen is drawn
 tests/system/suites/agents.sh: a try of SSH every two seconds until the server answers
-tests/system/suites/drill.sh: the service log is read every second for recovery's fixed address
-tests/system/suites/drill.sh: the service log is read every three seconds for the lease
 tests/system/suites/fakeapi.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answers
 tests/system/suites/sealed.sh: a try of SSH every two seconds until the server answers
@@ -15,7 +13,6 @@ tests/system/suites/uefi.sh: the dump is written whole by then, or still growing
 tests/system/suites/uefi.sh: the monitor takes the command between the guest's work
 tests/system/suites/uefi.sh: a look at the game's output every second until its first frame
 tests/system/suites/uefi.sh: a look every second until the killed game has gone
-tests/system/suites/drill.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/grub.sh: a holder keeps the console's feed open while the machine runs
 tests/system/suites/install.sh: a holder keeps the console's feed open while the machine runs
 tests/system/accept/metal_accept.sh: a reset before the session is tried again after a second
