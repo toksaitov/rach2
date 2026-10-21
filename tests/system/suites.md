@@ -15,10 +15,10 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `selfbuild-ext2` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the self-build on an ext2 root, the os-real system at 48 MiB on a partition at LBA 2048 as the KRFFS disk has it, booted with rach2.root=ext2; the suite reads the volume back with debugfs and e2fsck must find it consistent after the synced stop.
 * `sealed` (full tier; needs qemu, ssh, mformat, mmd, mcopy; 128 MiB): the disk that goes into the laptop, operated the way it will be operated once it is in there.
 * `fakeapi` (full tier; needs qemu, ssh, scp, python3, openssl; 1024 MiB; x86_64 only): the fake API server the agents' suites talk to, with its test certificate authority, proved from the GNU system with curl on a network whose route out is closed.
-* `dhcp-e1000` (full tier; needs qemu; 128 MiB): the dhcp suite's card half on the e1000 card.
+* `dhcp-e1000` (full tier; needs qemu; 128 MiB): the dhcp suite's lease on the e1000 card.
 * `dhcp` (full tier; needs qemu; 128 MiB): the machine taking an address it was not told, with both of its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own `dhcpc`, which its `netup` runs.
-* `netif` (full tier; needs qemu; 128 MiB): the interface ioctls, which is how a program sets this machine's address.
-* `netif-e1000` (full tier; needs qemu; 128 MiB): the netif suite's card half on the e1000 card.
+* `netif` (full tier; needs qemu; 128 MiB): the interface ioctls, which is how a program sets this machine's address, and machines with two cards.
+* `netif-e1000` (full tier; needs qemu; 128 MiB): the netif suite's probe on the e1000 card.
 * `mount` (core tier; needs qemu, mformat, mcopy, mdir; 128 MiB): the partition nodes, the block path through a device that sleeps or never answers, and mount(2) and the claims it makes (see tests/system/suites/mount.sh).
 * `fdlock` (full tier; needs qemu; 128 MiB): pending KRFFS relocation, orphan truncation, and concurrent raw offsets.
 * `grow` (full tier; needs qemu, mke2fs, e2fsck, qemu-img, xorriso; 512 MiB): a 1 GiB ext2 root grown by `growroot` on the recovery system to a partition the size of the installed machine's disk, its writes checked against the grow set, a grow killed and repaired, one interrupted between the entry and the grow, and the memory it needs.

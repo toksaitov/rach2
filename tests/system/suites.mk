@@ -49,19 +49,11 @@ ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
 .PHONY: prepare-all prepare-images prepare-tools components harness-kernel \
         $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
 
-# The card the network suites attach. The RTL8139 is the default, which an
-# invocation that names no card gets; the `NAME-e1000` suites run these same
-# targets with the other emulated card, which the runner and the harness both
-# take as --device.
+# The card that the boots of the targets below attach, which the runner and
+# the harness both take as --device: the RTL8139 unless NIC names another.
 # The host ports the suites forward. They are named here because two suites
 # sharing one cannot both run, and a number buried in a recipe is a collision
 # nobody sees until the two are scheduled together.
-#
-# The network suites run twice, once per card, and the two runs are ordinary
-# neighbours rather than one waiting for the other. So the card picks the
-# ports and tags the files each run writes: without that, the second-card ping
-# and the first-card ping forward the same port and capture into the same
-# file, and neither can say which of them wrote what.
 #
 # The table keeps the suites of one tree apart; PORT_OFFSET keeps the trees
 # of one host apart. The testing host runs several trees at once, the two ci
@@ -70,12 +62,12 @@ ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
 # it starts anything: block N is the lock file /tmp/rach2-ports.N, which
 # every account can lock, the lowest free block of ten is taken, and the run
 # exports RACH2_PORT_OFFSET as N * 1000 while it holds the lock. Every port
-# below is the table's number plus that offset. Within a block the numbers
-# end in 222 to 331, 777 and 898 to 999, so no port of one block is a port
-# of another, and the highest, 15999 + 9000, is below the ephemeral ports.
-# etude's set driver gives the machine cases of tests/cases the ports 2400 to
-# 2499 of the block (tools/etude/Readme.md, The set driver). A make run
-# without tests/run has no offset and forwards the table's numbers.
+# below is the table's number plus that offset. Within a block the table's
+# numbers are 2225 and 2296 to 2304, and etude's set driver gives the machine
+# cases of tests/cases 2400 to 2499 (tools/etude/Readme.md, The set driver),
+# so no port of one block is a port of another, and the highest, 2499 + 9000,
+# is below the ephemeral ports. A make run without tests/run has no offset
+# and forwards the table's numbers.
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
 port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
 GNU_PORT        := $(call port,2296)
@@ -87,19 +79,6 @@ AGENTSACCEPT_API_PORT := $(call port,2304)
 SEALED_PORT     := $(call port,2297)
 DRILL_PORT      := $(call port,2298)
 PROCFILES_PORT  := $(call port,2299)
-ifeq ($(NIC),e1000)
-NIC_TAG          = -e1000
-DHCP_SSH_PORT   := $(call port,2324)
-DHCP_TWO_PORT_A := $(call port,2326)
-DHCP_TWO_PORT_B := $(call port,2328)
-NETIF_PORT      := $(call port,15899)
-else
-NIC_TAG          =
-DHCP_SSH_PORT   := $(call port,2224)
-DHCP_TWO_PORT_A := $(call port,2226)
-DHCP_TWO_PORT_B := $(call port,2228)
-NETIF_PORT      := $(call port,15999)
-endif
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 # The suites' wall-clock limit tool (see its rule below).
@@ -249,28 +228,8 @@ PREPARE_TOOLS = xorriso,mformat,mmd,mcopy
 prepare-tools:
 	@echo $(PREPARE_TOOLS)
 # `tests/run addressed`: the address named on the boot line, and the proof that
-# it is the one in force. The address is deliberately not the one SLIRP hands
-# out: a kernel that ignored `rach2.ip=` entirely would still hold 10.0.2.15 and
-# pass every probe. It is not .99 either, which pingtest requires to stay
-# unreachable. So the machine is given .77, pings the gateway, and the capture
-# is read from outside: the echo request must leave from .77, which only the IP
-# layer can put there, and the ARP request for the gateway must be sent as .77,
-# which is where the address reached ARP. Nothing on this network ever asks the
-# machine for its address, so what it answers cannot be read; what it asks as
-# can. The gateway half of the boot line is not checked here: every destination
-# in reach is on the subnet, so nothing has to be routed. `dhcp` and `netif`
-# check routing.
-ADDRESSED_PCAP = $(IMAGES_DIR)/addressed$(NIC_TAG).pcap
-run-addressed: rach2 tests krffs test-image $(PCAPCHECK) $(HARNESS)
-	@rm -f $(ADDRESSED_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --append "rach2.ip=10.0.2.77/24 rach2.gateway=10.0.2.2" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=ad0,netdev=net0,file=$(ADDRESSED_PCAP) \
-	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" until=60
-	$(PCAPCHECK) bcast $(ADDRESSED_PCAP) --source 10.0.2.77 --arp-from 10.0.2.77
+# it is the one in force. Its case is in tests/cases/machine.addressed.json,
+# which etude runs, and has no target here.
 # `tests/run noentropy`: the entropy policy's fail-closed half, which no other
 # suite can reach, on a processor without RDRAND and RDSEED. The kernel's
 # generator is untrusted there: the salt mint refuses and writes nothing,
@@ -706,453 +665,16 @@ run-servicelog: rach2 utils check-busybox $(MKMBR) $(HARNESS)
 # are. Its cases, each in a boot of its own, are in
 # tests/cases/machine.raw.json, which etude runs, and have no target here.
 # `tests/run netif`: the interface ioctls, which is how a program sets this
-# machine's address. Its own target, like `tests/run ping`: it changes the
-# address out from under the machine and puts it back, and the last thing it
-# does is ping the gateway, which needs the network to answer.
-TWONIC_LOG = $(IMAGES_DIR)/netif-test.twonic$(NIC_TAG).log
-MIXNIC_LOG = $(IMAGES_DIR)/netif-test.mixnic$(NIC_TAG).log
-NICFAIL_LOG = $(IMAGES_DIR)/netif-test.nicfail$(NIC_TAG).log
-run-netif: netif-stack
-netif-card: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0,hostfwd=udp::$(NETIF_PORT)-:9999" \
-	    --timeout 180 --ok "NETIFPROBE OK" \
-	    "expect=Type 'help'" "send=exec /netifprobe" \
-	    "expect=NETIFPROBE DOWN" "udp=$(NETIF_PORT):down" \
-	    "expect=NETIFPROBE UP" "udp=$(NETIF_PORT):up" until=60
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --append "rach2.ip=none" \
-	    --timeout 120 --ok "NETIFPROBE OK" \
-	    "expect=Type 'help'" "send=exec /netifprobe" until=60
-ifeq ($(NIC),e1000)
-netif-stack: netif-card
-	@echo "netif-test: the boots that name their cards, two cards, two models and a refused card, are skipped here; tests/run netif covers them"
-else
-netif-stack: netif-card
-# Two cards on two subnets: each becomes an interface of its own, with its own
-# name, its own station address and its own line in the boot report and in
-# `/proc/net/dev`. The first still carries the traffic, which is what says the
-# second did not take the stack over.
-	@rm -f $(TWONIC_LOG)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0" --device "e1000,netdev=net0" \
-	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
-	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
-	    --append "rach2.ifaddr=52:54:00:12:34:57,10.0.3.5/24,10.0.3.2" \
-	    --log $(TWONIC_LOG) \
-	    --timeout 180 --steptmo 60 --ok "NETIFPROBE OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" "expect=PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /netifprobe second" until=60
-	@sh -c 'l=$(TWONIC_LOG); \
-	    grep -aq "net: eth0: e1000" "$$l" || \
-	        { echo "netif-test: FAIL: the first card did not become eth0" >&2; exit 1; }; \
-	    grep -aq "net: eth1: e1000" "$$l" || \
-	        { echo "netif-test: FAIL: the second card did not become eth1" >&2; exit 1; }; \
-	    a=`sed -n "s/.*net: eth0: e1000, station \\(.*\\)/\\1/p" "$$l" | head -1`; \
-	    b=`sed -n "s/.*net: eth1: e1000, station \\(.*\\)/\\1/p" "$$l" | head -1`; \
-	    [ -n "$$a" ] && [ "$$a" != "$$b" ] || \
-	        { echo "netif-test: FAIL: the two cards report one station address" >&2; exit 1; }; \
-	    grep -aq "net: eth1: configured by its station address" "$$l" || \
-	        { echo "netif-test: FAIL: the second card was not configured by its station" >&2; exit 1; }; \
-	    grep -aq "net: eth1: IPv4 10.0.3.5/24, gateway 10.0.3.2" "$$l" || \
-	        { echo "netif-test: FAIL: the second card did not take the address it was given" >&2; exit 1; }; \
-	    grep -aq "net: eth0: IPv4 10.0.2.15/24" "$$l" || \
-	        { echo "netif-test: FAIL: the first card lost its own address" >&2; exit 1; }; \
-	    echo "netif-test: two cards are two interfaces, each with its own station and address: OK"'
-# Two cards of different models on two subnets. The driver table tries the
-# RTL8139 first, so the RTL8139 is eth0 whichever slot it sits in and the e1000
-# is eth1: probe order is the table's, and each card is given its address by the
-# station address it carries rather than by where it was found. The ping leaves
-# by the second card, which is the one on the network the gateway is on, while
-# the first is up and configured on another.
-	@rm -f $(MIXNIC_LOG)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0" --device "e1000,netdev=net0,mac=52:54:00:12:34:56" \
-	    --qemu-arg=-netdev --qemu-arg=user,id=net1,net=10.0.3.0/24 \
-	    --qemu-arg=-device --qemu-arg=rtl8139,netdev=net1,mac=52:54:00:12:34:58 \
-	    --append "rach2.ifaddr=52:54:00:12:34:58,10.0.3.5/24,10.0.3.2 \
-rach2.ifaddr=52:54:00:12:34:56,10.0.2.15/24,10.0.2.2" \
-	    --log $(MIXNIC_LOG) \
-	    --timeout 180 --steptmo 60 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" until=60
-	@sh -c 'l=$(MIXNIC_LOG); \
-	    grep -aq "net: eth0: RTL8139" "$$l" || \
-	        { echo "netif-test: FAIL: the RTL8139 did not become eth0" >&2; exit 1; }; \
-	    grep -aq "net: eth1: e1000" "$$l" || \
-	        { echo "netif-test: FAIL: the e1000 did not become eth1" >&2; exit 1; }; \
-	    grep -aq "net: eth0: IPv4 10.0.3.5/24, gateway 10.0.3.2" "$$l" || \
-	        { echo "netif-test: FAIL: the RTL8139 did not take its own address" >&2; exit 1; }; \
-	    grep -aq "net: eth1: IPv4 10.0.2.15/24, gateway 10.0.2.2" "$$l" || \
-	        { echo "netif-test: FAIL: the e1000 did not take its own address" >&2; exit 1; }; \
-	    echo "netif-test: two cards of different models are two interfaces, and the ping \
-leaves by the one that reaches the gateway: OK"'
-# The first card refused at its bring-up: the second still comes up, takes the
-# one interface there is, and carries the traffic.
-	@rm -f $(NICFAIL_LOG)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --net "user,id=net0" --device "e1000,netdev=net0" \
-	    --qemu-arg=-netdev --qemu-arg=user,id=net1 \
-	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
-	    --append "rach2.nicfail=0" \
-	    --log $(NICFAIL_LOG) \
-	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" until=60
-	@sh -c 'l=$(NICFAIL_LOG); \
-	    grep -aq "net: eth0: refused: rach2.nicfail=0" "$$l" || \
-	        { echo "netif-test: FAIL: the card was not refused" >&2; exit 1; }; \
-	    n=`grep -ac "net: eth[0-9]*: e1000, station" "$$l"`; \
-	    [ "$$n" = "1" ] || \
-	        { echo "netif-test: FAIL: $$n interfaces came up, not one" >&2; exit 1; }; \
-	    echo "netif-test: a card refused at its bring-up leaves the other one serving: OK"'
-endif
-.PHONY: netif-card netif-stack
+# machine's address, and machines with two cards. Its cases are in
+# tests/cases/machine.netif.json, which etude runs, and have no target here.
 # `tests/run dgram`: a connected datagram socket and the permission to
 # broadcast, which is how a DHCP client renews a lease and how it asks for one.
 # Its case is in tests/cases/machine.dgram.json, which etude runs, and has no
 # target here.
 # `tests/run dhcp`: the machine taking an address it was not told, with both of
 # its clients: BusyBox's `udhcpc`, which `ifup` runs, and os-simple's own
-# `dhcpc`, which its `netup` runs. A boot that is to take a lease has
-# `rach2.ip=none`, so IPv4 is unset and nothing is configured until userland
-# does it, and QEMU's user network is given a network of its own so the address
-# that arrives cannot be the one the machine would have had anyway.
-DHCP_NET = user,id=net0,net=192.168.90.0/24,host=192.168.90.2,dhcpstart=192.168.90.20,dns=192.168.90.3
-TWONET_PCAP_A = $(IMAGES_DIR)/twonet-a$(NIC_TAG).pcap
-TWONET_PCAP_B = $(IMAGES_DIR)/twonet-b$(NIC_TAG).pcap
-DHCP_PCAP = $(IMAGES_DIR)/dhcp$(NIC_TAG).pcap
-DHCP_DISK = $(IMAGES_DIR)/dhcp-test$(NIC_TAG).disk
-METAL_PCAP = $(IMAGES_DIR)/dhcp-metal$(NIC_TAG).pcap
-SIMPLE_PCAP = $(IMAGES_DIR)/dhcp-simple$(NIC_TAG).pcap
-SIMPLE_LOG = $(IMAGES_DIR)/dhcp-simple$(NIC_TAG).log
-STATIC_PCAP = $(IMAGES_DIR)/static-simple$(NIC_TAG).pcap
-RSTATIC_PCAP = $(IMAGES_DIR)/static-real$(NIC_TAG).pcap
-SIMPLE_NET = user,id=net0,net=10.90.0.0/16,host=10.90.0.2,dhcpstart=10.90.0.20,dns=10.90.0.3
-run-dhcp: dhcp-stack
-dhcp-card: $(DEMO_CREDS) rach2 utils busybox krffs os-real-image os-simple-image rach2-metal-image $(PCAPCHECK) $(HARNESS)
-	@rm -f $(DHCP_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(DHCP_NET)" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=dh0,netdev=net0,file=$(DHCP_PCAP) \
-	    --append "rach2.ip=none" \
-	    --timeout 240 --steptmo 60 --ok "DHCPOK" --log $(IMAGES_DIR)/dhcp$(NIC_TAG).log \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " "send=ifconfig eth0 | grep -q 'addr:0.0.0.0' && echo UNSET\"\"OK" \
-	    "expect=UNSETOK" "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:192.168.90.20' /tmp/if && grep -q 'Bcast:192.168.90.255' /tmp/if && grep -q 'Mask:255.255.255.0' /tmp/if && grep -q '192.168.90.3' /etc/resolv.conf && echo LEASE\"\"OK" \
-	    "expect=LEASEOK" "send=ping -c 1 192.168.90.2 > /dev/null && echo PEER\"\"OK" "expect=PEEROK" \
-	    "send=arping -f -w 5 192.168.90.2 > /tmp/ap 2>&1; echo ARPING\"\"-STATUS:\$$?; cat /tmp/ap" \
-	    "expect=ARPING-STATUS:0" "expect=Received 1 response" \
-	    "send=arping -w 2 192.168.90.9 > /tmp/as 2>&1; echo SILENT\"\"-STATUS:\$$?; cat /tmp/as" \
-	    "expect=SILENT-STATUS:1" "expect=Received 0 response" \
-	    "send=arp -n | grep -q '(192.168.90.2)' && echo ARP\"\"CACHED" \
-	    "expect=ARPCACHED" \
-	    "send=ping -c 1 -W 1 10.9.9.9 > /dev/null 2>&1; echo ROUTE\"\"TRIED" \
-	    "expect=ROUTETRIED" "send=echo DHCP\"\"OK" \
-	    "expect=DHCPOK"
-	# An arping at an address nothing answers must end at its deadline with status
-	# 1: the run ends in the SIGALRM handler, so it needs the interval timer
-	# (setitimer(2)). The address, the netmask and the broadcast are asserted
-	# above, and the route below: a packet for an address on no subnet of this
-	# machine's must leave addressed to the gateway's hardware address, which is
-	# what a default route means. Nothing answers 10.9.9.9, and nothing needs to.
-	$(PCAPCHECK) bcast $(DHCP_PCAP) \
-	    --routed-via 192.168.90.2 --routed-dst 10.9.9.9
-ifeq ($(NIC),e1000)
-dhcp-stack: dhcp-card
-	@echo "dhcp-test: the rows above the driver, the disk's two boots, the unattended boot, the server that never answers, os-simple's client and the fixed addresses, are skipped here; tests/run dhcp covers them on the first card"
-else
-dhcp-stack: dhcp-card
-	# And twice on a disk, where /var/run survives a reboot. `ifup` records there
-	# which interfaces it has configured, and the second boot must take a lease
-	# rather than read the first boot's record and decide it is already configured.
-	# Init empties that directory, and this is what says so: two boots of one disk,
-	# each of which must reach a lease.
-	$(MKDISK) krffs/manifests/os-real.manifest $(DHCP_DISK) 64 48
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.ip=none" \
-	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
-	    --timeout 240 --steptmo 60 --ok "FIRSTLEASE" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo FIRST\"\"LEASE" \
-	    "expect=FIRSTLEASE" "send=poweroff -f" until=15 --must-exit
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.ip=none" \
-	    --drive "file=$(DHCP_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --qemu-arg=-cpu --qemu-arg=max --net "$(DHCP_NET)" \
-	    --timeout 240 --steptmo 60 --ok "SECONDLEASE" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "send=ifconfig eth0 | grep -q 'addr:192.168.90.20' && echo SECOND\"\"LEASE" \
-	    "expect=SECONDLEASE" "send=poweroff -f" until=15 --must-exit
-	# And unattended, which is how the sealed machine comes up: nothing is typed at
-	# all. The metal init runs `ifup -a` itself, after the console login and before
-	# the SSH server, so the lease must arrive with no console session in it.
-	@rm -f $(METAL_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(DHCP_NET),hostfwd=tcp::$(DHCP_SSH_PORT)-:22" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=mt0,netdev=net0,file=$(METAL_PCAP) \
-	    --append "rach2.ip=none" \
-	    --timeout 180 --steptmo 60 --ok "rach2 login:" \
-	    "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "tcp=$(DHCP_SSH_PORT)"
-	# What init starts writes to `/var/log/services` and not to the console, so the
-	# client's lease line is not on this serial at all and the console can only say
-	# the machine got as far as a login. Nothing is typed here, so the wire is the
-	# whole proof: the step above knocks on the SSH port through the address the
-	# lease gave, and the capture must then hold packets sent from that address,
-	# which only a machine holding it can send. The knock alone proves nothing,
-	# because QEMU's user network accepts the host side of a connection before it
-	# knows whether the guest is there. The asking is on the wire too, as a
-	# broadcast to port 67, and is required here: without it a machine given that
-	# address by hand would satisfy the rest of this row.
-	$(PCAPCHECK) bcast $(METAL_PCAP) --port 67 --source 192.168.90.20
-	# And on a network with no server at all, which is a cable plugged in later or
-	# a switch that has not started forwarding. The client must go to the
-	# background and keep asking rather than give up, because a machine that gave
-	# up is one nobody can reach until somebody walks to it. The console login must
-	# still be there, so a network that never comes up does not take the local way
-	# in with it. And the same on the machine that carries none of busybox:
-	# os-simple's own `netup` reads the same `/etc/network/interfaces` and its own
-	# `dhcpc` takes the lease. Both images end up on the same network by the same
-	# exchange, which is the point of having two clients over one kernel interface.
-	#
-	# This one runs on a /16, and that is what makes the netmask provable: the
-	# classful mask for a 10.x address is /8, so a client that took the address and
-	# not the mask would reach 10.200.0.1 by ARPing for it directly. The check
-	# below requires that packet to have gone to the gateway instead, which only a
-	# machine holding the leased /16 does.
-	@rm -f $(SIMPLE_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(SIMPLE_NET)" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=sp0,netdev=net0,file=$(SIMPLE_PCAP) \
-	    --append "rach2.ip=none" \
-	    --timeout 240 --steptmo 60 \
-	    --ok "lease of 10.90.0.20 netmask 255.255.0.0" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=The ISH shell" "send=netup -a" \
-	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" \
-	    "send=ping -c 4 10.90.0.2" "expect=4 packets transmitted, [1-4] received" \
-	    "send=cat /etc/resolv.conf" "expect=nameserver 10.90.0.3" \
-	    "send=netup -a" "expect=is already holding it" \
-	    "send=ping -c 4 -W 1 10.200.0.1" "expect=4 packets transmitted, 0 received" \
-	    "send=dhcpc -i eth0 -k" "expect=net: eth0: IPv4 none" "expect=stopped process" \
-	    "send=ping -c 4 -W 1 10.90.0.2" "expect=4 packets transmitted, 0 received" \
-	    "send=netup -a" "expect=lease of 10.90.0.20 netmask 255.255.0.0" \
-	    "send=ping -c 4 10.90.0.2" "expect=4 packets transmitted, [1-4] received"
-	# The last four steps are the way back off a lease. A client holds an address
-	# for as long as it renews it, so an address is taken off by stopping its
-	# client: `dhcpc -k` signals the one that holds the interface and waits for the
-	# claim to go. The ping that follows must fail, which is what says the address
-	# really came off and not just the process; the `netup -a` after it must take a
-	# lease again, which is what says the claim was released; and the ping after
-	# that must answer, which is what says the machine is back where it started.
-	# A ping that must answer passes on any reply of its four: the kernel waits a
-	# few seconds of the machine's time for each, which a stalled host can let
-	# run out, and one reply is what says the address works.
-	#
-	# Every `expect` above is an assertion, and a missed one fails the run. The
-	# success marker is a line only the client prints, because this image runs the
-	# ISH shell, which does not take the quotes out of an echoed token the way ash
-	# does: a token typed at it would match its own echo.
-	$(PCAPCHECK) bcast $(SIMPLE_PCAP) --source 10.90.0.20 \
-	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
-
-	# And the other half of the file: a fixed address, on both machines. The format
-	# has two methods and only one of them has been exercised above. This is also
-	# the sequence an administrator runs to move a machine off DHCP, and every step
-	# of it is asserted: the configurator must refuse while a client holds the
-	# interface, the client must let go when it is stopped, and the fixed address
-	# must then be applied and work. os-simple copies the stanza it stages, since
-	# it has no editor; os-real writes one with its shell.
-	@rm -f $(STATIC_PCAP)
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(SIMPLE_NET)" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=st0,netdev=net0,file=$(STATIC_PCAP) \
-	    --append "rach2.ip=none" \
-	    --timeout 240 --steptmo 60 --ok "configured from /etc/network/interfaces" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=The ISH shell" "send=netup -a" \
-	    "expect=lease of 10.90.0.20 netmask 255.255.0.0" \
-	    "send=cp /etc/network/interfaces.static /etc/network/interfaces" \
-	    "send=netup -a" "expect=is holding it with a lease" \
-	    "send=dhcpc -i eth0 -k" "expect=net: eth0: IPv4 none" "expect=stopped process" \
-	    "send=netup -a" "expect=configured from /etc/network/interfaces" \
-	    "send=ping -c 4 10.90.0.2" "expect=4 packets transmitted, [1-4] received" \
-	    "send=ping -c 4 -W 1 10.200.0.1" "expect=4 packets transmitted, 0 received"
-	# The address is the fixed one and not the leased one, which the capture says:
-	# packets sent from 10.90.0.50, and the off-subnet packet addressed to the
-	# gateway's hardware address, which is the route the stanza asked for. Neither
-	# is possible from a machine still holding the lease.
-	$(PCAPCHECK) bcast $(STATIC_PCAP) --source 10.90.0.50 \
-	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
-	# The same stanza on os-real, through busybox's `ifup`, which is the whole
-	# reason the file has this format: one description of a network, two machines
-	# that read it. On the same /16 as the run above, and for the same reason: on a
-	# 192.168.x network the mask the stanza asks for is the one the kernel would
-	# derive anyway, so skipping the netmask directive entirely would look
-	# identical. Here it does not.
-	@rm -f $(RSTATIC_PCAP)
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(SIMPLE_NET)" \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=rs0,netdev=net0,file=$(RSTATIC_PCAP) \
-	    --append "rach2.ip=none" \
-	    --timeout 240 --steptmo 60 --ok "REALSTATICOK" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " \
-	    "send=printf 'auto eth0\niface eth0 inet static\naddress 10.90.0.50\nnetmask 255.255.0.0\ngateway 10.90.0.2\n' > /etc/network/interfaces" \
-	    "send=ifup -a" "expect=net: eth0: IPv4 10.90.0.50/" \
-	    "send=ifconfig eth0 > /tmp/if; grep -q 'addr:10.90.0.50' /tmp/if && grep -q 'Mask:255.255.0.0' /tmp/if && ping -c 1 10.90.0.2 > /dev/null && echo REALSTATIC\"\"OK" \
-	    "expect=REALSTATICOK" "send=ping -c 1 -W 1 10.200.0.1 > /dev/null 2>&1; echo DONE" \
-	    "expect=DONE" "send=poweroff -f" until=15 --must-exit
-	$(PCAPCHECK) bcast $(RSTATIC_PCAP) --source 10.90.0.50 \
-	    --routed-via 10.90.0.2 --routed-dst 10.200.0.1
-
-	# And the half of the client that only time reaches: holding the lease. QEMU
-	# hands out a day, so `-l` caps what the client will act on, the renewal falls
-	# due ten seconds in, and the run must see the lease applied more than once.
-	# Without that cap nothing here could reach the renewal path at all, and a
-	# client that renewed wrongly would pass.
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_SIMPLE_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(SIMPLE_NET)" --append "rach2.ip=none" \
-	    --timeout 180 --steptmo 90 --log $(SIMPLE_LOG) \
-	    --ok "lease of 10.90.0.20" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=The ISH shell" "send=dhcpc -i eth0 -l 20" \
-	    "expect=renewed for 20 seconds" "expect=renewed for 20 seconds"
-	# A renewal and a fresh lease are different things, and the difference is what
-	# this checks: the client must say it renewed, and it must have asked for an
-	# address exactly once. A client that let every lease lapse and discovered
-	# again would print the second line as often as the first.
-	@r=`grep -ac "renewed for 20 seconds" $(SIMPLE_LOG)`; \
-	 a=`grep -ac "asking for an address" $(SIMPLE_LOG)`; \
-	    if [ "$$r" -lt 1 ]; then \
-	        echo "dhcp-test: the client never renewed its lease" >&2; exit 1; \
-	    fi; \
-	    if [ "$$a" -ne 1 ]; then \
-	        echo "dhcp-test: the client asked for an address $$a times:" \
-	             "it was starting over, not renewing" >&2; exit 1; \
-	    fi; \
-	    echo "dhcp-test: ok: the client renewed $$r time(s) from one exchange"
-
-	# And a boot that was told its address on the command line, on a network with a
-	# DHCP server ready to hand out a different one. Init must not run `ifup` there
-	# at all: a machine given an address is configured already, and a client would
-	# begin by taking that address off and might never put one back. This one is
-	# asked at the console rather than read off the wire, because what is being
-	# tested is that nothing happened.
-# interval: the machine is asked every second until init has started SSH
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(DHCP_NET)" \
-	    --append "rach2.ip=192.168.90.50/24 rach2.gateway=192.168.90.2" \
-	    --timeout 180 --steptmo 60 --ok "STATICKEPT" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " \
-	    "send=until pidof dropbearmulti > /dev/null; do sleep 1; done; ifconfig eth0 | grep -q 'addr:192.168.90.50' && echo STATIC\"\"KEPT" \
-	    "expect=STATICKEPT"
-# interval: the service log is read every second until the client gives up
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --initrd $(METAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "hubport,id=net0,hubid=1" --append "rach2.ip=none" \
-	    --timeout 180 --steptmo 90 --ok "NOLEASEOK" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " "send=echo CONSOLE\"\"UP" \
-	    "expect=CONSOLEUP" \
-	    "send=until grep -q 'no lease, forking to background' /var/log/services; do sleep 1; done; echo NOLEASE\"\"OK" \
-	    "expect=NOLEASEOK"
-	# The client's giving up is read from the service log and not from this
-	# console: init gives what it starts `/var/log/services`, so that a client
-	# retrying for minutes does not write over the login prompt.
-	# Two cards on two networks, each with a server of its own: a lease on each
-	# interface, asked for by name, and a server answering through both. The
-	# second client is `udhcpc -i eth1`, which is how an administrator configures
-	# an interface that no boot-time file names. Both cards are e1000s whichever
-	# card the rest of this suite runs on, since that is the driver with a record
-	# per card; the RTL8139 and the RTL8168 drive one each.
-	#
-	# The knock on each forwarded port proves nothing on its own, since QEMU's
-	# user network accepts the host side before it knows whether the guest is
-	# there. What proves it is the capture of each network: packets sent from the
-	# address that network leased, which only a machine holding that address on
-	# that card can send, and on the second network that address is not the
-	# machine's own. A TCP that did not take the address a connection arrived on
-	# would answer a connection to the second card from the first card's address,
-	# and no capture would hold a packet from the second's.
-	@rm -f $(TWONET_PCAP_A) $(TWONET_PCAP_B)
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --net "$(DHCP_NET),hostfwd=tcp::$(DHCP_TWO_PORT_A)-:22" \
-	    --device "e1000,netdev=net0" \
-	    --qemu-arg=-netdev \
-	    --qemu-arg=user,id=net1,net=10.0.7.0/24,host=10.0.7.2,dhcpstart=10.0.7.20,dns=10.0.7.3,hostfwd=tcp::$(DHCP_TWO_PORT_B)-:22 \
-	    --qemu-arg=-device --qemu-arg=e1000,netdev=net1 \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=tw0,netdev=net0,file=$(TWONET_PCAP_A) \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=tw1,netdev=net1,file=$(TWONET_PCAP_B) \
-	    --append "rach2.ip=none" \
-	    --timeout 300 --steptmo 90 --ok "TWONETOK" \
-	    --log $(IMAGES_DIR)/twonet$(NIC_TAG).log \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " "send=ifup -a" \
-	    "expect=lease of 192.168.90.20 obtained" "expect=net: eth0: IPv4 192.168.90.20/" \
-	    "send=udhcpc -i eth1 -n -q" \
-	    "expect=lease of 10.0.7.20 obtained" "expect=net: eth1: IPv4 10.0.7.20/" \
-	    "send=ifconfig eth0 > /tmp/i0; ifconfig eth1 > /tmp/i1; grep -q 'addr:192.168.90.20' /tmp/i0 && grep -q 'addr:10.0.7.20' /tmp/i1 && echo TWO\"\"LEASES" \
-	    "expect=TWOLEASES" \
-	    "send=dropbearmulti dropbear -R -g -p 22" \
-	    "tcp=$(DHCP_TWO_PORT_A)" "tcp=$(DHCP_TWO_PORT_B)" \
-	    "send=echo TWONET\"\"OK" "expect=TWONETOK"
-	$(PCAPCHECK) bcast $(TWONET_PCAP_A) --source 192.168.90.20
-	$(PCAPCHECK) bcast $(TWONET_PCAP_B) --source 10.0.7.20
-	# And the server's own record of who reached it. The knock says only that
-	# QEMU took the host side; this says the segments crossed the interface, were
-	# taken by TCP as addressed to the address that card holds, and reached the
-	# program listening. A connection arriving on the second card is dropped at
-	# the checksum unless it is taken against the address the segment was sent
-	# to, and is answered from the wrong address unless the connection records
-	# the one it arrived on.
-	@sh -c 'l=$(IMAGES_DIR)/twonet$(NIC_TAG).log; \
-	    grep -aq "Child connection from 192.168.90.2:" "$$l" || \
-	        { echo "dhcp-test: FAIL: nothing reached the server on the first card" >&2; \
-	          exit 1; }; \
-	    grep -aq "Child connection from 10.0.7.2:" "$$l" || \
-	        { echo "dhcp-test: FAIL: nothing reached the server on the second card" >&2; \
-	          exit 1; }; \
-	    echo "dhcp-test: a lease on each interface and the server answering through both: OK"'
-endif
-.PHONY: dhcp-card dhcp-stack
+# `dhcpc`, which its `netup` runs. Its cases are in
+# tests/cases/machine.dhcp.json, which etude runs, and have no target here.
 # `tests/run netconsole`: the kernel log on the wire, the cases of
 # tests/cases/machine.netconsole.json.
 # `tests/run e1000`: the network path on the other emulated card, and the probe
@@ -1862,15 +1384,12 @@ run-drive: $(HARNESS)
 # build's files or out of date. They are the cases of
 # tests/cases/host.imagerace.json, which etude runs, and have no target here.
 
-# The eight network suites again on the second card. Each with a target here
-# is the first-card target with `NIC=e1000`, which picks the tagged files and
-# the second set of forwarded ports, so a pair can run at the same time; the
-# others are families of etude's cases whose machines have the e1000. The rows
-# whose subject is above the driver belong to the first card's suite: `netif`
-# and `dhcp` are split into a `-card` half, run on both cards, and a `-stack`
-# half that the second card's run skips with a line saying which suite covers
-# it, and `raw-e1000` has the case of the card alone. The probe suite is not
-# repeated at all, since none of its probes sends a frame.
+# The eight network suites again on the second card, each the family of
+# etude's cases whose machines have the e1000. The cases whose subject is
+# above the driver belong to the first card's family: `netif-e1000` and
+# `dhcp-e1000` have only the cases that the card changes, and `raw-e1000` has
+# the case of the card alone. The probe suite is not repeated at all, since
+# none of its probes sends a frame.
 
 # `tests/run ping-e1000`: the ping suite on the e1000 card. Its case is in
 # tests/cases/guest.ping-e1000.json, which etude runs, and has no target here.
@@ -1878,9 +1397,9 @@ run-drive: $(HARNESS)
 # `tests/run packet-e1000`: the packet suite on the e1000 card. Its case is in
 # tests/cases/guest.packet-e1000.json, which etude runs, and has no target here.
 
-# `tests/run netif-e1000`: the netif suite's card half on the e1000 card.
-run-netif-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-netif
+# `tests/run netif-e1000`: the netif suite's probe on the e1000 card. Its cases
+# are in tests/cases/machine.netif-e1000.json, which etude runs, and have no
+# target here.
 
 # `tests/run dgram-e1000`: the dgram suite on the e1000 card. Its case is in
 # tests/cases/machine.dgram-e1000.json, which etude runs, and has no target
@@ -1893,9 +1412,9 @@ run-netif-e1000:
 # is in tests/cases/machine.raw-e1000.json, which etude runs, and has no target
 # here.
 
-# `tests/run dhcp-e1000`: the dhcp suite's card half on the e1000 card.
-run-dhcp-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-dhcp
+# `tests/run dhcp-e1000`: the dhcp suite's lease on the e1000 card. Its case is
+# in tests/cases/machine.dhcp-e1000.json, which etude runs, and has no target
+# here.
 
 # `tests/run ssh-e1000`: the ssh suite on the e1000 card, the case of
 # tests/cases/machine.ssh-e1000.json.

@@ -1,8 +1,6 @@
 # The intervals the suites keep on purpose, one per line as FILE: REASON,
 # in the words of the `interval:` mark on the line; tools/verify/suitecheck.sh
 # refuses a sleep without one. A person reads this list.
-tests/system/suites.mk: the machine is asked every second until init has started SSH
-tests/system/suites.mk: the service log is read every second until the client gives up
 tests/system/clockload.py: the host holds the machine stopped
 tests/system/clockload.py: the machine runs between two stops
 tests/system/agents/codex.sh: the pane is read every second until the screen is drawn
