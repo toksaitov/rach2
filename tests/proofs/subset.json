@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "proof": "subset",
+  "summary": "the subset cases against kernels that start a probe its option left out, ignore rach2.nousb, or leave the mouse out whatever the line says, and a bootlogprobe that reads none of the ring",
+  "tree": "shared",
+  "sources": [
+    "rach2/kernel.c",
+    "rach2/sys/arch/x86/platform.c",
+    "tests/bootlogprobe.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/bootlogprobe"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 tests && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/bootlogprobe"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec sh tests/proofs/guest.sh run subset 'run: subset: PASS'"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "audio-started",
+      "summary": "a boot with rach2.noaudio says it left the audio probe out and then starts it all the same",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "        klog(KLOG_INFO, \"audio\", \"skipped: rach2.noaudio\");\n",
+          "replace": "        klog(KLOG_INFO, \"audio\", \"skipped: rach2.noaudio\");\n        klog(KLOG_DEBUG, \"audio\", \"started\");\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.subset.noaudio on ",
+          "@etude 1 assert not-started fail the ring has the text"
+        ]
+      }
+    },
+    {
+      "name": "nousb-ignored",
+      "summary": "the kernel starts the USB stack whatever the line says",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    if (kcmdline_has(\"rach2.nousb\")) {",
+          "replace": "    if (0 && kcmdline_has(\"rach2.nousb\")) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.subset.nousb on ",
+          "@etude 1 assert ring-skipped fail"
+        ]
+      }
+    },
+    {
+      "name": "mouse-left-out",
+      "summary": "the kernel leaves the PS/2 mouse out on every boot, as if every line had rach2.nomouse",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/x86/platform.c",
+          "find": "    if (kcmdline_has(\"rach2.nomouse\")) {",
+          "replace": "    if (1 || kcmdline_has(\"rach2.nomouse\")) {"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.subset.ordinary on ",
+          "@etude 1 assert no-skip fail"
+        ]
+      }
+    },
+    {
+      "name": "ring-unread",
+      "summary": "bootlogprobe asks syslog(2) for none of the ring, so that every text is absent from what it read",
+      "edits": [
+        {
+          "file": "tests/bootlogprobe.c",
+          "find": "(long)ring, (long)sizeof(ring));",
+          "replace": "(long)ring, 0L);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "guest.subset.noaudio on ",
+          "@etude 1 assert whole fail"
+        ]
+      }
+    }
+  ]
+}
