@@ -190,6 +190,10 @@ echo "etude-deploy: the machine record of $host"
     echo "ETUDE_ADMISSION=$(quote "$admission")"
     echo "ETUDE_WHPX=$whpx"
     cat "$here/bootstrap.sh"
+    echo 'deploy_find_ovmf()'
+    echo '{'
+    cat "$tree/tools/setup/ovmf_path.sh"
+    echo '}'
     cat <<'EOF'
 
 # deploy_fail WHAT: report WHAT on stderr and end with status 1.
@@ -242,6 +246,27 @@ deploy_qemu()
         rach2*) return 1 ;;
         *) command -v qemu-system-x86_64 ;;
     esac
+}
+
+# deploy_ovmf QEMU: print the readable x86-64 firmware's code image, or `-`.
+# Windows paths use the form C:/... that native QEMU reads.
+deploy_ovmf()
+{
+    (
+        [ -n "$1" ] || { echo -; exit; }
+        PATH=${1%/*}:$PATH
+        case $platform in
+            windows*) RACH2_OVMF_CODE=${RACH2_OVMF_CODE:-${1%/*}/share/edk2-x86_64-code.fd} ;;
+        esac
+        deploy_find_ovmf
+        if [ -z "$OVMF_CODE" ] || [ ! -f "$OVMF_CODE" ] || [ ! -r "$OVMF_CODE" ]; then
+            echo -
+        elif [ "${platform%% *}" = windows ]; then
+            cygpath -m "$OVMF_CODE"
+        else
+            printf '%s\n' "$OVMF_CODE"
+        fi
+    )
 }
 
 # deploy_accels QEMU: print the accelerators this account can run guests
@@ -343,6 +368,7 @@ platform $platform
 cpus $(deploy_cpus)
 memory_bytes $(deploy_memory)
 qemu ${v:--}
+ovmf_x86_64 $(deploy_ovmf "$q")
 accelerators $(deploy_accels "$q")
 admission $ETUDE_ADMISSION
 ledger $shown

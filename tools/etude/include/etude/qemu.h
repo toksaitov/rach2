@@ -135,7 +135,7 @@ struct etude_qemu_capture {
 
 /* A case's QEMU profile with its artifacts resolved to paths. */
 struct etude_qemu_profile {
-    const char *architecture;            /* "i686" or "x86_64" */
+    const char *architecture;            /* the kernel: "i686" or "x86_64" */
     const char *kernel;                  /* loaded by direct firmware alone */
     const char *initrd;                  /* NULL for none */
     const struct etude_qemu_disk *disks; /* in the order of the profile, ended by
@@ -190,9 +190,9 @@ struct etude_qemu_site {
     enum etude_accel accel;
     const char *qemu_i686;   /* the program for i686, qemu-system-i386 */
     const char *qemu_x86_64; /* and for x86-64 */
-    const char *ovmf_i686;   /* the code image of each one's OVMF, or NULL */
-    const char *ovmf_x86_64;
-    int boundary_lazy; /* the site permits the proved lazy boundary profile */
+    const char *ovmf_i686;   /* reserved; OVMF boots both kernels on x86-64 */
+    const char *ovmf_x86_64; /* the x86-64 OVMF code image, or NULL */
+    int boundary_lazy;       /* the site permits the proved lazy boundary profile */
 };
 
 /* The longest command line the launcher makes, in arguments. */
@@ -233,7 +233,8 @@ struct etude_qemu_line {
  * console on the socket at `console` and QMP on the one at `qmp`, both of
  * which QEMU connects to as a client. The machine starts stopped, with `-S`,
  * and the launcher starts it once QMP has confirmed the accelerator. argv[0]
- * is the site's program for the architecture. `audio` is the launcher-made
+ * is the site's program for the kernel architecture, except that OVMF uses
+ * qemu_x86_64 and ovmf_x86_64 for either kernel. `audio` is the launcher-made
  * WAV path, required when the profile selects an audio card. Each capture of
  * the profile is a `filter-dump` on its card's network, which QEMU creates or
  * truncates before the machine starts and to which it writes each frame the

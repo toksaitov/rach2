@@ -929,11 +929,18 @@ static int audio_check(const char *card, const char *path)
     return path != NULL && *path != '\0' ? 0 : EINVAL;
 }
 
+/** Return whether the profile needs x86-64 QEMU and firmware. */
+static int machine_x86_64(const struct etude_qemu_profile *p)
+{
+    return p->firmware == ETUDE_FIRMWARE_OVMF ||
+           (p->architecture != NULL && strcmp(p->architecture, "x86_64") == 0);
+}
+
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
                     const struct etude_qemu_line *out)
 {
-    int x86_64 = p->architecture != NULL && strcmp(p->architecture, "x86_64") == 0;
+    int x86_64 = machine_x86_64(p);
     const char *program = x86_64 ? s->qemu_x86_64 : s->qemu_i686;
     const char *ovmf = x86_64 ? s->ovmf_x86_64 : s->ovmf_i686;
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};

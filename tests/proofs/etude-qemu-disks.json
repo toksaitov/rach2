@@ -331,6 +331,43 @@
         ],
         "only": true
       }
+    },
+    {
+      "name": "kernel-architecture-ovmf",
+      "summary": "OVMF uses the machine of the kernel architecture for an i686 kernel",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "    return p->firmware == ETUDE_FIRMWARE_OVMF ||\n           (p->architecture != NULL && strcmp(p->architecture, \"x86_64\") == 0);",
+          "replace": "    return p->architecture != NULL && strcmp(p->architecture, \"x86_64\") == 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": i686 on x86-64 ovmf: ",
+          ": no x86-64 ovmf for i686: "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "i686-firmware-fallback",
+      "summary": "a site without x86-64 OVMF falls back to i686 firmware",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "const char *ovmf = x86_64 ? s->ovmf_x86_64 : s->ovmf_i686;",
+          "replace": "const char *ovmf = s->ovmf_x86_64 != NULL ? s->ovmf_x86_64 : s->ovmf_i686;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": no x86-64 ovmf for i686: "
+        ],
+        "only": true
+      }
     }
   ]
 }

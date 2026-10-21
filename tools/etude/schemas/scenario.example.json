@@ -18,7 +18,7 @@
     "qemu_i686": "/usr/bin/qemu-system-i386",
     "qemu_x86_64": "/usr/bin/qemu-system-x86_64",
     "ovmf_i686": null,
-    "ovmf_x86_64": null
+    "ovmf_x86_64": "/usr/share/OVMF/OVMF_CODE_4M.fd"
   },
   "steps": {
     "poweroff": 90000000,

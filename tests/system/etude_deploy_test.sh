@@ -22,14 +22,16 @@
 # reported with the commands that fix it; a connection lost at each of the
 # three steps, and a build and a record stopped by SIGTERM, each followed by
 # a deployment that finishes; a deployment on this machine from a clone,
-# which the probes leave as it was; a commit's source; and Windows.
+# which the probes leave as it was; a commit's source; Windows; the discovery
+# of QEMU's OVMF code image and an absent override. --ovmf runs only the two
+# firmware rows and Windows.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored and the rows run again at the end.
 # --texts puts each fault into the copy, requires only that it changes the
 # file, and runs no row.
 #
-# Usage: sh tests/system/etude_deploy_test.sh [--mutate | --texts]
+# Usage: sh tests/system/etude_deploy_test.sh [--mutate | --texts | --ovmf]
 #
 set -u
 
@@ -37,8 +39,10 @@ case ${1:-} in
     '') mode=check ;;
     --mutate) mode=mutate ;;
     --texts) mode=texts ;;
-    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--mutate | --texts]' >&2; exit 2 ;;
+    --ovmf) mode=ovmf ;;
+    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--mutate | --texts | --ovmf]' >&2; exit 2 ;;
 esac
+deploy_source=${ETUDE_DEPLOY_SOURCE:-}
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 testpid=
@@ -152,6 +156,8 @@ cat > "$work/windows/cygpath" <<'EOF'
 case "$1 $2" in
     '-u C:\Users\fix\AppData\Local') echo "$FIX/appdata" ;;
     '-u C:\Program Files') echo "$FIX/programfiles" ;;
+    "-m $FIX/programfiles/qemu/share/edk2-x86_64-code.fd")
+        echo 'C:/Program Files/qemu/share/edk2-x86_64-code.fd' ;;
     -m\ /*) echo "$2" ;;
     *) exit 1 ;;
 esac
@@ -244,7 +250,7 @@ if [ -n "$windows_memory" ]; then windows_memory=$((windows_memory * 1024)); els
 # `none`, and fail when a fault leaves the copy unchanged.
 fault()
 {
-    cp "$repo/tools/etude/deploy.sh" "$TREE/tools/etude/deploy.sh" || exit 1
+    cp "${deploy_source:-$repo/tools/etude/deploy.sh}" "$TREE/tools/etude/deploy.sh" || exit 1
     # shellcheck disable=SC2016 # the dollars are in the text sed matches
     case $1 in
         none) return 0 ;;
@@ -287,6 +293,8 @@ state()
     : > "$FIX/cc.log"
     : > "$FIX/ssh.log"
     : > "$FIX/log"
+    : > "$FIX/firmware code.fd"
+    ovmf_code=$FIX/firmware\ code.fd
 }
 
 # run ARGS...: run the copy of deploy.sh with the stand-ins first on the
@@ -294,7 +302,7 @@ state()
 # work/err, its status in work/status. Its own scratch must be gone after.
 run()
 {
-    PATH="$work/bin:$work/mbin:$PATH" TMPDIR="$work/ctl" \
+    PATH="$work/bin:$work/mbin:$PATH" TMPDIR="$work/ctl" RACH2_OVMF_CODE="$ovmf_code" \
         sh "$TREE/tools/etude/deploy.sh" -c fakecc -C "$FIX/cache" "$@" > "$work/out" 2> "$work/err"
     echo "$?" > "$work/status"
     # shellcheck disable=SC2012 # the names are the scripts' own
@@ -349,6 +357,7 @@ record()
         echo "cpus $cpus"
         echo "memory_bytes ${7:-$memory}"
         echo "qemu ${5:-QEMU emulator version 9.9.9 (fixture)}"
+        echo "ovmf_x86_64 ${8:-$FIX/firmware code.fd}"
         echo "accelerators ${6:-$accels}"
         echo 'admission etude-ledger 1'
         echo "ledger $2"
@@ -602,6 +611,23 @@ row()
             rm -rf "$TREE/.git"
             deployed || return 1
             record "$home_state/machine" "$home_state/ledger" ;;
+        ovmf-discovery)
+            begin
+            mkdir -p "$work/share/qemu" || exit 1
+            : > "$work/share/qemu/edk2-x86_64-code.fd"
+            : > "$work/share/qemu/edk2-i386-vars.fd"
+            ovmf_code=
+            run machine
+            rm -rf "$work/share"
+            deployed || return 1
+            record "$home_state/machine" "$home_state/ledger" '' '' '' '' '' \
+                "$work/mbin/../share/qemu/edk2-x86_64-code.fd" ;;
+        ovmf-missing)
+            begin
+            ovmf_code=$FIX/absent.fd
+            run machine
+            deployed || return 1
+            record "$home_state/machine" "$home_state/ledger" '' '' '' '' '' - ;;
         windows)
             begin
             rm -f "$FIX/have/user-tool"
@@ -610,6 +636,9 @@ row()
             printf '#!/bin/sh\necho "QEMU emulator version 9.9.8 (windows fixture)\r"\n' \
                 > "$FIX/programfiles/qemu/qemu-system-x86_64.exe"
             chmod 755 "$FIX/programfiles/qemu/qemu-system-x86_64.exe"
+            mkdir -p "$FIX/programfiles/qemu/share" || exit 1
+            : > "$FIX/programfiles/qemu/share/edk2-x86_64-code.fd"
+            ovmf_code=
             run -w machine
             deployed || return 1
             grep -qx 'pwsh Get user-tool' "$FIX/log" || { why 'the account'\''s tool was not installed'; return 1; }
@@ -620,11 +649,13 @@ row()
                 *) why "$dir is not a build of the cache"; return 1 ;;
             esac
             record "$FIX/appdata/etude-state/machine" "$FIX/appdata/etude-state/ledger" winbox \
-                'windows x86_64' 'QEMU emulator version 9.9.8 (windows fixture)' 'whpx tcg' "$windows_memory" ;;
+                'windows x86_64' 'QEMU emulator version 9.9.8 (windows fixture)' 'whpx tcg' "$windows_memory" \
+                'C:/Program Files/qemu/share/edk2-x86_64-code.fd' ;;
     esac
 }
 
-rows='deploy again admin sudo check busy format rights lost stopped local revision windows'
+rows='deploy again admin sudo check busy format rights lost stopped local revision ovmf-discovery ovmf-missing windows'
+[ "$mode" != ovmf ] || rows='ovmf-discovery ovmf-missing windows'
 
 # rows: run every row against the copy, print `etude-deploy-test: failed:
 # NAME` for each that fails, and fail when any did.
@@ -685,4 +716,4 @@ if [ "$mode" = mutate ]; then
     echo 'etude-deploy-test: result: pass: ten faults caught and restored'
 fi
 [ "$root" = 0 ] || echo 'etude-deploy-test: not run: rights: root can write any ledger'
-echo 'etude-deploy-test: result: pass: 13 rows'
+echo "etude-deploy-test: result: pass: $(printf '%s\n' "$rows" | wc -w | tr -d ' ') rows"

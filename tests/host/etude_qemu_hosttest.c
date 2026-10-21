@@ -968,6 +968,7 @@ static void test_uefi(void)
     disks[1].bus = ETUDE_BUS_NVME;
     disks[1].serial = "rach2big";
     disks[1].discard = 1;
+    rows[0].arch = strcmp(dir, "build") == 0 ? "i686" : "x86_64";
     rows[0].profile.disks = disks;
     rows[0].site.ovmf_x86_64 = code;
     q = etude_qemu_new();
@@ -1281,7 +1282,13 @@ static void test_argv(void)
           "a profile with present and absent features");
     b.cpu = p.cpu;
     b.architecture = "i686";
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == ENOENT, "no i686 ovmf");
+    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], "/q/x86_64") == 0 &&
+              has_arg(argv, "-drive", "if=pflash,format=raw,readonly=on,file=/f/ov,,mf"),
+          "i686 on x86-64 ovmf");
+    site.ovmf_i686 = "/f/i686";
+    site.ovmf_x86_64 = NULL;
+    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == ENOENT, "no x86-64 ovmf for i686");
+    site.ovmf_x86_64 = "/f/ov,mf";
     b.firmware = ETUDE_FIRMWARE_SEABIOS;
     CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], "/q/i686") == 0 &&
               strcmp(argv[14], "-drive") == 0,
