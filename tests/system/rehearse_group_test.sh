@@ -8,11 +8,12 @@
 # 16384 blocks to an ext2 group, so that its 64 MiB are one whole group, and
 # give growset a save set for the small form's disk of 524288 sectors with
 # the root at DISK's third entry. A root growset refuses is written into a
-# copy of DISK, and the rehearsal run on that copy must fail with its setup's
-# message before it writes the base disk, the overlay or a stick. The status
-# is 0 when every check passes, 1 when one fails, 2 for a usage error and 3
-# when the rehearsal goes past its setup on a root growset refused. The
-# scratch is under build/tests and is removed on every exit.
+# copy of DISK, and the rehearsal's fixture, tests/cases/machine/
+# rehearse_fixture.sh, made from that copy must fail before it writes the
+# save disk or the base disk. The status is 0 when every check passes, 1 when
+# one fails, 2 for a usage error and 3 when the fixture goes past the save
+# set on a root growset refused. The scratch is under build/tests and is
+# removed on every exit.
 set -eu
 [ $# -eq 3 ] || { echo 'rehearse-group: usage: rehearse_group_test.sh ROOT REFERENCE DISK' >&2; exit 2; }
 root=$1
@@ -64,18 +65,18 @@ fail 'growset did not compute the save set'
 cp "$disk" "$work/root.disk"
 dd if="$root" of="$work/root.disk" bs=512 seek="$root_start" conv=notrunc 2>/dev/null
 status=0
-sh tests/system/suites/installer.sh "$work/unused-stick.img" "$work/unused-sealed.disk" \
-    "$work/unused-harness" "$work/installer" unused "$work/unused-test-stick.img" \
-    "$work/root.disk" 0 "$work/unused-ptydrive" "$work/unused-key" rehearse || status=$?
+sh tests/cases/machine/rehearse_fixture.sh "$work/root.disk" 524288 "$growset" \
+    build/tests/host/mkexfatfixture build/tools/image/mkmbr build/tools/image/mkgpt \
+    "$work/fixture" > "$work/fixture.log" 2>&1 || status=$?
 if [ "$status" -eq 0 ]; then
-    echo 'rehearse-group: the rehearsal passed on a root growset refused' >&2
+    echo "rehearse-group: the rehearsal's fixture was made on a root growset refused" >&2
     exit 3
 fi
-for written in base.raw disk.qcow2 save-stick.img product-stick.img; do
-    if [ -e "$work/installer/rehearse/$written" ]; then
-        echo "rehearse-group: the rehearsal wrote $written before its setup failed" >&2
+for written in ranges save.img base.raw; do
+    if [ -e "$work/fixture/$written" ]; then
+        echo "rehearse-group: the rehearsal's fixture wrote $written past the refused save set" >&2
         exit 3
     fi
 done
-echo "rehearse-group: the rehearsal stopped at its setup with status $status"
+echo "rehearse-group: the rehearsal's fixture stopped at the save set with status $status"
 exit 1
