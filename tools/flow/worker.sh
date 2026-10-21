@@ -36,12 +36,14 @@
 # every process in its group; a long suite is not a stuck session, and the
 # manager stops one that is stuck sooner. After three sessions on one issue
 # that leave it open, the loop waits thirty minutes before each further one
-# and says so in its log, for the manager to see. A session that hands its
-# issue back escapes that wait, so a claim passes by an issue labelled
-# `intermittent` that was handed back after ci last reported on it, for a day
-# after the hand-back, as `rests` says. A loop that starts while a session of
-# the loop before it still runs, as one does after that loop's tmux session is
-# killed, waits for the session to end before it does anything in the clone.
+# and says so in its log, for the manager to see, unless another open issue
+# waits on it, since that wait delays every issue behind it. A session that
+# hands its issue back escapes that wait, so a claim passes by an issue
+# labelled `intermittent` that was handed back after ci last reported on it,
+# for a day after the hand-back, as `rests` says. A loop that starts while a
+# session of the loop before it still runs, as one does after that loop's
+# tmux session is killed, waits for the session to end before it does
+# anything in the clone.
 #
 # While it holds no issue, before it claims one, the loop removes what
 # finished work left in its clone, as `tidy` in lib.sh says, and prunes its
@@ -147,6 +149,14 @@ repair()
                 startswith("Core tests did not finish on "))')" != true ] || return 0
     done
     return 1
+}
+
+# waited_on N: succeed when another open issue waits on issue N, by GitHub's
+# count of the open issues N blocks. A count that cannot be read is none.
+waited_on()
+{
+    [ "$(gh api "repos/$REPO/issues/$1" --jq .issue_dependencies_summary.blocking \
+        2> /dev/null)" -gt 0 ] 2> /dev/null
 }
 
 # rests N: succeed when a claim should pass issue N by: N is labelled
@@ -338,7 +348,8 @@ main()
         fi
         fails=0
         runs=$((runs + 1))
-        if [ "$runs" -ge 3 ] && [ "$(sh "$state/run/board.sh" mine "$issue")" = yes ]; then
+        if [ "$runs" -ge 3 ] && [ "$(sh "$state/run/board.sh" mine "$issue")" = yes ] &&
+            ! waited_on "$issue"; then
             log "#$issue still open after $runs sessions; waiting 30 minutes"
             sleep 1800
         fi
