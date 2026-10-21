@@ -499,6 +499,18 @@ $(IMAGES_DIR)/auth-test.disk: $(MKFIXTURE)
 OS_REAL_SMALL_EXT2 = $(IMAGES_DIR)/os-real-small.ext2
 $(OS_REAL_SMALL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
+# The disk of the menu case, tests/cases/machine.menu.json: the GRUB disk
+# around the kernel, on an MBR, with os-real's root, since every line the
+# case types at the machine is a BusyBox command.
+MENU_DISK = $(ARCH_CASE_DIR)/menu/menu.disk
+$(MENU_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(OS_REAL_SMALL_EXT2) $(DISK_TOOLS) \
+              $(GRUB_FILES) | rach2 krffs $(MANIFEST_PARTS_os_real)
+	@mkdir -p $(@D)
+	RACH2_DISK_TABLE=mbr \
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=96 \
+	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 INSTALL_TEST_DISK = $(IMAGES_DIR)/install-test.disk
 run-install: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(BINFIND) rach2-recovery $(RECOVERY_IMAGE) $(OS_REAL_SMALL_EXT2) $(RUNUTIL) $(DISK_TOOLS)
 	@mkdir -p $(IMAGES_DIR)
