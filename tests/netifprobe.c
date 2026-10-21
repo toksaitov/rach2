@@ -36,11 +36,20 @@
  * the subnet's and the MTU 1500, where the test image's are fixed. It leaves
  * out every change of address, flags and routes, which would move or cut the
  * machine's connection.
+ *
+ * Beside its own lines it writes etude's report records (probe_report.h),
+ * one assertion for each row, for the case ETUDE_CASE names, or else
+ * machine.netif.probe, or machine.netif.twocards for `netifprobe second`;
+ * the scenarios run it at the debug shell, where ETUDE_CASE is not set.
+ * The rows of each path are planned once the probe knows which path it is
+ * on. A failed check ends the probe: its assertion fails and those after it
+ * are not run.
  */
 
 #include "probe.h"
 #include "probe_args.h"
 #include "probe_netif.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -231,11 +240,22 @@ static int ping_retry(uint32_t ip)
     return r;
 }
 
-/** Print "NETIFPROBE FAIL: `what` (`n`)" and exit 1. */
+/** Print "NETIFPROBE FAIL: `what`", report it, and exit 1. */
+static void fail(const char *what)
+{
+    say("NETIFPROBE FAIL: ");
+    say(what);
+    say("\n");
+    report_stop(what);
+    sys_exit(1);
+}
+
+/** Print "NETIFPROBE FAIL: `what` (`n`)", report it, and exit 1; a `what`
+ * too long for the line is cut. */
 static void fail_n(const char *what, int n)
 {
-    char buf[12];
-    int i = (int)sizeof(buf);
+    char buf[12], line[200];
+    int i = (int)sizeof(buf), k = 0;
     unsigned int v = (unsigned int)(n < 0 ? -n : n);
 
     buf[--i] = 0;
@@ -246,22 +266,63 @@ static void fail_n(const char *what, int n)
     if (n < 0) {
         buf[--i] = '-';
     }
-    say("NETIFPROBE FAIL: ");
-    say(what);
-    say(" (");
-    say(&buf[i]);
-    say(")\n");
-    sys_exit(1);
+    while (*what != '\0' && k < (int)sizeof(line) - 16) {
+        line[k++] = *what++;
+    }
+    line[k++] = ' ';
+    line[k++] = '(';
+    while (buf[i] != '\0') {
+        line[k++] = buf[i++];
+    }
+    line[k++] = ')';
+    line[k] = '\0';
+    fail(line);
 }
 
-/** Print "NETIFPROBE FAIL: `what`" and exit 1. */
-static void fail(const char *what)
+/* The report's assertions, one for each row, in the order the probe checks
+ * them: the two rows of every path but the second card's; then those of a
+ * native run, or those of a machine of QEMU's before the probe knows whether
+ * it has an address, and after them the rows of a machine booted with
+ * `rach2.ip=none` or the four lists of one with QEMU's address: its queries,
+ * the changes of address, the interface taken down and up, and the refused
+ * addresses and the routes; and the rows of `netifprobe second`. */
+static const char *const common_rows[] = {"raw-descriptor", "raw-protocol-refused"};
+static const char *const native_rows[] = {
+    "native-index", "hardware-address", "native-address", "mtu", "flags", "query-refusals"};
+static const char *const query_rows[] = {"index", "name-from-index", "hardware-address",
+                                         "address-read"};
+static const char *const unaddressed_rows[] = {
+    "no-netmask",         "address-from-nothing", "classful-from-nothing",
+    "mask-after-address", "route-from-nothing",   "gateway-from-nothing"};
+static const char *const configured_rows[] = {"booted-address", "netmask",       "broadcast", "mtu",
+                                              "flags",          "query-refusals"};
+static const char *const change_rows[] = {
+    "self-connection",   "set-needs-root",        "address-set",   "reset-once",
+    "listener-survives", "same-address-no-reset", "classful-mask", "reset-not-rearmed"};
+static const char *const down_rows[] = {"gateway-before-down", "down-flags", "down-no-ping",
+                                        "down-no-datagram",    "up-again",   "reset-nonblocking",
+                                        "up-datagram"};
+static const char *const route_rows[] = {
+    "invalid-addresses",   "default-route",        "gateway-off-subnet",  "other-route",
+    "gatewayless-default", "unknown-device-route", "own-subnet-route",    "default-removed",
+    "absent-removal",      "waiting-address",      "refused-mask-clears", "restored"};
+static const char *const second_rows[] = {
+    "raw-descriptor",   "gateways",           "second-down",  "first-stays-up",
+    "link-dump-down",   "second-back-up",     "proc-net-dev", "bind-device",
+    "invalid-accept",   "tcp-second-address", "packet-names", "packet-second-arp",
+    "packet-first-only"};
+
+/** Add the `n` rows of `rows` to the end of the report's planned path. */
+static void plan_rows(const char *const *rows, int n)
 {
-    say("NETIFPROBE FAIL: ");
-    say(what);
-    say("\n");
-    sys_exit(1);
+    int i;
+
+    for (i = 0; i < n; i++) {
+        report_plan(rows[i]);
+    }
 }
+
+#define PLAN(rows) plan_rows(rows, (int)(sizeof(rows) / sizeof(rows[0])))
 
 /* struct ifreq: a 16-byte name, then a union whose largest member, struct
  * ifmap, begins with two unsigned longs. struct rtentry: a pad word of a
@@ -399,15 +460,18 @@ static void configure_from_nothing(int fd)
     if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0) {
         fail("a machine with no address reported a netmask");
     }
+    report_held();
     set_name("eth0");
     set_ifr_addr(SLIRP_IP);
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != 0) {
         fail("an address could not be set on a machine that had none");
     }
+    report_held();
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0xFF000000UL) {
         fail("an address with no mask did not take the classful one");
     }
+    report_held();
     set_name("eth0");
     set_ifr_addr(SLIRP_MASK);
     if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
@@ -417,13 +481,16 @@ static void configure_from_nothing(int fd)
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != SLIRP_IP) {
         fail("the address did not survive the mask being set");
     }
+    report_held();
     set_route(0, SLIRP_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("the default route could not be set");
     }
+    report_held();
     if (ping_retry(SLIRP_GW) < 0) {
         fail("the gateway did not answer a machine configured from nothing");
     }
+    report_held();
 }
 
 /** Whether `hay` holds `needle`. */
@@ -795,6 +862,7 @@ static void packet_on_second(int raw_fd)
 
     packet_name(on_first, 1, raw_fd);
     packet_name(on_second, 2, raw_fd);
+    report_held();
 
     /* The reply goes to the sender the request names: the second card. */
     set_name("eth1");
@@ -865,6 +933,7 @@ static void packet_on_second(int raw_fd)
         fail_n("the answer was addressed to neither this machine nor everyone",
                (int)from.sll_pkttype);
     }
+    report_held();
 
     /* What the first interface's socket was given arrived there. */
     for (tries = 0; tries < 8; tries++) {
@@ -887,6 +956,7 @@ static void packet_on_second(int raw_fd)
                    from.sll_ifindex);
         }
     }
+    report_held();
 
     sys_close(on_second);
     sys_close(on_first);
@@ -979,6 +1049,7 @@ static void second_down(void)
     if (fd < 0) {
         fail("the raw descriptor the interface is asked through did not open");
     }
+    report_held();
 
     /* A neighbour on each subnet, reached through the card that is on it. */
     if (ping_retry(SLIRP_GW) < 0) {
@@ -987,6 +1058,7 @@ static void second_down(void)
     if (ping_retry(SECOND_GW) < 0) {
         fail("the second interface's gateway did not answer");
     }
+    report_held();
 
     set_name("eth1");
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0) {
@@ -1005,6 +1077,7 @@ static void second_down(void)
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || (ifr[16] & (IFF_UP | IFF_RUNNING))) {
         fail("the second interface said it was up or running while it was down");
     }
+    report_held();
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || !(ifr[16] & IFF_UP)) {
         fail("the first interface went down with the second");
@@ -1012,12 +1085,14 @@ static void second_down(void)
     if (ping_retry(SLIRP_GW) < 0) {
         fail("the gateway stopped answering when the second interface went down");
     }
+    report_held();
     if (link_flags(2) & (IFF_UP | IFF_RUNNING)) {
         fail("the link dump reported the second interface up while it was down");
     }
     if ((link_flags(1) & (IFF_UP | IFF_RUNNING)) != (IFF_UP | IFF_RUNNING)) {
         fail("the link dump reported the first interface down with the second");
     }
+    report_held();
     set_name("eth1");
     ifr[16] = IFF_UP;
     ifr[17] = 0;
@@ -1027,28 +1102,41 @@ static void second_down(void)
     if (!(link_flags(2) & IFF_UP)) {
         fail("the link dump reported the second interface down once it was up");
     }
+    report_held();
     proc_names_both();
+    report_held();
     device_option(fd);
+    report_held();
     invalid_accept();
+    report_held();
     tcp_names();
+    report_held();
     packet_on_second(fd);
+    report_end();
     say("NETIFPROBE OK\n");
     sys_exit(0);
 }
 
 static void netif_main(void);
 
-/** The probe's entry, given the initial stack `sp`: `netifprobe second`
- * runs `second_down`, and any other command line `netif_main`. */
+/** The probe's entry, given the initial stack `sp`: it begins the report
+ * and plans the first rows of the path, and then `netifprobe second` runs
+ * `second_down`, and any other command line `netif_main`. */
 void probe_main(unsigned long *sp)
 {
     const char *mode;
+    int second;
 
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1);
-    if (mode != 0 && mode[0] == 's') {
+    second = mode != 0 && mode[0] == 's';
+    report_begin(report_case((char **)(sp + 2 + sp[0]),
+                             second ? "machine.netif.twocards" : "machine.netif.probe"));
+    if (second) {
+        PLAN(second_rows);
         second_down();
     }
+    PLAN(common_rows);
     netif_main();
 }
 
@@ -1218,7 +1306,9 @@ static void native_queries(int fd)
     const char *name = probe_ifname();
     uint32_t index = native_index(fd, name), addr, mask, brd;
 
+    report_held();
     native_hwaddr(fd, name);
+    report_held();
     set_name(name);
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || (addr = ifr_addr()) == 0) {
         fail("the address did not read back");
@@ -1232,10 +1322,12 @@ static void native_queries(int fd)
     if (sys_ioctl(fd, SIOCGIFBRDADDR, ifr) != 0 || (brd = ifr_addr()) != ((addr & mask) | ~mask)) {
         fail("the broadcast address is not the subnet's");
     }
+    report_held();
     set_name(name);
     if (sys_ioctl(fd, SIOCGIFMTU, ifr) != 0 || ifr[16] != 0xdc || ifr[17] != 0x05) {
         fail("the MTU is not 1500");
     }
+    report_held();
     set_name(name);
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0) {
         fail("the flags did not read");
@@ -1244,6 +1336,7 @@ static void native_queries(int fd)
         !(ifr[16] & IFF_RUNNING)) {
         fail("an interface that is up and running did not say so");
     }
+    report_held();
     say("netifprobe: ");
     say(name);
     say(": index ");
@@ -1257,6 +1350,8 @@ static void native_queries(int fd)
     say(", mtu 1500\n");
 
     query_refusals(fd);
+    report_held();
+    report_end();
     say("NETIFPROBE OK\n");
     sys_exit(0);
 }
@@ -1334,15 +1429,19 @@ static void netif_main(void)
     if (fd < 0) {
         fail("the raw descriptor a DHCP client asks the interface through did not open");
     }
+    report_held();
     args[0] = AF_INET;
     args[1] = SOCK_RAW;
     args[2] = 6;
     if (socketcall(SC_SOCKET, args) != -EPROTONOSUPPORT) {
         fail("a raw socket for a protocol this stack does not carry was not refused");
     }
+    report_held();
     if (probe_native()) {
+        PLAN(native_rows);
         native_queries(fd);
     }
+    PLAN(query_rows);
 
     /* What this machine says about itself. */
     set_name("eth0");
@@ -1353,6 +1452,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFINDEX, ifr) != -ENODEV) {
         fail("an interface this machine does not have was not refused");
     }
+    report_held();
     /* An index in, a name out. */
     set_name("");
     ifr[16] = 1;
@@ -1367,6 +1467,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFNAME, ifr) != -ENODEV) {
         fail("an index this machine does not have was not refused");
     }
+    report_held();
 
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFHWADDR, ifr) != 0) {
@@ -1379,31 +1480,43 @@ static void netif_main(void)
         ifr[23] == 0) {
         fail("the hardware address is all zeros");
     }
+    report_held();
     /* A machine booted with `rach2.ip=none` has no address. */
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0) {
         fail("the address did not read back");
     }
+    report_held();
     if (ifr_addr() == 0) {
+        PLAN(unaddressed_rows);
         configure_from_nothing(fd);
+        report_end();
         say("NETIFPROBE OK\n");
         sys_exit(0);
     }
+    PLAN(configured_rows);
+    PLAN(change_rows);
+    PLAN(down_rows);
+    PLAN(route_rows);
     if (ifr_addr() != SLIRP_IP) {
         fail("the address this machine booted with is not the one it should be");
     }
+    report_held();
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != SLIRP_MASK) {
         fail("the netmask did not read back");
     }
+    report_held();
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFBRDADDR, ifr) != 0 || ifr_addr() != SLIRP_BRD) {
         fail("the broadcast address is not the subnet's");
     }
+    report_held();
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFMTU, ifr) != 0 || ifr[16] != 0xdc || ifr[17] != 0x05) {
         fail("the MTU is not 1500");
     }
+    report_held();
     set_name("eth0");
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0) {
         fail("the flags did not read");
@@ -1412,9 +1525,11 @@ static void netif_main(void)
         !(ifr[16] & IFF_RUNNING)) {
         fail("an interface that is up and running did not say so");
     }
+    report_held();
 
     /* The query descriptor refuses everything but its ioctls. */
     query_refusals(fd);
+    report_held();
 
     /* A connection to this machine itself, open across the change. */
     args[0] = AF_INET;
@@ -1457,6 +1572,7 @@ static void netif_main(void)
     if (conn < 0) {
         fail("the connection was not accepted");
     }
+    report_held();
 
     /* Setting is root's, and a child that is not root must be told so. */
     pid = sys_fork();
@@ -1481,6 +1597,7 @@ static void netif_main(void)
     if (((status >> 8) & 0xff) != 0) {
         fail("an ordinary user was allowed to set the machine's address");
     }
+    report_held();
 
     /* And the change itself. */
     set_name("eth0");
@@ -1497,6 +1614,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != OTHER_IP) {
         fail("the address that was set did not read back");
     }
+    report_held();
 
     /* The connection is aborted, and each end reports ENETRESET once. */
     if (sys_write(conn, ifr, 1) != -ENETRESET) {
@@ -1518,6 +1636,7 @@ static void netif_main(void)
     if (err != 0) {
         fail("the reason was reported twice, so nothing took it");
     }
+    report_held();
 
     /* The listener survives and accepts at the new address. */
     args[0] = AF_INET;
@@ -1541,6 +1660,7 @@ static void netif_main(void)
     if (conn2 < 0) {
         fail("the listener did not accept after the address changed");
     }
+    report_held();
 
     /* The same address and mask set again reset nothing. */
     set_name("eth0");
@@ -1566,6 +1686,7 @@ static void netif_main(void)
     if (err != 0) {
         fail("reapplying the same address reset a connection");
     }
+    report_held();
 
     /* An address in another class takes that class's mask. */
     set_name("eth0");
@@ -1577,6 +1698,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFNETMASK, ifr) != 0 || ifr_addr() != 0xFFFF0000UL) {
         fail("an address in another class kept the mask of the one before it");
     }
+    report_held();
 
     /* That change does not arm the old connection's reset again. */
     args[0] = (uint32_t)conn;
@@ -1602,6 +1724,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
         fail("the mask did not come back");
     }
+    report_held();
 
     /* Down is down: no ping answered and no datagram received. */
     set_name("eth0");
@@ -1632,6 +1755,7 @@ static void netif_main(void)
     if (socketcall(SC_BIND, args) != 0) {
         fail("the socket for the inbound case did not bind");
     }
+    report_held();
 
     set_name("eth0");
     ifr[16] = 0;
@@ -1643,12 +1767,15 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFFLAGS, ifr) != 0 || (ifr[16] & (IFF_UP | IFF_RUNNING))) {
         fail("an interface that was taken down still says it is up or running");
     }
+    report_held();
     args[0] = SLIRP_GW;
     if (socketcall(SC_PING, args) >= 0) {
         fail("the gateway answered a machine whose interface was down");
     }
+    report_held();
 
     down_drops(inbound);
+    report_held();
     set_name("eth0");
     ifr[16] = IFF_UP;
     ifr[17] = 0;
@@ -1659,6 +1786,7 @@ static void netif_main(void)
     if (r < 0) {
         fail_n("the gateway did not answer after the interface came back up", r);
     }
+    report_held();
 
     /* The second connection, open across this change, read without blocking. */
     args[0] = (uint32_t)conn2;
@@ -1668,6 +1796,7 @@ static void netif_main(void)
     if (socketcall(SC_RECV, args) != -ENETRESET) {
         fail("a nonblocking read of the aborted connection did not report why it ended");
     }
+    report_held();
 
     /* With the interface up, the datagram the suite sends arrives, or the
      * case above proved nothing; the poll waits until it does. */
@@ -1680,6 +1809,7 @@ static void netif_main(void)
         fail_n("the wait for the datagram once the interface was up ended without one", r);
     }
     sys_close(inbound);
+    report_held();
 
     set_name("eth0");
     set_ifr_addr(OTHER_IP);
@@ -1708,16 +1838,19 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCSIFADDR, ifr) != -EINVAL) {
         fail("a multicast address was taken");
     }
+    report_held();
 
     /* Routes: the default, a gateway off the subnet, another network. */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("a default route was not taken");
     }
+    report_held();
     set_route(0, SLIRP_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != -ENETUNREACH) {
         fail("a gateway off the subnet was taken");
     }
+    report_held();
     set_route(0x0A0A0A00UL, 0, 0xFFFFFF00UL);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("a route to another network was not taken");
@@ -1726,6 +1859,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
         fail("a route to another network was not removed");
     }
+    report_held();
     /* A default route with no gateway is refused and removes nothing. */
     set_route(0, OTHER_GW, 0);
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
@@ -1743,6 +1877,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCADDRT, rt) != 0) {
         fail("the default route did not go back for the removal cases");
     }
+    report_held();
 
     /* A route for an interface this machine does not have. */
     set_route(0, SLIRP_GW, 0);
@@ -1755,6 +1890,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCDELRT, rt) != -ENODEV) {
         fail("a removal for an interface this machine does not have was taken");
     }
+    report_held();
 
     /* The route to the machine's own subnet: added, and not removed. */
     set_route(OTHER_IP & OTHER_MASK, 0, OTHER_MASK);
@@ -1765,14 +1901,17 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCDELRT, rt) != -EOPNOTSUPP) {
         fail("removing the route this machine has by being on the subnet succeeded");
     }
+    report_held();
     set_route(0, 0, 0);
     if (sys_ioctl(fd, SIOCDELRT, rt) != 0) {
         fail("the default route was not removed");
     }
+    report_held();
     /* A second removal is ESRCH, which ends a DHCP script's loop. */
     if (sys_ioctl(fd, SIOCDELRT, rt) != -ESRCH) {
         fail("removing a route that is not there succeeded");
     }
+    report_held();
 
     /* 192.168.1.0: a network address until a wider mask makes it a host. */
     set_name("eth0");
@@ -1798,6 +1937,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != -EINVAL) {
         fail("a mask that would make this address a network address was taken");
     }
+    report_held();
 
     /* A mask refused under the classful one leaves no address. */
     set_name("eth0");
@@ -1819,6 +1959,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0 || ifr_addr() != 0) {
         fail("a refused mask left the machine on a pair nobody judged");
     }
+    report_held();
 
     /* The machine as it booted, its ARP cache emptied by the changes. */
     set_name("eth0");
@@ -1838,6 +1979,7 @@ static void netif_main(void)
     if (ping_retry(SLIRP_GW) < 0) {
         fail("the gateway did not answer after the address was put back");
     }
+    report_held();
 
     sys_close(conn2);
     sys_close(client2);
@@ -1845,6 +1987,7 @@ static void netif_main(void)
     sys_close(client);
     sys_close(listener);
     sys_close(fd);
+    report_end();
     say("NETIFPROBE OK\n");
     sys_exit(0);
 }

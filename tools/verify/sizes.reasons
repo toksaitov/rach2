@@ -588,7 +588,7 @@ tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, rea
 
 
 tests/netifprobe.c:netif_main complexity 132 a probe, one sequence of steps in the order the log records them
-tests/netifprobe.c:netif_main lines 563 a probe, one sequence of steps in the order the log records them
+tests/netifprobe.c:netif_main lines 577 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:packet_on_second lines 148 a probe, one sequence of steps in the order the log records them
 
 
