@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "proof": "selfbuild",
+  "summary": "the cases of the selfbuild and selfbuild-ext2 suites on i686, against a kernel whose bytes depend on the time it was compiled, a kernel that reports a processor past the set's limit only when TinyCC compiled it, and an echo that prints a stray byte only when TinyCC compiled it; the guest compiles the sources the faults change, so copies of them are artifacts beside the host's kernel",
+  "tree": "shared",
+  "sources": [
+    "rach2/kernel.c",
+    "rach2/sys/syscall_proc.c",
+    "utils/echo.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/kernel.c",
+    "${WORK}/syscall_proc.c",
+    "${WORK}/echo.c"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 sh tests/proofs/guest.sh make rach2 && ARCH=i686 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel && cp rach2/kernel.c rach2/sys/syscall_proc.c utils/echo.c ${WORK}/"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 RACH2_WORKERS=4 exec tests/run selfbuild selfbuild-ext2 </dev/null"
+    ],
+    "bound_s": 10800
+  },
+  "faults": [
+    {
+      "name": "build-time",
+      "summary": "an unreproducible build: the debug shell's greeting has the time of the compile, so two builds of one tree minutes apart make two kernels",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    kernel_shell_active = true;\n    console_puts(\"Type 'help' for available commands.\");\n",
+          "replace": "    kernel_shell_active = true;\n    console_puts(\"Type 'help' for available commands. \" __TIME__);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: selfbuild: machine.selfbuild.kernel: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "tcc-getcpu",
+      "summary": "a fault of the guest's build alone: getcpu reports processor 4096 when TinyCC compiled the kernel, so callsmusl fails on the kernel the machine built and on no other",
+      "edits": [
+        {
+          "file": "rach2/sys/syscall_proc.c",
+          "find": "    uint32_t cpu = arch_cpu_id();\n    uint32_t zero = 0;\n\n",
+          "replace": "    uint32_t cpu = arch_cpu_id();\n    uint32_t zero = 0;\n\n#ifdef __TINYC__\n    cpu = 4096;\n#endif\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: selfbuild: machine.selfbuild.kernel: evidence: ",
+          "run: selfbuild-ext2: machine.selfbuild-ext2.kernel: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "tcc-echo",
+      "summary": "a fault of the guest's build alone: echo ends its line with a stray byte when TinyCC compiled it, so the echo the machine built prints the wrong text",
+      "edits": [
+        {
+          "file": "utils/echo.c",
+          "find": "    putchar('\\n');\n",
+          "replace": "#ifdef __TINYC__\n    putchar('!');\n#endif\n    putchar('\\n');\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: selfbuild: machine.selfbuild.userland: evidence: "
+        ]
+      }
+    }
+  ]
+}

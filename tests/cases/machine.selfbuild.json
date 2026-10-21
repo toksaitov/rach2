@@ -1,0 +1,170 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.selfbuild",
+  "summary": "The machine builds its kernel, its utilities and its shell from its own sources on a KRFFS root, and what it built runs",
+  "cases": [
+    {
+      "case_id": "machine.selfbuild.kernel",
+      "behavior": "The machine builds its own kernel on a KRFFS root with the staged TinyCC and pdpmake twice, to the same bytes, the host takes the bytes it built off the disk and checks them, and GRUB starts them to a login prompt and to the debug shell, where every probe of the default suite passes",
+      "units": ["selfbuild"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mcopy"], "features": {}},
+      "execution": {"program": "selfbuild_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["selfbuild-disk", "grub-disk"]}], "children": "none", "cleanup": "libetude-case ends the machines and removes the disk copies and the evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "room", "stage": "execute", "does": "read the free space of the root of a copy of the os-real disk on the host, with setidcheck from its free-node chain"},
+        {"step_id": "boot", "stage": "execute", "machine": "build", "does": "boot the copy and wait for the console's login prompt"},
+        {"step_id": "login", "stage": "execute", "machine": "build", "does": "log in at the console as the test account with its password"},
+        {"step_id": "build-one", "stage": "execute", "machine": "build", "does": "copy /src/rach2 to a workspace, build the kernel with make -f guest.mk, and hash it and set it aside in /home/test"},
+        {"step_id": "build-two", "stage": "execute", "machine": "build", "does": "copy /src/rach2 again, build the kernel again and compare the two hashes in the guest"},
+        {"step_id": "sync", "stage": "execute", "machine": "build", "does": "sync the root and end the machine with QMP's quit"},
+        {"step_id": "extract", "stage": "execute", "does": "take the kernel set aside off the copy with readfile.krffs, hash it with sha256 and check it with elfcheck"},
+        {"step_id": "slot", "stage": "execute", "does": "write the kernel in place of the placeholders in the candidate and recovery slots of a copy of the GRUB disk with mcopy, and read each back"},
+        {"step_id": "grub", "stage": "execute", "machine": "grub", "does": "boot the GRUB disk under SeaBIOS to the login prompt of os-simple's ext2 root, and end the machine"},
+        {"step_id": "probes", "stage": "execute", "machine": "probes", "does": "select the recovery entry in the menu file of the GRUB disk, boot it to the debug shell of the test image in RAM, run each probe of the list there and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "build", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["selfbuild-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "grub", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["grub-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "probes", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["grub-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "seabios", "devices": ["rtl8139"], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "room", "checks": "the root has the 16 MiB a build needs free before the machine starts", "source": "scenario"},
+        {"assertion_id": "login", "checks": "the test account logs in at the console and its shell prompts", "source": "scenario"},
+        {"assertion_id": "build-one", "checks": "make -f guest.mk in a copy of /src/rach2 exits 0", "source": "scenario"},
+        {"assertion_id": "size", "checks": "the kernel the build made is at least 200000 bytes", "source": "scenario"},
+        {"assertion_id": "build-two", "checks": "a second make -f guest.mk in a fresh copy of /src/rach2 exits 0", "source": "scenario"},
+        {"assertion_id": "same", "checks": "the two builds made kernels with the same SHA-256", "source": "scenario"},
+        {"assertion_id": "extract", "checks": "the kernel taken off the disk has the SHA-256 the guest gave it", "source": "scenario"},
+        {"assertion_id": "elfcheck", "checks": "elfcheck --kernel --tcc accepts the kernel taken off the disk", "source": "scenario"},
+        {"assertion_id": "slot", "checks": "the candidate and recovery slots of the GRUB disk read back as the kernel written there", "source": "scenario"},
+        {"assertion_id": "grub-login", "checks": "GRUB starts the kernel the machine built to the login prompt of os-simple's ext2 root", "source": "scenario"},
+        {"assertion_id": "timing", "checks": "the kernel the machine built prints its record of its clock's check at level 6 at boot", "source": "scenario"},
+        {"assertion_id": "probes", "checks": "every probe of the default suite's PROBES table that the architecture builds exits 0 at the debug shell of the kernel the machine built, none killed by a signal", "source": "scenario"},
+        {"assertion_id": "reference", "checks": "clockmusl prints CLOCKMUSL REFERENCE OK, its result of comparing the guest's clocks with the host's reference over UDP", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10},
+        {"witness_id": "build", "kind": "quiet", "means": "a build of the machine's own sources has ended", "limit": null, "bound": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}},
+        {"witness_id": "probe", "kind": "counter", "means": "a probe has handed the debug shell back", "limit": 256}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 10800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 805306368, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "selfbuild-disk", "node": "images/selfbuild-test.disk", "per_architecture": true},
+        {"name": "grub-disk", "node": "tests/cases/machine/selfbuild/grub.disk", "per_architecture": true},
+        {"name": "probes-list", "node": "tests/cases/machine/selfbuild/probes.list", "per_architecture": true},
+        {"name": "test-password", "node": "tests/cases/credentials/rach2_test_password", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false},
+        {"name": "setidcheck", "node": "tools/inspect/setidcheck", "per_architecture": false},
+        {"name": "sha256", "node": "tools/verify/sha256", "per_architecture": false},
+        {"name": "elfcheck", "node": "tools/inspect/elfcheck", "per_architecture": false},
+        {"name": "selfbuild_scenario", "node": "tests/cases/machine/selfbuild_scenario", "per_architecture": false}
+      ],
+      "timing": [
+        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:122", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
+      ],
+      "native": {"plan": "none", "class": "disk", "reason": "the guest builds on a private copy of a disk root and the kernel it built boots from a GRUB disk that the scenario writes"}
+    },
+    {
+      "case_id": "machine.selfbuild.userland",
+      "behavior": "The machine builds its own utilities and shell on a KRFFS root with the staged TinyCC and pdpmake, and the programs it built run: the file tools, the network tools, the refusals of the credential tools and the shell",
+      "units": ["selfbuild"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "selfbuild_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["selfbuild-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "build", "does": "boot a copy of the os-real disk and wait for the console's login prompt"},
+        {"step_id": "login", "stage": "execute", "machine": "build", "does": "log in at the console as the test account with its password"},
+        {"step_id": "build", "stage": "execute", "machine": "build", "does": "copy /src/utils and /src/ish to a workspace and build each with make -f guest.mk"},
+        {"step_id": "smoke", "stage": "execute", "machine": "build", "does": "run the programs the machine built, each check a line of its own, and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "build", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["selfbuild-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "login", "checks": "the test account logs in at the console and its shell prompts", "source": "scenario"},
+        {"assertion_id": "utils-built", "checks": "make -f guest.mk in a copy of /src/utils exits 0", "source": "scenario"},
+        {"assertion_id": "ish-built", "checks": "make -f guest.mk in a copy of /src/ish exits 0", "source": "scenario"},
+        {"assertion_id": "smoke-cat", "checks": "the cat built copies a file to standard output", "source": "scenario"},
+        {"assertion_id": "smoke-echo", "checks": "the echo built prints its argument", "source": "scenario"},
+        {"assertion_id": "smoke-true-false", "checks": "the true and false built exit 0 and 1", "source": "scenario"},
+        {"assertion_id": "smoke-pwd", "checks": "the pwd built names /tmp in /tmp", "source": "scenario"},
+        {"assertion_id": "smoke-ls", "checks": "the ls built lists a file of /tmp", "source": "scenario"},
+        {"assertion_id": "smoke-touch-mkdir", "checks": "the touch and mkdir built make a file and a directory", "source": "scenario"},
+        {"assertion_id": "smoke-cp-mv-rm", "checks": "the cp, mv and rm built copy, rename and remove a file", "source": "scenario"},
+        {"assertion_id": "smoke-yes", "checks": "the yes built prints y", "source": "scenario"},
+        {"assertion_id": "smoke-ping", "checks": "the ping built has an answer from 127.0.0.1", "source": "scenario"},
+        {"assertion_id": "smoke-httpd", "checks": "the httpd built, once it says it listens on port 8080, answers GET / with status 200 to the nc built", "source": "scenario"},
+        {"assertion_id": "smoke-built", "checks": "the build made halt, init-shell, init-login and adduser-crash", "source": "scenario"},
+        {"assertion_id": "smoke-login", "checks": "the login built, with no terminal input, refuses with status 1", "source": "scenario"},
+        {"assertion_id": "smoke-su", "checks": "the su built, with no password, refuses with status 1", "source": "scenario"},
+        {"assertion_id": "smoke-sudo", "checks": "the sudo built refuses the test account with status 1", "source": "scenario"},
+        {"assertion_id": "smoke-passwd", "checks": "the passwd built, with no input, refuses with status 1", "source": "scenario"},
+        {"assertion_id": "smoke-adduser", "checks": "the adduser built refuses the test account with status 1", "source": "scenario"},
+        {"assertion_id": "smoke-bootctl", "checks": "the bootctl built refuses to install a kernel with status 1", "source": "scenario"},
+        {"assertion_id": "smoke-ish", "checks": "the ish built runs a command given with -c", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4},
+        {"witness_id": "build", "kind": "quiet", "means": "a build of the machine's own sources has ended", "limit": null, "bound": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 5400000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "selfbuild-disk", "node": "images/selfbuild-test.disk", "per_architecture": true},
+        {"name": "test-password", "node": "tests/cases/credentials/rach2_test_password", "per_architecture": false},
+        {"name": "selfbuild_scenario", "node": "tests/cases/machine/selfbuild_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the guest builds on a private copy of a disk root"}
+    },
+    {
+      "case_id": "machine.selfbuild.inplace",
+      "behavior": "Root builds the staged /src/ish where it is on a KRFFS root with the staged TinyCC and pdpmake, which needs the times the image gave the staged files",
+      "units": ["selfbuild"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "selfbuild_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["selfbuild-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy and the evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "build", "does": "boot a copy of the os-real disk and wait for the console's login prompt"},
+        {"step_id": "login", "stage": "execute", "machine": "build", "does": "log in at the console as root with its password"},
+        {"step_id": "inplace", "stage": "execute", "machine": "build", "does": "run make -f guest.mk in the staged /src/ish, with no copy and no touch, and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "build", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["selfbuild-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "login", "checks": "root logs in at the console and its shell prompts", "source": "scenario"},
+        {"assertion_id": "inplace", "checks": "make -f guest.mk in the staged /src/ish exits 0, which it cannot when the staged files have zero modification times", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3},
+        {"witness_id": "build", "kind": "quiet", "means": "a build of the machine's own sources has ended", "limit": null, "bound": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "selfbuild-disk", "node": "images/selfbuild-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "selfbuild_scenario", "node": "tests/cases/machine/selfbuild_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the guest builds on a private copy of a disk root"}
+    }
+  ]
+}

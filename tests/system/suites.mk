@@ -1217,6 +1217,82 @@ run-selfbuild-ext2: $(DEMO_CREDS) rach2 krffs test-image $(MANIFEST_PARTS_os_rea
 	build/tools/image/mkmbr --lba $(SELFBUILD_EXT2_DISK) 2048:98304:83 > /dev/null
 	SELFBUILD_ROOT=ext2 sh tests/system/suites/selfbuild.sh $(BOOT_KERNEL) $(SELFBUILD_EXT2_DISK) \
 	    "`cat krffs/rach2_test_password`" "`cat krffs/rach2_demo_password`"
+# `tests/run selfbuild`: the machine builds its own kernel, utilities and
+# shell with the staged TinyCC and pdpmake, and what it built runs. It is the
+# cases of tests/cases/machine.selfbuild.json, which etude runs, and has no
+# target here: the test account builds the kernel twice from clean copies of
+# /src/rach2 on a KRFFS root, to the same bytes, which the host takes off the
+# disk and checks, and which GRUB starts to a login prompt and to the debug
+# shell, where every probe of the default suite runs; the test account builds
+# the utilities and the shell and runs them; and root builds the staged
+# /src/ish in place.
+# `tests/run selfbuild-ext2`: the machine builds its own kernel on an ext2
+# root, and the kernel it built runs. It is the cases of
+# tests/cases/machine.selfbuild-ext2.json: one build of the kernel on the
+# os-real system as an ext2 volume, which e2fsck must find consistent after the
+# synced stop, the same checks and boots of what it built, and the ten probes
+# of an installed root on an ext2 root of the test manifest; and root's build
+# of /src/ish in place.
+#
+# SELFBUILD_DISK is a disk of os-real, of which each KRFFS case boots a
+# private copy, and SELFBUILD_EXT2_DISK the same system as an ext2 volume of
+# 48 MiB on a partition at LBA 2048, as the KRFFS disk has it. The kernel the
+# machine builds is no artifact, so it boots from a disk that GRUB starts,
+# whose kernel the scenario writes. SELFBUILD_GRUB has a placeholder that
+# cannot boot in the slots of its candidate and recovery entries: the
+# candidate entry boots os-simple's ext2 root to a login prompt, and the
+# recovery entry the test image from RAM, at whose debug shell the scenario
+# runs the probes of SELFBUILD_PROBES, the PROBES table of
+# tests/system/runner/runtests.c less the probes this architecture does not
+# build. SELFBUILD_ROOTS has the same placeholder, and its candidate entry
+# boots an ext2 root of the test manifest to the debug shell.
+SELFBUILD_GRUB = $(ARCH_CASE_DIR)/selfbuild/grub.disk
+SELFBUILD_ROOTS = $(ARCH_CASE_DIR)/selfbuild/roots.disk
+SELFBUILD_PROBES = $(ARCH_CASE_DIR)/selfbuild/probes.list
+SELFBUILD_PLACEHOLDER = no kernel: the selfbuild scenario writes the one the machine built
+$(SELFBUILD_DISK): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                   $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+$(SELFBUILD_EXT2_DISK): $(SELFBUILD_EXT2_VOL) $(MKMBR)
+	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
+	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $@.tmp
+	$(MKMBR) --lba $@.tmp 2048:98304:83 > /dev/null
+	mv $@.tmp $@
+$(SELFBUILD_GRUB): tools/image/mkdisk_grub.sh $(OS_SIMPLE_EXT2) $(TEST_IMAGE) $(DISK_TOOLS) \
+                   $(GRUB_FILES)
+	@mkdir -p $(@D)
+	echo "$(SELFBUILD_PLACEHOLDER)" > $@.kernel
+	RACH2_ARCH=$(ARCH) RACH2_DISK_TABLE=mbr RACH2_DISK_APPEND= RACH2_DISK_DHCP_APPEND= \
+	RACH2_DISK_RECOVERY_MB=32 RACH2_DISK_EXT2_MB=16 RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$@.kernel RACH2_DISK_RECOVERY_IMAGE=$(TEST_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh $@.kernel $@.tmp
+	rm -f $@.kernel
+	mv $@.tmp $@
+$(SELFBUILD_ROOTS): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) \
+                    tools/image/mkext2.sh tools/image/mkdisk_grub.sh $(IMAGE_TOOLS) $(DISK_TOOLS) \
+                    $(GRUB_FILES) | preflight krffs rach2 tests musl-programs utils ish \
+                    tools/etude/guest check-dropbearmulti
+	@mkdir -p $(@D)
+	sh tools/image/mkext2.sh krffs/manifests/test.manifest $@.ext2 16
+	echo "$(SELFBUILD_PLACEHOLDER)" > $@.kernel
+	RACH2_ARCH=$(ARCH) RACH2_DISK_TABLE=mbr RACH2_DISK_APPEND=rach2.rescue \
+	RACH2_DISK_DHCP_APPEND= RACH2_DISK_RECOVERY_MB=8 RACH2_DISK_EXT2_MB=16 \
+	RACH2_DISK_EXT2_IMAGE=$@.ext2 \
+	    sh tools/image/mkdisk_grub.sh $@.kernel $@.tmp
+	rm -f $@.ext2 $@.kernel
+	mv $@.tmp $@
+$(SELFBUILD_PROBES): tests/system/runner/runtests.c
+	@mkdir -p $(@D)
+	awk -v arch=$(ARCH) ' \
+	    FNR == NR && /I686_ONLY\[\] *=/ { \
+	        n = split($$0, f, "\""); for (i = 2; i < n; i += 2) only[f[i]] = 1 } \
+	    FNR == NR { next } \
+	    /PROBES\[\].*= *\{/ { p = 1 } \
+	    p && /^[ \t]*"/ { \
+	        n = split($$0, f, "\""); \
+	        for (i = 2; i < n; i += 2) if (arch == "i686" || !(f[i] in only)) print f[i] } \
+	    p && /};/ { p = 0 }' $< $< > $@.tmp
+	mv $@.tmp $@
 # `tests/run ssh`: logins over SSH with nobody at the keyboard, the case of
 # tests/cases/machine.ssh.json.
 

@@ -654,8 +654,8 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # programs, the same for both architectures, which a case's `prepare` names
 # as tests/cases/machine/NAME. The lifecycle scenarios, and those of the
 # audio, Doom, krffsmount, loop device, mount, partition, disk arrangement,
-# console and boot line cases, also link tests/cases/machine/lifecycle.c,
-# which they share.
+# console, boot line and selfbuild cases, also link
+# tests/cases/machine/lifecycle.c, which they share.
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/bootline_scenario \
                       build/tests/cases/machine/bootorder_scenario \
@@ -678,6 +678,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/mount_scenario \
                       build/tests/cases/machine/parts_scenario \
                       build/tests/cases/machine/reset_scenario \
+                      build/tests/cases/machine/selfbuild_scenario \
                       build/tests/cases/machine/servicelog_scenario \
                       build/tests/cases/machine/shutdown_scenario \
                       build/tests/cases/machine/smp_scenario
