@@ -10,15 +10,21 @@
  * block again. The last step is what a file system that lost the space
  * instead of freeing it would fail.
  *
- * The probe writes to the mounted root until it is full, so `tests/run
- * diskfull` runs it in a boot of its own on the test image, which the other
- * probes share. It removes its own file on every path but a failed unlink.
+ * The probe writes to the mounted root until it is full, so its case,
+ * guest.diskfull.diskfull, boots the test image for it alone. It writes the
+ * report records of the fill only once it has removed the file, and removes
+ * the file on every path but a failed unlink.
  *
- * Prints "DISKFULL OK (...)" and exits 0, or "DISKFULL FAIL: " with the
- * reason and exits 1. Freestanding; direct system calls (probe.h).
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, guest.diskfull.diskfull without it: `filled`, bytes written and then
+ * a write refused; `enospc`, the refusal ENOSPC; and `space-returned`, a block
+ * written again once the file is removed. Beside them it prints "DISKFULL OK
+ * (...)" and exits 0, or "DISKFULL FAIL: " with the reason and exits 1.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -87,23 +93,59 @@ static void print_num(int v)
     }
 }
 
-/** Close `fd` unless it is negative, remove the probe's file, print
- * "DISKFULL FAIL: `why`" and exit 1. */
+/** Close `fd` unless it is negative, remove the probe's file, report the
+ * failure `why` of the planned assertion now checked, print "DISKFULL FAIL:
+ * `why`" and exit 1. */
 static void fail(const char *why, int fd)
 {
     if (fd >= 0) {
         syscall3(SYS_CLOSE, fd, 0, 0);
     }
     syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0);
+    report_stop(why);
     print("DISKFULL FAIL: ");
     puts(why);
     sys_exit(1);
 }
 
-/** The probe's entry: fill, check the refusal, unlink, and write again. */
-PROBE_START void _start(void)
+/** Write into `out`, of 64 bytes, "the refusal was -N, not -ENOSPC" for
+ * the result `refused`, which is negative; return `out`. */
+static const char *refusal(char *out, int refused)
 {
-    int fd, n, i, refused, written;
+    static const char head[] = "the refusal was -", tail[] = ", not -ENOSPC";
+    char num[12];
+    int n = 0, i;
+
+    for (i = 0; head[i] != '\0'; i++) {
+        out[n++] = head[i];
+    }
+    report_decimal(num, -refused);
+    for (i = 0; num[i] != '\0'; i++) {
+        out[n++] = num[i];
+    }
+    for (i = 0; tail[i] != '\0'; i++) {
+        out[n++] = tail[i];
+    }
+    out[n] = '\0';
+    return out;
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, entered with `sp` at argc: fill, check the refusal, unlink,
+ * and write again. */
+void probe_main(unsigned long *sp)
+{
+    char **envp = (char **)(sp + 1) + sp[0] + 1;
+    char why[64];
+    int fd, n, i, refused, written, removed;
+
+    report_begin(report_case(envp, "guest.diskfull.diskfull"));
+    report_plan("filled");
+    report_plan("enospc");
+    report_plan("space-returned");
 
     for (i = 0; i < CHUNK; i++) {
         block[i] = (char)('a' + (i & 15));
@@ -128,21 +170,19 @@ PROBE_START void _start(void)
     if (refused == 0) {
         fail("the file system never refused a write", fd);
     }
-    if (refused != -ENOSPC) {
-        print("DISKFULL FAIL: the refusal was ");
-        print_num(refused);
-        puts(", not -ENOSPC");
-        syscall3(SYS_CLOSE, fd, 0, 0);
-        syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0);
-        sys_exit(1);
-    }
     if (written == 0) {
         fail("nothing was written before the refusal", fd);
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
+    removed = syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0) == 0;
+    report_held();
+    if (refused != -ENOSPC) {
+        fail(refusal(why, refused), -1);
+    }
+    report_held();
 
     /* The space comes back once the file is removed. */
-    if (syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0) != 0) {
+    if (!removed) {
         fail("the file could not be removed", -1);
     }
     fd = syscall3(SYS_OPEN, (long)"/diskfull.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -155,6 +195,8 @@ PROBE_START void _start(void)
     }
     syscall3(SYS_CLOSE, fd, 0, 0);
     syscall3(SYS_UNLINK, (long)"/diskfull.tmp", 0, 0);
+    report_held();
+    report_end();
 
     print("DISKFULL OK (");
     print_num(written / 1024);

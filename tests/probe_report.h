@@ -16,9 +16,10 @@
  * assertions it checks in order, with `report_plan`, reports each that held
  * with `report_held`, and calls `report_stop` before it exits at a failure:
  * that assertion fails, those after it are not run, and the report ends.
- * Only the process that began the report writes these records; a forked
- * child that stops writes none. A probe that goes on past a failed check
- * reports that assertion with `report_missed` and continues.
+ * `report_skip` reports the next as not run, for a check the probe leaves
+ * out. Only the process that began the report writes these records; a
+ * forked child that stops writes none. A probe that goes on past a failed
+ * check reports that assertion with `report_missed` and continues.
  *
  * A probe that counts its failures and goes on divides its checks into
  * parts, one assertion each. `report_part` begins a part, ending the one
@@ -184,6 +185,15 @@ static __inline__ void report_held(void)
 {
     if (report_path_at < report_path_len) {
         report_pass(report_path[report_path_at++]);
+    }
+}
+
+/** Report that the path's next assertion could not be evaluated, for
+ * `reason`, in a probe that leaves that check out. */
+static __inline__ void report_skip(const char *reason)
+{
+    if (report_path_at < report_path_len) {
+        report_notrun(report_path[report_path_at++], reason);
     }
 }
 

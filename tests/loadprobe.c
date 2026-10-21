@@ -4,19 +4,19 @@
  * Six children spin, two write a file of 256 KiB on the mounted volume and
  * sync it over and over, one pings the gateway through the kernel's own
  * ping every fifty milliseconds, and one reads lines from the console,
- * which the harness types one after another, each once the reader has
- * said it took the last. The load lasts until the reader has reported
+ * which the case's scenario types one after another, each once the reader
+ * has said it took the last. The load lasts until the reader has reported
  * LOAD_LINES lines over a pipe, or until the pipe ends because the reader
- * did; however long the harness and the loaded machine take, the parent
+ * did; however long the scenario and the loaded machine take, the parent
  * waits for the lines and not for a time. Then the parent kills them all,
  * reads `/proc/stat`, and prints the four delays the kernel kept as its
  * longest: the gap between two timer ticks, a block request from its
  * taking to its completion, a wait for the request limit, and a console
  * line from readable to read. The four delays depend on the machine and
  * are printed, not judged; what is judged is counted: every line the
- * harness typed must have been read, and no request may have been
- * quarantined by its deadline, which /proc/disk counts. The suite's wait
- * for the probe's token ends a run whose reader never gets its lines.
+ * scenario typed must have been read, and no request may have been
+ * quarantined by its deadline, which /proc/disk counts. The case's bound
+ * ends a run whose reader never gets its lines.
  *
  * The volume is /dev/disk0p1, mounted on /lo, and the pinger pings QEMU's
  * gateway, 10.0.2.2. A native run gives its own as arguments
@@ -26,13 +26,22 @@
  * check of /proc/disk's quarantines, which counts the requests of every
  * disk of a running machine.
  *
- * Prints "LOADPROBE timer N disk N diskwait N console N lines N" and then
- * "LOADPROBE OK" and exits 0, or "LOADPROBE FAIL: " and the reason and
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, machine.load.lag without it: `mounted`, the volume mounted;
+ * `started`, the report pipe and the ten load processes made; `killed`, each
+ * load process ended by the kill and none by itself; `latencies`, the lines
+ * of /proc/stat for the timer, the disk and the console read; `lines`,
+ * every line typed read, not run without the reader; `no-quarantine`,
+ * /proc/disk's quarantines unchanged, not run with `machine=native`; and
+ * `unmounted`, the volume unmounted and its mount point removed. Beside
+ * them it prints "LOADPROBE timer N disk N diskwait N console N lines N" and
+ * then "LOADPROBE OK" and exits 0, or "LOADPROBE FAIL: " and the reason and
  * exits 1.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define GATEWAY_IP 0x0A000202u
 
@@ -42,7 +51,7 @@
 #define O_TRUNC  01000
 #define SIGKILL  9
 
-/* The lines tests/system/suites/load.sh types, one after each read. */
+/* The lines the scenario of machine.load types, one after each read. */
 #define LOAD_LINES 6
 
 /** End the process with `status`; it does not return. */
@@ -90,9 +99,11 @@ static void print_num(unsigned v)
     }
 }
 
-/** Print "LOADPROBE FAIL: " and `why`, and exit 1. */
+/** Report the failure `why` of the planned assertion now checked, print
+ * "LOADPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
+    report_stop(why);
     print("LOADPROBE FAIL: ");
     puts(why);
     sys_exit(1);
@@ -368,11 +379,20 @@ void probe_main(unsigned long *sp)
     probe_args((int)sp[0], (char **)(sp + 1));
     arg = probe_word(1);
     take_arguments();
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "machine.load.lag"));
+    report_plan("mounted");
+    report_plan("started");
+    report_plan("killed");
+    report_plan("latencies");
+    report_plan("lines");
+    report_plan("no-quarantine");
+    report_plan("unmounted");
     if (syscall2(SYS_MKDIR, (long)mount_dir, 0755) != 0 ||
         syscall5(SYS_MOUNT, (long)node, (long)mount_dir,
                  (long)(wanted(arg, 'k') && arg ? "krffs" : "vfat"), 0, 0) != 0) {
         fail("the mount of the volume");
     }
+    report_held();
     report[0] = report[1] = -1;
     if (syscall1(SYS_PIPE, (long)report) != 0) {
         fail("the report pipe");
@@ -387,6 +407,7 @@ void probe_main(unsigned long *sp)
         }
     }
     syscall1(SYS_CLOSE, report[1]);
+    report_held();
     quarantines = file_field("/proc/disk", "disk-quarantines ");
     while (lines < LOAD_LINES && syscall3(SYS_READ, report[0], (long)&byte, 1) == 1) {
         lines++;
@@ -402,6 +423,7 @@ void probe_main(unsigned long *sp)
             fail("a load process exited on its own before it was killed");
         }
     }
+    report_held();
     timer = file_field("/proc/stat", "latency_timer_us ");
     disk = file_field("/proc/stat", "latency_disk_us ");
     diskwait = file_field("/proc/stat", "latency_diskwait_us ");
@@ -420,14 +442,25 @@ void probe_main(unsigned long *sp)
     if (timer == 0xFFFFFFFFu || disk == 0xFFFFFFFFu || console == 0xFFFFFFFFu) {
         fail("/proc/stat has no latency lines");
     }
-    if (lines < LOAD_LINES && wanted(arg, 'r')) {
+    report_held();
+    if (!wanted(arg, 'r')) {
+        report_skip("the load has no console reader");
+    } else if (lines < LOAD_LINES) {
         fail("the console reader ended before it read every line");
+    } else {
+        report_held();
     }
-    if (!probe_native() && (quarantines == 0xFFFFFFFFu ||
-                            file_field("/proc/disk", "disk-quarantines ") != quarantines)) {
+    if (probe_native()) {
+        report_skip("a running machine's other disks move the count");
+    } else if (quarantines == 0xFFFFFFFFu ||
+               file_field("/proc/disk", "disk-quarantines ") != quarantines) {
         fail("a request was quarantined by its deadline under the load");
+    } else {
+        report_held();
     }
     cleanup_mount(report[0]);
+    report_held();
+    report_end();
     puts("LOADPROBE OK");
     sys_exit(0);
 }
