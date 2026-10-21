@@ -639,6 +639,17 @@ $(MACHINE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
 
+# The machine scenarios that also link the reader of a probe's report on the
+# console (tests/cases/machine/console_report.c), for the cases whose probe
+# runs inside the machine and reports there.
+PROBE_SCENARIOS =
+$(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                    tests/cases/machine/console_report.c tests/cases/machine/console_report.h \
+                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
 $(ASCIISCAN): tools/verify/asciiscan.c
@@ -1358,7 +1369,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
              $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
-             $(MACHINE_SCENARIOS)
+             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS)
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:

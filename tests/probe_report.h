@@ -41,7 +41,7 @@ static int report_records;
 
 /* The planned path: its assertions, the next of them, and the process that
  * began the report; and whether the report has ended. */
-static const char *report_path[32];
+static const char *report_path[64];
 static int report_path_len, report_path_at, report_owner, report_ended;
 
 /** Append `s` to the record `line`, which has `*n` bytes, as room allows. */
