@@ -46,9 +46,11 @@
 /* The assert, notrun and branch records written so far, which `end` counts. */
 static int report_records;
 
-/* The planned path: its assertions, the next of them, and the process that
- * began the report; and whether the report has ended. */
-static const char *report_path[64];
+/* The planned path: its assertions, at most REPORT_PATH_MAX, the next of
+ * them, and the process that began the report; and whether the report has
+ * ended. */
+#define REPORT_PATH_MAX 64
+static const char *report_path[REPORT_PATH_MAX];
 static int report_path_len, report_path_at, report_owner, report_ended;
 
 /** Append `s` to the record `line`, which has `*n` bytes, as room allows. */
@@ -167,23 +169,31 @@ static __inline__ void report_end(void)
     report_ended = 1;
 }
 
-/** Add the assertion `id` to the end of the planned path. */
+/** Add the assertion `id` to the end of the planned path. An id past
+ * REPORT_PATH_MAX is left out, so that its case fails for the missing
+ * assertion. */
 static __inline__ void report_plan(const char *id)
 {
-    report_path[report_path_len++] = id;
+    if (report_path_len < REPORT_PATH_MAX) {
+        report_path[report_path_len++] = id;
+    }
 }
 
 /** Report that the path's next assertion held. */
 static __inline__ void report_held(void)
 {
-    report_pass(report_path[report_path_at++]);
+    if (report_path_at < report_path_len) {
+        report_pass(report_path[report_path_at++]);
+    }
 }
 
 /** Report that the path's next assertion did not hold, with `why`, in a
  * probe that goes on past a failed check. */
 static __inline__ void report_missed(const char *why)
 {
-    report_fail(report_path[report_path_at++], why);
+    if (report_path_at < report_path_len) {
+        report_fail(report_path[report_path_at++], why);
+    }
 }
 
 /** In the process that began the report, report that the path's next
