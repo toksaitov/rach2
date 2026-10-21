@@ -4,7 +4,7 @@
  * A test of the guest's network needs a process at the host end of QEMU's
  * user network: a peer for a connection the guest is to show in its tables,
  * or a server whose answers show what the guest sent. hostpeer is that
- * process, in one of two jobs.
+ * process, in one of three jobs.
  *
  *   hostpeer hold PORT SECONDS
  *       Connect to 127.0.0.1:PORT and keep the connection open for SECONDS.
@@ -21,7 +21,13 @@
  *       the same bytes back, which tests the guest's own transmit and
  *       receive paths. With a PORT of 0 the host chooses a port free for
  *       both transports, and the line that says the server is listening
- *       gives it.
+ *       gives it. With SECONDS 0 it serves until a signal ends it, as
+ *       etude's socket cases stop their service.
+ *
+ *   hostpeer send PORT TEXT
+ *       Send TEXT as one UDP datagram to 127.0.0.1:PORT. The dgram cases
+ *       send it to the port QEMU forwards to the guest's 7502, once the
+ *       guest's probe says it waits for it.
  *
  * SECONDS is a completion bound and is multiplied by the set's deadline
  * factor. The exit status is 0 when the job was done, 1 when it could not
@@ -157,7 +163,8 @@ static long bind_pair(int *listener, int *dgram, long port)
 
 /**
  * The `echo` job: serve TCP and UDP on the loopback's `port`, or on a port
- * the host chooses when it is 0, for `seconds`, sending back what arrives.
+ * the host chooses when it is 0, for `seconds`, or until a signal ends it
+ * when that is 0, sending back what arrives.
  * Returns 0 when the time is up, or 1 with the reason printed when the
  * sockets cannot be bound or `select` fails.
  *
@@ -182,10 +189,13 @@ static int echo(long port, long seconds)
     port = bind_pair(&listener, &dgram, port);
     if (port == 0)
         return 1;
-    printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n", port, seconds);
+    if (seconds == 0)
+        printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld until stopped\n", port);
+    else
+        printf("hostpeer: echoing tcp and udp on 127.0.0.1:%ld for %lds\n", port, seconds);
     fflush(stdout);
 
-    while (now() < deadline) {
+    while (seconds == 0 || now() < deadline) {
         char buf[2048];
         struct timeval tv;
         fd_set rfds;
@@ -250,6 +260,31 @@ static int echo(long port, long seconds)
 }
 
 /**
+ * The `send` job: send `text` as one UDP datagram to the loopback's `port`.
+ * Returns 0, or 1 with the reason printed when it was not sent whole.
+ */
+static int send_text(long port, const char *text)
+{
+    struct sockaddr_in addr;
+    size_t n = strlen(text);
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (fd < 0) {
+        perror("hostpeer: socket");
+        return 1;
+    }
+    fill_local(&addr, port);
+    if (sendto(fd, text, n, 0, (struct sockaddr *)&addr, sizeof(addr)) != (ssize_t)n) {
+        perror("hostpeer: sendto");
+        close(fd);
+        return 1;
+    }
+    close(fd);
+    printf("hostpeer: sent %lu bytes to 127.0.0.1:%ld\n", (unsigned long)n, port);
+    return 0;
+}
+
+/**
  * Read `text` into `*out` as a decimal number. Returns 1, or 0 when `text`
  * is empty or has anything after the number: `strtol` alone reads `10junk`
  * as 10 and `junk` as 0.
@@ -274,8 +309,16 @@ int main(int argc, char **argv)
     long port, seconds;
 
     if (argc != 4) {
-        fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n");
+        fprintf(stderr, "usage: hostpeer hold|echo PORT SECONDS\n"
+                        "       hostpeer send PORT TEXT\n");
         return 2;
+    }
+    if (strcmp(argv[1], "send") == 0) {
+        if (!whole_number(argv[2], &port) || port < 1 || port > 65535) {
+            fprintf(stderr, "hostpeer: a port in 1..65535\n");
+            return 2;
+        }
+        return send_text(port, argv[3]);
     }
     if (!whole_number(argv[2], &port) || !whole_number(argv[3], &seconds) || port < 0 ||
         port > 65535 || seconds < 0 || (port == 0 && strcmp(argv[1], "echo") != 0)) {
@@ -289,6 +332,6 @@ int main(int argc, char **argv)
         return hold(port, seconds);
     if (strcmp(argv[1], "echo") == 0)
         return echo(port, seconds);
-    fprintf(stderr, "hostpeer: unknown job '%s'; hold or echo\n", argv[1]);
+    fprintf(stderr, "hostpeer: unknown job '%s'; hold, echo or send\n", argv[1]);
     return 2;
 }
