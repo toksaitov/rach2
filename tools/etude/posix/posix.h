@@ -52,7 +52,8 @@ struct keeper_args {
     int err_r; /* controller has gone */
 };
 
-/** Run the keeper of one attempt in the process just forked; never returns. */
+/** Run the keeper of one attempt in the process just forked, every signal
+ * blocked across the fork; never returns. */
 void keeper_main(const struct keeper_args *k);
 
 /** Write one message; 0 on success, -1 when the reader has gone. */

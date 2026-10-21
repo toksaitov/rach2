@@ -478,10 +478,40 @@ static int keeper_pipe(int fds[2])
     return fds[0] < 0 || fds[1] < 0 ? -1 : 0;
 }
 
-/** Wake the keeper on SIGCHLD through a pipe of its own. */
+/**
+ * Give the keeper its own signal dispositions, which it does first, while
+ * every signal is still blocked from the controller's fork: ignore SIGPIPE
+ * and the stop signals, and set every other signal the controller caught to
+ * its default.
+ *
+ * A handler of the controller's would run in the keeper on the controller's
+ * data, writing, say, to a descriptor number the keeper has since given to a
+ * pipe of its own. The stop signals are ignored because the keeper must
+ * outlive the case to end it: a stop reaches it as the end of the
+ * controller's pipe, and a signal sent to every process of a run must not
+ * leave the case without its keeper.
+ */
+static void keeper_dispositions(void)
+{
+    struct sigaction old;
+    int sig;
+
+    for (sig = 1; sig < NSIG; sig++)
+        if (sig != SIGKILL && sig != SIGSTOP && sigaction(sig, NULL, &old) == 0 &&
+            old.sa_handler != SIG_IGN && old.sa_handler != SIG_DFL)
+            signal(sig, SIG_DFL);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+}
+
+/** Wake the keeper on SIGCHLD through a pipe of its own, and unblock the
+ * signals. */
 static int keeper_signals(struct keeper *kp)
 {
     struct sigaction sa;
+    sigset_t none;
     int wake[2];
 
     if (keeper_pipe(wake) != 0)
@@ -494,7 +524,10 @@ static int keeper_signals(struct keeper *kp)
     sa.sa_handler = keeper_sigchld;
     sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    return sigaction(SIGCHLD, &sa, NULL);
+    sigemptyset(&none);
+    if (sigaction(SIGCHLD, &sa, NULL) != 0)
+        return -1;
+    return sigprocmask(SIG_SETMASK, &none, NULL);
 }
 
 /**
@@ -546,6 +579,7 @@ void keeper_main(const struct keeper_args *k)
     struct keeper_args a;
     struct keeper kp;
 
+    keeper_dispositions();
     setsid();
     if (keeper_fds(&a, k) != 0)
         _exit(1);

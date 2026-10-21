@@ -110,13 +110,16 @@ enum { FD_IN, FD_CTL_R, FD_CTL_W, FD_EV_R, FD_EV_W, FD_OUT_R, FD_OUT_W, FD_ERR_R
 
 /**
  * Fork the attempt's keeper, with the pipes between them and the case's
- * standard input open.
+ * standard input open. Every signal is blocked across the fork, so that no
+ * handler of the controller's runs in the keeper before the keeper has set
+ * its own.
  */
 static int proc_spawn(struct etude_proc *p, const struct etude_exec_spec *spec)
 {
     const char *in = spec->stdin_path != NULL ? spec->stdin_path : "/dev/null";
     int fds[FD_N], i, e;
     struct keeper_args k;
+    sigset_t all, old;
 
     for (i = 0; i < FD_N; i++)
         fds[i] = -1;
@@ -124,9 +127,19 @@ static int proc_spawn(struct etude_proc *p, const struct etude_exec_spec *spec)
     if (fds[FD_IN] >= 0)
         fcntl(fds[FD_IN], F_SETFD, FD_CLOEXEC);
     if (fds[FD_IN] < 0 || cloexec_pipe(&fds[FD_CTL_R]) != 0 || cloexec_pipe(&fds[FD_EV_R]) != 0 ||
-        cloexec_pipe(&fds[FD_OUT_R]) != 0 || cloexec_pipe(&fds[FD_ERR_R]) != 0 ||
-        (p->keeper = fork()) < 0) {
+        cloexec_pipe(&fds[FD_OUT_R]) != 0 || cloexec_pipe(&fds[FD_ERR_R]) != 0) {
         e = errno;
+        for (i = 0; i < FD_N; i++)
+            close_fd(&fds[i]);
+        errno = e;
+        return -1;
+    }
+    sigfillset(&all);
+    sigprocmask(SIG_SETMASK, &all, &old);
+    p->keeper = fork();
+    if (p->keeper < 0) {
+        e = errno;
+        sigprocmask(SIG_SETMASK, &old, NULL);
         for (i = 0; i < FD_N; i++)
             close_fd(&fds[i]);
         errno = e;
@@ -143,6 +156,7 @@ static int proc_spawn(struct etude_proc *p, const struct etude_exec_spec *spec)
         k.err_r = fds[FD_ERR_R];
         keeper_main(&k);
     }
+    sigprocmask(SIG_SETMASK, &old, NULL);
     p->ctl = fds[FD_CTL_W];
     p->ev = fds[FD_EV_R];
     p->out = fds[FD_OUT_R];

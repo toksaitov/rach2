@@ -58,10 +58,12 @@
  * without forwards; a machine that forwards a port the case does not hold is
  * refused before QEMU starts. This program is also the peer that a scenario
  * runs as a service; two machines at once reach it, a service ended unseen is a
- * fault, and failing rows at each stage end their own processes while a held
- * row keeps its own. A row that passes leaves nothing in its scratch but its
- * machines' consoles. With the real QEMU, a disk root written at the debug
- * shell and powered off is read back by the next boot, from a private copy on
+ * fault, failing rows at each stage end their own processes while a held row
+ * keeps its own, and a SIGTERM to every process of a case, its keepers among
+ * them, ends them all and leaves the scenario seeing its service ended by the
+ * stop. A row that passes leaves nothing in its scratch but its machines'
+ * consoles. With the real QEMU, a disk root written at the debug shell and
+ * powered off is read back by the next boot, from a private copy on
  * AHCI and from a qcow2 overlay over the disk on an IDE drive with a serial,
  * whose map lists the write and whose raw conversion has it; etude-guest runs
  * the test image's /hello, two machines run /tcptest against the peer, the
@@ -75,8 +77,9 @@
  * written inside one and one after each; a stop signal, a step's bound and a
  * kill of the scenario during a stop each leave no stopped QEMU. With
  * ETUDE_TEST_FORWARD set the program runs the two forward rows alone, with
- * ETUDE_TEST_FAULT_ONLY set the reboot row and the fault row alone, and with
- * ETUDE_TEST_SUSPEND_ONLY the stand-in's suspension rows alone.
+ * ETUDE_TEST_FAULT_ONLY set the reboot row and the fault row alone, with
+ * ETUDE_TEST_SUSPEND_ONLY the stand-in's suspension rows alone, and with
+ * ETUDE_TEST_STOP_ALL_ONLY the row whose every process gets SIGTERM alone.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -1685,7 +1688,8 @@ static int serve_and_boot(struct etude_case *c, struct peer_args *pa, int both,
  * Run the rows that fail beside a service and machines that run: an
  * artifact whose object is damaged (`broken`), a wait past its step's bound
  * (`bound-pair`), a stop or a kill during a wait (`stop-pair`, `kill-pair`),
- * and a service that dies unseen (`unseen`).
+ * a stop of every process of the case during a wait (`stop-all`), and a
+ * service that dies unseen (`unseen`).
  */
 static int scenario_fail(struct etude_case *c, const char *row)
 {
@@ -1717,6 +1721,10 @@ static int scenario_fail(struct etude_case *c, const char *row)
         return 1;
     }
     etude_progress(c, "waiting", 0);
+    if (strcmp(row, "stop-all") == 0) {
+        etude_console_wait(b, "never printed", 0, &at);
+        return 0;
+    }
     expect(c, "stopped", etude_console_wait(b, "never printed", 0, &at), ETUDE_STOPPED);
     return 0;
 }
@@ -1950,7 +1958,7 @@ static int scenario_services(struct etude_case *c, const char *row)
         return scenario_unready(c);
     if (strcmp(row, "broken") == 0 || strcmp(row, "bound-pair") == 0 ||
         strcmp(row, "stop-pair") == 0 || strcmp(row, "kill-pair") == 0 ||
-        strcmp(row, "unseen") == 0)
+        strcmp(row, "stop-all") == 0 || strcmp(row, "unseen") == 0)
         return scenario_fail(c, row);
     if (strcmp(row, "hold") == 0)
         return scenario_hold(c);
@@ -3112,16 +3120,54 @@ static const struct row kill_row[] = {
      STEP_US, -1, 0, 0, 1, NULL, 0, NULL, SIGKILL},
 };
 
+/* The row whose every process, its keepers among them, gets SIGTERM during
+ * its wait, as a stop sent to every process of a run gives it. Its wait ends
+ * by the stop or by the loss of its machine, whichever the scenario sees
+ * first, so it asserts nothing of the wait. */
+static const struct row stop_all_row[] = {
+    {"stop-all", "disk", "serve first:alpha second:beta wait", "service-ready", "disk", 0, STEP_US,
+     1, 0, 1, 1, NULL, 0, "peer.1.out=peer: listening", SIGTERM},
+};
+
 /* What stops a row during its wait. */
 #define WAITING "@etude 1 progress waiting 0\n"
 
 /**
+ * Run the stop-all row: once it waits, send SIGTERM to each of its
+ * processes, its scenario, its keepers, its service and its machines. Each
+ * keeper must outlive the signal and still report its process's end, so that
+ * the scenario sees the service ended by the stop and not by itself.
+ */
+static void test_stop_all(const struct site *s)
+{
+    struct row_run rr;
+    char err[PATH_MAX];
+    long pids[ROW_PROCS];
+    int n, i;
+
+    row_start(&rr, stop_all_row, s, 0);
+    if (rr.started && attempt_read(&rr.a, WAITING, NULL, now_ms() + (uint64_t)FAKE_ATTEMPT_MS)) {
+        n = row_procs("stop-all", pids);
+        for (i = 0; i < n; i++)
+            kill((pid_t)pids[i], SIGTERM);
+        rr.a.stopped = 1;
+    }
+    CHECK(rr.a.stopped, "stop-all: every process stopped during its wait");
+    fix_format(err, sizeof(err), "%s/stop-all.err", fix_dir());
+    row_finish(&rr, NULL, 1);
+    CHECK(!file_has(err, "ended before the case stopped it"),
+          "stop-all: the service's end by the stop was seen");
+}
+
+/**
  * Run the hold row, and while its service and machines run, each failing
- * row and the killed one: each must end every process of its own, and leave
- * the hold row's processes as they were, which then still answer.
+ * row, the killed one and the stop-all row: each must end every process of
+ * its own, and leave the hold row's processes as they were, which then still
+ * answer.
  */
 static void test_isolation(const struct site *s)
 {
+    const size_t nfail = sizeof(fail_rows) / sizeof(fail_rows[0]);
     long before[ROW_PROCS], after[ROW_PROCS];
     struct row_run hold, killed;
     int nb, na;
@@ -3140,14 +3186,15 @@ static void test_isolation(const struct site *s)
     }
     nb = row_procs("hold", before);
     CHECK(nb >= 6, "hold: its scenario, keepers, service and machines run");
-    for (i = 0; i <= sizeof(fail_rows) / sizeof(fail_rows[0]); i++) {
-        const struct row *r =
-            i < sizeof(fail_rows) / sizeof(fail_rows[0]) ? &fail_rows[i] : kill_row;
+    for (i = 0; i <= nfail + 1; i++) {
+        const struct row *r = i < nfail ? &fail_rows[i] : i == nfail ? kill_row : stop_all_row;
 
         if (r == kill_row) {
             row_start(&killed, r, s, 0);
             row_finish(&killed, WAITING, 0);
             CHECK(killed.a.stopped, "kill-pair: killed during its wait");
+        } else if (r == stop_all_row) {
+            test_stop_all(s);
         } else {
             run_row(r, s, r->stop_sig != 0 ? WAITING : NULL);
         }
@@ -3510,8 +3557,9 @@ static void test_suspend(const struct site *s)
  * ETUDE_TEST_AUDIO_ONLY asks for one kind alone, and then the stand-in rows,
  * the fault row, the stop row, the suspension rows, the forward row and the
  * damaged row; or the forward row alone when `forward_only` is set, the
- * reboot row and the fault row alone when ETUDE_TEST_FAULT_ONLY is, or the
- * suspension rows alone when ETUDE_TEST_SUSPEND_ONLY is. */
+ * reboot row and the fault row alone when ETUDE_TEST_FAULT_ONLY is, the
+ * suspension rows alone when ETUDE_TEST_SUSPEND_ONLY is, or the stop-all row
+ * alone when ETUDE_TEST_STOP_ALL_ONLY is. */
 static void test_stand_in(int forward_only)
 {
     struct site s;
@@ -3532,6 +3580,13 @@ static void test_stand_in(int forward_only)
     }
     if (getenv("ETUDE_TEST_SUSPEND_ONLY") != NULL) {
         test_suspend(&s);
+        CHECK(!machines_left(), "every stand-in QEMU has ended");
+        etude_store_close(s.store);
+        return;
+    }
+    if (getenv("ETUDE_TEST_STOP_ALL_ONLY") != NULL) {
+        test_stop_all(&s);
+        row_gone("stop-all");
         CHECK(!machines_left(), "every stand-in QEMU has ended");
         etude_store_close(s.store);
         return;
@@ -3611,6 +3666,7 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
     test_stand_in(forward_only);
     if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL && getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL &&
         getenv("ETUDE_TEST_FAULT_ONLY") == NULL && getenv("ETUDE_TEST_SUSPEND_ONLY") == NULL &&
+        getenv("ETUDE_TEST_STOP_ALL_ONLY") == NULL &&
         (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
         test_real(forward_only);
     if (fails != 0)
