@@ -74,7 +74,7 @@
         }
       ],
       "fails": {
-        "status": 28,
+        "status": 32,
         "lines": [
           "frame_hosttest: failed: CHECK(m.usable_bytes + KIB(513) == MIB(sizes[i])); (1)",
           "frame_hosttest: failed: CHECK(m.unreachable_bytes == 0); (1)",
@@ -98,6 +98,10 @@
           "frame_hosttest: failed: CHECK(m.unreachable_bytes == MIB(1024 * 1024)); (1)",
           "frame_hosttest: failed: CHECK(m.top_frame == REACH_X86_64 / FRAME_PAGE_SIZE); (1)",
           "frame_hosttest: failed: CHECK(frame_map_usable(&m, REACH_X86_64 / FRAME_PAGE_SIZE - 1)); (1)",
+          "frame_hosttest: failed: CHECK(m.usable_bytes + KIB(513) == MIB(63 * 1024)); (1)",
+          "frame_hosttest: failed: CHECK(m.unreachable_bytes == MIB(9 * 1024)); (1)",
+          "frame_hosttest: failed: CHECK(m.top_frame == REACH_2M / FRAME_PAGE_SIZE); (1)",
+          "frame_hosttest: failed: CHECK(frame_map_usable(&m, REACH_2M / FRAME_PAGE_SIZE - 1)); (1)",
           "frame_hosttest: failed: CHECK(m.count == 1 + UEFI_GROUPS + 2); (1)",
           "frame_hosttest: failed: CHECK(m.usable_bytes == low + high && m.unreachable_bytes == 0); (1)",
           "frame_hosttest: failed: CHECK(m.top_frame == 0x400000000ULL / FRAME_PAGE_SIZE); (1)",

@@ -15,9 +15,11 @@
  * keeps. Then with x86-64's reach, the direct map's 64 TiB: QEMU's maps at
  * 6 GiB and 8 GiB, the Lenovo's, a map past the direct map, and a map shaped
  * as a UEFI firmware gives one, of the record's whole BOOT_MMAP_MAX entries,
- * with the reservations the boot makes on it. The reservations are replayed
- * against each and the four numbers checked, and the frame table is placed
- * with `frame_map_place`. Exits with the count of failed checks, at most 50.
+ * with the reservations the boot makes on it; and QEMU's map at 72 GiB with
+ * the 64 GiB reach of a processor without 1 GiB pages. The reservations are
+ * replayed against each and the four numbers checked, and the frame table
+ * is placed with `frame_map_place`. Exits with the count of failed checks, at
+ * most 50.
  * tests/proofs/frame.json counts the NVS and ACPI types as memory and
  * requires the Lenovo's two rows, and no other, to fail.
  */
@@ -40,6 +42,10 @@ int printf(const char *format, ...);
  * the 64 TiB of x86-64's direct map (KVA_DIRECT_SIZE). */
 #define REACH_I686   FRAME_REACH_32
 #define REACH_X86_64 0x400000000000ULL
+
+/* The direct map's reach on an x86-64 processor without 1 GiB pages
+ * (DIRECT_2M_REACH in x86-64's mmu.c). */
+#define REACH_2M 0x1000000000ULL
 
 static int fails;
 
@@ -427,6 +433,26 @@ static void x86_64_past_reach(void)
     CHECK(frame_map_usable(&m, REACH_X86_64 / FRAME_PAGE_SIZE - 1));
 }
 
+/**
+ * QEMU's map at 72 GiB with the 64 GiB reach of a processor without 1 GiB
+ * pages, as the large-memory suite's boundary boot has it: the first 3 GiB and
+ * the 60 GiB from 4 GiB to the reach are usable, 63 GiB with the 513 KiB of
+ * holes, the 9 GiB past the reach are unreachable, and the top frame is the
+ * reach's, so that the frame table has 16777216 entries.
+ */
+static void x86_64_boundary(void)
+{
+    uint8_t map[512];
+    struct frame_map m;
+    uint32_t n = qemu_map(map, 73728);
+
+    CHECK(frame_map_build(&m, map, n, 0, REACH_2M) == 0);
+    CHECK(m.usable_bytes + KIB(513) == MIB(63 * 1024));
+    CHECK(m.unreachable_bytes == MIB(9 * 1024));
+    CHECK(m.top_frame == REACH_2M / FRAME_PAGE_SIZE);
+    CHECK(frame_map_usable(&m, REACH_2M / FRAME_PAGE_SIZE - 1));
+}
+
 /* The UEFI-shaped map's groups, each a run of memory the firmware lists as
  * two usable entries, then a small region of another type: the number of
  * groups that, with the map's eight other entries, fill the record's
@@ -573,6 +599,7 @@ int main(void)
     x86_64_qemu();
     x86_64_lenovo();
     x86_64_past_reach();
+    x86_64_boundary();
     uefi();
     ranges_bound();
     place();
