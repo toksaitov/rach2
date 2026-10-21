@@ -449,27 +449,15 @@ BOOTORDER_DISK = $(IMAGES_DIR)/bootorder-test.disk
 run-bootorder: $(DEMO_CREDS) rach2 rach2-recovery rach2-recovery-image krffs $(GRUB_TEST_EXT2) $(MANIFEST_PARTS_os_real) $(HARNESS)
 	sh tests/system/suites/bootorder.sh $(BOOT_KERNEL) $(HARNESS) $(BOOTORDER_DISK)
 # `tests/run menu`: the boot menu that can be rewritten, and the stub that
-# cannot. Four boots of one GRUB disk: a two-entry menu staged through `bootctl
-# config` with a grubenv key round-tripped and the candidate kernel corrupted; a
-# boot proving both staged entries reached the menu and that the fallback NUMBER
-# still named the stub's own entry rather than a staged one; that file truncated
-# mid-entry from the host, after which the machine must still boot through the
-# stub with GRUB's parse error in the log; and the slot's extent read back to
-# prove bootctl overwrote bytes in place rather than rewriting a file.
-MENU_TEST_DISK = $(IMAGES_DIR)/menu-test.disk
-# The root is os-real's, not os-simple's, because every line this suite types
-# at the machine is a busybox command and os-simple carries no busybox: with
-# that root the first command would print nothing and the suite would wait out
-# its deadline.
-run-menu: $(DEMO_CREDS) rach2 krffs $(OS_REAL_SMALL_EXT2) $(MANIFEST_PARTS_os_real) $(BINFIND) $(RUNUTIL) $(DISK_TOOLS)
-	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_EXT2_MB=96 \
-	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
-	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(MENU_TEST_DISK)
-	sh tests/system/suites/menu.sh $(MENU_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`"
+# cannot. It is the case of tests/cases/machine.menu.json, which etude runs,
+# and has no target here: four boots of one GRUB disk, a two-entry menu staged
+# through `bootctl config` with a grubenv key round-tripped and the candidate
+# kernel destroyed; a boot proving both staged entries reached the menu and
+# that the fallback number still named the stub's own entry rather than a
+# staged one; that file torn mid-entry from the host, after which the machine
+# must still boot through the stub with GRUB's parse error in the log; and the
+# slot's extent read back to prove bootctl overwrote bytes in place rather
+# than rewriting a file.
 # `tests/run authority`: which kernel may write the whole disk. The
 # authority is read off each built kernel, and then each boots the test image
 # with a disk over AHCI: the everyday build must refuse a write to /dev/disk0
