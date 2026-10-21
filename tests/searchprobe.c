@@ -85,10 +85,20 @@
  * Prints "SEARCHPROBE OK" and exits 0 when every case passed; a failure
  * prints "SEARCHPROBE FAIL: " with the step and the answer it got, and exits
  * 1. Freestanding; direct system calls (probe.h).
+ *
+ * The parent writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each step, as `steps` lists them, and
+ * one for each run of steps checked the same way: the staged modes, the
+ * fixtures, a child's dropped ids and the removals. A failed step fails its
+ * assertion; those before it held and those after it did not run. A child
+ * writes no record: it names its failed step to the parent on a pipe. The
+ * branch of the group `arch` is `i686`, with the steps of the old stat(2),
+ * or `x86-64`, with none of its own.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -223,7 +233,264 @@ static void puto(u32 v)
     puts_(&buf[i]);
 }
 
-/** Print "SEARCHPROBE FAIL: `step` (got `got`)" and exit 1. */
+/* The probe's checks in the order it makes them: the label each passes to
+ * `want_eq`, `want_ok` or `want_mode`, and its assertion. Consecutive steps
+ * of one assertion are one row. */
+static const struct step {
+    const char *label;
+    const char *id;
+} steps[] = {
+    {"staged /sp_denied", "staged-modes"},
+    {"staged /sp_denied/deep", "staged-modes"},
+    {"staged /sp_denied/shared", "staged-modes"},
+    {"staged /sp_denied/leaf.txt", "staged-modes"},
+    {"staged /sp_denied/deep/leaf.txt", "staged-modes"},
+    {"staged /sp_denied/prog", "staged-modes"},
+    {"mint a fixture file", "fixtures"},
+    {"chmod a fixture file", "fixtures"},
+    {"mint a fixture directory", "fixtures"},
+    {"chmod a fixture directory", "fixtures"},
+    {"give mine to uid 1000", "fixtures"},
+    {"open a dirfd on /sp_denied", "fixtures"},
+    {"open a dirfd on /sp_denied/shared", "fixtures"},
+    {"drop the gids", "baseline-drop-ids"},
+    {"drop the uids", "baseline-drop-ids"},
+    {"baseline: open the one-level leaf", "baseline-open-one-level-leaf"},
+    {"baseline: open the two-level leaf", "baseline-open-two-level-leaf"},
+    {"baseline: stat the two-level leaf", "baseline-stat-two-level-leaf"},
+#if !defined __x86_64__
+    {"baseline: legacy stat the one-level leaf", "baseline-legacy-stat-one-level-leaf"},
+#endif
+    {"baseline: fstatat the two-level leaf", "baseline-fstatat-two-level-leaf"},
+    {"baseline: access the one-level leaf", "baseline-access-one-level-leaf"},
+    {"baseline: faccessat the two-level leaf", "baseline-faccessat-two-level-leaf"},
+    {"baseline: openat through the denied dirfd", "baseline-openat-through-denied-dirfd"},
+    {"baseline: openat through the shared dirfd", "baseline-openat-through-shared-dirfd"},
+    {"baseline: chdir one level", "baseline-chdir-one-level"},
+    {"baseline: chdir two levels", "baseline-chdir-two-levels"},
+    {"baseline: chdir back to the root", "baseline-chdir-back-to-root"},
+    {"baseline: exec the staged program", "baseline-exec-staged-program"},
+    {"baseline: exec a missing name", "baseline-exec-missing-name"},
+    {"baseline: creat in the 0777 directory", "baseline-creat-in-0777-directory"},
+    {"baseline: chmod its own file", "baseline-chmod-its-own-file"},
+    {"baseline: fchmodat its own file", "baseline-fchmodat-its-own-file"},
+    {"baseline: fchownat with no change", "baseline-fchownat-with-no-change"},
+    {"baseline: utimensat through the other-write bit",
+     "baseline-utimensat-through-other-write-bit"},
+    {"baseline: linkat reaches the no-hard-links answer",
+     "baseline-linkat-reaches-no-hard-links-answer"},
+    {"baseline: mkdir in the 0777 directory", "baseline-mkdir-in-0777-directory"},
+    {"baseline: rmdir in the 0777 directory", "baseline-rmdir-in-0777-directory"},
+    {"baseline: rename out of the tree", "baseline-rename-out-of-tree"},
+    {"baseline: rename back into the tree", "baseline-rename-back-into-tree"},
+    {"baseline: unlink in the 0777 directory", "baseline-unlink-in-0777-directory"},
+    {"baseline: creat directly under /sp_denied", "baseline-creat-directly-under-sp-denied"},
+    {"baseline: mkdir directly under /sp_denied", "baseline-mkdir-directly-under-sp-denied"},
+    {"baseline: rmdir directly under /sp_denied", "baseline-rmdir-directly-under-sp-denied"},
+    {"baseline: rename out of /sp_denied", "baseline-rename-out-of-sp-denied"},
+    {"baseline: rename back into /sp_denied", "baseline-rename-back-into-sp-denied"},
+    {"baseline: unlink directly under /sp_denied", "baseline-unlink-directly-under-sp-denied"},
+    {"close /sp_denied to 0666", "close-sp-denied-to-0666"},
+    {"drop the gids", "denied-drop-gids"},
+    {"drop only the effective uid", "denied-drop-only-effective-uid"},
+    {"denied: open is charged by the effective id", "denied-open-is-charged-by-effective-id"},
+    {"denied: access is charged by the real id (root)", "denied-access-is-charged-by-real-id-root"},
+    {"take the effective id back", "denied-take-effective-id-back"},
+    {"denied: open under the effective root", "denied-open-under-effective-root"},
+    {"denied: access is charged by the real id (1000)", "denied-access-is-charged-by-real-id-1000"},
+    {"drop the uids", "denied-drop-uids"},
+    {"denied: open the one-level leaf", "denied-open-one-level-leaf"},
+    {"denied: open the two-level leaf", "denied-open-two-level-leaf"},
+    {"denied: open a missing one-level name", "denied-open-missing-one-level-name"},
+    {"denied: open a missing two-level name", "denied-open-missing-two-level-name"},
+    {"denied: stat the one-level leaf", "denied-stat-one-level-leaf"},
+    {"denied: stat a missing name", "denied-stat-missing-name"},
+#if !defined __x86_64__
+    {"denied: legacy stat the one-level leaf", "denied-legacy-stat-one-level-leaf"},
+    {"denied: legacy stat a missing name", "denied-legacy-stat-missing-name"},
+#endif
+    {"denied: fstatat the two-level leaf", "denied-fstatat-two-level-leaf"},
+    {"denied: access the one-level leaf", "denied-access-one-level-leaf"},
+    {"denied: access a missing name", "denied-access-missing-name"},
+    {"denied: faccessat the two-level leaf", "denied-faccessat-two-level-leaf"},
+    {"denied: openat through the denied dirfd", "denied-openat-through-denied-dirfd"},
+    {"denied: openat through the shared dirfd", "denied-openat-through-shared-dirfd"},
+    {"denied: chdir one level", "denied-chdir-one-level"},
+    {"denied: chdir two levels", "denied-chdir-two-levels"},
+    {"denied: chdir into the 0777 directory", "denied-chdir-into-0777-directory"},
+    {"denied: exec the staged program", "denied-exec-staged-program"},
+    {"denied: exec a missing name", "denied-exec-missing-name"},
+    {"denied: creat", "denied-creat"},
+    {"denied: open with O_CREAT", "denied-open-with-o-creat"},
+    {"denied: mkdir", "denied-mkdir"},
+    {"denied: rmdir", "denied-rmdir"},
+    {"denied: unlink", "denied-unlink"},
+    {"denied: rename out of the tree", "denied-rename-out-of-tree"},
+    {"denied: rename into the tree", "denied-rename-into-tree"},
+    {"denied: chmod its own file", "denied-chmod-its-own-file"},
+    {"denied: fchmodat its own file", "denied-fchmodat-its-own-file"},
+    {"denied: fchownat with no change", "denied-fchownat-with-no-change"},
+    {"denied: utimensat", "denied-utimensat"},
+    {"denied: linkat", "denied-linkat"},
+    {"denied: creat under the denied parent", "denied-creat-under-denied-parent"},
+    {"denied: open with O_CREAT under the denied parent",
+     "denied-open-with-o-creat-under-denied-parent"},
+    {"denied: mkdir under the denied parent", "denied-mkdir-under-denied-parent"},
+    {"denied: rmdir under the denied parent", "denied-rmdir-under-denied-parent"},
+    {"denied: unlink under the denied parent", "denied-unlink-under-denied-parent"},
+    {"denied: rename out of the denied parent", "denied-rename-out-of-denied-parent"},
+    {"denied: rename into the denied parent", "denied-rename-into-denied-parent"},
+    {"denied: open through the denied directory's ..",
+     "denied-open-through-denied-directorys-dotdot"},
+    {"denied: open the root", "denied-open-root"},
+    {"denied: search the root", "denied-search-root"},
+    {"creat left a file behind", "creat-left-file-behind"},
+    {"O_CREAT left a file behind", "o-creat-left-file-behind"},
+    {"mkdir left a directory behind", "mkdir-left-directory-behind"},
+    {"rename into the tree landed", "rename-into-tree-landed"},
+    {"rename out of the tree landed", "rename-out-of-tree-landed"},
+    {"unlink took the victim away", "unlink-took-victim-away"},
+    {"rename took the mover away", "rename-took-mover-away"},
+    {"rmdir removed the directory", "rmdir-removed-directory"},
+    {"rename took the outside source away", "rename-took-outside-source-away"},
+    {"chmod got through the denied ancestor", "chmod-got-through-denied-ancestor"},
+    {"creat under the denied parent left a file behind",
+     "creat-under-denied-parent-left-file-behind"},
+    {"O_CREAT under the denied parent left a file behind",
+     "o-creat-under-denied-parent-left-file-behind"},
+    {"mkdir under the denied parent left a directory behind",
+     "mkdir-under-denied-parent-left-directory-behind"},
+    {"rename into the denied parent landed", "rename-into-denied-parent-landed"},
+    {"rename out of the denied parent landed", "rename-out-of-denied-parent-landed"},
+    {"unlink took the denied parent's victim away", "unlink-took-denied-parents-victim-away"},
+    {"rename took the denied parent's mover away", "rename-took-denied-parents-mover-away"},
+    {"rmdir removed the denied parent's directory", "rmdir-removed-denied-parents-directory"},
+    {"rename took the second outside source away", "rename-took-second-outside-source-away"},
+    {"reopen /sp_denied to 0777", "reopen-sp-denied-to-0777"},
+    {"close /sp_denied/deep to 0666", "close-sp-denied-deep-to-0666"},
+    {"drop the gids", "moved-drop-ids"},
+    {"drop the uids", "moved-drop-ids"},
+    {"moved: open the one-level leaf", "moved-open-one-level-leaf"},
+    {"moved: openat through the denied dirfd", "moved-openat-through-denied-dirfd"},
+    {"moved: open under the new denier", "moved-open-under-new-denier"},
+    {"moved: stat a missing name under the new denier", "moved-stat-missing-name-under-new-denier"},
+    {"moved: chdir into the new denier", "moved-chdir-into-new-denier"},
+    {"moved: chdir into its searchable parent", "moved-chdir-into-its-searchable-parent"},
+    {"moved: chdir back to the root", "moved-chdir-back-to-root"},
+    {"moved: creat in the reachable 0777 directory", "moved-creat-in-reachable-0777-directory"},
+    {"moved: unlink it again", "moved-unlink-it-again"},
+    {"reopen /sp_denied/deep to 0777", "reopen-sp-denied-deep-to-0777"},
+    {"remove the victim", "cleanup"},
+    {"remove the mover", "cleanup"},
+    {"remove mine", "cleanup"},
+    {"remove the rmdir target", "cleanup"},
+    {"remove the second victim", "cleanup"},
+    {"remove the second mover", "cleanup"},
+    {"remove the second rmdir target", "cleanup"},
+    {"remove the outside source", "cleanup"},
+    {"remove the second outside source", "cleanup"},
+    {"remove the outside directory", "cleanup"},
+    {"remove the upward target", "cleanup"}};
+
+#define STEPS ((int)(sizeof(steps) / sizeof(steps[0])))
+
+/* The last step known to have passed, or -1; the first step not yet
+ * reported; the step a failed child named, or -1; the write end of the pipe
+ * a child names its failed step on, or -1; and the process that writes the
+ * report. */
+static int step_done = -1, step_next, step_hint = -1, step_pipe = -1, report_pid;
+
+/** Whether the strings `a` and `b` are equal. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/** The first step of the row of step `i`. */
+static int row_start(int i)
+{
+    while (i > 0 && same(steps[i - 1].id, steps[i].id)) {
+        i--;
+    }
+    return i;
+}
+
+/** The step labelled `label` from the row of the last step that passed on,
+ * or -1. */
+static int step_of(const char *label)
+{
+    int i;
+
+    for (i = step_done < 0 ? 0 : row_start(step_done); i < STEPS; i++) {
+        if (same(steps[i].label, label)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Record that the check labelled `label` passed. */
+static void step_passed(const char *label)
+{
+    int i = step_of(label);
+
+    if (i >= 0) {
+        step_done = i;
+    }
+}
+
+/**
+ * Report the rows not yet reported: held before the row of step `failed`,
+ * that row failed with `why`, and the rest not run, or every row held when
+ * `failed` is STEPS; then the report's end.
+ */
+static void rows_report(int failed, const char *why)
+{
+    int row = failed < STEPS ? row_start(failed) : STEPS;
+    int i;
+
+    for (i = step_next; i < STEPS; i++) {
+        if (i > 0 && same(steps[i - 1].id, steps[i].id)) {
+            continue;
+        }
+        if (i < row) {
+            report_pass(steps[i].id);
+        } else if (i == row) {
+            report_fail(steps[i].id, why);
+        } else {
+            report_notrun(steps[i].id, "an earlier step failed");
+        }
+    }
+    step_next = STEPS;
+    report_end();
+}
+
+/**
+ * Take the check labelled `label` as failed. The parent reports its row; a
+ * child names its step to the parent on `step_pipe`. A label no step has,
+ * such as that of the fork for an exec, is the step after the last that
+ * passed, and the parent's label for a child is the step the child named.
+ */
+static void step_failed(const char *label)
+{
+    int i = step_hint >= 0 ? step_hint : step_of(label);
+
+    if (i < 0) {
+        i = step_done + 1 < STEPS ? step_done + 1 : STEPS - 1;
+    }
+    if (syscall0(SYS_GETPID) == report_pid) {
+        rows_report(i, label);
+    } else if (step_pipe >= 0) {
+        syscall3(SYS_WRITE, step_pipe, (long)&i, sizeof(i));
+    }
+}
+
+/** Print "SEARCHPROBE FAIL: `step` (got `got`)", take `step` as failed, and
+ * exit 1. */
 static void fail(const char *step, int got)
 {
     puts_("SEARCHPROBE FAIL: ");
@@ -231,6 +498,7 @@ static void fail(const char *step, int got)
     puts_(" (got ");
     putd(got);
     puts_(")\n");
+    step_failed(step);
     syscall1(SYS_EXIT, 1);
 }
 
@@ -241,6 +509,7 @@ static void want_eq(const char *step, int got, int want)
     if (got != want) {
         fail(step, got);
     }
+    step_passed(step);
 }
 
 /** Fail `step` unless the call succeeded: `got` is 0 or more, since open
@@ -250,6 +519,7 @@ static void want_ok(const char *step, int got)
     if (got < 0) {
         fail(step, got);
     }
+    step_passed(step);
 }
 
 /** Open `path` read-only and close it again: open's answer. */
@@ -325,8 +595,10 @@ static void want_mode(const char *step, const char *path, u32 mode)
         puts_(" not ");
         puto(mode);
         puts_(")\n");
+        step_failed(step);
         syscall1(SYS_EXIT, 1);
     }
+    step_passed(step);
 }
 
 /** Exec `path` in a new child and report what became of it: the program's
@@ -565,25 +837,68 @@ static void moved_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
+/**
+ * Read the step a failed child named from `fd`, the read end of its pipe, if
+ * it is there to read now, and close `fd`: the step, or `first`, the
+ * child's first, when it named none.
+ */
+static int child_step(int fd, int first)
+{
+    struct {
+        int fd;
+        short events, revents;
+    } ready;
+    int i = -1;
+
+    if (fd < 0) {
+        return first;
+    }
+    ready.fd = fd;
+    ready.events = 1; /* POLLIN */
+    ready.revents = 0;
+    if (syscall3(SYS_POLL, (long)&ready, 1, 0) != 1 || !(ready.revents & 1) ||
+        syscall3(SYS_READ, fd, (long)&i, sizeof(i)) != (int)sizeof(i) || i < first || i >= STEPS) {
+        i = first;
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    return i;
+}
+
 /** Run `body` in a child to its end and fail the probe, as `what`, unless it
  * exits 0. WIFEXITED comes first, since a signal death has the signal in the
  * low bits and would read as exit 0. A failing child has already printed the
- * case it failed. */
+ * case it failed, and named its step on a pipe. */
 static void run_child(void (*body)(void), const char *what)
 {
     int pid, status = 0;
     int reaped;
+    int pipefd[2] = {-1, -1};
+    int first = step_done + 1;
 
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
+        pipefd[0] = pipefd[1] = -1;
+    }
+    step_pipe = pipefd[1];
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail(what, pid);
     }
     if (pid == 0) {
+        syscall3(SYS_CLOSE, pipefd[0], 0, 0);
         body();
         /* Every body exits itself; one that returns fails with 127. */
         syscall1(SYS_EXIT, 127);
     }
+    if (pipefd[1] >= 0) {
+        syscall3(SYS_CLOSE, pipefd[1], 0, 0);
+    }
+    step_pipe = -1;
     reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
+    if (reaped != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        step_hint = child_step(pipefd[0], first);
+    } else if (pipefd[0] >= 0) {
+        syscall3(SYS_CLOSE, pipefd[0], 0, 0);
+    }
     if (reaped != pid) {
         fail(what, reaped);
     }
@@ -593,6 +908,7 @@ static void run_child(void (*body)(void), const char *what)
         puts_(": died by signal ");
         putd(status & 0x7F);
         puts_("\n");
+        step_failed(what);
         syscall1(SYS_EXIT, 1);
     }
     if (WEXITSTATUS(status) != 0) {
@@ -638,6 +954,13 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.searchprobe"));
+    report_pid = syscall0(SYS_GETPID);
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
     /* The staged tree is as the manifest declares it. */
     want_mode("staged /sp_denied", DENIED, 0777);
     want_mode("staged /sp_denied/deep", DEEP, 0777);
@@ -714,6 +1037,7 @@ void probe_main(unsigned long *sp)
     want_eq("remove the outside directory", syscall3(SYS_RMDIR, (long)OUTDIR, 0, 0), 0);
     want_eq("remove the upward target", syscall3(SYS_UNLINK, (long)UPFILE, 0, 0), 0);
 
+    rows_report(STEPS, 0);
     puts_("SEARCHPROBE OK\n");
     syscall1(SYS_EXIT, 0);
 }

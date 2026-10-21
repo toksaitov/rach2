@@ -23,11 +23,18 @@
  * arch_prctl is x86-64's alone; on i686 the probe says its rows did not run
  * and passes.
  *
+ * The probe writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
+ * them; a failed check fails its assertion and leaves those after it not
+ * run. The branch of the group `arch` is `x86-64`, with every assertion, or
+ * `i686`, with none. A child writes no record.
+ *
  * Prints "FSBASEPROBE OK" and exits 0, or "FSBASEPROBE FAIL: " and the
  * reason and exits 1.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define ARCH_SET_GS 0x1001
 #define ARCH_SET_FS 0x1002
@@ -96,12 +103,39 @@ static unsigned long block_b[4] = {0xB6B6B6B6B6B6B6B6ul};
 static unsigned long block_c[4] = {0xC7C7C7C7C7C7C7C7ul};
 static unsigned long absolute = 0xD8D8D8D8D8D8D8D8ul;
 
-/** Print "FSBASEPROBE FAIL: " and `why`, and exit 1. */
+/* The assertions, a check each, in the order the probe makes them. */
+static const char *const assertion_id[] = {"fs-set-get",
+                                           "gs-set-get",
+                                           "parent-fs-survives",
+                                           "fork-inherits-bases",
+                                           "child-fs-survives",
+                                           "bounds-setup",
+                                           "bounds-eperm",
+                                           "bounds-kept",
+                                           "bounds-no-child",
+                                           "bounds-last-address",
+                                           "clone-settls",
+                                           "selector-base-zero",
+                                           "selector-after-sleep",
+                                           "selector-absolute",
+                                           "selector-fork-zero",
+                                           "bind-processor0",
+                                           "parent-selectors-survive",
+                                           "fork-inherits-selectors",
+                                           "child-selectors-survive",
+                                           "ptrace-stop",
+                                           "peekuser",
+                                           "pokeuser",
+                                           "pokeuser-applied"};
+
+/** Print "FSBASEPROBE FAIL: " and `why`, end the report at the assertion
+ * that `why` fails, unless a child calls, and exit 1. */
 static void fail(const char *why)
 {
     say("FSBASEPROBE FAIL: ");
     say(why);
     say("\n");
+    report_stop(why);
     sys_exit(1);
 }
 
@@ -220,10 +254,12 @@ static void run_set_get(void)
         base_of(ARCH_GET_FS) != (unsigned long)block_a || fs_word(0) != block_a[0]) {
         fail("an FS base set does not read back or address its block");
     }
+    report_held();
     if (prctl(ARCH_SET_GS, (unsigned long)block_b) != 0 ||
         base_of(ARCH_GET_GS) != (unsigned long)block_b || gs_word(0) != block_b[0]) {
         fail("a GS base set does not read back or address its block");
     }
+    report_held();
 }
 
 /** A forked child starts with the bases `run_set_get` set, then moves its FS
@@ -232,7 +268,7 @@ static void run_set_get(void)
 static void run_fork_and_switches(void)
 {
     long pid = syscall0(SYS_FORK);
-    int i;
+    int i, status;
 
     if (pid == 0) {
         if (fs_word(0) != block_a[0] || gs_word(0) != block_b[0]) {
@@ -256,8 +292,14 @@ static void run_fork_and_switches(void)
             fail("the parent's FS base did not survive the switches");
         }
     }
-    switch (child_status(pid)) {
+    report_held();
+    status = child_status(pid);
+    if (status == 0 || status == 3) {
+        report_held();
+    }
+    switch (status) {
     case 0:
+        report_held();
         break;
     case 2:
         fail("a forked child did not start with its parent's bases");
@@ -281,14 +323,17 @@ static void run_selectors(void)
     if (base_of(ARCH_GET_FS) != 0 || base_of(ARCH_GET_GS) != 0) {
         fail("a selector loaded into FS or GS did not read back as base 0");
     }
+    report_held();
     sleep_ms(20);
     if (base_of(ARCH_GET_FS) != 0 || base_of(ARCH_GET_GS) != 0) {
         fail("a switch gave back the FS or GS base a loaded selector replaced");
     }
+    report_held();
     if (fs_word((unsigned long)&absolute) != absolute ||
         gs_word((unsigned long)&absolute) != absolute) {
         fail("FS or GS of base 0 does not address memory where it is");
     }
+    report_held();
     pid = syscall0(SYS_FORK);
     if (pid == 0) {
         sys_exit(base_of(ARCH_GET_FS) == 0 && base_of(ARCH_GET_GS) == 0 ? 0 : 4);
@@ -296,6 +341,7 @@ static void run_selectors(void)
     if (pid < 0 || child_status(pid) != 0) {
         fail("a child forked after a selector load did not start with base 0");
     }
+    report_held();
 }
 
 /** Clone a child with CLONE_SETTLS and the base `tls`, x86-64's argument
@@ -319,6 +365,7 @@ static void run_bounds(void)
         prctl(ARCH_SET_GS, (unsigned long)block_b) != 0) {
         fail("the bases to keep could not be set");
     }
+    report_held();
     for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
         if (prctl(ARCH_SET_FS, refused[i]) != -EPERM || prctl(ARCH_SET_GS, refused[i]) != -EPERM) {
             fail("a base at or above USER_ADDR_MAX was not refused with EPERM");
@@ -327,16 +374,20 @@ static void run_bounds(void)
             fail("clone with CLONE_SETTLS took a base at or above USER_ADDR_MAX");
         }
     }
+    report_held();
     if (base_of(ARCH_GET_FS) != (unsigned long)block_a ||
         base_of(ARCH_GET_GS) != (unsigned long)block_b || fs_word(0) != block_a[0]) {
         fail("a refused base changed the bases set before it");
     }
+    report_held();
     if (syscall3(SYS_WAITPID, -1, 0, WNOHANG) != -ECHILD) {
         fail("a refused clone made a child");
     }
+    report_held();
     if (prctl(ARCH_SET_GS, USER_ADDR_MAX - 1) != 0 || base_of(ARCH_GET_GS) != USER_ADDR_MAX - 1) {
         fail("the last user address below USER_ADDR_MAX was not taken as a base");
     }
+    report_held();
     pid = clone_tls((unsigned long)block_c);
     if (pid == 0) {
         if (fs_word(0) != block_c[0] || base_of(ARCH_GET_FS) != (unsigned long)block_c) {
@@ -347,6 +398,7 @@ static void run_bounds(void)
     if (pid < 0 || child_status(pid) != 0) {
         fail("clone with CLONE_SETTLS did not give its child the base");
     }
+    report_held();
 }
 
 /**
@@ -362,11 +414,12 @@ static void run_selector_switches(void)
 {
     unsigned long processor0 = 1;
     long pid;
-    int i;
+    int i, status;
 
     if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
         fail("the probe could not be bound to processor 0");
     }
+    report_held();
     load_data_sels(GDT_USER_DATA, GDT_USER_DATA);
     pid = syscall0(SYS_FORK);
     if (pid == 0) {
@@ -395,8 +448,14 @@ static void run_selector_switches(void)
             fail("the parent's DS, ES, FS or GS selector did not survive the switches");
         }
     }
-    switch (child_status(pid)) {
+    report_held();
+    status = child_status(pid);
+    if (status == 0 || status == 3) {
+        report_held();
+    }
+    switch (status) {
     case 0:
+        report_held();
         break;
     case 2:
         fail("a forked child did not start with its parent's selectors");
@@ -433,6 +492,7 @@ static void run_selector_ptrace(void)
     if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
         fail("a traced child did not stop");
     }
+    report_held();
     if (syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_DS, (long)&ds) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_ES, (long)&es) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, USER_FS, (long)&fs) != 0 ||
@@ -440,6 +500,7 @@ static void run_selector_ptrace(void)
         ds != GDT_USER_DATA || es != GDT_USER_DATA || fs != GDT_USER_DATA || gs != GDT_USER_DATA) {
         fail("PTRACE_PEEKUSER did not read a stopped child's DS, ES, FS and GS selectors");
     }
+    report_held();
     if (syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_DS, (long)GDT_USER_CODE) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_ES, 3) != 0 ||
         syscall4(SYS_PTRACE, PTRACE_POKEUSER, pid, USER_FS, (long)GDT_USER_CODE) != 0 ||
@@ -447,9 +508,11 @@ static void run_selector_ptrace(void)
         syscall4(SYS_PTRACE, PTRACE_CONT, pid, 0, 0) != 0) {
         fail("PTRACE_POKEUSER refused a DS, ES, FS or GS selector");
     }
+    report_held();
     if (child_status(pid) != 0) {
         fail("selectors written by PTRACE_POKEUSER were not the child's");
     }
+    report_held();
 }
 
 #endif
@@ -461,8 +524,16 @@ PROBE_SP_ENTRY;
 /** The probe: the rows in order on x86-64, and none on i686. */
 void probe_main(unsigned long *sp)
 {
-    (void)sp;
 #if defined __x86_64__
+    unsigned int i;
+#endif
+
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.fsbaseprobe"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
     run_set_get();
     run_fork_and_switches();
     run_bounds();
@@ -470,8 +541,10 @@ void probe_main(unsigned long *sp)
     run_selector_switches();
     run_selector_ptrace();
 #else
+    report_branch("arch", "i686");
     say("fsbaseprobe: not run: arch_prctl is x86-64's\n");
 #endif
+    report_end();
     say("FSBASEPROBE OK\n");
     sys_exit(0);
 }

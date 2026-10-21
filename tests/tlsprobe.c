@@ -43,9 +43,17 @@
  * pthread_self() rely on. set_thread_area and the TLS descriptor in the GDT
  * are i386's, so tests/Makefile builds the probe for i686 alone; x86-64
  * keeps the thread pointer in the FS base, set by arch_prctl.
+ *
+ * The parent writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
+ * them. A failed setup fails its assertion and leaves those after it not
+ * run; a check the run stops before, such as the rounds of the byte after a
+ * failure, is not run either. The child writes none, and its exit status
+ * gives its assertions.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #if defined __x86_64__
 #error "tlsprobe tests i386's set_thread_area and %gs; it is built for i686 alone"
@@ -215,6 +223,40 @@ static void put_u32(u32 v)
 static u32 tcb_parent[NUM_SLOTS];
 static u32 tcb_child[NUM_SLOTS];
 
+/* The assertions, a check each, in the order the probe makes them. */
+static const char *const assertion_id[] = {
+    "set-thread-area", "gs-aliases-tcb", "solo-sentinels", "bind-processor0",
+    "pipes",           "fork",           "child-runs",     "parent-switch-sentinels",
+    "ping-returns",    "ping-sentinels", "child-reaped",   "child-inherits-base",
+    "child-sets-tls",  "child-sentinels"};
+
+/* The index in `assertion_id` of each assertion the probe reports by name. */
+enum { A_SET_THREAD_AREA, A_BIND = 3, A_PIPES, A_FORK, A_CHILD_REAPED = 10, A_COUNT = 14 };
+
+/**
+ * Report the assertion at index `at` failed with `why`, those after it not
+ * run, and the report's end: a setup that failed, after which the probe
+ * exits.
+ */
+static void report_setup_failed(int at, const char *why)
+{
+    report_fail(assertion_id[at], why);
+    while (++at < A_COUNT) {
+        report_notrun(assertion_id[at], "a setup failed");
+    }
+    report_end();
+}
+
+/** Report the assertion `id` held when `ok`, and failed with `why` if not. */
+static void report_row(const char *id, int ok, const char *why)
+{
+    if (ok) {
+        report_pass(id);
+    } else {
+        report_fail(id, why);
+    }
+}
+
 /** Write magic^slot to every slot through %gs. */
 static void tls_fill(u32 magic)
 {
@@ -334,7 +376,7 @@ static int solo_phase(int fails)
 {
     long tv2[2];
     u32 last, now;
-    int i, rises = 0;
+    int i, rises = 0, kept = 1;
 
     tls_fill(0xA5A50000u);
     last = own_user_ticks();
@@ -350,6 +392,7 @@ static int solo_phase(int fails)
         }
         if (tls_check(0xA5A50000u) != 0) {
             fails++;
+            kept = 0;
             if (fails <= 3) {
                 puts_("FAIL: solo sentinel clobbered at i=");
                 put_u32((u32)i);
@@ -358,6 +401,7 @@ static int solo_phase(int fails)
             break;
         }
     }
+    report_row("solo-sentinels", kept, "a sentinel read through %gs changed in the solo phase");
     if (fails == 0) {
         puts_("solo phase OK\n");
     }
@@ -434,6 +478,50 @@ static void iso_child(const int to_child[2], const int to_parent[2])
 }
 
 /**
+ * Report the assertions of the byte's rounds: `returned` is 0 when the byte
+ * did not come back at a round, `kept` 0 when a sentinel changed after one,
+ * and `ran` 0 when the rounds did not run for an earlier failure. The rounds
+ * stop at the first failure, which leaves the other assertion not run.
+ */
+static void report_rounds(int ran, int returned, int kept)
+{
+    if (!ran) {
+        report_notrun("ping-returns", "an earlier check failed");
+        report_notrun("ping-sentinels", "an earlier check failed");
+    } else if (!returned) {
+        report_fail("ping-returns", "the byte did not come back from the child");
+        report_notrun("ping-sentinels", "the rounds stopped at the first failure");
+    } else if (!kept) {
+        report_notrun("ping-returns", "the rounds stopped at the first failure");
+        report_fail("ping-sentinels", "a sentinel read through %gs changed after the child ran");
+    } else {
+        report_pass("ping-returns");
+        report_pass("ping-sentinels");
+    }
+}
+
+/**
+ * Report the assertions of the spin beside the child: `clobbered` is 1 when
+ * a sentinel of the parent changed, and `ended` 1 when the child's user time
+ * could not be read or the child ended first. Either stops the spin, which
+ * leaves the other assertion not run.
+ */
+static void report_spin(int clobbered, int ended)
+{
+    if (ended) {
+        report_fail("child-runs", "the child's user time could not be read, or it ended first");
+        report_notrun("parent-switch-sentinels", "the spin stopped when the child ended");
+    } else if (clobbered) {
+        report_notrun("child-runs", "the spin stopped at a changed sentinel");
+        report_fail("parent-switch-sentinels",
+                    "a sentinel read through %gs changed after a switch");
+    } else {
+        report_pass("child-runs");
+        report_pass("parent-switch-sentinels");
+    }
+}
+
+/**
  * The parent's switches of the isolation phase: it keeps tcb_parent and
  * checks its sentinels across switches to the child, then across each
  * round of the byte it sends the child and gets back.
@@ -452,10 +540,12 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
     long tv2[2];
     char token, state;
     u32 last = 0, now = 0;
-    int i, rises = 0;
+    int i, rises = 0, clobbered = 0, ended = 0, returned = 1, kept = 1, ran;
 
     if (child_user_ticks(pid, &last) == 0) {
         puts_("FAIL: the child's user time cannot be read\n");
+        report_spin(0, 1);
+        report_rounds(0, 1, 1);
         return fails + 1;
     }
     for (i = 0; i < ISO_ITERS || rises < ISO_SWITCHES; i++) {
@@ -463,6 +553,7 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
         busy(BUSY_SPIN);
         if (tls_check(0xA5A50000u) != 0) {
             fails++;
+            clobbered = 1;
             if (fails <= 3) {
                 puts_("FAIL: parent sentinel clobbered after switch at i=");
                 put_u32((u32)i);
@@ -474,6 +565,7 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
         if (state == 0 || state == 'Z') {
             puts_("FAIL: the child ended before it ran beside the parent\n");
             fails++;
+            ended = 1;
             break;
         }
         if (now != last) {
@@ -481,21 +573,61 @@ static int iso_switches(int pid, const int to_child[2], const int to_parent[2], 
             last = now;
         }
     }
+    report_spin(clobbered, ended);
     token = 'x';
+    ran = fails == 0;
     for (i = 0; i < PING_ROUNDS && fails == 0; i++) {
         if (sys_write(to_child[1], &token, 1) != 1 || sys_read(to_parent[0], &token, 1) != 1) {
             puts_("FAIL: the byte did not come back from the child at round ");
             put_u32((u32)i);
             puts_("\n");
             fails++;
+            returned = 0;
         } else if (tls_check(0xA5A50000u) != 0) {
             puts_("FAIL: parent sentinel clobbered after the child ran, at round ");
             put_u32((u32)i);
             puts_("\n");
             fails++;
+            kept = 0;
         }
     }
+    report_rounds(ran, returned, kept);
     return fails;
+}
+
+/**
+ * Report the child's assertions from its wait: `got` is what waitpid
+ * returned for `pid`, and `status` its status. The child exits 8 when the
+ * base it inherited failed, 7 when it could not set its own, and 1 when its
+ * sentinels changed or its poll failed.
+ */
+static void report_child(int got, int pid, int status)
+{
+    int code = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : -1;
+    int at;
+
+    if (got != pid || code < 0) {
+        report_fail(assertion_id[A_CHILD_REAPED],
+                    got != pid ? "waitpid failed" : "the child was killed by a signal");
+        for (at = A_CHILD_REAPED + 1; at < A_COUNT; at++) {
+            report_notrun(assertion_id[at], "the child did not exit");
+        }
+        return;
+    }
+    report_pass(assertion_id[A_CHILD_REAPED]);
+    report_row("child-inherits-base", code != 8,
+               "the base the child inherited did not read the parent's sentinels");
+    if (code == 8) {
+        report_notrun("child-sets-tls", "an earlier check failed");
+        report_notrun("child-sentinels", "an earlier check failed");
+        return;
+    }
+    report_row("child-sets-tls", code != 7, "set_thread_area failed in the child");
+    if (code == 7) {
+        report_notrun("child-sentinels", "an earlier check failed");
+        return;
+    }
+    report_row("child-sentinels", code == 0, "a sentinel of the child changed, or its poll failed");
 }
 
 /**
@@ -515,6 +647,7 @@ static int iso_parent(int pid, const int to_child[2], const int to_parent[2], in
     fails = iso_switches(pid, to_child, to_parent, fails);
     sys_close(to_child[1]);
     got = sys_waitpid(pid, &status, 0);
+    report_child(got, pid, status);
     if (got != pid) {
         puts_("FAIL: waitpid\n");
         fails++;
@@ -542,16 +675,17 @@ void probe_main(unsigned long *sp)
     int fails = 0;
     int to_child[2], to_parent[2];
 
-    (void)sp;
-
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.tlsprobe"));
     puts_("tlsprobe: starting\n");
 
     /* This process's TLS, at tcb_parent. */
     entry = set_thread_area(tcb_parent);
     if (entry < 0) {
         puts_("FAIL: set_thread_area\n");
+        report_setup_failed(A_SET_THREAD_AREA, "set_thread_area failed");
         sys_exit(1);
     }
+    report_pass(assertion_id[A_SET_THREAD_AREA]);
     puts_("set_thread_area entry=");
     put_u32((u32)entry);
     puts_("\n");
@@ -563,27 +697,35 @@ void probe_main(unsigned long *sp)
         puts_("FAIL: %gs does not alias the TCB\n");
         fails++;
     }
+    report_row("gs-aliases-tcb", fails == 0, "a write through %gs did not reach the TCB");
 
     fails = solo_phase(fails);
 
     /* Isolation phase: a child with its own TCB, on the parent's processor. */
     if (syscall3(SYS_SCHED_SETAFFINITY, 0, (long)sizeof(processor0), (long)&processor0) != 0) {
         puts_("FAIL: the probe could not be bound to processor 0\n");
+        report_setup_failed(A_BIND, "sched_setaffinity to processor 0 failed");
         sys_exit(1);
     }
+    report_pass(assertion_id[A_BIND]);
     if (syscall1(SYS_PIPE, (long)to_child) != 0 || syscall1(SYS_PIPE, (long)to_parent) != 0) {
         puts_("FAIL: pipe\n");
+        report_setup_failed(A_PIPES, "pipe failed");
         sys_exit(1);
     }
+    report_pass(assertion_id[A_PIPES]);
     pid = sys_fork();
     if (pid < 0) {
         puts_("FAIL: fork\n");
+        report_setup_failed(A_FORK, "fork failed");
         sys_exit(1);
     }
     if (pid == 0) {
         iso_child(to_child, to_parent);
     }
+    report_pass(assertion_id[A_FORK]);
     fails = iso_parent(pid, to_child, to_parent, fails);
+    report_end();
 
     if (fails == 0) {
         puts_("All TLS checks passed!\n");

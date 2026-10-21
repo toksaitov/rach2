@@ -16,12 +16,22 @@
  * clock stepped between two of them; the writes, the stamps, the part below
  * the tick and the explicit times are still checked.
  *
+ * The argument `hello=PATH` names the file of the rows on an existing file
+ * that `hello.txt` in the working directory is otherwise, such as the
+ * image's `/hello.txt` for a run outside `/`.
+ *
  * Prints a line for each row and exits 0 when every row passed, 1 otherwise.
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each row, and one for each check of the time rows.
+ * The branch of the group `arch` is `i686`, with the rows of stat (106) from
+ * `old-file` to `old-absolute-file`, or `x86-64`, with none of its own.
+ * Given `machine=native`, the assertions of the stamps' order are not run.
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int mode_t;
 typedef unsigned int ino_t;
@@ -270,6 +280,21 @@ static void print_octal(unsigned int m)
 }
 
 /**
+ * Count a row in `*passed` when `ok`, and in `*failed` otherwise, and report
+ * its assertion `id`, failed with `why`.
+ */
+static void count_row(int ok, const char *id, const char *why, int *passed, int *failed)
+{
+    if (ok) {
+        (*passed)++;
+        report_pass(id);
+    } else {
+        (*failed)++;
+        report_fail(id, why);
+    }
+}
+
+/**
  * Part C: two files of one name in two directories have different inode
  * numbers, by every stat call. A tool that finds two files sharing an inode
  * number, as `cp -a` does, copies them as hard links of one file, and KRFFS
@@ -292,14 +317,14 @@ static void same_name_rows(int *passed, int *failed)
         if (old_ok && sys_stat64("/statc1/k", &one) == 0 && sys_stat64("/statc2/k", &two) == 0 &&
             one.st_ino != two.st_ino) {
             puts("OK");
-            (*passed)++;
         } else {
             puts("FAILED (one inode number for two files)");
-            (*failed)++;
         }
+        count_row(old_ok && one.st_ino != two.st_ino, "same-name-inodes",
+                  "two files of one name in two directories have one inode number", passed, failed);
     } else {
         puts("FAILED (the files could not be made)");
-        (*failed)++;
+        count_row(0, "same-name-inodes", "the files of one name could not be made", passed, failed);
     }
 }
 
@@ -312,13 +337,18 @@ static void same_name_rows(int *passed, int *failed)
 static void root_ino_rows(int *passed, int *failed)
 {
     const char *paths[] = {"/", "/statroot/.."};
+    const char *ids[] = {"root-inode-slash", "root-inode-dotdot"};
     unsigned int i;
 
     if (sys_call3(SYS_MKDIR, (long)"/statroot", 0755, 0) < 0) {
         puts("Root inode through stat and stat64: FAILED (/statroot could not be made)");
-        (*failed)++;
+        count_row(0, "root-fixture", "the directory /statroot could not be made", passed, failed);
+        report_notrun(ids[0], "the fixture could not be made");
+        report_notrun(ids[1], "the fixture could not be made");
+        report_notrun("root-inode-fd", "the fixture could not be made");
         return;
     }
+    report_pass("root-fixture");
     fixture_dirs[2] = 1;
     for (i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
         struct stat64 wide;
@@ -334,10 +364,11 @@ static void root_ino_rows(int *passed, int *failed)
         if (old_ok && sys_stat64(paths[i], &wide) == 0 && wide.st_ino == 1 && OLD_INO(wide) == 1 &&
             (wide.st_mode & S_IFMT) == S_IFDIR) {
             puts(" OK");
-            (*passed)++;
+            count_row(1, ids[i], 0, passed, failed);
         } else {
             puts(" FAILED");
-            (*failed)++;
+            count_row(0, ids[i], "the root is not inode 1, a directory, by stat and stat64", passed,
+                      failed);
         }
     }
     {
@@ -350,10 +381,11 @@ static void root_ino_rows(int *passed, int *failed)
             OLD_INO(byfd) == 1 && byat.st_ino == 1 && OLD_INO(byat) == 1 &&
             (byfd.st_mode & S_IFMT) == S_IFDIR && (byat.st_mode & S_IFMT) == S_IFDIR) {
             puts("OK");
-            (*passed)++;
+            count_row(1, "root-inode-fd", 0, passed, failed);
         } else {
             puts("FAILED");
-            (*failed)++;
+            count_row(0, "root-inode-fd",
+                      "the root is not inode 1, a directory, by fstat and fstatat", passed, failed);
         }
         if (fd >= 0) {
             sys_call3(SYS_CLOSE, fd, 0, 0);
@@ -382,6 +414,75 @@ static int below_tick(const struct stat64 *s)
     return s->st_mtime_nsec % 10000000u >= 1000u;
 }
 
+/* The assertions of the time rows, in the order of their checks. */
+static const char *const time_id[] = {"time-writes",       "time-writes-order", "time-stamps",
+                                      "time-stamps-order", "time-below-tick",   "time-explicit"};
+
+/* The stages of the time rows, an index in `time_id` each, and TIME_PASSED
+ * when every check passed. */
+enum {
+    TIME_WRITES,
+    TIME_WRITES_ORDER,
+    TIME_STAMPS,
+    TIME_STAMPS_ORDER,
+    TIME_BELOW_TICK,
+    TIME_EXPLICIT,
+    TIME_PASSED
+};
+
+/**
+ * Report the assertions of the time rows, which stopped at the check
+ * `stage`, or passed when it is TIME_PASSED. Given `machine=native`, the
+ * checks of the order are not run.
+ */
+static void report_time(int stage)
+{
+    static const char *const why[] = {"the two files could not be written and their times read",
+                                      "the second write's modification time is before the first's",
+                                      "a utimensat stamp or the stat after it failed",
+                                      "a stamp's modification time is before the one before it",
+                                      "no modification time has a part below the 10 ms tick",
+                                      "explicit times did not keep their fractions"};
+    int i;
+
+    for (i = 0; i < TIME_PASSED; i++) {
+        if (probe_native() && (i == TIME_WRITES_ORDER || i == TIME_STAMPS_ORDER)) {
+            report_notrun(time_id[i], "machine=native leaves out the order of the stamps");
+        } else if (i < stage) {
+            report_pass(time_id[i]);
+        } else if (i == stage) {
+            report_fail(time_id[i], why[i]);
+        } else {
+            report_notrun(time_id[i], "an earlier check failed");
+        }
+    }
+}
+
+/**
+ * Stamp the files `paths` fifty times by turns with utimensat, each
+ * stamp's modification time at or after the one before, starting from
+ * `*previous`, and set `*fine` when one has a part below the tick. Returns
+ * TIME_PASSED, or the stage that failed.
+ */
+static int stamp_rows(const char *const paths[2], struct stat64 *previous, int *fine)
+{
+    struct stat64 next;
+    int stage = TIME_PASSED;
+    int i;
+
+    for (i = 0; stage == TIME_PASSED && i < 50; i++) {
+        if (sys_call4(SYS_UTIMENSAT, -100, (long)paths[i % 2], 0, 0) != 0 ||
+            sys_stat64(paths[i % 2], &next) != 0) {
+            stage = TIME_STAMPS;
+        } else if (!in_order(&next, previous)) {
+            stage = TIME_STAMPS_ORDER;
+        }
+        *fine = *fine || below_tick(&next);
+        *previous = next;
+    }
+    return stage;
+}
+
 /**
  * The time rows; 1 when they passed. KRFFS keeps nanoseconds and the clock
  * adds the timer's place within the tick, so stamps taken back to back never
@@ -399,35 +500,34 @@ static int time_rows(void)
     long times[4] = {1234567890, 0, 1234567890, 123456789};
     int fd[2];
     int i;
-    int ok = 1;
-    int fine = 0;
+    int ok;
+    int fine;
+    int stage = TIME_PASSED;
 
     fd[0] = sys_call3(SYS_OPEN, (long)paths[0], 0101, 0644);
     fd[1] = sys_call3(SYS_OPEN, (long)paths[1], 0101, 0644);
-    if (fd[0] < 0 || fd[1] < 0) {
-        ok = 0;
+    if (fd[0] < 0 || fd[1] < 0 || sys_write(fd[0], "a", 1) != 1 || sys_write(fd[1], "b", 1) != 1 ||
+        sys_stat64(paths[0], &previous) != 0 || sys_stat64(paths[1], &next) != 0) {
+        stage = TIME_WRITES;
+    } else if (!in_order(&next, &previous)) {
+        stage = TIME_WRITES_ORDER;
     } else {
-        ok = sys_write(fd[0], "a", 1) == 1 && sys_write(fd[1], "b", 1) == 1 &&
-             sys_stat64(paths[0], &previous) == 0 && sys_stat64(paths[1], &next) == 0 &&
-             in_order(&next, &previous);
-        fine = ok && (below_tick(&previous) || below_tick(&next));
-        if (ok) {
-            previous = next;
+        fine = below_tick(&previous) || below_tick(&next);
+        previous = next;
+        stage = stamp_rows(paths, &previous, &fine);
+        if (stage == TIME_PASSED && !fine) {
+            stage = TIME_BELOW_TICK;
         }
-        for (i = 0; ok && i < 50; i++) {
-            ok = sys_call4(SYS_UTIMENSAT, -100, (long)paths[i % 2], 0, 0) == 0 &&
-                 sys_stat64(paths[i % 2], &next) == 0 && in_order(&next, &previous);
-            fine = fine || below_tick(&next);
-            previous = next;
-        }
-        ok = ok && fine;
-        if (ok) {
-            ok = sys_call4(SYS_UTIMENSAT, -100, (long)paths[0], (long)times, 0) == 0 &&
-                 sys_stat64(paths[0], &next) == 0 && next.st_atime == 1234567890u &&
-                 next.st_atime_nsec == 0 && next.st_mtime == 1234567890u &&
-                 next.st_mtime_nsec == 123456789u;
+        if (stage == TIME_PASSED &&
+            (sys_call4(SYS_UTIMENSAT, -100, (long)paths[0], (long)times, 0) != 0 ||
+             sys_stat64(paths[0], &next) != 0 || next.st_atime != 1234567890u ||
+             next.st_atime_nsec != 0 || next.st_mtime != 1234567890u ||
+             next.st_mtime_nsec != 123456789u)) {
+            stage = TIME_EXPLICIT;
         }
     }
+    ok = stage == TIME_PASSED;
+    report_time(stage);
     for (i = 0; i < 2; i++) {
         if (fd[i] >= 0) {
             sys_call3(SYS_CLOSE, fd[i], 0, 0);
@@ -439,27 +539,15 @@ static int time_rows(void)
     return ok;
 }
 
-void probe_main(unsigned long *sp);
-
-PROBE_SP_ENTRY;
-
 /**
- * Entry point: runs the stat64 (195) probes in part A, the stat (106) probes
- * in part B, then the inode and time rows, and exits 0 only if every row
- * passed. On x86-64 part A is stat (4) and there is no part B.
+ * Part A, the wide call, stat64 (195) on i386 and stat (4) on x86-64, of an
+ * existing file, of `/` and of a missing path. Counts each row in `*passed`
+ * or `*failed`.
  */
-void probe_main(unsigned long *sp)
+static void wide_rows(int *passed, int *failed)
 {
-#if !defined __x86_64__
-    struct stat st;
-#endif
     struct stat64 st64;
     int result;
-    int passed = 0, failed = 0;
-
-    probe_args((int)sp[0], (char **)(sp + 1));
-    puts("Stat syscall test starting...");
-    puts("");
 
     /* Part A: the wide call, stat64 (195) on i386 and stat (4) on x86-64. */
     puts("=== Part A: " WIDE_CALL " ===");
@@ -467,7 +555,7 @@ void probe_main(unsigned long *sp)
 
     /* Test A1: stat64 existing file */
     print("Test A1: stat64(\"hello.txt\")... ");
-    result = sys_stat64("hello.txt", &st64);
+    result = sys_stat64(probe_arg("hello", "hello.txt"), &st64);
     if (result == 0) {
         puts("OK");
         print("        size=");
@@ -477,7 +565,8 @@ void probe_main(unsigned long *sp)
         print(", nlink=");
         print_num(st64.st_nlink);
         puts("");
-        passed++;
+        (*passed)++;
+        report_pass("wide-file");
 
         print("        type: ");
         if ((st64.st_mode & S_IFMT) == S_IFREG) {
@@ -487,7 +576,8 @@ void probe_main(unsigned long *sp)
         }
     } else {
         puts("FAILED");
-        failed++;
+        (*failed)++;
+        report_fail("wide-file", "stat of an existing file failed");
     }
 
     /* Test A2: stat64 root directory */
@@ -500,7 +590,8 @@ void probe_main(unsigned long *sp)
         print(", nlink=");
         print_num(st64.st_nlink);
         puts("");
-        passed++;
+        (*passed)++;
+        report_pass("wide-root");
 
         print("        type: ");
         if ((st64.st_mode & S_IFMT) == S_IFDIR) {
@@ -510,7 +601,8 @@ void probe_main(unsigned long *sp)
         }
     } else {
         puts("FAILED");
-        failed++;
+        (*failed)++;
+        report_fail("wide-root", "stat of / failed");
     }
 
     /* Test A3: stat64 nonexistent file */
@@ -518,22 +610,34 @@ void probe_main(unsigned long *sp)
     result = sys_stat64("nonexistent", &st64);
     if (result < 0) {
         puts("OK (failed as expected)");
-        passed++;
+        (*passed)++;
+        report_pass("wide-missing");
     } else {
         puts("FAILED (should have failed)");
-        failed++;
+        (*failed)++;
+        report_fail("wide-missing", "stat of a missing path succeeded");
     }
 
     puts("");
+}
 
 #if !defined __x86_64__
+/**
+ * Part B, i386's old stat (106), of an existing file, of `/`, of a missing
+ * path and of `/hello.txt`. Counts each row in `*passed` or `*failed`.
+ */
+static void old_rows(int *passed, int *failed)
+{
+    struct stat st;
+    int result;
+
     /* Part B: i386's old stat (106). */
     puts("=== Part B: stat (syscall 106) ===");
     puts("");
 
     /* Test B1: stat existing file */
     print("Test B1: stat(\"hello.txt\")... ");
-    result = sys_stat("hello.txt", &st);
+    result = sys_stat(probe_arg("hello", "hello.txt"), &st);
     if (result == 0) {
         puts("OK");
         print("        size=");
@@ -543,7 +647,8 @@ void probe_main(unsigned long *sp)
         print(", nlink=");
         print_num(st.st_nlink);
         puts("");
-        passed++;
+        (*passed)++;
+        report_pass("old-file");
 
         print("        type: ");
         if ((st.st_mode & S_IFMT) == S_IFREG) {
@@ -553,7 +658,8 @@ void probe_main(unsigned long *sp)
         }
     } else {
         puts("FAILED");
-        failed++;
+        (*failed)++;
+        report_fail("old-file", "stat of an existing file failed");
     }
 
     /* Test B2: stat root directory */
@@ -566,7 +672,8 @@ void probe_main(unsigned long *sp)
         print(", nlink=");
         print_num(st.st_nlink);
         puts("");
-        passed++;
+        (*passed)++;
+        report_pass("old-root");
 
         print("        type: ");
         if ((st.st_mode & S_IFMT) == S_IFDIR) {
@@ -576,7 +683,8 @@ void probe_main(unsigned long *sp)
         }
     } else {
         puts("FAILED");
-        failed++;
+        (*failed)++;
+        report_fail("old-root", "stat of / failed");
     }
 
     /* Test B3: stat nonexistent file */
@@ -584,10 +692,12 @@ void probe_main(unsigned long *sp)
     result = sys_stat("nonexistent", &st);
     if (result < 0) {
         puts("OK (failed as expected)");
-        passed++;
+        (*passed)++;
+        report_pass("old-missing");
     } else {
         puts("FAILED (should have failed)");
-        failed++;
+        (*failed)++;
+        report_fail("old-missing", "stat of a missing path succeeded");
     }
 
     /* Test B4: stat with leading slash */
@@ -600,13 +710,44 @@ void probe_main(unsigned long *sp)
         print(" bytes, nlink=");
         print_num(st.st_nlink);
         puts("");
-        passed++;
+        (*passed)++;
+        report_pass("old-absolute-file");
     } else {
         puts("FAILED");
-        failed++;
+        (*failed)++;
+        report_fail("old-absolute-file", "stat of /hello.txt failed");
     }
 
     puts("");
+}
+#endif
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * Entry point: runs the stat64 (195) probes in part A, the stat (106) probes
+ * in part B, then the inode and time rows, and exits 0 only if every row
+ * passed. On x86-64 part A is stat (4) and there is no part B.
+ */
+void probe_main(unsigned long *sp)
+{
+    int passed = 0, failed = 0;
+
+    probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.stattest"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    puts("Stat syscall test starting...");
+    puts("");
+
+    wide_rows(&passed, &failed);
+#if !defined __x86_64__
+    old_rows(&passed, &failed);
 #endif
 
     same_name_rows(&passed, &failed);
@@ -624,6 +765,7 @@ void probe_main(unsigned long *sp)
     print_num(failed);
     puts(" failed");
 
+    report_end();
     if (failed == 0) {
         puts("All stat syscalls passed!");
         sys_exit(0);
