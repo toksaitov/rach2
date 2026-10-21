@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.disks",
+  "summary": "Two disks of different sizes on one AHCI controller, both in /proc/disk with their ports and sizes, both with nodes, a partition of each mounted and written, and the second disk's file found on the second disk by the host; the program is tests/cases/machine/disks_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.disks.pair",
+      "behavior": "a 64 MiB KRFFS disk on port 0 and a 20 MiB FAT32 disk on port 1 of one AHCI controller are disks 0 and 1, listed in /proc/disk with their ports and sizes and with their nodes, a partition of each mounts and takes a write that reads back, and the write through /dev/disk1p1 is on the second disk",
+      "units": ["disks", "disksprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /disksprobe", "disk0_sectors": 131072, "disk1_sectors": 40960}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mtype"], "features": {}},
+      "execution": {"program": "disks_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disks-zero", "disks-one"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disks' copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "pair", "does": "boot the test image with both disks on the AHCI controller and rach2.diskdiag, run disksprobe at the debug shell: /proc/disk and the nodes of both disks, the KRFFS partition of disk 0 and the FAT32 partition of disk 1 each mounted, written, read back and unmounted; read the kernel's record of each disk, and end the machine with QMP's quit"},
+        {"step_id": "host", "stage": "execute", "does": "read one.txt off the FAT32 volume of the second disk's copy with mtype"}
+      ],
+      "machines": [
+        {"machine_id": "pair", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "disks-zero", "bus": "ahci"}, {"name": "disks-one", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.diskdiag", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "disksprobe-ok", "checks": "disksprobe's line says DISKSPROBE OK, never DISKSPROBE FAIL: /proc/disk lists disk 0 on AHCI port 0 and disk 1 on port 1 with 40960 sectors, disk 0 the larger and no third disk; both disks and their first partitions have nodes, and no absent partition or disk has one; disk 0's KRFFS partition and disk 1's FAT32 partition each mount, take a file that reads back and unmount", "source": "scenario"},
+        {"assertion_id": "disk0-port0", "checks": "the kernel says disk: disk0: ahci 0: 131072 sectors, so the disk on port 0 is disk 0 at its size", "source": "scenario"},
+        {"assertion_id": "disk1-port1", "checks": "the kernel says disk: disk1: ahci 1: 40960 sectors, so the disk on port 1 is disk 1 at its size", "source": "scenario"},
+        {"assertion_id": "second-disk-file", "checks": "mtype reads one.txt off the FAT32 volume at sector 2048 of the second disk's copy, and it says 'disk one says hello', so the write through /dev/disk1p1 reached the disk on port 1", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "disks-zero", "node": "tests/cases/machine/disks/zero.disk", "per_architecture": true},
+        {"name": "disks-one", "node": "tests/cases/machine/disks/one.disk", "per_architecture": false},
+        {"name": "disks_scenario", "node": "tests/cases/machine/disks_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the case needs two disks of its own sizes and tables on ports 0 and 1 of one AHCI controller, a partition of each written, which the Lenovo's one disk cannot give without a raw write"}
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "proof": "disks",
+  "summary": "the case of tests/run disks under etude, against an AHCI driver that registers each disk one port past its own, one that gives each disk one sector fewer than it has, and one that takes its ports from the last to the first, so that the disk on port 1 is disk 0",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/block/ahci.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run disks </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "port-past",
+      "summary": "the AHCI driver registers each disk with its port number plus one",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "        disk_register(&d->dev, \"ahci\", d->port, ahci_idbuf);",
+          "replace": "        disk_register(&d->dev, \"ahci\", d->port + 1, ahci_idbuf);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: disks: FAIL",
+          "assert disksprobe-ok fail",
+          "assert disk0-port0 fail",
+          "assert disk1-port1 fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "short-disk",
+      "summary": "the AHCI driver gives each disk one sector fewer than IDENTIFY says it has",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "        d->dev.sector_count = d->sectors;",
+          "replace": "        d->dev.sector_count = d->sectors - 1;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: disks: FAIL",
+          "assert disksprobe-ok fail",
+          "assert disk0-port0 fail",
+          "assert disk1-port1 fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "ports-reversed",
+      "summary": "the AHCI driver takes its ports from the last to the first, so the kernel numbers the disk on port 1 disk 0",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "    for (p = 0; p < 32; ++p) {\n        uint32_t ssts, sig;",
+          "replace": "    for (p = 31; p >= 0; --p) {\n        uint32_t ssts, sig;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: disks: FAIL",
+          "assert disksprobe-ok fail",
+          "assert disk0-port0 fail",
+          "assert second-disk-file fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}
