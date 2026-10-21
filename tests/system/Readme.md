@@ -197,7 +197,8 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `probe-roots.json` and `ext2-map.json`: the ext2 rows of `vfsprobe` and `musl/mapmusl` on an ext2 root.
 * `ext2-batch-probe.json`: the ext2 driver's count of disk commands for batched writes.
 * `usbdisk.json`: the `usbdisk` suite's pull rows, against faults in the VFS's removal of a mount.
-* `gpt-write.json`: the `parts` suite's GPT write refusal.
+* `gpt-write.json`: the `parts` cases of the recovery shell's `disk write`, against a recovery kernel that writes a disk with a GUID header, one that does not read the last sector, and one that does not look at the MBR's entries.
+* `parts.json`: the `parts` cases of the partition tables and of the root by identity, against a reader that never takes a GUID table from its backup header, one that stops the chain of logical partitions after the first, one that truncates a GUID partition's first sector to 32 bits, a root by identity that takes the first of two matches, and an MBR identity whose disk id is not compared.
 * `install-keys.json`, `install-stick.json`, `recovery-disk-key.json` and `rehearse-group.json`: rows of the installer suites.
 * `metal-fat.json`, `metal-accept.json` and `installed.json`: the acceptance rows of the `metal` suite.
 * `host-tools-krffs.json`: the host tests of the KRFFS driver, of the KRFFS tools' hash and of the kernel's KRFFS hash.

@@ -1,0 +1,721 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.parts",
+  "summary": "The partition tables the kernel reads and the root it chooses by identity, on AHCI disks of crafted tables: four tables read and written by partsprobe and found by the host, a 5 TiB disk's numbers past 32 bits, and seven roots named by identity, found or refused; and the recovery shell's disk write, refused on GUID disks and on an MBR disk whose partition holds the last sector, and taken on one whose last sector is free; the program is tests/cases/machine/parts_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.parts.tables",
+      "behavior": "four partition tables on four AHCI disks are read as built: an MBR with an extended partition of three logical ones, a GUID table, the same table read from its backup, and a blank disk; the nodes are numbered as the tables number them, a logical and a GUID partition take a write, and the host finds both files where the nodes said",
+      "units": ["parts", "partsprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /partsprobe"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mtype"], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b", "parts-c"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies and the empty disk, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "probe", "stage": "execute", "machine": "tables", "does": "boot the test image with disks A, B, C and D on ports 0 to 3 of the AHCI controller, run partsprobe at the debug shell, and end the machine with QMP's quit"},
+        {"step_id": "files", "stage": "execute", "does": "read logical.txt out of the copy of A's logical partition 6 and gpt.txt out of the copy of B's GUID entry 3 with mtype"}
+      ],
+      "machines": [
+        {"machine_id": "tables", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}, {"name": "parts-c", "bus": "ahci"}, {"name": "parts-d", "bus": "ahci", "size_bytes": 8388608}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.diskdiag", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "partsprobe's line says PARTSPROBE OK, never PARTSPROBE FAIL: /proc/disk lists each disk and partition as built, the nodes exist for the partitions and for no extended entry, seventh entry or blank disk, disk 2 was read from its backup GUID header, two partitions mount and take a write, BLKRRPART is refused while one is mounted and reads the table again once none is, and /sys/block and /sys/dev/block describe a partition", "source": "scenario"},
+        {"assertion_id": "logical-file", "checks": "mtype prints 'logical six says hello' out of logical.txt in the FAT32 volume of A's logical partition 6, at sector 112642 of the copy the machine wrote", "source": "scenario"},
+        {"assertion_id": "gpt-file", "checks": "mtype prints 'gpt three says hello' out of gpt.txt in the FAT32 volume of B's GUID entry 3, at sector 8192 of the copy the machine wrote", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts-c", "node": "tests/cases/machine/parts/c.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the probe reads four disks of crafted tables on QEMU's AHCI controller, two of them written, and the host reads the copies the machine wrote"}
+    },
+    {
+      "case_id": "machine.parts.large",
+      "behavior": "a sparse 5 TiB disk whose one GUID partition starts at sector 4294969344 has its size and the partition's first sector in full, past 32 bits, in /proc/disk, /sys/block and /proc/partitions",
+      "units": ["parts", "partsprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /partsprobe large", "disk_bytes": 5497558138880, "partition": "4294969344:2048:data=FAR"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes the empty disk, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "layout", "stage": "execute", "does": "write a GUID table of seed 5 to the empty 5 TiB disk with mkgpt, its one partition at sector 4294969344"},
+        {"step_id": "probe", "stage": "execute", "machine": "large", "does": "boot the test image with the disk alone on the AHCI controller, run partsprobe large at the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "large", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [{"name": "parts-e", "bus": "ahci", "size_bytes": 5497558138880}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.diskdiag", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "probe-ok", "checks": "partsprobe large's line says PARTSPROBE OK, never PARTSPROBE FAIL: /proc/disk, /sys/block and /proc/partitions give the disk's 10737418240 sectors and the partition's first sector, 4294969344, in full", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the disk is a sparse file of 5 TiB on QEMU's AHCI controller, whose partition starts past sector 2^32"}
+    },
+    {
+      "case_id": "machine.parts.root-partuuid",
+      "behavior": "a root named by its GUID partition's identity, PARTUUID=, is found and mounted on the second of three disks",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks A, B and D on ports 0 upward of the AHCI controller, naming the root PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}, {"name": "parts-d", "bus": "ahci", "size_bytes": 8388608}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-found", "checks": "the kernel says ext2: root: /dev/disk1p4, the ext2 root of B's entry 4", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.root-swapped",
+      "behavior": "the same identity names the same partition when the disks are swapped, whose node is then another",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-b", "parts-a"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks B, A and D on ports 0 upward of the AHCI controller, naming the root PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-b", "bus": "ahci"}, {"name": "parts-a", "bus": "ahci"}, {"name": "parts-d", "bus": "ahci", "size_bytes": 8388608}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-found", "checks": "the kernel says ext2: root: /dev/disk0p4, the ext2 root of B's entry 4 with B now first", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.root-clone",
+      "behavior": "an identity that two disks have, B and its clone C, is refused as ambiguous and no root is mounted",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b", "parts-c"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks A, B and C on ports 0 upward of the AHCI controller, naming the root PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}, {"name": "parts-c", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=PARTUUID=46454443-4847-4a49-494a-4b4c4d4e4f50", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says root: PARTUUID=GUID: ambiguous: /dev/disk1p4 and /dev/disk2p4, GUID being entry 4's as mkgpt's report of B gives it", "source": "scenario"},
+        {"assertion_id": "none-mounted", "checks": "the console of the ended machine never says ext2: root:", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts-c", "node": "tests/cases/machine/parts/c.disk", "per_architecture": false},
+        {"name": "parts-gpt-report", "node": "tests/cases/machine/parts/b.gpt", "per_architecture": true},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.root-mbrid",
+      "behavior": "a KRFFS root named by an MBR's disk id and entry number is found on the second disk",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "MBRID=0a0a0a0a,1"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks D and A on ports 0 upward of the AHCI controller, naming the root MBRID=0a0a0a0a,1, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-d", "bus": "ahci", "size_bytes": 8388608}, {"name": "parts-a", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=MBRID=0a0a0a0a,1", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-found", "checks": "the kernel says root: MBRID=0a0a0a0a,1: /dev/disk1p1, KRFFS", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.root-label",
+      "behavior": "a GUID entry's name that two disks have is refused as ambiguous and no root is mounted",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "LABEL=DATA3"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-b", "parts-c"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks B and C on ports 0 upward of the AHCI controller, naming the root LABEL=DATA3, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-b", "bus": "ahci"}, {"name": "parts-c", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=LABEL=DATA3", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says root: LABEL=DATA3: ambiguous: /dev/disk0p3 and /dev/disk1p3", "source": "scenario"},
+        {"assertion_id": "none-mounted", "checks": "the console of the ended machine never says root: /dev", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts-c", "node": "tests/cases/machine/parts/c.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.root-node",
+      "behavior": "a root named by its node, the rescue override, is mounted",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "/dev/disk1p4"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks A and B on ports 0 upward of the AHCI controller, naming the root /dev/disk1p4, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=/dev/disk1p4", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "root-found", "checks": "the kernel says ext2: root: /dev/disk1p4", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.root-unknown",
+      "behavior": "an identity that no disk has is not found and no root is mounted",
+      "units": ["parts"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"root": "MBRID=deadbeef,1"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-a", "parts-b"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "root", "does": "boot the kernel with no RAM image and the disks A and B on ports 0 upward of the AHCI controller, naming the root MBRID=deadbeef,1, wait for the debug shell, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "parts-a", "bus": "ahci"}, {"name": "parts-b", "bus": "ahci"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.root=MBRID=deadbeef,1", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says root: MBRID=deadbeef,1: not found on any of 2 disks", "source": "scenario"},
+        {"assertion_id": "none-mounted", "checks": "the console of the ended machine never says root: /dev", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "parts-a", "node": "tests/cases/machine/parts/a.disk", "per_architecture": true},
+        {"name": "parts-b", "node": "tests/cases/machine/parts/b.disk", "per_architecture": true},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "the kernel chooses its root at boot among disks of crafted tables on QEMU's AHCI controller, as rach2.root on its command line names it"}
+    },
+    {
+      "case_id": "machine.parts.write-gpt-nombr",
+      "behavior": "the recovery shell's disk write refuses a GUID disk with no protective MBR, whose last sector is its backup header, and leaves every byte of it as it was",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-gpt-nombr"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "backup", "stage": "execute", "does": "read the disk's last sector, which must begin with a GUID header's signature"},
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-gpt-nombr"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "backup-header", "checks": "the disk's last sector begins with EFI PART, its backup GUID header", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the shell answers disk: GPT disk; the last sector is its backup header", "source": "scenario"},
+        {"assertion_id": "no-round-trip", "checks": "the console of the ended machine never says last-sector round-trip", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "every byte of the copy is as the disk has it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-gpt-nombr", "node": "tests/cases/machine/parts/gpt-nombr.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    },
+    {
+      "case_id": "machine.parts.write-gpt-nombr-noprimary",
+      "behavior": "the recovery shell's disk write refuses a GUID disk with no protective MBR and no primary header, whose table is in its last sectors alone, and leaves every byte of it as it was",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-gpt-nombr-noprimary"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "backup", "stage": "execute", "does": "read the disk's last sector, which must begin with a GUID header's signature"},
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-gpt-nombr-noprimary"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "backup-header", "checks": "the disk's last sector begins with EFI PART, its backup GUID header", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the shell answers disk: GPT disk; the last sector is its backup header", "source": "scenario"},
+        {"assertion_id": "no-round-trip", "checks": "the console of the ended machine never says last-sector round-trip", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "every byte of the copy is as the disk has it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-gpt-nombr-noprimary", "node": "tests/cases/machine/parts/gpt-nombr-noprimary.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    },
+    {
+      "case_id": "machine.parts.write-gpt",
+      "behavior": "the recovery shell's disk write refuses a GUID disk with both headers whole and leaves every byte of it as it was",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-gpt"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "backup", "stage": "execute", "does": "read the disk's last sector, which must begin with a GUID header's signature"},
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-gpt"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "backup-header", "checks": "the disk's last sector begins with EFI PART, its backup GUID header", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the shell answers disk: GPT disk; the last sector is its backup header", "source": "scenario"},
+        {"assertion_id": "no-round-trip", "checks": "the console of the ended machine never says last-sector round-trip", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "every byte of the copy is as the disk has it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-gpt", "node": "tests/cases/machine/parts/gpt.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    },
+    {
+      "case_id": "machine.parts.write-gpt-badprimary",
+      "behavior": "the recovery shell's disk write refuses a GUID disk whose primary header's checksum is broken, so that a reader takes its table from the backup, and leaves every byte of it as it was",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-c"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "backup", "stage": "execute", "does": "read the disk's last sector, which must begin with a GUID header's signature"},
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-c"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "backup-header", "checks": "the disk's last sector begins with EFI PART, its backup GUID header", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the shell answers disk: GPT disk; the last sector is its backup header", "source": "scenario"},
+        {"assertion_id": "no-round-trip", "checks": "the console of the ended machine never says last-sector round-trip", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "every byte of the copy is as the disk has it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-c", "node": "tests/cases/machine/parts/c.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    },
+    {
+      "case_id": "machine.parts.write-gpt-noprimary",
+      "behavior": "the recovery shell's disk write refuses a GUID disk whose primary header's sector is zeroed, so that its table is in the backup alone, and leaves every byte of it as it was",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-gpt-noprimary"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "backup", "stage": "execute", "does": "read the disk's last sector, which must begin with a GUID header's signature"},
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-gpt-noprimary"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "backup-header", "checks": "the disk's last sector begins with EFI PART, its backup GUID header", "source": "scenario"},
+        {"assertion_id": "refused", "checks": "the shell answers disk: GPT disk; the last sector is its backup header", "source": "scenario"},
+        {"assertion_id": "no-round-trip", "checks": "the console of the ended machine never says last-sector round-trip", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "every byte of the copy is as the disk has it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-gpt-noprimary", "node": "tests/cases/machine/parts/gpt-noprimary.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    },
+    {
+      "case_id": "machine.parts.write-mbr-full",
+      "behavior": "the recovery shell's disk write refuses an MBR disk whose partition reaches the last sector, as a root grown into the whole disk does, and leaves every byte of it as it was",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-mbr-full"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-mbr-full"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the shell answers disk: the last sector belongs to partition 1, not a scratch sector", "source": "scenario"},
+        {"assertion_id": "no-round-trip", "checks": "the console of the ended machine never says last-sector round-trip", "source": "scenario"},
+        {"assertion_id": "unchanged", "checks": "every byte of the copy is as the disk has it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-mbr-full", "node": "tests/cases/machine/parts/mbr-full.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    },
+    {
+      "case_id": "machine.parts.write-mbr-scratch",
+      "behavior": "the recovery shell's disk write takes the round-trip on an MBR disk whose partition ends before the last sector, and changes that sector alone, to the bytes it writes",
+      "units": ["parts", "tests/system/gpt_write_refusal.sh"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "disk write"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "parts_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["parts-mbr-scratch"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "write", "stage": "execute", "machine": "write", "does": "boot the recovery kernel with the test image and the disk on IDE, type disk write at the debug shell, and end the machine with QMP's quit once the shell asks again"},
+        {"step_id": "compare", "stage": "execute", "does": "compare the copy the machine had with the disk, byte by byte"}
+      ],
+      "machines": [
+        {"machine_id": "write", "qemu": {"kernel": "recovery-kernel", "initrd": "test-image", "disks": ["parts-mbr-scratch"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "round-trip", "checks": "the shell answers disk: last-sector round-trip OK", "source": "scenario"},
+        {"assertion_id": "no-refusal", "checks": "the console of the ended machine never says not a scratch sector", "source": "scenario"},
+        {"assertion_id": "others-unchanged", "checks": "every sector of the copy before the last is as the disk has it", "source": "scenario"},
+        {"assertion_id": "pattern", "checks": "the copy's last sector has the bytes the command writes, i ^ 0x5A at offset i", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 180000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "parts-mbr-scratch", "node": "tests/cases/machine/parts/mbr-scratch.disk", "per_architecture": false},
+        {"name": "parts_scenario", "node": "tests/cases/machine/parts_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the recovery shell's disk write is offered a disk of its own on QEMU's IDE controller, which a fault in its refusal would write"}
+    }
+  ]
+}

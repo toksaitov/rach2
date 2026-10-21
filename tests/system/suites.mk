@@ -1268,6 +1268,23 @@ run-parts: rach2 rach2-recovery tests krffs test-image $(MKMBR) $(MKGPT) $(OS_SI
 	    $(OS_SIMPLE_EXT2) $(PARTS_DIR)
 	sh tests/system/gpt_write_refusal.sh $(RECOVERY_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKGPT) \
 	    $(PARTS_DIR)/gpt-write
+# The disks of the partition cases, tests/cases/machine.parts.json, which
+# parts_disks.sh makes. The MBR disk with logical partitions around a KRFFS
+# of disk-test.manifest, and the GUID disk with os-simple's ext2 root with
+# what mkgpt said of it, hold the architecture's programs. The clone of that
+# table, read from its backup, and the disks of the recovery shell's `disk
+# write` hold data alone, so one set of them serves both architectures. The
+# blank disk and the 5 TiB one are empty disks of the cases' own.
+PARTS_ARCH_DISKS = $(addprefix $(ARCH_CASE_DIR)/parts/,a.disk b.disk b.gpt)
+$(PARTS_ARCH_DISKS) &: tests/system/parts_disks.sh krffs/manifests/disk-test.manifest \
+                       $(MANIFEST_DEPS_disk_test) $(MKDISK) build/krffs/mkfs.krffs \
+                       build/krffs/stageimage.krffs $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) \
+                       | preflight krffs tests
+	sh tests/system/parts_disks.sh arch $(ARCH_CASE_DIR)/parts $(OS_SIMPLE_EXT2)
+PARTS_DATA_DISKS = $(addprefix $(CASE_DIR)/parts/,c.disk gpt.disk gpt-nombr.disk \
+                     gpt-nombr-noprimary.disk gpt-noprimary.disk mbr-full.disk mbr-scratch.disk)
+$(PARTS_DATA_DISKS) &: tests/system/parts_disks.sh $(MKMBR) $(MKGPT)
+	sh tests/system/parts_disks.sh shared $(CASE_DIR)/parts
 # `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
 # together with the root on each in turn, and a disk past 128 GiB.
 BUS_DIR = $(IMAGES_DIR)/bus
