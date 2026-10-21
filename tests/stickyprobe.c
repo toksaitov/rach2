@@ -74,11 +74,18 @@
  * checks WIFEXITED before WEXITSTATUS: a signal death has the signal in
  * the low bits and would otherwise decode as exit 0. Prints "STICKYPROBE OK"
  * and exits 0 only when every case passed; any failure names the step and
- * the answer it got, and exits 1. Freestanding; direct system calls (probe.h).
+ * the answer it got, and exits 1.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check `checks` lists. A child cannot write
+ * them, since only the process that began the report may, so it gives the
+ * check it failed to the parent on a pipe; a failure leaves the checks after
+ * it not run. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 
@@ -189,7 +196,144 @@ static void puto(u32 v)
     puts_(&buf[i]);
 }
 
-/** Print "STICKYPROBE FAIL: ", the step and the answer it got, and exit 1. */
+/* The checks, one assertion each, in the order the probe makes them. A row
+ * whose step is NULL stands for several steps: `fixtures` for those of the
+ * helpers that make the fixtures, the two drops for "drop the gids" and "drop
+ * the uids" in each child, and `root-cleanup` for every "root removes". */
+enum {
+    STAGED_STICKY,
+    STAGED_PLAIN,
+    FIXTURES,
+    DROP_1000,
+    USER_CHILD = 16,
+    DROP_1001 = 34,
+    OTHER_CHILD = 39,
+    ROOT_CLEANUP = 44,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *step;
+} checks[CHECKS] = {
+    {"staged-sticky", "staged /st_sticky"},
+    {"staged-plain", "staged /st_plain"},
+    {"fixtures", 0},
+    {"drop-1000", 0},
+    {"sticky-unlink", "sticky: unlink root's file"},
+    {"plain-unlink", "plain: unlink root's file"},
+    {"sticky-rename", "sticky: rename root's file"},
+    {"plain-rename", "plain: rename root's file"},
+    {"sticky-rmdir", "sticky: rmdir root's directory"},
+    {"plain-rmdir", "plain: rmdir root's directory"},
+    {"sticky-unlink-own", "sticky: unlink its own file"},
+    {"sticky-rename-own", "sticky: rename its own file"},
+    {"sticky-rename-over", "sticky: rename its own file over root's"},
+    {"plain-rename-over", "plain: rename its own file over root's"},
+    {"owned-unlink", "owned: unlink root's file"},
+    {"locked-unlink", "locked: unlink root's file"},
+    {"user-child", "the uid-1000 child"},
+    {"sticky-victim-kept", "sticky: the victim is still there"},
+    {"sticky-mover-kept", "sticky: the mover is still there"},
+    {"sticky-moved-absent", "sticky: the rename's destination"},
+    {"sticky-rmdir-kept", "sticky: the rmdir target is still there"},
+    {"sticky-source-kept", "sticky: the destination case's source"},
+    {"sticky-target-kept", "sticky: the destination case's victim"},
+    {"locked-victim-kept", "locked: the victim is still there"},
+    {"plain-victim-gone", "plain: the victim is gone"},
+    {"plain-mover-gone", "plain: the mover is gone"},
+    {"plain-moved-there", "plain: the rename's destination"},
+    {"plain-rmdir-gone", "plain: the rmdir target is gone"},
+    {"sticky-own-gone", "sticky: the entry owner's file is gone"},
+    {"sticky-own-source-gone", "sticky: the entry owner's rename source is gone"},
+    {"sticky-own-renamed", "sticky: the entry owner's rename destination"},
+    {"plain-source-gone", "plain: the destination case's source is gone"},
+    {"plain-target-replaced", "plain: the destination case's victim was replaced"},
+    {"owned-victim-gone", "owned: the directory owner's victim is gone"},
+    {"drop-1001", 0},
+    {"sticky-third-own", "sticky: a third uid's own file"},
+    {"owned-third-own", "owned: a third uid's own file"},
+    {"sticky-third-unlink", "sticky: a third uid unlinks root's file"},
+    {"owned-third-unlink", "owned: a third uid unlinks root's file"},
+    {"other-child", "the uid-1001 child"},
+    {"sticky-third-kept", "sticky: the third uid's victim is still there"},
+    {"owned-third-kept", "owned: the third uid's victim is still there"},
+    {"sticky-third-gone", "sticky: the third uid's own file is gone"},
+    {"owned-third-gone", "owned: the third uid's own file is gone"},
+    {"root-cleanup", 0},
+};
+
+/* The drop row of the child running, which its fork inherits, and the write
+ * end of the pipe on which a child gives its parent the check it failed, -1
+ * in the parent. */
+static int child_drop = DROP_1000;
+static int failed_fd = -1;
+
+/** Whether the string `s` begins with `prefix`. */
+static int begins(const char *s, const char *prefix)
+{
+    while (*prefix != '\0' && *s == *prefix) {
+        s++;
+        prefix++;
+    }
+    return *prefix == '\0';
+}
+
+/** The check whose step is `step`. */
+static int check_of(const char *step)
+{
+    int i;
+
+    if (begins(step, "drop the ")) {
+        return child_drop;
+    }
+    if (begins(step, "root removes ")) {
+        return ROOT_CLEANUP;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (checks[i].step != 0 && begins(step, checks[i].step) && begins(checks[i].step, step)) {
+            return i;
+        }
+    }
+    return FIXTURES;
+}
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with `why`, those after it as not run, and the
+ * report's end; with `check` CHECKS, every check held. */
+static void report_at(int check, const char *why)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Fail the check of `step`: in the parent report it, and in a child give
+ * its number to the parent on `failed_fd`. */
+static void report_step(const char *step)
+{
+    char check = (char)check_of(step);
+
+    if (failed_fd >= 0) {
+        syscall3(SYS_WRITE, failed_fd, (long)&check, 1);
+    }
+    report_at(check, step);
+}
+
+/** Print "STICKYPROBE FAIL: ", the step and the answer it got, fail the
+ * step's check, and exit 1. */
 static void fail(const char *step, int got)
 {
     puts_("STICKYPROBE FAIL: ");
@@ -197,6 +341,7 @@ static void fail(const char *step, int got)
     puts_(" (got ");
     putd(got);
     puts_(")\n");
+    report_step(step);
     syscall1(SYS_EXIT, 1);
 }
 
@@ -253,6 +398,7 @@ static void want_mode(const char *step, const char *path, u32 mode)
         puts_(" not ");
         puto(mode);
         puts_(")\n");
+        report_step(step);
         syscall1(SYS_EXIT, 1);
     }
 }
@@ -356,27 +502,53 @@ static void other_child(void)
     syscall1(SYS_EXIT, 0);
 }
 
+/** Report the checks of a child that failed: the one it gave on the pipe
+ * `rd`, or else its own row `what`, since a child that died or returned gave
+ * none. */
+static void report_child(int rd, const char *what)
+{
+    char check = 0;
+
+    if (syscall3(SYS_READ, rd, (long)&check, 1) == 1 && check > child_drop - 1 && check < CHECKS) {
+        report_at(check, checks[(int)check].step != 0 ? checks[(int)check].step
+                                                      : "the drop to the child's ids");
+    }
+    report_step(what);
+}
+
 /** Run one child to completion and require a clean exit 0. WIFEXITED comes
  * first: a signal death has the signal in the low bits and would otherwise
- * decode as exit 0. The child has already named the case it failed. */
-static void run_child(void (*body)(void), const char *what)
+ * decode as exit 0. The child has already named the case it failed, and
+ * gives its check to the parent on a pipe; `drop` is its drop row. */
+static void run_child(void (*body)(void), const char *what, int drop)
 {
     int pid, status = 0;
     int reaped;
+    int pipefd[2];
 
+    child_drop = drop;
+    if (syscall1(SYS_PIPE, (long)pipefd) != 0) {
+        pipefd[0] = pipefd[1] = -1;
+    }
     pid = syscall1(SYS_FORK, 0);
     if (pid < 0) {
         fail(what, pid);
     }
     if (pid == 0) {
+        failed_fd = pipefd[1];
         body();
         /* Every body exits itself; 127 fails one that returns. */
         syscall1(SYS_EXIT, 127);
     }
+    syscall1(SYS_CLOSE, pipefd[1]);
     reaped = syscall3(SYS_WAITPID, pid, (long)&status, 0);
     if (reaped != pid) {
         fail(what, reaped);
     }
+    if (status != 0) {
+        report_child(pipefd[0], what);
+    }
+    syscall1(SYS_CLOSE, pipefd[0]);
     if (!WIFEXITED(status)) {
         puts_("STICKYPROBE FAIL: ");
         puts_(what);
@@ -405,6 +577,7 @@ PROBE_SP_ENTRY;
 void probe_main(unsigned long *sp)
 {
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.stickyprobe"));
     want_mode("staged /st_sticky", STICKY, 01777);
     want_mode("staged /st_plain", PLAIN, 0777);
 
@@ -436,7 +609,7 @@ void probe_main(unsigned long *sp)
     mint_dir(LOCKED, 01755);
     mint_file(LOCK_VICTIM, 0666);
 
-    run_child(user_child, "the uid-1000 child");
+    run_child(user_child, "the uid-1000 child", DROP_1000);
 
     want_there("sticky: the victim is still there", S_VICTIM);
     want_there("sticky: the mover is still there", S_MOVER);
@@ -457,7 +630,7 @@ void probe_main(unsigned long *sp)
     want_mode("plain: the destination case's victim was replaced", P_TARGET, 0640);
     want_absent("owned: the directory owner's victim is gone", OWN_VICTIM);
 
-    run_child(other_child, "the uid-1001 child");
+    run_child(other_child, "the uid-1001 child", DROP_1001);
 
     want_there("sticky: the third uid's victim is still there", S_OTHER);
     want_there("owned: the third uid's victim is still there", OWN_OTHER);
@@ -483,6 +656,7 @@ void probe_main(unsigned long *sp)
     want_eq("root removes the locked victim", syscall3(SYS_UNLINK, (long)LOCK_VICTIM, 0, 0), 0);
     want_eq("root removes the locked directory", syscall3(SYS_RMDIR, (long)LOCKED, 0, 0), 0);
 
+    report_at(CHECKS, 0);
     puts_("STICKYPROBE OK\n");
     syscall1(SYS_EXIT, 0);
 }

@@ -8,10 +8,14 @@
  * give 0, and requires a descriptor that is not open to fail.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
- * otherwise. Freestanding; direct system calls (probe.h).
+ * otherwise. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each test; a failed open of "/" leaves
+ * the rest not run, and a failed first read the tests up to the close.
+ * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -119,14 +123,48 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &c, 1);
 }
 
-/**
- * Print "OK" and count a pass when `ok` is nonzero, else "FAILED" and a
- * failure.
- */
-static void verdict(int ok, int *passed, int *failed)
+/* The tests, one assertion each, which were reported, and the count of each
+ * verdict. */
+enum { OPEN, COUNT_ZERO, READ, ENTRIES, READ_AGAIN, COUNT_ZERO_END, BAD_FD, CLOSE, TESTS };
+
+static const char *const test_ids[TESTS] = {"open",       "count-zero",     "read",   "entries",
+                                            "read-again", "count-zero-end", "bad-fd", "close"};
+static char reported[TESTS];
+static int passed, failed;
+
+/** Count the test `test` as passed when `ok` is nonzero, and as failed for
+ * `why` otherwise, and report it. */
+static void count(int test, int ok, const char *why)
+{
+    if (ok) {
+        passed++;
+        report_pass(test_ids[test]);
+    } else {
+        failed++;
+        report_fail(test_ids[test], why);
+    }
+    reported[test] = 1;
+}
+
+/** Print "OK" when `ok` is nonzero, else "FAILED", and count the test `test`
+ * as `count` does. */
+static void verdict(int test, int ok, const char *why)
 {
     puts(ok ? "OK" : "FAILED");
-    ++*(ok ? passed : failed);
+    count(test, ok, why);
+}
+
+/** Report each test not reported as not run, and end the report. */
+static void report_rest(void)
+{
+    int i;
+
+    for (i = 0; i < TESTS; i++) {
+        if (!reported[i]) {
+            report_notrun(test_ids[i], "an earlier test failed");
+        }
+    }
+    report_end();
 }
 
 /** Write `n` as "0x" and eight hexadecimal digits to standard output. */
@@ -169,65 +207,18 @@ static const char *get_type_name(uint8_t d_type)
 }
 
 /**
- * The probe's entry: opens "/", checks that a count of 0 is EINVAL, reads its
- * entries with getdents64, walks and prints each one, reads again, checks
- * that a count of 0 at the end gives 0 and that a bad fd fails, closes the
- * directory, and prints the count of each verdict.
+ * Test 4: walk the `nread` bytes of records in `buf` and print each. The
+ * test passes when there was a record and none had a length of 0; a record
+ * of length 0 is counted as a failure of its own, as the walk always did.
  */
-PROBE_START void _start(void)
+static void walk(char *buf, int nread)
 {
-    char buf[1024];
     struct linux_dirent64 *d;
-    int fd;
-    int nread;
-    int pos;
-    int passed = 0;
-    int failed = 0;
+    int pos = 0;
     int file_count = 0;
+    const char *why = 0;
 
-    puts("Getdents64 (directory listing) syscall test starting...");
-    puts("");
-
-    /* Test 1: Open root directory "/" */
-    print("Test 1: open(\"/\", O_RDONLY)... ");
-    fd = sys_open("/", O_RDONLY);
-    if (fd >= 0) {
-        print("OK (fd=");
-        print_num(fd);
-        puts(")");
-        passed++;
-    } else {
-        print("FAILED (ret=");
-        print_num(fd);
-        puts(")");
-        failed++;
-        goto done;
-    }
-
-    /* Test 2: A count of 0 is EINVAL while an entry remains, as on Linux. */
-    print("Test 2: getdents64(fd, buf, 0)... ");
-    verdict(sys_getdents64(fd, buf, 0) == -EINVAL && sys_getdents64(fd, 0, 0) == -EINVAL, &passed,
-            &failed);
-
-    /* Test 3: Read directory entries with getdents64 */
-    print("Test 3: getdents64(fd, buf, 1024)... ");
-    nread = sys_getdents64(fd, buf, sizeof(buf));
-    if (nread > 0) {
-        print("OK (");
-        print_num(nread);
-        puts(" bytes)");
-        passed++;
-    } else {
-        print("FAILED (ret=");
-        print_num(nread);
-        puts(")");
-        failed++;
-        goto cleanup;
-    }
-
-    /* Test 4: Parse and display entries */
     puts("Test 4: Parsing directory entries...");
-    pos = 0;
     while (pos < nread) {
         d = (struct linux_dirent64 *)(buf + pos);
 
@@ -235,6 +226,7 @@ PROBE_START void _start(void)
         if (d->d_reclen == 0) {
             puts("  ERROR: d_reclen is 0, breaking");
             failed++;
+            why = "a record has d_reclen 0";
             break;
         }
 
@@ -262,11 +254,25 @@ PROBE_START void _start(void)
     } else {
         puts("  No entries found... FAILED");
         failed++;
+        why = why != 0 ? why : "no entries were found";
     }
+    if (why != 0) {
+        report_fail(test_ids[ENTRIES], why);
+    } else {
+        report_pass(test_ids[ENTRIES]);
+    }
+    reported[ENTRIES] = 1;
+}
+
+/** Tests 5 to 7 on the directory `fd`: a second read, a read of 0 bytes at
+ * the end, and a read of a descriptor that is not open. */
+static void read_rest(int fd, char *buf, int size)
+{
+    int nread;
 
     /* Test 5: getdents64 again returns 0 (end of dir) or more entries */
     print("Test 5: getdents64 again... ");
-    nread = sys_getdents64(fd, buf, sizeof(buf));
+    nread = sys_getdents64(fd, buf, size);
     if (nread >= 0) {
         if (nread == 0) {
             puts("OK (end of directory)");
@@ -275,31 +281,96 @@ PROBE_START void _start(void)
             print_num(nread);
             puts(" more bytes)");
         }
-        passed++;
+        count(READ_AGAIN, 1, 0);
     } else {
         print("FAILED (ret=");
         print_num(nread);
         puts(")");
-        failed++;
+        count(READ_AGAIN, 0, "the second read failed");
     }
 
     /* Test 6: At the end of the directory a count of 0 gives 0. */
     print("Test 6: getdents64(fd, buf, 0) at the end... ");
     while (nread > 0) {
-        nread = sys_getdents64(fd, buf, sizeof(buf));
+        nread = sys_getdents64(fd, buf, size);
     }
-    verdict(nread == 0 && sys_getdents64(fd, buf, 0) == 0, &passed, &failed);
+    verdict(COUNT_ZERO_END, nread == 0 && sys_getdents64(fd, buf, 0) == 0,
+            "a read of 0 bytes at the end did not give 0");
 
     /* Test 7: getdents64 on a descriptor that is not open fails. */
     print("Test 7: getdents64(999, ...)... ");
-    verdict(sys_getdents64(999, buf, sizeof(buf)) < 0, &passed, &failed);
+    verdict(BAD_FD, sys_getdents64(999, buf, size) < 0, "a read of descriptor 999 succeeded");
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * The probe's entry: opens "/", checks that a count of 0 is EINVAL, reads its
+ * entries with getdents64, walks and prints each one, reads again, checks
+ * that a count of 0 at the end gives 0 and that a bad fd fails, closes the
+ * directory, and prints the count of each verdict. `_start` calls it with
+ * the initial stack, whose environment gives the case's identity.
+ */
+void probe_main(unsigned long *sp)
+{
+    char buf[1024];
+    int fd;
+    int nread;
+
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.lstest"));
+    puts("Getdents64 (directory listing) syscall test starting...");
+    puts("");
+
+    /* Test 1: Open root directory "/" */
+    print("Test 1: open(\"/\", O_RDONLY)... ");
+    fd = sys_open("/", O_RDONLY);
+    if (fd >= 0) {
+        print("OK (fd=");
+        print_num(fd);
+        puts(")");
+        count(OPEN, 1, 0);
+    } else {
+        print("FAILED (ret=");
+        print_num(fd);
+        puts(")");
+        count(OPEN, 0, "open of / failed");
+        goto done;
+    }
+
+    /* Test 2: A count of 0 is EINVAL while an entry remains, as on Linux. */
+    print("Test 2: getdents64(fd, buf, 0)... ");
+    verdict(COUNT_ZERO,
+            sys_getdents64(fd, buf, 0) == -EINVAL && sys_getdents64(fd, 0, 0) == -EINVAL,
+            "a read of 0 bytes was not EINVAL");
+
+    /* Test 3: Read directory entries with getdents64 */
+    print("Test 3: getdents64(fd, buf, 1024)... ");
+    nread = sys_getdents64(fd, buf, sizeof(buf));
+    if (nread > 0) {
+        print("OK (");
+        print_num(nread);
+        puts(" bytes)");
+        count(READ, 1, 0);
+    } else {
+        print("FAILED (ret=");
+        print_num(nread);
+        puts(")");
+        count(READ, 0, "the first read gave no bytes");
+        goto cleanup;
+    }
+
+    walk(buf, nread);
+    read_rest(fd, buf, (int)sizeof(buf));
 
 cleanup:
     /* Test 8: Close directory */
     print("Test 8: close(fd)... ");
-    verdict(sys_close(fd) == 0, &passed, &failed);
+    verdict(CLOSE, sys_close(fd) == 0, "close of the directory failed");
 
 done:
+    report_rest();
     puts("");
     print("Results: ");
     print_num(passed);

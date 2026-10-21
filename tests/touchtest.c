@@ -3,10 +3,13 @@
  * `utimensat`, as `touch` makes them.
  *
  * Prints a line for each of the ten tests and exits 0 when every one passed,
- * 1 otherwise. Freestanding; direct system calls (probe.h).
+ * 1 otherwise. Writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each test. Freestanding; direct system
+ * calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 typedef long time_t;
 
@@ -117,20 +120,14 @@ static void print_num(int n)
     sys_write(STDOUT_FILENO, &ones, 1);
 }
 
-/**
- * The probe's entry: the creat, utimensat and unlink tests in order, then
- * the count of each verdict; exits 0 when every test passed, 1 otherwise.
- */
-PROBE_START void _start(void)
+/* The tests passed and failed. */
+static int passed, failed;
+
+/** Tests 1 to 4: the creat of a new file, its open, its creat again, and
+ * the creat of a second file. */
+static void creat_rows(void)
 {
     int fd;
-    int result;
-    int passed = 0;
-    int failed = 0;
-    struct timespec times[2];
-
-    puts("Creat/utimensat syscall test starting...");
-    puts("");
 
     /* Test 1: Create a new file */
     print("Test 1: creat(\"touchtest.tmp\")... ");
@@ -139,9 +136,11 @@ PROBE_START void _start(void)
         puts("OK");
         sys_close(fd);
         passed++;
+        report_pass("creat");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("creat", "creat of touchtest.tmp failed");
     }
 
     /* Test 2: Verify file exists by opening it */
@@ -151,9 +150,11 @@ PROBE_START void _start(void)
         puts("OK (file exists)");
         sys_close(fd);
         passed++;
+        report_pass("open-created");
     } else {
         puts("FAILED (file not found)");
         failed++;
+        report_fail("open-created", "open of the created touchtest.tmp failed");
     }
 
     /* Test 3: Create same file again (should succeed) */
@@ -163,9 +164,11 @@ PROBE_START void _start(void)
         puts("OK (existing file)");
         sys_close(fd);
         passed++;
+        report_pass("creat-existing");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("creat-existing", "creat of the existing touchtest.tmp failed");
     }
 
     /* Test 4: Create file with different name */
@@ -175,10 +178,20 @@ PROBE_START void _start(void)
         puts("OK");
         sys_close(fd);
         passed++;
+        report_pass("creat-second");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("creat-second", "creat of touchtest2.tmp failed");
     }
+}
+
+/** Tests 5 to 7: utimensat with NULL times, with explicit times, and of a
+ * missing name. */
+static void utimensat_rows(void)
+{
+    int result;
+    struct timespec times[2];
 
     /* Test 5: utimensat with NULL times (set to current time) */
     print("Test 5: utimensat(\"touchtest.tmp\", NULL)... ");
@@ -186,9 +199,11 @@ PROBE_START void _start(void)
     if (result == 0) {
         puts("OK");
         passed++;
+        report_pass("utimensat-now");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("utimensat-now", "utimensat with NULL times failed");
     }
 
     /* Test 6: utimensat with specific times */
@@ -201,9 +216,11 @@ PROBE_START void _start(void)
     if (result == 0) {
         puts("OK");
         passed++;
+        report_pass("utimensat-times");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("utimensat-times", "utimensat with explicit times failed");
     }
 
     /* Test 7: utimensat on nonexistent file (should fail) */
@@ -212,10 +229,20 @@ PROBE_START void _start(void)
     if (result < 0) {
         puts("OK (failed as expected)");
         passed++;
+        report_pass("utimensat-missing");
     } else {
         puts("FAILED (should have failed)");
         failed++;
+        report_fail("utimensat-missing", "utimensat of a missing name succeeded");
     }
+}
+
+/** Tests 8 to 10: the unlink of the first file, its open after it, and the
+ * unlink of the second. */
+static void unlink_rows(void)
+{
+    int fd;
+    int result;
 
     /* Test 8: unlink the first file. */
     print("Test 8: unlink(\"touchtest.tmp\")... ");
@@ -223,9 +250,11 @@ PROBE_START void _start(void)
     if (result == 0) {
         puts("OK");
         passed++;
+        report_pass("unlink");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("unlink", "unlink of touchtest.tmp failed");
     }
 
     /* Test 9: Verify first file is gone */
@@ -234,10 +263,12 @@ PROBE_START void _start(void)
     if (fd < 0) {
         puts("OK (file gone)");
         passed++;
+        report_pass("open-unlinked");
     } else {
         puts("FAILED (file still exists)");
         sys_close(fd);
         failed++;
+        report_fail("open-unlinked", "open of the unlinked touchtest.tmp succeeded");
     }
 
     /* Test 10: unlink the second file. */
@@ -246,10 +277,34 @@ PROBE_START void _start(void)
     if (result == 0) {
         puts("OK");
         passed++;
+        report_pass("unlink-second");
     } else {
         puts("FAILED");
         failed++;
+        report_fail("unlink-second", "unlink of touchtest2.tmp failed");
     }
+}
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/**
+ * The probe's entry: the creat, utimensat and unlink tests in order, then
+ * the count of each verdict; exits 0 when every test passed, 1 otherwise.
+ * `_start` calls it with the initial stack, whose environment gives the
+ * case's identity.
+ */
+void probe_main(unsigned long *sp)
+{
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.touchtest"));
+    puts("Creat/utimensat syscall test starting...");
+    puts("");
+
+    creat_rows();
+    utimensat_rows();
+    unlink_rows();
+    report_end();
 
     puts("");
     print("Results: ");
