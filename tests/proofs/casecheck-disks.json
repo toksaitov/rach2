@@ -61,7 +61,9 @@
         "status": 1,
         "lines": [
           "| ide-five: the launcher attaches at most 8 disks of a profile",
-          "| nine: the launcher attaches at most 8 disks of a profile"
+          "| nine: the launcher attaches at most 8 disks of a profile",
+          "| ahci-seven: the launcher attaches at most 8 disks of a profile",
+          "| boot-two: the launcher attaches at most 8 disks of a profile"
         ],
         "only": true
       }
@@ -175,7 +177,7 @@
     },
     {
       "name": "cd-bus",
-      "summary": "the schema takes a CD on NVMe",
+      "summary": "the schema takes a CD on NVMe or AHCI",
       "edits": [
         {
           "file": "tools/etude/schemas/case.schema.json",
@@ -186,7 +188,8 @@
       "fails": {
         "status": 1,
         "lines": [
-          "| /disks/2/bus: is not \"ide\""
+          "| /disks/2/bus: is not \"ide\"",
+          "| /disks/9/bus: is not \"ide\""
         ],
         "only": true
       }
@@ -269,8 +272,8 @@
       "edits": [
         {
           "file": "tools/etude/schemas/case.schema.json",
-          "find": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"device\"]}",
-          "replace": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"device\", \"usb\"]}"
+          "find": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"ahci\", \"device\"]}",
+          "replace": "\"bus\": {\"enum\": [\"ide\", \"nvme\", \"ahci\", \"device\", \"usb\"]}"
         }
       ],
       "fails": {
@@ -295,6 +298,95 @@
         "status": 1,
         "lines": [
           "| /disks/8/format: is a member the schema does not allow"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-bus",
+      "summary": "casecheck counts a disk on AHCI as one on IDE",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "same(bus, \"ahci\")   ? ETUDE_BUS_AHCI",
+          "replace": "same(bus, \"ahci\")   ? ETUDE_BUS_IDE"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "0 manifest ./disks.json"
+        ]
+      }
+    },
+    {
+      "name": "boot-flag",
+      "summary": "casecheck does not count the disks that boot first",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "d[i].boot = boot != NULL && boot->integer != 0;",
+          "replace": "d[i].boot = 0;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| boot-two: the launcher attaches at most 8 disks of a profile"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "boot-direct",
+      "summary": "casecheck takes a disk that boots first beside the direct firmware",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "boot != NULL && boot->integer != 0 && same(json_text(qemu, \"firmware\"), \"direct\")",
+          "replace": "0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| boot-direct: the disk b1 boots first beside the direct firmware"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "boot-type",
+      "summary": "the schema takes a boot flag that is no boolean",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"boot\": {\"type\": \"boolean\"},",
+          "replace": "\"boot\": {},"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/10/boot: is a string, where the schema wants a boolean"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "device-boot",
+      "summary": "the schema takes a disk on a device that boots first",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"properties\": {\"media\": {\"const\": \"disk\"}, \"boot\": {\"const\": false}}",
+          "replace": "\"properties\": {\"media\": {\"const\": \"disk\"}}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/11/boot: is not false"
         ],
         "only": true
       }

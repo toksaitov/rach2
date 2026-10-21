@@ -16,8 +16,10 @@ static const char *const accel_names[ETUDE_ACCEL_COUNT] = {"tcg", "kvm", "hvf", 
 /* The network cards a profile may name, each on a user network of its own. */
 static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
 
-/* The places of the IDE controllers of QEMU's PC, two on each channel. */
+/* The places of the IDE controllers of QEMU's PC, two on each channel, and
+ * the ports of an ich9-ahci. */
 #define IDE_PLACES 4
+#define AHCI_PORTS 6
 
 /* The longest identity of a device or disk. */
 #define ID_MAX 32
@@ -214,30 +216,60 @@ static size_t disk_count(const struct etude_qemu_disk *disks)
     return n;
 }
 
+/** Say whether a disk of `disks` boots first; QEMU boots `-kernel` first. */
+static int boot_disk(const struct etude_qemu_disk *disks)
+{
+    size_t i;
+
+    for (i = 0; i < disk_count(disks); i++)
+        if (disks[i].boot)
+            return 1;
+    return 0;
+}
+
 /** Say whether `s` is a serial number that QEMU's options take as it is. */
 static int serial_word(const char *s)
 {
     return word(s) && strlen(s) <= ETUDE_QEMU_SERIAL_MAX && strchr(s, ',') == NULL;
 }
 
+/**
+ * Say whether disk `d` of `disks`, on ETUDE_BUS_DEVICE, is one the launcher
+ * attaches: an identity of QEMU's that no earlier disk has, on a disk that is
+ * no CD, has no serial and does not boot first, since its device orders it.
+ */
+static int device_disk_ok(const struct etude_qemu_disk *disks, const struct etude_qemu_disk *d)
+{
+    const struct etude_qemu_disk *e;
+
+    if (!qemu_id(d->id) || d->cdrom || d->serial != NULL || d->boot)
+        return 0;
+    for (e = disks; e != d; e++)
+        if (e->id != NULL && strcmp(e->id, d->id) == 0)
+            return 0;
+    return 1;
+}
+
 int etude_qemu_disks_check(const struct etude_qemu_disk *disks)
 {
-    const struct etude_qemu_disk *d, *e;
-    size_t ide = 0;
+    const struct etude_qemu_disk *d;
+    size_t ide = 0, ahci = 0, boot = 0;
 
     if (disk_count(disks) > ETUDE_QEMU_DISKS)
         return EINVAL;
     for (d = disks; d != NULL && d->path != NULL; d++) {
         if (*d->path == '\0' || (d->id != NULL) != (d->bus == ETUDE_BUS_DEVICE))
             return EINVAL;
+        if (d->boot && ++boot > 1)
+            return EINVAL;
         if (d->bus == ETUDE_BUS_DEVICE) {
-            if (!qemu_id(d->id) || d->cdrom || d->serial != NULL)
+            if (!device_disk_ok(disks, d))
                 return EINVAL;
-            for (e = disks; e != d; e++)
-                if (e->id != NULL && strcmp(e->id, d->id) == 0)
-                    return EINVAL;
         } else if (d->bus == ETUDE_BUS_IDE) {
             if (++ide > IDE_PLACES || d->serial != NULL || (d->cdrom && d->discard))
+                return EINVAL;
+        } else if (d->bus == ETUDE_BUS_AHCI) {
+            if (++ahci > AHCI_PORTS || d->serial != NULL || d->cdrom)
                 return EINVAL;
         } else if (d->bus != ETUDE_BUS_NVME || d->cdrom || !serial_word(d->serial)) {
             return EINVAL;
@@ -788,12 +820,16 @@ static void add_audio(struct line *l, const char *card, const char *path)
 
 /**
  * Add the arguments that attach disk `d`, the `n`th of the profile counted
- * from 0; `*ide` counts the places of the IDE controllers taken before it.
+ * from 0; `*ide` counts the places of the IDE controllers taken before it,
+ * and `*ahci` the ports of the ich9-ahci. A disk on IDE that boots first is
+ * a device of its own, since only a device takes a boot index.
  */
-static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, unsigned *ide)
+static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, unsigned *ide,
+                     unsigned *ahci)
 {
     const char *discard = d->discard ? ",discard=unmap,detect-zeroes=unmap" : "";
-    char format[128], id[32];
+    const char *boot = d->boot ? ",bootindex=0" : "";
+    char format[128], id[32], device[128];
 
     if (d->bus == ETUDE_BUS_DEVICE) {
         snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s", d->id, discard);
@@ -801,19 +837,45 @@ static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, 
         add(l, 1, format, d->path);
         return;
     }
-    if (d->bus == ETUDE_BUS_NVME) {
-        snprintf(id, sizeof(id), "etude-disk%u", (unsigned)n);
-        snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s", id, discard);
+    if (d->bus == ETUDE_BUS_IDE && !d->boot) {
+        snprintf(format, sizeof(format), "file=%%s,format=raw,if=ide,index=%u,media=%s%s", (*ide)++,
+                 d->cdrom ? "cdrom,readonly=on" : "disk", discard);
         add(l, 0, "-drive");
         add(l, 1, format, d->path);
-        add(l, 0, "-device");
-        add(l, 0, "nvme,drive=%s,serial=%s", id, d->serial);
         return;
     }
-    snprintf(format, sizeof(format), "file=%%s,format=raw,if=ide,index=%u,media=%s%s", (*ide)++,
-             d->cdrom ? "cdrom,readonly=on" : "disk", discard);
+    snprintf(id, sizeof(id), "etude-disk%u", (unsigned)n);
+    snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s%s", id,
+             d->cdrom ? ",media=cdrom,readonly=on" : "", discard);
     add(l, 0, "-drive");
     add(l, 1, format, d->path);
+    add(l, 0, "-device");
+    if (d->bus == ETUDE_BUS_NVME) {
+        add(l, 0, "nvme,drive=%s,serial=%s%s", id, d->serial, boot);
+        return;
+    }
+    if (d->bus == ETUDE_BUS_AHCI) {
+        snprintf(device, sizeof(device), "ide-hd,drive=%s,bus=etude-ahci.%u", id, (*ahci)++);
+    } else {
+        snprintf(device, sizeof(device), "%s,drive=%s,bus=ide.%u,unit=%u",
+                 d->cdrom ? "ide-cd" : "ide-hd", id, *ide / 2, *ide % 2);
+        (*ide)++;
+    }
+    add(l, 0, "%s%s", device, boot);
+}
+
+/** Add the ich9-ahci of the disks of profile `p`, when one is on AHCI. */
+static void add_ahci(struct line *l, const struct etude_qemu_profile *p)
+{
+    size_t i;
+
+    for (i = 0; i < disk_count(p->disks); i++) {
+        if (p->disks[i].bus == ETUDE_BUS_AHCI) {
+            add(l, 0, "-device");
+            add(l, 0, "ich9-ahci,id=etude-ahci");
+            return;
+        }
+    }
 }
 
 /** Add one argument of the strings of `list` separated by spaces. */
@@ -887,6 +949,23 @@ static int captures_check(const struct etude_qemu_profile *p)
     return 0;
 }
 
+/**
+ * Check the firmware of profile `p` against what it boots: the direct
+ * firmware's kernel, with no disk that boots first, or a disk that SeaBIOS or
+ * OVMF boots, with no RAM image or boot options.
+ *
+ * @return 0, or EINVAL.
+ */
+static int firmware_check(const struct etude_qemu_profile *p)
+{
+    if (p->firmware == ETUDE_FIRMWARE_DIRECT)
+        return p->kernel != NULL && *p->kernel != '\0' && !boot_disk(p->disks) ? 0 : EINVAL;
+    if (p->firmware != ETUDE_FIRMWARE_SEABIOS && p->firmware != ETUDE_FIRMWARE_OVMF)
+        return EINVAL;
+    return p->initrd == NULL && count(p->boot_options) == 0 && disk_count(p->disks) > 0 ? 0
+                                                                                        : EINVAL;
+}
+
 /** Check what QEMU's command line cannot express or would ignore. */
 static int profile_check(const struct etude_qemu_profile *p)
 {
@@ -911,12 +990,7 @@ static int profile_check(const struct etude_qemu_profile *p)
             return EINVAL;
     if (forward_check(p) != 0 || captures_check(p) != 0)
         return EINVAL;
-    if (p->firmware == ETUDE_FIRMWARE_DIRECT)
-        return p->kernel != NULL && *p->kernel != '\0' ? 0 : EINVAL;
-    if (p->firmware != ETUDE_FIRMWARE_SEABIOS && p->firmware != ETUDE_FIRMWARE_OVMF)
-        return EINVAL;
-    return p->initrd == NULL && count(p->boot_options) == 0 && disk_count(p->disks) > 0 ? 0
-                                                                                        : EINVAL;
+    return firmware_check(p);
 }
 
 /** Check the selected audio card and its launcher-made WAV path. */
@@ -945,7 +1019,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     const char *ovmf = x86_64 ? s->ovmf_x86_64 : s->ovmf_i686;
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
     char number[32], cpu[256];
-    unsigned nics = 0, ide = 0;
+    unsigned nics = 0, ide = 0, ahci = 0;
     size_t i;
     int e;
 
@@ -1008,8 +1082,9 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
         add(&l, 0, "-drive");
         add(&l, 1, "if=pflash,format=raw,readonly=on,file=%s", ovmf);
     }
+    add_ahci(&l, p);
     for (i = 0; i < disk_count(p->disks); i++)
-        add_disk(&l, &p->disks[i], i, &ide);
+        add_disk(&l, &p->disks[i], i, &ide, &ahci);
     add_audio(&l, p->audio, audio);
     for (i = 0; i < device_count(p->devices); i++)
         add_device(&l, p, &p->devices[i], &nics);

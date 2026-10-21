@@ -104,6 +104,7 @@ int etude_qemu_guest_address(const struct etude_qemu_device *d, const char *addr
 enum etude_disk_bus {
     ETUDE_BUS_IDE,   /* one of the four places of the PC's IDE controllers */
     ETUDE_BUS_NVME,  /* an NVMe controller of its own */
+    ETUDE_BUS_AHCI,  /* one of the six ports of the profile's one ich9-ahci */
     ETUDE_BUS_DEVICE /* the device whose `drive` is the disk's `id` */
 };
 
@@ -117,9 +118,12 @@ struct etude_qemu_disk {
                            file's blocks */
     const char *id;     /* the identity a device's `drive` names, on
                            ETUDE_BUS_DEVICE alone */
+    int boot;           /* the firmware boots this disk first; one disk at most,
+                           and none on ETUDE_BUS_DEVICE */
 };
 
-/* The most disks of a profile, of which four at most are on IDE. */
+/* The most disks of a profile, of which four at most are on IDE and six on
+ * AHCI. */
 #define ETUDE_QEMU_DISKS 8
 
 /* The longest serial number, the size of NVMe's and ATA's serial fields. */
@@ -196,15 +200,17 @@ struct etude_qemu_site {
 };
 
 /* The longest command line the launcher makes, in arguments. */
-#define ETUDE_QEMU_ARGS_MAX 192
+#define ETUDE_QEMU_ARGS_MAX 224
 
 /**
  * Check the disks of a profile, `disks` as the profile gives them, against
  * what the launcher attaches: at most ETUDE_QEMU_DISKS, of which at most four
- * are on IDE, CDs among them; a path for each; an NVMe disk with a serial; a
- * serial that is a word of at most ETUDE_QEMU_SERIAL_MAX printable characters
- * without a comma, on NVMe alone; a CD on IDE, without `discard`; and an
- * identity of QEMU's, given once, for each disk on ETUDE_BUS_DEVICE alone.
+ * are on IDE, CDs among them, and six on AHCI; a path for each; an NVMe disk
+ * with a serial; a serial that is a word of at most ETUDE_QEMU_SERIAL_MAX
+ * printable characters without a comma, on NVMe alone; a CD on IDE, without
+ * `discard`; an identity of QEMU's, given once, for each disk on
+ * ETUDE_BUS_DEVICE alone; and at most one disk that boots first, on another
+ * bus.
  *
  * @return 0, or EINVAL.
  */

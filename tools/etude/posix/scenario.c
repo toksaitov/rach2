@@ -114,7 +114,7 @@ struct blank {
 struct disk_decl {
     const char *name;
     enum etude_disk_bus bus;
-    int cdrom, discard;
+    int cdrom, discard, boot;
     const char *serial; /* NULL for none */
     uint64_t size;      /* an empty disk's size in bytes, or 0 for an artifact's */
     const char *id;     /* the identity a device's `drive` names, on a device */
@@ -366,8 +366,8 @@ static int jhas(const struct eh_json *v, const char *s)
 /**
  * Read `v`, a disk of a profile's `disks`, into `d`: an artifact's name, a
  * private copy on IDE, or an object that gives the name, the bus, the
- * medium, the serial, `discard`, an empty disk's size, and the identity of a
- * disk that a device attaches.
+ * medium, the serial, `discard`, `boot`, an empty disk's size, and the
+ * identity of a disk that a device attaches.
  *
  * @return 0, or -1 for a disk of another form, or of a bus or medium that
  *         the library does not attach.
@@ -387,6 +387,8 @@ static int disk_decl(const struct eh_json *v, struct disk_decl *d)
     media = jtext(v, "media");
     if (bus != NULL && strcmp(bus, "nvme") == 0)
         d->bus = ETUDE_BUS_NVME;
+    else if (bus != NULL && strcmp(bus, "ahci") == 0)
+        d->bus = ETUDE_BUS_AHCI;
     else if (bus != NULL && strcmp(bus, "device") == 0)
         d->bus = ETUDE_BUS_DEVICE;
     else if (bus != NULL && strcmp(bus, "ide") != 0)
@@ -397,6 +399,7 @@ static int disk_decl(const struct eh_json *v, struct disk_decl *d)
         return -1;
     d->serial = jtext(v, "serial");
     d->discard = jbool(v, "discard") == 1;
+    d->boot = jbool(v, "boot") == 1;
     d->size = jnum(v, "size_bytes");
     d->id = jtext(v, "id");
     return 0;
@@ -1587,6 +1590,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         m->disks[i].serial = d.serial;
         m->disks[i].discard = d.discard;
         m->disks[i].id = d.id;
+        m->disks[i].boot = d.boot;
     }
     m->disks[i].path = NULL;
     p->architecture = c->arch;

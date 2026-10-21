@@ -160,16 +160,17 @@
           "required": ["name"],
           "properties": {
             "name": {"$ref": "#/$defs/name"},
-            "bus": {"enum": ["ide", "nvme", "device"]},
+            "bus": {"enum": ["ide", "nvme", "ahci", "device"]},
             "id": {"$ref": "#/$defs/qemu_id"},
             "media": {"enum": ["disk", "cdrom"]},
             "serial": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"},
             "discard": {"type": "boolean"},
+            "boot": {"type": "boolean"},
             "size_bytes": {"$ref": "#/$defs/positive"}
           },
           "allOf": [
             {"if": {"required": ["bus"], "properties": {"bus": {"const": "device"}}},
-             "then": {"required": ["id"], "properties": {"media": {"const": "disk"}}}, "else": {"not": {"required": ["id"]}}},
+             "then": {"required": ["id"], "properties": {"media": {"const": "disk"}, "boot": {"const": false}}}, "else": {"not": {"required": ["id"]}}},
             {"if": {"required": ["bus"], "properties": {"bus": {"const": "nvme"}}},
              "then": {"required": ["serial"]}, "else": {"not": {"required": ["serial"]}}},
             {"if": {"required": ["media"], "properties": {"media": {"const": "cdrom"}}},

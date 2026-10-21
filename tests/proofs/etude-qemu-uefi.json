@@ -49,8 +49,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "        add(l, 0, \"nvme,drive=%s,serial=%s\", id, d->serial);\n",
-          "replace": "        add(l, 0, \"nvme,drive=%s\", id);\n"
+          "find": "        add(l, 0, \"nvme,drive=%s,serial=%s%s\", id, d->serial, boot);\n",
+          "replace": "        add(l, 0, \"nvme,drive=%s%s\", id, boot);\n"
         }
       ],
       "fails": {

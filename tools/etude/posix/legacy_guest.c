@@ -170,6 +170,7 @@ static int make_disk(struct legacy_guest *g, size_t i, const struct json *d)
     const char *media = d->type == JSON_OBJECT ? json_text(d, "media") : NULL;
     const struct json *size = d->type == JSON_OBJECT ? json_member(d, "size_bytes") : NULL;
     const struct json *discard = d->type == JSON_OBJECT ? json_member(d, "discard") : NULL;
+    const struct json *boot = d->type == JSON_OBJECT ? json_member(d, "boot") : NULL;
     struct etude_qemu_disk *q = &g->disks[i];
     char hex[65], object[PATH_LEN];
     uint64_t n;
@@ -177,12 +178,14 @@ static int make_disk(struct legacy_guest *g, size_t i, const struct json *d)
 
     q->bus = bus == NULL                  ? ETUDE_BUS_IDE
              : strcmp(bus, "nvme") == 0   ? ETUDE_BUS_NVME
+             : strcmp(bus, "ahci") == 0   ? ETUDE_BUS_AHCI
              : strcmp(bus, "device") == 0 ? ETUDE_BUS_DEVICE
                                           : ETUDE_BUS_IDE;
     q->id = d->type == JSON_OBJECT ? json_text(d, "id") : NULL;
     q->cdrom = media != NULL && strcmp(media, "cdrom") == 0;
     q->serial = d->type == JSON_OBJECT ? json_text(d, "serial") : NULL;
     q->discard = discard != NULL && discard->integer;
+    q->boot = boot != NULL && boot->integer;
     q->path = g->disk_paths[i];
     snprintf(g->disk_paths[i], PATH_LEN, "%s/disks/%s", g->spec.work, name);
     if (size != NULL) {

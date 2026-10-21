@@ -40,26 +40,26 @@
  * Under the stand-in the machine's etude-guest runs a guest program whose
  * report becomes the scenario's, and an etude-guest killed in the middle of a
  * run is a lost end. A media row boots a machine twice with the same empty
- * sparse disk of 4 TiB on NVMe and a CD whose medium is the artifact's object,
- * and the stand-in says the drives it was given; the disk is removed after the
- * pass. A boot whose profile records its second card's frames gives the
- * scenario the file the stand-in wrote for that card, removed after a pass and
- * kept after a failure. A machine's first card has a restricted network that
- * forwards two of the case's ports to the guest, one by TCP and one by UDP, and
- * the guest's connections to 10.0.2.100:7777 to a third through this program as
- * the relay, and its second card has a user network without forwards; a
- * machine that forwards a port the case does not hold is refused before QEMU
- * starts. This program is also the peer that a scenario runs as a service; two
- * machines at once reach it, a service ended unseen is a fault, and failing
- * rows at each stage end their own processes while a held row keeps its own.
- * With the real QEMU, a disk root written at the debug shell and powered off is
- * read back by the next boot, etude-guest runs the test image's /hello, two
- * machines run /tcptest against the peer, the frames of one machine's card
- * recorded in its capture, QEMU accepts a connection at the forwarded TCP port
- * and has bound the forwarded UDP port, /tcptest reaches the peer through the
- * guest forward and is refused it at the gateway, and the kernel finds the size
- * of the media row's empty disk. With ETUDE_TEST_FORWARD set the program runs
- * the two forward rows alone.
+ * sparse disk of 4 TiB on NVMe, a CD whose medium is the artifact's object and
+ * an empty disk on AHCI, and the stand-in says the drives it was given; the
+ * disks are removed after the pass. A boot whose profile records its second
+ * card's frames gives the scenario the file the stand-in wrote for that card,
+ * removed after a pass and kept after a failure. A machine's first card has a
+ * restricted network that forwards two of the case's ports to the guest, one by
+ * TCP and one by UDP, and the guest's connections to 10.0.2.100:7777 to a third
+ * through this program as the relay, and its second card has a user network
+ * without forwards; a machine that forwards a port the case does not hold is
+ * refused before QEMU starts. This program is also the peer that a scenario
+ * runs as a service; two machines at once reach it, a service ended unseen is a
+ * fault, and failing rows at each stage end their own processes while a held
+ * row keeps its own. With the real QEMU, a disk root on AHCI written at the
+ * debug shell and powered off is read back by the next boot, etude-guest runs
+ * the test image's /hello, two machines run /tcptest against the peer, the
+ * frames of one machine's card recorded in its capture, QEMU accepts a
+ * connection at the forwarded TCP port and has bound the forwarded UDP port,
+ * /tcptest reaches the peer through the guest forward and is refused it at the
+ * gateway, and the kernel finds the size of the media row's empty disk. With
+ * ETUDE_TEST_FORWARD set the program runs the two forward rows alone.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -125,7 +125,8 @@ static int fails;
 #define BIG_BYTES (UINT64_C(4) << 40)
 #define MEDIA_DISKS                                                                         \
     "[{\"name\": \"big\", \"bus\": \"nvme\", \"serial\": \"rach2big\", \"discard\": true, " \
-    "\"size_bytes\": 4398046511104}, {\"name\": \"disk\", \"media\": \"cdrom\"}]"
+    "\"size_bytes\": 4398046511104}, {\"name\": \"disk\", \"media\": \"cdrom\"}, "          \
+    "{\"name\": \"blank\", \"bus\": \"ahci\", \"size_bytes\": 1048576}]"
 
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
@@ -911,7 +912,8 @@ static uint64_t wait_for(struct etude_case *c, struct etude_case_machine *m, con
     return st == ETUDE_OK ? at : from;
 }
 
-/** Run the reboot row: a write, a host read of the copy, and a readback. */
+/** Run the reboot row: a write, a host read of the copy, and a readback. The
+ * real row's disk is on AHCI, the kernel's disk0. */
 static int scenario_reboot(struct etude_case *c, int real)
 {
     const char *nonce = getenv("ETUDE_TEST_NONCE");
@@ -925,6 +927,10 @@ static int scenario_reboot(struct etude_case *c, int real)
     if (etude_step(c, "write") != ETUDE_OK || etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
         return 1;
     copy = etude_private_copy(c, "disk");
+    if (real)
+        etude_assert(c, "on-ahci",
+                     etude_console_wait(m, "disk: disk0: ahci 0: ", 0, &at) == ETUDE_OK,
+                     "the disk is not disk0, on port 0 of the AHCI controller");
     at = wait_for(c, m, "stopped", "Type 'help'", 0);
     at = wait_for(c, m, "stopped", shell, at);
     if (!real) {
@@ -1472,17 +1478,17 @@ static int scenario_real_peer(struct etude_case *c)
 }
 
 /**
- * Run the media rows: a machine whose disks are an empty sparse disk of
- * 4 TiB on NVMe and a CD whose medium is the artifact `disk`. Under the
- * stand-in the machine boots twice, each time with the same empty disk, and
- * says the arguments it was given; under the real QEMU the kernel finds the
- * disk's size.
+ * Run the media rows: a machine whose disks are an empty sparse disk of 4 TiB
+ * on NVMe, a CD whose medium is the artifact `disk` and an empty disk of 1 MiB
+ * on AHCI. Under the stand-in the machine boots twice, each time with the same
+ * empty disk, and says the arguments it was given; under the real QEMU the
+ * kernel finds the disk's size.
  */
 static int scenario_media(struct etude_case *c, int real)
 {
     static const char *const ids[2][3] = {{"sparse", "drives", "stopped"},
                                           {"same-disk", "drives-again", "second-stop"}};
-    const char *big = NULL, *again, *cd, *shell = real ? "\n> " : "> ";
+    const char *big = NULL, *again, *cd, *blank, *shell = real ? "\n> " : "> ";
     struct etude_case_machine *m;
     struct etude_termination end;
     char text[PATH_MAX + 256];
@@ -1498,6 +1504,7 @@ static int scenario_media(struct etude_case *c, int real)
         if (boot == 0)
             big = again;
         cd = etude_artifact(c, "disk");
+        blank = etude_private_copy(c, "blank");
         etude_assert(c, ids[boot][0],
                      again != NULL && again == big && stat(big, &st) == 0 &&
                          (uint64_t)st.st_size == BIG_BYTES &&
@@ -1506,12 +1513,15 @@ static int scenario_media(struct etude_case *c, int real)
         if (real)
             fix_format(text, sizeof(text), ": namespace 1: 4194304 MiB");
         else
-            fix_format(text, sizeof(text),
-                       "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
-                       "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
-                       "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
-                       "media=cdrom,readonly=on\r\n",
-                       big != NULL ? big : "", cd != NULL ? cd : "");
+            fix_format(
+                text, sizeof(text),
+                "fake: device ich9-ahci,id=etude-ahci\r\n"
+                "fake: drive file=%s,format=raw,if=none,id=etude-disk0,discard=unmap,"
+                "detect-zeroes=unmap\r\nfake: device nvme,drive=etude-disk0,"
+                "serial=rach2big\r\nfake: drive file=%s,format=raw,if=ide,index=0,"
+                "media=cdrom,readonly=on\r\nfake: drive file=%s,format=raw,if=none,"
+                "id=etude-disk2\r\nfake: device ide-hd,drive=etude-disk2,bus=etude-ahci.0\r\n",
+                big != NULL ? big : "", cd != NULL ? cd : "", blank != NULL ? blank : "");
         etude_assert(c, ids[boot][1], etude_console_wait(m, text, 0, &at) == ETUDE_OK, text);
         at = wait_for(c, m, ids[boot][2], "Type 'help'", at);
         wait_for(c, m, ids[boot][2], shell, at);
@@ -1838,12 +1848,15 @@ static int media(const struct row *r)
     return strcmp(r->name, "media") == 0 || strcmp(r->name, "real-media") == 0;
 }
 
-/** Give the `disks` of row `r`'s machine, as JSON. */
+/** Give the `disks` of row `r`'s machine, as JSON; a real row's disk is on
+ * AHCI. */
 static const char *row_disks(const struct row *r)
 {
     if (media(r))
         return MEDIA_DISKS;
-    return r->disk != NULL ? "[\"disk\"]" : "[]";
+    if (r->disk == NULL)
+        return "[]";
+    return r->mode == NULL ? "[{\"name\": \"disk\", \"bus\": \"ahci\"}]" : "[\"disk\"]";
 }
 
 /* The machines of the forward rows: fixture, whose first card has a
@@ -2939,8 +2952,8 @@ static const struct row damaged_row[] = {
 /* The real rows. */
 static const struct row real_rows[] = {
     {"real-reboot", NULL, "write:fixture check readback:fixture",
-     "stopped shutdown host-ran host-sees same-copy readback second-stop", "disk", 0, REAL_US, 0, 1,
-     0, 0, NULL, 0, NULL, 0},
+     "on-ahci stopped shutdown host-ran host-sees same-copy readback second-stop", "disk", 0,
+     REAL_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
     {"real-guest", NULL, "run:fixture", "guest-pass guest-exit", NULL, 1, REAL_US, 0, 1, 0, 0, NULL,
      0, NULL, 0},
     {"real-peer", NULL, "serve alpha:alpha beta:beta",

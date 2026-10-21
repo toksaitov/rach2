@@ -143,6 +143,23 @@
           "a property the launcher sets"
         ]
       }
+    },
+    {
+      "name": "device-boots",
+      "summary": "a disk on a device that boots first accepted",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "d->serial != NULL || d->boot)",
+          "replace": "d->serial != NULL)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a disk on a device that boots first"
+        ]
+      }
     }
   ]
 }

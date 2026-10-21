@@ -212,8 +212,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "        add(l, 0, \"nvme,drive=%s,serial=%s\", id, d->serial);\n",
-          "replace": "        add(l, 0, \"nvme,drive=%s\", id);\n"
+          "find": "        add(l, 0, \"nvme,drive=%s,serial=%s%s\", id, d->serial, boot);\n",
+          "replace": "        add(l, 0, \"nvme,drive=%s%s\", id, boot);\n"
         }
       ],
       "fails": {
@@ -230,8 +230,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "        add(l, 1, format, d->path);\n        add(l, 0, \"-device\");\n",
-          "replace": "        add(l, 0, format, d->path);\n        add(l, 0, \"-device\");\n"
+          "find": "    add(l, 1, format, d->path);\n    add(l, 0, \"-device\");\n",
+          "replace": "    add(l, 0, format, d->path);\n    add(l, 0, \"-device\");\n"
         }
       ],
       "fails": {
@@ -365,6 +365,168 @@
         "status": 1,
         "lines": [
           ": no x86-64 ovmf for i686: "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-port",
+      "summary": "every disk on AHCI is attached at its first port",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "\"ide-hd,drive=%s,bus=etude-ahci.%u\", id, (*ahci)++",
+          "replace": "\"ide-hd,drive=%s,bus=etude-ahci.%u\", id, *ahci"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-controller",
+      "summary": "the disks on AHCI are attached with no ich9-ahci of the name their ports have",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "add(l, 0, \"ich9-ahci,id=etude-ahci\");",
+          "replace": "add(l, 0, \"ich9-ahci\");"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "bootindex",
+      "summary": "a disk that boots first is attached without its boot index",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "const char *boot = d->boot ? \",bootindex=0\" : \"\";",
+          "replace": "const char *boot = \"\";"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ide-boot-place",
+      "summary": "a disk on IDE that boots first is attached at another place than its position gives",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "*ide / 2, *ide % 2",
+          "replace": "*ide % 2, *ide / 2"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the command line is"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-ports",
+      "summary": "a profile of seven disks on AHCI is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (++ahci > AHCI_PORTS || ",
+          "replace": "if ("
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": seven disks on AHCI: "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-cd",
+      "summary": "a CD on AHCI is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "AHCI_PORTS || d->serial != NULL || d->cdrom)",
+          "replace": "AHCI_PORTS || d->serial != NULL)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": a CD on AHCI: "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "ahci-serial",
+      "summary": "a serial on AHCI is taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "AHCI_PORTS || d->serial != NULL ||",
+          "replace": "AHCI_PORTS ||"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": a serial on AHCI: "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "boot-count",
+      "summary": "two disks that boot first are taken",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": "if (d->boot && ++boot > 1)",
+          "replace": "if (d->boot && ++boot > 2)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": two disks that boot first: "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "boot-kernel",
+      "summary": "a disk that boots first is taken beside -kernel",
+      "edits": [
+        {
+          "file": "tools/etude/qemu_profile.c",
+          "find": " && !boot_disk(p->disks) ? 0 : EINVAL",
+          "replace": " ? 0 : EINVAL"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": a disk that boots first beside -kernel: "
         ],
         "only": true
       }

@@ -510,11 +510,23 @@ static const struct json *profile_at(const struct rule *r, size_t i)
                                                     : NULL;
 }
 
+/** Returns the bus of `v`, a disk of a profile's `disks`; IDE by default. */
+static enum etude_disk_bus disk_bus(const struct json *v)
+{
+    const char *bus = json_text(v, "bus");
+
+    return same(bus, "nvme")     ? ETUDE_BUS_NVME
+           : same(bus, "ahci")   ? ETUDE_BUS_AHCI
+           : same(bus, "device") ? ETUDE_BUS_DEVICE
+                                 : ETUDE_BUS_IDE;
+}
+
 /**
- * Reports a disk that profile `qemu` gives twice, and disks that the launcher
- * does not attach together. The identities of disks that devices attach are
- * the schema's and rule_attached's to check, and each such disk is counted
- * here under an identity of its place.
+ * Reports a disk that profile `qemu` gives twice, disks that the launcher
+ * does not attach together, and a disk that boots first beside the direct
+ * firmware's kernel, which QEMU boots before any disk. The identities of
+ * disks that devices attach are the schema's and rule_attached's to check,
+ * and each such disk is counted here under an identity of its place.
  */
 static void profile_disks(const struct rule *r, const struct json *qemu)
 {
@@ -526,7 +538,7 @@ static void profile_disks(const struct rule *r, const struct json *qemu)
 
     memset(d, 0, sizeof d);
     for (i = 0; i < n; i++) {
-        const struct json *v = disks->item[i];
+        const struct json *v = disks->item[i], *boot = json_member(v, "boot");
 
         for (j = 0; j < i; j++) {
             if (same(disk_name(v)->string, disk_name(disks->item[j])->string)) {
@@ -537,17 +549,21 @@ static void profile_disks(const struct rule *r, const struct json *qemu)
         }
         if (i <= ETUDE_QEMU_DISKS) {
             d[i].path = disk_name(v)->string;
-            d[i].bus = same(json_text(v, "bus"), "nvme")     ? ETUDE_BUS_NVME
-                       : same(json_text(v, "bus"), "device") ? ETUDE_BUS_DEVICE
-                                                             : ETUDE_BUS_IDE;
+            d[i].bus = disk_bus(v);
             d[i].cdrom = same(json_text(v, "media"), "cdrom");
             d[i].serial = json_text(v, "serial");
             d[i].id = d[i].bus == ETUDE_BUS_DEVICE ? places[i] : NULL;
+            d[i].boot = boot != NULL && boot->integer != 0;
+        }
+        if (boot != NULL && boot->integer != 0 && same(json_text(qemu, "firmware"), "direct")) {
+            finding(r->file, v->line, "%s: the disk %s boots first beside the direct firmware",
+                    json_text(r->c, "case_id"), disk_name(v)->string);
         }
     }
     if (etude_qemu_disks_check(d) != 0) {
         finding(r->file, line_at(qemu, "disks"),
-                "%s: the launcher attaches at most %d disks of a profile, four of them on IDE",
+                "%s: the launcher attaches at most %d disks of a profile, four of them on IDE "
+                "and six on AHCI, and one at most that boots first",
                 json_text(r->c, "case_id"), ETUDE_QEMU_DISKS);
     }
 }

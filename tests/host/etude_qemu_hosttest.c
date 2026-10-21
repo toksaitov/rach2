@@ -13,26 +13,28 @@
  * host-alone: a stand-in QEMU must quit within a grace of 300 ms
  *
  * The command lines of profiles, and the profiles the launcher refuses, are
- * checked as text, disks on IDE and NVMe, a CD and the firmware's flash among
- * them; `--argv` runs these rows alone. A capture of a card's frames is a
- * filter-dump after the card, and a capture of a card the profile lacks is
- * refused; `--capture` runs these rows alone. Thirteen stand-in machines then
- * run at once, each with an end of its own, and each must keep its own console
- * and end: a QEMU that fails before it connects is an unexpected exit, and one
- * that reports that it could not start the accelerator is a failed accelerator;
- * so is one whose QMP reports another accelerator in use, through
- * query-accelerators or, for a QEMU without that command, query-kvm. QMP's
- * SHUTDOWN events of the guest give a shutdown, a reset and a panic; one of the
- * host, or an exit without an event, is an unexpected exit; a cancellation of a
- * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, and
- * of one that never answers QMP is a cancellation. Each leaves no process and
- * no socket behind. With the real QEMU, the kernel of the architecture ARCH
- * names boots under TCG to the debug shell, whose `poweroff` must give a
- * shutdown; a cancellation at the prompt must give a cancellation, and an
- * accelerator this host's QEMU does not have must give a failed accelerator.
- * OVMF's code image, as tools/setup/ovmf_path.sh finds it, boots from the
- * launcher's read-only flash with a CD and an empty disk of 4 TiB on NVMe, and
- * its boot manager must name both; `--uefi` runs this row alone.
+ * checked as text, disks on IDE, AHCI and NVMe, a CD, disks that boot first and
+ * the firmware's flash among them; `--argv` runs these rows alone. A capture of
+ * a card's frames is a filter-dump after the card, and a capture of a card the
+ * profile lacks is refused; `--capture` runs these rows alone. Thirteen
+ * stand-in machines then run at once, each with an end of its own, and each
+ * must keep its own console and end: a QEMU that fails before it connects is an
+ * unexpected exit, and one that reports that it could not start the accelerator
+ * is a failed accelerator; so is one whose QMP reports another accelerator in
+ * use, through query-accelerators or, for a QEMU without that command,
+ * query-kvm. QMP's SHUTDOWN events of the guest give a shutdown, a reset and a
+ * panic; one of the host, or an exit without an event, is an unexpected exit; a
+ * cancellation of a machine that obeys QMP's quit, of one that ignores both
+ * quit and SIGTERM, and of one that never answers QMP is a cancellation. Each
+ * leaves no process and no socket behind. With the real QEMU, the kernel of the
+ * architecture ARCH names boots under TCG to the debug shell, the first boot
+ * with an empty disk on IDE and two on AHCI that the kernel must find where the
+ * profile put them, and its `poweroff` must give a shutdown; a cancellation at
+ * the prompt must give a cancellation, and an accelerator this host's QEMU does
+ * not have must give a failed accelerator. OVMF's code image, as
+ * tools/setup/ovmf_path.sh finds it, boots from the launcher's read-only flash
+ * with a CD and an empty disk of 4 TiB on NVMe, and its boot manager must name
+ * both; `--uefi` runs this row alone.
  *
  * The memory rows check the reservations of an ordinary profile and of the
  * boundary profile, refuse a changed boundary profile and a site that has not
@@ -823,9 +825,39 @@ static void check_real_audio(const struct etude_machine_result *res)
 }
 
 /**
+ * Give row `r` empty disks of sizes of their own: one on IDE and two on AHCI,
+ * each of whose places the kernel prints with its size.
+ */
+static void attach_disks(struct row *r)
+{
+    static struct etude_qemu_disk disks[4];
+    static const char *const names[] = {"ide.img", "ahci0.img", "ahci1.img"};
+    int fd, i;
+
+    for (i = 0; i < 3; i++) {
+        disks[i].path = fix_path(names[i]);
+        disks[i].bus = i == 0 ? ETUDE_BUS_IDE : ETUDE_BUS_AHCI;
+        fd = open(disks[i].path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        CHECK(fd >= 0 && ftruncate(fd, (off_t)1 << (20 + i)) == 0, "an empty disk");
+        if (fd >= 0)
+            close(fd);
+    }
+    r->profile.disks = disks;
+}
+
+/** Check that the kernel found each disk of attach_disks where it was put. */
+static void check_real_disks(const struct etude_machine_result *res, const char *row)
+{
+    CHECK(find(&res->console, "ata: primary master: 2048 sectors", 0) >= 0, row);
+    CHECK(find(&res->console, "ahci: port 0: 4096 sectors", 0) >= 0, row);
+    CHECK(find(&res->console, "ahci: port 1: 8192 sectors", 0) >= 0, row);
+}
+
+/**
  * Boot the kernel of the architecture ARCH names, i686 when it is unset, in
  * the real QEMU under TCG, twice, and ask QEMU for an accelerator it does not
- * have. A host without QEMU or a tree without the kernel fails the rows.
+ * have. The first boot has the disks of attach_disks. A host without QEMU or a
+ * tree without the kernel fails the rows.
  */
 static void test_real(int boundary)
 {
@@ -880,6 +912,8 @@ static void test_real(int boundary)
             return;
         }
     }
+    if (!boundary)
+        attach_disks(&rows[0]);
     q = etude_qemu_new();
     CHECK(q != NULL, "launcher");
     if (q == NULL)
@@ -896,6 +930,8 @@ static void test_real(int boundary)
         res = etude_machine_result(rows[i].m);
         if (rows[i].act == 'a')
             check_real_audio(res);
+        if (rows[i].profile.disks != NULL)
+            check_real_disks(res, rows[i].name);
         if (rows[i].act == 'b')
             boundary_result(&rows[i]);
         if (rows[i].want == ETUDE_END_SHUTDOWN) {
@@ -1143,6 +1179,106 @@ static void disks_row(const struct etude_qemu_profile *p, const struct etude_qem
     CHECK(make(&b, site, argv, buf, sizeof(buf)) == (ok ? 0 : EINVAL), row);
 }
 
+/**
+ * Check the disks on AHCI and the disks that boot first that the launcher
+ * attaches, and those it refuses. `p` has the direct firmware.
+ */
+static void test_ahci_disks(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
+{
+    struct etude_qemu_disk d[ETUDE_QEMU_DISKS + 2];
+    struct etude_qemu_profile b = *p;
+    size_t i;
+
+    b.firmware = ETUDE_FIRMWARE_SEABIOS;
+    b.initrd = NULL;
+    b.boot_options = NULL;
+    fill_disks(d, 8, 0);
+    for (i = 0; i < 6; i++)
+        d[i].bus = ETUDE_BUS_AHCI;
+    d[5].boot = 1;
+    disks_row(&b, site, d, 1, "six disks on AHCI and two on IDE");
+    d[6].bus = ETUDE_BUS_AHCI;
+    disks_row(&b, site, d, 0, "seven disks on AHCI");
+    fill_disks(d, 1, 0);
+    d[0].bus = ETUDE_BUS_AHCI;
+    d[0].cdrom = 1;
+    disks_row(&b, site, d, 0, "a CD on AHCI");
+    d[0].cdrom = 0;
+    d[0].serial = "s";
+    disks_row(&b, site, d, 0, "a serial on AHCI");
+    fill_disks(d, 1, 1);
+    d[0].boot = 1;
+    disks_row(&b, site, d, 1, "a disk on IDE that boots first");
+    disks_row(p, site, d, 0, "a disk that boots first beside -kernel");
+    d[1].boot = 1;
+    disks_row(&b, site, d, 0, "two disks that boot first");
+}
+
+/**
+ * Require the command line of profile `p` with `disks` in place of its own to
+ * have `want`, the arguments of the disks joined by spaces.
+ */
+static void disk_line(const struct etude_qemu_profile *p, const struct etude_qemu_site *site,
+                      const struct etude_qemu_disk *disks, const char *want)
+{
+    struct etude_qemu_profile b = *p;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096], line[4096];
+    size_t used = 0;
+    int i;
+
+    b.disks = disks;
+    line[0] = '\0';
+    if (make(&b, site, argv, buf, sizeof(buf)) == 0)
+        for (i = 0; argv[i] != NULL; i++)
+            used +=
+                (size_t)snprintf(line + used, sizeof(line) - used, "%s%s", i ? " " : "", argv[i]);
+    if (strstr(line, want) == NULL) {
+        printf("etude-qemu-test: fail: the command line is\n  %s\nwithout\n  %s\n", line, want);
+        fails++;
+    }
+}
+
+/**
+ * Check the command lines of disks on IDE and AHCI in one profile, the
+ * second AHCI disk booted first; of a CD on IDE booted first; and of a disk
+ * on NVMe booted first. `p` has the direct firmware.
+ */
+static void test_disk_lines(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
+{
+    static const struct etude_qemu_disk mixed[] = {{"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0},
+                                                   {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
+                                                   {"/d/a1", ETUDE_BUS_AHCI, 0, NULL, 1, NULL, 1},
+                                                   {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
+                                                   {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
+    static const struct etude_qemu_disk cd[] = {{"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
+                                                {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 1},
+                                                {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
+                                                {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
+    static const struct etude_qemu_disk nvme[] = {{"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1},
+                                                  {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
+    struct etude_qemu_profile b = *p;
+
+    b.firmware = ETUDE_FIRMWARE_SEABIOS;
+    b.initrd = NULL;
+    b.boot_options = NULL;
+    disk_line(&b, site, mixed,
+              "-m 268435456B -device ich9-ahci,id=etude-ahci "
+              "-drive file=/d/a0,format=raw,if=none,id=etude-disk0 "
+              "-device ide-hd,drive=etude-disk0,bus=etude-ahci.0 "
+              "-drive file=/d/i0,format=raw,if=ide,index=0,media=disk "
+              "-drive file=/d/a1,format=raw,if=none,id=etude-disk2,discard=unmap,"
+              "detect-zeroes=unmap -device ide-hd,drive=etude-disk2,bus=etude-ahci.1,bootindex=0 "
+              "-drive file=/d/i1,format=raw,if=ide,index=1,media=disk -netdev");
+    disk_line(&b, site, cd,
+              "-m 268435456B -drive file=/d/i0,format=raw,if=ide,index=0,media=disk "
+              "-drive file=/d/r.iso,format=raw,if=none,id=etude-disk1,media=cdrom,readonly=on "
+              "-device ide-cd,drive=etude-disk1,bus=ide.0,unit=1,bootindex=0 "
+              "-drive file=/d/i2,format=raw,if=ide,index=2,media=disk -netdev");
+    disk_line(&b, site, nvme,
+              "-m 268435456B -drive file=/d/n,format=raw,if=none,id=etude-disk0 "
+              "-device nvme,drive=etude-disk0,serial=s,bootindex=0 -netdev");
+}
+
 /** Check the disks the launcher attaches together, and those it refuses. */
 static void test_disks(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
 {
@@ -1186,6 +1322,7 @@ static void test_disks(const struct etude_qemu_profile *p, const struct etude_qe
     d[0].bus = (enum etude_disk_bus)7;
     d[0].serial = "s";
     disks_row(p, site, d, 0, "an unknown bus");
+    test_ahci_disks(p, site);
 }
 
 /** Check the accelerators' names, and the reading of QEMU's refusal of one. */
@@ -1218,11 +1355,11 @@ static void test_accel_names(void)
 static void test_argv(void)
 {
     static const struct etude_qemu_disk disks[] = {
-        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL},
-        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL},
-        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL},
-        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL},
-        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL}};
+        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
+        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL, 0},
+        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL, 0},
+        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
     static const char *const want =
         "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S "
@@ -1314,6 +1451,7 @@ static void test_argv(void)
     REFUSED(firmware, (enum etude_firmware)7, "an unknown firmware");
     test_accel_names();
     test_disks(&p, &site);
+    test_disk_lines(&p, &site);
 }
 
 /** Find an argument after `option` whose whole value is `value`. */
@@ -1793,6 +1931,16 @@ static const char *joined(char *const *argv, char *line, size_t size)
     return line;
 }
 
+/* Require test_usb's profile to be refused with `field` of disk `at` set to
+ * `value`. */
+#define DISK_REFUSED(at, field, value, row)                            \
+    do {                                                               \
+        kept = disks[at];                                              \
+        disks[at].field = value;                                       \
+        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
+        disks[at] = kept;                                              \
+    } while (0)
+
 /**
  * Check the command line of a machine of USB devices, a hub and two disks on
  * them, without the 8042, and refuse each device whose bus, port, drive,
@@ -1862,13 +2010,9 @@ static void test_usb(void)
     b.initrd = NULL;
     b.boot_options = NULL;
     CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0, "seabios from disks on devices alone");
-#define DISK_REFUSED(at, field, value, row)                            \
-    do {                                                               \
-        kept = disks[at];                                              \
-        disks[at].field = value;                                       \
-        CHECK(make(&p, &site, argv, buf, sizeof(buf)) == EINVAL, row); \
-        disks[at] = kept;                                              \
-    } while (0)
+    disks[1].boot = 1;
+    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == EINVAL, "a disk on a device that boots first");
+    disks[1].boot = 0;
     DISK_REFUSED(1, id, "stick", "a disk's identity given twice");
     DISK_REFUSED(1, id, "lun.1", "a disk's identity with a dot");
     DISK_REFUSED(1, id, NULL, "a disk on a device without an identity");

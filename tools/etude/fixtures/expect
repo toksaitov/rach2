@@ -286,11 +286,14 @@
 # together, each given once; an empty disk is no artifact and has one size.
 0 manifest ./disks.json
 1 manifest ./disks-bad.json | twice: the disk stick is given twice in a profile
-1 manifest ./disks-bad.json | ide-five: the launcher attaches at most 8 disks of a profile, four of them on IDE
-1 manifest ./disks-bad.json | nine: the launcher attaches at most 8 disks of a profile, four of them on IDE
+1 manifest ./disks-bad.json | ide-five: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
+1 manifest ./disks-bad.json | nine: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
 1 manifest ./disks-bad.json | empty-artifact: the empty disk stick is an artifact that prepare lists
 1 manifest ./disks-bad.json | empty-sizes: the empty disk big is given two sizes
 1 manifest ./disks-bad.json | cd-unprepared: the disk nothing-built is no artifact that prepare lists
+1 manifest ./disks-bad.json | ahci-seven: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
+1 manifest ./disks-bad.json | boot-two: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
+1 manifest ./disks-bad.json | boot-direct: the disk b1 boots first beside the direct firmware
 1 manifest ./disks-shape.json | /disks/0: has no member "serial"
 1 manifest ./disks-shape.json | /disks/1: has "serial", which this form does not allow
 1 manifest ./disks-shape.json | /disks/2/bus: is not "ide"
@@ -300,6 +303,9 @@
 1 manifest ./disks-shape.json | /disks/6/serial: "a,b" does not match
 1 manifest ./disks-shape.json | /disks/7/bus: "usb" is not one of the values the schema allows
 1 manifest ./disks-shape.json | /disks/8/format: is a member the schema does not allow
+1 manifest ./disks-shape.json | /disks/9/bus: is not "ide"
+1 manifest ./disks-shape.json | /disks/10/boot: is a string, where the schema wants a boolean
+1 manifest ./disks-shape.json | /disks/11/boot: is not false
 
 # A machine's cards forward only the ports the case reserves, each once by a
 # protocol; the cards of a guest case's boot forward none and are not

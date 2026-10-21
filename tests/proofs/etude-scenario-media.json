@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "etude-scenario-media",
-  "summary": "libetude-case's empty disk on NVMe and CD under the stand-in for QEMU, each fault in a private copy of posix/scenario.c found by the media row",
+  "summary": "libetude-case's empty disks on NVMe and AHCI and its CD under the stand-in for QEMU, each fault in a private copy of posix/scenario.c found by the media row",
   "tree": "private",
   "sources": [
     "tools/etude/posix/scenario.c"
@@ -120,6 +120,23 @@
           "file": "tools/etude/posix/scenario.c",
           "find": "        m->disks[i].serial = d.serial;\n",
           "replace": "        m->disks[i].serial = NULL;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "media: no `assert drives pass`"
+        ]
+      }
+    },
+    {
+      "name": "ahci-bus",
+      "summary": "a disk on AHCI is attached on IDE",
+      "edits": [
+        {
+          "file": "tools/etude/posix/scenario.c",
+          "find": "        d->bus = ETUDE_BUS_AHCI;\n",
+          "replace": "        d->bus = ETUDE_BUS_IDE;\n"
         }
       ],
       "fails": {

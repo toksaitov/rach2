@@ -49,7 +49,10 @@
               {"name": "serial-long", "bus": "nvme", "serial": "abcdefghijklmnopqrstu", "size_bytes": 1048576},
               {"name": "serial-comma", "bus": "nvme", "serial": "a,b", "size_bytes": 1048576},
               {"name": "bus-usb", "bus": "usb"},
-              {"name": "format", "format": "qcow2"}
+              {"name": "format", "format": "qcow2"},
+              {"name": "ahci-cd", "bus": "ahci", "media": "cdrom"},
+              {"name": "boot-word", "boot": "yes"},
+              {"name": "device-boot", "bus": "device", "id": "stick", "boot": true}
             ],
             "cpu": "max",
             "processors": 1,
