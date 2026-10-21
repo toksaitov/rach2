@@ -470,6 +470,17 @@ build/tests/cases/host/%: tests/cases/host/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
 
+# The demo credentials that etude's machine cases use as artifacts, such as
+# the key of tests/cases/machine.diskdiag.json: copies readable by their
+# owner alone, since krffs/rach2_demo_password is made by gen_demo_password.sh
+# beside krffs/shadow.
+build/tests/cases/credentials/rach2_demo_ed25519: krffs/rach2_demo_ed25519
+	@mkdir -p $(@D)
+	cp $< $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
+build/tests/cases/credentials/rach2_demo_password: krffs/shadow
+	@mkdir -p $(@D)
+	cp krffs/rach2_demo_password $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
+
 # Muse Code, which the museapi cases run (tests/cases/host.museapi.json):
 # tests/system/fakeapi/fetch_muse.sh downloads it once into
 # build/downloads/muse/ and checks it against Meta's digest, and this name is
@@ -1059,6 +1070,12 @@ $(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIF
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ 5 512
 
 rach2-recovery-image: $(RECOVERY_IMAGE)
+
+# The recovery image under one name whether it has a key or not, for etude's
+# cases that boot it, such as those of tests/cases/machine.diskrate.json,
+# whose preparation names a fixed node.
+$(IMAGES_DIR)/etude-recovery.krffs: $(RECOVERY_IMAGE)
+	cp $< $@.tmp && mv $@.tmp $@
 
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
 # RAM-disk module: a 64 MB disk with a 48 MB KRFFS partition at LBA 2048. The
