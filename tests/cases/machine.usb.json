@@ -1,0 +1,3091 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.usb",
+  "summary": "The USB stack from a port to a keystroke, each case a boot of its own that tests/cases/machine/usb_scenario.c drives, and the check of the keystroke cases' judge",
+  "cases": [
+    {
+      "case_id": "machine.usb.enum-high",
+      "behavior": "a keyboard and a mouse at high speed are enumerated, and the guest reads them out of /proc/usb",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "listed",
+          "checks": "usbprobe finds a keyboard and a mouse in /proc/usb, each line with a port, a speed, a device and a class, prints `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.enum-full",
+      "behavior": "a keyboard and a mouse at full speed, which QEMU gives only when asked, are enumerated, and the guest reads them out of /proc/usb",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0", "properties": {"usb_version": "1"}},
+              {"model": "usb-mouse", "bus": "xhci.0", "properties": {"usb_version": "1"}}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "listed",
+          "checks": "usbprobe finds a keyboard and a mouse in /proc/usb, each line with a port, a speed, a device and a class, prints `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.key-shell",
+      "behavior": "a key typed on the USB keyboard reaches the debug shell, on a machine with no 8042 and so no other keyboard",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.key-read",
+      "behavior": "keys typed on the USB keyboard are read by a program through the terminal's line discipline, on a machine with no 8042",
+      "units": ["usb", "stdintest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "does": "run stdintest and type three lines on the USB keyboard",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read",
+          "checks": "stdintest, given `ab`, `cd` and `ef` typed on the keyboard once it asks for its first line, reads `ab` and `cd` as two lines, prints `All stdin syscalls passed` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.mouse-move",
+      "behavior": "a USB mouse moved through QEMU's monitor arrives at the mouse device, on a machine with no 8042 and so no other mouse",
+      "units": ["usb", "mouseprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the mouse and the debug shell greets",
+          "machine": "usb"
+        },
+        {
+          "step_id": "move",
+          "stage": "execute",
+          "does": "run mouseprobe and move the mouse by 20,-8 once it waits",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-mouse", "bus": "xhci.0"}],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "mouse",
+          "checks": "the kernel's record of a configured mouse, `class 3 protocol 2`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "moved",
+          "checks": "mouseprobe reads the movement right and up from `mouse`, prints `MOUSEPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.hotplug",
+      "behavior": "a keyboard plugged in after the boot is enumerated, and pulled out is taken down",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {
+          "step_id": "plug",
+          "stage": "execute",
+          "does": "plug a keyboard into the controller through QMP",
+          "machine": "usb"
+        },
+        {"step_id": "pull", "stage": "execute", "does": "pull the keyboard out through QMP", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "added",
+          "checks": "after the plug the kernel writes a record of the device at `usb: device: port 5:`",
+          "source": "scenario"
+        },
+        {"assertion_id": "removed", "checks": "after the pull the kernel writes `port 5: gone`", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB devices through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.off",
+      "behavior": "with `rach2.nousb` the file /proc/usb is there and empty",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": ["rach2.nousb"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "empty",
+          "checks": "usbprobe, on a boot line with `rach2.nousb`, opens /proc/usb, finds it empty, prints `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.sixteen",
+      "behavior": "two hubs on two root ports with fourteen devices between them, sixteen in all, are every one configured, a hub's last port as its first",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe 16", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub1", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-hub", "id": "hub2", "bus": "xhci.0", "port": "2"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.3"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.4"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.5"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.6"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.7"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.8"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.1"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.2"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.3"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.4"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.5"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.6"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "settled",
+          "checks": "`usbprobe 16` reads /proc/usb until the stack has finished with every device it found, finds at least sixteen devices, prints `USBPROBE settled` and `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configured",
+          "checks": "the console up to the probe's end has exactly sixteen records `usb: device: port P: ... class`, P a port or a path of digits and dots",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.slow-scan",
+      "behavior": "the sixteen devices behind hubs whose scans take 300 ms a port, `rach2.hubslow=300`, are every one configured, so a reset a hub refuses during its scan does not give a port up",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe 16", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub1", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-hub", "id": "hub2", "bus": "xhci.0", "port": "2"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.3"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.4"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.5"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.6"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.7"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.8"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.1"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.2"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.3"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.4"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.5"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "2.6"}
+            ],
+            "boot_options": ["rach2.hubslow=300"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "settled",
+          "checks": "`usbprobe 16` reads /proc/usb until the stack has finished with every device it found, finds at least sixteen devices, prints `USBPROBE settled` and `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configured",
+          "checks": "the console up to the probe's end has exactly sixteen records `usb: device: port P: ... class`, P a port or a path of digits and dots",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 720000000, "ceiling_us": 2160000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.undrivable",
+      "behavior": "a tablet, which this kernel cannot drive, is refused at most once and the keyboard and mouse beside it are enumerated",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-tablet", "bus": "xhci.0"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "listed",
+          "checks": "usbprobe finds a keyboard and a mouse in /proc/usb, each line with a port, a speed, a device and a class, finds at most one refusal `: no driver for it here` in the kernel's log, prints `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 270000000, "ceiling_us": 810000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.replug",
+      "behavior": "a device that cannot be driven does not hold an entry of the device table: beside a tablet, the mouse pulled out and plugged back in is enumerated again",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel says how many devices it configured",
+          "machine": "usb"
+        },
+        {"step_id": "pull", "stage": "execute", "does": "pull the mouse out through QMP", "machine": "usb"},
+        {
+          "step_id": "plug",
+          "stage": "execute",
+          "does": "plug a mouse back in through QMP, on whichever port QEMU gives it",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-tablet", "bus": "xhci.0"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "id": "themouse", "bus": "xhci.0"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "configured", "checks": "the kernel says `usb: devices: 2 configured`", "source": "scenario"},
+        {
+          "assertion_id": "gone",
+          "checks": "after the pull the kernel writes a record ending `: gone`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "again",
+          "checks": "after the plug the kernel writes `class 3 protocol 2, endpoint 1`, a mouse configured again",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB devices through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.msi",
+      "behavior": "the controller's messages arrive and are counted on its vector, and the timer's pump finds none of their work",
+      "units": ["usb", "intrprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run intrprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "counted",
+          "checks": "intrprobe judges /proc/interrupts as the boot line and the devices require, prints `INTRPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `INTRPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.nomsi",
+      "behavior": "with `rach2.nomsi` the controller's PCI line takes its interrupts, no message vector is used, and the keyboard types",
+      "units": ["usb", "intrprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run intrprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": ["rach2.nomsi"],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "counted",
+          "checks": "intrprobe judges /proc/interrupts as the boot line and the devices require, prints `INTRPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `INTRPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.mouse-msi",
+      "behavior": "a mouse's reports, moved with three button states, are counted on the controller's message vector",
+      "units": ["usb", "intrprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the mouse and the debug shell greets",
+          "machine": "usb"
+        },
+        {
+          "step_id": "move",
+          "stage": "execute",
+          "does": "move the mouse three times, the second and third with a button down",
+          "machine": "usb"
+        },
+        {"step_id": "probe", "stage": "execute", "does": "run intrprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-mouse", "bus": "xhci.0"}],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "mouse",
+          "checks": "the kernel's record of a configured mouse, `class 3 protocol 2`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "counted",
+          "checks": "intrprobe judges /proc/interrupts as the boot line and the devices require, prints `INTRPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `INTRPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.msi-drop",
+      "behavior": "with `rach2.msidrop=3` the controller is silenced after three messages and the machine keeps typing on the timer's pump, which counts what it finds",
+      "units": ["usb", "intrprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run intrprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": ["rach2.msidrop=3"],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "counted",
+          "checks": "intrprobe judges /proc/interrupts as the boot line and the devices require, prints `INTRPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `INTRPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.msi-lines",
+      "behavior": "with the controller's messages on and no USB device, the PS/2 keyboard's line through the I/O APIC and the local APIC's timer still arrive",
+      "units": ["usb", "intrprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the PS/2 keyboard", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run intrprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the PS/2 keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "counted",
+          "checks": "intrprobe judges /proc/interrupts as the boot line and the devices require, prints `INTRPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `INTRPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.latency-spin",
+      "behavior": "with `rach2.usblatency`, eight keys typed one at a time to keylatprobe beside a spinning child each leave a record of the keystroke's path from the controller's interrupt to the reader's dispatch",
+      "units": ["usb", "`tests/system/usb_latency.sh`", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["awk"], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "does": "run `keylatprobe spin 8` and type a key each time the kernel says the reader waits",
+          "machine": "usb"
+        },
+        {"step_id": "judge", "stage": "execute", "does": "run usblatency.awk on the console"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": ["rach2.usblatency"],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "keys",
+          "checks": "after `KEYLAT READING` and `usb: latency: reader waiting`, each of the eight keys is followed by a record `usb: latency: msi`, and each of the first seven by the next `usb: latency: reader waiting`",
+          "source": "scenario"
+        },
+        {"assertion_id": "read", "checks": "keylatprobe prints `KEYLAT OK` and exits 0", "source": "scenario"},
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `KEYLAT FAIL`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-pump",
+          "checks": "the console up to the probe's end has no line with `usb: pump:`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "records",
+          "checks": "`awk -v random=0 -v keys=8 -f usblatency.awk` exits 0 on the console: eight records, each with its eight fields once as integers, one tracked event and one dispatch, no pumps and no work, and at least one with `msi 1`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "usblatency.awk", "node": "tests/cases/machine/usblatency.awk", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.latency-random",
+      "behavior": "with `rach2.usblatency`, eight keys typed one at a time to keylatprobe beside a child inside getrandom each leave a record of the keystroke's path from the controller's interrupt to the reader's dispatch",
+      "units": ["usb", "`tests/system/usb_latency.sh`", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["awk"], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "does": "run `keylatprobe random 8` and type a key each time the kernel says the reader waits",
+          "machine": "usb"
+        },
+        {"step_id": "judge", "stage": "execute", "does": "run usblatency.awk on the console"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": ["rach2.usblatency"],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "keys",
+          "checks": "after `KEYLAT HOG` and `usb: latency: reader waiting`, each of the eight keys is followed by a record `usb: latency: msi`, and each of the first seven by the next `usb: latency: reader waiting`",
+          "source": "scenario"
+        },
+        {"assertion_id": "read", "checks": "keylatprobe prints `KEYLAT OK` and exits 0", "source": "scenario"},
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `KEYLAT FAIL`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-pump",
+          "checks": "the console up to the probe's end has no line with `usb: pump:`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "records",
+          "checks": "`awk -v random=1 -v keys=8 -f usblatency.awk` exits 0 on the console: eight records, each with its eight fields once as integers, one tracked event and one dispatch, and at most 4096 bytes of work",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "usblatency.awk", "node": "tests/cases/machine/usblatency.awk", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.latency-off",
+      "behavior": "without `rach2.usblatency` keylatprobe reads its key and no record of the keystroke's path is printed",
+      "units": ["usb", "keylatprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "does": "run keylatprobe and type a key once it reads",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read",
+          "checks": "keylatprobe, given a key after `KEYLAT READING`, prints `KEYLAT OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unrecorded",
+          "checks": "the console up to the probe's end has no line with `usb: latency:`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.hub-tree",
+      "behavior": "a keyboard and a mouse behind a hub are enumerated at their path, listed with it, and the keyboard types on a machine with no 8042",
+      "units": ["usb", "usbprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbprobe", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.3"}
+            ],
+            "boot_options": ["rach2.hubtree"],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "listed",
+          "checks": "usbprobe, on a boot line with `rach2.hubtree`, finds the keyboard and the mouse in /proc/usb at a path behind the hub and the hub itself, `class 9`, prints `USBPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the probe's end has no line with `USBPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.hub-stick",
+      "behavior": "a stick behind a hub mounts and takes a write, is pulled from under a mount, and plugged back in mounts again",
+      "units": ["usb", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "write", "stage": "execute", "does": "run `usbdiskprobe write`", "machine": "usb"},
+        {
+          "step_id": "pull",
+          "stage": "execute",
+          "does": "run `usbdiskprobe hold` and pull the stick through QMP once it holds the mount",
+          "machine": "usb"
+        },
+        {
+          "step_id": "replug",
+          "stage": "execute",
+          "does": "plug a stick of the same image back in behind the hub through QMP, and run `usbdiskprobe replug`",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "port": "1.4", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "written",
+          "checks": "`usbdiskprobe write` writes a file to the FAT volume, syncs and unmounts it, reads it back after a remount, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pulled",
+          "checks": "`usbdiskprobe hold`, with the stick pulled once it prints `USBDISKPROBE HOLDING`, reads the partition until a read answers EIO, then finds a cached listing and a read, a write and an open on the mount answer EIO, the disk and the mount gone from /proc/disk and the mount table, and the unmount refused while the file is open and done once it is closed, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "enumerated",
+          "checks": "after the plug the kernel writes `usbdisk: disk0: mbr`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "replugged",
+          "checks": "`usbdiskprobe replug` mounts the volume again and reads the file back, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the last record waited for has no line with `USBDISKPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB sticks through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.pull-read",
+      "behavior": "a 32 KiB read in flight when the stick is pulled is kept and failed only after the controller has given the slot back, and the next stick enumerates; the stick, throttled to a budget of 32 KiB and a byte a second after it, is plugged in after the boot",
+      "units": ["usb", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {
+          "step_id": "plug",
+          "stage": "execute",
+          "does": "make the throttled medium of the stick's copy through QMP and plug the stick in",
+          "machine": "usb"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "does": "run `usbdiskprobe pullread` and pull the stick once one of its reads is in flight",
+          "machine": "usb"
+        },
+        {
+          "step_id": "replug",
+          "stage": "execute",
+          "does": "plug a stick of the same copy back in, unthrottled, through QMP",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "plugged",
+          "checks": "after the plug the kernel writes `usbdisk: disk0:`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "kept",
+          "checks": "after the pull the kernel writes a line `its request is kept, its ... in flight`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "given-back",
+          "checks": "after that line the kernel writes `: given back`, the slot given back",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "failed-after",
+          "checks": "after the slot is given back the kernel writes `its request is failed with the slot given back`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-failed",
+          "checks": "after that line `usbdiskprobe pullread` prints `USBDISKPROBE READ FAILED` and `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "enumerated",
+          "checks": "after the second plug the kernel writes `: mbr`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the last record waited for has no line with `USBDISKPROBE FAIL`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "answered",
+          "checks": "the console up to the last record waited for has no line with `a transfer never answered`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB sticks through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.reslot",
+      "behavior": "a stick plugged in after a pull, while a file on the pulled stick is still open, is given the pulled stick's slot by the controller, enumerates and answers a read before the file is closed",
+      "units": ["usb", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {
+          "step_id": "keep",
+          "stage": "execute",
+          "does": "run `usbdiskprobe keep`, pull the stick once it keeps its file, and plug a stick of the same copy back in through QMP",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "given-back",
+          "checks": "after the pull the kernel writes `: given back`, the slot given back",
+          "source": "scenario"
+        },
+        {"assertion_id": "enumerated", "checks": "after the plug the kernel writes `: mbr`", "source": "scenario"},
+        {
+          "assertion_id": "kept",
+          "checks": "`usbdiskprobe keep` holds its file through the pull and the plug, reads the next stick's table, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the last record waited for has no line with `USBDISKPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB sticks through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.hub-pull",
+      "behavior": "the hub pulled with a keyboard, a mouse and a stick behind it: the stick's mount answers EIO and unmounts once its file is closed, every device below the hub goes before the hub, and all four slots are given back",
+      "units": ["usb", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {
+          "step_id": "pull",
+          "stage": "execute",
+          "does": "run `usbdiskprobe hold` and pull the hub through QMP once it holds the mount",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.2"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.3"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "port": "1.4", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "unmounted",
+          "checks": "`usbdiskprobe hold`, with the hub pulled once it prints `USBDISKPROBE HOLDING`, reads the partition until a read answers EIO, then finds a cached listing and a read, a write and an open on the mount answer EIO, the disk and the mount gone from /proc/disk and the mount table, and the unmount refused while the file is open and done once it is closed, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "below-first",
+          "checks": "once four `usb: slot:` records and four lines with `: gone` are on the console, it has exactly three records `usb: device: port R.P: gone` and its last line with `gone` is `port R: gone`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "slots",
+          "checks": "the console then has exactly four records `usb: slot: N: given back` and no line with `the entry is lost`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the last record waited for has no line with `USBDISKPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB sticks through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.hub-hub",
+      "behavior": "a keyboard behind a hub behind a hub is configured at its path and types",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-hub", "id": "hub2", "bus": "xhci.0", "port": "1.1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.1.2"}
+            ],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "path",
+          "checks": "the console has the record `usb: device: port R.1.2: 627:1, class 3 protocol 1`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.table-full",
+      "behavior": "two hubs and fifteen devices: sixteen fill the device table, and the seventeenth is refused by name",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel says the device table is full and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "help", "stage": "execute", "does": "type `help` at the serial console", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-hub", "id": "hub", "bus": "xhci.0", "port": "1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.1"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.2"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.3"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.4"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.5"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.6"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.7"},
+              {"model": "usb-hub", "id": "hub2", "bus": "xhci.0", "port": "1.8"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.8.1"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.8.2"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.8.3"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.8.4"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.8.5"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.8.6"},
+              {"model": "usb-mouse", "bus": "xhci.0", "port": "1.8.7"},
+              {"model": "usb-kbd", "bus": "xhci.0", "port": "1.8.8"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "refused",
+          "checks": "the kernel writes `the device table is full` and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "answered",
+          "checks": "`help` typed at the serial console is answered by `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "configured",
+          "checks": "once sixteen lines with `, class ` are on the console, it has exactly sixteen records `usb: device: port P: ... class`, P a port or a path of digits and dots",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.two-hc",
+      "behavior": "two controllers, each driven from its own record with its own interrupt: the machine's only keyboard, behind a hub on the second, types",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci0"},
+              {"model": "qemu-xhci", "id": "xhci1"},
+              {"model": "usb-mouse", "bus": "xhci0.0"},
+              {"model": "usb-hub", "id": "hub3", "bus": "xhci1.0", "port": "1"},
+              {"model": "usb-kbd", "bus": "xhci1.0", "port": "1.1"},
+              {"model": "usb-mouse", "bus": "xhci1.0", "port": "1.2"}
+            ],
+            "boot_options": [],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "controllers",
+          "checks": "the console has exactly two records `usb: ready: xhciN:`, N 0 or 1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "devices",
+          "checks": "once four lines with `, class ` are on the console, it has exactly four records `usb: device: port ... class`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vectors",
+          "checks": "the first records `interrupts: xhci0: ... vector N` and `interrupts: xhci1: ... vector M` are there with N and M different, and no line says `the timer pumps this controller`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.two-hc-sticks",
+      "behavior": "three sticks across two controllers mount, and the second controller's first stick, `/dev/disk1`, pulled from under a reader leaves the first controller's mounting and reading",
+      "units": ["usb", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick0", "stick1", "stick2"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "three", "stage": "execute", "does": "run `usbdiskprobe three`", "machine": "usb"},
+        {
+          "step_id": "pull",
+          "stage": "execute",
+          "does": "run `usbdiskprobe pullone` and pull the stick st1 through QMP once it holds it",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [
+              {"name": "stick0", "bus": "device", "id": "stick0"},
+              {"name": "stick1", "bus": "device", "id": "stick1"},
+              {"name": "stick2", "bus": "device", "id": "stick2"}
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci0"},
+              {"model": "qemu-xhci", "id": "xhci1"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci0.0", "drive": "stick0"},
+              {"model": "usb-storage", "id": "st1", "bus": "xhci1.0", "drive": "stick1"},
+              {"model": "usb-storage", "id": "st2", "bus": "xhci1.0", "drive": "stick2"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "mounted",
+          "checks": "`usbdiskprobe three` mounts the FAT32 volume of each of the three sticks, reads its file and unmounts it, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pulled",
+          "checks": "`usbdiskprobe pullone`, with st1 pulled once it prints `USBDISKPROBE HOLDING`, finds the read in flight answer EIO, the other two sticks mount and read, and the pulled one no longer mounts, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the last record waited for has no line with `USBDISKPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "stick0", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false},
+        {"name": "stick1", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false},
+        {"name": "stick2", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB sticks through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.two-hc-sticks-first",
+      "behavior": "three sticks across two controllers mount, and the first controller's second stick, `/dev/disk2`, pulled from under a reader leaves a stick on each controller mounting and reading",
+      "units": ["usb", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick0", "stick1", "stick2"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the machine to the debug shell", "machine": "usb"},
+        {"step_id": "three", "stage": "execute", "does": "run `usbdiskprobe three`", "machine": "usb"},
+        {
+          "step_id": "pull",
+          "stage": "execute",
+          "does": "run `usbdiskprobe pullone 2` and pull the stick st1 through QMP once it holds it",
+          "machine": "usb"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [
+              {"name": "stick0", "bus": "device", "id": "stick0"},
+              {"name": "stick1", "bus": "device", "id": "stick1"},
+              {"name": "stick2", "bus": "device", "id": "stick2"}
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci0"},
+              {"model": "qemu-xhci", "id": "xhci1"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci0.0", "drive": "stick0"},
+              {"model": "usb-storage", "id": "st1", "bus": "xhci0.0", "drive": "stick1"},
+              {"model": "usb-storage", "id": "st2", "bus": "xhci1.0", "drive": "stick2"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the machine boots to the debug shell", "source": "scenario"},
+        {
+          "assertion_id": "mounted",
+          "checks": "`usbdiskprobe three` mounts the FAT32 volume of each of the three sticks, reads its file and unmounts it, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pulled",
+          "checks": "`usbdiskprobe pullone 2`, with st1 pulled once it prints `USBDISKPROBE HOLDING`, finds the read in flight answer EIO, the other two sticks mount and read, and the pulled one no longer mounts, prints `USBDISKPROBE OK` and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-failure",
+          "checks": "the console up to the last record waited for has no line with `USBDISKPROBE FAIL`",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false},
+        {"name": "stick0", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false},
+        {"name": "stick1", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false},
+        {"name": "stick2", "node": "tests/cases/machine/usbdisk/stick-hub.img", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the row plugs and pulls USB sticks through QEMU's monitor, which no native machine has"
+      }
+    },
+    {
+      "case_id": "machine.usb.hc-refused",
+      "behavior": "with `rach2.hcfail=0` the first controller is refused at its bring-up, and the other comes up numbered from zero and its keyboard types",
+      "units": ["usb"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usb_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the machine until the kernel has configured the keyboard and the debug shell greets",
+          "machine": "usb"
+        },
+        {"step_id": "type", "stage": "execute", "does": "type `help` on the USB keyboard", "machine": "usb"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usb",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci0"},
+              {"model": "qemu-xhci", "id": "xhci1"},
+              {"model": "usb-mouse", "bus": "xhci0.0"},
+              {"model": "usb-kbd", "bus": "xhci1.0"}
+            ],
+            "boot_options": ["rach2.hcfail=0"],
+            "i8042": false
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "keyboard",
+          "checks": "the kernel's record of a configured keyboard, `class 3 protocol 1`, appears and the machine boots to the debug shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "typed",
+          "checks": "`help` typed on the keyboard through QEMU's monitor is answered by the shell's `Available commands`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "the console up to the shell's answer has `usb: refused: xhci0: rach2.hcfail=0` and exactly one record `usb: ready: xhci`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "devices",
+          "checks": "the console up to the shell's answer has exactly one record `usb: device: port ... class`, the keyboard's",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "usb_scenario", "node": "tests/cases/machine/usb_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "card",
+        "reason": "the rows need QEMU's xHCI controller and its USB keyboard, mouse and hub models, which the Lenovo's xHCI and devices do not give"
+      }
+    },
+    {
+      "case_id": "machine.usb.latency-checker",
+      "behavior": "usblatency.awk, the judge of the latency cases' records, accepts and refuses the records of a host test built with the kernel's recorder as tests/system/usb_latency_test.sh requires",
+      "units": ["usb", "`tests/system/usb_latency_test.sh`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["latency-checker"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "awk"], "features": {}},
+      "execution": {
+        "program": "usbchecks",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "reaped",
+        "cleanup": "usb_latency_test.sh removes its work directory, which it keeps after a failure that names it"
+      },
+      "assertions": [
+        {
+          "assertion_id": "checker",
+          "checks": "tests/system/usb_latency_test.sh exits 0: the checker accepts each valid set of records and refuses each invalid one",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}],
+      "timing": [],
+      "native": {"plan": "host"}
+    }
+  ]
+}

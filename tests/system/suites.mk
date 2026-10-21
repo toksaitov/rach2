@@ -1191,8 +1191,8 @@ endif
 # `tests/run subset`: each optional device probe left out, and proved left
 # out. They are the cases of tests/cases/guest.subset.json, which etude runs,
 # and have no target here.
-# `tests/run usb`: the USB stack, from a port to a keystroke, in the boots
-# that `tests/system/suites/usb.sh` counts and describes.
+# `tests/run usb`: the USB stack, from a port to a keystroke, the cases of
+# tests/cases/machine.usb.json, each a boot of its own.
 # `tests/run mount`: the partition nodes, the block path through a device
 # that sleeps or never answers, and mount(2) and the claims it makes (see
 # tests/system/suites/mount.sh). Its disk is the test disk with a FAT32
@@ -1461,18 +1461,27 @@ run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INS
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(UEFI_TEST_DISK)
 	sh tests/system/suites/uefi.sh $(UEFI_TEST_DISK) $(INSTALL_TEST_STICK) $(RECOVERY_ISO) \
 	    $(UEFI_DIR) $(UEFI_PORT) krffs/rach2_demo_ed25519
-# `tests/run usbdisk`: a flash drive as a disk. Three sticks built on the
-# host, an MBR one, a GUID one and one with no table; the nodes, the mounts,
-# a write, the pull from under a mount and the replug, ten plugs and pulls
-# of a stick nobody opened, BusyBox mounting by label, and a throughput line.
-USBDISK_DIR = $(IMAGES_DIR)/usbdisk
-run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKGPT) $(MKMBR) $(HARNESS) $(STICK_IMAGE) rach2-recovery $(RECOVERY_IMAGE)
-	sh tests/system/suites/usbdisk.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(USBDISK_DIR) \
-	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE) $(STICK_IMAGE) \
-	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
+# `tests/run usbdisk`: a flash drive as a disk, the cases of
+# tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no
+# table; the nodes, the mounts, a write, the pull from under a mount and the
+# replug, ten plugs and pulls of a stick nobody opened, BusyBox mounting by
+# label, a throughput line, a boot from the stick image, three sticks at once,
+# raw writes from the recovery kernel, a stick past two terabytes and two
+# logical units.
 
-run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
-	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
+# The artifacts of the USB cases beyond the kernels, the images and the
+# credentials: the sticks and the far volume that usbdisk_sticks.sh makes,
+# the checker of the keystroke records, and the recovery image under one
+# name, whether or not it has the development key.
+USB_CASE_STICKS = $(addprefix $(CASE_DIR)/usbdisk/,stick-mbr.img stick-gpt.img stick-super.img \
+                  stick-hub.img far.vol)
+$(USB_CASE_STICKS) &: tests/system/usbdisk_sticks.sh $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
+	sh tests/system/usbdisk_sticks.sh $(CASE_DIR)/usbdisk $(MKEXFATFIXTURE)
+$(CASE_DIR)/usblatency.awk: tests/system/checkers/usblatency.awk
+	@mkdir -p $(@D)
+	cp $< $@
+$(IMAGES_DIR)/usbdisk-recovery.krffs: $(RECOVERY_IMAGE)
+	cp $< $@
 # `tests/run diskpolicy`: the read-only kernel does not write the disk, shown on
 # the bytes rather than on a return value. It is the cases of
 # tests/cases/machine.diskpolicy.json, which etude runs, and has no target

@@ -25,12 +25,12 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `drill` (full tier; needs qemu, ssh, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the recovery drill, boots of one disk that carries the same three partitions the sealed disk has.
 * `account` (full tier; needs qemu; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools and they are different code.
 * `large` (full tier; needs qemu, mke2fs, e2fsck, mformat, either hdiutil and newfs_exfat or mkfs.exfat and fsck.exfat; 128 MiB): a file past 4 GiB on ext2 and on exFAT, written, read back after a remount, sought, sized, truncated, appended and shared between two descriptors, and a write past each format's limit refused by name.
-* `usb` (core tier; needs qemu; 128 MiB): the USB stack, from a port to a keystroke, in the boots that `tests/system/suites/usb.sh` counts and describes.
+* `usb` (core tier; needs qemu; 128 MiB): the USB stack, from a port to a keystroke, the cases of tests/cases/machine.usb.json, each a boot of its own.
 * `raw-e1000` (full tier; needs qemu; 128 MiB): the raw suite's card half on the e1000 card.
 * `raw` (full tier; needs qemu; 128 MiB): the raw ICMP socket, which is what `ping` and `traceroute` are.
 * `krffsmount` (full tier; needs qemu; 128 MiB): a KRFFS volume placed by mount(2), read through to its last byte and unmounted, and the three volumes the kernel refuses.
 * `diskrate` (full tier; needs qemu, mformat; 512 MiB): the storage paths timed in the machine and held under bounds: the raw device, a file on exFAT and on FAT32 written and read, two hundred small files, and a raw read piped into a hash.
-* `usbdisk` (core tier; needs qemu, xorriso, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk.
+* `usbdisk` (core tier; needs qemu, xorriso, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk, the cases of tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no table; the nodes, the mounts, a write, the pull from under a mount and the replug, ten plugs and pulls of a stick nobody opened, BusyBox mounting by label, a throughput line, a boot from the stick image, three sticks at once, raw writes from the recovery kernel, a stick past two terabytes and two logical units.
 * `stress-ahci` (full tier; needs qemu; 128 MiB): the stress suite's on-disk KRFFS larger than the page cache, on an AHCI controller.
 * `default` (core tier; needs qemu; 128 MiB): the probe suite, every guest probe booted on the test image in one machine and scored by the runner.
 * `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than the page cache works.

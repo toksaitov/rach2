@@ -1,6 +1,9 @@
 #!/bin/sh
-# usb_latency.sh KERNEL IMAGE HARNESS: the USB suite's two rows of the path
-# from a keystroke's interrupt to its dispatch, which suites/usb.sh runs.
+# usb_latency.sh KERNEL IMAGE HARNESS: the two boots of the path from a
+# keystroke's interrupt to its dispatch, on KERNEL, a harness kernel, which
+# tests/proofs/usb-latency-guest.json runs on kernels with faults in them.
+# The usb suite's cases of the same two boots are in
+# tests/cases/machine.usb.json.
 #
 # Each row boots with a USB keyboard on an xHCI controller and
 # `rach2.usblatency`, and runs keylatprobe, once beside a spinning loop and

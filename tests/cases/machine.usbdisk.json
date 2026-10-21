@@ -1,0 +1,1551 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.usbdisk",
+  "summary": "A flash drive as a disk, from its table to its removal, each case a boot of its own that tests/cases/machine/usbdisk_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.usbdisk.mbr",
+      "behavior": "an MBR stick is named and sized as a block device, and both its volumes mount; the table reads back through /dev/disk0",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "report", "stage": "execute", "does": "run usbdiskprobe report", "machine": "usbdisk"},
+        {"step_id": "volumes", "stage": "execute", "does": "run usbdiskprobe volumes", "machine": "usbdisk"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "report",
+          "checks": "usbdiskprobe report finds /dev/disk0 a block device that /proc/usb names with a size and a count of free names, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "volumes",
+          "checks": "usbdiskprobe volumes mounts, reads and unmounts the FAT32 volume of /dev/disk0p1 and the exFAT one of /dev/disk0p2, reads the MBR they came from in sector 0 of /dev/disk0, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.gpt",
+      "behavior": "a GUID stick whose first used entry is at index 6 mounts both its volumes as p7 and p10, the table's own numbers",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "report", "stage": "execute", "does": "run usbdiskprobe report", "machine": "usbdisk"},
+        {
+          "step_id": "volumes",
+          "stage": "execute",
+          "does": "run usbdiskprobe volumes /dev/disk0p7 /dev/disk0p10",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "report",
+          "checks": "usbdiskprobe report finds /dev/disk0 a block device that /proc/usb names with a size and a count of free names, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "volumes",
+          "checks": "usbdiskprobe volumes mounts, reads and unmounts the FAT32 volume of /dev/disk0p7 and the exFAT one of /dev/disk0p10, reads the protective MBR in sector 0 of /dev/disk0, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-gpt.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.super",
+      "behavior": "a stick with no partition table mounts as one volume through its whole node, and the kernel records it as one volume",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbdiskprobe super", "machine": "usbdisk"},
+        {
+          "step_id": "record",
+          "stage": "execute",
+          "does": "wait for the kernel's record of one volume",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "super",
+          "checks": "usbdiskprobe super mounts the exFAT volume of /dev/disk0, which has no table, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "one-volume",
+          "checks": "the console has the kernel's line usbdisk: disk0: one volume",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-super.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.write",
+      "behavior": "a file written to the stick, synced and unmounted comes back after a remount, and mtools reads it off the stick's image on the host",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["mtype"], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbdiskprobe write", "machine": "usbdisk"},
+        {"step_id": "read", "stage": "execute", "does": "read written.txt off the stick's copy with mtype"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "write",
+          "checks": "usbdiskprobe write writes, syncs and unmounts a file on the FAT32 volume, reads it back after a remount, finds the stick's cache flushed by its count in /proc/usb, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "host-read",
+          "checks": "mtype, reading the FAT32 volume at byte 1048576 of the stick's copy, exits 0 and prints written.txt with the text a stick takes a write",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.holdnested",
+      "behavior": "the stick pulled while a file is open on its FAT32 volume, with the exFAT volume mounted below it: the read in flight answers EIO, the child mount is released before the parent, umount2 is EBUSY while the file is open; the same stick plugged back in mounts again with nothing inherited, and the first one is reclaimed",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {
+          "step_id": "hold",
+          "stage": "execute",
+          "does": "run usbdiskprobe holdnested and pull the stick at USBDISKPROBE HOLDING",
+          "machine": "usbdisk"
+        },
+        {"step_id": "free", "stage": "execute", "does": "run usbdiskprobe free", "machine": "usbdisk"},
+        {
+          "step_id": "replug",
+          "stage": "execute",
+          "does": "make a medium of the same copy, plug a stick of it in and run usbdiskprobe replug",
+          "machine": "usbdisk"
+        },
+        {
+          "step_id": "record",
+          "stage": "execute",
+          "does": "wait for the kernel's record that the first stick was reclaimed",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "hold",
+          "checks": "usbdiskprobe holdnested, the stick pulled after USBDISKPROBE HOLDING, finds the read in flight answer EIO and the held file, the listings and the mounts as a pulled stick leaves them, the child mount unmounted before the parent and umount2 EBUSY until the file is closed, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "free",
+          "checks": "usbdiskprobe free prints USBDISKPROBE FREE 8 and USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "replug",
+          "checks": "the stick plugged in again is named by the kernel's line usbdisk: disk0: mbr, and usbdiskprobe replug mounts its FAT32 volume, reads hello.txt back, unmounts it, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reclaimed",
+          "checks": "the console has the kernel's line usbdisk: disk0: reclaimed",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the stick is pulled and plugged through QEMU's monitor at a point the guest's output chooses, which no person at the Lenovo can do on time"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.holdnestedexfat",
+      "behavior": "the stick pulled while a file is open on its exFAT volume, with the FAT32 volume mounted below it: the read in flight answers EIO, the child mount is released before the parent, umount2 is EBUSY while the file is open; the same stick plugged back in mounts again with nothing inherited, and the first one is reclaimed",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {
+          "step_id": "hold",
+          "stage": "execute",
+          "does": "run usbdiskprobe holdnestedexfat and pull the stick at USBDISKPROBE HOLDING",
+          "machine": "usbdisk"
+        },
+        {"step_id": "free", "stage": "execute", "does": "run usbdiskprobe free", "machine": "usbdisk"},
+        {
+          "step_id": "replug",
+          "stage": "execute",
+          "does": "make a medium of the same copy, plug a stick of it in and run usbdiskprobe replug",
+          "machine": "usbdisk"
+        },
+        {
+          "step_id": "record",
+          "stage": "execute",
+          "does": "wait for the kernel's record that the first stick was reclaimed",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "hold",
+          "checks": "usbdiskprobe holdnestedexfat, the stick pulled after USBDISKPROBE HOLDING, finds the read in flight answer EIO and the held file, the listings and the mounts as a pulled stick leaves them, the child mount unmounted before the parent and umount2 EBUSY until the file is closed, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "free",
+          "checks": "usbdiskprobe free prints USBDISKPROBE FREE 8 and USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "replug",
+          "checks": "the stick plugged in again is named by the kernel's line usbdisk: disk0: mbr, and usbdiskprobe replug mounts its FAT32 volume, reads hello.txt back, unmounts it, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reclaimed",
+          "checks": "the console has the kernel's line usbdisk: disk0: reclaimed",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the stick is pulled and plugged through QEMU's monitor at a point the guest's output chooses, which no person at the Lenovo can do on time"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.churn",
+      "behavior": "a stick plugged in and pulled out ten times without being opened is reclaimed each time, and every name is free afterwards",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {
+          "step_id": "churn",
+          "stage": "execute",
+          "does": "make a read-only medium of the MBR stick, and ten times plug a stick of it in, wait for its table and pull it",
+          "machine": "usbdisk"
+        },
+        {"step_id": "free", "stage": "execute", "does": "run usbdiskprobe free", "machine": "usbdisk"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "churn",
+          "checks": "each of the ten sticks plugged in is named by the kernel's line usbdisk: disk0: mbr, and after each pull the next line usbdisk: disk0: reclaimed follows",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "free",
+          "checks": "usbdiskprobe free prints USBDISKPROBE FREE 8 and USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reclaimed-ten",
+          "checks": "the console has the line usbdisk: disk0: reclaimed exactly ten times",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 720000000, "ceiling_us": 2160000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the stick is pulled and plugged through QEMU's monitor at a point the guest's output chooses, which no person at the Lenovo can do on time"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.busybox",
+      "behavior": "BusyBox on the os-real image finds the stick's volumes by their labels, mounts the FAT32 one by its label, copies a file off it and unmounts it",
+      "units": ["usbdisk"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the os-real image to its login prompt", "machine": "usbdisk"},
+        {"step_id": "login", "stage": "execute", "does": "log in as root", "machine": "usbdisk"},
+        {
+          "step_id": "commands",
+          "stage": "execute",
+          "does": "run blkid and findfs, mount LABEL=STICKFAT, copy hello.txt off it and unmount it",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "busybox",
+          "checks": "mount -t vfat LABEL=STICKFAT /mnt succeeds, and so does umount /mnt after the copy",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "findfs-fat",
+          "checks": "a line of the console begins FOUND1=/dev/disk0p1: findfs named the FAT32 partition for LABEL=STICKFAT",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "findfs-exfat",
+          "checks": "a line of the console begins FOUND2=/dev/disk0p2: findfs named the exFAT partition for LABEL=FIXTURE, whose prober reads part of a sector",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "blkid-label",
+          "checks": "a line of blkid's output begins /dev/disk0p1: and has STICKFAT",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "copied",
+          "checks": "the copy of hello.txt that cat prints has the text hello from the stick",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 720000000, "ceiling_us": 2160000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "demo_password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the case boots the os-real image with a stick of its own on QEMU's xHCI controller, which is no installed system"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.throughput",
+      "behavior": "a 16 MiB read of /dev/disk0 with the controller's messages on, its rate printed and not judged, needs no recovery of a command",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbdiskprobe throughput", "machine": "usbdisk"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci", "properties": {"msi": "on"}},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "throughput",
+          "checks": "usbdiskprobe throughput reads 16 MiB of /dev/disk0, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {"assertion_id": "no-recovery", "checks": "no line of the console has usbdisk: recovery", "source": "scenario"},
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 360000000, "ceiling_us": 1080000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.stickboot",
+      "behavior": "the stick image booted by the firmware, with no kernel given to QEMU: GRUB loads the kernel and its RAM root off the stick, the stick is the machine's disk0, and the machine mounts its second partition",
+      "units": ["usbdisk"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the stick image through SeaBIOS and GRUB to the login prompt",
+          "machine": "usbdisk"
+        },
+        {"step_id": "login", "stage": "execute", "does": "log in as root", "machine": "usbdisk"},
+        {
+          "step_id": "commands",
+          "stage": "execute",
+          "does": "list disk0 in /proc/usb, mount /dev/disk0p2, list it and /proc/mounts and unmount it",
+          "machine": "usbdisk"
+        },
+        {
+          "step_id": "record",
+          "stage": "execute",
+          "does": "wait for the kernel's record of the stick it booted from",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "seabios",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "mounted",
+          "checks": "mount -t exfat /dev/disk0p2 /mnt succeeds, and so does umount /mnt after the listing",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "own-stick",
+          "checks": "the console has the kernel's line usbdisk: disk0: mbr: N MiB, 3 partitions, N the stick image's size in bytes divided by 1048576",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "proc-mounts",
+          "checks": "the console has /dev/disk0p2 /mnt exfat, the line of /proc/mounts for the stick's second partition",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 720000000, "ceiling_us": 2160000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/rach2-stick.img", "per_architecture": true},
+        {"name": "demo_password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "firmware",
+        "reason": "the case boots QEMU's SeaBIOS from a USB stick on QEMU's xHCI controller, with no kernel given, which the installed Lenovo does not"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.three",
+      "behavior": "three sticks at once each mount and read; the middle one pulled while a reader keeps a command queued on it answers EIO, the two beside it are unharmed, and it is reclaimed as disk1",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick0", "stick1", "stick2"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "three", "stage": "execute", "does": "run usbdiskprobe three", "machine": "usbdisk"},
+        {
+          "step_id": "pullone",
+          "stage": "execute",
+          "does": "run usbdiskprobe pullone and pull the middle stick at USBDISKPROBE HOLDING",
+          "machine": "usbdisk"
+        },
+        {
+          "step_id": "record",
+          "stage": "execute",
+          "does": "wait for the kernel's record that the middle stick was reclaimed",
+          "machine": "usbdisk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [
+              {"name": "stick0", "bus": "device", "id": "stick0"},
+              {"name": "stick1", "bus": "device", "id": "stick1"},
+              {"name": "stick2", "bus": "device", "id": "stick2"}
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick0"},
+              {"model": "usb-storage", "id": "st1", "bus": "xhci.0", "drive": "stick1"},
+              {"model": "usb-storage", "id": "st2", "bus": "xhci.0", "drive": "stick2"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "three",
+          "checks": "usbdiskprobe three mounts and reads each of the three sticks, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pullone",
+          "checks": "usbdiskprobe pullone, the middle stick pulled after USBDISKPROBE HOLDING, finds the read in flight answer EIO, the two other sticks unharmed and the pulled one no longer mounting, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reclaimed",
+          "checks": "the console has the kernel's line usbdisk: disk1: reclaimed",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 335544320,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "stick0", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "stick1", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "stick2", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the stick is pulled and plugged through QEMU's monitor at a point the guest's output chooses, which no person at the Lenovo can do on time"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.recovery",
+      "behavior": "the recovery kernel writes a stick raw: a 4 KiB pattern read back on the machine and found on the host, and 4 MiB in 32 KiB pieces read back byte for byte, each direction 128 commands",
+      "units": ["usbdisk"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "does": "boot the recovery kernel and image to the recovery shell",
+          "machine": "usbdisk"
+        },
+        {
+          "step_id": "raw",
+          "stage": "execute",
+          "does": "write a 4 KiB pattern at sector 1000 of /dev/disk0 and read it back",
+          "machine": "usbdisk"
+        },
+        {
+          "step_id": "big",
+          "stage": "execute",
+          "does": "write 4 MiB in 128 pieces of 32 KiB at 5 MiB, read it back and count the commands",
+          "machine": "usbdisk"
+        },
+        {"step_id": "host", "stage": "execute", "does": "read both patterns off the stick's copy"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "recovery-kernel",
+            "initrd": "recovery-image",
+            "disks": [{"name": "stick", "bus": "device", "id": "stick"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "stick"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "raw",
+          "checks": "the machine prints RAWDONE after writing the pattern of yes RACH2RAW, 4096 bytes, at sector 1000 and reading it back",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "raw-machine",
+          "checks": "at least two lines of the console begin with the POSIX cksum of that pattern and a space: the read of sector 1000 and the pattern itself",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "big",
+          "checks": "the machine prints BIGDONE after writing 128 pieces of 32 KiB, each PIECE-NNN- and 32758 bytes of yes RACH2-BIG-PATTERN-LINE, at 5 MiB, and reading them back",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "big-machine",
+          "checks": "at least two lines of the console begin with the POSIX cksum of the 4 MiB of pieces and a space: the read of the stick and the pieces themselves",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "big-commands",
+          "checks": "the last line that begins BIGCMDS is BIGCMDS 128 128: /proc/disk counted 128 commands for the write and 128 for the read",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "raw-host",
+          "checks": "the 4096 bytes at sector 1000 of the stick's copy have the POSIX cksum of that pattern",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "big-host",
+          "checks": "the 4 MiB at byte 5242880 of the stick's copy have the POSIX cksum of the pieces",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "recovery-image", "node": "images/usbdisk-recovery.krffs", "per_architecture": true},
+        {"name": "stick", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "image",
+        "reason": "the case boots the recovery kernel and its image with a stick of its own on QEMU's xHCI controller, and writes the stick raw"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.big",
+      "behavior": "a stick past two terabytes, whose one partition starts past sector 2^32, is listed at its size, and a file written to that partition is read back on the host",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["dd", "mtype"], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "layout",
+          "stage": "execute",
+          "does": "write a GUID table to the empty stick and place the far volume at sector 4294969344"
+        },
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbdiskprobe big", "machine": "usbdisk"},
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "does": "copy the far volume out of the stick and read far.txt off it with mtype"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "big", "bus": "device", "id": "big", "size_bytes": 2469606195200}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-kbd", "bus": "xhci.0"},
+              {"model": "usb-mouse", "bus": "xhci.0"},
+              {"model": "usb-storage", "id": "st0", "bus": "xhci.0", "drive": "big"}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "big",
+          "checks": "usbdiskprobe big finds the stick listed in /proc/usb at 4823449600 sectors and its partition past sector 2^32, writes far.txt there and reads it back, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "host-read",
+          "checks": "the 65536 sectors at sector 4294969344 of the stick, copied out with dd, are a FAT32 volume whose far.txt, as mtype prints it, has the text written past two terabytes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 201326592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "mkgpt", "node": "tools/image/mkgpt", "per_architecture": false},
+        {"name": "far", "node": "tests/cases/machine/usbdisk/far.vol", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.luns",
+      "behavior": "two logical units on one USB device are two disks, both mounted",
+      "units": ["usbdisk", "usbdiskprobe"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "usbdisk_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["lun0", "lun1"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the sticks' copies, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "does": "boot the test image to the debug shell", "machine": "usbdisk"},
+        {"step_id": "probe", "stage": "execute", "does": "run usbdiskprobe luns", "machine": "usbdisk"}
+      ],
+      "machines": [
+        {
+          "machine_id": "usbdisk",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "lun0", "bus": "device", "id": "lun0"}, {"name": "lun1", "bus": "device", "id": "lun1"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [
+              {"model": "qemu-xhci", "id": "xhci"},
+              {"model": "usb-bot", "id": "bot", "bus": "xhci.0"},
+              {"model": "scsi-hd", "bus": "bot.0", "drive": "lun0", "properties": {"scsi-id": "0", "lun": "0"}},
+              {"model": "scsi-hd", "bus": "bot.0", "drive": "lun1", "properties": {"scsi-id": "0", "lun": "1"}}
+            ],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "luns",
+          "checks": "usbdiskprobe luns mounts and reads a volume of each of the two units, prints USBDISKPROBE OK and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-fail",
+          "checks": "no line USBDISKPROBE FAIL appears on the console up to the end of the last probe's run",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 540000000, "ceiling_us": 1620000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 201326592,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "lun0", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "lun1", "node": "tests/cases/machine/usbdisk/stick-mbr.img", "per_architecture": false},
+        {"name": "usbdisk_scenario", "node": "tests/cases/machine/usbdisk_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "the case needs sticks of its own layout, built on the host and attached to QEMU's xHCI controller as USB mass storage, which the Lenovo has none of"
+      }
+    },
+    {
+      "case_id": "machine.usbdisk.vfs-unmount",
+      "behavior": "the unmount functions of rach2/sys/fs/vfs.c that a pulled stick's mounts go through, compiled with counting substitutes under ASan and UBSan, release the mounts they should and write nothing to a device that is gone",
+      "units": ["usbdisk", "`tests/system/vfs_unmount_test.sh`", "`tests/system/fixtures/vfs_unmount.c`"],
+      "domain": "host",
+      "architectures": "none",
+      "workload": {"arguments": ["vfs-unmount"], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "awk"], "features": {}},
+      "execution": {
+        "program": "usbchecks",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "reaped",
+        "cleanup": "vfs_unmount_test.sh removes its work directory on every exit"
+      },
+      "assertions": [
+        {
+          "assertion_id": "unmount-cases",
+          "checks": "tests/system/vfs_unmount_test.sh compiles the unmount functions of vfs.c with fixtures/vfs_unmount.c under the sanitizers, and its 18 cases pass",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "stages": {}
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [{"name": "usbchecks", "node": "tests/cases/host/usbchecks", "per_architecture": false}],
+      "timing": [],
+      "native": {"plan": "host"}
+    }
+  ]
+}

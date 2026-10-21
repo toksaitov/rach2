@@ -703,6 +703,15 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
+# The USB scenarios share usbcase.c.
+USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario
+$(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                  tests/cases/machine/usbcase.c tests/cases/machine/usbcase.h \
+                  $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
 # The host's side of the network cases' connections that are not logins: a
 # wait for the guest's SSH server, and the ssh cases' flood.
 build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
@@ -1434,7 +1443,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
              $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
-             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) build/tests/cases/machine/sshpeer
+             $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(USB_SCENARIOS) \
+             build/tests/cases/machine/sshpeer
 .PHONY: host-tools print-host-tools
 host-tools: $(HOST_TOOLS)
 print-host-tools:
