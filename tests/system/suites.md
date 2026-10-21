@@ -32,7 +32,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `diskrate` (full tier; needs qemu, mformat; 512 MiB): the storage paths timed in the machine and held under bounds: the raw device, a file on exFAT and on FAT32 written and read, two hundred small files, and a raw read piped into a hash.
 * `usbdisk` (core tier; needs qemu, xorriso, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk, the cases of tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no table; the nodes, the mounts, a write, the pull from under a mount and the replug, ten plugs and pulls of a stick nobody opened, BusyBox mounting by label, a throughput line, a boot from the stick image, three sticks at once, raw writes from the recovery kernel, a stick past two terabytes and two logical units.
 * `stress-ahci` (full tier; needs qemu; 128 MiB): the stress suite's on-disk KRFFS larger than the page cache, on an AHCI controller.
-* `default` (core tier; needs qemu; 128 MiB): the probe suite, every guest probe booted on the test image in one machine and scored by the runner.
+* `default` (core tier; needs qemu; 128 MiB): every guest probe, each in a boot of its own on the test image.
 * `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than the page cache works.
 * `procfiles` (full tier; needs qemu; 128 MiB): the machine's own /proc files, on the boots that differ and through the programs that read them.
 * `bigmem` (full tier; needs qemu; 73728 MiB; x86_64 only): all of an x86-64 machine's eight gigabytes is counted, and a program's pages fill memory past what lies below 4 GiB and read back as written; without 1 GiB pages, 72 GiB is counted to the direct map's 64 GiB (see tests/system/suites/bigmem.sh).

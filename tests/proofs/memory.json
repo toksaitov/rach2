@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "proof": "memory",
+  "summary": "the memory suite's cases on i686, against a memory report that overstates the usable memory, a frame allocation never failed on purpose, a recovery kernel that does not refuse a machine too small, and a string sweep that finds a routine wrong",
+  "tree": "shared",
+  "sources": [
+    "rach2/kernel.c",
+    "rach2/sys/mm/paging.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 sh tests/proofs/guest.sh make rach2 rach2-recovery && ARCH=i686 sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 RACH2_WORKERS=4 exec tests/run memory"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "usable-overstated",
+      "summary": "the memory report giving 4 KiB more usable memory than the map has, which the size cases find against the map and against QEMU's size",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "             (unsigned long)(map.usable_bytes / 1024),\n",
+          "replace": "             (unsigned long)(map.usable_bytes / 1024 + 4),\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: memory: machine.memory.size-64: evidence: ",
+          "run: memory: machine.memory.size-512: evidence: ",
+          "run: memory: machine.memory.size-2048: evidence: ",
+          "run: memory: machine.memory.size-3072: evidence: ",
+          "run: memory: machine.memory.size-4096: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "framefail-never",
+      "summary": "rach2.framefail logging the allocation it was armed to fail and then letting it succeed, which the framefail cases find",
+      "edits": [
+        {
+          "file": "rach2/sys/mm/paging.c",
+          "find": "    klog(KLOG_WARN, \"vm\", \"frame allocation failed on purpose (rach2.framefail)\");\n    return 1;\n",
+          "replace": "    klog(KLOG_WARN, \"vm\", \"frame allocation failed on purpose (rach2.framefail)\");\n    return 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: memory: machine.memory.framefail-64: evidence: ",
+          "run: memory: machine.memory.framefail-4096: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "no-refusal",
+      "summary": "the kernel going on with less memory than it needs, which the refused case finds in the recovery kernel at 8 MiB",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "        if (frame_total_count() * (PAGE_SIZE / 1024) < FRAME_MIN_MANAGED_KIB) {\n",
+          "replace": "        if (frame_total_count() * (PAGE_SIZE / 1024) < 1) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: memory: machine.memory.refused: evidence: "
+        ]
+      }
+    },
+    {
+      "name": "strlen-wrong",
+      "summary": "the sweep expecting k_strlen to give 6 for hello, so that it reports the routine wrong and no sweep, which the strings case finds",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    if (k_strlen(\"hello\") != 5 || k_strlen(\"\") != 0) {\n",
+          "replace": "    if (k_strlen(\"hello\") != 6 || k_strlen(\"\") != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "run: memory: machine.memory.strings: evidence: "
+        ]
+      }
+    }
+  ]
+}

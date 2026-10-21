@@ -250,19 +250,28 @@ judge() {
 
 # validate: run casecheck over the manifests and the examples; print the
 # timing it declares on stdout, its findings on stderr, and return its
-# status.
+# status. The manifests and the examples are checked apart, since an
+# example may declare a case that a manifest also declares.
 validate() {
+    examples=
+    for f in "$REPO"/tools/etude/schemas/case.*.example.json; do
+        [ -e "$f" ] && examples="$examples ${f#"$REPO/"}"
+    done
     set --
-    for f in "$REPO"/tests/cases/*.json "$REPO"/tools/etude/schemas/case.*.example.json; do
+    for f in "$REPO"/tests/cases/*.json; do
         [ -e "$f" ] && set -- "$@" "${f#"$REPO/"}"
     done
-    [ $# -eq 0 ] || [ -x "$CASECHECK" ] ||
+    [ $# -eq 0 ] && [ -z "$examples" ] || [ -x "$CASECHECK" ] ||
         { echo "suitecheck: $CASECHECK: not built; make build/tools/etude/casecheck" >&2; return 2; }
     (
         cd "$REPO" || exit 2
         status=0
         if [ $# -gt 0 ]; then
             "$CASECHECK" -s "$SCHEMAS" -r . timing "$@" || status=$?
+        fi
+        if [ -n "$examples" ]; then
+            # shellcheck disable=SC2086 # the examples' paths have no spaces
+            "$CASECHECK" -s "$SCHEMAS" -r . timing $examples || status=$?
         fi
         ex=tools/etude/schemas
         if [ -e "$ex/results.example.jsonl" ]; then

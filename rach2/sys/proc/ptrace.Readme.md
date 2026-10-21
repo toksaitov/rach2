@@ -120,7 +120,7 @@ A core file has the registers of each thread as the requests read them. [The pro
 
 ## Tests
 
-`tests/run default` runs every guest probe in one boot of the test image ([the tests' Readme](../../../tests/Readme.md)). Among them:
+`tests/run default` runs every guest probe, each in a boot of its own on the test image ([the tests' Readme](../../../tests/Readme.md)). Among them:
 
 * `tests/musl/ptracemusl.c` traces a child as GDB does: its memory through the requests and `/proc/PID/mem`, its registers and floating-point state, a single step, a breakpoint in read-only text, the system-call stops and a call changed or skipped at its entry, a restart cancelled at the exit, the exec event, a debug register, an attach, a detach and a seize, `PTRACE_INTERRUPT` of a read and of a listening tracee, the fork event under a seizing tracer, the reports of a tracee's end to its tracer and its parent, and the thread pointer through `PTRACE_ARCH_PRCTL` on x86-64 and `PTRACE_SET_THREAD_AREA` on i686. Its debug-register rows step over a system call to its exact return, watch a `MOV SS` before a system call, watch a kernel copy, and take a deferred hit with `rt_sigtimedwait`. QEMU's TCG takes the `MOV SS` hit early, which the rows report apart; under KVM, which `tests/run` uses when the host has it, the processor delays it into the system-call entry.
 * `tests/xsaveprobe.c` reads and writes a stopped child's YMM registers through `NT_X86_XSTATE` and finds them in a core file's note.

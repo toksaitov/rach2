@@ -187,7 +187,7 @@ The code and stack selectors are always the user's. On i686 a data selector stay
 
 ## Tests
 
-`tests/run default` runs every guest probe in one boot of the test image ([the tests' Readme](../../../tests/Readme.md)). Among them:
+`tests/run default` runs every guest probe, each in a boot of its own on the test image ([the tests' Readme](../../../tests/Readme.md)). Among them:
 
 * `tests/sigprobe.c`: a handler and its return through `rt_sigreturn`, a blocked signal delivered once unblocked, a default termination, a handler that writes invalid selectors into its own frame, `SA_RESETHAND`, a sleep a signal ends where it lands (judged by `sleeps_interrupted` in `/proc/stat`, not by time), and the real-time interval timer.
 * `tests/trapprobe.c`: an invalid opcode and a divide error end only the faulting child, with `SIGILL` and `SIGFPE`.

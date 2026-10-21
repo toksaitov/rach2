@@ -227,7 +227,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 
 ## Tests
 
-`tests/run default` boots the test image and runs every guest probe in one machine, and `ARCH=x86_64 tests/run default` runs them on x86-64 ([the tests' Readme](../../../tests/Readme.md)). These test the process subsystem:
+`tests/run default` runs every guest probe, each in a boot of its own on the test image, and `ARCH=x86_64 tests/run default` runs them on x86-64 ([the tests' Readme](../../../tests/Readme.md)). These test the process subsystem:
 
 * `tests/forktest.c`, `tests/exitprobe.c`, `tests/orphanprobe.c`, `tests/zombieprobe.c`, `tests/survivorprobe.c` and `tests/forkleak.c`: fork, an end by exit, by a signal and after a failed exec, reparenting onto init, signal teardown beside a writer, an init that exits with a runnable child, and no frame lost across fork and reap.
 * `tests/musl/clonemusl.c`, `tests/musl/vforkmusl.c`, `tests/musl/spawnmusl.c` and `tests/musl/threadmusl.c`: `clone` as glibc's fork calls it, `vfork` and `CLONE_VM|CLONE_VFORK`, `posix_spawn`, and threads: their ids, shared descriptors and directories, an `execve` from a thread and two at once.
@@ -238,7 +238,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `tests/limitprobe.c`: `RLIMIT_NPROC`, `RLIMIT_NOFILE` and `RLIMIT_AS`.
 * `tests/musl/schedmusl.c`, `tests/musl/prctlmusl.c`, `tests/musl/seccompmusl.c`, `tests/musl/coremusl.c` and `tests/musl/callsmusl.c`: thread ids, nice values and the scheduling calls, `prctl`, seccomp filters, core files, and among other calls `getcpu`, `personality` and a suspend to idle.
 
-The catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver put faults into the tree one at a time, each of which the row of PROBE in the default suite must catch; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json NAME` runs one.
+The catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver put faults into the tree one at a time, each of which PROBE, run alone in one boot of the test image by the default suite's old runner, `runtests`, must catch; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json NAME` runs one.
 
 Other suites ([the suites](../../../tests/system/suites.md)):
 

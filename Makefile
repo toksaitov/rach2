@@ -147,7 +147,7 @@ MKDISK          = krffs/mkdisk.sh
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        run-host run-default \
+        run-host \
         musl busybox dropbear tcc pdpmake e2fsprogs $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,
@@ -656,6 +656,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # share.
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/crash_scenario \
+                      build/tests/cases/machine/default_scenario \
                       build/tests/cases/machine/doom_scenario \
                       build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/reset_scenario \
@@ -664,6 +665,11 @@ DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
                  build/tests/cases/machine/diskdiag_scenario \
                  build/tests/cases/machine/diskrate_scenario
 MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS)
+# A file of tests/native that the native run of a case stages, which the
+# case's prepare names as tests/native/NAME.
+build/tests/native/%: tests/native/%
+	@mkdir -p $(@D)
+	cp $< $@
 ETUDE_CASE_LIB_HDRS = tools/etude/include/etude/scenario.h tools/etude/include/etude/contract.h \
                       tools/etude/include/etude/qemu.h tools/etude/include/etude/exec.h \
                       tools/etude/include/etude/artifact.h tools/etude/include/etude/processor.h \

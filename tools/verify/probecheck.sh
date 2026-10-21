@@ -6,7 +6,10 @@
 # tests/system/runner/runtests.c, to a suite of tests/registry by a line
 # `NAME SUITE` of tests/probe-suites, or as a helper by a line `NAME REASON`
 # of tests/probe-helpers. An assignment of a program that is not built fails
-# too. PROBECHECK_ROOT, when set, is the tree to check in place of this one.
+# too, and so does a program of the default suite that has no case
+# guest.default.NAME in tests/cases/guest.default.json, NAME the program's
+# file name. PROBECHECK_ROOT, when set, is the tree to check in place of
+# this one.
 set -eu
 REPO=${PROBECHECK_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}
 WORK=
@@ -58,9 +61,17 @@ awk '
     }
     END {
         for (name in built) if (!(name in assigned)) fail("unassigned program: " name)
-        if (!bad) print "probecheck: passed: every built program has a suite or helper use"
         exit bad
     }
 ' "$WORK/built" "$REPO/tests/registry" "$WORK/default" \
-    "$REPO/tests/probe-suites" "$REPO/tests/probe-helpers"
+    "$REPO/tests/probe-suites" "$REPO/tests/probe-helpers" || status=1
+while read -r program _; do
+    if ! grep -Fq "\"case_id\": \"guest.default.${program##*/}\"" \
+        "$REPO/tests/cases/guest.default.json" 2>/dev/null; then
+        echo "probecheck: default program without a case of guest.default: $program" >&2
+        status=1
+    fi
+done < "$WORK/default"
 finished=1
+[ "$status" -eq 0 ] || exit 1
+echo "probecheck: passed: every built program has a suite or helper use"

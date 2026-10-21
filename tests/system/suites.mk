@@ -183,26 +183,13 @@ $(ETUDESERIAL): tests/system/runner/etudeserial.c tools/etude/guest/wire.c utils
                 tools/etude/guest/wire.h tools/etude/include/etude/frame.h utils/sha256.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK) -I tools/etude/guest -I tools/etude/include -I utils
-# The probe suite boots the test image headless (-cpu max) and runs every
-# probe, failing if any does not exit 0; `make test` runs it with the rest of
-# the core tier. The few probes with a special contract (fork-exit-code,
-# stdin, faults, network) are run by hand under tests/system/runner/harness.c;
-# see tests/system/runner/runtests.c. --timeout is one deadline for the whole
-# run, not per probe, so it is stated here rather than left at the default:
-# the suite grows as probes are added, and a default sized for a shorter suite
-# would fail the tail as a hang on a slow host. --steptmo is the per-probe
-# window, and it is stated here for one probe: musl/pwauthmusl waits out the
-# credential lock's ten-second retry delay twice, so it takes tens of seconds
-# to pass. Only a failing probe waits a step window out, so widening it costs
-# a passing run nothing.
-# `tests/run default`: the probe suite, every guest probe booted on the test
-# image in one machine and scored by the runner. DEFAULT_PROBES, empty but in
-# a proof's test (tests/system/default_probe.sh), names the probes to run.
-DEFAULT_PROBES =
-run-default: rach2 test-image $(RUNTESTS)
-	$(RUNTESTS) $(NIC_DEV) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --timeout 300 --steptmo 60 --log $(IMAGES_DIR)/default-test.log \
-	    $(DEFAULT_PROBES:%=--probe %)
+# `tests/run default`: every guest probe, each in a boot of its own on the
+# test image. They are the cases of tests/cases/guest.default.json, which
+# etude runs, and have no target here: guest cases that run under etude-guest,
+# and machine cases, whose scenario (tests/cases/machine/default_scenario.c)
+# runs a probe as the debug shell's transient init on the console. The runner
+# tests/system/runner/runtests.c, which boots the probes in one machine, is
+# kept for selfbuild and for the proofs of tests/system/default_probe.sh.
 # `tests/run etudeguest`: etude-guest on the test image's serial console, as
 # the debug shell's designated init, without the debug-exit port. The driver
 # stores the image's /hello and /ish without a transfer and utils' `yes` with
