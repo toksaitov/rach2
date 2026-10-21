@@ -682,6 +682,70 @@ MOUNT_DISK = $(IMAGES_DIR)/mount-test.disk
 run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(MKMBR) $(HARNESS)
 	sh tests/system/suites/mount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
 	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
+# The disks of the mount cases (tests/cases/machine.mount.json), made for each
+# architecture, since the FAT32 volume holds its tests/hello and
+# tests/memprobe. MOUNT_TEST_DISK is the test disk with a 48 MiB KRFFS
+# partition at LBA 2048 and a 14 MiB FAT32 one at LBA 100352, whose volume
+# mtools fills as a used one is: a name written, deleted and written again.
+# mformat's -T makes the volume the partition's 28672 sectors, since the
+# driver refuses a volume that claims more sectors than its partition has.
+# pattern.bin is 128 sectors, each 128 copies of its own number and a dot.
+# MOUNT_TEST_LIST and MOUNT_TEST_SUMS are what mtools reads off that volume:
+# its names sorted on one line, and the cksum of three of its files, which
+# the busybox case compares with what the machine's shell printed.
+# MOUNT_BOOT_DISK is the boot fixture of `mkfixture boot`, for the write
+# through /dev/bootpart, and MOUNT_CLAIM_DISK the mount disk with its MBR
+# entries swapped, so that the boot partition is the FAT32 volume.
+MOUNT_TEST_DISK  = $(IMAGES_DIR)/mount-test.disk
+MOUNT_TEST_LIST  = $(IMAGES_DIR)/mount-test.list
+MOUNT_TEST_SUMS  = $(IMAGES_DIR)/mount-test.sums
+MOUNT_BOOT_DISK  = $(IMAGES_DIR)/mount-test-boot.disk
+MOUNT_CLAIM_DISK = $(IMAGES_DIR)/mount-test-claim.disk
+MOUNT_FAT        = @@51380224
+$(MOUNT_TEST_DISK): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
+                    build/krffs/mkfs.krffs build/krffs/stageimage.krffs $(MKMBR) \
+                    $(wildcard $(ARCH_BUILD)/tests/hello $(ARCH_BUILD)/tests/memprobe) \
+                    | preflight krffs tests
+	rm -f $@.tmp $@.hello $@.pattern
+	$(MKDISK) krffs/manifests/disk-test.manifest $@.tmp 64 48
+	$(MKMBR) --lba $@.tmp 2048:98304:7f 100352:28672:0c
+	mformat -i $@.tmp$(MOUNT_FAT) -F -T 28672 -v M36FAT ::
+	echo "hello from the mount suite" > $@.hello
+	mcopy -i $@.tmp$(MOUNT_FAT) $@.hello ::/hello.txt
+	mcopy -i $@.tmp$(MOUNT_FAT) $(ARCH_BUILD)/tests/hello ::/hello
+	mcopy -i $@.tmp$(MOUNT_FAT) $@.hello ::/gone.txt
+	mdel -i $@.tmp$(MOUNT_FAT) ::/gone.txt
+	mcopy -i $@.tmp$(MOUNT_FAT) $(ARCH_BUILD)/tests/hello ::/again.bin
+	awk 'BEGIN { for (i = 0; i < 128; i++) for (j = 0; j < 128; j++) printf "%03d.", i }' \
+	    > $@.pattern
+	mcopy -i $@.tmp$(MOUNT_FAT) $@.pattern ::/pattern.bin
+	mcopy -i $@.tmp$(MOUNT_FAT) $(ARCH_BUILD)/tests/memprobe ::/memprobe
+	rm -f $@.hello $@.pattern
+	mv $@.tmp $@
+$(MOUNT_TEST_LIST): $(MOUNT_TEST_DISK)
+	mdir -i $(MOUNT_TEST_DISK)$(MOUNT_FAT) -b :: > $@.tmp
+	sed 's#::/##' $@.tmp | LC_ALL=C sort | tr '\n' ' ' | sed 's/ *$$//' > $@.list
+	rm -f $@.tmp
+	mv $@.list $@
+$(MOUNT_TEST_SUMS): $(MOUNT_TEST_DISK)
+	rm -f $@.tmp
+	for name in hello again.bin hello.txt; do \
+	    mcopy -i $(MOUNT_TEST_DISK)$(MOUNT_FAT) ::/$$name - > $@.file || exit 1; \
+	    cksum < $@.file | awk -v name=$$name '{ print $$1, $$2, name }' >> $@.tmp || exit 1; \
+	done
+	rm -f $@.file
+	mv $@.tmp $@
+$(MOUNT_BOOT_DISK): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
+                    build/krffs/mkfs.krffs build/krffs/stageimage.krffs $(MKFIXTURE) \
+                    | preflight krffs tests
+	rm -f $@.tmp
+	$(MKDISK) krffs/manifests/disk-test.manifest $@.tmp 64 48
+	$(MKFIXTURE) boot $@.tmp
+	mv $@.tmp $@
+$(MOUNT_CLAIM_DISK): $(MOUNT_TEST_DISK) $(MKMBR)
+	cp $(MOUNT_TEST_DISK) $@.tmp
+	$(MKMBR) --lba $@.tmp 100352:28672:0c 2048:98304:7f
+	mv $@.tmp $@
 
 # `tests/run load`: the machine under load while six lines are typed at its
 # console: every line read, no request quarantined by its deadline, and the

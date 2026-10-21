@@ -57,7 +57,7 @@ dhcp-e1000|qemu|full
 dhcp|qemu|full
 netif|qemu|full
 netif-e1000|qemu|full
-mount|qemu,mformat,mcopy,mdir|core
+mount|qemu,mformat,mcopy,mdel,mdir|core
 fdlock|qemu|full
 grow|qemu,mke2fs,e2fsck,qemu-img,xorriso|full||512
 drill|qemu,ssh,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full

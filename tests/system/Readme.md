@@ -178,6 +178,7 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `rtc-host.json` and `rtc-guest.json`: the clock's time between ticks, in `rtc_hosttest` and in `stattest`'s STATTIME row on the KRFFS root, against a `clock.c` whose time between ticks lacks the PIT's position.
 * `sb16.json`: an SB16 boot like the `audio` suite's, on the host's clock and on a slow instruction clock, against a scale command that does not lower its rate for the SB16, an SB16 that does not refill from the callback, and one that plays stereo as mono.
 * `audio.json`: the `audio` cases, against an HDA stream that raises no interrupt at the end of a buffer, so that the notes come from the timer's service alone, and an SB16 that plays stereo as mono.
+* `mount.json`: the `mount` cases, against a request whose deadline counts from its caller's wait for a slot, a late answer to a quarantined request that never frees its slot, and a raw writer that opens a mounted range.
 * `servicelog.json`: the `servicelog` suite, against an init that never empties its log within a boot and one that never removes a full log at boot.
 * `sigcontext.json`: `musl/sigmusl`'s signal frame rows, on i686 alone, with FXSR and with `rach2.nofxsr`, against a `sigframe.c` that does not fill the ucontext.
 * `stackoverrun-i686.json` and `stackoverrun-x86-64.json`: the `memory` suite's two stack-overrun cases, against a mapped stack guard, a mapped boot stack guard, and a double fault without a stack of its own (a task gate on i686, the interrupt stack on x86-64).
