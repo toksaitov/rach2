@@ -81,8 +81,8 @@ image_make()
 {
     build "$@" -C "$tree" -j32 -o preflight -o krffs -o rach2 \
         -o ish -o utils -o tools/etude/guest -o musl-programs \
-        -o vendor/musl/.stamp -o build/krffs/mkfs.krffs PROGS=conloadprobe DEMO_CREDS= \
-        build/images/test.krffs
+        -o check-dropbearmulti -o vendor/musl/.stamp -o build/krffs/mkfs.krffs \
+        PROGS=conloadprobe DEMO_CREDS= build/images/test.krffs
 }
 
 mkdir -p "$tree/tests/system" "$tree/krffs/manifests" "$tree/tools/inspect" \
