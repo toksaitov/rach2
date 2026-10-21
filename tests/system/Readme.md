@@ -183,6 +183,8 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `bigmem.json`: the `bigmem` cases on x86-64, against a memory report that overstates the usable memory, a frame map that leaves out the memory past 4 GiB, and a frame allocator that never gives out a frame past 4 GiB.
 * `large-cases.json`: the `large` cases, against an ext2 read that cuts a file's offset to 32 bits, an exFAT write checked by its offset alone, and a FAT32 write limited at 4 GiB in place of 4 GiB less a byte.
 * `ext2-cases.json`: the `ext2` cases, against a mount check that counts no lost block, a statfs that gives KRFFS's magic number for ext2, and a recovery init that runs `e2fsck` on the first disk alone under `rach2.fsck`.
+* `fatwrite-cases.json`: the `fatwrite` cases, against a FAT32 driver that never sets the dirty flag, one that writes each FAT entry through on its own, and one that leaves a removed file's clusters allocated.
+* `exfat-cases.json`: the `exfat` cases, against an exFAT driver that never sets VolumeDirty, one that leaves a removed file's clusters allocated, and one that records a large file's valid length one byte short.
 * `agents-accept.json`: the `agentsaccept` suite's resized terminal, with Claude Code alone, against a kernel whose pseudo-terminal master sends no `SIGWINCH` when the window size is set.
 * `ntpd.json`: the `gnu` suite's ntpd row, against a configuration that names no server and an SNTP server that answers with the host's own time.
 * `exe.json`: the `gnu` suite's bash row, against an `execve` that names the program by the path it was given, links and all, in `/proc/PID/exe`.

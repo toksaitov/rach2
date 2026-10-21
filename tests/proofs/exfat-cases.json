@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "proof": "exfat-cases",
+  "summary": "the cases of tests/run exfat under etude, against an exFAT driver that never sets VolumeDirty, one that leaves a removed file's clusters allocated, and one that records a large file's valid length one byte short",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/exfat.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run exfat </dev/null"
+    ],
+    "bound_s": 7200
+  },
+  "faults": [
+    {
+      "name": "never-dirty",
+      "summary": "the boot sector's VolumeFlags written without VolumeDirty whatever the caller asks, so that neither a machine ended in the middle of a write nor a failed write leaves the volume marked dirty",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/exfat.c",
+          "find": "    flags[0] = (uint8_t)((em->active_fat & 1) | (dirty ? 2 : 0));",
+          "replace": "    flags[0] = (uint8_t)(em->active_fat & 1);\n    (void)dirty;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: exfat: FAIL",
+          "assert crash-dirty fail",
+          "assert latefail-dirty fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "chain-kept",
+      "summary": "a removed file's cluster chain is never freed, so that the host's walk finds clusters allocated and reached by nothing",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/exfat.c",
+          "find": "    return first ? free_chain(em, first, (set->stream[1] & FLAG_NO_FAT_CHAIN) != 0,\n                              le64(set->stream + 24))\n                 : 0;",
+          "replace": "    return 0;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: exfat: FAIL",
+          "assert walk-written fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "valid-short",
+      "summary": "a file of 64 KiB or more is written to its directory entry with a ValidDataLength one byte short, so that its last byte reads as zero on the host and after a reboot",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/exfat.c",
+          "find": "        uint64_t v = n->valid, l = n->length;",
+          "replace": "        uint64_t v = n->valid - (n->valid >= 65536), l = n->length;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: exfat: FAIL",
+          "assert reader-pattern fail",
+          "assert read-back fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

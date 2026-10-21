@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "proof": "fatwrite-cases",
+  "summary": "the cases of tests/run fatwrite under etude, against a FAT32 driver that never sets the dirty flag, one that writes every FAT entry of a run through on its own, and one that leaves a removed file's clusters allocated",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/fs/fat32.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run fatwrite </dev/null"
+    ],
+    "bound_s": 7200
+  },
+  "faults": [
+    {
+      "name": "never-dirty",
+      "summary": "the first metadata change of a mount clears the dirty flag instead of setting it, so that a machine ended in the middle of a write leaves a volume that says it was unmounted cleanly",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    rc = fat_flag(fm, 1);",
+          "replace": "    rc = fat_flag(fm, 0);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: fatwrite: FAIL",
+          "assert crash-dirty fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "entry-through",
+      "summary": "every FAT entry is written through on its own, even in a batch, so that a large write and its removal take a disk command for each cluster",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "        rc = fat_put_bytes(fm, off, raw, 4, batch == 0);",
+          "replace": "        rc = fat_put_bytes(fm, off, raw, 4, 1);"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: fatwrite: FAIL",
+          "assert bb-write-commands fail",
+          "assert bb-free-commands fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "chain-kept",
+      "summary": "a removed file's cluster chain is never freed, so that the host's walk finds clusters allocated and reached by nothing",
+      "edits": [
+        {
+          "file": "rach2/sys/fs/fat32.c",
+          "find": "    return first ? free_chain(fm, first) : 0;",
+          "replace": "    (void)first;\n    return 0;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: fatwrite: FAIL",
+          "assert walk-written fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

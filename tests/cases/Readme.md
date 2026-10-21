@@ -70,4 +70,6 @@ The storage cases have catalogues of their own, each with faults in the kernel. 
 
 [`tests/proofs/ext2-cases.json`](../proofs/ext2-cases.json) proves the ext2 cases with a mount check that counts no lost block, a statfs that gives ext2 the magic number of KRFFS, which `vfsprobe` finds on the ext2 root, and a recovery init that runs `e2fsck` on the first disk alone, which the copy on the second disk finds.
 
+[`tests/proofs/fatwrite-cases.json`](../proofs/fatwrite-cases.json) and [`exfat-cases.json`](../proofs/exfat-cases.json) prove the fatwrite and exfat cases with faults in the drivers: a volume never marked dirty, which the crash leaves clean; a removed file's clusters kept, which the host's walk finds; FAT entries written through one at a time, which the BusyBox row's command counts find; and an exFAT valid length one byte short, which the host's reader finds.
+
 The catalogues `account-cases.json`, `login-cases.json`, `cred-persist.json`, `procfiles.json` and `fdlock.json` in `tests/proofs/` prove the process and account cases. The existing `authority.json`, `textbusy.json` and `bindhold.json` prove the other families of that conversion.
