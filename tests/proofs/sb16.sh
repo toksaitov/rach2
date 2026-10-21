@@ -1,6 +1,7 @@
 #!/bin/sh
-# sb16.sh: the test of the proof sb16.json, the audio suite's SB16 boot run
-# at two speeds on the kernel WORK/kernel, for the architecture ARCH names.
+# sb16.sh: the test of the proof sb16.json, an SB16 boot like the case
+# machine.audio.sb16's, run at two speeds on the kernel WORK/kernel, for the
+# architecture ARCH names.
 #
 # The catalogue's test calls it from the tree's root:
 #

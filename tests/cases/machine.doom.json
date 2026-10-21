@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.doom",
+  "summary": "The Doom port runs on a disk root: it refuses without its WAD, draws, plays a demo to its end and records one",
+  "cases": [
+    {
+      "case_id": "machine.doom.game",
+      "behavior": "the Doom port refuses to start without its WAD, draws on the framebuffer with a zone sized from the machine's free memory, plays a demo to its end drawing as it goes, and records a demo through fopen",
+      "units": ["doom"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"demo": "demo1", "maxdemo_kib": 1, "least_zone_bytes": 10485760}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "doom_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["doom-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the copy to its root shell and look for the WAD"},
+        {"step_id": "nowad", "stage": "execute", "does": "run the game with the WAD moved away, and put it back"},
+        {"step_id": "draw", "stage": "execute", "does": "start the game in the background, wait for its report of the first frame, look at it and kill it"},
+        {"step_id": "demo", "stage": "execute", "does": "play demo1 to its end"},
+        {"step_id": "record", "stage": "execute", "does": "record a demo until its buffer of 1 KiB fills, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["doom-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "wad", "checks": "the disk has /demo/doom1.wad, which its image stages from ports/doom/doom1.wad", "source": "scenario"},
+        {"assertion_id": "nowad-status", "checks": "the game started with its WAD moved away exits with status 255", "source": "scenario"},
+        {"assertion_id": "nowad-message", "checks": "that game prints the engine's error that the IWAD was not found", "source": "scenario"},
+        {"assertion_id": "drew", "checks": "the game started in the background reports its first frame drawn", "source": "scenario"},
+        {"assertion_id": "running", "checks": "the game still runs once it has reported its first frame", "source": "scenario"},
+        {"assertion_id": "framebuffer", "checks": "the game reported the framebuffer's geometry and did not fail to open it", "source": "scenario"},
+        {"assertion_id": "zone", "checks": "the game's zone is at least 10 MiB, sized from the machine's free memory", "source": "scenario"},
+        {"assertion_id": "demo-exit", "checks": "demo1 played to its end quits with status 0", "source": "scenario"},
+        {"assertion_id": "demo-frames", "checks": "the game's last report of the demo counts more than one frame drawn", "source": "scenario"},
+        {"assertion_id": "record-mode", "checks": "a demo recorded until its buffer fills is written through fopen with mode 644", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "doom-disk", "node": "images/doom-test.disk", "per_architecture": true},
+        {"name": "doom_scenario", "node": "tests/cases/machine/doom_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots a disk root of its own whose shell is root's on the console, and moves the game's WAD away"}
+    }
+  ]
+}

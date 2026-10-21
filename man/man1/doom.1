@@ -96,9 +96,12 @@ In the source tree,
 first starts the game with the WAD moved away and requires that error
 and status 255, then launches the game from
 .Pa /root ,
-waits for its second report, which must count more than one frame,
-checks that it is still running, checks framebuffer
-initialization and a zone of at least 10 MiB, and counts disk commands.
+waits for its report of the first frame, and checks that it is still
+running, that it opened the framebuffer and that its zone is at least 10 MiB.
+It then plays
+.Ql demo1
+to its end, which must exit with status 0 after the game has reported more
+than one frame, and records a demo, whose file must have mode 644.
 It does not judge visual or audible quality.
 .Sh SEE ALSO
 .Xr gettimeofday 2 ,

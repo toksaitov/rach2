@@ -1,6 +1,6 @@
 # `krffs/`: the KRFFS host tools and the image manifests
 
-`krffs/` is the build machine's side of KRFFS, the project's own file system. It has the host programs that make, check, compact, edit, draw and read KRFFS images (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`, `edfs.krffs`, `fsviz.krffs`, `readfile.krffs`), the stager that writes a directory tree into an image from a manifest (`stageimage.krffs`), a password hasher (`mkhash.krffs`) and an optional FUSE driver (`krffs`); the scripts that build images and the development credentials; the 21 manifests in `manifests/`, which list what each image contains; and four scripts the images install as programs, `dmesg.script`, `man.script`, `udhcpc-default.script` and `rescue-static.script`. Every system image is staged on the host without mounting anything, so the build needs neither root nor FUSE and works the same on macOS and Linux, and `fsck.krffs`, which shares no code with the kernel, judges the images the kernel writes in the suites. The format is the kernel's: [krffs.Readme.md](../rach2/sys/fs/krffs.Readme.md).
+`krffs/` is the build machine's side of KRFFS, the project's own file system. It has the host programs that make, check, compact, edit, draw and read KRFFS images (`mkfs.krffs`, `fsck.krffs`, `defrag.krffs`, `edfs.krffs`, `fsviz.krffs`, `readfile.krffs`), the stager that writes a directory tree into an image from a manifest (`stageimage.krffs`), a password hasher (`mkhash.krffs`) and an optional FUSE driver (`krffs`); the scripts that build images and the development credentials; the 23 manifests in `manifests/`, which list what each image contains; and four scripts the images install as programs, `dmesg.script`, `man.script`, `udhcpc-default.script` and `rescue-static.script`. Every system image is staged on the host without mounting anything, so the build needs neither root nor FUSE and works the same on macOS and Linux, and `fsck.krffs`, which shares no code with the kernel, judges the images the kernel writes in the suites. The format is the kernel's: [krffs.Readme.md](../rach2/sys/fs/krffs.Readme.md).
 
 ## Use
 
@@ -94,6 +94,7 @@ The images are written under `build/images/`, or `build/x86_64/images/` for x86-
 | `cred-persist-test` | the disk of `cred-persist` | `creddisk` and the two files it replaces |
 | `stress-test` | disks of `stress`, `stress-ahci` | `stressprobe` |
 | `shutdown-test` | the disk of `shutdown` | BusyBox, a set-user-ID `su`, `init-shell`, a test account |
+| `doom-test` | the disk of `doom` | BusyBox, `init-shell`, Doom and its WAD when the tree has one |
 | `login-test-strict`, `login-test-shell` | the two RAM roots of `login` | one system, with `init-login` or `init-shell`, and no `/bin/login` |
 | `krffsvol-test` | the volume of `krffsmount` and `krffscheck` | three files, one in a directory |
 | `loopimg-test` | `loopdev`'s loop image, and the KRFFS partition of `metal`'s stick | two files |

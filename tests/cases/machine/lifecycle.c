@@ -1,6 +1,7 @@
 /*
- * lifecycle.c: the code the scenarios of machine.crash, machine.reset and
- * machine.shutdown share, over libetude-case.
+ * lifecycle.c: the code the scenarios of machine.crash, machine.reset,
+ * machine.shutdown, machine.audio and machine.doom share, over
+ * libetude-case.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -197,6 +198,46 @@ void lc_find(struct lc *l, struct etude_case_machine *m, const char *id, const c
     else
         snprintf(detail, sizeof(detail), "the search for '%s' was %s", text, status_name(st));
     lc_assert(l, id, present ? st == ETUDE_OK : st == ETUDE_FAILED, detail);
+}
+
+int lc_text(struct lc *l, const char *console, const char *key, uint64_t from, char *buf,
+            size_t size)
+{
+    const char *path = etude_evidence(l->c, console);
+    FILE *f = path != NULL ? fopen(path, "rb") : NULL;
+    size_t n = 0, cap = 0, i = 0;
+    char *text = NULL, *at, *grown;
+    int found = 0;
+
+    if (size > 0)
+        buf[0] = '\0';
+    if (f == NULL)
+        return 0;
+    do {
+        if (n == cap) {
+            cap = cap ? 2 * cap : 65536;
+            if ((grown = realloc(text, cap + 1)) == NULL)
+                break;
+            text = grown;
+        }
+        n += fread(text + n, 1, cap - n, f);
+    } while (n == cap && !feof(f) && !ferror(f));
+    fclose(f);
+    if (text == NULL)
+        return 0;
+    text[n] = '\0';
+    if (from < n && (at = strstr(text + from, key)) != NULL) {
+        found = 1;
+        at += strlen(key);
+        while (size > 0 && i < size - 1 && at[i] != '\0' && at[i] != '\r' && at[i] != '\n') {
+            buf[i] = at[i];
+            i++;
+        }
+        if (size > 0)
+            buf[i] = '\0';
+    }
+    free(text);
+    return found;
 }
 
 int lc_end(struct lc *l, struct etude_case_machine *m, struct etude_termination *end)

@@ -399,7 +399,7 @@ manifest_parts_row()
     fi
     # The row is empty if it finds no stager at all, so require the rules
     # this fault would leave without e2fsprogs to have been read.
-    for t in run-doom build/images/os-real.krffs; do
+    for t in run-tcc build/images/os-real.krffs; do
         is_target "$db" "$t" || { fail manifest-parts "no rule makes $t"; return; }
     done
     pass manifest-parts

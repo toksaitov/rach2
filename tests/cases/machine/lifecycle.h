@@ -1,12 +1,14 @@
 /*
- * lifecycle.h: what the scenarios of machine.crash, machine.reset and
- * machine.shutdown share: each declared assertion reported once, waits and
- * searches of a console that report what they found, the end of a machine
- * by QMP's quit, a look at its processors, and fsck.krffs on a disk copy.
+ * lifecycle.h: what the scenarios of machine.crash, machine.reset,
+ * machine.shutdown, machine.audio and machine.doom share: each declared
+ * assertion reported once, waits and searches of a console that report what
+ * they found, a value read off a console, the end of a machine by QMP's
+ * quit, a look at its processors, and fsck.krffs on a disk copy.
  */
 #ifndef LIFECYCLE_H
 #define LIFECYCLE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "etude/scenario.h"
@@ -87,6 +89,17 @@ int lc_type(struct lc *l, struct etude_case_machine *m, const char *text);
  */
 void lc_find(struct lc *l, struct etude_case_machine *m, const char *id, const char *text,
              uint64_t from, int present);
+
+/**
+ * Copy into `buf` the rest of the console's line after the first `key`
+ * after byte `from`, without its line ending; `console` is the evidence that
+ * keeps the machine's console, `MACHINE.N.console` for its Nth boot. Only
+ * the bytes a wait or the machine's end has read are there.
+ *
+ * @return 1 when the key was found, 0 when it was not, with `buf` empty.
+ */
+int lc_text(struct lc *l, const char *console, const char *key, uint64_t from, char *buf,
+            size_t size);
 
 /**
  * Wait for the machine to end by itself, and give its end in `end`.

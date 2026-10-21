@@ -345,6 +345,7 @@ MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.ma
 MANIFEST_DEPS_etude_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/etude-disk.manifest)
 MANIFEST_DEPS_shutdown_test := $(shell $(MANIFEST_DEPS) krffs/manifests/shutdown-test.manifest)
 MANIFEST_DEPS_disk_test := $(shell $(MANIFEST_DEPS) krffs/manifests/disk-test.manifest)
+MANIFEST_DEPS_doom_test := $(shell $(MANIFEST_DEPS) krffs/manifests/doom-test.manifest)
 # The targets that build what os-real's manifest stages, and grub-test's,
 # which is os-real's with two more files. Every rule that stages either names
 # them as prerequisites, order-only in the rule of a file, so that a tree with
@@ -354,7 +355,8 @@ MANIFEST_PARTS_os_real = utils check-busybox check-tcc check-pdpmake check-setid
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
     $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
-    $(MANIFEST_DEPS_etude_disk) $(MANIFEST_DEPS_shutdown_test) $(MANIFEST_DEPS_disk_test))
+    $(MANIFEST_DEPS_etude_disk) $(MANIFEST_DEPS_shutdown_test) $(MANIFEST_DEPS_disk_test) \
+    $(MANIFEST_DEPS_doom_test))
 STAGED_IN_MANIFESTS = $(filter $(ARCH_MUSL)/% $(TCC_STAGE)/%,$(MANIFEST_INPUTS))
 MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter $(ARCH_MUSL)/%,$(STAGED_IN_MANIFESTS)))
 TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter $(TCC_STAGE)/%,$(STAGED_IN_MANIFESTS)))
@@ -649,9 +651,12 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # The machine scenarios of etude's cases (tests/cases/machine/), each linked
 # with libetude-case, the library that gives it its `main`. They are host
 # programs, the same for both architectures, which a case's `prepare` names
-# as tests/cases/machine/NAME. The lifecycle scenarios also link
-# tests/cases/machine/lifecycle.c, which they share.
-LIFECYCLE_SCENARIOS = build/tests/cases/machine/crash_scenario \
+# as tests/cases/machine/NAME. The lifecycle scenarios, and those of the
+# audio and Doom cases, also link tests/cases/machine/lifecycle.c, which they
+# share.
+LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
+                      build/tests/cases/machine/crash_scenario \
+                      build/tests/cases/machine/doom_scenario \
                       build/tests/cases/machine/reset_scenario \
                       build/tests/cases/machine/shutdown_scenario
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \

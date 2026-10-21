@@ -81,7 +81,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `disk-ahci` (core tier; needs qemu; 128 MiB): the disk suite's page-cache integrity check with the disk on an AHCI controller.
 * `grub` (core tier; needs qemu, mformat, mmd, mcopy; 128 MiB): the machine replacing its own boot loader.
 * `disk-q35` (full tier; needs qemu; 128 MiB): the same disk proof on the q35 machine, whose AHCI controller is built in at 0:31.2, function 2 of the multi-function device 31.
-* `doom` (full tier; needs qemu; 128 MiB): the Doom port's zone on a disk root, sized from the machine's free memory through a heap that grows with brk; one boot.
+* `doom` (full tier; needs qemu; 128 MiB): the Doom port on a disk root, refused without its WAD, drawing with a zone sized from the machine's free memory, playing a demo to its end and recording one through fopen.
 * `disk` (core tier; needs qemu; 128 MiB): the disk-backed page-cache integrity check.
 * `diskpolicy` (full tier; needs qemu; 128 MiB): the read-only kernel does not write the disk, shown on the bytes rather than on a return value.
 * `console` (core tier; needs qemu; 128 MiB): the two probes that read from the console, which the shared probe boot cannot run because they block until something is typed.

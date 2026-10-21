@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "doom",
-  "summary": "the doom suite, whose rows run the game without its WAD and wait for its second report of frames, with three faults in the game's sources",
+  "summary": "the doom case, whose assertions run the game without its WAD and count the frames it drew in a demo played to its end, with three faults in the game's sources",
   "tree": "shared",
   "sources": [
     "ports/doom/doomgeneric_rach2.c",
@@ -21,12 +21,10 @@
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "run",
-      "doom",
-      "doom-test: PASS"
+      "-c",
+      "RACH2_WORKERS=4 exec tests/run doom </dev/null"
     ],
-    "bound_s": 1800
+    "bound_s": 3600
   },
   "faults": [
     {
@@ -40,8 +38,10 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "without its WAD the game exited with status 0 and"
+          "run: doom: machine.doom.game: evidence: ",
+          "failure: nowad-status failed: without its WAD the game exited 0; 255 was required"
         ]
       }
     },
@@ -56,14 +56,16 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "and 0 not-found line(s); the engine"
+          "run: doom: machine.doom.game: evidence: ",
+          "failure: nowad-status failed: without its WAD the game exited "
         ]
       }
     },
     {
       "name": "stall",
-      "summary": "the platform draws no frame after its first, so that the game runs on without progress and never prints its second report",
+      "summary": "the platform draws no frame after its first, so that the game runs on without progress and its last report of a demo counts one frame",
       "edits": [
         {
           "file": "ports/doom/doomgeneric_rach2.c",
@@ -72,8 +74,10 @@
         }
       ],
       "fails": {
+        "status": 1,
         "lines": [
-          "the game printed 1 report(s) of its frames, the last counting 1 frames"
+          "run: doom: machine.doom.game: evidence: ",
+          "failure: demo-frames failed: the game's last report of the demo counts 1 frames"
         ]
       }
     }

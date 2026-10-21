@@ -248,6 +248,14 @@ setid /bin/su 04755:0:0 build/utils/sbin/su
 trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
 init init-shell
 
+# The Doom fixture: a root shell on the console, the game and its data, and
+# no set-id program.
+manifest doom-test
+trusted file 0755:0:0 /bin/busybox build/vendor/busybox/busybox
+trusted file 0755:0:0 /sbin/init build/utils/sbin/init-shell
+sentinel /bin/doom 0755:0:0
+init init-shell
+
 manifest stress-test
 sentinel /stressprobe 0755:0:0
 init none

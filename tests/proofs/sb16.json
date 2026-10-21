@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "sb16",
-  "summary": "the audio suite's SB16 row: the scale recorded from QEMU's SB16 and judged by wavcheck, at the host's speed and under an instruction clock of 512 ns an instruction, at which the device plays periods of the buffer again",
+  "summary": "an SB16 boot like the audio suite's: the scale recorded from QEMU's SB16 and judged by wavcheck, at the host's speed and under an instruction clock of 512 ns an instruction, at which the device plays periods of the buffer again",
   "tree": "shared",
   "sources": [
     "rach2/sys/audio/audio_debug.c",

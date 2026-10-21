@@ -372,55 +372,10 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 	    "expect=COOKED:" "expect=TTYPROBE RAW" \
 	    'sendraw=X' \
 	    "expect=RAW:" "expect=TTYPROBE ALT" "key=alt-x"
-# `tests/run audio`: what the machine actually played. The debug shell's
-# `audio test scale` plays five notes, and the driver's own report says what it
-# was asked to play, not what came out; QEMU's wav backend writes every sample
-# the guest produced, so the notes can be measured afterwards from outside.
-# The PC-speaker fallback cannot play samples, so the boot names an Intel HDA
-# controller and a codec for it to find. The probe reads `/proc/interrupts` on
-# the machine before the notes and again after them, and the count on the
-# audio controller's message vector must have grown between the two: the notes
-# come out either way, since the timer services the stream as well, and the
-# growth is what shows that the controller's own interrupt fed them. A second
-# boot plays the scale on a Sound Blaster 16. Both boots run on any
-# accelerator: rach2/sys/audio/Readme.md says why late refills cannot change
-# the order of the notes, and a device that stops taking frames makes the
-# command report a stall.
-AUDIO_WAV = $(IMAGES_DIR)/audio-scale.wav
-AUDIO_LOG = $(IMAGES_DIR)/audio-scale.log
-run-audio: rach2 tests krffs test-image $(HARNESS) $(WAVCHECK)
-	@rm -f $(AUDIO_WAV) $(AUDIO_LOG)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-device --qemu-arg=intel-hda \
-	    --qemu-arg=-device --qemu-arg=hda-duplex,audiodev=au0 \
-	    --qemu-arg=-audiodev --qemu-arg=wav,id=au0,path=$(AUDIO_WAV) \
-	    --log $(AUDIO_LOG) \
-	    --timeout 120 --ok "INTRPROBE OK" --never "INTRPROBE FAIL" --never "audio: stalled" \
-	    "expect=Type 'help'" "send=exec /intrprobe" "expect=INTRPROBE OK" \
-	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done." \
-	    "send=exec /intrprobe" "expect=INTRPROBE OK"
-	$(WAVCHECK) scale $(AUDIO_WAV) 262 294 330 349 392
-	@awk '/INTRPROBE READ/ { \
-	        for (i = 1; i <= NF; i++) { \
-	            if ($$i == "audio") { seen++; if (seen == 1) { before = $$(i + 1) + 0; } else { after = $$(i + 1) + 0; } } \
-	        } \
-	    } \
-	    END { \
-	        if (seen < 2) { print "audio-test: the probe did not read /proc/interrupts twice" > "/dev/stderr"; exit 1; } \
-	        if (after <= before) { print "audio-test: the audio controller sent no message while it played (" before " then " after ")" > "/dev/stderr"; exit 1; } \
-	        print "audio-test: the audio controller took " after - before " interrupts on its message vector while it played: OK"; \
-	    }' $(AUDIO_LOG)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --append "rach2.rescue rach2.nonet" \
-	    --net hubport,id=net0,hubid=0 \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-device --qemu-arg=sb16,audiodev=au0 \
-	    --qemu-arg=-audiodev \
-	    --qemu-arg=wav,id=au0,timer-period=500,path=$(IMAGES_DIR)/audio-scale-sb16.wav \
-	    --log $(IMAGES_DIR)/audio-scale-sb16.log \
-	    --timeout 120 --ok "Done." --never "AUDIO_START failed." --never "audio: stalled" \
-	    "expect=Type 'help'" "send=audio test scale 2000" "expect=Done."
-	$(WAVCHECK) scale $(IMAGES_DIR)/audio-scale-sb16.wav 262 294 330 349 392
+# `tests/run audio`: what the machine actually played. Its cases
+# (tests/cases/machine.audio.json) play the debug shell's scale on an Intel
+# HDA controller and on a Sound Blaster 16, and wavcheck measures the notes in
+# QEMU's recording of each.
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than `EIO`, removes the file
 # and writes again. It has a boot of its own because it fills the image every
@@ -1561,6 +1516,15 @@ run-account: $(DEMO_CREDS) rach2 krffs ish $(MANIFEST_PARTS_os_real) os-simple-i
 	    "`cat krffs/rach2_demo_password`" real
 	sh tests/system/suites/account.sh $(BOOT_KERNEL) $(OS_SIMPLE_IMAGE) \
 	    "`cat krffs/rach2_demo_password`" simple
+# `tests/run doom`: the Doom port on a disk root, refused without its WAD,
+# drawing with a zone sized from the machine's free memory, playing a demo
+# to its end and recording one through fopen. Its case
+# (tests/cases/machine.doom.json) boots a copy of this disk.
+DOOM_TEST_DISK = $(IMAGES_DIR)/doom-test.disk
+$(DOOM_TEST_DISK): krffs/manifests/doom-test.manifest $(MANIFEST_DEPS_doom_test) $(MKDISK) \
+                   build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
+                   | preflight krffs utils busybox ports/doom
+	$(MKDISK) krffs/manifests/doom-test.manifest $@ 64 48
 # `tests/run tcc`: the machine compiling a program on itself. Boots os-real from
 # a disk as the unprivileged `test` account, writes a C file at the prompt,
 # compiles it, runs the result, and then asks for the four kinds of program this
@@ -1569,13 +1533,6 @@ run-account: $(DEMO_CREDS) rach2 krffs ish $(MANIFEST_PARTS_os_real) os-simple-i
 # compiler wants and this kernel lacks is named on the console rather than
 # turning into a mysterious failure.
 TCC_TEST_DISK = $(IMAGES_DIR)/tcc-test.disk
-# `tests/run doom`: the Doom port's zone on a disk root, sized from the
-# machine's free memory through a heap that grows with brk; one boot.
-DOOM_TEST_DISK = $(IMAGES_DIR)/doom-test.disk
-run-doom: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(HARNESS)
-	$(MKDISK) krffs/manifests/os-real.manifest $(DOOM_TEST_DISK) 64 48
-	sh tests/system/suites/doom.sh $(BOOT_KERNEL) $(DOOM_TEST_DISK) $(HARNESS) \
-	    "`cat krffs/rach2_demo_password`"
 run-tcc: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real) $(RUNUTIL)
 	$(MKDISK) krffs/manifests/os-real.manifest $(TCC_TEST_DISK) 64 48
 	sh tests/system/suites/tcc.sh $(BOOT_KERNEL) $(TCC_TEST_DISK) \

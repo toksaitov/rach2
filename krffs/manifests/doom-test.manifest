@@ -1,0 +1,35 @@
+# doom-test.manifest: the disk of `tests/run doom`, a root on which the Doom
+# port runs with the machine's free memory to give to its zone.
+#
+# Its init is init-shell, not init-login, so that the console starts with a
+# root shell and the case's input never meets `login`, which discards
+# pending input when it puts the terminal back into canonical mode. The game
+# reads its data from /demo/doom1.wad, which Git does not track; without it
+# the image has no WAD, and the case says so.
+#
+# The case of tests/cases/machine.doom.json boots a copy of it. Host paths
+# are relative to the repository root, where mkdisk.sh runs.
+
+dir 0755 /bin
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+file 0755 /bin/doom build/ports/doom/doom
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-shell
+
+dir 0755 /demo
+optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
+
+dir 0755 /etc
+text 0644 /etc/motd doom-test\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\n
+text 0644 /etc/group root:x:0:\n
+text 0644 /etc/shells /bin/sh\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\n
+
+dir 0700 /root
+
+# The game and the case write their files here.
+dir 1777 /tmp
