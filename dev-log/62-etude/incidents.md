@@ -27,6 +27,10 @@ The faults that the process showed while phase #589 converted the suites to etud
 
 * At 21:41 ci opened hold #812, which stops every push but repairs, for failures of guest cases alone, which the rules do not hold pushes for. `run_set` in `tools/ci/run.sh` reads the failed suites from the summary after the last suite's result line; `tests/run` now prints two summaries, and on i686 the one that named the suites came before later result lines, while the last one, `run: result: incomplete`, named none, so the run was recorded as a failure of the whole set, `core`. Five workers with finished work, a, m, v, Codex and the owner's Claude worker on #672, waited on it for about an hour. It was closed by hand at 22:33 as opened in error, and #817 fixes the reading.
 
+## Cancelled runs
+
+* Each architecture's core run asks the admission ledger for 12 processors, so ci's two runs take all 24 of the testing host's and no worker's check is admitted for the 45 minutes they last. To let #672 through, the coordinating session cancelled two core runs and stopped a queued run of worker a's between 23:05 and 23:10, and did not look at the ledger afterwards. Their claims stayed until the ledger could confirm that their processes were gone, and in those minutes it refused every launch that could not fit beside them as `No space left on device`. ci's next core run, of #672's commit, failed at `build` on both architectures (#821, #822) without compiling anything, opened hold #823, and two checks of the coordinating session's failed the same way. The hold was closed by hand at 23:15 and core started again. #824 limits each core run to 6 processors, and a session that stops a run now confirms that its claim has left the ledger before it goes on.
+
 ## The manager
 
 * The manager's check asks whether each worker wrote something in the last twenty minutes and whether new issues arrived. Each check is a new session that sees only the last ten lines of its log, its instructions are a list of things to read, and it may not take work or start helpers. So it saw neither the critical task stall, nor failures that nobody took, nor a hold that the rules did not call for. #814 records it; the owner has asked for a manager that owns the phase's progress, not for more rules.
@@ -45,4 +49,5 @@ The faults that the process showed while phase #589 converted the suites to etud
 * `AGENTS.md`, Writing: times to the owner in local time.
 * #817: ci reads the failed suites whatever the order of the summaries.
 * #814: the manager, to be redesigned around the phase's progress.
-* #792: admission to the testing host, which has no priority for the critical task or for a repair of core.
+* #824: ci's core runs take at most half the testing host.
+* Admission to the testing host still has no priority for the critical task or for a repair of core.
