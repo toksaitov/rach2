@@ -1,0 +1,374 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.textbusy",
+  "summary": "Executable files exclude writers until the last image ends, and bind mounts keep removed files of the KRFFS boot root until the last holder ends, each program on a boot of its own of the x86-64 test image",
+  "cases": [
+    {
+      "case_id": "guest.textbusy.exclusion",
+      "behavior": "an executable file refuses writers and truncation while an image of it runs, and takes them again once the last image has ended, on the KRFFS boot root and on a tmpfs",
+      "units": [
+        "textbusy",
+        "musl/textbusymusl"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "textbusymusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the copies, the tmpfs and its directory under /tmp, which the program removes on every exit, and its workspace"
+      },
+      "assertions": [
+        {
+          "assertion_id": "krffs",
+          "checks": "while two copies of the program run from a scratch directory of the KRFFS boot root, opens of the file for writing, reading and writing, and with O_TRUNC, and truncate(2), are each ETXTBSY, through a new name after a rename and, on tmpfs, through a hard link; a read-only descriptor's ftruncate is EINVAL and fallocate EBADF; an exec is ETXTBSY while a duplicate of a writer is open; once the last image ends, by exit or by exec of another program, the file can be written and truncated again, also after a forked image; an image runs on after its file is unlinked; a failed exec of a file that is no program leaves it writable; and an ELF interpreter is held like the program that names it, through a rename and an unlink",
+          "source": "program"
+        },
+        {
+          "assertion_id": "tmpfs",
+          "checks": "while two copies of the program run from a tmpfs mounted in the workspace, opens of the file for writing, reading and writing, and with O_TRUNC, and truncate(2), are each ETXTBSY, through a new name after a rename and, on tmpfs, through a hard link; a read-only descriptor's ftruncate is EINVAL and fallocate EBADF; an exec is ETXTBSY while a duplicate of a writer is open; once the last image ends, by exit or by exec of another program, the file can be written and truncated again, also after a forked image; an image runs on after its file is unlinked; a failed exec of a file that is no program leaves it writable; and an ELF interpreter is held like the program that names it, through a rename and an unlink",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "textbusymusl",
+          "node": "tests/musl/textbusymusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "statushelper",
+          "node": "tests/musl/statushelper",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          },
+          {
+            "fixture": "root",
+            "type": "krffs"
+          },
+          {
+            "fixture": "stage",
+            "names": [
+              "statushelper"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guest.textbusy.bindhold",
+      "behavior": "a file of the KRFFS boot root held through a bind mount of its directory keeps its bytes after it loses its name, through the original or through the bind, and returns its blocks when its last holder ends",
+      "units": [
+        "textbusy",
+        "musl/bindholdmusl"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": [
+            "rach2.rescue"
+          ]
+        }
+      },
+      "execution": {
+        "program": "bindholdmusl",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "root",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the bind mount and its directory under /tmp, which the program removes on every exit, and its workspace"
+      },
+      "assertions": [
+        {
+          "assertion_id": "descriptor-unlink",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the original directory: a descriptor and its duplicate keep the file's bytes, the first close keeps its blocks and the last returns them; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "descriptor-rename",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the original directory: a descriptor and its duplicate keep the file's bytes, the first close keeps its blocks and the last returns them; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "mapping-unlink",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the original directory: a private mapping made through the bind keeps the file's bytes after its descriptor closes, and munmap returns its blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "mapping-rename",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the original directory: a private mapping made through the bind keeps the file's bytes after its descriptor closes, and munmap returns its blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "flight-unlink",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the original directory: a descriptor sent over an AF_UNIX socket and closed keeps the file, and its receiver reads the bytes; the last close returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "flight-rename",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the original directory: a descriptor sent over an AF_UNIX socket and closed keeps the file, and its receiver reads the bytes; the last close returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "image-unlink",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the original directory: an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "image-rename",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the original directory: an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "forked-image-unlink",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the original directory: the forked child of an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "forked-image-rename",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the original directory: the forked child of an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "descriptor-unlink-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the bind remounted writable: a descriptor and its duplicate keep the file's bytes, the first close keeps its blocks and the last returns them; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "descriptor-rename-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the bind remounted writable: a descriptor and its duplicate keep the file's bytes, the first close keeps its blocks and the last returns them; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "mapping-unlink-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the bind remounted writable: a private mapping made through the bind keeps the file's bytes after its descriptor closes, and munmap returns its blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "mapping-rename-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the bind remounted writable: a private mapping made through the bind keeps the file's bytes after its descriptor closes, and munmap returns its blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "flight-unlink-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the bind remounted writable: a descriptor sent over an AF_UNIX socket and closed keeps the file, and its receiver reads the bytes; the last close returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "flight-rename-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the bind remounted writable: a descriptor sent over an AF_UNIX socket and closed keeps the file, and its receiver reads the bytes; the last close returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "image-unlink-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the bind remounted writable: an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "image-rename-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the bind remounted writable: an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "forked-image-unlink-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file unlinked through the bind remounted writable: the forked child of an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        },
+        {
+          "assertion_id": "forked-image-rename-bind",
+          "checks": "the read-only bind refuses to remove the name with EROFS, and with the file renamed over through the bind remounted writable: the forked child of an image executed through the bind keeps the file, readable through /proc/PID/exe, until it exits and returns the blocks; its bytes outlast a new file written after the name goes, and the free blocks come back to their count before the row",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 600000000,
+          "ceiling_us": 1800000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "transfer": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "bindholdmusl",
+          "node": "tests/musl/bindholdmusl",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          },
+          {
+            "fixture": "root",
+            "type": "krffs"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -2172,11 +2172,5 @@ prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_
 
 # `tests/run textbusy`: executable files exclude writers until the last image
 # ends, and bind mounts retain removed KRFFS boot-root files until last close.
-run-textbusy: rach2 tests krffs musl-programs test-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-m --qemu-arg=128 --append "rach2.rescue" \
-	    --timeout 120 --ok "BINDHOLDMUSL OK" --never "TEXTBUSYMUSL FAIL" \
-	    --never "BINDHOLDMUSL FAIL" \
-	    --log $(IMAGES_DIR)/textbusy-test.log \
-	    "expect=Type 'help'" "send=exec /musl/textbusymusl" "expect=TEXTBUSYMUSL OK" \
-	    "expect=Type 'help'" "send=exec /musl/bindholdmusl" until=90
+# They are the cases of tests/cases/guest.textbusy.json, which etude runs on
+# x86-64, and have no target here.
