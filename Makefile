@@ -665,6 +665,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/disks_scenario \
                       build/tests/cases/machine/doom_scenario \
                       build/tests/cases/machine/krffsmount_scenario \
+                      build/tests/cases/machine/large_scenario \
                       build/tests/cases/machine/loopdev_scenario \
                       build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/mount_scenario \

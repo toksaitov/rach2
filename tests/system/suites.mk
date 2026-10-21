@@ -1354,13 +1354,12 @@ $(BUS_ROOTS): $(ARCH_CASE_DIR)/bus/%.disk: krffs/manifests/disk-test.manifest \
 	$(MKDISK) krffs/manifests/disk-test.manifest $@.tmp 64 48
 	$(MKMBR) --lba --id $(BUS_ID_$*) $@.tmp 2048:98304:7f >/dev/null
 	mv $@.tmp $@
-# `tests/run large`: a file past 4 GiB on ext2 and on exFAT, written, read
-# back after a remount, sought, sized, truncated, appended and shared
-# between two descriptors, and a write past each format's limit refused by
-# name. The exFAT volume comes from the host's own formatter.
-LARGE_DIR = $(IMAGES_DIR)/large
-run-large: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/large.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(LARGE_DIR)
+# `tests/run large`: a file of 256 MiB on ext2 and on exFAT, written, read
+# back after a remount, sought, sized, truncated, appended and shared between
+# two descriptors, a mebibyte written astride the 4 GiB line of a sparse ext2
+# file, and a write past each format's limit refused by name. They are the
+# machine cases of tests/cases/machine.large.json, which etude runs, and have
+# no target here. The exFAT volume comes from the host's own formatter.
 # `tests/run grow`: a 1 GiB ext2 root grown by `growroot` on the recovery
 # system to a partition the size of the installed machine's disk, its
 # writes checked against the grow set, a grow killed and repaired, one

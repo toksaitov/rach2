@@ -1,0 +1,225 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.large",
+  "summary": "A file of 256 MiB on ext2 and on exFAT, a mebibyte astride the 4 GiB line of a sparse ext2 file, and a write past each format's limit refused by name, on volumes that the host's own tools make in an empty AHCI disk and check after the machine; the program is tests/cases/machine/large_scenario.c, which runs tests/bigfileprobe.c at the kernel's debug shell",
+  "cases": [
+    {
+      "case_id": "machine.large.ext2",
+      "behavior": "a 256 MiB file on a 6 GiB ext2 volume that mke2fs made is written, sized, sought, read at its middle and near its end, shared between a second open and a duplicate, truncated in a few disk commands and appended to, and read back whole after a remount in a second boot; a mebibyte written astride the 4 GiB line of a sparse file reads back with its hole zero; a write at the file limit for 4096-byte blocks is refused with EFBIG and named in the kernel's log; and e2fsck -fn finds the volume consistent after the machine",
+      "units": ["large", "tests/bigfileprobe.c", "rach2/sys/fs/ext2.c", "rach2/sys/block/ahci.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"file_mib": 256, "volume_mib": 6144, "limit_offset": "2196875759616"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mke2fs", "e2fsck"], "features": {}},
+      "execution": {
+        "program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "volume", "stage": "prepare",
+         "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the ext2 volume in the first with mke2fs; the disk stays sparse"},
+        {"step_id": "write", "stage": "execute", "machine": "write",
+         "does": "boot the test image on the disk, run bigfileprobe write at the debug shell and end the machine"},
+        {"step_id": "verify", "stage": "execute", "machine": "check",
+         "does": "boot the test image on the disk again and run bigfileprobe verify, which reads the file back after the new mount"},
+        {"step_id": "sparse", "stage": "execute", "machine": "check",
+         "does": "run bigfileprobe sparse, which writes and reads a mebibyte astride the 4 GiB line of a new file"},
+        {"step_id": "limit", "stage": "execute", "machine": "check",
+         "does": "run bigfileprobe limit at the file limit for 4096-byte blocks"},
+        {"step_id": "fsck", "stage": "execute",
+         "does": "end the machine and run e2fsck -fn on the volume"}
+      ],
+      "machines": [
+        {"machine_id": "write",
+         "qemu": {"kernel": "kernel", "initrd": "test-image",
+                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "check",
+         "qemu": {"kernel": "kernel", "initrd": "test-image",
+                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and mke2fs makes the 6 GiB ext2 volume in its first partition, each exiting 0", "source": "scenario"},
+        {"assertion_id": "write-exit", "checks": "bigfileprobe write returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "write-ok", "checks": "bigfileprobe write says BIGFILE OK (write) and never BIGFILE FAIL: the file of 256 MiB written and synced, its size, a seek to its end and back, its blocks at the middle and near the end, an offset shared with a duplicate and not with a second open, a truncate to three quarters that takes at most 8 disk commands for each 4 MiB it frees and 64 more, and an appended mebibyte read back", "source": "scenario"},
+        {"assertion_id": "verify-exit", "checks": "bigfileprobe verify, in a second boot, returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "verify-ok", "checks": "bigfileprobe verify says BIGFILE OK (verify) and never BIGFILE FAIL: after the new mount the file has the size the write left, every block has its number and a read at its end gives nothing", "source": "scenario"},
+        {"assertion_id": "sparse-exit", "checks": "bigfileprobe sparse returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "sparse-ok", "checks": "bigfileprobe sparse says BIGFILE OK (sparse) and never BIGFILE FAIL: a mebibyte written astride the 4 GiB line of a new file sets its size past the line, reads back, leaves the hole below it reading zeros, and the file truncates to a block past the line", "source": "scenario"},
+        {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 2196875759616 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at the file limit for 4096-byte blocks is refused with EFBIG and the file stays empty", "source": "scenario"},
+        {"assertion_id": "limit-named", "checks": "the kernel's log says ext2: write: offset 2095103 MiB is past the file limit of 2095103 MiB for 4096-byte blocks", "source": "scenario"},
+        {"assertion_id": "fsck", "checks": "e2fsck -fn on the volume after the machine exits 0, finding it consistent", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 6}
+      ],
+      "bounds": {
+        "case": {"floor_us": 10000000, "initial_us": 7200000000, "ceiling_us": 14400000000},
+        "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1200000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 536870912, "disk_bytes": 536870912,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "it boots an empty AHCI disk of its own whose partitions the host's tools format before the boots and check after them"}
+    },
+    {
+      "case_id": "machine.large.exfat",
+      "behavior": "a 256 MiB file on a 6 GiB exFAT volume that the host's own formatter made is written, sized, sought, read at its middle and near its end, shared between a second open and a duplicate, truncated in a few disk commands and appended to, and read back whole after a remount in a second boot; a write at the largest offset a seek can name is refused with EFBIG and named in the kernel's log; and the host's own exFAT checker finds the volume consistent after the machine",
+      "units": ["large", "tests/bigfileprobe.c", "rach2/sys/fs/exfat.c", "rach2/sys/block/ahci.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"file_mib": 256, "volume_mib": 6144, "limit_offset": "9223372036854775807"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the empty disk, which it keeps after a failure; fstool removes the copy of the volume it checks"
+      },
+      "steps": [
+        {"step_id": "volume", "stage": "prepare",
+         "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the exFAT volume in the second with the host's own formatter through fstool; the disk stays sparse"},
+        {"step_id": "write", "stage": "execute", "machine": "write",
+         "does": "boot the test image on the disk, run bigfileprobe write at the debug shell and end the machine"},
+        {"step_id": "verify", "stage": "execute", "machine": "check",
+         "does": "boot the test image on the disk again and run bigfileprobe verify, which reads the file back after the new mount"},
+        {"step_id": "limit", "stage": "execute", "machine": "check",
+         "does": "run bigfileprobe limit at the largest offset a seek can name"},
+        {"step_id": "fsck", "stage": "execute",
+         "does": "end the machine and check the volume with the host's own exFAT checker through fstool"}
+      ],
+      "machines": [
+        {"machine_id": "write",
+         "qemu": {"kernel": "kernel", "initrd": "test-image",
+                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "check",
+         "qemu": {"kernel": "kernel", "initrd": "test-image",
+                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and the host's own exFAT formatter, which fstool finds, makes the 6 GiB volume in its second partition, each exiting 0; a host with no formatter and no made tooling machine fails it", "source": "scenario"},
+        {"assertion_id": "write-exit", "checks": "bigfileprobe write returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "write-ok", "checks": "bigfileprobe write says BIGFILE OK (write) and never BIGFILE FAIL: the file of 256 MiB written and synced, its size, a seek to its end and back, its blocks at the middle and near the end, an offset shared with a duplicate and not with a second open, a truncate to three quarters that takes at most 8 disk commands for each 4 MiB it frees and 64 more, and an appended mebibyte read back", "source": "scenario"},
+        {"assertion_id": "verify-exit", "checks": "bigfileprobe verify, in a second boot, returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "verify-ok", "checks": "bigfileprobe verify says BIGFILE OK (verify) and never BIGFILE FAIL: after the new mount the file has the size the write left, every block has its number and a read at its end gives nothing", "source": "scenario"},
+        {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 9223372036854775807 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at the format's limit of 2^63 - 1 bytes is refused with EFBIG and the file stays empty", "source": "scenario"},
+        {"assertion_id": "limit-named", "checks": "the kernel's log says exfat: write: offset past the format's limit", "source": "scenario"},
+        {"assertion_id": "fsck", "checks": "the host's own exFAT checker, which fstool finds, exits 0 on a copy of the volume after the machine, finding it consistent; a host with no checker and no made tooling machine fails it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {
+        "case": {"floor_us": 10000000, "initial_us": 7200000000, "ceiling_us": 14400000000},
+        "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1200000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 536870912, "disk_bytes": 536870912,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "fstool", "node": "tests/cases/host/fstool", "per_architecture": false},
+        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "it boots an empty AHCI disk of its own whose partitions the host's tools format before the boots and check after them"}
+    },
+    {
+      "case_id": "machine.large.fat32",
+      "behavior": "a write at the last byte of 4 GiB, past FAT32's limit, on a volume that mformat made, is refused with EFBIG and named in the kernel's log",
+      "units": ["large", "tests/bigfileprobe.c", "rach2/sys/fs/fat32.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"volume_mib": 64, "limit_offset": "4294967295"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": ["mformat"], "features": {}},
+      "execution": {
+        "program": "large_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the empty disk, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "volume", "stage": "prepare",
+         "does": "write the disk's MBR, with identity 1a26e001 and its ext2, exFAT and FAT32 partitions, with mkmbr, and make the FAT32 volume in the third with mformat; the disk stays sparse"},
+        {"step_id": "boot", "stage": "execute", "machine": "fixture",
+         "does": "boot the test image on the disk and wait for the debug shell"},
+        {"step_id": "limit", "stage": "execute", "machine": "fixture",
+         "does": "run bigfileprobe limit at the last byte of 4 GiB and end the machine"}
+      ],
+      "machines": [
+        {"machine_id": "fixture",
+         "qemu": {"kernel": "kernel", "initrd": "test-image",
+                  "disks": [{"name": "large", "bus": "ahci", "size_bytes": 12954107904}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [],
+                  "boot_options": ["rach2.rescue"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "volume", "checks": "mkmbr writes the disk's table and mformat makes the 64 MiB FAT32 volume in its third partition, each exiting 0", "source": "scenario"},
+        {"assertion_id": "limit-exit", "checks": "bigfileprobe limit at offset 4294967295 returns to the debug shell with status 0, by the kernel's record of its exit", "source": "scenario"},
+        {"assertion_id": "limit-ok", "checks": "bigfileprobe limit says BIGFILE OK (limit) and never BIGFILE FAIL: a one-byte write at the last byte of 4 GiB, past the largest file of 4 GiB less a byte, is refused with EFBIG and the file stays empty", "source": "scenario"},
+        {"assertion_id": "limit-named", "checks": "the kernel's log says vfat: write: offset 4095 MiB is past the format's limit of 4 GiB", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 1200000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "mkmbr", "node": "tools/image/mkmbr", "per_architecture": false},
+        {"name": "large_scenario", "node": "tests/cases/machine/large_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "layout", "reason": "it boots an empty AHCI disk of its own whose partition the host's tools format before the boot"}
+    }
+  ]
+}
