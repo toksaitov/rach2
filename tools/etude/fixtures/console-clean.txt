@@ -1,0 +1,5 @@
+<6>[0.00] boot: rach2 starting
+<6>[0.12] pci: 00:03.0 rtl8139
+Type 'help' for available commands.
+# echo '<2>[0.50] isr: kernel exception: typed, not a record'
+<6>[1.07] exec: /etude-guest

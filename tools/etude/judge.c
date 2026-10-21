@@ -67,6 +67,8 @@ struct judging {
     const char *how[32];     /* "feature" or "report", or NULL for neither */
     int reported[32];        /* the group's branch record was read */
     struct jbuf *texts;      /* an open JSON array of the errors, or NULL */
+    const char *console;     /* the machine's console, or NULL for none */
+    size_t console_len;
 };
 
 static int same(const char *a, const char *b)
@@ -739,23 +741,35 @@ static const struct etude_processor *placed_processor(const struct json *c, cons
     return same(placement, "qemu") ? etude_processor_find(json_text(qemu, "cpu")) : NULL;
 }
 
-/* The arguments of `report` and `attempt`: the processor's features, then
- * the manifest, the case, the architecture, the placement and the rest. */
+/* The arguments of `report` and `attempt`: the processor's features and
+ * the console, then the manifest, the case, the architecture, the placement
+ * and the rest. */
 struct request {
     char *features[64]; /* each `NAME=present` or `NAME=absent` of a -f */
     int nfeatures;
+    const char *console; /* the file of a -k, or NULL */
     char **arg;
     int n;
 };
 
-/** Takes the -f options of `args` into `q`, and the arguments after them. */
+/**
+ * Takes the -f and -k options of `args` into `q`, and the arguments after
+ * them.
+ */
 static void read_request(char **args, int n, struct request *q)
 {
     int i = 0;
 
     q->nfeatures = 0;
-    for (; i + 1 < n && strcmp(args[i], "-f") == 0 && q->nfeatures < 64; i += 2) {
-        q->features[q->nfeatures++] = args[i + 1];
+    q->console = NULL;
+    for (; i + 1 < n; i += 2) {
+        if (strcmp(args[i], "-f") == 0 && q->nfeatures < 64) {
+            q->features[q->nfeatures++] = args[i + 1];
+        } else if (strcmp(args[i], "-k") == 0 && q->console == NULL) {
+            q->console = args[i + 1];
+        } else {
+            break;
+        }
     }
     q->arg = args + i;
     q->n = n - i;
@@ -845,7 +859,7 @@ int judge_report(struct cases *set, char **args, int n)
     int status;
 
     read_request(args, n, &q);
-    if (q.n < 4 || q.n > 5) {
+    if (q.n < 4 || q.n > 5 || q.console != NULL) {
         return 2;
     }
     status = open_case(set, &q, &j);
@@ -1387,10 +1401,55 @@ static void put_assertion(struct jbuf *b, const char *id, const char *source, in
 }
 
 /**
+ * Returns 1 when the console of `j`, NUL bytes and all, has the text `s`,
+ * and 0 when not or when `s` is NULL or empty.
+ */
+static int console_has(const struct judging *j, const char *s)
+{
+    size_t n = s != NULL ? strlen(s) : 0, i;
+
+    for (i = 0; n > 0 && i + n <= j->console_len; i++) {
+        if (j->console[i] == s[0] && memcmp(j->console + i, s, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Copies into `out` the first record of the console of `j` at the kernel's
+ * level 2, KLOG_CRIT, which only a panic and a fault of the kernel use: a
+ * line that begins `<2>[`. With `panics` set, a record of the subsystem
+ * `panic` is passed by. Returns 1 when there is one, and 0 when not.
+ */
+static int console_fault(const struct judging *j, int panics, char *out, size_t size)
+{
+    const char *c = j->console, *close;
+    size_t i, end;
+
+    for (i = 0; i + 4 <= j->console_len; i++) {
+        if ((i > 0 && c[i - 1] != '\n') || memcmp(c + i, "<2>[", 4) != 0) {
+            continue;
+        }
+        for (end = i; end < j->console_len && c[end] != '\r' && c[end] != '\n'; end++) {
+        }
+        close = memchr(c + i, ']', end - i);
+        if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&
+            memcmp(close, "] panic: ", 9) == 0) {
+            continue;
+        }
+        snprintf(out, size, "the console has %.*s", (int)(end - i), c + i);
+        return 1;
+    }
+    return 0;
+}
+
+/**
  * Returns the outcome of the declared assertion `a`, with its detail in
  * `*detail`, or -1 when the attempt does not require it. An assertion of
- * the executor or a scenario is missing, since only an executor's console
- * and a scenario's calls give them.
+ * the executor passes when the console has its record and fails when it has
+ * not; without the console it is missing, as one of a scenario is, since
+ * only an executor's console and a scenario's calls give them.
  */
 static int declared_outcome(const struct judging *j, const struct json *a, const char **detail)
 {
@@ -1403,8 +1462,15 @@ static int declared_outcome(const struct judging *j, const struct json *a, const
     if (!required(j, a)) {
         return -1;
     }
+    if (same(json_text(a, "source"), "executor") && j->console != NULL) {
+        if (console_has(j, json_text(a, "record"))) {
+            return OUTCOME_PASS;
+        }
+        *detail = "the console has no such record";
+        return OUTCOME_FAIL;
+    }
     if (same(json_text(a, "source"), "executor")) {
-        *detail = "casecheck attempt does not read the kernel's records";
+        *detail = "casecheck attempt was given no console";
         return OUTCOME_MISSING;
     }
     if (same(json_text(a, "source"), "scenario")) {
@@ -1427,13 +1493,15 @@ static int declared_outcome(const struct judging *j, const struct json *a, const
 /**
  * Appends the assertions an attempt of the case requires, which ended as
  * `e`, placed `placement` with its report in `state`: the declared ones in
- * the manifest's order, then the executor's.
+ * the manifest's order, then the executor's. With the console, `etude.kernel`
+ * fails for its first record of a panic or a fault of the kernel, passing by
+ * a panic when the termination expects one, and passes when it has none.
  */
 static void put_assertions(struct jbuf *b, const struct judging *j, const struct ending *e,
                            const char *placement, const char *state)
 {
     const struct json *list = json_member(j->c, "assertions");
-    char why[200], seen[64];
+    char why[200], seen[64], fault[256];
     const char *detail;
     size_t i;
     int outcome;
@@ -1450,9 +1518,15 @@ static void put_assertions(struct jbuf *b, const struct judging *j, const struct
     outcome = detail == NULL ? OUTCOME_PASS : OUTCOME_FAIL;
     put_assertion(b, "etude.termination", "executor", e->value < 0 ? OUTCOME_MISSING : outcome,
                   detail);
-    if (kernel_read(j->c, placement)) {
+    if (kernel_read(j->c, placement) && j->console != NULL) {
+        outcome =
+            console_fault(j, same(json_text(json_member(j->c, "termination"), "end"), "panic"),
+                          fault, sizeof fault);
+        put_assertion(b, "etude.kernel", "executor", outcome ? OUTCOME_FAIL : OUTCOME_PASS,
+                      outcome ? fault : NULL);
+    } else if (kernel_read(j->c, placement)) {
         put_assertion(b, "etude.kernel", "executor", OUTCOME_MISSING,
-                      "casecheck attempt does not read the console or the kernel's log");
+                      "casecheck attempt was given no console and does not read the kernel's log");
     }
     if (program_reports(j->c)) {
         outcome = report_verdict(state);
@@ -1613,12 +1687,14 @@ static int recheck(const struct cases *set, const char *text)
 /**
  * Gives the results document of one attempt. `args` are those of `report`,
  * with the output's file required, then the run's, the attempt's and the
- * item's identities, the end and, for exited and signaled, its value.
+ * item's identities, the end and, for exited and signaled, its value; a
+ * `-k CONSOLE` among the options gives the console of the machine of an
+ * attempt placed `qemu`, from which the executor's assertions are decided.
  * Judges the output's records as `report` does, without printing the
  * judgement, and prints the document as one line. Returns 0 when the
  * attempt passed, 1 when it failed and 3 when it is incomplete; 2, with no
  * document, for a usage fault, a file that cannot be read, a case not in the
- * manifest or a placement it cannot have.
+ * manifest, a placement it cannot have or a console of another placement.
  */
 int judge_attempt(struct cases *set, char **args, int n)
 {
@@ -1626,6 +1702,8 @@ int judge_attempt(struct cases *set, char **args, int n)
     struct request q;
     struct judging j;
     struct ending e;
+    char *console = NULL;
+    size_t console_len = 0;
     int i, result = -1;
 
     read_request(args, n, &q);
@@ -1641,10 +1719,21 @@ int judge_attempt(struct cases *set, char **args, int n)
     if (open_case(set, &q, &j) != 0) {
         return 2;
     }
+    if (q.console != NULL && !same(q.arg[3], "qemu")) {
+        finding(NULL, 0, "attempt: -k gives a QEMU machine's console, and %s is placed %s",
+                q.arg[1], q.arg[3]);
+        return 2;
+    }
+    if (q.console != NULL && (console = read_file(q.console, &console_len)) == NULL) {
+        return 2;
+    }
+    j.console = console;
+    j.console_len = console_len;
     jbuf_puts(&texts, "[");
     j.texts = &texts;
     if (judge_text(&j, q.arg[4]) != 0) {
         jbuf_free(&texts);
+        free(console);
         return 2;
     }
     jbuf_puts(&texts, "]");
@@ -1661,6 +1750,7 @@ int judge_attempt(struct cases *set, char **args, int n)
         say_text(doc.data);
     }
     free(j.rec);
+    free(console);
     jbuf_free(&texts);
     jbuf_free(&doc);
     return result < 0 ? 2 : result == ATTEMPT_PASS ? 0 : result == ATTEMPT_FAILURE ? 1 : 3;

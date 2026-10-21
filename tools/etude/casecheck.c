@@ -19,13 +19,15 @@
  *     report of CASE run on ARCH (i686, x86_64 or none) and placed host,
  *     qemu or native, with the processor's features that a branch group is
  *     decided by; prints each assertion's outcome and the outcome they give.
- * casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... MANIFEST CASE
- *         ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]
+ * casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... [-k CONSOLE]
+ *         MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]
  *     judges OUTPUT, a file or `-`, as `report` does, and prints the results
  *     document of the attempt ATTEMPT of the item ITEM of the run RUN, whose
  *     program ended as END: `exited` or `signaled` with VALUE, or `stopped`
- *     or `lost`. The status is 0 for a pass, 1 for a failure and 3 for an
- *     incomplete attempt; with 2, no document is printed.
+ *     or `lost`. CONSOLE is the console of the machine of an attempt placed
+ *     qemu, which decides the executor's assertions. The status is 0 for a
+ *     pass, 1 for a failure and 3 for an incomplete attempt; with 2, no
+ *     document is printed.
  * casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
  *     checks each results document of the JSON Lines file RESULTS against
  *     its schema and its case, and prints each attempt's outcome; with -o,
@@ -419,7 +421,8 @@ static void usage(void)
                     "       casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... "
                     "MANIFEST CASE ARCH PLACEMENT [OUTPUT]\n"
                     "       casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... "
-                    "MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]\n"
+                    "[-k CONSOLE] MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END "
+                    "[VALUE]\n"
                     "       casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...\n"
                     "       casecheck [-s SCHEMAS] schema NAME FILE...\n"
                     "       casecheck [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] "

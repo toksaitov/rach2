@@ -184,9 +184,28 @@
 3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-truncated.out run-1 attempt-1 item-1 lost | "termination":{"end":"lost","value":null,"observed_by":"executor","detail":"the executor did not observe its end"}
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 1 | {"assertion_id":"etude.termination","source":"executor","outcome":"fail","detail":"exited 1, where the case expects exited 0"}
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled 9 | "detail":"signaled 9, where the case expects exited 0"
-3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"casecheck attempt does not read the console or the kernel's log"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console and does not read the kernel's log"}
 3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | "observed_by":"etude_guest"
-1 attempt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"missing","detail":"casecheck attempt does not read the kernel's records"}
+1 attempt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console"}
+# With -k, the console of the machine decides the executor's assertions:
+# etude.kernel fails for a record at level 2, a panic or a fault of the
+# kernel, at the start of a line, and passes without one; an executor
+# assertion passes when the console has its record. A processor profile
+# decides the branches of a guest case placed qemu.
+0 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"pass","detail":null}
+1 attempt -k ./console-panic.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"fail","detail":"the console has <2>[1.31] panic: stopped: kmalloc: free of a bad pointer"}
+1 attempt -k ./console-fault.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | "detail":"the console has <2>[1.31] vm: fault: in kernel mode at 0x00000004 (err 0x0), pc 0xC0101234"
+0 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.rngprobe x86_64 qemu ./report-rng.out run-1 attempt-1 item-1 exited 0 | [{"group_id":"source","alternative_id":"trusted","decided_by":"feature"}]
+1 attempt -k ./console-survivor.txt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"pass","detail":null}
+1 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"fail","detail":"the console has no such record"}
+2 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 0 | -k gives a QEMU machine's console, and guest.default.errnoprobe is placed native
+2 attempt -k ./absent.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | cannot read
+2 report -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out
+# A case that expects the kernel's panic passes etude.kernel by a panic's
+# record, but not by a fault's before it.
+0 manifest ./console-case.json
+3 attempt -k ./console-panic.txt ./console-case.json fixture.console.panic i686 qemu ./report-absent.out run-1 attempt-1 item-1 stopped | {"assertion_id":"etude.kernel","source":"executor","outcome":"pass","detail":null}
+1 attempt -k ./console-fault.txt ./console-case.json fixture.console.panic i686 qemu ./report-absent.out run-1 attempt-1 item-1 stopped | "detail":"the console has <2>[1.31] vm: fault: in kernel mode at 0x00000004 (err 0x0), pc 0xC0101234"
 3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | "report":{"state":"not_used","records":0,"errors":[]}
 3 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./report-absent.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"stopped","source":"scenario","outcome":"missing","detail":"casecheck attempt does not read a scenario's calls"}
 2 attempt ../schemas/case.machine.example.json machine.shutdown.poweroff i686 qemu ./attempt-machine.out run-1 attempt-1 item-1 exited 0 | declares no assertion of its program

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "family_id": "fixture.console",
+  "summary": "A boot case that expects the kernel's panic, for the console's judgement",
+  "cases": [
+    {
+      "case_id": "fixture.console.panic",
+      "behavior": "A boot with rach2.panictest ends in the kernel's panic, which the console gives",
+      "units": ["panic"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.panictest"]}
+      },
+      "execution": {
+        "program": "panicprobe", "stdin": null, "role": "boot", "privileges": "any",
+        "isolation": [], "children": "none", "cleanup": "nothing outlives the boot"
+      },
+      "assertions": [
+        {"assertion_id": "panicked", "checks": "the kernel panics with the allocator's message", "source": "executor",
+         "record": "panic: stopped: kmalloc"}
+      ],
+      "branches": [],
+      "termination": {"end": "panic", "value": null},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "panicprobe", "node": "tests/panicprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot",
+                 "reason": "the kernel panics only when it boots with rach2.panictest"}
+    }
+  ]
+}

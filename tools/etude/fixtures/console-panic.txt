@@ -1,0 +1,4 @@
+<6>[0.00] boot: rach2 starting
+Type 'help' for available commands.
+<4>[1.20] vm: low on frames
+<2>[1.31] panic: stopped: kmalloc: free of a bad pointer

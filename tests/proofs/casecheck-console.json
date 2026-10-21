@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "proof": "casecheck-console",
+  "summary": "casecheck's self-test lines of a machine's console given with -k, each fault in a private copy of judge.c found by its own line",
+  "tree": "private",
+  "sources": [
+    "tools/etude/judge.c"
+  ],
+  "artifacts": [
+    "${WORK}/casecheck"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "${CC:-cc} -std=c99 -O1 -I tools/etude -I tools/etude/include -I utils tools/etude/casecheck.c tools/etude/cases.c tools/etude/digest.c ${SRC}/tools/etude/judge.c tools/etude/json.c tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c tools/etude/verdict.c tools/etude/history.c tools/etude/history_json.c utils/sha256.c -o ${WORK}/casecheck"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "d=$TMPDIR/selftest && mkdir -p $d/fixtures && cp tools/etude/fixtures/console-*.txt tools/etude/fixtures/console-case.json tools/etude/fixtures/report-pass.out tools/etude/fixtures/report-rng.out tools/etude/fixtures/report-absent.out tools/etude/fixtures/attempt-survivor.out $d/fixtures/ && grep -e ' -k ' -e 'console-case' tools/etude/fixtures/expect > $d/fixtures/expect && ln -s \"$PWD/tools/etude/schemas\" $d/schemas && ${WORK}/casecheck --selftest $d/fixtures; s=$?; rm -rf $d; exit $s"
+    ],
+    "bound_s": 60,
+    "fail_prefix": "casecheck selftest: line "
+  },
+  "faults": [
+    {
+      "name": "option",
+      "summary": "-k is not taken as an option",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "        } else if (strcmp(args[i], \"-k\") == 0 && q->console == NULL) {\n",
+          "replace": "        } else if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "attempt -k ./console-survivor.txt ../schemas/case.guest.example.json"
+        ]
+      }
+    },
+    {
+      "name": "report",
+      "summary": "casecheck report takes -k",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "    if (q.n < 4 || q.n > 5 || q.console != NULL) {\n",
+          "replace": "    if (q.n < 4 || q.n > 5) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "2 report -k ./console-clean.txt"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "placement",
+      "summary": "a console is taken for an attempt placed native",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "    if (q.console != NULL && !same(q.arg[3], \"qemu\")) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "2 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "unread",
+      "summary": "a console that cannot be read is taken as none",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "    if (q.console != NULL && (console = read_file(q.console, &console_len)) == NULL) {\n",
+          "replace": "    if (q.console != NULL && (console = read_file(q.console, &console_len)) == NULL && 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "2 attempt -k ./absent.txt"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "kernel",
+      "summary": "etude.kernel passes whatever the console has",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "        put_assertion(b, \"etude.kernel\", \"executor\", outcome ? OUTCOME_FAIL : OUTCOME_PASS,\n",
+          "replace": "        put_assertion(b, \"etude.kernel\", \"executor\", OUTCOME_PASS,\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "1 attempt -k ./console-panic.txt ../schemas/case.guest.example.json",
+          "1 attempt -k ./console-fault.txt "
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "linestart",
+      "summary": "a record at level 2 is taken anywhere in a line, as in a command typed at the shell",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "        if ((i > 0 && c[i - 1] != '\\n') || memcmp(c + i, \"<2>[\", 4) != 0) {\n",
+          "replace": "        if (memcmp(c + i, \"<2>[\", 4) != 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "0 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.errnoprobe",
+          "0 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.rngprobe"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "passby",
+      "summary": "the panic that a case expects fails etude.kernel",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "        if (panics && close != NULL && (size_t)(c + end - close) >= 9 &&\n",
+          "replace": "        if (0 && close != NULL && (size_t)(c + end - close) >= 9 &&\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "3 attempt -k ./console-panic.txt ./console-case.json"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "absent",
+      "summary": "an executor assertion passes without its record on the console",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "        if (console_has(j, json_text(a, \"record\"))) {\n",
+          "replace": "        if (1) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "1 attempt -k ./console-clean.txt ../schemas/case.guest.example.json guest.default.survivorprobe"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "present",
+      "summary": "an executor assertion fails with its record on the console",
+      "edits": [
+        {
+          "file": "tools/etude/judge.c",
+          "find": "        if (j->console[i] == s[0] && memcmp(j->console + i, s, n) == 0) {\n",
+          "replace": "        if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "1 attempt -k ./console-survivor.txt ../schemas/case.guest.example.json",
+          "3 attempt -k ./console-panic.txt ./console-case.json"
+        ],
+        "only": true
+      }
+    }
+  ]
+}

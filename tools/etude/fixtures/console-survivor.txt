@@ -1,0 +1,3 @@
+<6>[0.00] boot: rach2 starting
+Type 'help' for available commands.
+<6>[2.40] sys_exit: init process 7 exited with status 0, returning to kernel shell
