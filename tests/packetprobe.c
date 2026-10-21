@@ -26,12 +26,18 @@
  * of HeapUsed, which the machine's other processes move.
  *
  * Prints "PACKETPROBE OK" and exits 0 on success, or "PACKETPROBE FAIL: " and
- * the reason and exits 1.
+ * the reason and exits 1. Beside its own lines it writes etude's report
+ * records (probe_report.h) for the case ETUDE_CASE names or
+ * guest.packet.packetprobe: one assertion for each check, in the order of
+ * `path_rows`, and the branch of the group `network`: `own` on QEMU's
+ * network, or `shared` with `machine=native`, whose path leaves out the
+ * rows named above.
  */
 
 #include "probe.h"
 #include "probe_args.h"
 #include "probe_netif.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -234,12 +240,109 @@ static int contains(const char *hay, int len, const char *needle)
     return 0;
 }
 
+/* The assertions of the probe, in the order it checks them. Those of the
+ * alternative `own` of the group `network` are checked only on QEMU's
+ * network; the alternative `shared`, a native run's, has none. */
+static const struct {
+    const char *id;
+    int own;
+} path_rows[] = {
+    {"stream-refused", 0},
+    {"ipv6-refused", 0},
+    {"open", 0},
+    {"auxdata-refused", 0},
+    {"bind-missing", 0},
+    {"bind", 0},
+    {"discover-sent", 1},
+    {"not-mac-refused", 0},
+    {"offer-polled", 1},
+    {"select-agrees", 1},
+    {"offer-ipv4", 1},
+    {"no-control", 1},
+    {"offer-address", 1},
+    {"no-flags", 1},
+    {"bootp-broadcast", 1},
+    {"empty-eagain", 1},
+    {"no-address-written", 1},
+    {"second-offer", 1},
+    {"true-length", 1},
+    {"truncated-address", 1},
+    {"capacity", 1},
+    {"refused-bind-keeps", 0},
+    {"third-offer", 1},
+    {"rebind-drops", 1},
+    {"arp-bind", 0},
+    {"hwaddr", 0},
+    {"getsockname-whole", 0},
+    {"getsockname-bound", 0},
+    {"getsockname-mac", 0},
+    {"ip-bind", 0},
+    {"arp-request-sent", 0},
+    {"gateway-ping", 0},
+    {"arp-only", 0},
+    {"ipv4-only", 0},
+    {"both-answered", 0},
+    {"arp-cache", 0},
+    {"heap-read", 0},
+    {"reopen", 0},
+    {"bind-takes-heap", 1},
+    {"close-frees", 1},
+    {"unprivileged-refused", 0},
+};
+
+/** Plan the path of `path_rows`, with the rows of `own` when `own` is
+ * nonzero, and report the branch of the group `network`. */
+static void plan(int own)
+{
+    unsigned int k;
+
+    for (k = 0; k < sizeof(path_rows) / sizeof(path_rows[0]); k++) {
+        if (own || !path_rows[k].own) {
+            report_plan(path_rows[k].id);
+        }
+    }
+    report_branch("network", own ? "own" : "shared");
+}
+
+/** 1 if the strings `a` and `b` are equal, else 0. */
+static int same(const char *a, const char *b)
+{
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
 /**
- * Print "PACKETPROBE FAIL: ", `what` and the number `n` in parentheses, and
- * exit 1. The number tells the reader of the log which errno the refusal
- * was.
+ * Report as held each assertion of the path before `id`, or each one left
+ * when `id` is NULL; an `id` the path has passed changes nothing.
+ *
+ * A check inside a loop is made once for each frame, so the probe reports
+ * the loop's rows after the loop, or at a failure, when `fail` reaches the
+ * failed row: the checks before it held for every frame so far.
  */
-static void fail_n(const char *what, int n)
+static void reach(const char *id)
+{
+    int k = report_path_at;
+
+    while (k < report_path_len && (id == 0 || !same(report_path[k], id))) {
+        k++;
+    }
+    if (id != 0 && k == report_path_len) {
+        return;
+    }
+    while (report_path_at < k) {
+        report_held();
+    }
+}
+
+/**
+ * Print "PACKETPROBE FAIL: ", `what` and the number `n` in parentheses,
+ * report that the assertion `id` failed, and exit 1. The number tells the
+ * reader of the log which errno the refusal was.
+ */
+static void fail_n(const char *id, const char *what, int n)
 {
     char buf[12];
     int i = (int)sizeof(buf);
@@ -258,15 +361,20 @@ static void fail_n(const char *what, int n)
     say(" (");
     say(&buf[i]);
     say(")\n");
+    reach(id);
+    report_stop(what);
     sys_exit(1);
 }
 
-/** Print "PACKETPROBE FAIL: " and `what`, and exit 1. */
-static void fail(const char *what)
+/** Print "PACKETPROBE FAIL: " and `what`, report that the assertion `id`
+ * failed with it, and exit 1. */
+static void fail(const char *id, const char *what)
 {
     say("PACKETPROBE FAIL: ");
     say(what);
     say("\n");
+    reach(id);
+    report_stop(what);
     sys_exit(1);
 }
 
@@ -367,12 +475,12 @@ static void interface(int fd)
     }
     ifreq_for(ifr);
     if (sys_ioctl(fd, SIOCGIFINDEX, ifr) != 0) {
-        fail("the interface would not report its index");
+        fail("open", "the interface would not report its index");
     }
     if_index = (int)(ifr[16] | (ifr[17] << 8) | (ifr[18] << 16) | ((unsigned)ifr[19] << 24));
     ifreq_for(ifr);
     if (sys_ioctl(fd, SIOCGIFADDR, ifr) != 0) {
-        fail("the interface would not report its address");
+        fail("open", "the interface would not report its address");
     }
     self_ip = arg_ip(probe_arg("addr", 0), ((uint32_t)ifr[20] << 24) | ((uint32_t)ifr[21] << 16) |
                                                ((uint32_t)ifr[22] << 8) | ifr[23]);
@@ -420,7 +528,7 @@ static void check_close_releases(void)
 
     before = probe_meminfo("HeapUsed:");
     if (before == 0xFFFFFFFFu) {
-        fail("HeapUsed could not be read from /proc/meminfo");
+        fail("heap-read", "HeapUsed could not be read from /proc/meminfo");
     }
     for (k = 0; k < 4; k++) {
         args[0] = AF_PACKET;
@@ -428,7 +536,7 @@ static void check_close_releases(void)
         args[2] = ETH_P_IP_BE;
         fd = socketcall(SC_SOCKET, args);
         if (fd < 0) {
-            fail_n("a packet socket did not open after an earlier one closed", fd);
+            fail_n("reopen", "a packet socket did not open after an earlier one closed", fd);
         }
         opened = probe_meminfo("HeapUsed:");
         sll = zero_sll;
@@ -440,17 +548,17 @@ static void check_close_releases(void)
         args[2] = sizeof(sll);
         r = socketcall(SC_BIND, args);
         if (r != 0) {
-            fail_n("a bind after an earlier socket closed was refused", r);
+            fail_n("reopen", "a bind after an earlier socket closed was refused", r);
         }
         if (!probe_native() && probe_meminfo("HeapUsed:") <= opened) {
-            fail("a bind took nothing from the heap, so the heap cannot show "
-                 "whether a close frees the binding");
+            fail("bind-takes-heap", "a bind took nothing from the heap, so the heap cannot show "
+                                    "whether a close frees the binding");
         }
         sys_close(fd);
     }
     if (!probe_native() && probe_meminfo("HeapUsed:") != before) {
-        fail("four packet sockets bound and closed left the heap other than it "
-             "was, so a close kept its binding");
+        fail("close-frees", "four packet sockets bound and closed left the heap other than it "
+                            "was, so a close kept its binding");
     }
 }
 
@@ -488,7 +596,7 @@ static void native_rows(int fd)
     args[4] = (unsigned long)&sll;
     args[5] = sizeof(sll);
     if (socketcall(SC_SENDTO, args) != -EINVAL) {
-        fail("a destination that is not a MAC address was not refused");
+        fail("not-mac-refused", "a destination that is not a MAC address was not refused");
     }
 
     sll.sll_protocol = ETH_P_ARP_BE;
@@ -497,7 +605,7 @@ static void native_rows(int fd)
     args[1] = (unsigned long)&sll;
     args[2] = sizeof(sll);
     if (socketcall(SC_BIND, args) != -ENODEV) {
-        fail("a bind to an interface that does not exist was not refused");
+        fail("refused-bind-keeps", "a bind to an interface that does not exist was not refused");
     }
     back = zero_sll;
     backlen = sizeof(back);
@@ -505,10 +613,10 @@ static void native_rows(int fd)
     args[1] = (unsigned long)&back;
     args[2] = (unsigned long)&backlen;
     if (socketcall(SC_GETSOCKNAME, args) != 0) {
-        fail("getsockname after the refused bind failed");
+        fail("refused-bind-keeps", "getsockname after the refused bind failed");
     }
     if (back.sll_protocol != ETH_P_IP_BE) {
-        fail("a refused bind changed the protocol the socket receives");
+        fail("refused-bind-keeps", "a refused bind changed the protocol the socket receives");
     }
 }
 
@@ -594,32 +702,34 @@ void probe_main(unsigned long *sp)
     unsigned int i;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 2 + sp[0]), "guest.packet.packetprobe"));
+    plan(!probe_native());
 
     /* What it refuses: a stream socket, IPv6, and PACKET_AUXDATA. */
     args[0] = AF_PACKET;
     args[1] = SOCK_STREAM;
     args[2] = ETH_P_IP_BE;
     if (socketcall(SC_SOCKET, args) != -ESOCKTNOSUPPORT) {
-        fail("a stream packet socket was not refused");
+        fail("stream-refused", "a stream packet socket was not refused");
     }
     args[1] = SOCK_DGRAM;
     args[2] = ETH_P_IPV6_BE;
     if (socketcall(SC_SOCKET, args) != -EINVAL) {
-        fail("a packet socket for a protocol this stack has no frames for "
-             "was not refused");
+        fail("ipv6-refused", "a packet socket for a protocol this stack has no frames for "
+                             "was not refused");
     }
     /* What it accepts at creation: no protocol, as `arping` opens it. */
     args[2] = 0;
     r = socketcall(SC_SOCKET, args);
     if (r < 0) {
-        fail_n("a packet socket with no protocol did not open", r);
+        fail_n("open", "a packet socket with no protocol did not open", r);
     }
     sys_close(r);
 
     args[2] = ETH_P_IP_BE;
     fd = socketcall(SC_SOCKET, args);
     if (fd < 0) {
-        fail("a packet socket did not open");
+        fail("open", "a packet socket did not open");
     }
     interface(fd);
 
@@ -630,7 +740,7 @@ void probe_main(unsigned long *sp)
     args[3] = (unsigned long)&r;
     args[4] = sizeof(int);
     if (socketcall(SC_SETSOCKOPT, args) != -ENOPROTOOPT) {
-        fail("PACKET_AUXDATA was not refused");
+        fail("auxdata-refused", "PACKET_AUXDATA was not refused");
     }
 
     for (i = 0; i < sizeof(sll); i++) {
@@ -643,11 +753,11 @@ void probe_main(unsigned long *sp)
     args[1] = (unsigned long)&sll;
     args[2] = sizeof(sll);
     if (socketcall(SC_BIND, args) != -ENODEV) {
-        fail("a bind to an interface that does not exist was not refused");
+        fail("bind-missing", "a bind to an interface that does not exist was not refused");
     }
     sll.sll_ifindex = if_index;
     if (socketcall(SC_BIND, args) != 0) {
-        fail("a bind to the machine's interface failed");
+        fail("bind", "a bind to the machine's interface failed");
     }
     if (probe_native()) {
         native_rows(fd);
@@ -715,14 +825,15 @@ void probe_main(unsigned long *sp)
         discover[i] = frame[i];
     }
     if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
-        fail("the discover did not send");
+        fail("discover-sent", "the discover did not send");
     }
     sll.sll_halen = 4;
     if (socketcall(SC_SENDTO, args) != -EINVAL) {
-        fail("a destination that is not a MAC address was not refused");
+        fail("not-mac-refused", "a destination that is not a MAC address was not refused");
     }
 
     /* What it receives: the offer to 255.255.255.255, which `ip_rx` drops. */
+    reach("offer-polled");
     seen_offer = 0;
     polled = 0;
     while (!seen_offer) {
@@ -744,7 +855,7 @@ void probe_main(unsigned long *sp)
         pfd.revents = 0;
         r = sys_poll_wait(&pfd, 1);
         if (r != 1 || !(pfd.revents & POLLIN)) {
-            fail_n("a poll for the offer ended with nothing to read", r);
+            fail_n("offer-polled", "a poll for the offer ended with nothing to read", r);
         }
         polled = 1;
 
@@ -753,7 +864,7 @@ void probe_main(unsigned long *sp)
         tv.tv_sec = 0;
         tv.tv_usec = 0;
         if (sys_select(fd + 1, readfds, 0, 0, &tv) != 1) {
-            fail("select did not see what poll saw");
+            fail("select-agrees", "select did not see what poll saw");
         }
 
         args[0] = (uint32_t)fd;
@@ -761,40 +872,41 @@ void probe_main(unsigned long *sp)
         args[2] = 0x40; /* MSG_DONTWAIT */
         r = socketcall(SC_RECVMSG, args);
         if (r < 0) {
-            fail_n("a socket poll called readable had nothing to read", r);
+            fail_n("offer-polled", "a socket poll called readable had nothing to read", r);
         }
         if (r < 20) {
-            fail("a received packet was shorter than an IP header");
+            fail("offer-ipv4", "a received packet was shorter than an IP header");
         }
         if ((frame[0] >> 4) != 4) {
-            fail("a received packet was not IPv4");
+            fail("offer-ipv4", "a received packet was not IPv4");
         }
         if (msg.msg_controllen != 0) {
-            fail("control data was reported where this stack attaches none");
+            fail("no-control", "control data was reported where this stack attaches none");
         }
         {
             const uint8_t *ll = (const uint8_t *)&from_ll;
 
             if (msg.msg_namelen != 20) {
-                fail("recvmsg did not report the link address the frame came from");
+                fail("offer-address",
+                     "recvmsg did not report the link address the frame came from");
             }
             if (ll[0] != AF_PACKET || ll[1] != 0) {
-                fail("the reported address was not a sockaddr_ll");
+                fail("offer-address", "the reported address was not a sockaddr_ll");
             }
             if (ll[4] != 1 || ll[8] != 1 || ll[11] != 6) {
-                fail("the reported address did not name this Ethernet interface");
+                fail("offer-address", "the reported address did not name this Ethernet interface");
             }
             /* The offer is broadcast, and a reader decides on this field. */
             if (ll[10] != 1) {
-                fail("a broadcast offer was not reported as a broadcast");
+                fail("offer-address", "a broadcast offer was not reported as a broadcast");
             }
             if (ll[12] == 0 && ll[13] == 0 && ll[14] == 0 && ll[15] == 0 && ll[16] == 0 &&
                 ll[17] == 0) {
-                fail("the reported address had no sender in it");
+                fail("offer-address", "the reported address had no sender in it");
             }
         }
         if (msg.msg_flags != 0) {
-            fail("a message flag was reported where none is set");
+            fail("no-flags", "a message flag was reported where none is set");
         }
         if (frame[9] != IPPROTO_UDP || r < 272) {
             continue;
@@ -807,16 +919,16 @@ void probe_main(unsigned long *sp)
             continue;
         }
         if (frame[28] != 2) {
-            fail("the reply on port 68 was not a BOOTP reply");
+            fail("bootp-broadcast", "the reply on port 68 was not a BOOTP reply");
         }
         /* Addressed to the broadcast, a packet `ip_rx` would have dropped. */
         if (frame[16] != 0xff || frame[17] != 0xff || frame[18] != 0xff || frame[19] != 0xff) {
-            fail("the offer was not the broadcast ip_rx drops");
+            fail("bootp-broadcast", "the offer was not the broadcast ip_rx drops");
         }
         seen_offer = 1;
     }
     if (!polled) {
-        fail("the offer was read without poll ever reporting it readable");
+        fail("offer-polled", "the offer was read without poll ever reporting it readable");
     }
 
     /* On the emptied socket, a failed receive leaves the address arguments. */
@@ -831,13 +943,14 @@ void probe_main(unsigned long *sp)
     args[4] = (unsigned long)sender;
     args[5] = (unsigned long)&senderlen;
     if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
-        fail("an empty socket did not report that it was empty");
+        fail("empty-eagain", "an empty socket did not report that it was empty");
     }
     if (senderlen != 16 || sender[0] != 0xa5) {
-        fail("a receive that failed wrote to the caller's address arguments");
+        fail("no-address-written", "a receive that failed wrote to the caller's address arguments");
     }
 
     /* A second offer, by recvfrom with too little room for the address. */
+    reach("second-offer");
     args[0] = (uint32_t)fd;
     args[1] = (unsigned long)discover;
     args[2] = DHCP_LEN;
@@ -846,7 +959,7 @@ void probe_main(unsigned long *sp)
     args[5] = sizeof(sll);
     sll.sll_halen = 6;
     if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
-        fail("the second discover did not send");
+        fail("second-offer", "the second discover did not send");
     }
     seen_offer = 0;
     while (!seen_offer) {
@@ -855,7 +968,7 @@ void probe_main(unsigned long *sp)
         pfd.revents = 0;
         r = sys_poll_wait(&pfd, 1);
         if (r != 1 || !(pfd.revents & POLLIN)) {
-            fail_n("a poll for the second offer ended with nothing to read", r);
+            fail_n("second-offer", "a poll for the second offer ended with nothing to read", r);
         }
         senderlen = 16;
         args[0] = (uint32_t)fd;
@@ -866,17 +979,17 @@ void probe_main(unsigned long *sp)
         args[5] = (unsigned long)&senderlen;
         r = socketcall(SC_RECVFROM, args);
         if (r < 0) {
-            fail_n("a socket poll called readable had nothing for recvfrom", r);
+            fail_n("second-offer", "a socket poll called readable had nothing for recvfrom", r);
         }
         /* The true length, 20, and only the 16 bytes that fit written. */
         if (senderlen != 20) {
-            fail("a packet socket did not report the true address length");
+            fail("true-length", "a packet socket did not report the true address length");
         }
         if (sender[0] != AF_PACKET || sender[4] != 1 || sender[11] != 6) {
-            fail("the address written was not this interface's sockaddr_ll");
+            fail("truncated-address", "the address written was not this interface's sockaddr_ll");
         }
         if (sender[16] != 0xa5 || sender[17] != 0xa5) {
-            fail("a packet socket wrote past the capacity the caller declared");
+            fail("capacity", "a packet socket wrote past the capacity the caller declared");
         }
         seen_offer = 1;
     }
@@ -892,7 +1005,8 @@ void probe_main(unsigned long *sp)
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != -ENODEV) {
-            fail("a bind to an interface that does not exist was not refused");
+            fail("refused-bind-keeps",
+                 "a bind to an interface that does not exist was not refused");
         }
         for (i = 0; i < sizeof(back); i++) {
             ((uint8_t *)&back)[i] = 0;
@@ -902,14 +1016,15 @@ void probe_main(unsigned long *sp)
         args[1] = (unsigned long)&back;
         args[2] = (unsigned long)&senderlen;
         if (socketcall(SC_GETSOCKNAME, args) != 0) {
-            fail("getsockname after the refused bind failed");
+            fail("refused-bind-keeps", "getsockname after the refused bind failed");
         }
         if (back.sll_protocol != ETH_P_IP_BE) {
-            fail("a refused bind changed the protocol the socket receives");
+            fail("refused-bind-keeps", "a refused bind changed the protocol the socket receives");
         }
     }
 
     /* A rebind to another protocol drops what arrived under the first. */
+    reach("third-offer");
     {
         sll.sll_family = AF_PACKET;
         sll.sll_protocol = ETH_P_IP_BE;
@@ -925,21 +1040,21 @@ void probe_main(unsigned long *sp)
         args[4] = (unsigned long)&sll;
         args[5] = sizeof(sll);
         if (socketcall(SC_SENDTO, args) != DHCP_LEN) {
-            fail("the third discover did not send");
+            fail("third-offer", "the third discover did not send");
         }
         pfd.fd = fd;
         pfd.events = POLLIN;
         pfd.revents = 0;
         r = sys_poll_wait(&pfd, 1);
         if (r != 1 || !(pfd.revents & POLLIN)) {
-            fail_n("a poll for the third offer ended with nothing to read", r);
+            fail_n("third-offer", "a poll for the third offer ended with nothing to read", r);
         }
         sll.sll_protocol = ETH_P_ARP_BE;
         args[0] = (uint32_t)fd;
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
-            fail("a rebind to ARP was refused");
+            fail("rebind-drops", "a rebind to ARP was refused");
         }
         senderlen = sizeof(sender);
         args[0] = (uint32_t)fd;
@@ -949,7 +1064,7 @@ void probe_main(unsigned long *sp)
         args[4] = (unsigned long)sender;
         args[5] = (unsigned long)&senderlen;
         if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
-            fail("a rebound socket still had what arrived under its old protocol");
+            fail("rebind-drops", "a rebound socket still had what arrived under its old protocol");
         }
     }
 
@@ -969,7 +1084,7 @@ two_protocols:
         args[2] = 0;
         arp_fd = socketcall(SC_SOCKET, args);
         if (arp_fd < 0) {
-            fail_n("the ARP socket did not open", arp_fd);
+            fail_n("arp-bind", "the ARP socket did not open", arp_fd);
         }
         for (i = 0; i < sizeof(sll); i++) {
             ((uint8_t *)&sll)[i] = 0;
@@ -981,13 +1096,13 @@ two_protocols:
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
-            fail("a bind naming ARP was refused");
+            fail("arp-bind", "a bind naming ARP was refused");
         }
 
         /* getsockname gives the address SIOCGIFHWADDR reports. */
         ifreq_for(ifr);
         if (sys_ioctl(arp_fd, SIOCGIFHWADDR, ifr) != 0) {
-            fail("the interface would not report its hardware address");
+            fail("hwaddr", "the interface would not report its hardware address");
         }
         for (i = 0; i < 6; i++) {
             mac[i] = ifr[18 + i]; /* ifr_hwaddr.sa_data, past name and family */
@@ -1001,20 +1116,21 @@ two_protocols:
         args[1] = (unsigned long)&sll;
         args[2] = (unsigned long)&senderlen;
         if (socketcall(SC_GETSOCKNAME, args) != 0) {
-            fail("getsockname on a packet socket failed");
+            fail("getsockname-whole", "getsockname on a packet socket failed");
         }
         if (senderlen != 20) {
-            fail("getsockname did not report a whole sockaddr_ll");
+            fail("getsockname-whole", "getsockname did not report a whole sockaddr_ll");
         }
         if (sll.sll_family != AF_PACKET || sll.sll_protocol != ETH_P_ARP_BE) {
-            fail("getsockname did not report the family and protocol bound");
+            fail("getsockname-bound", "getsockname did not report the family and protocol bound");
         }
         if (sll.sll_ifindex != if_index || sll.sll_hatype != 1 || sll.sll_halen != 6) {
-            fail("getsockname did not report the interface it is bound to");
+            fail("getsockname-bound", "getsockname did not report the interface it is bound to");
         }
         for (i = 0; i < 6; i++) {
             if (sll.sll_addr[i] != mac[i]) {
-                fail("getsockname reported an address the interface does not have");
+                fail("getsockname-mac",
+                     "getsockname reported an address the interface does not have");
             }
         }
 
@@ -1023,7 +1139,7 @@ two_protocols:
         args[2] = ETH_P_IP_BE;
         ip_fd = socketcall(SC_SOCKET, args);
         if (ip_fd < 0) {
-            fail_n("the IPv4 socket did not open", ip_fd);
+            fail_n("ip-bind", "the IPv4 socket did not open", ip_fd);
         }
         for (i = 0; i < sizeof(sll); i++) {
             ((uint8_t *)&sll)[i] = 0;
@@ -1035,7 +1151,7 @@ two_protocols:
         args[1] = (unsigned long)&sll;
         args[2] = sizeof(sll);
         if (socketcall(SC_BIND, args) != 0) {
-            fail("a bind naming IPv4 was refused");
+            fail("ip-bind", "a bind naming IPv4 was refused");
         }
 
         /* An ARP request of the probe's own, sent under ARP. */
@@ -1068,16 +1184,18 @@ two_protocols:
         args[4] = (unsigned long)&sll;
         args[5] = sizeof(sll);
         if (socketcall(SC_SENDTO, args) != 28) {
-            fail("the ARP request did not send");
+            fail("arp-request-sent", "the ARP request did not send");
         }
 
         /* The gateway's echo reply is IPv4 traffic for the other socket. */
         args[0] = gateway_ip;
         r = socketcall(SC_PING, args);
         if (r < 0) {
-            fail_n("the gateway did not answer the ping whose reply the IPv4 socket waits for", r);
+            fail_n("gateway-ping",
+                   "the gateway did not answer the ping whose reply the IPv4 socket waits for", r);
         }
 
+        reach("arp-only");
         while (arp_replies == 0 || ip_frames == 0) {
             pair[0].fd = arp_fd;
             pair[0].events = POLLIN;
@@ -1087,7 +1205,8 @@ two_protocols:
             pair[1].revents = 0;
             n = sys_poll_wait(pair, 2);
             if (n <= 0 || !((pair[0].revents | pair[1].revents) & POLLIN)) {
-                fail_n("a poll for the ARP and IPv4 frames ended with nothing to read", n);
+                fail_n("both-answered",
+                       "a poll for the ARP and IPv4 frames ended with nothing to read", n);
             }
             if (pair[0].revents & POLLIN) {
                 senderlen = 0;
@@ -1099,12 +1218,12 @@ two_protocols:
                 args[5] = 0;
                 n = socketcall(SC_RECVFROM, args);
                 if (n < 28) {
-                    fail("a frame on the ARP socket was shorter than an ARP packet");
+                    fail("arp-only", "a frame on the ARP socket was shorter than an ARP packet");
                 }
                 /* Hardware 1, protocol 0x0800, address lengths 6 and 4. */
                 if (frame[0] != 0 || frame[1] != 1 || frame[2] != 0x08 || frame[3] != 0 ||
                     frame[4] != 6 || frame[5] != 4) {
-                    fail("the ARP socket was given a frame that is not ARP");
+                    fail("arp-only", "the ARP socket was given a frame that is not ARP");
                 }
                 /* A reply from the address asked about answers it. */
                 if (frame[6] == 0 && frame[7] == 2 && frame[14] == (uint8_t)(asked_ip >> 24) &&
@@ -1122,10 +1241,10 @@ two_protocols:
                 args[5] = 0;
                 n = socketcall(SC_RECVFROM, args);
                 if (n < 20) {
-                    fail("a frame on the IPv4 socket was shorter than an IP header");
+                    fail("ipv4-only", "a frame on the IPv4 socket was shorter than an IP header");
                 }
                 if ((frame[0] >> 4) != 4) {
-                    fail("the IPv4 socket was given a frame that is not IPv4");
+                    fail("ipv4-only", "the IPv4 socket was given a frame that is not IPv4");
                 }
                 ip_frames++;
             }
@@ -1134,12 +1253,12 @@ two_protocols:
         /* The kernel's ARP cache has the gateway it resolved. */
         n = read_file("/proc/net/arp", (char *)frame, (int)sizeof(frame));
         if (n <= 0) {
-            fail("/proc/net/arp could not be read");
+            fail("arp-cache", "/proc/net/arp could not be read");
         }
         dotted(gateway_text, gateway_ip);
         if (!contains((const char *)frame, n, gateway_text)) {
-            fail("the address the machine resolved is not in its ARP cache, so "
-                 "the packet socket took the frame away from the kernel");
+            fail("arp-cache", "the address the machine resolved is not in its ARP cache, so "
+                              "the packet socket took the frame away from the kernel");
         }
 
         sys_close(arp_fd);
@@ -1160,19 +1279,21 @@ two_protocols:
         sys_exit(socketcall(SC_SOCKET, args) == -EPERM ? 0 : 3);
     }
     if (pid < 0) {
-        fail("the fork for the unprivileged case failed");
+        fail("unprivileged-refused", "the fork for the unprivileged case failed");
     }
     status = -1;
     if (sys_waitpid(pid, &status, 0) != pid) {
-        fail("waiting for the unprivileged case failed");
+        fail("unprivileged-refused", "waiting for the unprivileged case failed");
     }
     if ((status & 0x7f) != 0) {
-        fail("the unprivileged case died on a signal");
+        fail("unprivileged-refused", "the unprivileged case died on a signal");
     }
     if (((status >> 8) & 0xff) != 0) {
-        fail("an ordinary user was not refused a packet socket");
+        fail("unprivileged-refused", "an ordinary user was not refused a packet socket");
     }
 
+    reach(0);
+    report_end();
     say("PACKETPROBE OK\n");
     sys_exit(0);
 }

@@ -611,13 +611,13 @@ tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the 
 tests/ownprobe.c:child_main lines 124 a probe, one sequence of steps in the order the log records them
 
 tests/packetprobe.c:probe_main complexity 134 a probe, one sequence of steps in the order the log records them
-tests/packetprobe.c:probe_main lines 595 a probe, one sequence of steps in the order the log records them
+tests/packetprobe.c:probe_main lines 608 a probe, one sequence of steps in the order the log records them
 
 tests/partsprobe.c:probe_main complexity 46 a probe, one sequence of steps in the order the log records them
 tests/partsprobe.c:probe_main lines 109 a probe, one sequence of steps in the order the log records them
 
-tests/pingtest.c:probe_main complexity 27 a probe, one sequence of steps in the order the log records them
-tests/pingtest.c:probe_main lines 150 a probe, one sequence of steps in the order the log records them
+tests/pingtest.c:probe_main complexity 28 a probe, one sequence of steps in the order the log records them
+tests/pingtest.c:probe_main lines 162 a probe, one sequence of steps in the order the log records them
 tests/pingtest.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
 tests/pipeprobe.c:probe_main complexity 50 a probe, one sequence of steps in the order the log records them

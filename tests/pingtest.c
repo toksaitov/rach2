@@ -41,12 +41,15 @@
  * than the time of day, which the machine's NTP daemon may step.
  *
  * Prints "PINGTEST OK" and exits 0 when every test passed, which the suites
- * that run it match; otherwise exits 1. Freestanding; direct system calls
- * (probe.h).
+ * that run it match; otherwise exits 1. Beside its own lines it writes
+ * etude's report records (probe_report.h), one assertion for each control,
+ * each check of the fork round and the data ping, for the case ETUDE_CASE
+ * names or guest.ping.pingtest. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 
@@ -75,6 +78,29 @@ static uint32_t gateway_ip, silent_ip;
  * the clock may lose. How much longer it took depends on the machine and is
  * printed; a call that never returns is ended by the harness. */
 #define PING_MIN_MS 3990
+
+/* The assertions of the fork round, in the order the parent checks them. */
+enum {
+    ROW_IN_PING,
+    ROW_BUSY,
+    ROW_PROGRESS,
+    ROW_LENGTH,
+    ROW_EXIT,
+    ROW_ETIMEDOUT,
+    ROW_FLOOR,
+    ROW_RELEASE,
+    WAIT_ROWS
+};
+
+static const char *const wait_rows[WAIT_ROWS] = {
+    "child-in-ping",   "busy",       "progress", "child-length", "child-exit",
+    "child-etimedout", "wait-floor", "release",
+};
+
+/* The first row of the fork round that failed, WAIT_ROWS while none has,
+ * and why it failed. */
+static int wait_failed = WAIT_ROWS;
+static const char *wait_why;
 
 struct timeval_probe {
     long tv_sec;
@@ -279,10 +305,10 @@ static const char *child_in_ping(int fd, int child, long *began)
 
     *began = now_ms();
     if (got != 1) {
-        return "FAILED (the child never reached its ping)";
+        return "the child never reached its ping";
     }
     if (!seen_asleep(child)) {
-        return "FAILED (the child was never seen asleep in its ping)";
+        return "the child was never seen asleep in its ping";
     }
     return "";
 }
@@ -314,6 +340,34 @@ static void print_ip(uint32_t ip)
         print_num((int)((ip >> (8 * i)) & 0xFF));
         if (i > 0) {
             print(".");
+        }
+    }
+}
+
+/** Record that the row `row` of the fork round failed for the reason `why`,
+ * unless an earlier check of the round failed first, and return `why`. */
+static const char *wait_fails(int row, const char *why)
+{
+    if (wait_failed == WAIT_ROWS) {
+        wait_failed = row;
+        wait_why = why;
+    }
+    return why;
+}
+
+/** Report the rows of the fork round: those before the first that failed
+ * held, that one failed with its reason, and those after it were not run. */
+static void report_wait_rows(void)
+{
+    int k;
+
+    for (k = 0; k < WAIT_ROWS; k++) {
+        if (k < wait_failed) {
+            report_pass(wait_rows[k]);
+        } else if (k == wait_failed) {
+            report_fail(wait_rows[k], wait_why);
+        } else {
+            report_notrun(wait_rows[k], "an earlier check of the fork round failed");
         }
     }
 }
@@ -353,10 +407,12 @@ static int gateway_replies(void)
     for (i = 0; i < 3; i++) {
         if (ping(gateway_ip) < 0) {
             puts("FAILED (no reply)");
+            report_fail("gateway-replies", "a ping to the gateway got no reply");
             return 0;
         }
     }
     puts("OK");
+    report_pass("gateway-replies");
     return 1;
 }
 
@@ -401,6 +457,7 @@ static int data_ping_refused(void)
 #endif
     if (r1 == -EMSGSIZE && r2 == -EMSGSIZE) {
         puts("OK");
+        report_pass("data-size");
         return 1;
     }
     print("FAILED (");
@@ -408,6 +465,7 @@ static int data_ping_refused(void)
     print(", ");
     print_num(r2);
     puts(")");
+    report_fail("data-size", "a data ping past 1472 bytes was not refused with EMSGSIZE");
     return 0;
 }
 
@@ -422,6 +480,7 @@ void probe_main(unsigned long *sp)
     int passed = 0, failed = 0, rtt;
 
     addresses(sp);
+    report_begin(report_case((char **)(sp + 2 + sp[0]), "guest.ping.pingtest"));
     puts("ICMP ping test starting...");
     puts("");
 
@@ -438,11 +497,13 @@ void probe_main(unsigned long *sp)
     rtt = ping(silent_ip);
     if (rtt < 0) {
         puts("OK (timeout)");
+        report_pass("silent-timeout");
         passed++;
     } else {
         print("FAILED (unexpected reply, rtt=");
         print_num(rtt);
         puts(")");
+        report_fail("silent-timeout", "the address nobody answers replied");
         failed++;
     }
 
@@ -460,6 +521,7 @@ void probe_main(unsigned long *sp)
         const char *why = "";
 
         if (sys_pipe(ready) != 0) {
+            wait_fails(ROW_IN_PING, "no pipe");
             puts("FAILED (no pipe)");
             failed++;
         } else {
@@ -470,16 +532,19 @@ void probe_main(unsigned long *sp)
             sys_close(ready[1]);
             if (child < 0) {
                 ok = 0;
-                why = "FAILED (no fork)";
+                why = wait_fails(ROW_IN_PING, "no fork");
             } else {
                 why = child_in_ping(ready[0], child, &began);
                 ok = why[0] == '\0';
+                if (!ok) {
+                    wait_fails(ROW_IN_PING, why);
+                }
                 if (ok) {
                     /* While the child is in its call, a ping is EBUSY. */
                     busy = ping(LOOPBACK_IP);
                     if (busy != PING_EBUSY) {
                         ok = 0;
-                        why = "FAILED (a second ping was not refused)";
+                        why = wait_fails(ROW_BUSY, "a second ping was not refused");
                     }
                 }
                 /* Progress: the time the parent ran while the child waited. */
@@ -498,7 +563,7 @@ void probe_main(unsigned long *sp)
                 }
                 if (ok && live_span == 0) {
                     ok = 0;
-                    why = "FAILED (nothing else ran while the ping waited)";
+                    why = wait_fails(ROW_PROGRESS, "nothing else ran while the ping waited");
                 }
                 if (reaped != child) {
                     reaped = sys_waitpid(child, &status, 0);
@@ -507,16 +572,16 @@ void probe_main(unsigned long *sp)
                 child_ms = 0;
                 if (sys_read(ready[0], &child_ms, sizeof(child_ms)) != (int)sizeof(child_ms)) {
                     ok = 0;
-                    why = "FAILED (the child did not report its call's length)";
+                    why = wait_fails(ROW_LENGTH, "the child did not report its call's length");
                 }
                 sys_close(ready[0]);
                 if (ok && (reaped != child || (status & 0x7f) != 0)) {
                     ok = 0;
-                    why = "FAILED (the pinging child did not exit normally)";
+                    why = wait_fails(ROW_EXIT, "the pinging child did not exit normally");
                 }
                 if (ok && ((status >> 8) & 0xff) != 0) {
                     ok = 0;
-                    why = "FAILED (the child's ping did not return ETIMEDOUT)";
+                    why = wait_fails(ROW_ETIMEDOUT, "the child's ping did not return ETIMEDOUT");
                 }
                 puts("PINGTEST dead-address call ms:");
                 print_num((int)child_ms);
@@ -526,14 +591,15 @@ void probe_main(unsigned long *sp)
                 puts("");
                 if (ok && child_ms < PING_MIN_MS) {
                     ok = 0;
-                    why = "FAILED (the wait ended before the kernel's four hundred ticks)";
+                    why = wait_fails(ROW_FLOOR,
+                                     "the wait ended before the kernel's four hundred ticks");
                 }
                 if (ok) {
                     /* The release: the slot is free again. */
                     rtt = ping(LOOPBACK_IP);
                     if (rtt < 0) {
                         ok = 0;
-                        why = "FAILED (the slot was not released)";
+                        why = wait_fails(ROW_RELEASE, "the slot was not released");
                     }
                 }
             }
@@ -541,10 +607,13 @@ void probe_main(unsigned long *sp)
                 puts("OK");
                 passed++;
             } else {
-                puts(why);
+                print("FAILED (");
+                print(why);
+                puts(")");
                 failed++;
             }
         }
+        report_wait_rows();
     }
 
     /* Test 4: a data ping past its 1472 bytes is refused before it is sent. */
@@ -555,6 +624,7 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
+    report_end();
     puts("");
     print("Results: ");
     print_num(passed);
