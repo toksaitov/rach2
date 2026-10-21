@@ -18,11 +18,18 @@
  * Prints, per run, `PLACEPROBE NEAR N ms KiB/s` or `PLACEPROBE FAR N ms
  * KiB/s`, and first the mappings: the code's pages from `_start` to
  * `etext` and each buffer's pages, which must not meet. Then `PLACEPROBE
- * OK`, or `PLACEPROBE FAIL: reason`. Freestanding; direct system calls
- * (probe.h).
+ * OK`, or `PLACEPROBE FAIL: reason`. The times are for a person and judge
+ * nothing.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, machine.diskrate.placement without it: `apart`, no buffer shares a
+ * page with the code; `executable`, the near buffer's first page runs its
+ * `ret`; and `runs`, each of the six runs reads the whole 32 MiB as it was
+ * written. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define CLOCK_MONOTONIC 1
 #define PAGE            4096u
@@ -70,9 +77,11 @@ static void puthex(unsigned long v)
     put(&buf[i]);
 }
 
-/** Print "PLACEPROBE FAIL: `why`" and exit 1. */
+/** Report the failure `why` of the planned assertion now checked, print
+ * "PLACEPROBE FAIL: `why`" and exit 1. A forked writer reports nothing. */
 static void fail(const char *why)
 {
+    report_stop(why);
     put("PLACEPROBE FAIL: ");
     put(why);
     put("\n");
@@ -182,16 +191,20 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe's entry: print the mappings and check that the buffers meet no
- * code, make the near buffer's first page code with one `ret` and call it,
- * then the six runs. `sp` is not read. */
+/** The probe's entry, with `sp` at argc: print the mappings and check that
+ * the buffers meet no code, make the near buffer's first page code with one
+ * `ret` and call it, then the six runs. */
 void probe_main(unsigned long *sp)
 {
+    char **envp = (char **)(sp + 1) + sp[0] + 1;
     unsigned long code_lo = (unsigned long)_start & ~(unsigned long)(PAGE - 1);
     unsigned long code_hi = ((unsigned long)etext + PAGE - 1) & ~(unsigned long)(PAGE - 1);
     unsigned i;
 
-    (void)sp;
+    report_begin(report_case(envp, "machine.diskrate.placement"));
+    report_plan("apart");
+    report_plan("executable");
+    report_plan("runs");
     for (i = 0; i < PAGE; i++) {
         page_out[i] = 0x5A;
     }
@@ -212,6 +225,7 @@ void probe_main(unsigned long *sp)
         ((unsigned long)far_buf < code_hi && (unsigned long)far_buf + BUFFER > code_lo)) {
         fail("a buffer shares a page with the program's own code");
     }
+    report_held();
     /* x86-64 maps .bss without execute; i386 pages have no such bit. */
 #if defined __x86_64__
     if (syscall3(SYS_MPROTECT, (long)near_buf, PAGE, 7) != 0) {
@@ -220,11 +234,14 @@ void probe_main(unsigned long *sp)
 #endif
     near_buf[0] = 0xC3;
     ((void (*)(void))near_buf)();
+    report_held();
 
     for (i = 0; i < 3; i++) {
         report("NEAR", run(near_buf, 1));
         report("FAR", run(far_buf, 0));
     }
+    report_held();
+    report_end();
     put("PLACEPROBE OK\n");
     syscall1(SYS_EXIT, 0);
 }
