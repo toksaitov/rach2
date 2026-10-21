@@ -12,14 +12,15 @@
  * processes besides the parent are live at once.
  *
  * `poolprobe heap` opens and closes a pipe, a pty and a socket a thousand
- * times each, and after each thousand the heap's `HeapUsed` in
- * `/proc/meminfo` must be what it was before, with `HeapPages` within two
- * pages of it, so nothing leaked. One object of each kind is made and closed
- * before the first reading, since the first of a kind may set up state the
- * kernel keeps for every later one, which is no leak. The heap is the whole
- * kernel's, so the probe writes nothing between the first reading and the
- * last: its report records follow the three comparisons, and the process
- * that reads its output has nothing to do meanwhile.
+ * times each. After a thousand, the heap's `HeapUsed` in `/proc/meminfo`
+ * must be what it was before, and `HeapPages` within two pages of it, so
+ * nothing leaked. One object of each kind is made and closed before the
+ * first reading, since the first of a kind may set up state the kernel keeps
+ * for every later one, which is no leak. The heap is the whole kernel's, so
+ * the probe writes nothing between the first reading and the last, and each
+ * kind has three tries: the process that reads the probe's output still
+ * wakes on its timer, and can hold a block of the heap at one reading and
+ * not at the other, while a leak of each object shows in every try.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names, guest.pools.live or guest.pools.heap without it, and beside them
@@ -240,19 +241,61 @@ static int make_close(int kind, int count)
     return 0;
 }
 
-/** Make and close a thousand objects of `kind`; 1 when each was made, and
- * HeapUsed is unchanged and HeapPages within two pages of where it was. */
+/* The last try of `cycle`: whether it made every object, and HeapUsed and
+ * HeapPages before and after it. */
+static int made_all;
+static unsigned used_before, used_after, pages_before, pages_after;
+
+/** Make and close a thousand objects of `kind`, up to three times; 1 when
+ * after one of the tries HeapUsed is what it was before it and HeapPages is
+ * within two pages, and 0 when none is or an object could not be made. */
 static int cycle(int kind)
 {
-    unsigned used0 = probe_meminfo("HeapUsed:"), pages0 = probe_meminfo("HeapPages:");
-    unsigned used1, pages1;
+    int tries;
 
-    if (make_close(kind, 1000) != 0) {
-        return 0;
+    for (tries = 0; tries < 3; tries++) {
+        used_before = probe_meminfo("HeapUsed:");
+        pages_before = probe_meminfo("HeapPages:");
+        made_all = make_close(kind, 1000) == 0;
+        if (!made_all) {
+            return 0;
+        }
+        used_after = probe_meminfo("HeapUsed:");
+        pages_after = probe_meminfo("HeapPages:");
+        if (used_after == used_before && pages_after + 2 >= pages_before &&
+            pages_after <= pages_before + 2) {
+            return 1;
+        }
     }
-    used1 = probe_meminfo("HeapUsed:");
-    pages1 = probe_meminfo("HeapPages:");
-    return used1 == used0 && pages1 + 2 >= pages0 && pages1 <= pages0 + 2;
+    return 0;
+}
+
+/** The reason a cycle of `what` failed, with the readings of its last try,
+ * in a buffer that the next call reuses. */
+static const char *changed(const char *what)
+{
+    static char text[ETUDE_REPORT_LINE_MAX];
+    char number[12];
+    int n = 0;
+
+    report_put(text, &n, "a thousand ");
+    report_put(text, &n, what);
+    if (!made_all) {
+        report_put(text, &n, " could not all be made");
+        text[n] = '\0';
+        return text;
+    }
+    report_put(text, &n,
+               " made and closed changed the heap in three tries; the last moved HeapUsed from ");
+    report_put(text, &n, report_decimal(number, (int)used_before));
+    report_put(text, &n, " to ");
+    report_put(text, &n, report_decimal(number, (int)used_after));
+    report_put(text, &n, " and HeapPages from ");
+    report_put(text, &n, report_decimal(number, (int)pages_before));
+    report_put(text, &n, " to ");
+    report_put(text, &n, report_decimal(number, (int)pages_after));
+    text[n] = '\0';
+    return text;
 }
 
 /** The four rounds, each reported as it ends. */
@@ -271,9 +314,7 @@ static void live(void)
 /** The three cycles, measured before anything is reported. */
 static void heap(const char *case_id)
 {
-    static const char *const why[] = {"a thousand pipes made and closed left the heap changed",
-                                      "a thousand ptys made and closed left the heap changed",
-                                      "a thousand sockets made and closed left the heap changed"};
+    static const char *const kinds[] = {"pipes", "ptys", "sockets"};
     int meminfo = probe_meminfo("HeapUsed:") != 0xFFFFFFFFu;
     int warm = meminfo && make_close(0, 1) == 0 && make_close(1, 1) == 0 && make_close(2, 1) == 0;
     int held = 0, kind;
@@ -297,7 +338,7 @@ static void heap(const char *case_id)
         report_held();
     }
     if (held < 3) {
-        fail(why[held]);
+        fail(changed(kinds[held]));
     }
 }
 

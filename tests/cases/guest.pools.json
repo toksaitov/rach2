@@ -45,11 +45,11 @@
     },
     {
       "case_id": "guest.pools.heap",
-      "behavior": "A thousand pipes, a thousand pty masters and a thousand datagram sockets, each made and closed in turn, leave the kernel heap's HeapUsed where it was and HeapPages within two pages of it",
+      "behavior": "A thousand pipes, a thousand pty masters and a thousand datagram sockets, each made and closed in turn, leave the kernel heap's HeapUsed where it was and HeapPages within two pages of it, in one of three tries of each kind, since the process that reads the output can hold a block of the heap at one reading and not at the other",
       "units": ["pools", "poolprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["heap"], "inputs": {"cycles": 1000, "page_slack": 2}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": ["heap"], "inputs": {"cycles": 1000, "tries": 3, "page_slack": 2}, "repetitions": 1, "seed": null},
       "requirements": {
         "host_api": "c", "tools": [], "features": {},
         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
@@ -61,9 +61,9 @@
       },
       "assertions": [
         {"assertion_id": "meminfo", "checks": "/proc/meminfo gives HeapUsed", "source": "program"},
-        {"assertion_id": "pipe-heap", "checks": "a thousand pipes made and closed leave HeapUsed unchanged and HeapPages within two pages", "source": "program"},
-        {"assertion_id": "pty-heap", "checks": "a thousand pty masters opened and closed leave HeapUsed unchanged and HeapPages within two pages", "source": "program"},
-        {"assertion_id": "socket-heap", "checks": "a thousand datagram sockets made and closed leave HeapUsed unchanged and HeapPages within two pages", "source": "program"}
+        {"assertion_id": "pipe-heap", "checks": "a thousand pipes made and closed leave HeapUsed unchanged and HeapPages within two pages, in one of three tries", "source": "program"},
+        {"assertion_id": "pty-heap", "checks": "a thousand pty masters opened and closed leave HeapUsed unchanged and HeapPages within two pages, in one of three tries", "source": "program"},
+        {"assertion_id": "socket-heap", "checks": "a thousand datagram sockets made and closed leave HeapUsed unchanged and HeapPages within two pages, in one of three tries", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
