@@ -48,7 +48,7 @@ tests/pollprobe.c: 1 sleep
 tests/procprobe.c: 1 sleep
 tests/rawprobe.c: 1 sleep
 tests/sigprobe.c: 1 sleep
-tests/system/suites.mk: 3 skip
+tests/system/suites.mk: 2 skip
 tests/system/suites/exfat.sh: 3 skip
 tests/system/suites/fatwrite.sh: 2 skip
 tests/timeprobe.c: 1 sleep

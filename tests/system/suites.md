@@ -55,7 +55,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `cred-persist` (full tier; needs qemu; 128 MiB): the credential replacement's durability across a reboot.
 * `packet-e1000` (full tier; needs qemu; 128 MiB): the packet suite on the e1000 card.
 * `addressed` (full tier; needs qemu; 128 MiB): the address named on the boot line, and the proof that it is the one in force.
-* `ping` (full tier; needs qemu; 128 MiB): the ICMP path against the SLIRP gateway, which is why it is its own target rather than a probe in the suite.
+* `ping` (full tier; needs qemu; 128 MiB): the ICMP path against the SLIRP gateway, which is why it is a case of its own rather than a probe in the default suite.
 * `packet` (full tier; needs qemu; 128 MiB): the packet socket, which is how a DHCP client sees a reply that arrives before this machine owns an address.
 * `ping-e1000` (full tier; needs qemu; 128 MiB): the ping suite on the e1000 card.
 * `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load while six lines are typed at its console: every line read, no request quarantined by its deadline, and the longest delays it saw, from `/proc/stat`, printed.

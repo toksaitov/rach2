@@ -730,31 +730,15 @@ CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 $(CRASH_TEST_IMAGE): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
                      build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs tests
 	$(MKDISK) krffs/manifests/disk-test.manifest $@ 64 48
-# The capture `tests/run raw` reads the hop limits and the checksum out of.
-RAW_PCAP = $(IMAGES_DIR)/raw$(NIC_TAG).pcap
 # Its own disk image, so `make -j` cannot have this target and `test-disk`
 # rewriting one file while the other boots it.
 BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # `tests/run ping`: the ICMP path against the SLIRP gateway, which is why it is
-# its own target rather than a probe in the suite. The explicit until= is
-# required: after its last step the harness drains only --grace and then kills
-# QEMU, while the timeout case alone costs four seconds and the child the probe
-# forks lives three to eight, so without it the token would arrive after QEMU
-# was dead.
-run-ping: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 120 --ok "PINGTEST OK" \
-	    "expect=Type 'help'" "send=exec /pingtest" until=60
+# a case of its own rather than a probe in the default suite. Its case is in
+# tests/cases/guest.ping.json, which etude runs, and has no target here.
 # `tests/run packet`: the packet socket, which is how a DHCP client sees a reply
-# that arrives before this machine owns an address. Its own target and not a
-# probe in the suite, for the reason `tests/run ping` is: it needs the
-# network to answer, and the suite's probes must not.
-run-packet: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 120 --ok "PACKETPROBE OK" \
-	    "expect=Type 'help'" "send=exec /packetprobe" until=60
+# that arrives before this machine owns an address. Its case is in
+# tests/cases/guest.packet.json, which etude runs, and has no target here.
 # `tests/run bootline`: the boot line that contradicts itself. `rach2.nodisk`
 # skips the disk an image rooted on it needs, and the machine would fall to a
 # shell that authenticates nobody, so the kernel refuses that combination; with
@@ -778,59 +762,8 @@ run-servicelog: rach2 utils check-busybox $(MKMBR) $(HARNESS)
 	sh tests/system/suites/servicelog.sh $(BOOT_KERNEL) $(HARNESS) $(MKMBR) \
 	    $(ARCH_BUILD)/utils/sbin/init-shell $(ARCH_BUILD)/utils/update $(BUSYBOX_BIN) $(SERVICELOG_DIR)
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
-# are. Three boots, because the three things it must show cannot be shown in
-# one: the probe with the network answering, the same probe with an address and
-# no gateway (where the only truthful answer is that there is no route), and
-# `traceroute` itself on the image that has it. The capture is read by the
-# capture checker for the two things a program inside the machine cannot see:
-# the hop limit each datagram left with, and the caller's own checksum.
-run-raw: raw-stack
-raw-card: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(PCAPCHECK) $(HARNESS)
-	@rm -f $(RAW_PCAP)
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-object \
-	    --qemu-arg=filter-dump,id=rw0,netdev=net0,file=$(RAW_PCAP) \
-	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test$(NIC_TAG).rawprobe.log \
-	    "expect=Type 'help'" "send=exec /rawprobe" until=60
-	$(PCAPCHECK) rawwire $(RAW_PCAP)
-ifeq ($(NIC),e1000)
-raw-stack: raw-card
-	@echo "raw-test: the rows above the driver, the route that is not there, traceroute and the user's ping, are skipped here; tests/run raw covers them on the first card"
-else
-raw-stack: raw-card
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(TEST_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --append "rach2.ip=10.0.2.15/24" \
-	    --timeout 200 --ok "RAWPROBE OK" --log $(IMAGES_DIR)/raw-test.static.log \
-	    "expect=Type 'help'" "send=exec /rawprobe" until=30
-	# And the program the socket was built for. The ping comes first because a
-	# datagram for an address whose hardware address is not known yet is dropped
-	# while the request goes out, and traceroute sends one probe per hop and does
-	# not retry, so a cold cache costs it its first answer. What is asserted is the
-	# first hop, which is the gateway answering a hop limit of one, and that is the
-	# whole mechanism.
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 300 --steptmo 90 --ok "TRACEDONE" \
-	    "expect=rach2 login:" "send=root" "expect=Password:" \
-	    "send=`cat krffs/rach2_demo_password`" \
-	    "expect=# " \
-	    "send=/bin/ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8" \
-	    "expect= 1  10.0.2.2" "send=echo TRACE\"\"DONE" "expect=TRACEDONE"
-	# The in-house ping is the one an ordinary account runs: busybox's needs
-	# a raw socket, which is root's, and is not built for that reason. Its reply
-	# line has the hop limit the reply arrived with, 255 from the emulator's
-	# gateway, which answers with the most there is.
-	$(HARNESS) $(NIC_DEV) --kernel $(BOOT_KERNEL) \
-	    --initrd $(OS_REAL_IMAGE) --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 300 --steptmo 90 --ok "USERPINGOK" \
-	    "expect=rach2 login:" "send=test" "expect=Password:" \
-	    "send=`cat krffs/rach2_test_password`" "expect=[$$] " \
-	    "send=/bin/ping -c 1 10.0.2.2 && echo USERPING\"\"OK" "expect=icmp_seq=1 ttl=255 time=" \
-	    "expect=USERPINGOK"
-endif
-.PHONY: raw-card raw-stack
+# are. Its cases, each in a boot of its own, are in
+# tests/cases/machine.raw.json, which etude runs, and have no target here.
 # `tests/run netif`: the interface ioctls, which is how a program sets this
 # machine's address. Its own target, like `tests/run ping`: it changes the
 # address out from under the machine and puts it back, and the last thing it
@@ -2050,22 +1983,21 @@ run-drive: $(HARNESS)
 # build's files or out of date. They are the cases of
 # tests/cases/host.imagerace.json, which etude runs, and have no target here.
 
-# The eight network suites again on the second card. Each is the first-card
-# target with `NIC=e1000`, which picks the tagged files and the second set of
-# forwarded ports, so a pair can run at the same time. The rows whose subject
-# is above the driver belong to the first card's suite: `netif`, `raw` and
-# `dhcp` are split into a `-card` half, run on both cards, and a `-stack`
-# half that the second card's run skips with a line saying which suite
-# covers it. The probe suite is not repeated at all, since none of its
-# probes sends a frame.
+# The eight network suites again on the second card. Each with a target here
+# is the first-card target with `NIC=e1000`, which picks the tagged files and
+# the second set of forwarded ports, so a pair can run at the same time; the
+# others are families of etude's cases whose machines have the e1000. The rows
+# whose subject is above the driver belong to the first card's suite: `netif`
+# and `dhcp` are split into a `-card` half, run on both cards, and a `-stack`
+# half that the second card's run skips with a line saying which suite covers
+# it, and `raw-e1000` has the case of the card alone. The probe suite is not
+# repeated at all, since none of its probes sends a frame.
 
-# `tests/run ping-e1000`: the ping suite on the e1000 card.
-run-ping-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-ping
+# `tests/run ping-e1000`: the ping suite on the e1000 card. Its case is in
+# tests/cases/guest.ping-e1000.json, which etude runs, and has no target here.
 
-# `tests/run packet-e1000`: the packet suite on the e1000 card.
-run-packet-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-packet
+# `tests/run packet-e1000`: the packet suite on the e1000 card. Its case is in
+# tests/cases/guest.packet-e1000.json, which etude runs, and has no target here.
 
 # `tests/run netif-e1000`: the netif suite's card half on the e1000 card.
 run-netif-e1000:
@@ -2079,9 +2011,9 @@ run-dgram-e1000:
 run-netconsole-e1000:
 	$(MAKE) --no-print-directory NIC=e1000 run-netconsole
 
-# `tests/run raw-e1000`: the raw suite's card half on the e1000 card.
-run-raw-e1000:
-	$(MAKE) --no-print-directory NIC=e1000 run-raw
+# `tests/run raw-e1000`: the raw suite's card half on the e1000 card. Its case
+# is in tests/cases/machine.raw-e1000.json, which etude runs, and has no target
+# here.
 
 # `tests/run dhcp-e1000`: the dhcp suite's card half on the e1000 card.
 run-dhcp-e1000:
