@@ -1,8 +1,0 @@
-# The disk of `tests/run stress` and `stress-ahci`: stressprobe on a KRFFS
-# root on disk.
-#
-# mkdisk.sh builds it, and the suite boots it with rach2.fsdisk and
-# rach2.rescue. The debug shell runs `exec /stressprobe`, which writes 33 MiB
-# of files and reads them back through a page cache of at most 8 MiB, so that
-# the data that comes back has been through the disk.
-file 0755 /stressprobe build/tests/stressprobe

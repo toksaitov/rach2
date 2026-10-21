@@ -69,9 +69,9 @@ raw|qemu|full
 krffsmount|qemu,python3|full
 diskrate|qemu,mformat|full||512
 usbdisk|qemu,xorriso,mformat,mcopy,mtype|core
-stress-ahci|qemu|full|stress-ahci-test*,stress-ahci.*,stress-ahci/*,stress-test-ahci.*
+stress-ahci|qemu|full
 default|qemu|core
-stress|qemu|full|stress-test.*,stress.*,stress/*
+stress|qemu|full
 procfiles|qemu|full
 bigmem|qemu|full||8320|x86_64
 memory|qemu|core||4096
@@ -99,7 +99,7 @@ ping-e1000|qemu|full
 load|qemu,mformat|full
 authority|qemu|core|authority-test*,authority.*,authority-*,authority/*,auth-test.*
 queue|qemu,mformat,mke2fs|core
-persist-ahci|qemu|full|persist-ahci-test*,persist-ahci.*,persist-ahci/*,persist-test-ahci.*
+persist-ahci|qemu|full
 subset|qemu|core
 bus|qemu,mformat,mtype|full
 exitline|qemu|full

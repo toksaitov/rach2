@@ -8,7 +8,8 @@
  * "still alive" line appears only when the write did not fault. vmfault is
  * the companion case, an address in no region at all.
  *
- * `tests/run fault` runs it with vmfault and winprobe in one boot.
+ * Its case is guest.fault.vmro (tests/cases/guest.fault.json), which
+ * requires the end on signal 11 and the kernel's record of the kill.
  * Freestanding; direct system calls (probe.h).
  */
 

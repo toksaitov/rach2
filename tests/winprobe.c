@@ -12,11 +12,10 @@
  * panic when the disk cannot fill the page.
  *
  * Prints "winprobe: about to read the page-cache window" and dies on signal
- * 11. `tests/run fault` expects both, and then runs a program that prints,
- * which a kernel that went down with the fault cannot; the line the probe
- * prints when the read returns, "winprobe: ERROR still alive after window
- * read", is that suite's `--never` text. Freestanding; direct system calls
- * (probe.h).
+ * 11, which its case, guest.fault.winprobe (tests/cases/guest.fault.json),
+ * requires with the kernel's record of the kill and no panic; the probe
+ * prints "winprobe: ERROR still alive after window read" and exits 0 when
+ * the read returns. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"

@@ -14,7 +14,7 @@
  * whole and synced; `read`, every file read whole; and `intact`, every byte
  * read equal to its pattern. Beside them it prints "BLOCKPROBE OK" and exits
  * 0, or prints "BLOCKPROBE FAIL: " and the step, and exits 1, which the bus
- * and queue suites read. Freestanding; direct system calls (probe.h).
+ * suite reads. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"

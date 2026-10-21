@@ -8,9 +8,11 @@
  * line before the fault; the "still alive" line after it appears only when
  * the write did not fault.
  *
- * `tests/run fault` runs it with vmro and winprobe in one boot, requires
- * "killed by signal 11" after each, and then runs hello, which a kernel the
- * fault took down cannot run. Freestanding; direct system calls (probe.h).
+ * Its case, guest.fault.vmfault (tests/cases/guest.fault.json), requires
+ * that it ends on signal 11 and that the kernel logs the kill of a bad write
+ * at WILD_ADDR without a panic; etude-guest, which reports the end, runs on
+ * only in a kernel the fault left running. Freestanding; direct system calls
+ * (probe.h).
  */
 
 #include "probe.h"

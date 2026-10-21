@@ -176,7 +176,7 @@ The catalogues `ata-identify.json`, `ata-durable.json`, `ata-wait.json`, `ata-ra
 `tests/run NAME` runs a system suite under QEMU, `RACH2_WORKERS=4 tests/run A B C` several, and `ARCH=x86_64` the other architecture; [tests/system/suites.md](../../../tests/system/suites.md) gives each suite's tier and needs. Those that cover this layer:
 
 * ATA: `disk` and `persist` (core); `stress`, `bus` and `load` (full), `load` with `rach2.atapio`.
-* AHCI: `disk-ahci`, `disks` and `queue` (core); `disk-q35`, `persist-ahci`, `stress-ahci` and `bootorder` (full). `queue` covers the interrupt path beside the fault path, a late answer under `rach2.blockdeadline=1`, and `rach2.blockpool`.
+* AHCI: `disk-ahci`, `disks` and `queue` (core); `disk-q35`, `persist-ahci`, `stress-ahci` and `bootorder` (full). `queue` covers the interrupt path, the fault path beside raw reads of the same port, and an ext2 batch; `request_hosttest.c` and `ahci_hosttest.c` cover the deadlines and the completion of independent requests.
 * NVMe: `uefi` (full), which installs onto a 4 TiB NVMe disk and boots it.
 * Partition tables and identities: `parts` (core).
 * The request pool and the lag device: `mount`, `fatwrite` and `exfat` (core), `krffsmount` (full).

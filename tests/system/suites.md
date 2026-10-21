@@ -33,7 +33,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `usbdisk` (core tier; needs qemu, xorriso, mformat, mcopy, mtype; 128 MiB): a flash drive as a disk, the cases of tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no table; the nodes, the mounts, a write, the pull from under a mount and the replug, ten plugs and pulls of a stick nobody opened, BusyBox mounting by label, a throughput line, a boot from the stick image, three sticks at once, raw writes from the recovery kernel, a stick past two terabytes and two logical units.
 * `stress-ahci` (full tier; needs qemu; 128 MiB): the stress suite's on-disk KRFFS larger than the page cache, on an AHCI controller.
 * `default` (core tier; needs qemu; 128 MiB): every guest probe, each in a boot of its own on the test image.
-* `stress` (full tier; needs qemu; 128 MiB): prove an on-disk KRFFS larger than the page cache works.
+* `stress` (full tier; needs qemu; 128 MiB): an on-disk KRFFS larger than the page cache.
 * `procfiles` (full tier; needs qemu; 128 MiB): the machine's own /proc files, on the boots that differ and through the programs that read them.
 * `bigmem` (full tier; needs qemu; 8320 MiB; x86_64 only): all of an x86-64 machine's eight gigabytes is counted, and a program's pages fill memory past what lies below 4 GiB and read back as written; without 1 GiB pages, 72 GiB is counted to the direct map's 64 GiB.
 * `memory` (core tier; needs qemu; 4096 MiB): the kernel's account of physical memory at five sizes, memprobe and frame allocations failed at the two ends of the range, the string routines swept, a machine of 8 MiB refused and kernel stacks run out.
@@ -61,7 +61,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `load` (full tier; needs qemu, mformat; 128 MiB): the machine under load while six lines are typed at its console: every line read, no request quarantined by its deadline, and the longest delays it saw, from `/proc/stat`, printed.
 * `authority` (core tier; needs qemu; 128 MiB): which kernel may write the whole disk.
 * `queue` (core tier; needs qemu, mformat, mke2fs; 128 MiB): real AHCI reads, interrupts, ext2 batch writes and fallback root faults beside raw reads; controlled host models test deadlines.
-* `persist-ahci` (full tier; needs qemu; 128 MiB): fsync durability across a reboot with the disk on an AHCI controller.
+* `persist-ahci` (full tier; needs qemu; 128 MiB): fsync durability across a power cut with the disk on an AHCI controller.
 * `subset` (core tier; needs qemu; 128 MiB): each optional device probe left out, and proved left out.
 * `bus` (full tier; needs qemu, mformat, mtype; 128 MiB): four IDE drives on both channels, an AHCI and an IDE disk together with the root on each in turn, and a disk past 128 GiB.
 * `exitline` (full tier; needs qemu; 128 MiB): the plain process-exit line is printed under the debug shell and nowhere else.
@@ -72,7 +72,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `metal` (core tier; needs qemu, ssh, mformat, mcopy, mmd, mke2fs, debugfs, e2fsck, python3; 128 MiB): unattended SSH on the metal image, the acceptance script rehearsed on it, and the script's installed-root rows, the cases of tests/cases/machine.metal.json.
 * `bootline` (full tier; needs qemu, mke2fs; 128 MiB): the boot line that contradicts itself.
 * `servicelog` (full tier; needs qemu, mke2fs; 128 MiB): the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next.
-* `persist` (core tier; needs qemu; 128 MiB): fsync durability across a reboot.
+* `persist` (core tier; needs qemu; 128 MiB): fsync durability across a power cut.
 * `style` (full tier; needs cppcheck, shellcheck, clang, clang-format, python3; no machine): the source checks over the tree, booting nothing.
 * `dgram-e1000` (full tier; needs qemu; 128 MiB): the dgram suite on the e1000 card.
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.

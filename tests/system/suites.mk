@@ -265,27 +265,10 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # `tests/run fault`: the three probes whose whole claim is that the kernel
 # killed them. vmfault writes through a pointer in no mapping, vmro writes a
 # page it mapped read-only, and winprobe reads the page-cache window, which
-# belongs to the kernel. Each must die on signal 11 and leave the machine
-# running, so the boot ends by executing a program that prints a token: a
-# kernel that took any of the three faults with it cannot print it. The
-# `--never` text is the line each probe prints when it was not killed. These
-# cannot join the shared probe boot, which scores a probe by its exit status;
-# a probe that is killed has none.
-run-fault: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 120 --ok "Hello from ELF!" --never "ERROR still alive" \
-	    "expect=Type 'help'" \
-	    "send=exec /vmfault" \
-	    "expect=vmfault: about to dereference a wild pointer" \
-	    "expect=killed by signal 11" \
-	    "send=exec /vmro" \
-	    "expect=vmro: about to write a read-only page" \
-	    "expect=killed by signal 11" \
-	    "send=exec /winprobe" \
-	    "expect=winprobe: about to read the page-cache window" \
-	    "expect=killed by signal 11" \
-	    "send=exec /hello"
+# belongs to the kernel. They are the cases of tests/cases/guest.fault.json,
+# which etude runs, each in a boot of its own, and have no target here: each
+# must end on signal 11 with the kernel's record of the kill on the console
+# and no panic.
 # `tests/run console`: the two probes that read from the console, which the
 # shared probe boot cannot run because they block until something is typed.
 # stdintest reads three lines and prints what it read, so the steps assert the
@@ -324,13 +307,9 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 # QEMU's recording of each.
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than `EIO`, removes the file
-# and writes again. It has a boot of its own because it fills the image every
-# other probe is staged in.
-run-diskfull: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 180 --ok "DISKFULL OK" --never "DISKFULL FAIL" \
-	    "expect=Type 'help'" "send=exec /diskfull" "expect=DISKFULL"
+# and writes again. It is the case of tests/cases/guest.diskfull.json, which
+# etude runs in a boot of its own, since it fills the test image's root, and
+# has no target here.
 # `tests/run socket`: the guest opening connections of its own, checked by a
 # host that answers (see tests/cases/machine.socket.json). They are the cases
 # of that manifest, which etude runs, and have no target here.
@@ -570,25 +549,15 @@ $(DRILL_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-em
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
-# `tests/run persist`: fsync durability across a reboot. Builds a disk holding
-# persistprobe, boots it twice against the same image: the first boot writes and
-# fsyncs /persist.txt, the second reads it back. The second boot passes only if
-# fsync pushed the write through the cache to the disk, since the file would
-# otherwise be gone.
+# `tests/run persist`: fsync durability across a power cut. It is the case of
+# tests/cases/machine.persist.json, which etude runs, and has no target here:
+# two boots of one private copy of this disk on IDE, the first writing and
+# fsyncing /persist.txt and then cut off by QMP's quit, the second reading it
+# back. The disk is the persist-ahci case's too.
 PERSIST_DISK = $(IMAGES_DIR)/persist-test.disk
 $(PERSIST_DISK): krffs/manifests/persist-test.manifest $(MANIFEST_DEPS_persist_test) $(MKDISK) \
                  $(IMAGE_TOOLS) | preflight krffs tests
 	$(MKDISK) krffs/manifests/persist-test.manifest $@ 64 48
-run-persist: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_DISK) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(PERSIST_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
 # `tests/run cred-persist`: the credential replacement's durability across a
 # reboot. Both of cred_rewrite's flushes are no-ops on the RAM module the probe
 # suite boots, so a library that dropped either would pass every other probe.
@@ -755,7 +724,11 @@ $(MOUNT_CLAIM_DISK): $(MOUNT_TEST_DISK) $(MKMBR)
 
 # `tests/run load`: the machine under load while six lines are typed at its
 # console: every line read, no request quarantined by its deadline, and the
-# longest delays it saw, from `/proc/stat`, printed.
+# longest delays it saw, from `/proc/stat`, printed. It is the cases of
+# tests/cases/machine.load.json, which etude runs, and has no target here:
+# the load on a disk behind the lag device whose flushes QEMU keeps from the
+# host, and the polled writer of `rach2.atapio`. Their disk is 16 MiB with a
+# FAT32 partition at LBA 2048.
 LOAD_DISK = $(IMAGES_DIR)/load-test.disk
 $(LOAD_DISK): $(MKMBR)
 	@mkdir -p $(@D)
@@ -763,8 +736,6 @@ $(LOAD_DISK): $(MKMBR)
 	$(MKMBR) --lba $@.tmp 2048:28672:0c >/dev/null
 	mformat -i $@.tmp@@1048576 -F -T 28672 -v LOAD ::
 	mv $@.tmp $@
-run-load: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/load.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(LOAD_DISK)
 
 # `tests/run conload`: every line typed at the console under load arrives,
 # numbered and checksummed, with the reader parked, as type-ahead, after an
@@ -1253,31 +1224,15 @@ run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-i
 	sh tests/system/suites/exitline.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
 	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
 	    $(HARNESS_KERNEL)
-# `tests/run stress`: prove an on-disk KRFFS larger than the page cache works.
-# Boots a 64 MB disk with a 48 MB partition and runs stressprobe, which writes
-# and re-reads 33 MiB through the page cache, which holds at most 8 MiB. The run
-# ends on the probe's token; the bound is the run's budget and not its cost,
-# since the 33 MiB take about 130 s under either accelerator and a bound of 150
-# s would cut a loaded emulator's run short. A hang is the runner's idle limit
-# to catch.
-STRESS_DISK = $(IMAGES_DIR)/stress-test.disk
-run-stress: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_DISK) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(STRESS_DISK),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
-	    --log $(STRESS_DISK).log probe=/stressprobe
-# The AHCI variants of the disk tests: identical images and probes, but the disk
-# rides an ich9-ahci HBA (if=none + ide-hd) and rach2.disk=ahci selects the AHCI
-# backend, exercising the same page-cache/KRFFS path through
-# ahci_read/ahci_write. The --qemu-arg passthrough adds the two -device lines
-# without disturbing the fixed NIC. The ATA disk, persist and stress suites
-# stay on if=ide.
+# `tests/run stress`: an on-disk KRFFS larger than the page cache. It is the
+# case of tests/cases/guest.stress.json, which etude runs, and has no target
+# here: stressprobe writes and reads back 33 MiB through a page cache of at
+# most 8 MiB, on a private copy of etude's disk on IDE.
+# The harness's arguments that put the drive drv0 on a port of an ich9-ahci
+# (if=none and ide-hd), beside the fixed NIC; rach2.disk=ahci then selects the
+# AHCI backend.
 AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
               --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
-PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
-STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
 # `tests/run disk-ahci`: the disk suite's page-cache integrity check with the
 # disk on an AHCI controller. It is the case of
 # tests/cases/guest.disk-ahci.json, which etude runs, and has no target here.
@@ -1346,6 +1301,10 @@ run-grow: $(DEMO_CREDS) rach2 tests krffs test-image $(MKMBR) $(MKGPT) $(GROWSET
 	    $(GROW_GPT_DISK) $(GROW_DIR)
 # `tests/run queue`: real AHCI reads, interrupts, ext2 batch writes and
 # fallback root faults beside raw reads; controlled host models test deadlines.
+# It is the cases of tests/cases/guest.queue.json, which etude runs, and has
+# no target here. Their disks are two of 8 MiB with a FAT32 partition each,
+# a copy of etude's disk with a FAT32 partition after its KRFFS one, which is
+# the root, and an ext2 volume of 6 MiB on a disk of 8.
 QUEUE_DIR = $(IMAGES_DIR)/queue
 $(QUEUE_DIR)/slow.disk $(QUEUE_DIR)/fast.disk: $(MKMBR)
 	@mkdir -p $(@D)
@@ -1370,32 +1329,14 @@ $(QUEUE_DIR)/late.disk: $(MKMBR)
 	rm -f $@.vol
 	$(MKMBR) --lba $@.tmp 2048:12288:83 >/dev/null
 	mv $@.tmp $@
-run-queue: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/queue.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MKMBR) $(QUEUE_DIR)
-# `tests/run persist-ahci`: fsync durability across a reboot with the disk on
-# an AHCI controller.
-run-persist-ahci: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/persist-test.manifest $(PERSIST_AHCI_DISK) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 60 --ok "PERSISTPROBE OK (wrote)" probe=persistprobe
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(PERSIST_AHCI_DISK),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 60 --ok "PERSISTPROBE OK (read back)" probe=persistprobe
+# `tests/run persist-ahci`: fsync durability across a power cut with the disk
+# on an AHCI controller. It is the case of
+# tests/cases/machine.persist-ahci.json, which etude runs, and has no target
+# here.
 # `tests/run stress-ahci`: the stress suite's on-disk KRFFS larger than the page
-# cache, on an AHCI controller.
-run-stress-ahci: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/stress-test.manifest $(STRESS_AHCI_DISK) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(STRESS_AHCI_DISK),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 900 --steptmo 800 --ok "STRESSPROBE OK" --never "STRESSPROBE FAIL" \
-	    --log $(STRESS_AHCI_DISK).log probe=/stressprobe
+# cache, on an AHCI controller. It is the case of
+# tests/cases/guest.stress-ahci.json, which etude runs, and has no target
+# here.
 # `tests/run style`: the source checks over the tree, booting nothing. They are
 # the cases of tests/cases/host.style.json, which etude runs, and have no
 # target here.
