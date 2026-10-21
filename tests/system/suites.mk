@@ -776,6 +776,17 @@ LOOPDEV_DISK = $(IMAGES_DIR)/loopdev-test.disk
 run-loopdev: rach2 tests krffs test-image $(HARNESS) $(MKMBR)
 	sh tests/system/suites/loopdev.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) \
 	    $(LOOPDEV_DISK)
+# The artifacts of the loop device cases beyond the kernel and the test
+# image, which loopdev_disks.sh makes: the FAT32, ext2 and KRFFS images in
+# build/tests/system/loopdev, where the native cases take them from
+# (tests/native/maps), and the disk of the FAT32 volume that holds them, the
+# disk of the ext2 volume that holds the KRFFS image, and the stick. They
+# hold data alone, so one set serves both architectures.
+LOOPDEV_ARTIFACTS = $(addprefix build/tests/system/loopdev/,fat.img ext2.img krffs.img) \
+                    $(addprefix $(CASE_DIR)/loopdev/,disk.img ext2back.img stick.img)
+$(LOOPDEV_ARTIFACTS) &: tests/system/loopdev_disks.sh krffs/manifests/loopimg-test.manifest \
+                        $(MKMBR) $(IMAGE_TOOLS)
+	sh tests/system/loopdev_disks.sh build/tests/system/loopdev $(CASE_DIR)/loopdev
 
 # `tests/run krffsmount`: a KRFFS volume mounted by mount(2) from a program,
 # read, written, read back after a reboot, left by a machine killed while

@@ -652,7 +652,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # with libetude-case, the library that gives it its `main`. They are host
 # programs, the same for both architectures, which a case's `prepare` names
 # as tests/cases/machine/NAME. The lifecycle scenarios, and those of the
-# audio, Doom, krffsmount and mount cases, also link
+# audio, Doom, krffsmount, loop device and mount cases, also link
 # tests/cases/machine/lifecycle.c, which they share.
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/clock_scenario \
@@ -660,6 +660,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/default_scenario \
                       build/tests/cases/machine/doom_scenario \
                       build/tests/cases/machine/krffsmount_scenario \
+                      build/tests/cases/machine/loopdev_scenario \
                       build/tests/cases/machine/memory_scenario \
                       build/tests/cases/machine/mount_scenario \
                       build/tests/cases/machine/reset_scenario \
