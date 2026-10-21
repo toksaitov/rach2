@@ -1,5 +1,11 @@
 /* Check executable write exclusion, its lifetime, and the ELF interpreter.
  *
+ * The rows run on the file system of $TMPDIR, or of /tmp, which is KRFFS on
+ * the test image, and then on a tmpfs; etude's report (probe_report.h) has
+ * an assertion for each, `krffs` and `tmpfs`, for the case ETUDE_CASE names.
+ * The first failed row ends the program, failing its file system's
+ * assertion with the row and errno.
+ *
  * The copy that ends by exec runs /musl/statushelper, or the path that
  * `helper=PATH` gives, as a native run's private root has the helper at /
  * (tests/native/Readme.md); the copies are passed the same argument. Other
@@ -18,6 +24,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The path `helper=PATH` gives, or null for /musl/statushelper. */
 static const char *helper;
@@ -59,11 +66,15 @@ static void interrupted(int sig)
     exit(128 + sig);
 }
 
-/** Require a row, preserving errno for the diagnostic. */
+/** Require a row, preserving errno for the diagnostic and the report. */
 static void check(int ok, const char *what)
 {
+    char detail[128];
+
     if (!ok) {
+        snprintf(detail, sizeof(detail), "%s: errno %d", what, errno);
         printf("TEXTBUSYMUSL FAIL (%s): errno %d\n", what, errno);
+        report_stop(detail);
         exit(1);
     }
 }
@@ -350,8 +361,14 @@ int main(int argc, char **argv)
     signal(SIGINT, interrupted);
     signal(SIGHUP, interrupted);
     signal(SIGPIPE, interrupted);
+    report_begin(report_case(environ, "guest.textbusy.exclusion"));
+    report_plan("krffs");
+    report_plan("tmpfs");
     filesystem(0);
+    report_held();
     filesystem(1);
+    report_held();
+    report_end();
     puts("TEXTBUSYMUSL OK");
     return 0;
 }

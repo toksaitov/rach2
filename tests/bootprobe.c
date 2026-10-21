@@ -38,11 +38,18 @@
  * "BOOTPROBE AUTH RECOVERY OK" or, with `machine=native`, "BOOTPROBE CMDLINE
  * OK", and "BOOTPROBE FAILED" when a check failed.
  *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names: an assertion for each part of the boot, `cmdline` and
+ * `proc-listing` in every boot and then the mode's (`raw-readv` and
+ * `raw-shared`, `ramroot`, `authority` and `window-batch`, `wide`, `absent`
+ * or `fixture`), each failed with the first of its checks that failed.
+ *
  * Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define O_RDONLY 0
 #define O_WRONLY 1
@@ -102,14 +109,56 @@ static void puts(const char *s)
 
 static int fails = 0;
 
+/* The part of the boot whose assertion is open, the failures counted before
+ * it began, and the first of its checks that failed. */
+static const char *part;
+static int part_fails;
+static const char *part_why;
+
 /** Count a failure and print `msg` when `cond` is 0. */
 static void check(int cond, const char *msg)
 {
     if (!cond) {
         fails++;
+        if (part_why == 0) {
+            part_why = msg;
+        }
         syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
     }
+}
+
+/** Report the open part's assertion: held when none of its checks failed. */
+static void part_end(void)
+{
+    if (part == 0) {
+        return;
+    }
+    if (fails == part_fails) {
+        report_pass(part);
+    } else {
+        report_fail(part, part_why);
+    }
+    part = 0;
+}
+
+/** End the open part, and begin the part whose assertion is `id`. */
+static void part_begin(const char *id)
+{
+    part_end();
+    part = id;
+    part_fails = fails;
+    part_why = 0;
+}
+
+/** End the report, print `token`, or "BOOTPROBE FAILED" after a failed
+ * check, and exit 0, or 1 after a failed check. */
+static void finish(const char *token)
+{
+    part_end();
+    report_end();
+    puts(fails ? "BOOTPROBE FAILED" : token);
+    sys_exit(fails != 0);
 }
 
 /** Whether `hay` (NUL-terminated) contains `needle`. */
@@ -780,13 +829,15 @@ void probe_main(unsigned long *sp)
 
     probe_args((int)sp[0], (char **)(sp + 1));
     native = probe_native();
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.bootprobe"));
 
+    part_begin("cmdline");
     cmdline_case(native);
+    part_begin("proc-listing");
     proc_listing_case();
 
     if (native) {
-        puts(fails ? "BOOTPROBE FAILED" : "BOOTPROBE CMDLINE OK");
-        sys_exit(fails != 0);
+        finish("BOOTPROBE CMDLINE OK");
     }
 
     fixture = contains(cmdline, "rach2.bootprobe=fixture");
@@ -794,16 +845,18 @@ void probe_main(unsigned long *sp)
     if (contains(cmdline, "rach2.bootprobe=shared")) {
         int kind;
 
+        part_begin("raw-readv");
         check(contains(cmdline, "rach2.blocklag="), "raw overlap uses delayed device");
         raw_readv_case();
+        part_begin("raw-shared");
         for (kind = 0; kind < 5; kind++) {
             raw_shared_case(kind);
         }
-        puts(fails ? "BOOTPROBE FAILED" : "BOOTPROBE SHARED OK");
-        sys_exit(fails != 0);
+        finish("BOOTPROBE SHARED OK");
     }
 
     if (contains(cmdline, "rach2.bootprobe=ramroot")) {
+        part_begin("ramroot");
         rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == 0, "a RAM-root boot still has /dev/bootpart");
         check(*(unsigned int *)(statbuf + KSTAT_MODE) == 020600, "and it is a 0600 device");
@@ -855,25 +908,16 @@ void probe_main(unsigned long *sp)
 
         rc = syscall3(SYS_OPEN, (long)"/dev/grubcore", O_RDONLY, 0);
         check(rc == -EACCES, "and an unprivileged open of grubcore is -EACCES");
-
-        if (fails == 0) {
-            puts("BOOTPROBE RAMROOT OK");
-            sys_exit(0);
-        }
-        puts("BOOTPROBE FAILED");
-        sys_exit(1);
+        finish("BOOTPROBE RAMROOT OK");
     }
 
     if (contains(cmdline, "rach2.bootprobe=auth")) {
+        part_begin("authority");
         auth_case(contains(cmdline, "rach2.bootprobe=auth-recovery"));
+        part_begin("window-batch");
         window_batch_case();
-        if (fails == 0) {
-            puts(contains(cmdline, "rach2.bootprobe=auth-recovery") ? "BOOTPROBE AUTH RECOVERY OK"
-                                                                    : "BOOTPROBE AUTH ORDINARY OK");
-            sys_exit(0);
-        }
-        puts("BOOTPROBE FAILED");
-        sys_exit(1);
+        finish(contains(cmdline, "rach2.bootprobe=auth-recovery") ? "BOOTPROBE AUTH RECOVERY OK"
+                                                                  : "BOOTPROBE AUTH ORDINARY OK");
     }
 
     if (contains(cmdline, "rach2.bootprobe=wide")) {
@@ -883,6 +927,7 @@ void probe_main(unsigned long *sp)
         long long size = 260LL * 1024 * 1024 * 1024;
         int fd2;
 
+        part_begin("wide");
         fd = syscall3(SYS_OPEN, (long)"/dev/disk0", O_RDONLY, 0);
         check(fd >= 0, "root opens /dev/disk0 on a 260 GB drive");
 
@@ -946,28 +991,19 @@ void probe_main(unsigned long *sp)
         rc = syscall3(SYS_LSEEK, fd, 0, SEEK_SET);
         check(rc == 0, "and still works for an offset it can name");
         syscall1(SYS_CLOSE, fd);
-
-        if (fails == 0) {
-            puts("BOOTPROBE WIDE OK");
-            sys_exit(0);
-        }
-        puts("BOOTPROBE FAILED");
-        sys_exit(1);
+        finish("BOOTPROBE WIDE OK");
     }
 
     if (!fixture) {
+        part_begin("absent");
         rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
         check(rc == -ENOENT, "stat64 /dev/bootpart is -ENOENT");
         rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDONLY, 0);
         check(rc == -ENOENT, "open /dev/bootpart is -ENOENT");
-        if (fails == 0) {
-            puts("BOOTPROBE ABSENT OK");
-            sys_exit(0);
-        }
-        puts("BOOTPROBE FAILED");
-        sys_exit(1);
+        finish("BOOTPROBE ABSENT OK");
     }
 
+    part_begin("fixture");
     rc = syscall3(SYS_STAT, (long)"/dev/bootpart", (long)statbuf, 0);
     check(rc == 0, "stat64 /dev/bootpart");
     mode = *(unsigned int *)(statbuf + KSTAT_MODE);
@@ -1049,11 +1085,5 @@ void probe_main(unsigned long *sp)
     check(rc == -EACCES, "an unprivileged open is -EACCES");
     rc = syscall3(SYS_OPEN, (long)"/dev/bootpart", O_RDWR, 0);
     check(rc == -EACCES, "an unprivileged read-write open is -EACCES");
-
-    if (fails == 0) {
-        puts("BOOTPROBE OK");
-        sys_exit(0);
-    }
-    puts("BOOTPROBE FAILED");
-    sys_exit(1);
+    finish("BOOTPROBE OK");
 }

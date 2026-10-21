@@ -1,4 +1,13 @@
-/* Check KRFFS boot-root holders opened through a bind mount. */
+/* Check KRFFS boot-root holders opened through a bind mount.
+ *
+ * Twenty rows, each a kind of holder whose file loses its name by unlink or
+ * by a rename over it, through the original directory and then through its
+ * bind. Each row requires the free blocks of the file system to come back
+ * exactly, so etude's report (probe_report.h), an assertion for each row for
+ * the case ETUDE_CASE names, is written only once the rows have ended: a
+ * record written while they run would grow etude-guest's copy of the output
+ * on the same file system. The first failed check ends the program, failing
+ * its row with the check and errno. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -13,6 +22,34 @@
 #include <sys/statfs.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
+
+/* The rows in the order they run, each its assertion's identity: the kind
+ * of holder, how the name goes, and the mount it goes through. */
+static const char *const rows[20] = {
+    "descriptor-unlink",
+    "descriptor-rename",
+    "mapping-unlink",
+    "mapping-rename",
+    "flight-unlink",
+    "flight-rename",
+    "image-unlink",
+    "image-rename",
+    "forked-image-unlink",
+    "forked-image-rename",
+    "descriptor-unlink-bind",
+    "descriptor-rename-bind",
+    "mapping-unlink-bind",
+    "mapping-rename-bind",
+    "flight-unlink-bind",
+    "flight-rename-bind",
+    "image-unlink-bind",
+    "image-rename-bind",
+    "forked-image-unlink-bind",
+    "forked-image-rename-bind",
+};
+static int rows_done;
 
 static char work[256], original[320], alias[320];
 static char program[384], replacement[384], churn[384], bound[384], bound_replacement[384];
@@ -58,11 +95,35 @@ static void interrupted(int sig)
     exit(128 + sig);
 }
 
+/** Write the report: the rows that ended held, and then, when `why` is not
+ * null, the next row failed with `why` and the rest not run. */
+static void report_rows(const char *why)
+{
+    int i;
+
+    report_begin(report_case(environ, "guest.textbusy.bindhold"));
+    for (i = 0; i < 20; i++) {
+        report_plan(rows[i]);
+    }
+    for (i = 0; i < rows_done; i++) {
+        report_held();
+    }
+    if (why != NULL) {
+        report_stop(why);
+    } else {
+        report_end();
+    }
+}
+
 /** Require a row and print the operation that failed. */
 static void check(int ok, const char *what)
 {
+    char detail[128];
+
     if (!ok) {
+        snprintf(detail, sizeof(detail), "%s: errno %d", what, errno);
         printf("BINDHOLDMUSL FAIL (%s): errno %d\n", what, errno);
+        report_rows(detail);
         exit(1);
     }
 }
@@ -385,7 +446,9 @@ int main(int argc, char **argv)
         } else {
             image(kind & 1, kind >= 8);
         }
+        rows_done++;
     }
+    report_rows(NULL);
     puts("BINDHOLDMUSL OK");
     return 0;
 }

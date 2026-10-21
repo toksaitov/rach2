@@ -1,7 +1,9 @@
 /*
- * probe_report.h: etude's report records for the freestanding probes, which
- * include it after probe.h. tools/etude/include/etude/report.h defines the
- * records and tools/etude/Readme.md their contract.
+ * probe_report.h: etude's report records for the guest programs: the
+ * freestanding probes, which include it after probe.h, and the musl
+ * programs, which write through the C library's write(2) and give `environ`
+ * to `report_case`. tools/etude/include/etude/report.h defines the records
+ * and tools/etude/Readme.md their contract.
  *
  * A probe begins its report with `report_begin`, gives each assertion of its
  * path once with `report_pass`, `report_fail` or `report_notrun` and each
@@ -25,12 +27,21 @@
 
 #include "../tools/etude/include/etude/report.h"
 
+#if defined __STDC_HOSTED__ && __STDC_HOSTED__
+#include <unistd.h>
+#define report_write(line, n) ((void)write(1, (line), (size_t)(n)))
+#define report_getpid()       ((int)getpid())
+#else
+#define report_write(line, n) ((void)syscall3(SYS_WRITE, 1, (long)(line), (n)))
+#define report_getpid()       ((int)syscall0(SYS_GETPID))
+#endif
+
 /* The assert, notrun and branch records written so far, which `end` counts. */
 static int report_records;
 
 /* The planned path: its assertions, the next of them, and the process that
  * began the report. */
-static const char *report_path[16];
+static const char *report_path[32];
 static int report_path_len, report_path_at, report_owner;
 
 /** Append `s` to the record `line`, which has `*n` bytes, as room allows. */
@@ -62,7 +73,7 @@ static __inline__ void report_record(const char *verb, const char *a, const char
         }
     }
     line[n++] = '\n';
-    syscall3(SYS_WRITE, 1, (long)line, n);
+    report_write(line, n);
 }
 
 /**
@@ -90,7 +101,7 @@ static __inline__ const char *report_case(char **envp, const char *own)
 /** Begin the report of the case `case_id`. */
 static __inline__ void report_begin(const char *case_id)
 {
-    report_owner = (int)syscall0(SYS_GETPID);
+    report_owner = report_getpid();
     report_record(ETUDE_REPORT_BEGIN, case_id, 0, 0);
 }
 
@@ -165,7 +176,7 @@ static __inline__ void report_held(void)
  * report's end. */
 static __inline__ void report_stop(const char *why)
 {
-    if (report_owner == 0 || (int)syscall0(SYS_GETPID) != report_owner) {
+    if (report_owner == 0 || report_getpid() != report_owner) {
         return;
     }
     if (report_path_at < report_path_len) {
