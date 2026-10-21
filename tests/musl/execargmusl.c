@@ -21,7 +21,10 @@
  * it exits 0 only when it was handed what the parent sent, so a vector
  * delivered short fails the check. The parent prints "EXECARGMUSL OK" and
  * exits 0 on success, or prints "EXECARGMUSL FAIL (detail)" and exits 1 at
- * the first failure.
+ * the first failure. It writes etude's report records (../probe_report.h) for
+ * the case ETUDE_CASE names, an assertion for each check `checks` lists, with
+ * the branch `wide` present on x86-64 and absent on i686; a failure leaves the
+ * checks after it not run.
  */
 
 #define _GNU_SOURCE
@@ -33,6 +36,8 @@
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 #define KIB     1024UL
 #define MIB     (1024UL * 1024UL)
@@ -51,10 +56,76 @@ static char *vec[32770];
 static char big_a[LONGEST + 2];
 static char big_b[LONGEST + 2];
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. The checks from `WIDE_MAP` on are
+ * those of x86-64 alone. */
+enum {
+    MANY_ARGS,
+    MANY_VARS,
+    LONGEST_STRING,
+    STRING_E2BIG,
+    BUDGET_EXACT,
+    BUDGET_E2BIG,
+    POINTERS_E2BIG,
+    EMPTY_ARGV,
+    WIDE_MAP,
+    WIDE_POINTERS,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"many-args", "five thousand arguments were not delivered whole"},
+    {"many-vars", "five thousand variables were not delivered whole"},
+    {"longest-string", "a string of 128 KiB with its NUL was not delivered"},
+    {"string-e2big", "a string of 128 KiB and a NUL was not refused with E2BIG"},
+    {"budget-exact", "strings and pointers of exactly the budget were refused"},
+    {"budget-e2big", "a byte past the budget was not refused with E2BIG"},
+    {"pointers-e2big", "32768 pointers under a 128 KiB budget were not refused with E2BIG"},
+    {"empty-argv", "an empty argv was not given one empty argument"},
+    {"wide-map", "mapping pages at 4 GiB and 8 GiB"},
+    {"wide-pointers", "an argument or variable at an address of zero low bits was lost"},
+};
+
+/** In the process that began the report, report the branch of the group
+ * `wide`, every check of it before `check` as held, `check` as failed with
+ * its text, those after it as not run, and the report's end; with `check`
+ * CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("EXECARGMUSL FAIL (%s)\n", what);
+    int wide = 0;
+    int i;
+
+#if defined __x86_64__
+    wide = 1;
+#endif
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    report_branch("wide", wide ? "present" : "absent");
+    for (i = 0; i < CHECKS; i++) {
+        if (!wide && i >= WIDE_MAP) {
+            continue;
+        }
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("EXECARGMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -233,7 +304,7 @@ static int many(void)
     }
     vec[MANY + 2] = NULL;
     if (run(vec, none, 8 * MIB) != 0) {
-        return fail("five thousand arguments were not delivered whole");
+        return fail(MANY_ARGS);
     }
     for (i = 0; i < MANY; i++) {
         snprintf(names[i], sizeof(names[i]), "E%04d", i);
@@ -245,7 +316,7 @@ static int many(void)
         char *argv[3] = {(char *)SELF, (char *)"env", NULL};
 
         if (run(argv, vec, 8 * MIB) != 0) {
-            return fail("five thousand variables were not delivered whole");
+            return fail(MANY_VARS);
         }
     }
     return 0;
@@ -262,11 +333,11 @@ static int one_string(void)
 
     argv[2] = text(big_a, LONGEST, 'x');
     if (run(argv, none, 8 * MIB) != 0) {
-        return fail("a string of 128 KiB with its NUL was not delivered");
+        return fail(LONGEST_STRING);
     }
     argv[2] = text(big_a, LONGEST + 1, 'x');
     if (run(argv, none, 8 * MIB) != 7) {
-        return fail("a string of 128 KiB and a NUL was not refused with E2BIG");
+        return fail(STRING_E2BIG);
     }
     return 0;
 }
@@ -287,12 +358,12 @@ static int budget(void)
     envp[0] = text(big_b, env_len, 'z');
     memcpy(big_b, "E=", 2);
     if (run(argv, envp, 1 * MIB) != 0) {
-        return fail("strings and pointers of exactly the budget were refused");
+        return fail(BUDGET_EXACT);
     }
     envp[0] = text(big_b, env_len + 1, 'z');
     memcpy(big_b, "E=", 2);
     if (run(argv, envp, 1 * MIB) != 7) {
-        return fail("a byte past the budget was not refused with E2BIG");
+        return fail(BUDGET_E2BIG);
     }
     return 0;
 }
@@ -313,10 +384,10 @@ static int pointers(void)
     }
     vec[32768] = NULL;
     if (run(vec, none, 256 * KIB) != 7) {
-        return fail("32768 pointers under a 128 KiB budget were not refused with E2BIG");
+        return fail(POINTERS_E2BIG);
     }
     if (run(none, empty_env, 8 * MIB) != 0) {
-        return fail("an empty argv was not given one empty argument");
+        return fail(EMPTY_ARGV);
     }
     return 0;
 }
@@ -337,14 +408,14 @@ static int wide_pointers(void)
     char *envp[2] = {NULL, NULL};
 
     if (arg != (char *)0x100000000UL || var != (char *)0x200000000UL) {
-        return fail("mapping pages at 4 GiB and 8 GiB");
+        return fail(WIDE_MAP);
     }
     strcpy(arg, "wide");
     strcpy(var, "W=wide");
     argv[2] = arg;
     envp[0] = var;
     if (run(argv, envp, 8 * MIB) != 0) {
-        return fail("an argument or variable at an address of zero low bits was lost");
+        return fail(WIDE_POINTERS);
     }
     munmap(arg, 4096);
     munmap(var, 4096);
@@ -371,6 +442,7 @@ int main(int argc, char *argv[])
     if (!parent(argc, argv) || getenv("EXECARG_EMPTY") != NULL) {
         return child(argc, argv);
     }
+    report_begin(report_case(environ, "guest.default.execargmusl"));
     if (many() != 0 || one_string() != 0 || budget() != 0 || pointers() != 0) {
         return 1;
     }
@@ -380,6 +452,7 @@ int main(int argc, char *argv[])
     }
 #endif
 
+    report_at(CHECKS);
     printf("EXECARGMUSL OK\n");
 
     return 0;

@@ -22,7 +22,9 @@
  * /proc/self, and the namespace calls.
  *
  * Prints `PATHMAXMUSL OK` and exits 0 on success, and prints
- * `PATHMAXMUSL FAIL (detail)` and exits 1 otherwise.
+ * `PATHMAXMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists; a failure leaves the checks after it not run.
  */
 
 #define _GNU_SOURCE
@@ -34,6 +36,8 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 #define PATH_BYTES 4096
 
@@ -48,10 +52,114 @@
 static char spell_a[PATH_BYTES + 16];
 static char spell_b[PATH_BYTES + 16];
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    STAT_4095,
+    OPEN_4095,
+    READ_4095,
+    ACCESS_4095,
+    STAT_4096,
+    OPEN_4096,
+    DEVICE_4095,
+    PROC_SELF_4095,
+    PROC_SELF_PID,
+    WORK_DIRS,
+    CHDIR_LONG,
+    GETCWD_LONG,
+    GETCWD_ERANGE,
+    RELATIVE_CREATE,
+    RELATIVE_CREATE_LANDS,
+    FORK_CWD,
+    JOINED_4095,
+    JOINED_4096,
+    CHDIR_SHORT,
+    CHDIR_ROOT,
+    RELATIVE_4094,
+    OPEN_LONG_DIR,
+    OPENAT_4095,
+    FSTATAT_4095,
+    OPENAT_4096,
+    MKDIR_4095,
+    CREATE_4095,
+    CHMOD_4095,
+    RENAME_4095,
+    UNLINK_4095,
+    RMDIR_4095,
+    SYMLINK_4095,
+    SYMLINK_4096,
+    EXECVE_4095,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"stat-4095", "stat of a path of 4095 bytes"},
+    {"open-4095", "open of a path of 4095 bytes"},
+    {"read-4095", "the file a path of 4095 bytes names"},
+    {"access-4095", "access with a path of 4095 bytes"},
+    {"stat-4096", "a path of 4096 bytes without its terminator is not ENAMETOOLONG"},
+    {"open-4096", "open of a path of 4096 bytes is not ENAMETOOLONG"},
+    {"device-4095", "a synthetic device by a path of 4095 bytes"},
+    {"proc-self-4095", "readlink of /proc/self by a path of 4095 bytes"},
+    {"proc-self-pid", "readlink of /proc/self does not name this process"},
+    {"work-dirs", "the working directories"},
+    {"chdir-long", "chdir to a directory whose path is 89 bytes"},
+    {"getcwd-long", "getcwd of a working directory of 89 bytes"},
+    {"getcwd-erange", "getcwd into a buffer with no room for the terminator is not ERANGE"},
+    {"relative-create", "a relative create in the long working directory"},
+    {"relative-create-lands", "the relative create did not land in the long working directory"},
+    {"fork-cwd", "a child does not inherit the long working directory"},
+    {"joined-4095", "a relative path that joins to 4095 bytes"},
+    {"joined-4096", "a relative path that joins to 4096 bytes is not ENAMETOOLONG"},
+    {"chdir-short", "chdir back to a short working directory"},
+    {"chdir-root", "chdir to the root"},
+    {"relative-4094", "a relative path of 4094 bytes from the root"},
+    {"open-long-dir", "open of the long directory"},
+    {"openat-4095", "openat with a path that joins to 4095 bytes"},
+    {"fstatat-4095", "fstatat with a path that joins to 4095 bytes"},
+    {"openat-4096", "openat with a path that joins to 4096 bytes is not ENAMETOOLONG"},
+    {"mkdir-4095", "mkdir by a path of 4095 bytes"},
+    {"create-4095", "create by a path of 4095 bytes"},
+    {"chmod-4095", "chmod by a path of 4095 bytes"},
+    {"rename-4095", "rename between two paths of 4095 bytes"},
+    {"unlink-4095", "unlink by a path of 4095 bytes"},
+    {"rmdir-4095", "rmdir by a path of 4095 bytes"},
+    {"symlink-4095", "symlink with a target of 4095 bytes does not reach the file system"},
+    {"symlink-4096", "symlink with a target of 4096 bytes is not ENAMETOOLONG"},
+    {"execve-4095", "execve by a path of 4095 bytes"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("PATHMAXMUSL FAIL (%s)\n", what);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("PATHMAXMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -109,39 +217,39 @@ static int absolute_rows(void)
 
     spell(spell_a, "/", "hello.txt", PATH_BYTES - 1);
     if (stat(spell_a, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size != 13) {
-        return fail("stat of a path of 4095 bytes");
+        return fail(STAT_4095);
     }
     fd = open(spell_a, O_RDONLY);
     if (fd < 0) {
-        return fail("open of a path of 4095 bytes");
+        return fail(OPEN_4095);
     }
     n = read(fd, buf, sizeof(buf));
     close(fd);
     if (n != 13 || memcmp(buf, "hello, world\n", 13) != 0) {
-        return fail("the file a path of 4095 bytes names");
+        return fail(READ_4095);
     }
     if (access(spell_a, R_OK) != 0) {
-        return fail("access with a path of 4095 bytes");
+        return fail(ACCESS_4095);
     }
     spell(spell_a, "/", "hello.txt", PATH_BYTES);
     if (!refused(stat(spell_a, &st), ENAMETOOLONG)) {
-        return fail("a path of 4096 bytes without its terminator is not ENAMETOOLONG");
+        return fail(STAT_4096);
     }
     if (!refused(open(spell_a, O_RDONLY), ENAMETOOLONG)) {
-        return fail("open of a path of 4096 bytes is not ENAMETOOLONG");
+        return fail(OPEN_4096);
     }
     spell(spell_a, "/dev/", "null", PATH_BYTES - 1);
     if (stat(spell_a, &st) != 0 || !S_ISCHR(st.st_mode)) {
-        return fail("a synthetic device by a path of 4095 bytes");
+        return fail(DEVICE_4095);
     }
     spell(spell_a, "/proc/", "self", PATH_BYTES - 1);
     n = readlink(spell_a, buf, sizeof(buf) - 1);
     if (n <= 0) {
-        return fail("readlink of /proc/self by a path of 4095 bytes");
+        return fail(PROC_SELF_4095);
     }
     buf[n] = '\0';
     if (atoi(buf) != (int)getpid()) {
-        return fail("readlink of /proc/self does not name this process");
+        return fail(PROC_SELF_PID);
     }
     return 0;
 }
@@ -160,31 +268,31 @@ static int cwd_rows(void)
     int fd;
 
     if (mkdir(WORK, 0755) != 0 || mkdir(LONGDIR, 0755) != 0) {
-        return fail("the working directories");
+        return fail(WORK_DIRS);
     }
     if (chdir(LONGDIR) != 0) {
-        return fail("chdir to a directory whose path is 89 bytes");
+        return fail(CHDIR_LONG);
     }
     if (!getcwd(cwd, sizeof(cwd)) || strcmp(cwd, LONGDIR) != 0) {
-        return fail("getcwd of a working directory of 89 bytes");
+        return fail(GETCWD_LONG);
     }
     if (getcwd(cwd, strlen(LONGDIR)) != NULL || errno != ERANGE) {
-        return fail("getcwd into a buffer with no room for the terminator is not ERANGE");
+        return fail(GETCWD_ERANGE);
     }
     fd = open("made", O_WRONLY | O_CREAT | O_EXCL, 0644);
     if (fd < 0) {
-        return fail("a relative create in the long working directory");
+        return fail(RELATIVE_CREATE);
     }
     close(fd);
     if (stat(LONGDIR "/made", &st) != 0) {
-        return fail("the relative create did not land in the long working directory");
+        return fail(RELATIVE_CREATE_LANDS);
     }
     pid = fork();
     if (pid == 0) {
         _exit(getcwd(cwd, sizeof(cwd)) && strcmp(cwd, LONGDIR) == 0 ? 0 : 1);
     }
     if (pid < 0 || status_of(pid) != 0) {
-        return fail("a child does not inherit the long working directory");
+        return fail(FORK_CWD);
     }
 
     /* The joined path's own bound: the working directory, a slash and the
@@ -192,22 +300,22 @@ static int cwd_rows(void)
     room = PATH_BYTES - 1 - strlen(LONGDIR) - 1;
     spell(spell_a, "", "made", room);
     if (stat(spell_a, &st) != 0) {
-        return fail("a relative path that joins to 4095 bytes");
+        return fail(JOINED_4095);
     }
     spell(spell_a, "", "made", room + 1);
     if (!refused(stat(spell_a, &st), ENAMETOOLONG)) {
-        return fail("a relative path that joins to 4096 bytes is not ENAMETOOLONG");
+        return fail(JOINED_4096);
     }
 
     if (chdir("..") != 0 || !getcwd(cwd, sizeof(cwd)) || strcmp(cwd, WORK) != 0) {
-        return fail("chdir back to a short working directory");
+        return fail(CHDIR_SHORT);
     }
     if (chdir("/") != 0) {
-        return fail("chdir to the root");
+        return fail(CHDIR_ROOT);
     }
     spell(spell_a, "", "hello.txt", PATH_BYTES - 2);
     if (stat(spell_a, &st) != 0) {
-        return fail("a relative path of 4094 bytes from the root");
+        return fail(RELATIVE_4094);
     }
     return 0;
 }
@@ -225,24 +333,24 @@ static int dirfd_rows(void)
 
     dirfd = open(LONGDIR, O_RDONLY | O_DIRECTORY);
     if (dirfd < 0) {
-        return fail("open of the long directory");
+        return fail(OPEN_LONG_DIR);
     }
     room = PATH_BYTES - 1 - strlen(LONGDIR) - 1;
     spell(spell_a, "", "made", room);
     fd = openat(dirfd, spell_a, O_RDONLY);
     if (fd < 0) {
         close(dirfd);
-        return fail("openat with a path that joins to 4095 bytes");
+        return fail(OPENAT_4095);
     }
     close(fd);
     if (fstatat(dirfd, spell_a, &st, 0) != 0) {
         close(dirfd);
-        return fail("fstatat with a path that joins to 4095 bytes");
+        return fail(FSTATAT_4095);
     }
     spell(spell_a, "", "made", room + 1);
     if (!refused(openat(dirfd, spell_a, O_RDONLY), ENAMETOOLONG)) {
         close(dirfd);
-        return fail("openat with a path that joins to 4096 bytes is not ENAMETOOLONG");
+        return fail(OPENAT_4096);
     }
     close(dirfd);
     return 0;
@@ -260,44 +368,46 @@ static int namespace_rows(void)
 
     spell(spell_a, WORK "/", "d", PATH_BYTES - 1);
     if (mkdir(spell_a, 0755) != 0 || stat(WORK "/d", &st) != 0 || !S_ISDIR(st.st_mode)) {
-        return fail("mkdir by a path of 4095 bytes");
+        return fail(MKDIR_4095);
     }
     spell(spell_a, WORK "/", "f", PATH_BYTES - 1);
     fd = open(spell_a, O_WRONLY | O_CREAT | O_EXCL, 0644);
     if (fd < 0) {
-        return fail("create by a path of 4095 bytes");
+        return fail(CREATE_4095);
     }
     close(fd);
     if (chmod(spell_a, 0600) != 0 || stat(WORK "/f", &st) != 0 || (st.st_mode & 0777) != 0600) {
-        return fail("chmod by a path of 4095 bytes");
+        return fail(CHMOD_4095);
     }
     spell(spell_b, WORK "/", "g", PATH_BYTES - 1);
     if (rename(spell_a, spell_b) != 0 || stat(WORK "/g", &st) != 0) {
-        return fail("rename between two paths of 4095 bytes");
+        return fail(RENAME_4095);
     }
     if (unlink(spell_b) != 0 || stat(WORK "/g", &st) == 0) {
-        return fail("unlink by a path of 4095 bytes");
+        return fail(UNLINK_4095);
     }
     spell(spell_a, WORK "/", "d", PATH_BYTES - 1);
     if (rmdir(spell_a) != 0 || stat(WORK "/d", &st) == 0) {
-        return fail("rmdir by a path of 4095 bytes");
+        return fail(RMDIR_4095);
     }
 
     /* A target is copied, not resolved; the KRFFS root has no links (EPERM). */
     spell(spell_a, "", "t", PATH_BYTES - 1);
     if (!refused(symlink(spell_a, WORK "/link"), EPERM)) {
-        return fail("symlink with a target of 4095 bytes does not reach the file system");
+        return fail(SYMLINK_4095);
     }
     spell(spell_a, "", "t", PATH_BYTES);
     if (!refused(symlink(spell_a, WORK "/link"), ENAMETOOLONG)) {
-        return fail("symlink with a target of 4096 bytes is not ENAMETOOLONG");
+        return fail(SYMLINK_4096);
     }
     return 0;
 }
 
 /**
  * Check `execve` of the root's hello program by a path of 4095 bytes, in a
- * forked child. Returns 0, or 1 once the failure is reported.
+ * forked child whose standard output is its standard error, since hello
+ * writes report records of its own. Returns 0, or 1 once the failure is
+ * reported.
  */
 static int exec_row(void)
 {
@@ -309,11 +419,12 @@ static int exec_row(void)
     if (pid == 0) {
         argv[0] = (char *)"hello";
         argv[1] = NULL;
+        dup2(2, 1);
         execv(spell_a, argv);
         _exit(3);
     }
     if (pid < 0 || status_of(pid) != 0) {
-        return fail("execve by a path of 4095 bytes");
+        return fail(EXECVE_4095);
     }
     return 0;
 }
@@ -333,6 +444,7 @@ int main(void)
 {
     int rc;
 
+    report_begin(report_case(environ, "guest.default.pathmaxmusl"));
     clean();
     rc = absolute_rows();
     if (rc == 0) {
@@ -350,6 +462,7 @@ int main(void)
     chdir("/");
     clean();
     if (rc == 0) {
+        report_at(CHECKS);
         printf("PATHMAXMUSL OK\n");
     }
     return rc;

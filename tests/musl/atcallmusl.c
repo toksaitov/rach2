@@ -14,7 +14,9 @@
  * the result back with getcwd.
  *
  * Prints `ATCALLMUSL OK` and exits 0 on success, and prints
- * `ATCALLMUSL FAIL (detail)` and exits 1 otherwise.
+ * `ATCALLMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists; a failure leaves the checks after it not run.
  */
 
 #define _GNU_SOURCE
@@ -26,6 +28,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
+#include "../probe_report.h"
+
 /* The renameat2 flags, which musl does not declare. */
 #define RENAME_NOREPLACE 1
 #define RENAME_EXCHANGE  2
@@ -33,10 +37,112 @@
 
 #define WORK "/atcall"
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    WORKDIR,
+    DESCRIPTORS,
+    MKDIRAT,
+    MKDIRAT_MODE,
+    MKDIRAT_EEXIST,
+    MKDIRAT_EBADF,
+    MKDIRAT_ENOTDIR,
+    MKDIRAT_ABSOLUTE,
+    SUB_FILE,
+    UNLINKAT_ENOTEMPTY,
+    UNLINKAT_EISDIR,
+    UNLINKAT_ENOTDIR,
+    UNLINKAT_EINVAL,
+    UNLINKAT_FILE,
+    UNLINKAT_DIR,
+    UNLINKAT_ABSOLUTE,
+    RENAME_DIRS,
+    RENAME_DESCRIPTORS,
+    RENAME_FILES,
+    RENAMEAT,
+    NOREPLACE_EEXIST,
+    NOREPLACE_KEPT,
+    NOREPLACE_ENOENT,
+    NOREPLACE_FREE,
+    RENAMEAT2_REPLACE,
+    RENAMEAT2_EINVAL,
+    RENAMEAT_EBADF,
+    FCHDIR_ROOT_DIR,
+    FCHDIR_RELATIVE,
+    FCHDIR_DEV,
+    FCHDIR_PROC,
+    FCHDIR_ENOTDIR,
+    FCHDIR_EBADF,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"workdir", "the work directory"},
+    {"descriptors", "the descriptors the rows use"},
+    {"mkdirat", "mkdirat of a relative name"},
+    {"mkdirat-mode", "mkdirat does not keep the mode"},
+    {"mkdirat-eexist", "mkdirat of a name that exists is not EEXIST"},
+    {"mkdirat-ebadf", "mkdirat through a descriptor that is not open is not EBADF"},
+    {"mkdirat-enotdir", "mkdirat through a file is not ENOTDIR"},
+    {"mkdirat-absolute", "mkdirat of an absolute path reads the descriptor"},
+    {"sub-file", "a file in the new directory"},
+    {"unlinkat-enotempty", "unlinkat AT_REMOVEDIR of a directory that has a file is not ENOTEMPTY"},
+    {"unlinkat-eisdir", "unlinkat of a directory without AT_REMOVEDIR is not EISDIR"},
+    {"unlinkat-enotdir", "unlinkat AT_REMOVEDIR of a file is not ENOTDIR"},
+    {"unlinkat-einval", "unlinkat with a flag it does not take is not EINVAL"},
+    {"unlinkat-file", "unlinkat of a file"},
+    {"unlinkat-dir", "unlinkat AT_REMOVEDIR of an empty directory"},
+    {"unlinkat-absolute", "unlinkat AT_REMOVEDIR of an absolute path"},
+    {"rename-dirs", "the rename directories"},
+    {"rename-descriptors", "the rename directories' descriptors"},
+    {"rename-files", "the files to rename"},
+    {"renameat", "renameat between two descriptors"},
+    {"noreplace-eexist", "renameat2 RENAME_NOREPLACE onto a name that exists is not EEXIST"},
+    {"noreplace-kept", "a refused RENAME_NOREPLACE changed a file"},
+    {"noreplace-enoent", "renameat2 RENAME_NOREPLACE of a missing name is not ENOENT"},
+    {"noreplace-free", "renameat2 RENAME_NOREPLACE onto a free name"},
+    {"renameat2-replace", "renameat2 without flags does not replace"},
+    {"renameat2-einval", "renameat2 with a flag other than RENAME_NOREPLACE is not EINVAL"},
+    {"renameat-ebadf", "renameat through a descriptor that is not open is not EBADF"},
+    {"fchdir-root-dir", "fchdir to a directory of the root"},
+    {"fchdir-relative", "a relative name after fchdir"},
+    {"fchdir-dev", "fchdir to /dev"},
+    {"fchdir-proc", "fchdir to /proc/self"},
+    {"fchdir-enotdir", "fchdir to a file is not ENOTDIR"},
+    {"fchdir-ebadf", "fchdir through a descriptor that is not open is not EBADF"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with its text, those after it as not run, and
+ * the report's end; with `check` CHECKS, every check held. */
+static void report_at(int check)
 {
-    printf("ATCALLMUSL FAIL (%s)\n", what);
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("ATCALLMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -95,46 +201,46 @@ static int mkdir_unlink_rows(int dirfd, int filefd)
     struct stat st;
 
     if (mkdirat(dirfd, "sub", 0700) != 0 || !is_dir(WORK "/sub")) {
-        return fail("mkdirat of a relative name");
+        return fail(MKDIRAT);
     }
     if (stat(WORK "/sub", &st) != 0 || (st.st_mode & 0777) != 0700) {
-        return fail("mkdirat does not keep the mode");
+        return fail(MKDIRAT_MODE);
     }
     if (!refused(mkdirat(dirfd, "sub", 0755), EEXIST)) {
-        return fail("mkdirat of a name that exists is not EEXIST");
+        return fail(MKDIRAT_EEXIST);
     }
     if (!refused(mkdirat(999, "x", 0755), EBADF)) {
-        return fail("mkdirat through a descriptor that is not open is not EBADF");
+        return fail(MKDIRAT_EBADF);
     }
     if (!refused(mkdirat(filefd, "x", 0755), ENOTDIR)) {
-        return fail("mkdirat through a file is not ENOTDIR");
+        return fail(MKDIRAT_ENOTDIR);
     }
     if (mkdirat(999, WORK "/abs", 0755) != 0 || !is_dir(WORK "/abs")) {
-        return fail("mkdirat of an absolute path reads the descriptor");
+        return fail(MKDIRAT_ABSOLUTE);
     }
     if (!make_file(dirfd, "sub/f", "f")) {
-        return fail("a file in the new directory");
+        return fail(SUB_FILE);
     }
     if (!refused(unlinkat(dirfd, "sub", AT_REMOVEDIR), ENOTEMPTY)) {
-        return fail("unlinkat AT_REMOVEDIR of a directory that has a file is not ENOTEMPTY");
+        return fail(UNLINKAT_ENOTEMPTY);
     }
     if (!refused(unlinkat(dirfd, "sub", 0), EISDIR)) {
-        return fail("unlinkat of a directory without AT_REMOVEDIR is not EISDIR");
+        return fail(UNLINKAT_EISDIR);
     }
     if (!refused(unlinkat(dirfd, "sub/f", AT_REMOVEDIR), ENOTDIR)) {
-        return fail("unlinkat AT_REMOVEDIR of a file is not ENOTDIR");
+        return fail(UNLINKAT_ENOTDIR);
     }
     if (!refused(unlinkat(dirfd, "sub/f", 0x1), EINVAL)) {
-        return fail("unlinkat with a flag it does not take is not EINVAL");
+        return fail(UNLINKAT_EINVAL);
     }
     if (unlinkat(dirfd, "sub/f", 0) != 0 || access(WORK "/sub/f", F_OK) == 0) {
-        return fail("unlinkat of a file");
+        return fail(UNLINKAT_FILE);
     }
     if (unlinkat(dirfd, "sub", AT_REMOVEDIR) != 0 || access(WORK "/sub", F_OK) == 0) {
-        return fail("unlinkat AT_REMOVEDIR of an empty directory");
+        return fail(UNLINKAT_DIR);
     }
     if (unlinkat(AT_FDCWD, WORK "/abs", AT_REMOVEDIR) != 0) {
-        return fail("unlinkat AT_REMOVEDIR of an absolute path");
+        return fail(UNLINKAT_ABSOLUTE);
     }
     return 0;
 }
@@ -150,35 +256,35 @@ static int rename_rows(int dirfd)
     int rc = 0;
 
     if (mkdirat(dirfd, "a", 0755) != 0 || mkdirat(dirfd, "b", 0755) != 0) {
-        return fail("the rename directories");
+        return fail(RENAME_DIRS);
     }
     afd = openat(dirfd, "a", O_RDONLY | O_DIRECTORY);
     bfd = openat(dirfd, "b", O_RDONLY | O_DIRECTORY);
     if (afd < 0 || bfd < 0) {
-        rc = fail("the rename directories' descriptors");
+        rc = fail(RENAME_DESCRIPTORS);
     } else if (!make_file(afd, "f", "f") || !make_file(afd, "x", "x") ||
                !make_file(bfd, "y", "y")) {
-        rc = fail("the files to rename");
+        rc = fail(RENAME_FILES);
     } else if (renameat(afd, "f", bfd, "g") != 0 || !has_text(WORK "/b/g", "f") ||
                access(WORK "/a/f", F_OK) == 0) {
-        rc = fail("renameat between two descriptors");
+        rc = fail(RENAMEAT);
     } else if (!refused(syscall(SYS_renameat2, afd, "x", bfd, "y", RENAME_NOREPLACE), EEXIST)) {
-        rc = fail("renameat2 RENAME_NOREPLACE onto a name that exists is not EEXIST");
+        rc = fail(NOREPLACE_EEXIST);
     } else if (!has_text(WORK "/a/x", "x") || !has_text(WORK "/b/y", "y")) {
-        rc = fail("a refused RENAME_NOREPLACE changed a file");
+        rc = fail(NOREPLACE_KEPT);
     } else if (!refused(syscall(SYS_renameat2, afd, "gone", bfd, "y", RENAME_NOREPLACE), ENOENT)) {
-        rc = fail("renameat2 RENAME_NOREPLACE of a missing name is not ENOENT");
+        rc = fail(NOREPLACE_ENOENT);
     } else if (syscall(SYS_renameat2, afd, "x", bfd, "z", RENAME_NOREPLACE) != 0 ||
                !has_text(WORK "/b/z", "x") || access(WORK "/a/x", F_OK) == 0) {
-        rc = fail("renameat2 RENAME_NOREPLACE onto a free name");
+        rc = fail(NOREPLACE_FREE);
     } else if (syscall(SYS_renameat2, bfd, "z", bfd, "y", 0) != 0 || !has_text(WORK "/b/y", "x")) {
-        rc = fail("renameat2 without flags does not replace");
+        rc = fail(RENAMEAT2_REPLACE);
     } else if (!refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", RENAME_EXCHANGE), EINVAL) ||
                !refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", RENAME_WHITEOUT), EINVAL) ||
                !refused(syscall(SYS_renameat2, bfd, "y", bfd, "w", 8), EINVAL)) {
-        rc = fail("renameat2 with a flag other than RENAME_NOREPLACE is not EINVAL");
+        rc = fail(RENAMEAT2_EINVAL);
     } else if (!refused(renameat(999, "y", bfd, "w"), EBADF)) {
-        rc = fail("renameat through a descriptor that is not open is not EBADF");
+        rc = fail(RENAMEAT_EBADF);
     }
     close(afd);
     close(bfd);
@@ -219,23 +325,23 @@ static int fchdir_rows(int filefd)
 
     snprintf(self, sizeof(self), "/proc/%d", (int)getpid());
     if (!enters(WORK, WORK)) {
-        return fail("fchdir to a directory of the root");
+        return fail(FCHDIR_ROOT_DIR);
     }
     if (!make_file(AT_FDCWD, "rel", "rel") || !has_text(WORK "/rel", "rel")) {
-        return fail("a relative name after fchdir");
+        return fail(FCHDIR_RELATIVE);
     }
     unlink(WORK "/rel");
     if (!enters("/dev", "/dev")) {
-        return fail("fchdir to /dev");
+        return fail(FCHDIR_DEV);
     }
     if (!enters("/proc/self", self)) {
-        return fail("fchdir to /proc/self");
+        return fail(FCHDIR_PROC);
     }
     if (!refused(fchdir(filefd), ENOTDIR)) {
-        return fail("fchdir to a file is not ENOTDIR");
+        return fail(FCHDIR_ENOTDIR);
     }
     if (!refused(fchdir(999), EBADF)) {
-        return fail("fchdir through a descriptor that is not open is not EBADF");
+        return fail(FCHDIR_EBADF);
     }
     chdir("/");
     return 0;
@@ -246,14 +352,15 @@ int main(void)
     int dirfd, filefd;
     int rc;
 
+    report_begin(report_case(environ, "guest.default.atcallmusl"));
     rmdir(WORK);
     if (mkdir(WORK, 0755) != 0) {
-        return fail("the work directory");
+        return fail(WORKDIR);
     }
     dirfd = open(WORK, O_RDONLY | O_DIRECTORY);
     filefd = open("/hello.txt", O_RDONLY);
     if (dirfd < 0 || filefd < 0) {
-        return fail("the descriptors the rows use");
+        return fail(DESCRIPTORS);
     }
     rc = mkdir_unlink_rows(dirfd, filefd);
     if (rc == 0) {
@@ -267,6 +374,7 @@ int main(void)
     close(filefd);
     rmdir(WORK);
     if (rc == 0) {
+        report_at(CHECKS);
         printf("ATCALLMUSL OK\n");
     }
     return rc;

@@ -28,7 +28,10 @@
  * musl's stat makes there, reports them whole.
  *
  * Prints `STATMUSL OK` and exits 0 on success, and prints
- * `STATMUSL FAIL (detail)` and exits 1 otherwise.
+ * `STATMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists, with the branch `old-stat` present on i686 and
+ * absent on x86-64; a failure leaves the checks after it not run.
  */
 
 #define _GNU_SOURCE
@@ -39,6 +42,8 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "../probe_report.h"
 
 #if !defined __x86_64__
 /*
@@ -86,12 +91,128 @@ struct old_stat {
 static const char *const PATH = "/stattest.tmp";
 static const char *const DIR = "/stattestdir";
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. The checks from `OLD_STAT` to
+ * `OLD_STAT_DIR_TYPE` are those of the old stat(2), which i386 alone has. */
+enum {
+    CREATE_FILE,
+    WRITE_FILE,
+    UTIMENSAT,
+    STAT_TIMES,
+    STAT_CTIME,
+    LSTAT_TIMES,
+    FSTAT_TIMES,
+    OPEN_ROOT,
+    FSTATAT_TIMES,
+    FSTATAT_CTIME,
+    MKDIR,
+    UTIMENSAT_DIR,
+    DIR_TIMES,
+    DIR_TYPE,
+    OLD_STAT,
+    OLD_STAT_TIMES,
+    OLD_STAT_CTIME,
+    OLD_LSTAT,
+    OLD_LSTAT_TIMES,
+    OLD_STAT_DIR_TYPE,
+    CLOCK_GETTIME,
+    STAT_DEV_NULL,
+    DEV_NULL_BOOT,
+    STAT_PROC,
+    SYNTHETIC_AGREE,
+    SYNTHETIC_STEADY,
+    OPEN_DEV_NULL,
+    FSTAT_DEVICE,
+    REOPEN_FILE,
+    TIME_BEFORE_1970,
+    TIME_PAST_2038,
+    TIME_PAST_2106,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"create-file", "could not create the file"},
+    {"write-file", "could not write the file"},
+    {"utimensat", "utimensat failed"},
+    {"stat-times", "stat did not report the times that were set"},
+    {"stat-ctime", "stat did not report the attribute-change time"},
+    {"lstat-times", "lstat did not report the times that were set"},
+    {"fstat-times", "fstat did not report the times that were set"},
+    {"open-root", "could not open the root directory"},
+    {"fstatat-times", "fstatat did not report the times that were set"},
+    {"fstatat-ctime", "fstatat did not report the attribute-change time"},
+    {"mkdir", "could not create the directory"},
+    {"utimensat-dir", "utimensat on a directory failed"},
+    {"dir-times", "a directory did not report the times that were set"},
+    {"dir-type", "a directory did not report itself as one"},
+    {"old-stat", "the old stat(2) failed"},
+    {"old-stat-times", "the old stat(2) did not report the times that were set"},
+    {"old-stat-ctime", "the old stat(2) did not report the attribute-change time"},
+    {"old-lstat", "the old lstat(2) failed"},
+    {"old-lstat-times", "the old lstat(2) did not report a directory's times"},
+    {"old-stat-dir-type", "the old stat(2) reported a directory as a regular file"},
+    {"clock-gettime", "clock_gettime failed"},
+    {"stat-dev-null", "could not stat /dev/null"},
+    {"dev-null-boot", "/dev/null does not report the boot time"},
+    {"stat-proc", "could not stat a /proc file"},
+    {"synthetic-agree", "two synthetic nodes disagree about the boot time"},
+    {"synthetic-steady", "a synthetic node's time moved between two stats"},
+    {"open-dev-null", "could not open /dev/null"},
+    {"fstat-device", "fstat of a device did not report the boot time"},
+    {"reopen-file", "could not open the file again"},
+    {"time-before-1970", "a time before 1970"},
+    {"time-past-2038", "a time past 2^31 seconds"},
+    {"time-past-2106", "a time past 2^32 seconds"},
+};
+
+/** In the process that began the report, report the branch of the group
+ * `old-stat`, every check of it before `check` as held, `check` as failed
+ * with `why`, those after it as not run, and the report's end; with `check`
+ * CHECKS, every check held. */
+static void report_at(int check, const char *why)
+{
+    int old = 1;
+    int i;
+
+#if defined __x86_64__
+    old = 0;
+#endif
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    report_branch("old-stat", old ? "present" : "absent");
+    for (i = 0; i < CHECKS; i++) {
+        if (!old && i >= OLD_STAT && i <= OLD_STAT_DIR_TYPE) {
+            continue;
+        }
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report that the check `check` failed as `what` and return 1, the probe's
+ * failure status. */
+static int fail_as(int check, const char *what)
 {
     printf("STATMUSL FAIL (%s)\n", what);
+    report_at(check, what);
 
     return 1;
+}
+
+/** Report that the check `check` failed and return 1. */
+static int fail(int check)
+{
+    return fail_as(check, checks[check].text);
 }
 
 /** Whether a stat's access and modification times are `WHEN_SEC` and
@@ -128,25 +249,25 @@ static int old_stat_times(long before, long after)
 
     rc = syscall(SYS_stat, PATH, &os);
     if (rc != 0) {
-        return fail("the old stat(2) failed");
+        return fail(OLD_STAT);
     }
     if ((long)os.st_mtime_seconds != WHEN_SEC || (long)os.st_mtime_nanoseconds != WHEN_NSEC ||
         (long)os.st_atime_seconds != WHEN_SEC || (long)os.st_atime_nanoseconds != WHEN_NSEC) {
-        return fail("the old stat(2) did not report the times that were set");
+        return fail(OLD_STAT_TIMES);
     }
     if ((long)os.st_ctime_seconds < (unsigned long)before ||
         (long)os.st_ctime_seconds > (unsigned long)after) {
-        return fail("the old stat(2) did not report the attribute-change time");
+        return fail(OLD_STAT_CTIME);
     }
     rc = syscall(SYS_lstat, DIR, &os);
     if (rc != 0) {
-        return fail("the old lstat(2) failed");
+        return fail(OLD_LSTAT);
     }
     if ((long)os.st_mtime_seconds != WHEN_SEC) {
-        return fail("the old lstat(2) did not report a directory's times");
+        return fail(OLD_LSTAT_TIMES);
     }
     if ((os.st_mode & 0170000) != 0040000) {
-        return fail("the old stat(2) reported a directory as a regular file");
+        return fail(OLD_STAT_DIR_TYPE);
     }
 
     return 0;
@@ -156,9 +277,9 @@ static int old_stat_times(long before, long after)
 /**
  * Set `PATH`'s times to `when` and `WHEN_NSEC`, through the path, or through
  * `fd` with futimens when `byfd`, and check that stat and fstat report them
- * whole. Returns 0, or 1 after the failure is printed.
+ * whole, as the check `check`. Returns 0, or 1 after the failure is printed.
  */
-static int wide_time(int fd, time_t when, int byfd)
+static int wide_time(int fd, time_t when, int byfd, int check)
 {
     struct timespec times[2];
     struct stat st, fst;
@@ -171,20 +292,20 @@ static int wide_time(int fd, time_t when, int byfd)
         snprintf(detail, sizeof(detail), "%s to %lld seconds failed",
                  byfd ? "futimens" : "utimensat", (long long)when);
 
-        return fail(detail);
+        return fail_as(check, detail);
     }
     if (stat(PATH, &st) != 0 || st.st_mtim.tv_sec != when || st.st_atim.tv_sec != when ||
         st.st_mtim.tv_nsec != WHEN_NSEC) {
         snprintf(detail, sizeof(detail), "stat reports %lld for %lld seconds",
                  (long long)st.st_mtim.tv_sec, (long long)when);
 
-        return fail(detail);
+        return fail_as(check, detail);
     }
     if (fstat(fd, &fst) != 0 || fst.st_mtim.tv_sec != when || fst.st_atim.tv_sec != when) {
         snprintf(detail, sizeof(detail), "fstat reports %lld for %lld seconds",
                  (long long)fst.st_mtim.tv_sec, (long long)when);
 
-        return fail(detail);
+        return fail_as(check, detail);
     }
 
     return 0;
@@ -198,106 +319,32 @@ static int wide_time(int fd, time_t when, int byfd)
  */
 static int wide_times(int fd)
 {
-    return wide_time(fd, BEFORE_1970, 0) || wide_time(fd, PAST_2038, 0) ||
-           wide_time(fd, PAST_2106, 1);
+    return wide_time(fd, BEFORE_1970, 0, TIME_BEFORE_1970) ||
+           wide_time(fd, PAST_2038, 0, TIME_PAST_2038) ||
+           wide_time(fd, PAST_2106, 1, TIME_PAST_2106);
 }
 
-int main(void)
+/**
+ * Check that the synthetic nodes /dev/null and /proc/self/stat report the boot
+ * time, the real time less the time since boot, through stat and through
+ * fstat_fill's own branches, and that it does not move. Returns 0, or 1 after
+ * the failure is printed.
+ */
+static int synthetic_times(void)
 {
-    struct timespec times[2];
-    struct stat st;
     struct timespec now;
     struct timespec uptime;
-    long before;
-    long after;
+    struct stat st;
     long boot;
     long expected_boot;
     int fd;
-    int dirfd;
 
-    times[0].tv_sec = WHEN_SEC;
-    times[0].tv_nsec = WHEN_NSEC;
-    times[1].tv_sec = WHEN_SEC;
-    times[1].tv_nsec = WHEN_NSEC;
-
-    fd = open(PATH, O_CREAT | O_RDWR | O_TRUNC, 0644);
-    if (fd < 0) {
-        return fail("could not create the file");
-    }
-    if (write(fd, "x", 1) != 1) {
-        close(fd);
-        return fail("could not write the file");
-    }
-    before = (long)time(NULL);
-    if (utimensat(AT_FDCWD, PATH, times, 0) != 0) {
-        close(fd);
-        return fail("utimensat failed");
-    }
-    after = (long)time(NULL);
-
-    /* stat, through a path. */
-    if (stat(PATH, &st) != 0 || !times_match(&st)) {
-        close(fd);
-        return fail("stat did not report the times that were set");
-    }
-    if (!ctime_between(&st, before, after)) {
-        close(fd);
-        return fail("stat did not report the attribute-change time");
-    }
-    /* lstat: the same node, the other entry point. */
-    if (lstat(PATH, &st) != 0 || !times_match(&st)) {
-        close(fd);
-        return fail("lstat did not report the times that were set");
-    }
-    /* fstat, through the descriptor: a different fill. */
-    if (fstat(fd, &st) != 0 || !times_match(&st)) {
-        close(fd);
-        return fail("fstat did not report the times that were set");
-    }
-    close(fd);
-
-    /* A relative name: on x86-64 musl makes fstatat(AT_FDCWD, ...) a stat. */
-    dirfd = open("/", O_RDONLY | O_DIRECTORY);
-    if (dirfd < 0) {
-        return fail("could not open the root directory");
-    }
-    if (fstatat(dirfd, PATH + 1, &st, 0) != 0 || !times_match(&st)) {
-        close(dirfd);
-        return fail("fstatat did not report the times that were set");
-    }
-    if (!ctime_between(&st, before, after)) {
-        close(dirfd);
-        return fail("fstatat did not report the attribute-change time");
-    }
-    close(dirfd);
-
-    /* A directory, which reports its own times and its own type. */
-    if (mkdir(DIR, 0755) != 0) {
-        return fail("could not create the directory");
-    }
-    if (utimensat(AT_FDCWD, DIR, times, 0) != 0) {
-        return fail("utimensat on a directory failed");
-    }
-    if (stat(DIR, &st) != 0 || !times_match(&st)) {
-        return fail("a directory did not report the times that were set");
-    }
-    if (!S_ISDIR(st.st_mode)) {
-        return fail("a directory did not report itself as one");
-    }
-
-#if !defined __x86_64__
-    if (old_stat_times(before, after) != 0) {
-        return 1;
-    }
-#endif
-
-    /* A synthetic node: the boot time, the real time less the uptime. */
     if (clock_gettime(CLOCK_REALTIME, &now) != 0 || clock_gettime(CLOCK_MONOTONIC, &uptime) != 0) {
-        return fail("clock_gettime failed");
+        return fail(CLOCK_GETTIME);
     }
     expected_boot = (long)now.tv_sec - (long)uptime.tv_sec;
     if (stat("/dev/null", &st) != 0) {
-        return fail("could not stat /dev/null");
+        return fail(STAT_DEV_NULL);
     }
     boot = (long)st.st_mtim.tv_sec;
     if (boot < expected_boot - 2 || boot > expected_boot + 2) {
@@ -306,34 +353,126 @@ int main(void)
         snprintf(detail, sizeof(detail), "/dev/null reports %ld, and this machine booted at %ld",
                  boot, expected_boot);
 
-        return fail(detail);
+        return fail_as(DEV_NULL_BOOT, detail);
     }
     if (stat("/proc/self/stat", &st) != 0) {
-        return fail("could not stat a /proc file");
+        return fail(STAT_PROC);
     }
     if ((long)st.st_mtim.tv_sec != boot) {
-        return fail("two synthetic nodes disagree about the boot time");
+        return fail(SYNTHETIC_AGREE);
     }
     sleep(1);
     if (stat("/dev/null", &st) != 0 || (long)st.st_mtim.tv_sec != boot) {
-        return fail("a synthetic node's time moved between two stats");
+        return fail(SYNTHETIC_STEADY);
     }
 
-    /* fstat of a synthetic node, through fstat_fill's own branches. */
     fd = open("/dev/null", O_RDONLY);
     if (fd < 0) {
-        return fail("could not open /dev/null");
+        return fail(OPEN_DEV_NULL);
     }
     if (fstat(fd, &st) != 0 || (long)st.st_mtim.tv_sec != boot) {
         close(fd);
-        return fail("fstat of a device did not report the boot time");
+        return fail(FSTAT_DEVICE);
     }
     close(fd);
+
+    return 0;
+}
+
+int main(void)
+{
+    struct timespec times[2];
+    struct stat st;
+    long before;
+    long after;
+    int fd;
+    int dirfd;
+
+    report_begin(report_case(environ, "guest.default.statmusl"));
+    times[0].tv_sec = WHEN_SEC;
+    times[0].tv_nsec = WHEN_NSEC;
+    times[1].tv_sec = WHEN_SEC;
+    times[1].tv_nsec = WHEN_NSEC;
+
+    fd = open(PATH, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (fd < 0) {
+        return fail(CREATE_FILE);
+    }
+    if (write(fd, "x", 1) != 1) {
+        close(fd);
+        return fail(WRITE_FILE);
+    }
+    before = (long)time(NULL);
+    if (utimensat(AT_FDCWD, PATH, times, 0) != 0) {
+        close(fd);
+        return fail(UTIMENSAT);
+    }
+    after = (long)time(NULL);
+
+    /* stat, through a path. */
+    if (stat(PATH, &st) != 0 || !times_match(&st)) {
+        close(fd);
+        return fail(STAT_TIMES);
+    }
+    if (!ctime_between(&st, before, after)) {
+        close(fd);
+        return fail(STAT_CTIME);
+    }
+    /* lstat: the same node, the other entry point. */
+    if (lstat(PATH, &st) != 0 || !times_match(&st)) {
+        close(fd);
+        return fail(LSTAT_TIMES);
+    }
+    /* fstat, through the descriptor: a different fill. */
+    if (fstat(fd, &st) != 0 || !times_match(&st)) {
+        close(fd);
+        return fail(FSTAT_TIMES);
+    }
+    close(fd);
+
+    /* A relative name: on x86-64 musl makes fstatat(AT_FDCWD, ...) a stat. */
+    dirfd = open("/", O_RDONLY | O_DIRECTORY);
+    if (dirfd < 0) {
+        return fail(OPEN_ROOT);
+    }
+    if (fstatat(dirfd, PATH + 1, &st, 0) != 0 || !times_match(&st)) {
+        close(dirfd);
+        return fail(FSTATAT_TIMES);
+    }
+    if (!ctime_between(&st, before, after)) {
+        close(dirfd);
+        return fail(FSTATAT_CTIME);
+    }
+    close(dirfd);
+
+    /* A directory, which reports its own times and its own type. */
+    if (mkdir(DIR, 0755) != 0) {
+        return fail(MKDIR);
+    }
+    if (utimensat(AT_FDCWD, DIR, times, 0) != 0) {
+        return fail(UTIMENSAT_DIR);
+    }
+    if (stat(DIR, &st) != 0 || !times_match(&st)) {
+        return fail(DIR_TIMES);
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        return fail(DIR_TYPE);
+    }
+
+#if !defined __x86_64__
+    if (old_stat_times(before, after) != 0) {
+        return 1;
+    }
+#endif
+
+    if (synthetic_times() != 0) {
+        return 1;
+    }
 
     /* Times outside 32 bits, last, since they replace the file's. */
     fd = open(PATH, O_RDONLY);
     if (fd < 0) {
-        return fail("could not open the file again");
+        return fail(REOPEN_FILE);
     }
     if (wide_times(fd) != 0) {
         close(fd);
@@ -344,6 +483,7 @@ int main(void)
     unlink(PATH);
     rmdir(DIR);
 
+    report_at(CHECKS, NULL);
     printf("STATMUSL OK\n");
 
     return 0;

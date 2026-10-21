@@ -22,7 +22,9 @@
  * the case's own (tests/native/Readme.md).
  *
  * Prints `INOTIFYMUSL OK` and exits 0 on success, and prints
- * `INOTIFYMUSL FAIL (detail)` and exits 1 otherwise.
+ * `INOTIFYMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists; a failure leaves the checks after it not run.
  */
 
 #include <errno.h>
@@ -36,6 +38,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 /* On tmpfs, which has hard links, where the KRFFS root has none. */
 static const char *dir_path = "/dev/shm/inotifymusl";
@@ -62,21 +67,110 @@ struct want {
     const char *name;
 };
 
-/** Report one failed check with errno and return 1, the failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    INIT1,
+    REGISTER_KEPT,
+    WATCH_DIR,
+    FILE_TO_WATCH,
+    WATCH_FILE,
+    CALLS_WATCHED,
+    EVENTS,
+    SMALL_READ,
+    SMALL_READ_EVENTS,
+    EMPTY_EAGAIN,
+    RM_WATCH_EINVAL,
+    WATCH_ENOENT,
+    ONLYDIR_ENOTDIR,
+    NO_EVENTS_EINVAL,
+    NOT_INSTANCE_EINVAL,
+    SECOND_WATCH,
+    MASK_CREATE_EEXIST,
+    RM_WATCH,
+    RM_WATCH_IGNORED,
+    POLL_EMPTY,
+    ONESHOT_WATCH,
+    POLL_READABLE,
+    ONESHOT_EVENTS,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"init1", "inotify_init1"},
+    {"register-kept", "inotify_init changed the caller's register"},
+    {"watch-dir", "inotify_add_watch of a directory"},
+    {"file-to-watch", "a file to watch"},
+    {"watch-file", "inotify_add_watch of a file"},
+    {"calls-watched", "the calls watched"},
+    {"events", "the events of a directory and a file"},
+    {"small-read", "a read too small for an event was not EINVAL"},
+    {"small-read-events", "the events after a small read"},
+    {"empty-eagain", "an empty queue was not EAGAIN"},
+    {"rm-watch-einval", "inotify_rm_watch of no watch was not EINVAL"},
+    {"watch-enoent", "a watch of no file was not ENOENT"},
+    {"onlydir-enotdir", "IN_ONLYDIR of a file was not ENOTDIR"},
+    {"no-events-einval", "a watch of no events was not EINVAL"},
+    {"not-instance-einval", "a watch on a descriptor of no instance was not EINVAL"},
+    {"second-watch", "a second watch of a directory did not return the first's descriptor"},
+    {"mask-create-eexist", "IN_MASK_CREATE of a watched directory was not EEXIST"},
+    {"rm-watch", "inotify_rm_watch"},
+    {"rm-watch-ignored", "the IN_IGNORED of inotify_rm_watch"},
+    {"poll-empty", "an empty instance polled readable"},
+    {"oneshot-watch", "a one-shot watch"},
+    {"poll-readable", "an instance with an event did not poll readable"},
+    {"oneshot-events", "a one-shot watch"},
+};
+
+/** In the process that began the report, report every check before `check`
+ * as held, `check` as failed with `why`, those after it as not run, and the
+ * report's end; with `check` CHECKS, every check held. */
+static void report_at(int check, const char *why)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    for (i = 0; i < CHECKS; i++) {
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, why);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report that the check `check` failed as `what`, with errno, and return 1,
+ * the failure status. */
+static int fail_as(int check, const char *what)
 {
     printf("INOTIFYMUSL FAIL (%s: errno %d)\n", what, errno);
+    report_at(check, what);
     return 1;
+}
+
+/** Report that the check `check` failed, with errno, and return 1. */
+static int fail(int check)
+{
+    return fail_as(check, checks[check].text);
 }
 
 /**
  * Read the queue of `fd` and compare it with the `n` events of `w`, the
  * cookies of each IN_MOVED_FROM and the IN_MOVED_TO after it equal and not
- * zero, every other cookie zero. Returns 0, or 1 after naming the event
- * that differed.
+ * zero, every other cookie zero, as the check `check`. Returns 0, or 1 after
+ * naming the event that differed.
  */
-static int expect(int fd, const struct want *w, int n, const char *what)
+static int expect(int fd, const struct want *w, int n, int check)
 {
+    const char *what = checks[check].text;
     char buf[4096] __attribute__((aligned(8)));
     char *p;
     int avail = -1, i = 0;
@@ -84,11 +178,11 @@ static int expect(int fd, const struct want *w, int n, const char *what)
     ssize_t got;
 
     if (ioctl(fd, FIONREAD, &avail) != 0) {
-        return fail("FIONREAD");
+        return fail_as(check, "FIONREAD");
     }
     got = read(fd, buf, sizeof buf);
     if (got < 0 || got != avail) {
-        return fail(what);
+        return fail(check);
     }
     for (p = buf; p < buf + got; i++) {
         struct inotify_event *ev = (struct inotify_event *)p;
@@ -97,6 +191,7 @@ static int expect(int fd, const struct want *w, int n, const char *what)
         if (i == n || ev->wd != w[i].wd || ev->mask != w[i].mask || strcmp(name, w[i].name) != 0) {
             printf("INOTIFYMUSL FAIL (%s: event %d is wd %d mask %#x name \"%s\")\n", what, i,
                    ev->wd, ev->mask, name);
+            report_at(check, what);
             return 1;
         }
         if (ev->mask & IN_MOVED_FROM) {
@@ -104,12 +199,12 @@ static int expect(int fd, const struct want *w, int n, const char *what)
         }
         if ((ev->mask & (IN_MOVED_FROM | IN_MOVED_TO)) ? ev->cookie == 0 || ev->cookie != cookie
                                                        : ev->cookie != 0) {
-            return fail("a cookie did not pair a move's two events");
+            return fail_as(check, "a cookie did not pair a move's two events");
         }
         p += sizeof *ev + ev->len;
     }
     if (i != n) {
-        return fail(what);
+        return fail(check);
     }
     return 0;
 }
@@ -127,21 +222,21 @@ static int events(int fd, int *wd)
 
     *wd = inotify_add_watch(fd, DIR_PATH, IN_ALL_EVENTS);
     if (*wd != 1) {
-        return fail("inotify_add_watch of a directory");
+        return fail(WATCH_DIR);
     }
     f = open(at("a"), O_CREAT | O_WRONLY | O_TRUNC, 0644);
     if (f < 0 || write(f, "x", 1) != 1 || write(f, "y", 1) != 1 || close(f) != 0) {
-        return fail("a file to watch");
+        return fail(FILE_TO_WATCH);
     }
     wf = inotify_add_watch(fd, at("a"), IN_ALL_EVENTS);
     if (wf != 2) {
-        return fail("inotify_add_watch of a file");
+        return fail(WATCH_FILE);
     }
     f = open(at("a"), O_RDONLY);
     if (chmod(at("a"), 0600) != 0 || f < 0 || read(f, &c, 1) != 1 || close(f) != 0 ||
         rename(at("a"), at("b")) != 0 || link(at("b"), at("c")) != 0 || unlink(at("c")) != 0 ||
         unlink(at("b")) != 0 || mkdir(at("d"), 0755) != 0 || rmdir(at("d")) != 0) {
-        return fail("the calls watched");
+        return fail(CALLS_WATCHED);
     }
     {
         static const struct want w[] = {{1, IN_CREATE, "a"},
@@ -169,7 +264,7 @@ static int events(int fd, int *wd)
                                         {1, IN_CREATE | IN_ISDIR, "d"},
                                         {1, IN_DELETE | IN_ISDIR, "d"}};
 
-        return expect(fd, w, (int)(sizeof w / sizeof w[0]), "the events of a directory and a file");
+        return expect(fd, w, (int)(sizeof w / sizeof w[0]), EVENTS);
     }
 }
 
@@ -185,67 +280,67 @@ static int refusals(int fd, int wd)
 
     close(open(at("e"), O_CREAT | O_WRONLY, 0644));
     if (read(fd, small, sizeof small) != -1 || errno != EINVAL) {
-        return fail("a read too small for an event was not EINVAL");
+        return fail(SMALL_READ);
     }
     {
         static const struct want w[] = {
             {1, IN_CREATE, "e"}, {1, IN_OPEN, "e"}, {1, IN_CLOSE_WRITE, "e"}};
 
-        if (expect(fd, w, 3, "the events after a small read")) {
+        if (expect(fd, w, 3, SMALL_READ_EVENTS)) {
             return 1;
         }
     }
     if (read(fd, small, sizeof small) != -1 || errno != EAGAIN) {
-        return fail("an empty queue was not EAGAIN");
+        return fail(EMPTY_EAGAIN);
     }
     if (inotify_rm_watch(fd, 999) != -1 || errno != EINVAL) {
-        return fail("inotify_rm_watch of no watch was not EINVAL");
+        return fail(RM_WATCH_EINVAL);
     }
     if (inotify_add_watch(fd, "/nonexistent", IN_MODIFY) != -1 || errno != ENOENT) {
-        return fail("a watch of no file was not ENOENT");
+        return fail(WATCH_ENOENT);
     }
     if (inotify_add_watch(fd, at("e"), IN_MODIFY | IN_ONLYDIR) != -1 || errno != ENOTDIR) {
-        return fail("IN_ONLYDIR of a file was not ENOTDIR");
+        return fail(ONLYDIR_ENOTDIR);
     }
     if (inotify_add_watch(fd, DIR_PATH, 0) != -1 || errno != EINVAL) {
-        return fail("a watch of no events was not EINVAL");
+        return fail(NO_EVENTS_EINVAL);
     }
     if (inotify_add_watch(0, DIR_PATH, IN_MODIFY) != -1 || errno != EINVAL) {
-        return fail("a watch on a descriptor of no instance was not EINVAL");
+        return fail(NOT_INSTANCE_EINVAL);
     }
     if (inotify_add_watch(fd, DIR_PATH, IN_CREATE) != wd) {
-        return fail("a second watch of a directory did not return the first's descriptor");
+        return fail(SECOND_WATCH);
     }
     if (inotify_add_watch(fd, DIR_PATH, IN_CREATE | IN_MASK_CREATE) != -1 || errno != EEXIST) {
-        return fail("IN_MASK_CREATE of a watched directory was not EEXIST");
+        return fail(MASK_CREATE_EEXIST);
     }
     if (inotify_rm_watch(fd, wd) != 0) {
-        return fail("inotify_rm_watch");
+        return fail(RM_WATCH);
     }
     {
         static const struct want w[] = {{1, IN_IGNORED, ""}};
 
-        if (expect(fd, w, 1, "the IN_IGNORED of inotify_rm_watch")) {
+        if (expect(fd, w, 1, RM_WATCH_IGNORED)) {
             return 1;
         }
     }
     pf.fd = fd;
     pf.events = POLLIN;
     if (poll(&pf, 1, 0) != 0) {
-        return fail("an empty instance polled readable");
+        return fail(POLL_EMPTY);
     }
     if (inotify_add_watch(fd, DIR_PATH, IN_CREATE | IN_ONESHOT) != 3) {
-        return fail("a one-shot watch");
+        return fail(ONESHOT_WATCH);
     }
     close(open(at("f"), O_CREAT | O_WRONLY, 0644));
     close(open(at("g"), O_CREAT | O_WRONLY, 0644));
     if (poll(&pf, 1, 0) != 1 || !(pf.revents & POLLIN)) {
-        return fail("an instance with an event did not poll readable");
+        return fail(POLL_READABLE);
     }
     {
         static const struct want w[] = {{3, IN_CREATE, "f"}, {3, IN_IGNORED, ""}};
 
-        return expect(fd, w, 2, "a one-shot watch");
+        return expect(fd, w, 2, ONESHOT_EVENTS);
     }
 }
 
@@ -266,7 +361,7 @@ static int register_kept(void)
                          : "0"(253L), "1"(0xA5A5A5A5A5A5A5A5UL)
                          : "rcx", "r11", "memory");
     if (r < 0 || di != 0xA5A5A5A5A5A5A5A5UL) {
-        return fail("inotify_init changed the caller's RDI");
+        return fail_as(REGISTER_KEPT, "inotify_init changed the caller's RDI");
     }
     close((int)r);
     return 0;
@@ -284,7 +379,7 @@ static int register_kept(void)
 
     __asm__ __volatile__("int $0x80" : "=a"(r), "=b"(b) : "0"(291), "1"(0xA5A5A5A5u) : "memory");
     if (r < 0 || b != 0xA5A5A5A5u) {
-        return fail("inotify_init changed the caller's EBX");
+        return fail_as(REGISTER_KEPT, "inotify_init changed the caller's EBX");
     }
     close(r);
     return 0;
@@ -296,11 +391,12 @@ int main(int argc, char **argv)
     int fd, wd;
 
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.inotifymusl"));
     dir_path = probe_arg("dir", dir_path);
     mkdir(DIR_PATH, 0755);
     fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (fd < 0 || fcntl(fd, F_GETFD) != FD_CLOEXEC) {
-        return fail("inotify_init1");
+        return fail(INIT1);
     }
     if (register_kept() || events(fd, &wd) || refusals(fd, wd)) {
         return 1;
@@ -310,6 +406,7 @@ int main(int argc, char **argv)
     unlink(at("f"));
     unlink(at("g"));
     rmdir(DIR_PATH);
+    report_at(CHECKS, NULL);
     printf("INOTIFYMUSL OK\n");
     return 0;
 }

@@ -20,7 +20,10 @@
  *
  * The program runs as root. It prints `LCHOWNMUSL OK`, followed by
  * " (links)" when the link rows ran, and exits 0 on success, and prints
- * `LCHOWNMUSL FAIL (detail)` and exits 1 otherwise.
+ * `LCHOWNMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
+ * records (../probe_report.h) for the case ETUDE_CASE names, an assertion for
+ * each check `checks` lists, with the branch `links` present or absent as the
+ * link rows run; a failure leaves the checks after it not run.
  */
 
 #define _GNU_SOURCE
@@ -33,6 +36,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* fchown of 32-bit ids: fchown32 on i386, whose fchown takes 16-bit ones,
  * and fchown on x86-64, which has only that. */
@@ -46,10 +50,108 @@ static char file[256], link_name[256], dangling[256], subdir[256];
 /* A second directory there, and in it a second lchown.tmp. */
 static char decoy_dir[256], decoy[sizeof(decoy_dir) + sizeof("/lchown.tmp")];
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The checks, one assertion each, in the order the program makes them, and
+ * the text it prints for each that fails. */
+enum {
+    WORKING_DIR,
+    MAKE_FILE,
+    SYMLINK,
+    LCHOWN,
+    LCHOWN_NUMBER,
+    NOFOLLOW_FILE,
+    THROUGH_DESCRIPTOR,
+    EMPTY_PATH_O_PATH,
+    EMPTY_PATH_FILE,
+    EMPTY_PATH_CWD,
+    FLAG_EINVAL,
+    EMPTY_PATH_EBADF,
+    PROC_SELF,
+    DEV_NULL,
+    LINK_OWNER,
+    CHOWN_FOLLOWS,
+    NOFOLLOW_LINK,
+    FCHOWNAT_FOLLOWS,
+    O_PATH_LINK,
+    SETID_KEPT,
+    SETID_CLEARED,
+    DANGLING,
+    CHECKS
+};
+
+static const struct {
+    const char *id;
+    const char *text;
+} checks[CHECKS] = {
+    {"working-dir", "the working directory"},
+    {"make-file", "make the file"},
+    {"symlink", "a symbolic link where the file system has them"},
+    {"lchown", "lchown on a file"},
+    {"lchown-number", "lchown by number"},
+    {"nofollow-file", "AT_SYMLINK_NOFOLLOW on a file"},
+    {"through-descriptor",
+     "fchownat through a directory descriptor, from a directory with a decoy"},
+    {"empty-path-o-path", "AT_EMPTY_PATH on an O_PATH descriptor"},
+    {"empty-path-file", "AT_EMPTY_PATH on an open file"},
+    {"empty-path-cwd", "AT_EMPTY_PATH on the working directory"},
+    {"flag-einval", "a flag Linux does not define, before the path"},
+    {"empty-path-ebadf", "AT_EMPTY_PATH on a descriptor that is not open"},
+    {"proc-self", "the /proc/self link"},
+    {"dev-null", "an O_PATH descriptor on /dev/null"},
+    {"link-owner", "lchown changes the link and not its target"},
+    {"chown-follows", "chown follows the link"},
+    {"nofollow-link", "AT_SYMLINK_NOFOLLOW changes the link"},
+    {"fchownat-follows", "fchownat without the flag follows the link"},
+    {"o-path-link", "an O_PATH descriptor on the link"},
+    {"setid-kept", "the target keeps its set-id bits"},
+    {"setid-cleared", "a change through the link clears the target's set-id bits"},
+    {"dangling", "a dangling link"},
+};
+
+/* Whether the directory has symbolic links: 1 or 0 once `symlink` has
+ * answered, and -1 before. The checks from `LINK_OWNER` on are those of the
+ * branch `links` with them. */
+static int links = -1;
+
+/** The branch of the group `links`: whether `symlink` succeeded, or before it
+ * answered, whether a directory was given, which requires links. */
+static int with_links(void)
 {
-    printf("LCHOWNMUSL FAIL (%s)\n", what);
+    return links >= 0 ? links : probe_words() > 0;
+}
+
+/** In the process that began the report, report the branch of the group
+ * `links`, every check of it before `check` as held, `check` as failed with
+ * its text, those after it as not run, and the report's end; with `check`
+ * CHECKS, every check held. */
+static void report_at(int check)
+{
+    int i;
+
+    if (report_ended || report_getpid() != report_owner) {
+        return;
+    }
+    report_branch("links", with_links() ? "present" : "absent");
+    for (i = 0; i < CHECKS; i++) {
+        if (i >= LINK_OWNER && !with_links()) {
+            continue;
+        }
+        if (i < check) {
+            report_pass(checks[i].id);
+        } else if (i == check) {
+            report_fail(checks[i].id, checks[i].text);
+        } else {
+            report_notrun(checks[i].id, "an earlier check failed");
+        }
+    }
+    report_end();
+}
+
+/** Report the failed check `check` and return 1, the probe's failure
+ * status. */
+static int fail(int check)
+{
+    printf("LCHOWNMUSL FAIL (%s)\n", checks[check].text);
+    report_at(check);
 
     return 1;
 }
@@ -119,34 +221,34 @@ static int file_rows(const char *dir)
     int pfd, ffd;
 
     if (lchown(file, 1000, 1001) != 0 || !owner_is(file, 1, 1000) || !group_is(file, 1001)) {
-        return fail("lchown on a file");
+        return fail(LCHOWN);
     }
     if (syscall(SYS_lchown, file, 1100, 1101) != 0 || !owner_is(file, 1, 1100)) {
-        return fail("lchown by number");
+        return fail(LCHOWN_NUMBER);
     }
     if (fchownat(AT_FDCWD, file, 1200, (gid_t)-1, AT_SYMLINK_NOFOLLOW) != 0 ||
         !owner_is(file, 1, 1200) || !group_is(file, 1101)) {
-        return fail("AT_SYMLINK_NOFOLLOW on a file");
+        return fail(NOFOLLOW_FILE);
     }
     if (!through_descriptor(dir)) {
-        return fail("fchownat through a directory descriptor, from a directory with a decoy");
+        return fail(THROUGH_DESCRIPTOR);
     }
     pfd = open(file, O_PATH);
     if (pfd < 0 || fchownat(pfd, "", 1400, 1400, AT_EMPTY_PATH) != 0 || !owner_is(file, 1, 1400) ||
         !refused(syscall(SYS_fchown32, pfd, 0, 0), EBADF)) {
-        return fail("AT_EMPTY_PATH on an O_PATH descriptor");
+        return fail(EMPTY_PATH_O_PATH);
     }
     close(pfd);
     ffd = open(file, O_RDONLY);
     if (ffd < 0 || fchownat(ffd, "", 1500, (gid_t)-1, AT_EMPTY_PATH) != 0 ||
         !owner_is(file, 1, 1500) || !refused(fchownat(ffd, "", 0, 0, 0), ENOENT)) {
-        return fail("AT_EMPTY_PATH on an open file");
+        return fail(EMPTY_PATH_FILE);
     }
     close(ffd);
     if (mkdir(subdir, 0755) != 0 || chdir(subdir) != 0 ||
         fchownat(AT_FDCWD, "", 1600, 1600, AT_EMPTY_PATH) != 0 || chdir(dir) != 0 ||
         !owner_is(subdir, 1, 1600)) {
-        return fail("AT_EMPTY_PATH on the working directory");
+        return fail(EMPTY_PATH_CWD);
     }
     return 0;
 }
@@ -164,20 +266,20 @@ static int refusal_rows(void)
         !refused(fchownat(AT_FDCWD, file, 0, 0, 0x400), EINVAL) ||
         !refused(syscall(SYS_fchownat, AT_FDCWD, NULL, 0, 0, 0x200), EINVAL) ||
         !refused(syscall(SYS_fchownat, AT_FDCWD, NULL, 0, 0, 0), EFAULT)) {
-        return fail("a flag Linux does not define, before the path");
+        return fail(FLAG_EINVAL);
     }
     if (!refused(fchownat(999, "", 0, 0, AT_EMPTY_PATH), EBADF)) {
-        return fail("AT_EMPTY_PATH on a descriptor that is not open");
+        return fail(EMPTY_PATH_EBADF);
     }
     if (lchown("/proc/self", 0, 0) != 0 || !refused(lchown("/proc/self", 1000, -1), EPERM)) {
-        return fail("the /proc/self link");
+        return fail(PROC_SELF);
     }
     fd = open("/dev/null", O_PATH);
     ok = fd >= 0 && fchownat(fd, "", 0, 0, AT_EMPTY_PATH) == 0 &&
          refused(fchownat(fd, "", 1000, (gid_t)-1, AT_EMPTY_PATH), EPERM);
     close(fd);
     if (!ok) {
-        return fail("an O_PATH descriptor on /dev/null");
+        return fail(DEV_NULL);
     }
     return 0;
 }
@@ -194,19 +296,19 @@ static int link_rows(void)
 
     if (chown(file, 0, 0) != 0 || lchown(link_name, 2000, 2001) != 0 ||
         !owner_is(link_name, 0, 2000) || !group_is(link_name, 2001) || !owner_is(file, 1, 0)) {
-        return fail("lchown changes the link and not its target");
+        return fail(LINK_OWNER);
     }
     if (chown(link_name, 2100, (gid_t)-1) != 0 || !owner_is(file, 1, 2100) ||
         !owner_is(link_name, 0, 2000)) {
-        return fail("chown follows the link");
+        return fail(CHOWN_FOLLOWS);
     }
     if (fchownat(AT_FDCWD, link_name, 2200, (gid_t)-1, AT_SYMLINK_NOFOLLOW) != 0 ||
         !owner_is(link_name, 0, 2200) || !owner_is(file, 1, 2100)) {
-        return fail("AT_SYMLINK_NOFOLLOW changes the link");
+        return fail(NOFOLLOW_LINK);
     }
     if (fchownat(AT_FDCWD, link_name, 2300, (gid_t)-1, 0) != 0 || !owner_is(file, 1, 2300) ||
         !owner_is(link_name, 0, 2200)) {
-        return fail("fchownat without the flag follows the link");
+        return fail(FCHOWNAT_FOLLOWS);
     }
     fd = open(link_name, O_PATH | O_NOFOLLOW);
     ok = fd >= 0 && fstat(fd, &st) == 0 && S_ISLNK(st.st_mode) &&
@@ -214,19 +316,19 @@ static int link_rows(void)
          owner_is(file, 1, 2300);
     close(fd);
     if (!ok) {
-        return fail("an O_PATH descriptor on the link");
+        return fail(O_PATH_LINK);
     }
     if (chmod(file, 04755) != 0 || lchown(link_name, 2500, (gid_t)-1) != 0 ||
         stat(file, &st) != 0 || (st.st_mode & 07777) != 04755) {
-        return fail("the target keeps its set-id bits");
+        return fail(SETID_KEPT);
     }
     if (chown(link_name, 2600, (gid_t)-1) != 0 || stat(file, &st) != 0 ||
         (st.st_mode & 07777) != 0755) {
-        return fail("a change through the link clears the target's set-id bits");
+        return fail(SETID_CLEARED);
     }
     if (symlink("lchown.none", dangling) != 0 || lchown(dangling, 2700, (gid_t)-1) != 0 ||
         !owner_is(dangling, 0, 2700) || !refused(chown(dangling, 0, 0), ENOENT)) {
-        return fail("a dangling link");
+        return fail(DANGLING);
     }
     return 0;
 }
@@ -248,16 +350,16 @@ int main(int argc, char **argv)
     const char *sep;
     char where[200];
     int given;
-    int links;
     int fd;
     int rc;
 
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.lchownmusl"));
     given = probe_words() > 0;
     dir = given ? probe_word(1) : "/";
     if (dir[0] != '/') {
         if (getcwd(where, sizeof(where)) == NULL) {
-            return fail("the working directory");
+            return fail(WORKING_DIR);
         }
         snprintf(where + strlen(where), sizeof(where) - strlen(where), "/%s", dir);
         dir = where;
@@ -272,13 +374,13 @@ int main(int argc, char **argv)
     tidy();
     fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0 || chdir(dir) != 0) {
-        return fail("make the file");
+        return fail(MAKE_FILE);
     }
     close(fd);
     links = symlink("lchown.tmp", link_name) == 0;
     if (!links && (given || errno != EPERM)) {
         tidy();
-        return fail("a symbolic link where the file system has them");
+        return fail(SYMLINK);
     }
     rc = file_rows(dir);
     if (rc == 0) {
@@ -291,6 +393,7 @@ int main(int argc, char **argv)
     if (rc != 0) {
         return rc;
     }
+    report_at(CHECKS);
     printf("LCHOWNMUSL OK%s\n", links ? " (links)" : "");
     return 0;
 }
