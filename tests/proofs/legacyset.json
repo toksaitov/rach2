@@ -997,6 +997,74 @@
           "a machine case has arguments, but its scenario takes its invocation alone"
         ]
       }
+    },
+    {
+      "name": "machine-ports-shared",
+      "summary": "every machine case is given the set's first ports",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "                x->ports += man->cases[c].ports;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": invocation: the ports of the caller's block, each case's its own"
+        ]
+      }
+    },
+    {
+      "name": "machine-ports-none",
+      "summary": "a machine case's invocation gives none of the ports it declares",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    for (i = 0; i < k->ports; i++)\n",
+          "replace": "    for (i = k->ports; i < k->ports; i++)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": invocation: the ports of the caller's block, each case's its own"
+        ]
+      }
+    },
+    {
+      "name": "machine-ports-locks",
+      "summary": "a set with a lock directory gives its machine cases ports of a block it does not hold",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (x->o->locks != NULL)\n        return refuse(x, \"a machine case's local ports",
+          "replace": "    if (0)\n        return refuse(x, \"a machine case's local ports"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": machine: no ports with locks"
+        ]
+      }
+    },
+    {
+      "name": "host-ports",
+      "summary": "a host case that needs local ports is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (n < 0 || n > LEGACY_PORTS || (n > 0 && !k->machine))\n",
+          "replace": "    if (n < 0 || n > LEGACY_PORTS)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the case needs local ports, which the set driver gives a machine case alone"
+        ]
+      }
     }
   ]
 }

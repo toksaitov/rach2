@@ -74,6 +74,11 @@ extern char **environ;
 #define QEMU_BYTES (UINT64_C(128) << 20)
 #define DISK_BYTES (UINT64_C(1) << 30)
 
+/* The first local port of the machine cases, before the offset of the port
+ * block: their ports end in 400 to 499 of the block's first thousand, which
+ * no port of the table in tests/system/suites.mk does in any block. */
+#define PORT_BASE 2400u
+
 /* The bytes of history one run may write. */
 #define HISTORY_BYTES (UINT64_C(64) << 20)
 
@@ -180,6 +185,7 @@ struct member {
      * by its goals once they are published. */
     char invocation[PATH_LEN];
     char (*digests)[ETUDE_DIGEST_HEX + 1];
+    unsigned port; /* a machine case's first local port, or 0 */
     char inventory[65];
     char workload[400], assertions[400], profile[400]; /* blob references */
     struct command c;
@@ -209,6 +215,8 @@ struct set {
     struct etude_store *objects;       /* the guest and machine cases' artifacts,
                                           or NULL */
     char objects_dir[PATH_LEN];        /* their store, under the evidence */
+    unsigned port_base;                /* the machine cases' first local port */
+    unsigned ports;                    /* the local ports given out so far */
     struct legacy_manifest *manifests; /* by the request's members; a suite
                                           of the registry has none */
     struct etude_job *jobs;            /* beside mem */
@@ -2106,7 +2114,10 @@ static int write_invocation(const struct set *x, const struct member *m, char qe
         string(&d, json_text(steps->item[i], "step_id"));
         cmp_printf(&d, ":%llu", (unsigned long long)k->gap_us);
     }
-    cmp_printf(&d, "},\"ports\":[],\"cleanup_us\":%llu,\"scratch\":",
+    cmp_printf(&d, "},\"ports\":[");
+    for (i = 0; i < k->ports; i++)
+        cmp_printf(&d, i > 0 ? ",%u" : "%u", m->port + (unsigned)i);
+    cmp_printf(&d, "],\"cleanup_us\":%llu,\"scratch\":",
                (unsigned long long)(k->stage_us[ETUDE_STAGE_CLEANUP] > 0
                                         ? k->stage_us[ETUDE_STAGE_CLEANUP]
                                         : CASE_GRACE_US));
@@ -2652,6 +2663,31 @@ static size_t registry_suites(const struct etude_legacy_set_opts *o)
     return n;
 }
 
+/**
+ * Check that the set can give its machine cases their `ports` local ports,
+ * and find the first in `x->port_base`; 0, or 2 after a refusal. They are
+ * of the port block that RACH2_PORT_OFFSET names, which the caller holds, so
+ * a set with `-d`, whose claims take blocks of their own, cannot give them.
+ */
+static int check_ports(struct set *x, unsigned long long ports)
+{
+    const char *offset = getenv("RACH2_PORT_OFFSET");
+    unsigned long long base;
+
+    if (x->o->locks != NULL)
+        return refuse(x, "a machine case's local ports are of the caller's port block, and "
+                         "with a lock directory the caller holds none");
+    if (offset == NULL || offset[0] == '\0' || offset[strspn(offset, "0123456789")] != '\0' ||
+        strlen(offset) > 5)
+        return refuse(x, "the machine cases need local ports, so RACH2_PORT_OFFSET must name "
+                         "the port block the caller holds");
+    base = PORT_BASE + strtoull(offset, NULL, 10);
+    if (ports > LEGACY_PORTS || base + LEGACY_PORTS > 65536u)
+        return refuse(x, "the machine cases need more local ports than the port block has");
+    x->port_base = (unsigned)base;
+    return 0;
+}
+
 /** Read the manifest of each suite run by its cases, and count their
  * members in `x->n`; 0, or 2 after a refusal. */
 static int check_cases(struct set *x)
@@ -2659,6 +2695,7 @@ static int check_cases(struct set *x)
     const struct etude_legacy_set_opts *o = x->o;
     char why[PATH_LEN + 80];
     size_t i, k;
+    unsigned long long ports = 0;
     int machines = 0;
 
     x->n = registry_suites(o);
@@ -2681,8 +2718,12 @@ static int check_cases(struct set *x)
         for (k = 0; k < x->manifests[i].ncases; k++) {
             x->n += (size_t)x->manifests[i].cases[k].reps;
             machines |= x->manifests[i].cases[k].machine;
+            ports += (unsigned long long)x->manifests[i].cases[k].ports *
+                     (unsigned long long)x->manifests[i].cases[k].reps;
         }
     }
+    if (ports > 0 && check_ports(x, ports) != 0)
+        return 2;
     if (machines && (o->results[0] != '/' || o->evidence[0] != '/'))
         return refuse(x, "a machine case's scenario runs in its workspace and is given the "
                          "paths of its invocation, so the results and the evidence must be "
@@ -3051,6 +3092,10 @@ static size_t take_members(struct set *x, size_t s, size_t k)
             x->mem[k].k = &man->cases[c];
             x->mem[k].rep = r;
             x->mem[k].first = k == from;
+            if (man->cases[c].ports > 0) {
+                x->mem[k].port = x->port_base + x->ports;
+                x->ports += man->cases[c].ports;
+            }
         }
     return k;
 }

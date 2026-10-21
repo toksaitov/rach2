@@ -15,6 +15,9 @@
 /* The seconds casecheck may take to judge an attempt before it is killed. */
 #define LEGACY_JUDGE_S 60u
 
+/* The most local ports that the machine cases of one set are given. */
+#define LEGACY_PORTS 100u
+
 /* One case of a manifest that runs on the run's architecture. Its texts
  * point into the manifest's document. */
 struct legacy_case {
@@ -41,6 +44,7 @@ struct legacy_case {
     /* A guest or machine case's initial bound of each stage the manifest
      * bounds, by enum etude_stage; 0 for one bounded by the case alone. */
     uint64_t stage_us[ETUDE_WATCH_STAGES];
+    unsigned ports;          /* a machine case's local ports */
     const struct json *qemu; /* a guest case's QEMU profile, or NULL */
     struct etude_witness_bound *witnesses;
     size_t nwitnesses;
@@ -66,10 +70,11 @@ struct legacy_manifest {
  *
  * The last part of its family's identity must be the suite's name, at least
  * one case must run on `arch`, and each that does must have a program that
- * is an artifact of its `prepare`, no standard input, ports, loop devices or
- * host locks, and no fixture but `scratch`, or for a guest or machine case
+ * is an artifact of its `prepare`, no standard input, loop devices or host
+ * locks, and no fixture but `scratch`, or for a guest or machine case
  * `scratch` and `disk`. A machine case has no arguments, since its scenario
- * takes its invocation alone. A guest case must also be of the role
+ * takes its invocation alone, and at most LEGACY_PORTS local ports; a host or
+ * guest case has none. A guest case must also be of the role
  * `ordinary` or `boot`, end as `exited` or `signaled`, and have a QEMU
  * profile of direct firmware or SeaBIOS, reserved memory, and a kernel, a
  * RAM image and disks that are artifacts of its `prepare`, each disk a CD,

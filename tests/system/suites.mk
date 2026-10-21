@@ -67,8 +67,10 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 # exports RACH2_PORT_OFFSET as N * 1000 while it holds the lock. Every port
 # below is the table's number plus that offset. Within a block the numbers
 # end in 222 to 331, 777 and 898 to 999, so no port of one block is a port
-# of another, and the highest, 15999 + 9000, is below the ephemeral ports. A
-# make run without tests/run has no offset and forwards the table's numbers.
+# of another, and the highest, 15999 + 9000, is below the ephemeral ports.
+# etude's set driver gives the machine cases of tests/cases the ports 2400 to
+# 2499 of the block (tools/etude/Readme.md, The set driver). A make run
+# without tests/run has no offset and forwards the table's numbers.
 # SSH_TEST_PORT alone may come from the environment or the command line, as
 # in SSH_TEST_PORT=4022 make run-ssh; a port given that way is forwarded as
 # given, with no offset added.

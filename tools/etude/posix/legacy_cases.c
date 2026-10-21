@@ -181,6 +181,21 @@ static const char *runs_on(const struct json *c, const char *arch)
     return NULL;
 }
 
+/** Take the local ports of case `k`, whose resources are `r`, which the
+ * driver gives a machine case alone; 0, or -1 after a refusal. */
+static int ports_of(struct legacy_manifest *m, struct legacy_case *k, const struct json *r)
+{
+    long long n = count_of(r, "ports");
+
+    if (n < 0 || n > LEGACY_PORTS || (n > 0 && !k->machine))
+        return refuse(m,
+                      "%s: the case needs local ports, which the set driver gives a machine "
+                      "case alone, at most %u",
+                      k->case_id, LEGACY_PORTS);
+    k->ports = (unsigned)n;
+    return 0;
+}
+
 /** Check what case `k` needs of the driver, and take its claim; 0, or -1
  * after a refusal. */
 static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
@@ -205,11 +220,13 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     if (in->type != JSON_NULL)
         return refuse(m, "%s: the case reads standard input, which the set driver does not give",
                       k->case_id);
-    if (count_of(r, "ports") != 0 || count_of(r, "loop_devices") != 0 || locks->count != 0)
+    if (count_of(r, "loop_devices") != 0 || locks->count != 0)
         return refuse(m,
-                      "%s: the case needs local ports, loop devices or host locks, which the "
-                      "set driver does not give",
+                      "%s: the case needs loop devices or host locks, which the set driver "
+                      "does not give",
                       k->case_id);
+    if (ports_of(m, k, r) != 0)
+        return -1;
     for (i = 0; i < iso->count; i++) {
         f = json_text(iso->item[i], "fixture");
         if (f != NULL && (k->guest || k->machine) && strcmp(f, "disk") == 0)

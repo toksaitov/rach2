@@ -66,10 +66,11 @@
  * before the set stops. A case suite runs beside a suite of the registry. A
  * manifest that cannot be read, of another suite's family, with a case of a
  * domain other than host, guest and machine, that reads its input, needs
- * ports, loop devices or a fixture other than scratch, or has no case on the
- * architecture is refused, and so is a case suite without casecheck, a guest
- * case of the init role, booted by OVMF, ending other than by an exit, or
- * with a disk of no disk fixture, and a machine case with arguments.
+ * loop devices or a fixture other than scratch, or has no case on the
+ * architecture is refused, and so is a host case that needs ports, a case
+ * suite without casecheck, a guest case of the init role, booted by OVMF,
+ * ending other than by an exit, or with a disk of no disk fixture, and a
+ * machine case with arguments.
  *
  * A guest case boots its own machine of its profile, its program stored to
  * etude-guest from the image and run there: rngprobe passes on the processor
@@ -96,6 +97,9 @@
  * the workspace with its console; a scenario whose report stops short and that
  * exits 1, as one whose machine's transport was lost does, fails; and a
  * scenario that keeps no console is incomplete. Each attempt is placed qemu.
+ * A case's invocation gives the local ports it declares, from 2400 past the
+ * caller's port block on, none given twice, and a set of machine cases with
+ * ports and `locks` is refused.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -286,8 +290,8 @@ static const char scenario[] =
     "echo '@etude 1 progress stage 1'\n"
     "echo '@etude 1 end 1'\n";
 
-/* The form of a machine case of the fixture, with its identity and its
- * machine's `critical` member, or nothing. */
+/* The form of a machine case of the fixture, with its identity, its
+ * machine's `critical` member, or nothing, and its local ports. */
 static const char machine_form[] =
     "{\"case_id\": \"%s\", \"behavior\": \"The fixture's scenario keeps a console as its case "
     "says\",\n"
@@ -321,7 +325,7 @@ static const char machine_form[] =
     "600000000}}},\n"
     " \"resources\": {\"cpu_millis\": 100, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
     "268435456,\n"
-    "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 0, \"loop_devices\": 0},\n"
+    "  \"disk_bytes\": 0, \"locks\": [], \"ports\": %u, \"loop_devices\": 0},\n"
     " \"prepare\": [{\"name\": \"kernel\", \"node\": \"rach2/kernel\", \"per_architecture\": "
     "true},\n"
     "  {\"name\": \"disk\", \"node\": \"images/disk.img\", \"per_architecture\": true},\n"
@@ -330,14 +334,15 @@ static const char machine_form[] =
     "  \"reason\": \"the fixture's machine is a stand-in\"}}";
 
 /* The machine cases of the family `machine`, each with its machine's
- * `critical` member. */
+ * `critical` member and its local ports. */
 static const struct {
     const char *id, *critical;
-} machine_cases[] = {{"fixture.machine.clean", ""},
-                     {"fixture.machine.panic", ""},
-                     {"fixture.machine.allowed", ", \"critical\": \"init: exited\""},
-                     {"fixture.machine.lost", ""},
-                     {"fixture.machine.noconsole", ""}};
+    unsigned ports;
+} machine_cases[] = {{"fixture.machine.clean", "", 2},
+                     {"fixture.machine.panic", "", 0},
+                     {"fixture.machine.allowed", ", \"critical\": \"init: exited\"", 1},
+                     {"fixture.machine.lost", "", 0},
+                     {"fixture.machine.noconsole", "", 0}};
 
 /* One case of a fixture manifest, which manifest_text writes. */
 struct fcase {
@@ -980,7 +985,7 @@ static int machine_text(char *buf, size_t size)
                  " \"summary\": \"Machine cases of the set driver's fixture\",\n \"cases\": [");
     for (i = 0; k >= 0 && (size_t)k < size && i < n; i++) {
         k += snprintf(buf + k, size - (size_t)k, machine_form, machine_cases[i].id,
-                      machine_cases[i].critical);
+                      machine_cases[i].critical, machine_cases[i].ports);
         if (k >= 0 && (size_t)k < size)
             k += snprintf(buf + k, size - (size_t)k, i + 1 < n ? ",\n" : "]}\n");
     }
@@ -1949,8 +1954,10 @@ static void test_cases_refused(void)
          "fixture.bad.one: a machine case has arguments, but its scenario takes its invocation "
          "alone"},
         {"bad", "cases/bad/stdin.json", "fixture.bad.one: the case reads standard input"},
-        {"bad", "cases/bad/ports.json", "fixture.bad.one: the case needs local ports"},
-        {"bad", "cases/bad/loops.json", "fixture.bad.one: the case needs local ports"},
+        {"bad", "cases/bad/ports.json",
+         "fixture.bad.one: the case needs local ports, which the set driver gives a machine case "
+         "alone"},
+        {"bad", "cases/bad/loops.json", "fixture.bad.one: the case needs loop devices"},
         {"bad", "cases/bad/fixture.json", "fixture.bad.one: the case needs the fixture network"},
         {"bad", "cases/bad/noarch.json", "no case of it runs on i686"},
         {"badguest", "cases/badguest/init.json",
@@ -1978,6 +1985,21 @@ static void test_cases_refused(void)
         fix_format(names[i], sizeof(names[i]), "caserefused%lu", (unsigned long)i);
         refused(&r[i], names[i], rows[i].why, rows[i].why);
     }
+}
+
+/** A machine case's ports are of the caller's port block, so a set with
+ * `locks` that has one is refused. */
+static void test_machine_locks(void)
+{
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, 0, "cases/machine/machine.json"}};
+    static struct run r;
+
+    r.members = m;
+    r.n = 1;
+    r.locks = 1;
+    refused(&r, "machinelocks", "machine: no ports with locks",
+            "a machine case's local ports are of the caller's port block");
 }
 
 /** Say whether the plan of run `r` has the text `text`. */
@@ -2073,6 +2095,10 @@ static void test_machine(void)
               invocation_has(&r, "fixture.machine.clean.r0", "\"steps\":{\"boot\":20000000}") &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"cleanup_us\":7000000"),
           "invocation: the tools, the accelerator and the bounds");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"ports\":[9400,9401]") &&
+              invocation_has(&r, "fixture.machine.allowed.r0", "\"ports\":[9402]") &&
+              invocation_has(&r, "fixture.machine.panic.r0", "\"ports\":[]"),
+          "invocation: the ports of the caller's block, each case's its own");
     fix_format(text, sizeof(text), "\"scratch\":\"%s/%s.fixture.machine.clean.r0\"", r.evidence,
                r.run_id);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the scratch");
@@ -2420,6 +2446,7 @@ int main(int argc, char **argv)
     test_cases_beside();
     test_machine();
     test_cases_refused();
+    test_machine_locks();
     test_guest();
     if (fails != 0)
         return 1;
