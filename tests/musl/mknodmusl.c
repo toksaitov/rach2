@@ -22,6 +22,10 @@
  * `MKNODMUSL FAIL (detail)` and exits 1 otherwise. The caller who is not root
  * is user and group 1000, or the NEW of 1000 when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md).
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -39,6 +43,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 #define FIFO_PATH "/tmp/mknodmusl.p"
 #define ATFIFO    "mknodmusl.q"
@@ -46,10 +51,21 @@
 #define FILE_PATH "/tmp/mknodmusl.f"
 #define MNT       "/tmp/mknodmusl.d"
 
-/** Report one failed check and return 1, the probe's failure status. */
+extern char **environ;
+
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {
+    "fifo-umask",     "fifo-mknodat",   "socket-and-file",  "listing-types",  "socket-open-enxio",
+    "socket-connect", "krffs-device",   "tmpfs-mount",      "device-numbers", "device-listing",
+    "null-node",      "unknown-device", "kind-before-path", "refusals",       "nonroot-device",
+    "nodev-eacces",   "unmount"};
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("MKNODMUSL FAIL (%s: errno %d)\n", what, errno);
+    report_stop(what);
     return 1;
 }
 
@@ -108,23 +124,28 @@ static int on_krffs(void)
     if (mknod(FIFO_PATH, S_IFIFO | 0666, 0) != 0 || !node_is(FIFO_PATH, S_IFIFO | 0644, 0)) {
         return fail("a FIFO with the umask applied");
     }
+    report_held();
     dirfd = open("/tmp", O_RDONLY | O_DIRECTORY);
     if (dirfd < 0 || mknodat(dirfd, ATFIFO, S_IFIFO | 0600, 0) != 0 ||
         !node_is("/tmp/" ATFIFO, S_IFIFO | 0600, 0)) {
         return fail("a FIFO by mknodat");
     }
+    report_held();
     close(dirfd);
     if (mknod(SOCK_PATH, S_IFSOCK | 0600, 0) != 0 || !node_is(SOCK_PATH, S_IFSOCK | 0600, 0) ||
         mknod(FILE_PATH, 0644, 0) != 0 || !node_is(FILE_PATH, S_IFREG | 0644, 0)) {
         return fail("a socket file and a regular file");
     }
+    report_held();
     if (!lists("/tmp", "mknodmusl.p", DT_FIFO) || !lists("/tmp", "mknodmusl.s", DT_SOCK) ||
         !lists("/tmp", "mknodmusl.f", DT_REG)) {
         return fail("the listing's types");
     }
+    report_held();
     if (!refused(open(SOCK_PATH, O_RDWR), ENXIO)) {
         return fail("an open of a socket file");
     }
+    report_held();
     memset(&a, 0, sizeof(a));
     a.sun_family = AF_UNIX;
     strcpy(a.sun_path, SOCK_PATH);
@@ -132,10 +153,12 @@ static int on_krffs(void)
     if (s < 0 || !refused(connect(s, (struct sockaddr *)&a, sizeof(a)), ECONNREFUSED)) {
         return fail("a connect to a socket file with no socket");
     }
+    report_held();
     close(s);
     if (!refused(mknod("/tmp/mknodmusl.c", S_IFCHR | 0600, makedev(1, 3)), EPERM)) {
         return fail("a device node on KRFFS");
     }
+    report_held();
     clean();
     return 0;
 }
@@ -155,6 +178,7 @@ static int devices(void)
     if (mount("none", MNT, "tmpfs", 0, NULL) != 0) {
         return fail("the tmpfs");
     }
+    report_held();
     if (mknod(MNT "/null", S_IFCHR | 0666, makedev(1, 3)) != 0 ||
         !node_is(MNT "/null", S_IFCHR | 0644, makedev(1, 3)) ||
         mknod(MNT "/wide", S_IFCHR | 0600, wide) != 0 ||
@@ -163,18 +187,22 @@ static int devices(void)
         !node_is(MNT "/blk", S_IFBLK | 0600, makedev(8, 1))) {
         return fail("device nodes and their numbers");
     }
+    report_held();
     if (!lists(MNT, "null", DT_CHR) || !lists(MNT, "blk", DT_BLK)) {
         return fail("the listing's device types");
     }
+    report_held();
     fd = open(MNT "/null", O_RDWR);
     if (fd < 0 || write(fd, "x", 1) != 1 || read(fd, &c, 1) != 0) {
         return fail("the node of /dev/null's number");
     }
+    report_held();
     close(fd);
     if (!refused(open(MNT "/wide", O_RDONLY), ENXIO) ||
         !refused(open(MNT "/blk", O_RDONLY), ENXIO)) {
         return fail("nodes of numbers no device has");
     }
+    report_held();
     return 0;
 }
 
@@ -195,6 +223,7 @@ static int refusals(void)
         !refused(mknod(no_path, S_IFIFO | 0600, 0), EFAULT)) {
         return fail("the kind before the path");
     }
+    report_held();
     if (!refused(mknod(MNT "/x", 0170000 | 0600, 0), EINVAL) ||
         !refused(mknod(MNT "/x", S_IFDIR | 0700, 0), EPERM) || symlink("nowhere", MNT "/ln") != 0 ||
         !refused(mknod(MNT "/ln", S_IFIFO | 0600, 0), EEXIST) ||
@@ -204,6 +233,7 @@ static int refusals(void)
         !refused(mknod("/dev/mknodmusl", S_IFIFO | 0600, 0), EROFS)) {
         return fail("the refusals");
     }
+    report_held();
     pid = fork();
     if (pid == 0) {
         if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0) {
@@ -217,24 +247,34 @@ static int refusals(void)
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("a device node from a caller who is not root");
     }
+    report_held();
     if (mknod("/dev/shm/mknodmusl", S_IFCHR | 0666, makedev(1, 3)) != 0 ||
         !refused(open("/dev/shm/mknodmusl", O_RDONLY), EACCES) ||
         unlink("/dev/shm/mknodmusl") != 0) {
         return fail("a device node on a nodev mount");
     }
+    report_held();
     if (umount2(MNT, 0) != 0) {
         return fail("the unmount");
     }
+    report_held();
     rmdir(MNT);
     return 0;
 }
 
 int main(int argc, char **argv)
 {
+    unsigned int i;
+
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.mknodmusl"));
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
     if (on_krffs() || devices() || refusals()) {
         return 1;
     }
+    report_end();
     printf("MKNODMUSL OK\n");
     return 0;
 }

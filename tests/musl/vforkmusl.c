@@ -17,6 +17,12 @@
  * an absolute path, as a native run starts it (tests/native/Readme.md), by
  * that path. It prints "VFORKMUSL OK" and exits 0 on success, or
  * prints "VFORKMUSL FAIL (detail: errno N)" and exits 1 at the first failure.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check: `clone-vfork`, `shared-store`,
+ * `parent-memory`, `resume-at-exec`, `exec-fail-errno`, `exec-fail-status`,
+ * `vfork-shared`, `vfork-reap`, `system` and `popen`. A failed check fails
+ * its assertion and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -31,6 +37,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 /* The path this program execs itself by: /musl/vforkmusl, or the absolute
  * path it was started by. */
@@ -53,10 +62,12 @@ static char guard[64] = "the parent's bytes";
 static int msg[2];
 static char msg_arg[16];
 
-/** Report one failed check with errno and return 1, the failure status. */
+/** Report one failed check with errno, end the report at the assertion that
+ * `what` fails, and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("VFORKMUSL FAIL (%s: errno %d)\n", what, errno);
+    report_stop(what);
     return 1;
 }
 
@@ -111,6 +122,17 @@ int main(int argc, char **argv)
         return wait_for_parent(atoi(argv[2]));
     }
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.vforkmusl"));
+    report_plan("clone-vfork");
+    report_plan("shared-store");
+    report_plan("parent-memory");
+    report_plan("resume-at-exec");
+    report_plan("exec-fail-errno");
+    report_plan("exec-fail-status");
+    report_plan("vfork-shared");
+    report_plan("vfork-reap");
+    report_plan("system");
+    report_plan("popen");
     self = probe_self(self);
     if (pipe(msg) != 0) {
         return fail("the pipe the child's program waits on");
@@ -120,12 +142,15 @@ int main(int argc, char **argv)
     if (pid < 0 || write(msg[1], "g", 1) != 1) {
         return fail("clone CLONE_VM|CLONE_VFORK, or the byte for the child's program");
     }
+    report_held();
     if (word != 42) {
         return fail("the parent ran before the child's exec, or the memory was not shared");
     }
+    report_held();
     if (strcmp(guard, "the parent's bytes") != 0) {
         return fail("the child's exec changed the parent's memory");
     }
+    report_held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
         return fail("the program the child became");
     }
@@ -134,6 +159,7 @@ int main(int argc, char **argv)
                         ? "the parent ran again at the child's exit, not its exec"
                         : "the program the child became");
     }
+    report_held();
     close(msg[0]);
     close(msg[1]);
 
@@ -141,9 +167,11 @@ int main(int argc, char **argv)
     if (pid < 0 || exec_errno != ENOENT) {
         return fail("a failed exec did not come back to the child");
     }
+    report_held();
     if (waitpid(pid, &status, 0) != pid || WEXITSTATUS(status) != 126) {
         return fail("the child whose exec failed");
     }
+    report_held();
 
     pid = vfork();
     if (pid == 0) {
@@ -153,18 +181,23 @@ int main(int argc, char **argv)
     if (pid < 0 || word != 7) {
         return fail("vfork did not share the memory until _exit");
     }
+    report_held();
     if (waitpid(pid, &status, 0) != pid || WEXITSTATUS(status) != 3) {
         return fail("the vfork child");
     }
+    report_held();
 
     status = system("exit 4");
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 4) {
         return fail("system");
     }
+    report_held();
     p = popen("echo hi", "r");
     if (!p || !fgets(line, sizeof(line), p) || strcmp(line, "hi\n") != 0 || pclose(p) != 0) {
         return fail("popen");
     }
+    report_held();
+    report_end();
     printf("VFORKMUSL OK\n");
     return 0;
 }

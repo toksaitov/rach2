@@ -28,6 +28,12 @@
  * rows, root's step and the unprivileged one's refusal, since either would
  * step the machine's own clock; a native
  * run also gives it a UTS namespace of its own for the host name.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run. Under
+ * `machine=native` the two clock rows, `clock-root` and `clock-eperm`, are
+ * not run.
  */
 
 #define _GNU_SOURCE /* dup3, sethostname */
@@ -44,6 +50,40 @@
 #include <time.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
+
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {
+    "getpwnam-root", "getspnam-root",  "crypt-match",  "crypt-wrong",  "crypt-wrong-refused",
+    "getrlimit",     "rlimit-nofile",  "hostname-set", "hostname-get", "clock-root",
+    "open-passwd",   "dup3",           "dup3-cloexec", "rdlock",       "wrlock-ebadf",
+    "seteuid-out",   "saved-uid",      "seteuid-back", "drop",         "identity-after-drop",
+    "no-regain",     "hostname-eperm", "clock-eperm"};
+
+/** Begin the report and plan its assertions. */
+static void report_start(void)
+{
+    unsigned int i;
+
+    report_begin(report_case(environ, "guest.default.authmusl"));
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
+}
+
+/** Report the next assertion, a clock row, held, or not run under
+ * `machine=native`, which leaves the clock rows out. */
+static void report_clock_held(void)
+{
+    if (probe_native()) {
+        report_notrun(report_path[report_path_at++],
+                      "machine=native leaves out the steps of the machine's clock");
+    } else {
+        report_held();
+    }
+}
 
 /*
  * The numbers of the system calls whose times are a long wide: i386's stime
@@ -131,14 +171,18 @@ static int lock_rows(int fd)
     lk.l_type = F_RDLCK;
     lk.l_whence = SEEK_SET;
     if (fcntl(fd, F_SETLK, &lk) != 0) {
+        report_stop("F_SETLK");
         printf("AUTHMUSL FAIL (F_SETLK)\n");
         return 1;
     }
+    report_held();
     lk.l_type = F_WRLCK;
     if (fcntl(fd, F_SETLK, &lk) != -1 || errno != EBADF) {
+        report_stop("F_SETLK F_WRLCK on a descriptor for reading");
         printf("AUTHMUSL FAIL (F_SETLK F_WRLCK on a descriptor for reading)\n");
         return 1;
     }
+    report_held();
     return 0;
 }
 
@@ -152,29 +196,39 @@ static int account_rows(void)
 
     pw = getpwnam("root");
     if (!pw || pw->pw_uid != 0 || pw->pw_gid != 0) {
+        report_stop("getpwnam root");
         printf("AUTHMUSL FAIL (getpwnam root)\n");
         return 1;
     }
+    report_held();
 
     sp = getspnam("root");
     if (!sp || !sp->sp_pwdp || strncmp(sp->sp_pwdp, "$6$", 3) != 0) {
+        report_stop("getspnam root");
         printf("AUTHMUSL FAIL (getspnam root)\n");
         return 1;
     }
+    report_held();
     hash = crypt("rach2", sp->sp_pwdp);
     if (!hash || strcmp(hash, sp->sp_pwdp) != 0) {
+        report_stop("crypt against shadow");
         printf("AUTHMUSL FAIL (crypt against shadow)\n");
         return 1;
     }
+    report_held();
     hash = crypt("wrong", sp->sp_pwdp);
     if (!hash) {
+        report_stop("crypt of a wrong password");
         printf("AUTHMUSL FAIL (crypt of a wrong password)\n");
         return 1;
     }
+    report_held();
     if (strcmp(hash, sp->sp_pwdp) == 0) {
+        report_stop("crypt accepts a wrong password");
         printf("AUTHMUSL FAIL (crypt accepts a wrong password)\n");
         return 1;
     }
+    report_held();
     return 0;
 }
 
@@ -186,26 +240,36 @@ static int root_rows(void)
     char host[64];
 
     if (getrlimit(RLIMIT_NOFILE, &rl) != 0) {
+        report_stop("getrlimit RLIMIT_NOFILE");
         printf("AUTHMUSL FAIL (getrlimit RLIMIT_NOFILE)\n");
         return 1;
     }
+    report_held();
     if (rl.rlim_cur != 1024) {
+        report_stop("RLIMIT_NOFILE is not 1024");
         printf("AUTHMUSL FAIL (RLIMIT_NOFILE=%ld)\n", (long)rl.rlim_cur);
         return 1;
     }
+    report_held();
 
     if (sethostname("rachtest", 8) != 0 || gethostname(host, sizeof(host)) != 0) {
+        report_stop("hostname round-trip");
         printf("AUTHMUSL FAIL (hostname round-trip)\n");
         return 1;
     }
+    report_held();
     if (strcmp(host, "rachtest") != 0) {
+        report_stop("hostname round-trip: another name came back");
         printf("AUTHMUSL FAIL (hostname round-trip: %s)\n", host);
         return 1;
     }
+    report_held();
     if (!probe_native() && clock_step(100000) != 0) {
+        report_stop("root sets the real time forward and back");
         printf("AUTHMUSL FAIL (root sets the real time forward and back)\n");
         return 1;
     }
+    report_clock_held();
     return 0;
 }
 
@@ -217,6 +281,7 @@ int main(int argc, char **argv)
     gid_t group;
 
     probe_args(argc, argv);
+    report_start();
     user = (uid_t)probe_id(1000);
     group = (gid_t)probe_id(1000);
     if (account_rows() != 0 || root_rows() != 0) {
@@ -225,19 +290,25 @@ int main(int argc, char **argv)
 
     fd = open("/etc/passwd", O_RDONLY);
     if (fd < 0) {
+        report_stop("open passwd");
         printf("AUTHMUSL FAIL (open passwd)\n");
         return 1;
     }
+    report_held();
     nfd = fd + 3;
     if (dup3(fd, nfd, O_CLOEXEC) != nfd) {
+        report_stop("dup3");
         printf("AUTHMUSL FAIL (dup3)\n");
         return 1;
     }
+    report_held();
     fl = fcntl(nfd, F_GETFD);
     if (fl < 0 || !(fl & FD_CLOEXEC)) {
+        report_stop("dup3 cloexec");
         printf("AUTHMUSL FAIL (dup3 cloexec)\n");
         return 1;
     }
+    report_held();
 
     if (lock_rows(nfd) != 0) {
         return 1;
@@ -246,38 +317,55 @@ int main(int argc, char **argv)
     close(nfd);
 
     if (seteuid(user) != 0 || geteuid() != user || getuid() != 0) {
+        report_stop("seteuid excursion out");
         printf("AUTHMUSL FAIL (seteuid excursion out)\n");
         return 1;
     }
+    report_held();
     /* musl's seteuid is setresuid(-1, e, -1), which leaves the saved uid. */
     if (getresuid(&ru, &eu, &su) != 0 || ru != 0 || eu != user || su != 0) {
+        report_stop("saved uid during excursion");
         printf("AUTHMUSL FAIL (saved uid during excursion)\n");
         return 1;
     }
+    report_held();
     if (seteuid(0) != 0 || geteuid() != 0) {
+        report_stop("seteuid excursion back");
         printf("AUTHMUSL FAIL (seteuid excursion back)\n");
         return 1;
     }
+    report_held();
     if (setgid(group) != 0 || setuid(user) != 0) {
+        report_stop("drop to the user");
         printf("AUTHMUSL FAIL (drop to %lu)\n", (unsigned long)user);
         return 1;
     }
+    report_held();
     if (getuid() != user || geteuid() != user || getgid() != group) {
+        report_stop("identity after drop");
         printf("AUTHMUSL FAIL (identity after drop)\n");
         return 1;
     }
+    report_held();
     if (setuid(0) == 0 || seteuid(0) == 0 || setgid(0) == 0) {
+        report_stop("regained root after drop");
         printf("AUTHMUSL FAIL (regained root after drop)\n");
         return 1;
     }
+    report_held();
     if (sethostname("other", 5) == 0 || errno != EPERM) {
+        report_stop("an unprivileged caller set the host name");
         printf("AUTHMUSL FAIL (an unprivileged caller set the host name)\n");
         return 1;
     }
+    report_held();
     if (!probe_native() && (clock_step(1000) == 0 || errno != EPERM)) {
+        report_stop("an unprivileged caller set the time");
         printf("AUTHMUSL FAIL (an unprivileged caller set the time)\n");
         return 1;
     }
+    report_clock_held();
+    report_end();
 
     printf("AUTHMUSL OK\n");
     return 0;

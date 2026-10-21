@@ -20,7 +20,10 @@
  * bits wide.
  *
  * It prints "CLONEMUSL OK" and exits 0 on success, or prints "CLONEMUSL FAIL
- * (detail)" and exits 1 at the first failure.
+ * (detail)" and exits 1 at the first failure. Writes etude's report records
+ * (probe_report.h) for the case ETUDE_CASE names, an assertion for each
+ * check, as `assertion_id` lists them; a failed check fails its assertion
+ * and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -35,6 +38,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "../probe_report.h"
+
+extern char **environ;
+
 #define CLONE_SIGHAND        0x00000800
 #define CLONE_PARENT_SETTID  0x00100000
 #define CLONE_CHILD_CLEARTID 0x00200000
@@ -46,9 +53,43 @@
 #define FUTEX_PRIVATE_FLAG   128
 #define FUTEX_CLOCK_REALTIME 256
 
-/** Report one failed check and return 1, the probe's failure status. */
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {"set-tid-address",
+                                           "clone-fork-form",
+                                           "child-exit",
+                                           "child-settid",
+                                           "parent-settid",
+                                           "parent-word",
+                                           "sighand-einval",
+                                           "wake-no-waiter",
+                                           "wait-eagain",
+                                           "relative-timeout",
+                                           "relative-duration",
+                                           "monotonic-timeout",
+                                           "monotonic-deadline",
+                                           "realtime-past",
+                                           "zero-bitset",
+                                           "unaligned",
+                                           "requeue-enosys",
+                                           "realtime-wait-enosys",
+                                           "eintr"};
+
+/** Begin the report and plan its assertions. */
+static void report_start(void)
+{
+    unsigned int i;
+
+    report_begin(report_case(environ, "guest.default.clonemusl"));
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
+}
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("CLONEMUSL FAIL (%s)\n", what);
     return 1;
 }
@@ -139,20 +180,88 @@ static long interrupted_wait(volatile uint32_t *word)
     return r;
 }
 
+/**
+ * The futex rows on `word`, which holds 7: a wake with no waiter, a wait on
+ * another value, the timeouts on both clocks, the refusals, and a wait that
+ * a handler interrupts. Returns 0, or 1 from `fail` at the first failed
+ * check.
+ */
+static int futex_rows(volatile uint32_t *word)
+{
+    struct kts ts;
+    long long start;
+    long long deadline;
+
+    if (futex(word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL, 0) != 0) {
+        return fail("a wake with no waiter did not return 0");
+    }
+    report_held();
+    if (futex(word, FUTEX_WAIT, 8, NULL, 0) != -EAGAIN) {
+        return fail("a wait on another value did not return EAGAIN");
+    }
+    report_held();
+    start = ns_of(CLOCK_MONOTONIC);
+    to_kts(20000000, &ts);
+    if (futex(word, FUTEX_WAIT, 7, &ts, 0) != -ETIMEDOUT) {
+        return fail("a relative wait did not time out");
+    }
+    report_held();
+    if (ns_of(CLOCK_MONOTONIC) - start < 20000000) {
+        return fail("a relative wait of 20 ms ended sooner");
+    }
+    report_held();
+    deadline = ns_of(CLOCK_MONOTONIC) + 20000000;
+    to_kts(deadline, &ts);
+    if (futex(word, FUTEX_WAIT_BITSET, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
+        return fail("an absolute monotonic wait did not time out");
+    }
+    report_held();
+    if (ns_of(CLOCK_MONOTONIC) < deadline) {
+        return fail("an absolute monotonic wait ended before its deadline");
+    }
+    report_held();
+    to_kts(ns_of(CLOCK_REALTIME), &ts);
+    if (futex(word, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
+        return fail("an absolute real-time wait in the past did not time out");
+    }
+    report_held();
+    if (futex(word, FUTEX_WAIT_BITSET, 7, NULL, 0) != -EINVAL) {
+        return fail("a zero bitset was not refused");
+    }
+    report_held();
+    if (futex((volatile uint32_t *)((uintptr_t)word + 1), FUTEX_WAKE, 1, NULL, 0) != -EINVAL) {
+        return fail("an unaligned address was not refused");
+    }
+    report_held();
+    if (futex(word, FUTEX_REQUEUE, 1, NULL, 0) != -ENOSYS) {
+        return fail("requeue did not answer ENOSYS");
+    }
+    report_held();
+    if (futex(word, FUTEX_WAIT | FUTEX_CLOCK_REALTIME, 7, NULL, 0) != -ENOSYS) {
+        return fail("the real-time clock was accepted for FUTEX_WAIT");
+    }
+    report_held();
+    if (interrupted_wait(word) != -EINTR || alarms != 1) {
+        return fail("a timed wait a handler with SA_RESTART interrupted did not end with EINTR");
+    }
+    report_held();
+    report_end();
+    return 0;
+}
+
 int main(void)
 {
     static volatile int32_t ctid;
     static volatile int32_t ptid;
     static volatile uint32_t word = 7;
-    struct kts ts;
-    long long start;
-    long long deadline;
     long pid;
     int status;
 
+    report_start();
     if (raw(SYS_set_tid_address, (long)&ctid, 0, 0, 0, 0, 0) != getpid()) {
         return fail("set_tid_address did not return the pid");
     }
+    report_held();
 
     pid = raw(SYS_clone, CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_PARENT_SETTID | SIGCHLD,
               0, (long)&ptid, CLONE_TLS_CTID(0, &ctid), 0);
@@ -162,18 +271,23 @@ int main(void)
     if (pid == 0) {
         _exit(ctid == getpid() ? 0 : 1);
     }
+    report_held();
     if (waitpid((pid_t)pid, &status, 0) != pid || !WIFEXITED(status)) {
         return fail("the child did not exit");
     }
+    report_held();
     if (WEXITSTATUS(status) != 0) {
         return fail("the child's CLONE_CHILD_SETTID word was not its id");
     }
+    report_held();
     if (ptid != pid) {
         return fail("CLONE_PARENT_SETTID did not store the child's id");
     }
+    report_held();
     if (ctid != 0) {
         return fail("the store in the child changed the parent's word");
     }
+    report_held();
     pid = raw(SYS_clone, CLONE_SIGHAND | SIGCHLD, 0, 0, 0, 0, 0);
     if (pid == 0) {
         _exit(1);
@@ -184,47 +298,10 @@ int main(void)
     if (pid != -EINVAL) {
         return fail("CLONE_SIGHAND without CLONE_VM was not refused");
     }
+    report_held();
 
-    if (futex(&word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL, 0) != 0) {
-        return fail("a wake with no waiter did not return 0");
-    }
-    if (futex(&word, FUTEX_WAIT, 8, NULL, 0) != -EAGAIN) {
-        return fail("a wait on another value did not return EAGAIN");
-    }
-    start = ns_of(CLOCK_MONOTONIC);
-    to_kts(20000000, &ts);
-    if (futex(&word, FUTEX_WAIT, 7, &ts, 0) != -ETIMEDOUT) {
-        return fail("a relative wait did not time out");
-    }
-    if (ns_of(CLOCK_MONOTONIC) - start < 20000000) {
-        return fail("a relative wait of 20 ms ended sooner");
-    }
-    deadline = ns_of(CLOCK_MONOTONIC) + 20000000;
-    to_kts(deadline, &ts);
-    if (futex(&word, FUTEX_WAIT_BITSET, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
-        return fail("an absolute monotonic wait did not time out");
-    }
-    if (ns_of(CLOCK_MONOTONIC) < deadline) {
-        return fail("an absolute monotonic wait ended before its deadline");
-    }
-    to_kts(ns_of(CLOCK_REALTIME), &ts);
-    if (futex(&word, FUTEX_WAIT_BITSET | FUTEX_CLOCK_REALTIME, 7, &ts, 0xFFFFFFFFu) != -ETIMEDOUT) {
-        return fail("an absolute real-time wait in the past did not time out");
-    }
-    if (futex(&word, FUTEX_WAIT_BITSET, 7, NULL, 0) != -EINVAL) {
-        return fail("a zero bitset was not refused");
-    }
-    if (futex((volatile uint32_t *)((uintptr_t)&word + 1), FUTEX_WAKE, 1, NULL, 0) != -EINVAL) {
-        return fail("an unaligned address was not refused");
-    }
-    if (futex(&word, FUTEX_REQUEUE, 1, NULL, 0) != -ENOSYS) {
-        return fail("requeue did not answer ENOSYS");
-    }
-    if (futex(&word, FUTEX_WAIT | FUTEX_CLOCK_REALTIME, 7, NULL, 0) != -ENOSYS) {
-        return fail("the real-time clock was accepted for FUTEX_WAIT");
-    }
-    if (interrupted_wait(&word) != -EINTR || alarms != 1) {
-        return fail("a timed wait a handler with SA_RESTART interrupted did not end with EINTR");
+    if (futex_rows(&word) != 0) {
+        return 1;
     }
 
     printf("CLONEMUSL OK\n");

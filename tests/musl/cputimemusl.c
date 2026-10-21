@@ -27,6 +27,13 @@
  *
  * It prints "CPUTIMEMUSL OK" and exits 0 on success, or prints
  * "CPUTIMEMUSL FAIL (detail)" and exits 1 at the first failure.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check: `user-time`, `user-bound`,
+ * `system-time`, `system-bound`, `wait4-reap`, `child-charged`,
+ * `wait4-utime`, `children-times`, `getrusage-children`, `getrusage-self`
+ * and `getrusage-einval`. A failed check fails its assertion and leaves
+ * those after it not run.
  */
 
 #include <errno.h>
@@ -38,6 +45,10 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "../probe_report.h"
+
+extern char **environ;
+
 /* The most ticks a loop may take to be charged the few it asks for. */
 #define LOOP_BOUND 1000
 
@@ -46,9 +57,11 @@
 
 static char zeroes[READ_SIZE];
 
-/** Report one failed check and return 1, the probe's failure status. */
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("CPUTIMEMUSL FAIL (%s)\n", what);
 
     return 1;
@@ -118,6 +131,50 @@ static int usage_between(int who)
            sys < (long)before.tms_stime || sys > (long)after.tms_stime;
 }
 
+/**
+ * Fork a child that spins for three ticks of user time, reap it by `wait4`,
+ * and check what wait4 reports and the children's times in `after`, read
+ * after the reap. Returns 0, or 1 from `fail` at the first failed check.
+ */
+static int reaped_child(struct tms *after)
+{
+    struct tms before;
+    struct rusage ru;
+    pid_t pid;
+    int status;
+
+    /* A reaped child: the time wait4 reports is added to the children's. */
+    times(&before);
+    pid = fork();
+    if (pid < 0) {
+        return fail("fork failed");
+    }
+    if (pid == 0) {
+        struct tms mine;
+
+        _exit(spin_for(3, &mine) >= 3 ? 0 : 1);
+    }
+    if (wait4(pid, &status, 0, &ru) != pid) {
+        return fail("wait4 did not reap the child");
+    }
+    report_held();
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail("the child was not charged three ticks of user time");
+    }
+    report_held();
+    if (ticks_of(&ru.ru_utime) < 3) {
+        return fail("wait4 reported less user time than the child was charged");
+    }
+    report_held();
+    times(after);
+    if ((long)(after->tms_cutime - before.tms_cutime) != ticks_of(&ru.ru_utime) ||
+        (long)(after->tms_cstime - before.tms_cstime) != ticks_of(&ru.ru_stime)) {
+        return fail("the children's times did not rise by what wait4 reported");
+    }
+    report_held();
+    return 0;
+}
+
 int main(void)
 {
     struct tms before;
@@ -125,18 +182,31 @@ int main(void)
     struct rusage ru;
     clock_t start;
     clock_t at;
-    pid_t pid;
-    int status;
     int fd;
+
+    report_begin(report_case(environ, "guest.default.cputimemusl"));
+    report_plan("user-time");
+    report_plan("user-bound");
+    report_plan("system-time");
+    report_plan("system-bound");
+    report_plan("wait4-reap");
+    report_plan("child-charged");
+    report_plan("wait4-utime");
+    report_plan("children-times");
+    report_plan("getrusage-children");
+    report_plan("getrusage-self");
+    report_plan("getrusage-einval");
 
     /* User time: a loop in user mode is charged to utime. */
     if (spin_for(5, &before) < 5) {
         return fail("five ticks of spinning in user mode were not charged as user time");
     }
+    report_held();
     at = times(&after);
     if ((long)(after.tms_utime + after.tms_stime) > (long)at) {
         return fail("the process was charged more CPU time than the ticks since boot");
     }
+    report_held();
 
     /* System time: a loop of large reads is charged to stime. */
     fd = open("/dev/zero", O_RDONLY);
@@ -157,34 +227,14 @@ int main(void)
     if ((long)(after.tms_stime - before.tms_stime) < 2) {
         return fail("two ticks of reading /dev/zero were not charged as system time");
     }
+    report_held();
     if ((long)(after.tms_utime + after.tms_stime) > (long)at) {
         return fail("the process was charged more CPU time than the ticks since boot");
     }
+    report_held();
 
-    /* A reaped child: the time wait4 reports is added to the children's. */
-    times(&before);
-    pid = fork();
-    if (pid < 0) {
-        return fail("fork failed");
-    }
-    if (pid == 0) {
-        struct tms mine;
-
-        _exit(spin_for(3, &mine) >= 3 ? 0 : 1);
-    }
-    if (wait4(pid, &status, 0, &ru) != pid) {
-        return fail("wait4 did not reap the child");
-    }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("the child was not charged three ticks of user time");
-    }
-    if (ticks_of(&ru.ru_utime) < 3) {
-        return fail("wait4 reported less user time than the child was charged");
-    }
-    times(&after);
-    if ((long)(after.tms_cutime - before.tms_cutime) != ticks_of(&ru.ru_utime) ||
-        (long)(after.tms_cstime - before.tms_cstime) != ticks_of(&ru.ru_stime)) {
-        return fail("the children's times did not rise by what wait4 reported");
+    if (reaped_child(&after) != 0) {
+        return 1;
     }
 
     /* getrusage: the same ticks, as timevals. */
@@ -192,12 +242,16 @@ int main(void)
         ticks_of(&ru.ru_stime) != (long)after.tms_cstime) {
         return fail("getrusage of the children is not their times");
     }
+    report_held();
     if (usage_between(RUSAGE_SELF) != 0 || usage_between(RUSAGE_THREAD) != 0) {
         return fail("getrusage of the process or its thread is not its times");
     }
+    report_held();
     if (getrusage(2, &ru) != -1 || errno != EINVAL) {
         return fail("getrusage of an unknown who was not refused with EINVAL");
     }
+    report_held();
+    report_end();
 
     printf("CPUTIMEMUSL OK\n");
 

@@ -25,6 +25,10 @@
  * listener is on port 7461 of every address; given `ports=OLD:NEW,...`, as a
  * native run gives it (tests/native/Readme.md), it is on the NEW of 7461 of
  * 127.0.0.1.
+ *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -42,6 +46,7 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
 
 /* The socketcall numbers of the calls; on x86-64, sc maps them to its calls. */
 #define SC_SOCKET  1
@@ -51,9 +56,31 @@
 #define SC_ACCEPT4 18
 #define PORT       ((unsigned short)probe_port(7461))
 
-/** Report one failed check and return 1, the probe's failure status. */
+extern char **environ;
+
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {
+    "type-einval",    "socket-cloexec",   "listener-flags",     "accept-eagain",
+    "accept4-einval", "accept-flags",     "read-eagain",        "accept-no-flags",
+    "no-ip-options",  "fionbio-set",      "fionbio-clear",      "half-close-request",
+    "send-epipe",     "server-reads-end", "client-reads-answer"};
+
+/** Begin the report and plan its assertions. */
+static void report_start(void)
+{
+    unsigned int i;
+
+    report_begin(report_case(environ, "guest.default.sockflagmusl"));
+    for (i = 0; i < sizeof(assertion_id) / sizeof(assertion_id[0]); i++) {
+        report_plan(assertion_id[i]);
+    }
+}
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("SOCKFLAGMUSL FAIL (%s)\n", what);
 
     return 1;
@@ -182,15 +209,18 @@ static int half_close(int ls)
     if (as < 0 || send(cs, "ask\n", 4, 0) != 4 || shutdown(cs, SHUT_WR) != 0) {
         return fail("a request and the shutdown of the sending half");
     }
+    report_held();
     if (send(cs, "x", 1, 0) != -1 || errno != EPIPE) {
         return fail("a send after shutdown(SHUT_WR) was not EPIPE");
     }
+    report_held();
     while ((n = recv(as, buf + got, sizeof(buf) - got, 0)) > 0) {
         got += (size_t)n;
     }
     if (n != 0 || got != 4 || send(as, "answer", 6, 0) != 6) {
         return fail("the server did not read the request to its end and answer");
     }
+    report_held();
     close(as);
     got = 0;
     while ((n = recv(cs, buf + got, sizeof(buf) - got, 0)) > 0) {
@@ -199,6 +229,7 @@ static int half_close(int ls)
     if (n != 0 || got != 6 || memcmp(buf, "answer", 6) != 0) {
         return fail("the answer after shutdown(SHUT_WR) did not arrive");
     }
+    report_held();
     close(cs);
     return 0;
 }
@@ -214,49 +245,62 @@ int main(int argc, char **argv)
     int as;
 
     probe_args(argc, argv);
+    report_start();
 
     if (sc(SC_SOCKET, AF_INET, SOCK_STREAM | 0x10, 0, 0) != -1 || errno != EINVAL) {
         return fail("a type bit other than SOCK_CLOEXEC and SOCK_NONBLOCK was not EINVAL");
     }
+    report_held();
     ds = (int)sc(SC_SOCKET, AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0, 0);
     if (ds < 0 || !has(ds, 1, 0)) {
         return fail("a socket made with SOCK_CLOEXEC is not close-on-exec and blocking");
     }
+    report_held();
     ls = listener();
     if (ls < 0 || !has(ls, 1, 1)) {
         return fail("a listener made with both flags does not have both");
     }
+    report_held();
     if (sc(SC_ACCEPT4, ls, 0, 0, 0) != -1 || errno != EAGAIN) {
         return fail("an accept on an empty non-blocking listener was not EAGAIN");
     }
+    report_held();
     if (sc(SC_ACCEPT4, ls, 0, 0, 0x1) != -1 || errno != EINVAL) {
         return fail("an accept4 flag other than SOCK_CLOEXEC and SOCK_NONBLOCK was not EINVAL");
     }
+    report_held();
     as = connect_one() < 0 ? -1 : accept_within(ls, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (as < 0 || !has(as, 1, 1)) {
         return fail("a connection accepted with both flags does not have both");
     }
+    report_held();
     if (read(as, &c, 1) != -1 || errno != EAGAIN) {
         return fail("a read with nothing to read on a SOCK_NONBLOCK connection was not EAGAIN");
     }
+    report_held();
     as = connect_one() < 0 ? -1 : accept_within(ls, 0);
     if (as < 0 || !has(as, 0, 0)) {
         return fail("a connection accepted with no flags has one");
     }
+    report_held();
     if (getsockopt(as, IPPROTO_IP, IP_OPTIONS, opts, &len) != 0 || len != 0) {
         return fail("an accepted connection reported IP options");
     }
+    report_held();
     on = 1;
     if (ioctl(as, FIONBIO, &on) != 0 || !has(as, 0, 1)) {
         return fail("FIONBIO did not make a connection non-blocking");
     }
+    report_held();
     on = 0;
     if (ioctl(as, FIONBIO, &on) != 0 || !has(as, 0, 0)) {
         return fail("FIONBIO did not make a connection blocking again");
     }
+    report_held();
     if (half_close(ls) != 0) {
         return 1;
     }
+    report_end();
 
     printf("SOCKFLAGMUSL OK\n");
 
