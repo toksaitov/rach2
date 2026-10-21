@@ -1057,6 +1057,68 @@ static int listen_on(int fd, int port, unsigned char *sa, unsigned long *args)
     return 0;
 }
 
+/**
+ * The handshake of a child that holds sockets while the parent reads the
+ * tables, so that neither side depends on how long the other takes: the
+ * child writes a byte to `ready` once its sockets exist and then waits until
+ * the parent closes `go`, which the parent does once it has read. Each side
+ * closes the ends it does not use, so the parent's read of `ready` ends when
+ * the child exits before it is ready, and the child's read of `go` ends when
+ * the parent closes it.
+ */
+struct handshake {
+    int ready[2];
+    int go[2];
+};
+
+/** Open the handshake's pipes, before the fork. Returns 0 or -1. */
+static int handshake_open(struct handshake *h)
+{
+    h->ready[0] = h->ready[1] = h->go[0] = h->go[1] = -1;
+    if (syscall1(SYS_PIPE, (long)h->ready) != 0 || syscall1(SYS_PIPE, (long)h->go) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/** In the child, first: close the parent's ends. */
+static void handshake_child(struct handshake *h)
+{
+    syscall1(SYS_CLOSE, h->ready[0]);
+    syscall1(SYS_CLOSE, h->go[1]);
+}
+
+/** In the child, once its sockets exist: say so, and wait until the parent
+ * has read the tables. */
+static void handshake_hold(struct handshake *h)
+{
+    char byte = 'r';
+
+    syscall3(SYS_WRITE, h->ready[1], (long)&byte, 1);
+    syscall3(SYS_READ, h->go[0], (long)&byte, 1);
+}
+
+/** In the parent, after the fork, failed or not: close the child's ends and
+ * wait until the child is ready. Returns 1 when it is, and 0 when it exited
+ * first or there is no child. */
+static int handshake_wait(struct handshake *h)
+{
+    char byte;
+    long n;
+
+    syscall1(SYS_CLOSE, h->ready[1]);
+    syscall1(SYS_CLOSE, h->go[0]);
+    n = syscall3(SYS_READ, h->ready[0], (long)&byte, 1);
+    syscall1(SYS_CLOSE, h->ready[0]);
+    return n == 1;
+}
+
+/** In the parent, once it has read the tables: let the child go. */
+static void handshake_release(struct handshake *h)
+{
+    syscall1(SYS_CLOSE, h->go[1]);
+}
+
 /* The listeners `pool_full_rows` opens, eight in a child and the rest here. */
 #define MAX_TCP_ROWS 16
 #define FILL_CHILD   8
@@ -1764,28 +1826,34 @@ static void memory_file_rows(void)
 /**
  * Many rows. MAX_TCP_ROWS listening sockets, FILL_CHILD of them in a child
  * and the rest here, give /proc/net/tcp a header and a row for each, and the
- * file must come back in one read with every row and nothing cut.
+ * file must come back in one read with every row and nothing cut. The child
+ * holds its listeners from the moment it says they exist until the table
+ * has been read.
  */
 static void pool_full_rows(void)
 {
+    struct handshake h;
     unsigned long args[6];
     unsigned char sa[16];
     int fds[FILL_HERE];
-    int i, n, filler_pid, child_status;
+    int i, n, piped, ready, filler_pid, child_status;
 
+    piped = handshake_open(&h) == 0;
     filler_pid = syscall1(SYS_FORK, 0);
-    check("pool-fork", filler_pid >= 0, "fork for the second half of the pool");
     if (filler_pid == 0) {
+        handshake_child(&h);
         for (i = 0; i < FILL_CHILD; i++) {
             int lfd = new_socket(args);
             if (lfd < 0 || listen_on(lfd, (int)probe_port(9000 + i), sa, args) != 0) {
                 sys_exit(31);
             }
         }
-        nap(3000); /* hold them while the parent reads the table */
+        handshake_hold(&h);
         sys_exit(0);
     }
-    nap(500);
+    ready = handshake_wait(&h);
+    check("pool-fork", piped && filler_pid > 0 && ready,
+          "fork a child that opens the second half of the pool");
     for (i = 0; i < FILL_HERE; i++) {
         fds[i] = new_socket(args);
         check("pool-listeners",
@@ -1806,8 +1874,11 @@ static void pool_full_rows(void)
     for (i = 0; i < FILL_HERE; i++) {
         syscall1(SYS_CLOSE, fds[i]);
     }
-    syscall3(SYS_WAITPID, filler_pid, (long)&child_status, 0);
-    check("pool-child-exit", child_status == 0,
+    handshake_release(&h);
+    check("pool-child-exit",
+          filler_pid > 0 &&
+              syscall3(SYS_WAITPID, filler_pid, (long)&child_status, 0) == filler_pid &&
+              child_status == 0,
           "the child that held the other half exited cleanly");
 }
 
@@ -1858,7 +1929,8 @@ static void snapshot_rows(void)
  * child, and root connects to it: the accepted connection is allocated in
  * receive context, where no process is calling, so an implementation taking
  * the current process's uid would report root and pass a test whose two
- * sides had the same owner.
+ * sides had the same owner. The child holds the listener from the moment it
+ * says it exists until the table has been read.
  *
  * A closed connection stays in the table while it finishes closing, and its
  * socket is detached the moment the descriptor goes, so the row must still
@@ -1869,12 +1941,14 @@ static void connection_owner_rows(void)
 {
     unsigned long args[6];
     unsigned char sa[16];
-    int lfd, cfd, child_status, listener_pid, i, n;
+    struct handshake h;
+    int lfd, cfd, child_status, listener_pid, i, n, piped, ready;
     int owner_rows = 0, root_rows = 0;
 
+    piped = handshake_open(&h) == 0;
     listener_pid = syscall1(SYS_FORK, 0);
-    check("owner-fork", listener_pid >= 0, "fork for the listener");
     if (listener_pid == 0) {
+        handshake_child(&h);
         /* The child owns the listener, at a uid the parent lacks. */
         if (syscall3(SYS_SETRESUID, probe_id(1000), probe_id(1000), probe_id(1000)) != 0) {
             sys_exit(21);
@@ -1901,11 +1975,12 @@ static void connection_owner_rows(void)
         if (sock_call(SC_LISTEN, args) != 0) {
             sys_exit(24);
         }
-        /* Hold it open while the parent connects and reads the table. */
-        nap(2500);
+        handshake_hold(&h);
         sys_exit(0);
     }
-    nap(400);
+    ready = handshake_wait(&h);
+    check("owner-fork", piped && listener_pid > 0 && ready,
+          "fork a child that listens at a uid of its own");
     args[0] = AF_INET;
     args[1] = SOCK_STREAM;
     args[2] = 0;
@@ -1942,6 +2017,7 @@ static void connection_owner_rows(void)
     n = slurp("/proc/net/tcp", buf, (int)sizeof(buf));
     check("owner-detached-inode", n > 0 && no_row_has_zero_inode(buf, n),
           "a row whose socket is detached still reports its inode");
+    handshake_release(&h);
     check("owner-child-exit",
           listener_pid > 0 &&
               syscall3(SYS_WAITPID, listener_pid, (long)&child_status, 0) == listener_pid &&
