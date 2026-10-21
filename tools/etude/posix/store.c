@@ -29,7 +29,7 @@
 /* The first line of a record of this format. */
 #define RECORD_MAGIC "etude-artifact 1"
 
-/* The buffer of a copy. */
+/* The buffer of a copy; a chunk read that is all zeros is left a hole. */
 #define COPY_CHUNK (1u << 20)
 
 struct etude_store {
@@ -120,9 +120,19 @@ static int write_all(int fd, const void *buf, size_t n)
     return 0;
 }
 
+/** Whether the `n` bytes at `buf` are all zero. */
+static int all_zero(const unsigned char *buf, size_t n)
+{
+    return n == 0 || (buf[0] == 0 && memcmp(buf, buf + 1, n - 1) == 0);
+}
+
 /**
  * Read `from` to its end, hashing it, and write it to `to` unless `to` is
  * negative; 0 with the digest and size, or -1 with errno set.
+ *
+ * `to` is a new regular file. A chunk of zeros is passed over with
+ * lseek(2), which leaves a hole in `to`, so that a sparse file stays
+ * sparse; `to` is then given the size read, for a file that ends in zeros.
  */
 static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t *size)
 {
@@ -147,9 +157,17 @@ static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t 
             break;
         sha256_update(&h, buf, (size_t)r);
         total += (uint64_t)r;
-        if (to >= 0 && write_all(to, buf, (size_t)r) != 0)
+        if (to < 0)
+            continue;
+        if (all_zero(buf, (size_t)r)) {
+            if (lseek(to, (off_t)r, SEEK_CUR) < 0)
+                goto fail;
+        } else if (write_all(to, buf, (size_t)r) != 0) {
             goto fail;
+        }
     }
+    if (to >= 0 && ftruncate(to, (off_t)total) != 0)
+        goto fail;
     free(buf);
     sha256_final(&h, sum);
     sha256_hex(sum, hex);

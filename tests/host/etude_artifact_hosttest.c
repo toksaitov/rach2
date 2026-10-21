@@ -11,9 +11,10 @@
  * host-cflags: -Wall -Wextra -Werror
  *
  * An object is published read-only under its digest, once, and refused
- * when its digest is not the one expected. A writer killed while it copies
- * leaves no object, and its partial file is swept, while a writer that runs
- * keeps its own and publishes. A graph builds its nodes in the order of
+ * when its digest is not the one expected. A sparse file is published and
+ * copied with its holes. A writer killed while it copies leaves no object,
+ * and its partial file is swept, while a writer that runs keeps its own and
+ * publishes. A graph builds its nodes in the order of
  * their inputs and reuses each product by its key; a changed source makes
  * its dependents again, a changed key its own node alone, and a fresh node
  * is made every time. A recipe that fails, is killed, runs past its bound,
@@ -69,6 +70,11 @@ static int fails;
 
 /* The size of each half of a file copied from a FIFO. */
 #define HALF (1u << 20)
+
+/* The size of the sparse file, the offset of its data and their length. */
+#define SPARSE_BYTES (32u << 20)
+#define SPARSE_AT    ((3u << 20) + 7u)
+#define SPARSE_DATA  ((1u << 20) + 100u)
 
 /* A list of a recipe's arguments, ended by NULL. */
 #define ARGS(...) ((const char *const[]){__VA_ARGS__, NULL})
@@ -495,6 +501,83 @@ static void test_put(void)
     CHECK(etude_store_path(s, "xyz", path, sizeof(path)) == -1 && errno == EINVAL, "put: path");
     CHECK(etude_store_path(s, want, path, 8) == -1 && errno == ERANGE, "put: path");
     etude_store_close(s);
+}
+
+/** Give in `*bytes` the space on disk of the file at `path`; 0 or -1. */
+static int disk_bytes(const char *path, uint64_t *bytes)
+{
+    struct stat st;
+
+    if (stat(path, &st) != 0 || st.st_size != (off_t)SPARSE_BYTES)
+        return -1;
+    *bytes = (uint64_t)st.st_blocks * 512u;
+    return 0;
+}
+
+/**
+ * Give in `hex` the digest of the sparse file, zeros with `data` at
+ * SPARSE_AT, hashed from memory.
+ */
+static void sparse_hex(const unsigned char *data, char hex[ETUDE_DIGEST_HEX + 1])
+{
+    static const unsigned char zero[4096];
+    unsigned char sum[32];
+    struct sha256 h;
+    size_t n;
+
+    sha256_init(&h);
+    for (n = 0; n < SPARSE_AT; n += sizeof(zero))
+        sha256_update(&h, zero, SPARSE_AT - n < sizeof(zero) ? SPARSE_AT - n : sizeof(zero));
+    sha256_update(&h, data, SPARSE_DATA);
+    for (n = SPARSE_AT + SPARSE_DATA; n < SPARSE_BYTES; n += sizeof(zero))
+        sha256_update(&h, zero, SPARSE_BYTES - n < sizeof(zero) ? SPARSE_BYTES - n : sizeof(zero));
+    sha256_final(&h, sum);
+    sha256_hex(sum, hex);
+}
+
+/**
+ * Publish and copy a sparse file whose data begin inside a chunk and which
+ * ends in a hole: the object and the copy keep its holes, its size and its
+ * digest.
+ */
+static void test_sparse(void)
+{
+    const char *dir = fix_path("sparse");
+    const char *src = fix_path("sparse-src");
+    const char *copy = fix_path("sparse-copy");
+    unsigned char *data = malloc(SPARSE_DATA);
+    char d[ETUDE_DIGEST_HEX + 1], want[ETUDE_DIGEST_HEX + 1], path[PATH_MAX];
+    struct etude_store *s = etude_store_open(dir);
+    uint64_t size = 0, bytes = 0;
+    int fd = -1;
+
+    CHECK(data != NULL && s != NULL, "sparse");
+    if (data == NULL || s == NULL) {
+        free(data);
+        etude_store_close(s);
+        return;
+    }
+    pattern(data, SPARSE_DATA);
+    sparse_hex(data, want);
+    fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    CHECK(fd >= 0 && lseek(fd, SPARSE_AT, SEEK_SET) == SPARSE_AT &&
+              put_all(fd, data, SPARSE_DATA) == 0 && ftruncate(fd, SPARSE_BYTES) == 0 &&
+              close(fd) == 0,
+          "sparse");
+    CHECK(disk_bytes(src, &bytes) == 0 && bytes < SPARSE_BYTES / 8,
+          "sparse: the fixture's file system keeps holes");
+    CHECK(etude_store_put(s, src, NULL, d, &size) == 0 && strcmp(d, want) == 0 &&
+              size == SPARSE_BYTES,
+          "sparse: put: the digest of the whole file");
+    CHECK(etude_store_path(s, want, path, sizeof(path)) == 0 && disk_bytes(path, &bytes) == 0,
+          "sparse: put: whole");
+    CHECK(bytes < SPARSE_BYTES / 8, "sparse: put: the object keeps the holes");
+    CHECK(etude_store_copy(s, want, copy) == 0 && disk_bytes(copy, &bytes) == 0,
+          "sparse: copy: whole");
+    CHECK(bytes < SPARSE_BYTES / 8, "sparse: copy: the copy keeps the holes");
+    CHECK(etude_store_put(s, copy, want, d, NULL) == 0, "sparse: copy: the same content");
+    etude_store_close(s);
+    free(data);
 }
 
 /**
@@ -1158,6 +1241,7 @@ int main(int argc, char **argv)
     }
     signal(SIGPIPE, SIG_IGN);
     test_put();
+    test_sparse();
     test_interrupt();
     test_graph();
     test_refused();

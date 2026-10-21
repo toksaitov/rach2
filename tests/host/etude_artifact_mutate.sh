@@ -2,8 +2,9 @@
 # Prove etude_artifact_hosttest.c with faults in private copies of the
 # artifact store and the preparation graph: a recipe's failed exit taken for
 # success, a dependent of a failed node run, a live writer's partial file
-# swept, a damaged object reused, the key's lock never contended and a
-# digest other than the one expected accepted must each be found.
+# swept, a damaged object reused, the key's lock never contended, a digest
+# other than the one expected accepted, a chunk of zeros written out and a
+# file that ends in a hole cut short must each be found.
 #
 # Usage: sh tests/host/etude_artifact_mutate.sh [--texts]
 set -eu
@@ -31,6 +32,10 @@ faults = {
              '    if (0) {\n        e = errno;\n'),
     'expect': ('    if (expect != NULL && strcmp(expect, digest) != 0) {\n',
                '    if (0) {\n'),
+    'zeros': ('        if (all_zero(buf, (size_t)r)) {\n',
+              '        if (all_zero(buf, (size_t)r) && 0) {\n'),
+    'end': ('    if (to >= 0 && ftruncate(to, (off_t)total) != 0)\n',
+            '    if (0)\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -46,10 +51,10 @@ if [ "${1:-}" = --texts ]; then
     for fault in exit blocked; do
         apply_fault tools/etude/posix/prepare.c "$fault"
     done
-    for fault in sweep verify lock expect; do
+    for fault in sweep verify lock expect zeros end; do
         apply_fault tools/etude/posix/store.c "$fault"
     done
-    echo 'etude-artifact-mutation: texts: all six faults found once'
+    echo 'etude-artifact-mutation: texts: all eight faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -129,5 +134,7 @@ prove store.c sweep 'interrupt: the writer that runs keeps its file'
 prove store.c verify 'damage: object: made again'
 prove store.c lock 'race: the recipe ran once'
 prove store.c expect 'put: expected'
+prove store.c zeros 'sparse: put: the object keeps the holes'
+prove store.c end 'sparse: put: whole'
 restore
 run_phase restored 0

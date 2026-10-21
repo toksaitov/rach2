@@ -38,10 +38,12 @@ void etude_store_close(struct etude_store *s);
  * `digest` and its size in `*size` when `size` is not NULL.
  *
  * The copy is written and synchronized under a partial name, and only then
- * given the object's name, so that the name never shows a partial file. An
- * object already published with the same content is kept, and one whose
- * content differs from its name is replaced. When `expect` is not NULL, a
- * copy whose digest differs from it is refused, and nothing is published.
+ * given the object's name, so that the name never shows a partial file. A
+ * chunk of zeros in the file is left a hole in the object, so that a sparse
+ * file stays sparse. An object already published with the same content is
+ * kept, and one whose content differs from its name is replaced. When
+ * `expect` is not NULL, a copy whose digest differs from it is refused, and
+ * nothing is published.
  *
  * @return 0, or -1 with errno set: EBADMSG for a digest other than `expect`,
  *         or an error of the system.
@@ -68,7 +70,8 @@ int etude_store_check(const struct etude_store *s, const char *digest, uint64_t 
 
 /**
  * Make `dest`, a file that must not exist, a private writable copy of object
- * `digest`, checked by the digest as it is copied.
+ * `digest`, checked by the digest as it is copied. A chunk of zeros in the
+ * object is left a hole in `dest`, as etude_store_put leaves it.
  *
  * @return 0, or -1 with errno set as etude_store_check gives, EEXIST for a
  *         `dest` that exists, or an error of the system; `dest` is then
