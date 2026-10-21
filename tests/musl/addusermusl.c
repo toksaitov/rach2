@@ -52,6 +52,12 @@
  * It restores all three databases byte for byte and removes what it created
  * before it exits, since the probes share one boot.
  *
+ * It writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them. A failed
+ * check fails its assertion; the checks before it held, and those after it
+ * did not run, nor did those of a loop it stopped, such as the rounds of the
+ * injection, which hold only once every round has passed them.
+ *
  * The `probe` account's uid is 1000, as the test image stages it. A native
  * run gives `ids=OLD:NEW,...` (tests/native/Readme.md) and a private root
  * whose account files have the account at the NEW of 1000; the probe then
@@ -77,6 +83,9 @@
 
 #include "pwauth.h"
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 #define ADDUSER_PATH "/adduser"
 #define CRASH_PATH   "/adduser-crash"
@@ -101,20 +110,246 @@
 static const char *Databases[3] = {ETC_PASSWD, ETC_SHADOW, ETC_GROUP};
 static char Snapshot[3][4096];
 
-/** Report one failed check and return 1, the probe's failure status. */
-static int fail(const char *what)
+/* The rows, a check each, in the order the program makes them. */
+enum row {
+    R_ROOT,
+    R_SNAPSHOT,
+    R_CREATED_RUN,
+    R_CREATED_GETPWNAM,
+    R_CREATED_IDS,
+    R_CREATED_GETGRNAM,
+    R_CREATED_GETSPNAM,
+    R_CREATED_SHA512,
+    R_CREATED_HASH,
+    R_CREATED_HOME,
+    R_CREATED_MODE,
+    R_CREATED_OWNER,
+    R_CREATED_KEPT,
+    R_CREATED_SHELL,
+    R_CREATED_LOCK,
+    R_HALF_REFUSED,
+    R_HALF_PASSWD,
+    R_HALF_SHADOW,
+    R_HALF_LOCKED,
+    R_HALF_LOCK,
+    R_REFUSALS_READ,
+    R_EXISTS_REFUSED,
+    R_EXISTS_REPORTED,
+    R_UID0,
+    R_TAKEN,
+    R_TAKEN_NAMED,
+    R_NONROOT_RUN,
+    R_NONROOT,
+    R_LEFTOVER_READ,
+    R_LEFTOVER_FITS,
+    R_LEFTOVER_STAGED,
+    R_LEFTOVER,
+    R_LEFTOVER_NAMED,
+    R_REFUSED_PASSWD,
+    R_REFUSED_SHADOW,
+    R_REFUSED_RESTORED,
+    R_REFUSED_LOCK,
+    R_CRASH_DIES,
+    R_CRASH_LOCK,
+    R_CRASH_SHADOW_READ,
+    R_CRASH_ONE_SHADOW,
+    R_CRASH_LOCKED,
+    R_CRASH_GETSPNAM,
+    R_CRASH_GROUP_READ,
+    R_CRASH_GROUP,
+    R_CRASH_HOME,
+    R_CRASH_PASSWD_READ,
+    R_CRASH_PASSWD,
+    R_CRASH_GROUP_SAME,
+    R_CRASH_PASSWD_SAME,
+    R_COMPLETE_REFUSED,
+    R_COMPLETE_REPORTED,
+    R_COMPLETE_FINISHED,
+    R_COMPLETE_PASSWORD,
+    R_RESIDUE_REFUSED,
+    R_RESIDUE_NAMED,
+    R_RESIDUE_READ,
+    R_RESIDUE_ONE_SHADOW,
+    R_WAIT_CRASH,
+    R_WAIT_LOCK,
+    R_WAIT_READ,
+    R_WAIT_PIPES,
+    R_WAIT_FORK,
+    R_WAIT_BUSY,
+    R_WAIT_ALIVE,
+    R_WAIT_UNPUBLISHED,
+    R_WAIT_EXIT,
+    R_WAIT_SUCCESS,
+    R_WAIT_CREATED,
+    R_WAIT_LOCK_LEFT,
+    R_RACE_PIPES,
+    R_RACE_FORK,
+    R_RACE_PASSWD,
+    R_RACE_ADDUSER,
+    R_RACE_READ,
+    R_RACE_LINE,
+    R_RACE_PASSWORD,
+    R_RACE_ACCOUNT,
+    R_RACE_LOCK,
+    R_MAKERS_PIPES,
+    R_MAKERS_FORK,
+    R_MAKERS_EXIT,
+    R_MAKERS_SUCCESS,
+    R_MAKERS_READ,
+    R_MAKERS_FIRST,
+    R_MAKERS_SECOND,
+    R_MAKERS_UIDS,
+    R_MAKERS_ONCE,
+    R_MAKERS_SHADOW_READ,
+    R_MAKERS_PASSWORDS,
+    R_MAKERS_LOCK,
+    R_CONSISTENT_READ,
+    R_CONSISTENT_SHADOW,
+    R_CONSISTENT_ONCE,
+    R_CONSISTENT_GID,
+    R_CONSISTENT_GROUP,
+    ROWS
+};
+
+/* The assertion of each row. */
+static const char *const assertion_id[ROWS] = {"runs-as-root",
+                                               "snapshot",
+                                               "created-run",
+                                               "created-getpwnam",
+                                               "created-uid-gid",
+                                               "created-getgrnam",
+                                               "created-getspnam",
+                                               "created-sha512",
+                                               "created-hash",
+                                               "created-home",
+                                               "created-home-mode",
+                                               "created-home-owner",
+                                               "created-lines-kept",
+                                               "created-shell",
+                                               "created-no-lock",
+                                               "half-refused",
+                                               "half-passwd-group",
+                                               "half-shadow-line",
+                                               "half-locked",
+                                               "half-no-lock",
+                                               "refusals-snapshot",
+                                               "exists-refused",
+                                               "exists-reported",
+                                               "uid0-refused",
+                                               "taken-uid-refused",
+                                               "taken-uid-named",
+                                               "nonroot-run",
+                                               "nonroot-refused",
+                                               "leftover-group-read",
+                                               "leftover-group-fits",
+                                               "leftover-group-staged",
+                                               "leftover-refused",
+                                               "leftover-named",
+                                               "refused-passwd-same",
+                                               "refused-shadow-same",
+                                               "refused-restored",
+                                               "refused-no-lock",
+                                               "crash-dies",
+                                               "crash-lock",
+                                               "crash-shadow-read",
+                                               "crash-one-shadow",
+                                               "crash-shadow-locked",
+                                               "crash-getspnam",
+                                               "crash-group-read",
+                                               "crash-group-point",
+                                               "crash-home-point",
+                                               "crash-passwd-read",
+                                               "crash-passwd-point",
+                                               "crash-group-unchanged",
+                                               "crash-passwd-unchanged",
+                                               "complete-refused",
+                                               "complete-reported",
+                                               "complete-finished",
+                                               "complete-password",
+                                               "residue-refused",
+                                               "residue-named",
+                                               "residue-shadow-read",
+                                               "residue-one-shadow",
+                                               "wait-crash",
+                                               "wait-lock",
+                                               "wait-snapshot",
+                                               "wait-pipes",
+                                               "wait-fork",
+                                               "wait-busy",
+                                               "wait-alive",
+                                               "wait-unpublished",
+                                               "wait-exit",
+                                               "wait-success",
+                                               "wait-created",
+                                               "wait-no-lock",
+                                               "race-pipes",
+                                               "race-fork",
+                                               "race-passwd",
+                                               "race-adduser",
+                                               "race-shadow-read",
+                                               "race-shadow-line",
+                                               "race-password-kept",
+                                               "race-account-kept",
+                                               "race-no-lock",
+                                               "makers-pipes",
+                                               "makers-fork",
+                                               "makers-exit",
+                                               "makers-success",
+                                               "makers-passwd-read",
+                                               "makers-first",
+                                               "makers-second",
+                                               "makers-uids",
+                                               "makers-once",
+                                               "makers-shadow-read",
+                                               "makers-passwords",
+                                               "makers-no-lock",
+                                               "consistent-read",
+                                               "consistent-shadow",
+                                               "consistent-once",
+                                               "consistent-gid-field",
+                                               "consistent-gid-group"};
+
+/* The first row not yet reported, and the first row of the loop running,
+ * or ROWS outside a loop: a failure holds the rows before both. */
+static int row_next, row_loop = ROWS;
+
+/**
+ * Report the rows not yet reported: those before `row` held, as far as the
+ * loop running allows, `row` failed for `why`, unless it is ROWS, and the
+ * rest not run; then the report's end.
+ */
+static void rows_report(int row, const char *why)
+{
+    int i;
+
+    for (i = row_next; i < ROWS; i++) {
+        if (i == row) {
+            report_fail(assertion_id[i], why);
+        } else if (i < row && i < row_loop) {
+            report_pass(assertion_id[i]);
+        } else {
+            report_notrun(assertion_id[i], "an earlier check failed");
+        }
+    }
+    row_next = ROWS;
+    report_end();
+}
+
+/** Report a failed check of `row` and return 1, the probe's failure status. */
+static int fail(int row, const char *what)
 {
     printf("ADDUSERMUSL FAIL (%s)\n", what);
+    rows_report(row, what);
 
     return 1;
 }
 
 /**
- * Report a failed check as `fail` does, with `said`, the standard error of
- * the program that failed, on the same line; its newlines become spaces.
- * Returns 1.
+ * Report a failed check of `row` as `fail` does, with `said`, the standard
+ * error of the program that failed, on the same line; its newlines become
+ * spaces. Returns 1.
  */
-static int fail_said(const char *what, char *said)
+static int fail_said(int row, const char *what, char *said)
 {
     char *newline;
 
@@ -122,6 +357,7 @@ static int fail_said(const char *what, char *said)
         *newline = ' ';
     }
     printf("ADDUSERMUSL FAIL (%s: %s)\n", what, said);
+    rows_report(row, what);
 
     return 1;
 }
@@ -483,44 +719,44 @@ static int check_created(void)
     snprintf(script, sizeof(script), "%s\n%s\n", NEW_PASS, NEW_PASS);
     status = run_adduser(NEW_USER, script, report, sizeof(report));
     if (status != 0) {
-        return fail("adduser refused a new account");
+        return fail(R_CREATED_RUN, "adduser refused a new account");
     }
     pw = getpwnam(NEW_USER);
     if (!pw) {
-        return fail("getpwnam cannot parse the account adduser wrote");
+        return fail(R_CREATED_GETPWNAM, "getpwnam cannot parse the account adduser wrote");
     }
     if (pw->pw_uid < 1000 || pw->pw_gid != pw->pw_uid) {
-        return fail("the new account's uid and gid do not agree");
+        return fail(R_CREATED_IDS, "the new account's uid and gid do not agree");
     }
     gr = getgrnam(NEW_USER);
     if (!gr || gr->gr_gid != pw->pw_gid) {
-        return fail("getgrnam cannot parse the group adduser wrote");
+        return fail(R_CREATED_GETGRNAM, "getgrnam cannot parse the group adduser wrote");
     }
     sp = getspnam(NEW_USER);
     if (!sp || !sp->sp_pwdp) {
-        return fail("getspnam cannot parse the shadow line adduser wrote");
+        return fail(R_CREATED_GETSPNAM, "getspnam cannot parse the shadow line adduser wrote");
     }
     if (strncmp(sp->sp_pwdp, "$6$", 3) != 0) {
-        return fail("the new account's password is not a sha512 hash");
+        return fail(R_CREATED_SHA512, "the new account's password is not a sha512 hash");
     }
     made = crypt(NEW_PASS, sp->sp_pwdp);
     if (!made || strcmp(made, sp->sp_pwdp) != 0) {
-        return fail("the new account's hash is not of the password that was set");
+        return fail(R_CREATED_HASH, "the new account's hash is not of the password that was set");
     }
     if (stat(pw->pw_dir, &info) != 0) {
-        return fail("the new account has no home directory");
+        return fail(R_CREATED_HOME, "the new account has no home directory");
     }
     if ((info.st_mode & 07777) != 0700) {
-        return fail("the new home directory is not 0700");
+        return fail(R_CREATED_MODE, "the new home directory is not 0700");
     }
     if (info.st_uid != pw->pw_uid || info.st_gid != pw->pw_gid) {
-        return fail("the new home directory is not owned by the new account");
+        return fail(R_CREATED_OWNER, "the new home directory is not owned by the new account");
     }
     for (i = 0; i < 3; i++) {
         const char *line = Snapshot[i];
 
         if (slurp(Databases[i], after[i], sizeof(after[i])) < 0) {
-            return fail("cannot read back a database adduser rewrote");
+            return fail(R_CREATED_KEPT, "cannot read back a database adduser rewrote");
         }
         while (*line) {
             const char *end = strchr(line, '\n');
@@ -531,7 +767,7 @@ static int check_created(void)
                 memcpy(copy, line, span);
                 copy[span] = '\0';
                 if (strstr(after[i], copy) == NULL) {
-                    return fail("a line that was there before adduser ran is gone");
+                    return fail(R_CREATED_KEPT, "a line that was there before adduser ran is gone");
                 }
             }
             if (!end) {
@@ -542,10 +778,10 @@ static int check_created(void)
     }
     if (field_of(after[0], NEW_USER, 6, field, sizeof(field)) != 0 ||
         strcmp(field, "/bin/sh") != 0) {
-        return fail("the new account did not get the default shell");
+        return fail(R_CREATED_SHELL, "the new account did not get the default shell");
     }
     if (present(CRED_LOCK_PATH)) {
-        return fail("adduser left its lock behind");
+        return fail(R_CREATED_LOCK, "adduser left its lock behind");
     }
 
     return 0;
@@ -570,20 +806,20 @@ static int check_failed_password(void)
     restore_databases();
     status = run_adduser(HALF_USER, "one-password\nanother-password\n", report, sizeof(report));
     if (status == 0) {
-        return fail("the exec'd passwd accepted two different new passwords");
+        return fail(R_HALF_REFUSED, "the exec'd passwd accepted two different new passwords");
     }
     if (!getpwnam(HALF_USER) || !getgrnam(HALF_USER)) {
-        return fail("the account with no password is not in passwd and group");
+        return fail(R_HALF_PASSWD, "the account with no password is not in passwd and group");
     }
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0 ||
         field_of(after, HALF_USER, 1, field, sizeof(field)) != 0) {
-        return fail("the account with no password has no shadow line");
+        return fail(R_HALF_SHADOW, "the account with no password has no shadow line");
     }
     if (strcmp(field, "!") != 0) {
-        return fail("the account whose password was never set is not locked");
+        return fail(R_HALF_LOCKED, "the account whose password was never set is not locked");
     }
     if (present(CRED_LOCK_PATH)) {
-        return fail("adduser left its lock behind after the password failed");
+        return fail(R_HALF_LOCK, "adduser left its lock behind after the password failed");
     }
 
     return 0;
@@ -609,17 +845,17 @@ static int check_refusals(void)
     restore_databases();
     for (i = 0; i < 3; i++) {
         if (slurp(Databases[i], before[i], sizeof(before[i])) < 0) {
-            return fail("cannot read a database before the refusals");
+            return fail(R_REFUSALS_READ, "cannot read a database before the refusals");
         }
     }
 
     /* An account that already exists. */
     status = run_adduser(PROBE_USER, "", report, sizeof(report));
     if (status == 0) {
-        return fail("adduser created an account that already existed");
+        return fail(R_EXISTS_REFUSED, "adduser created an account that already existed");
     }
     if (strstr(report, "already exists") == NULL) {
-        return fail("adduser did not report an existing account as one");
+        return fail(R_EXISTS_REPORTED, "adduser did not report an existing account as one");
     }
 
     /* uid 0. */
@@ -629,16 +865,16 @@ static int check_refusals(void)
     argv[3] = (char *)NEW_USER;
     argv[4] = NULL;
     if (run_with(ADDUSER_PATH, argv, "", report, sizeof(report)) == 0) {
-        return fail("adduser handed out uid 0");
+        return fail(R_UID0, "adduser handed out uid 0");
     }
 
     /* A uid already taken. */
     argv[2] = probe_uid_text();
     if (run_with(ADDUSER_PATH, argv, "", report, sizeof(report)) == 0) {
-        return fail("adduser handed out a uid that was taken");
+        return fail(R_TAKEN, "adduser handed out a uid that was taken");
     }
     if (strstr(report, ETC_PASSWD) == NULL) {
-        return fail("adduser did not name the file holding the taken uid");
+        return fail(R_TAKEN_NAMED, "adduser did not name the file holding the taken uid");
     }
 
     /* A caller who is not root, refused before anything is opened. */
@@ -654,46 +890,113 @@ static int check_refusals(void)
             _exit(91);
         }
         if (child < 0 || waitpid(child, &wait_status, 0) != child || !WIFEXITED(wait_status)) {
-            return fail("could not run adduser as an unprivileged caller");
+            return fail(R_NONROOT_RUN, "could not run adduser as an unprivileged caller");
         }
         if (WEXITSTATUS(wait_status) == 0) {
-            return fail("an unprivileged caller created an account");
+            return fail(R_NONROOT, "an unprivileged caller created an account");
         }
     }
 
     /* A name written by hand into the group file alone. */
     if (slurp(ETC_GROUP, staged, sizeof(staged)) < 0) {
-        return fail("cannot read the group file the residue case writes");
+        return fail(R_LEFTOVER_READ, "cannot read the group file the residue case writes");
     }
     used = strlen(staged);
     if ((size_t)snprintf(staged + used, sizeof(staged) - used, "%s:x:1234:\n", NEW_USER) >=
         sizeof(staged) - used) {
-        return fail("the group file with a leftover line does not fit");
+        return fail(R_LEFTOVER_FITS, "the group file with a leftover line does not fit");
     }
     if (spill(ETC_GROUP, staged, 0644) != 0) {
-        return fail("could not stage the leftover group line");
+        return fail(R_LEFTOVER_STAGED, "could not stage the leftover group line");
     }
     status = run_adduser(NEW_USER, "", report, sizeof(report));
     if (status == 0) {
-        return fail("adduser created an account over a leftover group line");
+        return fail(R_LEFTOVER, "adduser created an account over a leftover group line");
     }
     if (strstr(report, ETC_GROUP) == NULL) {
-        return fail("adduser did not name the file holding the leftover line");
+        return fail(R_LEFTOVER_NAMED, "adduser did not name the file holding the leftover line");
     }
     if (slurp(ETC_PASSWD, after, sizeof(after)) < 0 || strcmp(after, before[0]) != 0) {
-        return fail("a refused adduser still rewrote the passwd file");
+        return fail(R_REFUSED_PASSWD, "a refused adduser still rewrote the passwd file");
     }
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0 || strcmp(after, before[1]) != 0) {
-        return fail("a refused adduser still rewrote the shadow file");
+        return fail(R_REFUSED_SHADOW, "a refused adduser still rewrote the shadow file");
     }
     restore_databases();
     for (i = 0; i < 3; i++) {
         if (slurp(Databases[i], after, sizeof(after)) < 0 || strcmp(after, before[i]) != 0) {
-            return fail("a database did not come back to what it was");
+            return fail(R_REFUSED_RESTORED, "a database did not come back to what it was");
         }
     }
     if (present(CRED_LOCK_PATH)) {
-        return fail("a refused adduser left a lock behind");
+        return fail(R_REFUSED_LOCK, "a refused adduser left a lock behind");
+    }
+
+    return 0;
+}
+
+/**
+ * Check the re-run after a crash at the last publication point, where the
+ * account is complete: `adduser` refuses it as one that exists, and `passwd`
+ * finishes it. Returns 0, or 1 after printing the failure.
+ */
+static int check_complete_rerun(void)
+{
+    char report[1024];
+    char after[4096];
+    char field[256];
+    char script[128];
+    char *argv[3];
+
+    if (run_adduser(CRASH_USER, "", report, sizeof(report)) == 0) {
+        return fail(R_COMPLETE_REFUSED, "adduser created an account that was already complete");
+    }
+    if (strstr(report, "already exists") == NULL) {
+        return fail(R_COMPLETE_REPORTED, "a complete account was reported as a residue");
+    }
+    /* The last prefix can be finished. */
+    snprintf(script, sizeof(script), "%s\n%s\n", NEW_PASS, NEW_PASS);
+    argv[0] = (char *)"passwd";
+    argv[1] = (char *)CRASH_USER;
+    argv[2] = NULL;
+    if (run_with(PASSWD_PATH, argv, script, report, sizeof(report)) != 0) {
+        return fail(R_COMPLETE_FINISHED, "passwd could not finish the account the crash completed");
+    }
+    if (slurp(ETC_SHADOW, after, sizeof(after)) < 0 ||
+        field_of(after, CRASH_USER, 1, field, sizeof(field)) != 0 ||
+        strncmp(field, "$6$", 3) != 0) {
+        return fail(R_COMPLETE_PASSWORD, "the finished account still has no password");
+    }
+
+    return 0;
+}
+
+/**
+ * Check the re-run after a crash at the publication point `which`, 1 to 3:
+ * `adduser` refuses, naming the databases that have the leftovers, and
+ * appends no second shadow line. Returns 0, or 1 after printing the failure.
+ */
+static int check_residue_rerun(int which)
+{
+    static const char *const refusal[] = {
+        CRASH_USER " is in " ETC_SHADOW " but not " ETC_PASSWD,
+        CRASH_USER " is in " ETC_SHADOW " and " ETC_GROUP " but not " ETC_PASSWD,
+        CRASH_USER " is in " ETC_SHADOW " and " ETC_GROUP " but not " ETC_PASSWD};
+    char report[1024];
+    char after[4096];
+
+    if (run_adduser(CRASH_USER, "", report, sizeof(report)) == 0) {
+        return fail(R_RESIDUE_REFUSED, "adduser created an account over a crash residue");
+    }
+    if (strstr(report, refusal[which - 1]) == NULL) {
+        return fail(R_RESIDUE_NAMED,
+                    "the refusal did not name the databases that have the leftovers");
+    }
+    if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
+        return fail(R_RESIDUE_READ, "cannot read the shadow file after the refusal");
+    }
+    if (count_lines(after, CRASH_USER) != 1) {
+        return fail(R_RESIDUE_ONE_SHADOW, "the refused re-run appended a second shadow line");
     }
 
     return 0;
@@ -718,10 +1021,6 @@ static int check_refusals(void)
  */
 static int check_injection(void)
 {
-    static const char *const refusal[] = {
-        CRASH_USER " is in " ETC_SHADOW " but not " ETC_PASSWD,
-        CRASH_USER " is in " ETC_SHADOW " and " ETC_GROUP " but not " ETC_PASSWD,
-        CRASH_USER " is in " ETC_SHADOW " and " ETC_GROUP " but not " ETC_PASSWD};
     char report[1024];
     char after[4096];
     char field[256];
@@ -729,6 +1028,7 @@ static int check_injection(void)
     char *argv[4];
     int which;
 
+    row_loop = R_CRASH_DIES;
     for (which = 1; which <= 4; which++) {
         restore_databases();
         snprintf(point, sizeof(point), "%d", which);
@@ -737,91 +1037,60 @@ static int check_injection(void)
         argv[2] = (char *)CRASH_USER;
         argv[3] = NULL;
         if (run_with(CRASH_PATH, argv, "", report, sizeof(report)) != 9) {
-            return fail("the crash build did not die where it was told to");
+            return fail(R_CRASH_DIES, "the crash build did not die where it was told to");
         }
         /* It died inside the transaction, so the lock is the residue too. */
         if (!present(CRED_LOCK_PATH)) {
-            return fail("a crash inside the transaction left no lock behind");
+            return fail(R_CRASH_LOCK, "a crash inside the transaction left no lock behind");
         }
         (void)unlink(CRED_LOCK_PATH);
 
         /* Shadow first, with a locked field. */
         if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
-            return fail("cannot read the shadow file after the crash");
+            return fail(R_CRASH_SHADOW_READ, "cannot read the shadow file after the crash");
         }
         if (count_lines(after, CRASH_USER) != 1) {
-            return fail("the crash did not leave exactly one shadow line");
+            return fail(R_CRASH_ONE_SHADOW, "the crash did not leave exactly one shadow line");
         }
         if (field_of(after, CRASH_USER, 1, field, sizeof(field)) != 0 || strcmp(field, "!") != 0) {
-            return fail("the shadow line the crash left is not locked");
+            return fail(R_CRASH_LOCKED, "the shadow line the crash left is not locked");
         }
         if (!getspnam(CRASH_USER)) {
-            return fail("getspnam cannot find the line the crash left");
+            return fail(R_CRASH_GETSPNAM, "getspnam cannot find the line the crash left");
         }
 
         if (slurp(ETC_GROUP, after, sizeof(after)) < 0) {
-            return fail("cannot read the group file after the crash");
+            return fail(R_CRASH_GROUP_READ, "cannot read the group file after the crash");
         }
         if (names_line(after, CRASH_USER) != (which >= 2)) {
-            return fail("the group file does not match the publication point");
+            return fail(R_CRASH_GROUP, "the group file does not match the publication point");
         }
         if (present("/home/" CRASH_USER) != (which >= 3)) {
-            return fail("the home directory does not match the publication point");
+            return fail(R_CRASH_HOME, "the home directory does not match the publication point");
         }
         if (slurp(ETC_PASSWD, after, sizeof(after)) < 0) {
-            return fail("cannot read the passwd file after the crash");
+            return fail(R_CRASH_PASSWD_READ, "cannot read the passwd file after the crash");
         }
         if (names_line(after, CRASH_USER) != (which >= 4)) {
-            return fail("the passwd file does not match the publication point");
+            return fail(R_CRASH_PASSWD, "the passwd file does not match the publication point");
         }
         /* What has not been published is byte-identical. */
         if (which < 2 &&
             (slurp(ETC_GROUP, after, sizeof(after)) < 0 || strcmp(after, Snapshot[2]) != 0)) {
-            return fail("a file published after the crash point was changed anyway");
+            return fail(R_CRASH_GROUP_SAME,
+                        "a file published after the crash point was changed anyway");
         }
         if (which < 4 &&
             (slurp(ETC_PASSWD, after, sizeof(after)) < 0 || strcmp(after, Snapshot[0]) != 0)) {
-            return fail("the passwd file was changed before its turn");
+            return fail(R_CRASH_PASSWD_SAME, "the passwd file was changed before its turn");
         }
 
         /* The re-run. */
-        if (which == 4) {
-            char script[128];
-
-            if (run_adduser(CRASH_USER, "", report, sizeof(report)) == 0) {
-                return fail("adduser created an account that was already complete");
-            }
-            if (strstr(report, "already exists") == NULL) {
-                return fail("a complete account was reported as a residue");
-            }
-            /* The last prefix can be finished. */
-            snprintf(script, sizeof(script), "%s\n%s\n", NEW_PASS, NEW_PASS);
-            argv[0] = (char *)"passwd";
-            argv[1] = (char *)CRASH_USER;
-            argv[2] = NULL;
-            if (run_with(PASSWD_PATH, argv, script, report, sizeof(report)) != 0) {
-                return fail("passwd could not finish the account the crash completed");
-            }
-            if (slurp(ETC_SHADOW, after, sizeof(after)) < 0 ||
-                field_of(after, CRASH_USER, 1, field, sizeof(field)) != 0 ||
-                strncmp(field, "$6$", 3) != 0) {
-                return fail("the finished account still has no password");
-            }
-        } else {
-            if (run_adduser(CRASH_USER, "", report, sizeof(report)) == 0) {
-                return fail("adduser created an account over a crash residue");
-            }
-            if (strstr(report, refusal[which - 1]) == NULL) {
-                return fail("the refusal did not name the databases that have the leftovers");
-            }
-            if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
-                return fail("cannot read the shadow file after the refusal");
-            }
-            if (count_lines(after, CRASH_USER) != 1) {
-                return fail("the refused re-run appended a second shadow line");
-            }
+        if ((which == 4 ? check_complete_rerun() : check_residue_rerun(which)) != 0) {
+            return 1;
         }
     }
+    row_loop = ROWS;
     restore_databases();
 
     return 0;
@@ -860,18 +1129,18 @@ static int check_waits(void)
     argv[2] = (char *)CRASH_USER;
     argv[3] = NULL;
     if (run_with(CRASH_PATH, argv, "", report, sizeof(report)) != 9) {
-        return fail("the crash build did not leave a lock to wait on");
+        return fail(R_WAIT_CRASH, "the crash build did not leave a lock to wait on");
     }
     if (!present(CRED_LOCK_PATH)) {
-        return fail("the crashed writer left no lock");
+        return fail(R_WAIT_LOCK, "the crashed writer left no lock");
     }
     for (i = 0; i < 3; i++) {
         if (slurp(Databases[i], before[i], sizeof(before[i])) < 0) {
-            return fail("cannot read a database before the waiting case");
+            return fail(R_WAIT_READ, "cannot read a database before the waiting case");
         }
     }
     if (pipe(a_in) != 0 || pipe(a_err) != 0) {
-        return fail("could not make the pipes the waiting maker reports on");
+        return fail(R_WAIT_PIPES, "could not make the pipes the waiting maker reports on");
     }
     maker = fork();
     if (maker == 0) {
@@ -886,43 +1155,153 @@ static int check_waits(void)
     close(a_in[0]);
     close(a_err[1]);
     if (maker < 0) {
-        return fail("could not fork the waiting maker");
+        return fail(R_WAIT_FORK, "could not fork the waiting maker");
     }
     report[0] = '\0';
     if (!read_until(a_err[0], "busy, waiting", report, sizeof(report), 20000)) {
         kill(maker, SIGKILL);
         (void)waitpid(maker, &status, 0);
 
-        return fail("the account maker did not report the lock as held");
+        return fail(R_WAIT_BUSY, "the account maker did not report the lock as held");
     }
     if (waitpid(maker, &status, WNOHANG) != 0) {
-        return fail("the account maker did not wait for the lock");
+        return fail(R_WAIT_ALIVE, "the account maker did not wait for the lock");
     }
     for (i = 0; i < 3; i++) {
         if (slurp(Databases[i], after, sizeof(after)) < 0 || strcmp(after, before[i]) != 0) {
             kill(maker, SIGKILL);
             (void)waitpid(maker, &status, 0);
 
-            return fail("the account maker published while the lock was held");
+            return fail(R_WAIT_UNPUBLISHED, "the account maker published while the lock was held");
         }
     }
     (void)unlink(CRED_LOCK_PATH);
     (void)write(a_in[1], NEW_PASS "\n" NEW_PASS "\n", 2 * strlen(NEW_PASS) + 2);
     close(a_in[1]);
     if (waitpid(maker, &status, 0) != maker || !WIFEXITED(status)) {
-        return fail("the waiting maker did not exit normally");
+        return fail(R_WAIT_EXIT, "the waiting maker did not exit normally");
     }
     close(a_err[0]);
     if (WEXITSTATUS(status) != 0) {
-        return fail("the maker failed after the lock was freed");
+        return fail(R_WAIT_SUCCESS, "the maker failed after the lock was freed");
     }
     if (!getpwnam(NEW_USER)) {
-        return fail("the account was not created once the lock was freed");
+        return fail(R_WAIT_CREATED, "the account was not created once the lock was freed");
     }
     if (present(CRED_LOCK_PATH)) {
-        return fail("the waiting case left a lock behind");
+        return fail(R_WAIT_LOCK_LEFT, "the waiting case left a lock behind");
     }
     restore_databases();
+
+    return 0;
+}
+
+/**
+ * Run two account makers at once, `newbie` and `halfway`, each with its own
+ * input pipe and the same password. Returns 0 when both exit 0, or 1 after
+ * printing the failure.
+ */
+static int run_two_makers(void)
+{
+    static const char *const names[2] = {NEW_USER, HALF_USER};
+    char report[1024];
+    int status;
+    int feed[2][2];
+    int errs[2][2];
+    pid_t makers[2];
+    size_t which;
+
+    for (which = 0; which < 2; which++) {
+        if (pipe(feed[which]) != 0 || pipe(errs[which]) != 0) {
+            return fail(R_MAKERS_PIPES, "could not make the pipes the two makers report on");
+        }
+    }
+    for (which = 0; which < 2; which++) {
+        makers[which] = fork();
+        if (makers[which] == 0) {
+            close(feed[which][1]);
+            close(errs[which][0]);
+            if (dup2(feed[which][0], 0) < 0 || dup2(errs[which][1], 2) < 0) {
+                _exit(90);
+            }
+            execl(ADDUSER_PATH, "adduser", names[which], (char *)0);
+            _exit(91);
+        }
+    }
+    for (which = 0; which < 2; which++) {
+        close(feed[which][0]);
+        close(errs[which][1]);
+        if (makers[which] < 0) {
+            return fail(R_MAKERS_FORK, "could not fork the two account makers");
+        }
+    }
+    for (which = 0; which < 2; which++) {
+        (void)write(feed[which][1], NEW_PASS "\n" NEW_PASS "\n", 2 * strlen(NEW_PASS) + 2);
+        close(feed[which][1]);
+    }
+    row_loop = R_MAKERS_EXIT;
+    for (which = 0; which < 2; which++) {
+        report[0] = '\0';
+        drain(errs[which][0], report, sizeof(report), 30000);
+        close(errs[which][0]);
+        if (waitpid(makers[which], &status, 0) != makers[which] || !WIFEXITED(status)) {
+            return fail_said(R_MAKERS_EXIT, "one of two concurrent makers did not exit normally",
+                             report);
+        }
+        if (WEXITSTATUS(status) != 0) {
+            return fail_said(R_MAKERS_SUCCESS, "one of two concurrent makers failed", report);
+        }
+    }
+    row_loop = ROWS;
+
+    return 0;
+}
+
+/**
+ * Check two account makers run at once: both succeed, with two different
+ * uids, each name once, and a password each. Returns 0, or 1 after printing
+ * the failure.
+ */
+static int check_two_makers(void)
+{
+    char after[4096];
+    char field[256];
+    unsigned long first_uid;
+    unsigned long second_uid;
+
+    restore_databases();
+    if (run_two_makers() != 0) {
+        return 1;
+    }
+    if (slurp(ETC_PASSWD, after, sizeof(after)) < 0) {
+        return fail(R_MAKERS_READ, "cannot read the passwd file after the two makers");
+    }
+    if (field_of(after, NEW_USER, 2, field, sizeof(field)) != 0) {
+        return fail(R_MAKERS_FIRST, "the first of two concurrent accounts is not there");
+    }
+    first_uid = strtoul(field, NULL, 10);
+    if (field_of(after, HALF_USER, 2, field, sizeof(field)) != 0) {
+        return fail(R_MAKERS_SECOND, "the second of two concurrent accounts is not there");
+    }
+    second_uid = strtoul(field, NULL, 10);
+    if (first_uid == second_uid) {
+        return fail(R_MAKERS_UIDS, "two concurrent runs handed out the same uid");
+    }
+    if (count_lines(after, NEW_USER) != 1 || count_lines(after, HALF_USER) != 1) {
+        return fail(R_MAKERS_ONCE, "a concurrent run appended a name twice");
+    }
+    /* Both have a password. */
+    if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
+        return fail(R_MAKERS_SHADOW_READ, "cannot read the shadow file after the two makers");
+    }
+    if (field_of(after, NEW_USER, 1, field, sizeof(field)) != 0 || strncmp(field, "$6$", 3) != 0 ||
+        field_of(after, HALF_USER, 1, field, sizeof(field)) != 0 || strncmp(field, "$6$", 3) != 0) {
+        return fail(R_MAKERS_PASSWORDS,
+                    "a concurrently created account has no password of its own");
+    }
+    if (present(CRED_LOCK_PATH)) {
+        return fail(R_MAKERS_LOCK, "the two makers left a lock behind");
+    }
 
     return 0;
 }
@@ -960,14 +1339,12 @@ static int check_concurrent(void)
     pid_t maker;
     int status;
     char *made;
-    unsigned long first_uid;
-    unsigned long second_uid;
 
     restore_databases();
 
     /* A password change and an account creation, racing. */
     if (pipe(p_in) != 0 || pipe(p_err) != 0 || pipe(a_in) != 0 || pipe(a_err) != 0) {
-        return fail("could not make the pipes the racing writers report on");
+        return fail(R_RACE_PIPES, "could not make the pipes the racing writers report on");
     }
     writer = fork();
     if (writer == 0) {
@@ -997,7 +1374,7 @@ static int check_concurrent(void)
     close(a_in[0]);
     close(a_err[1]);
     if (writer < 0 || maker < 0) {
-        return fail("could not fork the racing writers");
+        return fail(R_RACE_FORK, "could not fork the racing writers");
     }
     snprintf(script, sizeof(script), "%s\nconcurrent-pw\nconcurrent-pw\n", PROBE_PASS);
     (void)write(p_in[1], script, strlen(script));
@@ -1013,108 +1390,31 @@ static int check_concurrent(void)
     if (waitpid(writer, &status, 0) != writer || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         (void)waitpid(maker, &status, 0);
 
-        return fail_said("the racing password change failed", waiting);
+        return fail_said(R_RACE_PASSWD, "the racing password change failed", waiting);
     }
     if (waitpid(maker, &status, 0) != maker || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail_said("the racing account creation failed", report);
+        return fail_said(R_RACE_ADDUSER, "the racing account creation failed", report);
     }
     /* Both survive. */
     if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
-        return fail("cannot read the shadow file after the race");
+        return fail(R_RACE_READ, "cannot read the shadow file after the race");
     }
     if (field_of(after, PROBE_USER, 1, field, sizeof(field)) != 0) {
-        return fail("the racing password change lost its shadow line");
+        return fail(R_RACE_LINE, "the racing password change lost its shadow line");
     }
     made = crypt("concurrent-pw", field);
     if (!made || strcmp(made, field) != 0) {
-        return fail("the racing password change was lost");
+        return fail(R_RACE_PASSWORD, "the racing password change was lost");
     }
     if (field_of(after, NEW_USER, 1, field, sizeof(field)) != 0 || strncmp(field, "$6$", 3) != 0) {
-        return fail("the racing account creation was lost");
+        return fail(R_RACE_ACCOUNT, "the racing account creation was lost");
     }
     if (present(CRED_LOCK_PATH)) {
-        return fail("the race left a lock behind");
+        return fail(R_RACE_LOCK, "the race left a lock behind");
     }
 
     /* Two account makers at once, which must not agree on a number. */
-    restore_databases();
-    {
-        static const char *const names[2] = {NEW_USER, HALF_USER};
-        int feed[2][2];
-        int errs[2][2];
-        pid_t makers[2];
-        size_t which;
-
-        for (which = 0; which < 2; which++) {
-            if (pipe(feed[which]) != 0 || pipe(errs[which]) != 0) {
-                return fail("could not make the pipes the two makers report on");
-            }
-        }
-        for (which = 0; which < 2; which++) {
-            makers[which] = fork();
-            if (makers[which] == 0) {
-                close(feed[which][1]);
-                close(errs[which][0]);
-                if (dup2(feed[which][0], 0) < 0 || dup2(errs[which][1], 2) < 0) {
-                    _exit(90);
-                }
-                execl(ADDUSER_PATH, "adduser", names[which], (char *)0);
-                _exit(91);
-            }
-        }
-        for (which = 0; which < 2; which++) {
-            close(feed[which][0]);
-            close(errs[which][1]);
-            if (makers[which] < 0) {
-                return fail("could not fork the two account makers");
-            }
-        }
-        for (which = 0; which < 2; which++) {
-            (void)write(feed[which][1], NEW_PASS "\n" NEW_PASS "\n", 2 * strlen(NEW_PASS) + 2);
-            close(feed[which][1]);
-        }
-        for (which = 0; which < 2; which++) {
-            report[0] = '\0';
-            drain(errs[which][0], report, sizeof(report), 30000);
-            close(errs[which][0]);
-            if (waitpid(makers[which], &status, 0) != makers[which] || !WIFEXITED(status)) {
-                return fail_said("one of two concurrent makers did not exit normally", report);
-            }
-            if (WEXITSTATUS(status) != 0) {
-                return fail_said("one of two concurrent makers failed", report);
-            }
-        }
-    }
-    if (slurp(ETC_PASSWD, after, sizeof(after)) < 0) {
-        return fail("cannot read the passwd file after the two makers");
-    }
-    if (field_of(after, NEW_USER, 2, field, sizeof(field)) != 0) {
-        return fail("the first of two concurrent accounts is not there");
-    }
-    first_uid = strtoul(field, NULL, 10);
-    if (field_of(after, HALF_USER, 2, field, sizeof(field)) != 0) {
-        return fail("the second of two concurrent accounts is not there");
-    }
-    second_uid = strtoul(field, NULL, 10);
-    if (first_uid == second_uid) {
-        return fail("two concurrent runs handed out the same uid");
-    }
-    if (count_lines(after, NEW_USER) != 1 || count_lines(after, HALF_USER) != 1) {
-        return fail("a concurrent run appended a name twice");
-    }
-    /* Both have a password. */
-    if (slurp(ETC_SHADOW, after, sizeof(after)) < 0) {
-        return fail("cannot read the shadow file after the two makers");
-    }
-    if (field_of(after, NEW_USER, 1, field, sizeof(field)) != 0 || strncmp(field, "$6$", 3) != 0 ||
-        field_of(after, HALF_USER, 1, field, sizeof(field)) != 0 || strncmp(field, "$6$", 3) != 0) {
-        return fail("a concurrently created account has no password of its own");
-    }
-    if (present(CRED_LOCK_PATH)) {
-        return fail("the two makers left a lock behind");
-    }
-
-    return 0;
+    return check_two_makers();
 }
 
 /**
@@ -1136,8 +1436,9 @@ static int check_consistent(void)
     if (slurp(ETC_PASSWD, passwd_text, sizeof(passwd_text)) < 0 ||
         slurp(ETC_GROUP, group_text, sizeof(group_text)) < 0 ||
         slurp(ETC_SHADOW, shadow_text, sizeof(shadow_text)) < 0) {
-        return fail("cannot read the databases for the closing check");
+        return fail(R_CONSISTENT_READ, "cannot read the databases for the closing check");
     }
+    row_loop = R_CONSISTENT_SHADOW;
     line = passwd_text;
     while (*line) {
         const char *end = strchr(line, '\n');
@@ -1151,18 +1452,18 @@ static int check_consistent(void)
             memcpy(name, line, (size_t)(colon - line));
             name[colon - line] = '\0';
             if (!names_line(shadow_text, name)) {
-                return fail("an account in passwd has no shadow line");
+                return fail(R_CONSISTENT_SHADOW, "an account in passwd has no shadow line");
             }
             if (count_lines(passwd_text, name) != 1 || count_lines(shadow_text, name) != 1 ||
                 count_lines(group_text, name) > 1) {
-                return fail("a name appears twice in a database");
+                return fail(R_CONSISTENT_ONCE, "a name appears twice in a database");
             }
             if (field_of(passwd_text, name, 3, gid, sizeof(gid)) != 0) {
-                return fail("an account in passwd has no gid field");
+                return fail(R_CONSISTENT_GID, "an account in passwd has no gid field");
             }
             gr = getgrgid((gid_t)strtoul(gid, NULL, 10));
             if (!gr) {
-                return fail("an account names a gid no group has");
+                return fail(R_CONSISTENT_GROUP, "an account names a gid no group has");
             }
         }
         if (!end) {
@@ -1170,6 +1471,7 @@ static int check_consistent(void)
         }
         line = end + 1;
     }
+    row_loop = ROWS;
 
     return 0;
 }
@@ -1183,15 +1485,12 @@ int main(int argc, char **argv)
     int rc;
 
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.addusermusl"));
     if (getuid() != 0) {
-        printf("ADDUSERMUSL FAIL (the probe must run as root)\n");
-
-        return 1;
+        return fail(R_ROOT, "the probe must run as root");
     }
     if (snapshot_databases() != 0) {
-        printf("ADDUSERMUSL FAIL (cannot read the databases)\n");
-
-        return 1;
+        return fail(R_SNAPSHOT, "cannot read the databases");
     }
     rc = check_created();
     if (rc == 0) {
@@ -1214,6 +1513,7 @@ int main(int argc, char **argv)
     }
     restore_databases();
     if (rc == 0) {
+        rows_report(ROWS, NULL);
         printf("ADDUSERMUSL OK\n");
     }
 

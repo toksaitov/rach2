@@ -46,6 +46,15 @@
  *
  * Prints `MAPMUSL OK` and exits 0 on success, and prints
  * `MAPMUSL FAIL (detail)` and exits 1 otherwise.
+ *
+ * The probe writes etude's report records (probe_report.h) for the case
+ * ETUDE_CASE names, an assertion for each check, as `assertion_id` lists
+ * them; a failed check fails its assertion and leaves those after it not
+ * run. The branch of the group `arch` is `x86-64`, with the assertions from
+ * `wide-file` to `huge-move-munmap`, or `i686`, with none of its own; that
+ * of `root` is `ext2`, with those from `ext2-mmap` to `ext2-reach-file`, or
+ * `krffs`, with `krffs-enodev` and `krffs-readonly`, by the type of /tmp.
+ * The child that checks its segments writes none.
  */
 
 #define _GNU_SOURCE
@@ -64,6 +73,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 #define FILE_PATH "/tmp/mapmusl"
 #define SHM_PATH  "/dev/shm/mapmusl"
@@ -95,10 +107,167 @@ static unsigned char seg_data[2 * PAGE] __attribute__((aligned(PAGE))) = {
 static const unsigned char seg_ro[2 * PAGE] __attribute__((aligned(PAGE))) = {
     [0] = 'r', [PAGE - 1] = 'r', [PAGE] = 'o', [2 * PAGE - 1] = 'o'};
 
-/** Report one failed check with errno and return 1, the failure status. */
+/* The assertions, a check each, in the order the program makes them, with
+ * the alternatives of `root` one after the other. */
+static const char *const assertion_id[] = {"private-file",
+                                           "private-mmap",
+                                           "private-bytes",
+                                           "private-store-stays",
+                                           "private-fork",
+                                           "private-munmap",
+                                           "private-offset",
+                                           "shared-anon-mmap",
+                                           "shared-anon-child",
+                                           "shm-file",
+                                           "shm-mmap",
+                                           "shm-child",
+                                           "shm-read",
+                                           "root-file",
+                                           "ext2-mmap",
+                                           "ext2-child",
+                                           "ext2-read",
+                                           "ext2-write",
+                                           "ext2-msync",
+                                           "ext2-reach-file",
+                                           "krffs-enodev",
+                                           "krffs-readonly",
+                                           "trunc-file",
+                                           "trunc-mmap",
+                                           "trunc-freed",
+#if defined __x86_64__
+                                           "wide-file",
+                                           "wide-mmap",
+                                           "wide-first-page",
+                                           "wide-last-page",
+                                           "wide-eoverflow",
+                                           "wide-less-one",
+                                           "huge-mmap",
+                                           "huge-last-page",
+                                           "huge-mprotect-reach",
+                                           "huge-mprotect",
+                                           "huge-getrusage",
+                                           "huge-shrink-child",
+                                           "huge-shrink",
+                                           "huge-shrink-cut",
+                                           "huge-munmap",
+                                           "huge-move-mmap",
+                                           "huge-move",
+                                           "huge-move-munmap",
+#endif
+                                           "ro-file",
+                                           "ro-mmap",
+                                           "ro-shared-eacces",
+                                           "ro-private-mprotect",
+                                           "ro-private-store",
+                                           "offset-anon",
+                                           "offset-file",
+                                           "offset-eoverflow",
+                                           "offset-mmap",
+                                           "offset-sigsegv",
+                                           "remap-mmap",
+                                           "remap-blocker",
+                                           "remap-no-grow",
+                                           "remap-move",
+                                           "remap-shrink",
+                                           "remap-shrink-kept",
+                                           "remap-shrink-cut",
+                                           "remap-wrap-einval",
+                                           "advise-mmap",
+                                           "dontneed",
+                                           "cold",
+                                           "dontneed-locked",
+                                           "advice-einval",
+                                           "madvise-zero-einval",
+                                           "msync-zero-einval",
+                                           "forced-mmap",
+                                           "forced-fork-mprotect",
+                                           "forced-proc-mem",
+                                           "forced-read-only",
+                                           "limit-mmap",
+                                           "limit-size",
+                                           "limit-set",
+                                           "limit-restore",
+                                           "limit-shrink",
+                                           "exec-segments",
+                                           "exec-copy",
+                                           "exec-unlinked-segments"};
+
+#define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
+
+/* The index in `assertion_id` of the next assertion to report, the rows of
+ * the alternative of `root` not taken, from `skip_from` to `skip_to`, and
+ * whether this process writes the report, which the parent alone does. */
+static unsigned int assertion_at, skip_from, skip_to;
+static int reporting;
+
+/** The index of the assertion `id` in `assertion_id`. */
+static unsigned int assertion_index(const char *id)
+{
+    unsigned int i = 0;
+
+    while (i < ASSERTIONS && strcmp(assertion_id[i], id) != 0) {
+        i++;
+    }
+    return i;
+}
+
+/**
+ * Begin the report, give the branches of `arch` and of `root`, the latter by
+ * the type of the file system of /tmp, and set the rows of the alternative
+ * of `root` not taken aside.
+ */
+static void report_start(void)
+{
+    struct statfs sfs;
+    int ext2 = statfs("/tmp", &sfs) == 0 && sfs.f_type == EXT2_MAGIC;
+
+    report_begin(report_case(environ, "guest.default.mapmusl"));
+    reporting = 1;
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
+    report_branch("root", ext2 ? "ext2" : "krffs");
+    skip_from = assertion_index(ext2 ? "krffs-enodev" : "ext2-mmap");
+    skip_to = assertion_index(ext2 ? "trunc-file" : "krffs-enodev");
+}
+
+/** The next assertion to report. */
+static const char *row_next(void)
+{
+    if (assertion_at == skip_from) {
+        assertion_at = skip_to;
+    }
+    return assertion_id[assertion_at++];
+}
+
+/** Report that the next assertion held. */
+static void row_held(void)
+{
+    report_pass(row_next());
+}
+
+/** Report that the next assertion failed for `why`, that those after it
+ * were not run, and the report's end. */
+static void row_stop(const char *why)
+{
+    report_fail(row_next(), why);
+    while (assertion_at < ASSERTIONS) {
+        report_notrun(row_next(), "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report one failed check with errno, end the report at the assertion that
+ * `what` fails when this process writes it, and return 1, the failure
+ * status. */
 static int fail(const char *what)
 {
     printf("MAPMUSL FAIL (%s: errno %d)\n", what, errno);
+    if (reporting) {
+        row_stop(what);
+    }
     return 1;
 }
 
@@ -129,20 +298,24 @@ static int private_file(void)
     if (fd < 0 || write(fd, block, sizeof(block)) != (ssize_t)sizeof(block)) {
         return fail("the file");
     }
+    row_held();
     m = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
     if (m == MAP_FAILED) {
         return fail("mmap MAP_PRIVATE of a file");
     }
+    row_held();
     close(fd);
     if (m[0] != 'a' || m[PAGE - 1] != 'a' || m[PAGE] != 'b' || m[PAGE + 99] != 'b' ||
         m[PAGE + 100] != 0 || m[2 * PAGE - 1] != 0) {
         return fail("the mapping did not hold the file's bytes");
     }
+    row_held();
     m[0] = 'X';
     fd = open(FILE_PATH, O_RDONLY);
     if (fd < 0 || read(fd, check, 1) != 1 || check[0] != 'a') {
         return fail("a store in a private mapping reached the file");
     }
+    row_held();
     close(fd);
     pid = fork();
     if (pid == 0) {
@@ -154,13 +327,16 @@ static int private_file(void)
     if (!wait_ok(pid) || m[1] != 'a') {
         return fail("fork and a private file mapping");
     }
+    row_held();
     if (munmap(m, 2 * PAGE) != 0) {
         return fail("munmap");
     }
+    row_held();
     m = mmap(NULL, PAGE, PROT_READ, MAP_PRIVATE, open(FILE_PATH, O_RDONLY), PAGE);
     if (m == MAP_FAILED || m[0] != 'b') {
         return fail("a mapping from an offset");
     }
+    row_held();
     munmap(m, PAGE);
     unlink(FILE_PATH);
     return 0;
@@ -183,6 +359,7 @@ static int shared(void)
     if (anon == MAP_FAILED) {
         return fail("mmap MAP_SHARED|MAP_ANONYMOUS");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         anon[10] = 's';
@@ -191,16 +368,19 @@ static int shared(void)
     if (!wait_ok(pid) || anon[10] != 's') {
         return fail("a child's store in a shared anonymous mapping");
     }
+    row_held();
     munmap(anon, PAGE);
 
     fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
     if (fd < 0 || ftruncate(fd, PAGE) != 0) {
         return fail("a file in /dev/shm");
     }
+    row_held();
     m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (m == MAP_FAILED) {
         return fail("mmap MAP_SHARED of a file in /dev/shm");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         m[5] = 'c';
@@ -209,10 +389,12 @@ static int shared(void)
     if (!wait_ok(pid) || m[5] != 'c') {
         return fail("a child's store in a shared file mapping");
     }
+    row_held();
     m[6] = 'd';
     if (pread(fd, check, 2, 5) != 2 || check[0] != 'c' || check[1] != 'd') {
         return fail("a store in a shared mapping did not reach read");
     }
+    row_held();
     munmap(m, PAGE);
     close(fd);
     unlink(SHM_PATH);
@@ -234,15 +416,18 @@ static int truncated_shared(void)
     if (fd < 0 || ftruncate(fd, PAGE) != 0) {
         return fail("a file in /dev/shm to truncate");
     }
+    row_held();
     m = mmap(NULL, PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (m == MAP_FAILED) {
         return fail("mmap of a file in /dev/shm to truncate");
     }
+    row_held();
     m[0] = 'o';
     if (ftruncate(fd, 0) != 0 || ftruncate(fd, PAGE) != 0 || pwrite(fd, "n", 1, 0) != 1 ||
         m[0] != 'n') {
         return fail("a shared mapping kept a page its file's truncation freed");
     }
+    row_held();
     munmap(m, PAGE);
     close(fd);
     unlink(SHM_PATH);
@@ -271,28 +456,34 @@ static int truncated_wide(void)
     if (fd < 0 || ftruncate(fd, (off_t)(four + PAGE)) != 0) {
         return fail("a file in /dev/shm of 4 GiB and a page");
     }
+    row_held();
     m = mmap(NULL, four + PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (m == MAP_FAILED) {
         return fail("mmap of a file in /dev/shm of 4 GiB and a page");
     }
+    row_held();
     m[0] = 'a';
     m[four] = 'b';
     if (ftruncate(fd, (off_t)four) != 0 || mincore(m, PAGE, &in) != 0 || !(in & 1)) {
         return fail("a truncation to 4 GiB took the mapping's first page out");
     }
+    row_held();
     if (mincore(m + four, PAGE, &in) != 0 || (in & 1)) {
         return fail("a truncation to 4 GiB left the page past it in the mapping");
     }
+    row_held();
     munmap(m, four + PAGE);
     if (mmap(NULL, huge, PROT_READ, MAP_PRIVATE, fd, 0) != MAP_FAILED || errno != EOVERFLOW ||
         mmap(NULL, huge, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0) != MAP_FAILED ||
         errno != EOVERFLOW) {
         return fail("a mapping of a file or of shared memory of 2^32 pages is not EOVERFLOW");
     }
+    row_held();
     m = mmap(NULL, huge - PAGE, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED || munmap(m, huge - PAGE) != 0) {
         return fail("a mapping of shared memory of 2^32 pages less one");
     }
+    row_held();
     close(fd);
     unlink(SHM_PATH);
     return 0;
@@ -336,10 +527,12 @@ static int huge_walks(void)
     if (m == MAP_FAILED) {
         return fail("mmap of 64 TiB");
     }
+    row_held();
     far = m + big - PAGE;
     if (mprotect(far, PAGE, PROT_READ | PROT_WRITE) != 0) {
         return fail("mprotect of the last page of 64 TiB");
     }
+    row_held();
     *far = 'z';
     pid = fork();
     if (pid == 0) {
@@ -353,12 +546,15 @@ static int huge_walks(void)
     if (!died_of_segv(pid)) {
         return fail("mprotect of 64 TiB did not reach its last page");
     }
+    row_held();
     if (mprotect(m, big, PROT_READ) != 0) {
         return fail("mprotect of 64 TiB to one region");
     }
+    row_held();
     if (getrusage(RUSAGE_SELF, &ru) != 0 || ru.ru_maxrss <= 0) {
         return fail("getrusage with 64 TiB mapped");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         (void)*(volatile char *)far;
@@ -371,26 +567,33 @@ static int huge_walks(void)
     if (pid < 0 || waitpid(pid, &status, 0) != pid) {
         return fail("the child that shrinks 64 TiB");
     }
+    row_held();
     if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
         return fail("a shrink of 64 TiB to half was refused");
     }
+    row_held();
     if (!WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
         return fail("a shrink of 64 TiB to half kept its last page");
     }
+    row_held();
     if (munmap(m, big) != 0) {
         return fail("munmap of 64 TiB");
     }
+    row_held();
     m = mmap(NULL, 2 * half, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (m == MAP_FAILED || m[half - PAGE] != 0) {
         return fail("mmap of 64 TiB to move half of");
     }
+    row_held();
     moved = mremap(m, half, half, MREMAP_MAYMOVE | MREMAP_FIXED, m + half);
     if (moved != m + half || mincore(moved + half - PAGE, PAGE, &in) != 0 || !(in & 1)) {
         return fail("a move of 32 TiB did not carry its last page");
     }
+    row_held();
     if (munmap(m + half, half) != 0) {
         return fail("munmap of the 32 TiB moved");
     }
+    row_held();
     return 0;
 }
 #else
@@ -421,6 +624,7 @@ static int readonly_shared(void)
     if (fd < 0 || write(fd, "file", 4) != 4) {
         return fail("a file in /dev/shm for a read-only mapping");
     }
+    row_held();
     close(fd);
     fd = open(SHM_PATH, O_RDONLY);
     ro = mmap(NULL, PAGE, PROT_READ, MAP_SHARED, fd, 0);
@@ -428,16 +632,20 @@ static int readonly_shared(void)
     if (fd < 0 || ro == MAP_FAILED || priv == MAP_FAILED) {
         return fail("mmap of a file opened read-only");
     }
+    row_held();
     if (mprotect(ro, PAGE, PROT_READ | PROT_WRITE) != -1 || errno != EACCES) {
         return fail("mprotect made a read-only file's shared mapping writable");
     }
+    row_held();
     if (mprotect(priv, PAGE, PROT_READ | PROT_WRITE) != 0) {
         return fail("mprotect of a read-only file's private mapping");
     }
+    row_held();
     priv[0] = 'P';
     if (ro[0] != 'f') {
         return fail("a store in a private mapping reached the shared one");
     }
+    row_held();
     munmap(ro, PAGE);
     munmap(priv, PAGE);
     close(fd);
@@ -467,19 +675,23 @@ static int offsets(void)
     if (m == MAP_FAILED) {
         return fail("mmap2 of shared anonymous memory at a page offset of 2^31");
     }
+    row_held();
     m[0] = 'o';
     munmap(m, PAGE);
     fd = open(SHM_PATH, O_RDWR | O_CREAT | O_TRUNC, 0600);
     if (fd < 0) {
         return fail("a file in /dev/shm for the offsets");
     }
+    row_held();
     if (MMAP_PAGES(PAGE, PROT_READ, MAP_SHARED, fd, 0xFFFFFFFFu) != -1 || errno != EOVERFLOW) {
         return fail("mmap2 of a file whose last page is past 32 bits");
     }
+    row_held();
     m = (char *)MMAP_PAGES(PAGE, PROT_READ, MAP_SHARED, fd, 0x80000000u);
     if (m == MAP_FAILED) {
         return fail("mmap2 of a file at a page offset of 2^31");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         _exit(m[0] == 0 ? 0 : 1);
@@ -487,6 +699,7 @@ static int offsets(void)
     if (waitpid(pid, &status, 0) != pid || !WIFSIGNALED(status) || WTERMSIG(status) != SIGSEGV) {
         return fail("a touch of a file in memory past its end was not SIGSEGV");
     }
+    row_held();
     munmap(m, PAGE);
     close(fd);
     unlink(SHM_PATH);
@@ -505,36 +718,44 @@ static int remaps(void)
     if (m == MAP_FAILED) {
         return fail("mmap for mremap");
     }
+    row_held();
     m[0] = 'r';
     blocker =
         mmap(m + PAGE, PAGE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (blocker == MAP_FAILED) {
         return fail("the mapping that blocks growth in place");
     }
+    row_held();
     if (mremap(m, PAGE, 2 * PAGE, 0) != MAP_FAILED || errno != ENOMEM) {
         return fail("mremap without MREMAP_MAYMOVE grew into another mapping");
     }
+    row_held();
     moved = mremap(m, PAGE, 3 * PAGE, MREMAP_MAYMOVE);
     if (moved == MAP_FAILED || moved == m || moved[0] != 'r') {
         return fail("mremap did not move the mapping with its bytes");
     }
+    row_held();
     moved[3 * PAGE - 1] = 'e';
     if (mremap(moved, 3 * PAGE, PAGE, 0) != moved) {
         return fail("mremap did not shrink in place");
     }
+    row_held();
     if (moved[0] != 'r') {
         return fail("the page a shrink kept lost its bytes");
     }
+    row_held();
     cut = mmap(moved + PAGE, 2 * PAGE, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
                -1, 0);
     if (cut != moved + PAGE || cut[2 * PAGE - 1] != 0) {
         return fail("the pages a shrink cut were still mapped");
     }
+    row_held();
     munmap(cut, 2 * PAGE);
     if (mremap(moved, (size_t)-PAGE, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, moved) != MAP_FAILED ||
         errno != EINVAL || moved[0] != 'r') {
         return fail("mremap took an old length that wraps past the end of memory");
     }
+    row_held();
     munmap(blocker, PAGE);
     munmap(moved, PAGE);
     return 0;
@@ -552,28 +773,35 @@ static int advice(void)
     if (m == MAP_FAILED) {
         return fail("mmap for madvise");
     }
+    row_held();
     m[0] = 'z';
     m[PAGE] = 'z';
     if (madvise(m, PAGE, MADV_DONTNEED) != 0 || m[0] != 0 || m[PAGE] != 'z') {
         return fail("MADV_DONTNEED");
     }
+    row_held();
     m[0] = 'z';
     if (madvise(m, PAGE, MADV_COLD) != 0 || m[0] != 'z') {
         return fail("MADV_COLD");
     }
+    row_held();
     if (madvise(m, PAGE, MADV_DONTNEED_LOCKED) != 0 || m[0] != 0 || m[PAGE] != 'z') {
         return fail("MADV_DONTNEED_LOCKED");
     }
+    row_held();
     if (madvise(m, PAGE, 5) != -1 || errno != EINVAL || madvise(m, PAGE, 50) != -1 ||
         errno != EINVAL) {
         return fail("madvise took an advice Linux does not define");
     }
+    row_held();
     if (madvise(m, (size_t)-1, MADV_DONTNEED) != -1 || errno != EINVAL) {
         return fail("madvise took a length that rounds up to 0 for an empty range");
     }
+    row_held();
     if (msync(m, (size_t)-1, MS_SYNC) != -1 || errno != EINVAL) {
         return fail("msync took a length that rounds up to 0 for an empty range");
     }
+    row_held();
     munmap(m, 2 * PAGE);
     return 0;
 }
@@ -605,6 +833,7 @@ static int forced_write(void)
     if (m == MAP_FAILED) {
         return fail("mmap for a forced write");
     }
+    row_held();
     m[0] = 'a';
     pid = fork();
     if (pid == 0) {
@@ -613,10 +842,12 @@ static int forced_write(void)
     if (!wait_ok(pid) || mprotect(m, PAGE, PROT_READ) != 0) {
         return fail("fork and mprotect for a forced write");
     }
+    row_held();
     fd = open("/proc/self/mem", O_RDWR);
     if (fd < 0 || pwrite(fd, "b", 1, (off_t)(unsigned long)m) != 1 || m[0] != 'b') {
         return fail("a write through /proc/self/mem");
     }
+    row_held();
     close(fd);
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_segv;
@@ -626,6 +857,7 @@ static int forced_write(void)
         sigaction(SIGSEGV, &old, NULL);
         return fail("a store reached a read-only page after a write through /proc/self/mem");
     }
+    row_held();
     sigaction(SIGSEGV, &old, NULL);
     munmap(m, PAGE);
     return 0;
@@ -671,23 +903,28 @@ static int remap_limit(void)
     if (m == MAP_FAILED || dest == MAP_FAILED || munmap(dest, PAGE) != 0) {
         return fail("mmap for a fixed mremap that shrinks");
     }
+    row_held();
     m[0] = 'k';
     pages = mapped_pages();
     if (pages < 64 || getrlimit(RLIMIT_AS, &old) != 0) {
         return fail("the process's size");
     }
+    row_held();
     lim.rlim_cur = (pages - 32) * PAGE;
     lim.rlim_max = old.rlim_max;
     if (setrlimit(RLIMIT_AS, &lim) != 0) {
         return fail("setrlimit RLIMIT_AS");
     }
+    row_held();
     moved = mremap(m, 64 * PAGE, PAGE, MREMAP_MAYMOVE | MREMAP_FIXED, dest);
     if (setrlimit(RLIMIT_AS, &old) != 0) {
         return fail("setrlimit RLIMIT_AS back");
     }
+    row_held();
     if (moved != dest || moved[0] != 'k') {
         return fail("a fixed mremap that shrinks was held to its old size");
     }
+    row_held();
     munmap(moved, PAGE);
     return 0;
 }
@@ -703,10 +940,12 @@ static int krffs_shared(int fd, char *m)
     if (m != MAP_FAILED || errno != ENODEV) {
         return fail("a writable shared mapping of a KRFFS file was not ENODEV");
     }
+    row_held();
     m = mmap(NULL, PAGE, PROT_READ, MAP_SHARED, fd, 0);
     if (m == MAP_FAILED || mprotect(m, PAGE, PROT_READ | PROT_WRITE) != -1 || errno != EACCES) {
         return fail("a read-only shared mapping of a KRFFS file was made writable");
     }
+    row_held();
     munmap(m, PAGE);
     return 0;
 }
@@ -725,6 +964,7 @@ static int ext2_shared(int fd, char *m)
     if (m == MAP_FAILED) {
         return fail("mmap MAP_SHARED of a file on the root");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         memcpy(m + PAGE, "kid", 3);
@@ -733,18 +973,22 @@ static int ext2_shared(int fd, char *m)
     if (!wait_ok(pid) || memcmp(m + PAGE, "kid", 3) != 0) {
         return fail("a child's store in a shared mapping of a file on the root");
     }
+    row_held();
     memcpy(m, "root", 4);
     if (pread(fd, buf, 4, 0) != 4 || memcmp(buf, "root", 4) != 0) {
         return fail("a store in a shared mapping of a file on the root did not reach read");
     }
+    row_held();
     m[100] = 'S';
     if (pwrite(fd, "WR", 2, 8) != 2 || memcmp(m + 8, "WR", 2) != 0 || m[100] != 'S') {
         return fail("a write to a file on the root was not seen through its shared mapping, "
                     "or lost a store beside it");
     }
+    row_held();
     if (msync(m, 2 * PAGE, MS_SYNC) != 0) {
         return fail("msync of a shared mapping of a file on the root");
     }
+    row_held();
     munmap(m, 2 * PAGE);
     pid = fork();
     if (pid == 0) {
@@ -758,6 +1002,7 @@ static int ext2_shared(int fd, char *m)
         buf[0] != 'S') {
         return fail("the stores of a shared mapping of a file on the root did not reach it");
     }
+    row_held();
     return 0;
 }
 
@@ -776,6 +1021,7 @@ static int root_shared(void)
     if (fd < 0 || ftruncate(fd, 2 * PAGE) != 0 || fstatfs(fd, &sfs) != 0) {
         return fail("a file on the root for a shared mapping");
     }
+    row_held();
     m = mmap(NULL, 2 * PAGE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     rc = sfs.f_type == EXT2_MAGIC ? ext2_shared(fd, m) : krffs_shared(fd, m);
     close(fd);
@@ -849,6 +1095,7 @@ static int exec_segments(void)
     if (!run_segments("/proc/self/exe", "segments")) {
         return fail("the segments of the program run by execve");
     }
+    row_held();
     in = open("/proc/self/exe", O_RDONLY);
     out = open(EXE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0755);
     while (in >= 0 && out >= 0 && (n = read(in, buf, sizeof(buf))) > 0 &&
@@ -857,11 +1104,13 @@ static int exec_segments(void)
     if (in < 0 || out < 0 || n != 0 || close(out) != 0) {
         return fail("a copy of the program");
     }
+    row_held();
     close(in);
     if (!run_segments(EXE_PATH, "unlinked")) {
         unlink(EXE_PATH);
         return fail("the segments of a program whose file was renamed and unlinked");
     }
+    row_held();
     return 0;
 }
 
@@ -875,11 +1124,13 @@ int main(int argc, char **argv)
     if (probe_words() == 1) {
         return segments();
     }
+    report_start();
     if (private_file() || shared() || root_shared() || truncated_shared() || truncated_wide() ||
         huge_walks() || readonly_shared() || offsets() || remaps() || advice() || forced_write() ||
         remap_limit() || exec_segments()) {
         return 1;
     }
+    report_end();
     printf("MAPMUSL OK\n");
     return 0;
 }

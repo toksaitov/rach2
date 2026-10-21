@@ -39,6 +39,10 @@
  * (detail: errno N)" and exits 1 at the first failure. Ids 1000 and 65534 are
  * the NEW of each when a native run gives `ids=OLD:NEW,...`
  * (tests/native/Readme.md), since 65534 is the machine's `nobody`.
+ *
+ * It writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run.
  */
 
 #define _GNU_SOURCE
@@ -59,6 +63,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 #define SOCK_PATH  "/tmp/unixmusl.sock"
 #define DGRAM_PATH "/tmp/unixmusl.dg"
@@ -69,10 +76,138 @@
 #define USER_ID   ((unsigned)probe_id(1000))
 #define NOBODY_ID ((unsigned)probe_id(65534))
 
-/** Report one failed check with errno and return 1, the failure status. */
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {"stream-pair",
+                                           "stream-one-way",
+                                           "stream-other-way",
+                                           "stream-eof",
+                                           "stream-epipe",
+                                           "stream-shutdown",
+                                           "stream-shut-eof",
+                                           "stream-shut-other-way",
+                                           "dgram-pair",
+                                           "dgram-send",
+                                           "dgram-boundary",
+                                           "dgram-send-long",
+                                           "dgram-msg-trunc",
+                                           "seqpacket-pair",
+                                           "seqpacket-boundary",
+                                           "seqpacket-eof",
+                                           "rights-setup",
+                                           "rights-send",
+                                           "rights-child-write",
+                                           "rights-child-exit",
+                                           "creds-pair",
+                                           "creds-child-ids",
+                                           "creds-peercred",
+                                           "creds-child-byte",
+                                           "creds-scm",
+                                           "creds-values",
+                                           "thread-creds",
+                                           "path-listen",
+                                           "path-socket-file",
+                                           "path-eaddrinuse",
+                                           "path-connect",
+                                           "path-accept",
+                                           "path-sockname",
+                                           "path-peername",
+                                           "path-data",
+                                           "path-econnrefused",
+                                           "abstract-connect",
+                                           "abstract-data",
+                                           "abstract-gone",
+                                           "accept-listener",
+                                           "accept-efault",
+                                           "shut-rd-listener",
+                                           "shut-rd-queued",
+                                           "shut-rd-einval",
+                                           "shut-rd-econnrefused",
+                                           "backlog-zero",
+                                           "backlog-asleep",
+                                           "backlog-grows",
+                                           "peer-pair",
+                                           "peer-eperm",
+                                           "peer-reconnect",
+                                           "peer-reconnect-drops",
+                                           "peer-econnreset",
+                                           "peer-disconnect",
+                                           "peer-disconnect-drops",
+                                           "full-pair",
+                                           "full-eagain",
+                                           "full-asleep",
+                                           "full-epipe",
+                                           "chain-build",
+                                           "chain-closed",
+                                           "names-bind",
+                                           "names-sendto",
+                                           "names-recvfrom",
+                                           "nonblock-pair",
+                                           "nonblock-eagain",
+                                           "poll-empty",
+                                           "poll-readable",
+                                           "fill-pair",
+                                           "fill-eagain",
+                                           "fill-not-writable",
+                                           "shut-wr-writable",
+                                           "shut-wr-epipe",
+                                           "recvfrom-pair",
+                                           "recvfrom-efault",
+                                           "recvfrom-kept",
+                                           "flight-setup",
+                                           "flight-send",
+                                           "flight-move-write",
+                                           "flight-close-unlink",
+                                           "flight-refill",
+                                           "flight-recv",
+                                           "flight-size",
+                                           "flight-bytes",
+                                           "short-rights-setup",
+                                           "short-rights-length",
+                                           "short-creds-setup",
+                                           "short-creds-length"};
+
+#define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
+
+/* The index in `assertion_id` of the next assertion to report. */
+static unsigned int assertion_at;
+
+/** Report that the next assertion held. */
+static void row_held(void)
+{
+    report_pass(assertion_id[assertion_at++]);
+}
+
+/**
+ * Report as held the rows of a child's steps before the step `code` it
+ * failed, where step `first` is the first of `rows` steps that are rows; any
+ * other failure fails the first row, so none is held.
+ */
+static void held_before(int code, int first, int rows)
+{
+    int i;
+
+    for (i = first; code >= first && code < first + rows && i < code; i++) {
+        row_held();
+    }
+}
+
+/** Report that the next assertion failed for `why`, that those after it
+ * were not run, and the report's end. */
+static void row_stop(const char *why)
+{
+    report_fail(assertion_id[assertion_at++], why);
+    while (assertion_at < ASSERTIONS) {
+        report_notrun(assertion_id[assertion_at++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report one failed check with errno, end the report at the assertion that
+ * `what` fails, and return 1, the failure status. */
 static int fail(const char *what)
 {
     printf("UNIXMUSL FAIL (%s: errno %d)\n", what, errno);
+    row_stop(what);
     return 1;
 }
 
@@ -162,32 +297,40 @@ static int stream_pair(void)
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
         return fail("socketpair stream");
     }
+    row_held();
     if (write(sv[0], "hello", 5) != 5 || read(sv[1], buf, sizeof(buf)) != 5 ||
         memcmp(buf, "hello", 5) != 0) {
         return fail("stream one way");
     }
+    row_held();
     if (write(sv[1], "back", 4) != 4 || read(sv[0], buf, sizeof(buf)) != 4 ||
         memcmp(buf, "back", 4) != 0) {
         return fail("stream the other way");
     }
+    row_held();
     close(sv[1]);
     if (read(sv[0], buf, sizeof(buf)) != 0) {
         return fail("no end of input after the peer closed");
     }
+    row_held();
     if (write(sv[0], "x", 1) != -1 || errno != EPIPE) {
         return fail("a write after the peer closed was not EPIPE");
     }
+    row_held();
     close(sv[0]);
 
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || shutdown(sv[0], SHUT_WR) != 0) {
         return fail("shutdown");
     }
+    row_held();
     if (read(sv[1], buf, sizeof(buf)) != 0) {
         return fail("no end of input after SHUT_WR");
     }
+    row_held();
     if (write(sv[1], "r", 1) != 1 || read(sv[0], buf, sizeof(buf)) != 1) {
         return fail("the other direction after SHUT_WR");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -208,16 +351,20 @@ static int message_pairs(void)
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
         return fail("socketpair dgram");
     }
+    row_held();
     if (send(sv[0], "one", 3, 0) != 3 || send(sv[0], "second", 6, 0) != 6) {
         return fail("dgram send");
     }
+    row_held();
     if (recv(sv[1], buf, 2, 0) != 2 || recv(sv[1], buf, sizeof(buf), 0) != 6 ||
         memcmp(buf, "second", 6) != 0) {
         return fail("a datagram's boundary");
     }
+    row_held();
     if (send(sv[0], "abcdef", 6, 0) != 6) {
         return fail("dgram send 2");
     }
+    row_held();
     memset(&msg, 0, sizeof(msg));
     iov.iov_base = buf;
     iov.iov_len = 3;
@@ -226,20 +373,24 @@ static int message_pairs(void)
     if (recvmsg(sv[1], &msg, 0) != 3 || !(msg.msg_flags & MSG_TRUNC)) {
         return fail("MSG_TRUNC");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
 
     if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
         return fail("socketpair seqpacket");
     }
+    row_held();
     if (send(sv[0], "ab", 2, 0) != 2 || send(sv[0], "cde", 3, 0) != 3 ||
         recv(sv[1], buf, sizeof(buf), 0) != 2 || recv(sv[1], buf, sizeof(buf), 0) != 3) {
         return fail("a packet's boundary");
     }
+    row_held();
     close(sv[0]);
     if (recv(sv[1], buf, sizeof(buf), 0) != 0) {
         return fail("no end of input on a packet socket");
     }
+    row_held();
     close(sv[1]);
     return 0;
 }
@@ -293,6 +444,7 @@ static int creds(void)
         setsockopt(sv[0], SOL_SOCKET, SO_PASSCRED, &on, sizeof(on)) != 0) {
         return fail("the pair for credentials");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         close(sv[0]);
@@ -309,18 +461,24 @@ static int creds(void)
     n = pid < 0 ? -1 : (int)recvmsg(sv[0], &msg, 0);
     if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
+        held_before(pid > 0 && WIFEXITED(status) ? WEXITSTATUS(status) : 0, 2, 3);
         return fail(pid > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 3
                         ? "the child's SO_PEERCRED did not report the pair's creator"
                         : "the child of other ids");
     }
+    row_held();
+    row_held();
+    row_held();
     c = CMSG_FIRSTHDR(&msg);
     if (n != 1 || !c || c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_CREDENTIALS) {
         return fail("no SCM_CREDENTIALS with the child's byte");
     }
+    row_held();
     memcpy(&cr, CMSG_DATA(c), sizeof(cr));
     if (cr.pid != pid || cr.uid != USER_ID || cr.gid != USER_ID) {
         return fail("the SCM_CREDENTIALS values are not the sender's");
     }
+    row_held();
     close(sv[0]);
     return 0;
 }
@@ -340,6 +498,7 @@ static int rights_and_creds(void)
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || pipe(p) != 0) {
         return fail("setup for SCM_RIGHTS");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         int fd;
@@ -354,13 +513,16 @@ static int rights_and_creds(void)
     if (send_fd(sv[0], p[1]) != 0) {
         return fail("sendmsg SCM_RIGHTS");
     }
+    row_held();
     close(p[1]);
     if (read(p[0], buf, sizeof(buf)) != 3 || memcmp(buf, "via", 3) != 0) {
         return fail("the child did not write through the descriptor it received");
     }
+    row_held();
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the receiving child");
     }
+    row_held();
     close(p[0]);
     close(sv[0]);
     return creds();
@@ -429,6 +591,7 @@ static int thread_creds(void)
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("a thread's SCM_CREDENTIALS naming its process was refused");
     }
+    row_held();
     return 0;
 }
 
@@ -452,36 +615,44 @@ static int named(void)
     if (l < 0 || bind(l, (struct sockaddr *)&a, alen) != 0 || listen(l, 4) != 0) {
         return fail("bind and listen on a path");
     }
+    row_held();
     if (stat(SOCK_PATH, &st) != 0 || !S_ISSOCK(st.st_mode)) {
         return fail("bind made no socket file");
     }
+    row_held();
     extra = socket(AF_UNIX, SOCK_STREAM, 0);
     if (bind(extra, (struct sockaddr *)&a, alen) != -1 || errno != EADDRINUSE) {
         return fail("a second bind of the path was not EADDRINUSE");
     }
+    row_held();
     close(extra);
     c = socket(AF_UNIX, SOCK_STREAM, 0);
     if (c < 0 || connect(c, (struct sockaddr *)&a, alen) != 0) {
         return fail("connect to the path");
     }
+    row_held();
     glen = sizeof(got);
     s = accept(l, (struct sockaddr *)&got, &glen);
     if (s < 0 || glen != offsetof(struct sockaddr_un, sun_path)) {
         return fail("accept, or the unnamed client's address");
     }
+    row_held();
     glen = sizeof(got);
     if (getsockname(s, (struct sockaddr *)&got, &glen) != 0 ||
         strcmp(got.sun_path, SOCK_PATH) != 0) {
         return fail("getsockname of the accepted socket");
     }
+    row_held();
     glen = sizeof(got);
     if (getpeername(c, (struct sockaddr *)&got, &glen) != 0 ||
         strcmp(got.sun_path, SOCK_PATH) != 0) {
         return fail("getpeername of the client");
     }
+    row_held();
     if (write(c, "ping", 4) != 4 || read(s, buf, sizeof(buf)) != 4) {
         return fail("data over the named connection");
     }
+    row_held();
     close(s);
     close(c);
     close(l);
@@ -489,6 +660,7 @@ static int named(void)
     if (connect(c, (struct sockaddr *)&a, alen) != -1 || errno != ECONNREFUSED) {
         return fail("a connect to a socket file with no listener was not ECONNREFUSED");
     }
+    row_held();
     close(c);
     unlink(SOCK_PATH);
 
@@ -502,10 +674,12 @@ static int named(void)
         connect(c, (struct sockaddr *)&a, alen) != 0) {
         return fail("an abstract name");
     }
+    row_held();
     s = accept(l, NULL, NULL);
     if (s < 0 || write(c, "a", 1) != 1 || read(s, buf, 1) != 1) {
         return fail("data over the abstract connection");
     }
+    row_held();
     close(s);
     close(c);
     close(l);
@@ -513,6 +687,7 @@ static int named(void)
     if (connect(c, (struct sockaddr *)&a, alen) != -1 || errno != ECONNREFUSED) {
         return fail("an abstract name outlived its socket");
     }
+    row_held();
     close(c);
     return 0;
 }
@@ -557,27 +732,33 @@ static int listening(void)
     if (abstract_pair("unixmusl.acc", &l, &c) != 0) {
         return fail("a listener for accept");
     }
+    row_held();
     if (accept(l, (struct sockaddr *)&got, NULL) != -1 || errno != EFAULT) {
         return fail("an accept with an address and no length was not EFAULT");
     }
+    row_held();
     close(c);
     close(l);
 
     if (abstract_pair("unixmusl.shut", &l, &c) != 0 || shutdown(l, SHUT_RD) != 0) {
         return fail("a listener shut down for reading");
     }
+    row_held();
     s = accept(l, NULL, NULL);
     if (s < 0) {
         return fail("the connection queued before SHUT_RD was not accepted");
     }
+    row_held();
     if (accept(l, NULL, NULL) != -1 || errno != EINVAL) {
         return fail("an accept with none queued after SHUT_RD was not EINVAL");
     }
+    row_held();
     glen = abstract_addr(&got, "unixmusl.shut");
     late = socket(AF_UNIX, SOCK_STREAM, 0);
     if (connect(late, (struct sockaddr *)&got, glen) != -1 || errno != ECONNREFUSED) {
         return fail("a connect to a listener shut down for reading was not ECONNREFUSED");
     }
+    row_held();
     close(late);
     close(s);
     close(c);
@@ -686,6 +867,7 @@ static int backlog_growth(void)
         connect(c, (struct sockaddr *)&a, alen) != 0) {
         return fail("a listener with a backlog of 0");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         struct sigaction sa;
@@ -704,10 +886,12 @@ static int backlog_growth(void)
         }
         return fail("the connect waiting for room was never seen asleep");
     }
+    row_held();
     if (listen(l, 10) != 0 || reap_running(pid, &status) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
         return fail("a larger backlog did not let a waiting connect finish");
     }
+    row_held();
     close(c);
     close(l);
     return 0;
@@ -731,21 +915,26 @@ static int datagram_peers(void)
         bind(sv[0], (struct sockaddr *)&a, alen) != 0) {
         return fail("a named datagram pair");
     }
+    row_held();
     other = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (connect(other, (struct sockaddr *)&a, alen) != -1 || errno != EPERM) {
         return fail("a connect to a datagram socket connected elsewhere was not EPERM");
     }
+    row_held();
     alen = abstract_addr(&a, "unixmusl.other");
     if (bind(other, (struct sockaddr *)&a, alen) != 0 || send(sv[0], "old", 3, 0) != 3 ||
         connect(sv[1], (struct sockaddr *)&a, alen) != 0) {
         return fail("a datagram socket connected to another peer");
     }
+    row_held();
     if (recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT) != -1 || errno != EAGAIN) {
         return fail("a reconnected datagram socket kept its old peer's message");
     }
+    row_held();
     if (recv(sv[0], buf, sizeof(buf), MSG_DONTWAIT) != -1 || errno != ECONNRESET) {
         return fail("the peer left with a message lost was not ECONNRESET");
     }
+    row_held();
     close(other);
     close(sv[0]);
     close(sv[1]);
@@ -756,9 +945,11 @@ static int datagram_peers(void)
         connect(sv[1], (struct sockaddr *)&a, sizeof(a.sun_family)) != 0) {
         return fail("a datagram socket disconnected with AF_UNSPEC");
     }
+    row_held();
     if (recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT) != -1 || errno != EAGAIN) {
         return fail("a disconnected datagram socket kept its old peer's message");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -781,11 +972,13 @@ static int full_receiver_shut(void)
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
         return fail("a datagram pair to fill");
     }
+    row_held();
     while (send(sv[0], "f", 1, MSG_DONTWAIT) == 1) {
     }
     if (errno != EAGAIN) {
         return fail("a full datagram queue was not EAGAIN");
     }
+    row_held();
     pid = fork();
     if (pid == 0) {
         struct sigaction sa;
@@ -804,10 +997,12 @@ static int full_receiver_shut(void)
         }
         return fail("the send waiting for room was never seen asleep");
     }
+    row_held();
     if (shutdown(sv[1], SHUT_RD) != 0 || reap_running(pid, &status) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
         return fail("a send waiting on a receiver shut down for reading was not EPIPE");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -839,11 +1034,13 @@ static int chain_close(void)
         next[0] = sv[0];
         next[1] = sv[1];
     }
+    row_held();
     close(next[0]);
     close(next[1]);
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
         return fail("a pair after the chain closed");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -870,14 +1067,17 @@ static int datagram_names(void)
         bind(s, (struct sockaddr *)&from, fromlen) != 0) {
         return fail("bind the datagram sockets");
     }
+    row_held();
     if (sendto(s, "dg", 2, 0, (struct sockaddr *)&to, tolen) != 2) {
         return fail("sendto a name");
     }
+    row_held();
     glen = sizeof(got);
     if (recvfrom(r, buf, sizeof(buf), 0, (struct sockaddr *)&got, &glen) != 2 ||
         strcmp(got.sun_path, FROM_PATH) != 0) {
         return fail("recvfrom did not report the sender's name");
     }
+    row_held();
     close(r);
     close(s);
     unlink(DGRAM_PATH);
@@ -899,18 +1099,22 @@ static int waiting(void)
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) != 0) {
         return fail("socketpair with SOCK_NONBLOCK");
     }
+    row_held();
     if (recv(sv[0], buf, 1, 0) != -1 || errno != EAGAIN) {
         return fail("a nonblocking receive on an empty socket was not EAGAIN");
     }
+    row_held();
     pfd.fd = sv[0];
     pfd.events = POLLIN;
     pfd.revents = 0;
     if (poll(&pfd, 1, 0) != 0) {
         return fail("an empty socket polled readable");
     }
+    row_held();
     if (write(sv[1], "p", 1) != 1 || poll(&pfd, 1, 5000) != 1 || !(pfd.revents & POLLIN)) {
         return fail("poll did not report the byte");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -930,23 +1134,28 @@ static int shut_writable(void)
     if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0, sv) != 0) {
         return fail("a stream pair to fill");
     }
+    row_held();
     while (write(sv[0], block, sizeof(block)) > 0) {
     }
     if (errno != EAGAIN) {
         return fail("a full stream was not EAGAIN");
     }
+    row_held();
     pfd.fd = sv[0];
     pfd.events = POLLOUT;
     pfd.revents = 0;
     if (poll(&pfd, 1, 0) != 0) {
         return fail("a full stream polled writable");
     }
+    row_held();
     if (shutdown(sv[0], SHUT_WR) != 0 || poll(&pfd, 1, 1000) != 1 || !(pfd.revents & POLLOUT)) {
         return fail("a stream shut down for writing did not poll writable");
     }
+    row_held();
     if (write(sv[0], "x", 1) != -1 || errno != EPIPE) {
         return fail("a write after SHUT_WR was not EPIPE");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -966,13 +1175,16 @@ static int recvfrom_no_length(void)
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0 || send(sv[0], "nl", 2, 0) != 2) {
         return fail("a datagram pair for a recvfrom with no length");
     }
+    row_held();
     if (recvfrom(sv[1], buf, sizeof(buf), 0, (struct sockaddr *)&got, NULL) != -1 ||
         errno != EFAULT) {
         return fail("a recvfrom with an address and no length was not EFAULT");
     }
+    row_held();
     if (recv(sv[1], buf, sizeof(buf), MSG_DONTWAIT) != 2 || memcmp(buf, "nl", 2) != 0) {
         return fail("a recvfrom refused with EFAULT took the message");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -1017,31 +1229,39 @@ static int moved_in_flight(void)
     if (fd < 0 || wall < 0 || close(wall) != 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
         return fail("setup for a file moved while in flight");
     }
+    row_held();
     if (send_fd(sv[0], fd) != 0) {
         return fail("sendmsg of a file's descriptor");
     }
+    row_held();
     if (write(fd, bytes, sizeof(bytes)) != (ssize_t)sizeof(bytes)) {
         return fail("the write that moves a file in flight");
     }
+    row_held();
     if (close(fd) != 0 || unlink(GROW_PATH) != 0) {
         return fail("the close and unlink of a file in flight");
     }
+    row_held();
     refill = open(REFILL_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     if (refill < 0 || write(refill, other, sizeof(other)) != (ssize_t)sizeof(other) ||
         close(refill) != 0) {
         return fail("a file written after the unlink of a file in flight");
     }
+    row_held();
     got = recv_fd(sv[1]);
     if (got < 0) {
         return fail("recvmsg of a file's descriptor after a move");
     }
+    row_held();
     if (fstat(got, &st) != 0 || st.st_size != GROW_BYTES) {
         return fail("a received descriptor of a moved, unlinked file has another size");
     }
+    row_held();
     if (pread(got, back, sizeof(back), 0) != (ssize_t)sizeof(back) ||
         memcmp(back, bytes, sizeof(back)) != 0) {
         return fail("a received descriptor of a moved, unlinked file reads other bytes");
     }
+    row_held();
     close(got);
     close(sv[0]);
     close(sv[1]);
@@ -1074,6 +1294,7 @@ static int short_control(void)
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || send_fd(sv[0], 1) != 0) {
         return fail("setup for a short control buffer");
     }
+    row_held();
     memset(&msg, 0, sizeof(msg));
     iov.iov_base = &byte;
     iov.iov_len = 1;
@@ -1084,18 +1305,21 @@ static int short_control(void)
     if (recvmsg(sv[1], &msg, 0) != 1 || msg.msg_controllen > sizeof(ctl.buf)) {
         return fail("a control length past the buffer it came in");
     }
+    row_held();
     memcpy(&fd, CMSG_DATA(&ctl.h), sizeof(int));
     close(fd);
     if (setsockopt(sv[1], SOL_SOCKET, SO_PASSCRED, &on, sizeof(on)) != 0 ||
         write(sv[0], &byte, 1) != 1) {
         return fail("setup for a short credentials buffer");
     }
+    row_held();
     msg.msg_control = cred.buf;
     msg.msg_controllen = sizeof(cred.buf);
     if (recvmsg(sv[1], &msg, 0) != 1 || cred.h.cmsg_type != SCM_CREDENTIALS ||
         msg.msg_controllen > sizeof(cred.buf)) {
         return fail("a credentials length past the buffer it came in");
     }
+    row_held();
     close(sv[0]);
     close(sv[1]);
     return 0;
@@ -1104,6 +1328,7 @@ static int short_control(void)
 int main(int argc, char **argv)
 {
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.unixmusl"));
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
@@ -1111,6 +1336,7 @@ int main(int argc, char **argv)
         moved_in_flight() || short_control()) {
         return 1;
     }
+    report_end();
     printf("UNIXMUSL OK\n");
     return 0;
 }

@@ -56,6 +56,12 @@
  *
  * It prints "SCHEDMUSL OK" and exits 0 on success, or prints "SCHEDMUSL FAIL
  * (detail)" and exits 1 at the first failure.
+ *
+ * It writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them; a failed
+ * check fails its assertion and leaves those after it not run. A child's
+ * steps are rows of their own, which the parent reports from the step the
+ * child returns. The new image of --exec-group writes none.
  */
 
 #define _GNU_SOURCE
@@ -75,6 +81,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 /* The user and group the unprivileged rows take, 1000 or its native NEW. */
 #define USER_ID ((unsigned)probe_id(1000))
@@ -105,11 +114,123 @@ static int cpuinfo_ids(cpu_set_t *set)
     return n;
 }
 
-/** Report one failed check and return 1, the probe's failure status. */
+/* The assertions, a check each, in the order the program makes them. */
+static const char *const assertion_id[] = {"gettid-pid",
+                                           "child-gettid",
+                                           "exec-stops",
+                                           "exec-failed-setpgid",
+                                           "exec-new-image-groups",
+                                           "exec-eacces",
+                                           "thread-exec-stops",
+                                           "thread-exec-failed-setpgid",
+                                           "thread-exec-new-image-groups",
+                                           "thread-exec-eacces",
+                                           "other-session-eperm",
+                                           "nice-start",
+                                           "nice-kept",
+                                           "nice-raw",
+                                           "nice-clamped",
+                                           "nice-root-lowers",
+                                           "nice-inherited",
+                                           "nice-group-set",
+                                           "nice-group-lowest",
+                                           "nice-user-raise",
+                                           "nice-user-lower-eacces",
+                                           "nice-user-root-eperm",
+                                           "nice-user-own-user",
+                                           "nice-esrch",
+                                           "nice-which-einval",
+                                           "yield",
+                                           "policy-other",
+                                           "priority-zero",
+                                           "other-accepted",
+                                           "setparam-zero",
+                                           "realtime-eperm",
+                                           "priority-einval",
+                                           "policy-einval",
+                                           "setparam-einval",
+                                           "priority-ranges",
+                                           "range-einval",
+                                           "time-slice",
+                                           "cpuinfo",
+                                           "affinity-cpuinfo",
+                                           "affinity-raw-bytes",
+                                           "affinity-short-einval",
+                                           "affinity-last",
+                                           "affinity-read-back",
+                                           "getcpu-moved",
+                                           "affinity-offline-einval",
+                                           "affinity-all",
+                                           "root-policy-eperm",
+                                           "root-affinity-eperm",
+                                           "sched-esrch",
+                                           "sched-negative-einval",
+                                           "oom-first-zero",
+                                           "oom-mode-owner",
+                                           "oom-write-read-back",
+                                           "oom-inherited",
+                                           "oom-einval",
+                                           "oom-become-user",
+                                           "oom-user-raise-lower",
+                                           "oom-user-floor",
+                                           "oom-user-root-eacces",
+                                           "oom-floor-zero",
+                                           "io-first",
+                                           "io-kept",
+                                           "io-inherited",
+                                           "io-einval",
+                                           "io-user-idle",
+                                           "io-user-realtime-eperm",
+                                           "io-user-root-eperm"};
+
+#define ASSERTIONS (sizeof(assertion_id) / sizeof(assertion_id[0]))
+
+/* The index in `assertion_id` of the next assertion to report. */
+static unsigned int assertion_at;
+
+/** Report that the next assertion held. */
+static void row_held(void)
+{
+    report_pass(assertion_id[assertion_at++]);
+}
+
+/** Report that the next `n` assertions held. */
+static void rows_held(int n)
+{
+    while (n-- > 0) {
+        row_held();
+    }
+}
+
+/**
+ * Report as held the rows of a child's steps before the step `rc` it failed,
+ * where step `first` is the first of `rows` steps that are rows. A step
+ * outside them, such as setup, fails the first row, so none is held.
+ */
+static void held_before(int rc, int first, int rows)
+{
+    if (rc >= first && rc < first + rows) {
+        rows_held(rc - first);
+    }
+}
+
+/** Report that the next assertion failed for `why`, that those after it
+ * were not run, and the report's end. */
+static void row_stop(const char *why)
+{
+    report_fail(assertion_id[assertion_at++], why);
+    while (assertion_at < ASSERTIONS) {
+        report_notrun(assertion_id[assertion_at++], "an earlier check failed");
+    }
+    report_end();
+}
+
+/** Report one failed check, end the report at the assertion that `what`
+ * fails, and return 1, the probe's failure status. */
 static int fail(const char *what)
 {
     printf("SCHEDMUSL FAIL (%s)\n", what);
-
+    row_stop(what);
     return 1;
 }
 
@@ -125,6 +246,7 @@ static int thread_ids(void)
     if (gettid() != getpid()) {
         return fail("gettid is not the process id");
     }
+    row_held();
     child = fork();
     if (child < 0) {
         return fail("fork failed");
@@ -135,6 +257,7 @@ static int thread_ids(void)
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("a child's gettid is not its process id");
     }
+    row_held();
     return 0;
 }
 
@@ -202,6 +325,38 @@ static void *exec_group_thread(void *arg)
 }
 
 /**
+ * Check the parent's setpgid on `child`, stopped after its failed exec, and
+ * then after its exec of the new image, which stops again. Returns 0, or 1
+ * after the failure is printed.
+ */
+static int exec_group_rows(pid_t child)
+{
+    int status;
+
+    if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
+        WSTOPSIG(status) != SIGSTOP) {
+        return fail("the child did not stop after its failed exec");
+    }
+    row_held();
+    if (setpgid(child, child) != 0 || getpgid(child) != child || setpgid(child, getpgrp()) != 0) {
+        return fail("setpgid after a child's failed exec");
+    }
+    row_held();
+    kill(child, SIGCONT);
+    if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
+        WSTOPSIG(status) != SIGSTOP) {
+        return fail("the new image could not set its own or its child's group");
+    }
+    row_held();
+    if (setpgid(child, child) != -1 || errno != EACCES || setpgid(child, getpgrp()) != -1 ||
+        errno != EACCES || getpgid(child) != child) {
+        return fail("setpgid after a child's successful exec was not EACCES");
+    }
+    row_held();
+    return 0;
+}
+
+/**
  * Check the parent's setpgid before and after its child's exec. With
  * `threaded`, a non-leader thread executes the image. Returns 0 on success,
  * or 1 after the failure is printed. All children are reaped before return.
@@ -209,7 +364,7 @@ static void *exec_group_thread(void *arg)
 static int exec_groups(int threaded)
 {
     pid_t child = fork();
-    int status, rc = 0;
+    int rc;
     pthread_t thread;
 
     if (child < 0) {
@@ -231,22 +386,7 @@ static int exec_groups(int threaded)
         }
         exec_group_thread(NULL);
     }
-    if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
-        WSTOPSIG(status) != SIGSTOP) {
-        rc = fail("the child did not stop after its failed exec");
-    } else if (setpgid(child, child) != 0 || getpgid(child) != child ||
-               setpgid(child, getpgrp()) != 0) {
-        rc = fail("setpgid after a child's failed exec");
-    } else {
-        kill(child, SIGCONT);
-        if (waitpid(child, &status, WUNTRACED) != child || !WIFSTOPPED(status) ||
-            WSTOPSIG(status) != SIGSTOP) {
-            rc = fail("the new image could not set its own or its child's group");
-        } else if (setpgid(child, child) != -1 || errno != EACCES ||
-                   setpgid(child, getpgrp()) != -1 || errno != EACCES || getpgid(child) != child) {
-            rc = fail("setpgid after a child's successful exec was not EACCES");
-        }
-    }
+    rc = exec_group_rows(child);
     kill(child, SIGKILL);
     waitpid(child, NULL, 0);
     return rc;
@@ -354,29 +494,42 @@ static int unprivileged(void)
  */
 static int priorities(void)
 {
+    int rc;
+
     errno = 0;
     if (getpriority(PRIO_PROCESS, 0) != 0 || errno != 0) {
         return fail("the nice value does not start at 0");
     }
+    row_held();
     if (setpriority(PRIO_PROCESS, 0, 5) != 0 || getpriority(PRIO_PROCESS, 0) != 5) {
         return fail("a nice value of 5 was not kept");
     }
+    row_held();
     if (syscall(SYS_getpriority, PRIO_PROCESS, 0) != 15) {
         return fail("the raw getpriority does not return 20 less the nice value");
     }
+    row_held();
     if (setpriority(PRIO_PROCESS, getpid(), 100) != 0 || getpriority(PRIO_PROCESS, 0) != 19) {
         return fail("a nice value past 19 was not clamped to 19");
     }
+    row_held();
     if (setpriority(PRIO_PROCESS, 0, -5) != 0 || getpriority(PRIO_PROCESS, 0) != -5) {
         return fail("root could not lower the nice value");
     }
+    row_held();
     if (in_child(inherited) != 0) {
         return fail("a child did not inherit the nice value");
     }
-    if (in_child(group) != 0) {
+    row_held();
+    rc = in_child(group);
+    held_before(rc, 3, 2);
+    if (rc != 0) {
         return fail("a process group's nice value was not set or read as one");
     }
-    switch (in_child(unprivileged)) {
+    rows_held(2);
+    rc = in_child(unprivileged);
+    held_before(rc, 2, 4);
+    switch (rc) {
     case 0:
         break;
     case 2:
@@ -390,13 +543,16 @@ static int priorities(void)
     default:
         return fail("the unprivileged child did not run");
     }
+    rows_held(4);
     if (getpriority(PRIO_USER, 4242) != -1 || errno != ESRCH ||
         getpriority(PRIO_PROCESS, 999999) != -1 || errno != ESRCH) {
         return fail("a priority of no process was not refused with ESRCH");
     }
+    row_held();
     if (getpriority(3, 0) != -1 || errno != EINVAL) {
         return fail("an unknown which was not refused with EINVAL");
     }
+    row_held();
     return 0;
 }
 
@@ -447,21 +603,26 @@ static int policy_calls(void)
     if (sched_yield() != 0) {
         return fail("sched_yield did not return 0");
     }
+    row_held();
     if (syscall(SYS_sched_getscheduler, 0L) != SCHED_OTHER) {
         return fail("the policy is not SCHED_OTHER");
     }
+    row_held();
     sp.sched_priority = -1;
     if (syscall(SYS_sched_getparam, 0L, &sp) != 0 || sp.sched_priority != 0) {
         return fail("the priority is not 0");
     }
+    row_held();
     if (set_policy(0, SCHED_OTHER, 0) != 0 ||
         set_policy(0, SCHED_OTHER | SCHED_RESET_ON_FORK, 0) != 0) {
         return fail("SCHED_OTHER at priority 0 was refused");
     }
+    row_held();
     sp.sched_priority = 0;
     if (syscall(SYS_sched_setparam, 0L, &sp) != 0) {
         return fail("sched_setparam of priority 0 was refused");
     }
+    row_held();
     return 0;
 }
 
@@ -479,20 +640,24 @@ static int policy_refusals(void)
         set_policy(0, SCHED_RR, 99) != -1 || errno != EPERM) {
         return fail("a real-time policy was not refused with EPERM");
     }
+    row_held();
     if (set_policy(0, SCHED_FIFO, 0) != -1 || errno != EINVAL ||
         set_policy(0, SCHED_OTHER, 10) != -1 || errno != EINVAL ||
         set_policy(0, SCHED_RR, 100) != -1 || errno != EINVAL) {
         return fail("a priority that does not suit its policy was not refused with EINVAL");
     }
+    row_held();
     for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
         if (set_policy(0, refused[i], 0) != -1 || errno != EINVAL) {
             return fail("a policy this kernel does not run was not refused with EINVAL");
         }
     }
+    row_held();
     sp.sched_priority = 5;
     if (syscall(SYS_sched_setparam, 0L, &sp) != -1 || errno != EINVAL) {
         return fail("sched_setparam of priority 5 was not refused with EINVAL");
     }
+    row_held();
     return 0;
 }
 
@@ -510,12 +675,15 @@ static int ranges(void)
         sched_get_priority_max(SCHED_IDLE) != 0 || sched_get_priority_min(SCHED_BATCH) != 0) {
         return fail("a priority range is not Linux's");
     }
+    row_held();
     if (sched_get_priority_max(42) != -1 || errno != EINVAL) {
         return fail("the range of an unknown policy was not refused with EINVAL");
     }
+    row_held();
     if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 10000000L) {
         return fail("the time slice is not one 10 ms tick");
     }
+    row_held();
     return 0;
 }
 
@@ -545,39 +713,48 @@ static int affinity(void)
     if (cpus < 1 || cpus > 64 || last >= 64) {
         return fail("/proc/cpuinfo lists no processor, or one past the 64 the kernel has");
     }
+    row_held();
     mask_bytes = (long)((unsigned)last / (8u * sizeof(long)) + 1u) * (long)sizeof(long);
     memset(&set, 0xFF, sizeof(set));
     if (sched_getaffinity(0, sizeof(set), &set) != 0 || !CPU_EQUAL(&set, &online)) {
         return fail("the affinity is not the processors /proc/cpuinfo lists");
     }
+    row_held();
     if (syscall(SYS_sched_getaffinity, 0L, (long)sizeof(set), &set) != mask_bytes) {
         return fail("the raw sched_getaffinity did not return the bytes its mask takes");
     }
+    row_held();
     if (syscall(SYS_sched_getaffinity, 0L, 3L, &set) != -1 || errno != EINVAL) {
         return fail("an affinity of three bytes was not refused with EINVAL");
     }
+    row_held();
     CPU_ZERO(&set);
     CPU_SET(last, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
         return fail("an affinity of the last processor was refused");
     }
+    row_held();
     memset(&set, 0xFF, sizeof(set));
     if (sched_getaffinity(0, sizeof(set), &set) != 0 || CPU_COUNT(&set) != 1 ||
         !CPU_ISSET(last, &set)) {
         return fail("the affinity set is not the one read back");
     }
+    row_held();
     if (syscall(SYS_getcpu, &cpu, NULL, NULL) != 0 || cpu != (unsigned)last) {
         return fail("the caller did not move to the one processor of its affinity");
     }
+    row_held();
     CPU_ZERO(&set);
     CPU_SET(offline < 0 ? 64 : offline, &set);
     if (sched_setaffinity(0, sizeof(set), &set) != -1 || errno != EINVAL) {
         return fail("an affinity of a processor that is not started was not refused with EINVAL");
     }
+    row_held();
     memset(&set, 0xFF, sizeof(set));
     if (sched_setaffinity(0, sizeof(set), &set) != 0) {
         return fail("an affinity of every processor was refused");
     }
+    row_held();
     return 0;
 }
 
@@ -590,21 +767,27 @@ static int scheduling(void)
 {
     struct timespec slice;
     cpu_set_t set;
+    int rc;
 
     if (policy_calls() != 0 || policy_refusals() != 0 || ranges() != 0 || affinity() != 0) {
         return 1;
     }
-    if (in_child(not_root) != 0) {
+    rc = in_child(not_root);
+    held_before(rc, 2, 2);
+    if (rc != 0) {
         return fail("user 1000 changed the scheduling of root's process");
     }
+    rows_held(2);
     if (syscall(SYS_sched_getscheduler, 999999L) != -1 || errno != ESRCH ||
         sched_rr_get_interval(999999, &slice) != -1 || errno != ESRCH ||
         sched_getaffinity(999999, sizeof(set), &set) != -1 || errno != ESRCH) {
         return fail("a pid of no process was not refused with ESRCH");
     }
+    row_held();
     if (syscall(SYS_sched_getscheduler, -1L) != -1 || errno != EINVAL) {
         return fail("a negative pid was not refused with EINVAL");
     }
+    row_held();
     return 0;
 }
 
@@ -768,14 +951,17 @@ static int oom_score(void)
     if (rc == 0) {
         rc = in_child(user_rows);
     }
+    held_before(rc, 1, 9);
     if (rc != 0) {
         return fail(rc >= 1 && rc <= 9 ? rows[rc - 1] : "an OOM score child did not run");
     }
+    rows_held(9);
     rc = in_child(floor_zero);
     if (rc != 0) {
         return fail(rc == 1 ? "user 1000 lowered its OOM score adjustment below 0"
                             : "the second OOM score child did not run");
     }
+    row_held();
     return 0;
 }
 
@@ -826,24 +1012,33 @@ static int io_unprivileged(void)
  */
 static int io_priorities(void)
 {
+    int rc;
+
     if (syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) != 0) {
         return fail("the first I/O priority is class none, level 0");
     }
+    row_held();
     if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_BE, 3)) != 0 ||
         syscall(SYS_ioprio_get, IOPRIO_WHO_PROCESS, 0) != IOPRIO(IOPRIO_CLASS_BE, 3)) {
         return fail("an I/O priority set and read back");
     }
+    row_held();
     if (in_child(io_inherited) != 0) {
         return fail("a child inherits the I/O priority");
     }
+    row_held();
     if (syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, IOPRIO(IOPRIO_CLASS_BE, 8)) != -1 ||
         errno != EINVAL || syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, 1) != -1 ||
         errno != EINVAL) {
         return fail("a level past 7 and class none with a level are EINVAL");
     }
-    if (in_child(io_unprivileged) != 0) {
+    row_held();
+    rc = in_child(io_unprivileged);
+    held_before(rc, 2, 3);
+    if (rc != 0) {
         return fail("another user's caller and the real-time class or root's process");
     }
+    rows_held(3);
     return 0;
 }
 
@@ -854,15 +1049,18 @@ int main(int argc, char **argv)
     if (argc == 2 && strcmp(argv[1], "--exec-group") == 0) {
         return exec_group_image();
     }
+    report_begin(report_case(environ, "guest.default.schedmusl"));
     if (thread_ids() != 0 || exec_groups(0) != 0 || exec_groups(1) != 0) {
         return 1;
     }
     if (in_child(other_session_group) != 0) {
         return fail("setpgid of a child in another session was not EPERM");
     }
+    row_held();
     if (priorities() != 0 || scheduling() != 0 || oom_score() != 0 || io_priorities() != 0) {
         return 1;
     }
+    report_end();
     printf("SCHEDMUSL OK\n");
 
     return 0;

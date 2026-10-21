@@ -35,6 +35,13 @@
  * mount check forks its own child), so what it changes ends with the child.
  * Prints "NSMUSL OK" on success and "NSMUSL FAIL (detail)" otherwise.
  *
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, an assertion for each check, as `assertion_id` lists them, all at
+ * the end. A child exits with the number of its first failed row plus one,
+ * which the parent takes as that row's failure; the rows before it held, and
+ * those after it did not run. The branch of the group `arch` is `x86-64`,
+ * with `wide-flag-einval`, or `i686`, which has no assertion of its own.
+ *
  * Uid and gid 1000 are the NEW of 1000 when a native run gives
  * `ids=OLD:NEW,...` (tests/native/Readme.md), in the maps it writes and reads
  * back too; the argument is passed on to suidhelper. 65534 is the id outside
@@ -63,6 +70,9 @@
 #include <unistd.h>
 
 #include "../probe_args.h"
+#include "../probe_report.h"
+
+extern char **environ;
 
 /* The key of the System V segment the first IPC namespace has ("NSMU"). */
 #define SHM_KEY 0x4e534d55
@@ -70,16 +80,150 @@
 /* The uid and gid the unprivileged checks take, 1000 or its native NEW. */
 #define NS_USER ((unsigned)probe_id(1000))
 
-/** Report one failed check and return 1, a child's failure status. */
-static int fail(const char *what)
+/* The rows, a check each, in the order the program makes them. */
+enum row {
+    R_SEGMENT,
+#if defined __x86_64__
+    R_WIDE,
+#endif
+    R_UTS_LINK,
+    R_UTS_FIRST,
+    R_UTS_NAME,
+    R_UTS_SETNS,
+    R_PID_KEEP,
+    R_PID_ONE,
+    R_PID_TWO,
+    R_PID_NSPID,
+    R_PID_ROBUST,
+    R_PID_ROBUST_ESRCH,
+    R_PID_KILL_ESRCH,
+    R_PID_LINK,
+    R_PID_INODE,
+    R_PID_FD,
+    R_ORPHAN_PARENT,
+    R_ORPHAN_ADOPT,
+    R_PID_BOTH,
+    R_NET,
+    R_IPC,
+    R_MNT,
+    R_MNT_OUTSIDE,
+    R_MNT_INSIDE,
+    R_SANDBOX_USER,
+    R_SANDBOX,
+    R_USER_BECOME,
+    R_USER_UNMAPPED,
+    R_USER_MAPS,
+    R_USER_IDS,
+    R_USER_BACK,
+    R_USER_ONCE,
+    R_USER_CHROOT,
+    R_USER_KINDS,
+    R_SETID_MAP,
+    R_SETID_EXEC,
+    R_FDINFO_OPEN,
+    R_FDINFO,
+    R_EMPTY_USER,
+    R_EMPTY_HELPER,
+    R_EMPTY_NOTHING,
+    R_EMPTY_TAKES,
+    R_EMPTY_PROC,
+    ROWS
+};
+
+/* The assertion of each row. */
+static const char *const assertion_id[ROWS] = {"segment",
+#if defined __x86_64__
+                                               "wide-flag-einval",
+#endif
+                                               "uts-link-read",
+                                               "uts-first-link",
+                                               "uts-own-hostname",
+                                               "uts-setns-back",
+                                               "pid-caller-keeps-pid",
+                                               "pid-first-is-1",
+                                               "pid-child-is-2",
+                                               "pid-status-one-number",
+                                               "pid-robust-list",
+                                               "pid-robust-list-esrch",
+                                               "pid-kill-esrch",
+                                               "pid-proc-link",
+                                               "pid-proc-inode",
+                                               "pid-own-fd-dir",
+                                               "orphans-parent-exits",
+                                               "orphans-adopted",
+                                               "pid-status-both-numbers",
+                                               "net-unreachable",
+                                               "ipc-no-objects",
+                                               "mount-in-namespace",
+                                               "mount-unseen-outside",
+                                               "mount-seen-inside",
+                                               "sandbox-uid-1000",
+                                               "sandbox-clone",
+                                               "user-uid-1000",
+                                               "user-unmapped-65534",
+                                               "user-write-maps",
+                                               "user-mapped-ids",
+                                               "user-map-reads-back",
+                                               "user-map-once",
+                                               "user-chroot",
+                                               "user-other-kinds",
+                                               "setid-own-map",
+                                               "setid-runs-as-self",
+                                               "fdinfo-open",
+                                               "fdinfo-offset-flags",
+                                               "empty-uid-1000",
+                                               "empty-helper-chroot",
+                                               "empty-root-no-proc",
+                                               "empty-root-takes-nothing",
+                                               "empty-proc-reaches-fd"};
+
+/* The earliest row this process has seen fail, or -1, and the detail. */
+static int failed_row = -1;
+static const char *failed_what;
+
+/** Take `row` as failed for `what` when no earlier row has failed. */
+static void row_failed(int row, const char *what)
+{
+    if (failed_row < 0 || row < failed_row) {
+        failed_row = row;
+        failed_what = what;
+    }
+}
+
+/** Report one failed check of `row` and return 1, a child's failure status. */
+static int fail(int row, const char *what)
 {
     printf("NSMUSL FAIL (%s: errno %d)\n", what, errno);
     fflush(stdout);
+    row_failed(row, what);
     return 1;
 }
 
-/** Run `fn` in a child; 0 when it exits with status 0. */
-static int in_child(int (*fn)(void))
+/** The exit status of a child whose check failed: its failed row plus one. */
+static int failed_status(void)
+{
+    return failed_row >= 0 ? failed_row + 1 : ROWS + 1;
+}
+
+/**
+ * Take the exit status of a child whose checks have rows as its failure:
+ * the row its status names, or `row` for a status no row gives. Returns 0
+ * for a child that exited 0, and 1 otherwise.
+ */
+static int child_failed(int ok, int status, int row)
+{
+    int code = ok && WIFEXITED(status) ? WEXITSTATUS(status) : 0;
+
+    if (ok && code == 0) {
+        return 0;
+    }
+    row_failed(code >= 1 && code <= ROWS ? code - 1 : row,
+               "a check in a child failed; its NSMUSL FAIL line names it");
+    return 1;
+}
+
+/** Run `fn`, whose first row is `row`, in a child; 0 when it exits 0. */
+static int in_child(int (*fn)(void), int row)
 {
     pid_t pid;
     int status;
@@ -87,9 +231,26 @@ static int in_child(int (*fn)(void))
     fflush(stdout);
     pid = fork();
     if (pid == 0) {
-        _exit(fn());
+        _exit(fn() ? failed_status() : 0);
     }
-    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0 ? 0 : 1;
+    return child_failed(waitpid(pid, &status, 0) == pid, status, row);
+}
+
+/** Report each row: held before the failed one, failed, or not run after. */
+static void report_rows(void)
+{
+    int i;
+
+    for (i = 0; i < ROWS; i++) {
+        if (failed_row < 0 || i < failed_row) {
+            report_pass(assertion_id[i]);
+        } else if (i == failed_row) {
+            report_fail(assertion_id[i], failed_what);
+        } else {
+            report_notrun(assertion_id[i], "an earlier check failed");
+        }
+    }
+    report_end();
 }
 
 /** Write `text` to the file `path`; 0 when every byte is taken. */
@@ -153,20 +314,20 @@ static int uts(void)
     ssize_t n = readlink("/proc/self/ns/uts", link, sizeof(link) - 1);
 
     if (fd < 0 || n <= 0) {
-        return fail("open and read the uts link");
+        return fail(R_UTS_LINK, "open and read the uts link");
     }
     link[n] = '\0';
     if (strcmp(link, "uts:[4026531838]") != 0) {
-        return fail("the first uts namespace's link");
+        return fail(R_UTS_FIRST, "the first uts namespace's link");
     }
     uname(&u);
     strcpy(before, u.nodename);
     if (unshare(CLONE_NEWUTS) != 0 || sethostname("nsbox", 5) != 0 || uname(&u) != 0 ||
         strcmp(u.nodename, "nsbox") != 0) {
-        return fail("a new uts namespace has its own host name");
+        return fail(R_UTS_NAME, "a new uts namespace has its own host name");
     }
     if (setns(fd, CLONE_NEWUTS) != 0 || uname(&u) != 0 || strcmp(u.nodename, before) != 0) {
-        return fail("setns returns to the first uts namespace");
+        return fail(R_UTS_SETNS, "setns returns to the first uts namespace");
     }
     return 0;
 }
@@ -201,12 +362,12 @@ static int own_fd_dir(void)
     int p[2];
 
     if (dir < 0 || pipe(p) != 0) {
-        return fail("a descriptor of its /proc/self/fd reaches its own descriptors");
+        return fail(R_PID_FD, "a descriptor of its /proc/self/fd reaches its own descriptors");
     }
     snprintf(name, sizeof(name), "%d", p[0]);
     if (fstatat(dir, name, &entry, 0) != 0 || fstat(p[0], &own) != 0 ||
         entry.st_ino != own.st_ino || entry.st_dev != own.st_dev) {
-        return fail("a descriptor of its /proc/self/fd reaches its own descriptors");
+        return fail(R_PID_FD, "a descriptor of its /proc/self/fd reaches its own descriptors");
     }
     close(p[0]);
     close(p[1]);
@@ -241,10 +402,10 @@ static int proc_own_number(void)
         link[n] = '\0';
     }
     if (n < 0 || strcmp(link, "/proc/1/task/1/stat") != 0) {
-        return fail("the link of its /proc file names it 1");
+        return fail(R_PID_LINK, "the link of its /proc file names it 1");
     }
     if (stat("/proc/1", &st) != 0 || !(d = opendir("/proc"))) {
-        return fail("the entry 1 of /proc has the inode of /proc/1");
+        return fail(R_PID_INODE, "the entry 1 of /proc has the inode of /proc/1");
     }
     while ((e = readdir(d)) != NULL) {
         if (strcmp(e->d_name, "1") == 0) {
@@ -253,7 +414,7 @@ static int proc_own_number(void)
     }
     closedir(d);
     if (listed != st.st_ino) {
-        return fail("the entry 1 of /proc has the inode of /proc/1");
+        return fail(R_PID_INODE, "the entry 1 of /proc has the inode of /proc/1");
     }
     return 0;
 }
@@ -269,7 +430,7 @@ static int make_pid_orphans(int report, int go[2][2])
     int i, rc = 0;
 
     if (unshare(CLONE_NEWPID) != 0) {
-        return fail("unshare for orphan adoption");
+        return fail(R_ORPHAN_PARENT, "unshare for orphan adoption");
     }
     for (i = 0; i < 2; i++) {
         kids[i] = fork();
@@ -282,15 +443,17 @@ static int make_pid_orphans(int report, int go[2][2])
             close(go[1 - i][0]);
             rc = read(go[i][0], &c, 1) != 0 || getppid() != 0;
             close(go[i][0]);
-            _exit(rc ? fail("an adopted child's parent is outside its pid namespace") : 20 + i);
+            _exit(
+                rc ? fail(R_ORPHAN_ADOPT, "an adopted child's parent is outside its pid namespace")
+                   : 20 + i);
         }
         if (kids[i] < 0) {
-            rc = fail("fork for orphan adoption");
+            rc = fail(R_ORPHAN_PARENT, "fork for orphan adoption");
             break;
         }
     }
     if (!rc && write(report, kids, sizeof(kids)) != (ssize_t)sizeof(kids)) {
-        rc = fail("report orphan pids");
+        rc = fail(R_ORPHAN_PARENT, "report orphan pids");
     }
     if (rc) {
         for (i = 1; i >= 0; i--) {
@@ -316,7 +479,7 @@ static int pid_orphans(void)
     int i, j, status, rc = 0;
 
     if (pipe(report) != 0 || pipe(go[0]) != 0 || pipe(go[1]) != 0) {
-        rc = fail("pipes for orphan adoption");
+        rc = fail(R_ORPHAN_PARENT, "pipes for orphan adoption");
         goto out;
     }
     parent = fork();
@@ -328,20 +491,21 @@ static int pid_orphans(void)
     report[1] = -1;
     if (parent < 0 || read(report[0], kids, sizeof(kids)) != (ssize_t)sizeof(kids) ||
         waitpid(parent, &status, 0) != parent || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        rc = fail("the parent of the pid namespace's orphans exited");
+        rc = fail(R_ORPHAN_PARENT, "the parent of the pid namespace's orphans exited");
         goto out;
     }
     parent = -1;
     for (i = 1; i >= 0; i--) {
         if (waitpid(kids[i], &status, WNOHANG) != 0) {
-            rc = fail(i == 0 ? "the outer init adopted the namespace's init"
-                             : "the outer init adopted the namespace init's sibling");
+            rc = fail(R_ORPHAN_ADOPT, i == 0
+                                          ? "the outer init adopted the namespace's init"
+                                          : "the outer init adopted the namespace init's sibling");
         }
         close(go[i][1]);
         go[i][1] = -1;
         if (waitpid(kids[i], &status, 0) != kids[i] || !WIFEXITED(status) ||
             WEXITSTATUS(status) != 20 + i) {
-            rc = fail("the outer init reaped the pid namespace's orphan");
+            rc = fail(R_ORPHAN_ADOPT, "the outer init reaped the pid namespace's orphan");
         } else {
             kids[i] = 0;
         }
@@ -385,7 +549,7 @@ static int pid_first(void)
     int status;
 
     if (getpid() != 1 || getppid() != 0) {
-        return fail("the first process of a pid namespace is 1, its parent 0");
+        return fail(R_PID_ONE, "the first process of a pid namespace is 1, its parent 0");
     }
     pid = fork();
     if (pid == 0) {
@@ -393,23 +557,24 @@ static int pid_first(void)
     }
     if (pid != 2 || waitpid(pid, &status, 0) != 2 || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("its child is 2");
+        return fail(R_PID_TWO, "its child is 2");
     }
     if (!nspid_is("self", "1")) {
-        return fail("its status file shows it the one number");
+        return fail(R_PID_NSPID, "its status file shows it the one number");
     }
     head[0] = (long)head;
     if (syscall(SYS_set_robust_list, head, sizeof(head)) != 0 ||
         syscall(SYS_get_robust_list, 1, &got, &len) != 0 || got != head || len != sizeof(head)) {
-        return fail("get_robust_list of pid 1 gives the first process's own list");
+        return fail(R_PID_ROBUST, "get_robust_list of pid 1 gives the first process's own list");
     }
     errno = 0;
     if (syscall(SYS_get_robust_list, 99, &got, &len) != -1 || errno != ESRCH) {
-        return fail("get_robust_list of a pid the namespace has not given is ESRCH");
+        return fail(R_PID_ROBUST_ESRCH,
+                    "get_robust_list of a pid the namespace has not given is ESRCH");
     }
     errno = 0;
     if (kill(99, 0) != -1 || errno != ESRCH) {
-        return fail("kill of a pid the namespace has not given is ESRCH");
+        return fail(R_PID_KILL_ESRCH, "kill of a pid the namespace has not given is ESRCH");
     }
     return proc_own_number() || own_fd_dir() || pid_orphans();
 }
@@ -427,22 +592,22 @@ static int pid_ns(void)
     int go[2], status, rc = 0;
 
     if (unshare(CLONE_NEWPID) != 0 || getpid() != self || pipe(go) != 0) {
-        return fail("unshare of a pid namespace keeps the caller's pid");
+        return fail(R_PID_KEEP, "unshare of a pid namespace keeps the caller's pid");
     }
     fflush(stdout);
     first = fork();
     if (first == 0) {
         rc = pid_first();
         read(go[0], &c, 1);
-        _exit(rc);
+        _exit(rc ? failed_status() : 0);
     }
     snprintf(who, sizeof(who), "%d", (int)first);
     snprintf(want, sizeof(want), "%d\t1", (int)first);
     if (!nspid_is(who, want)) {
-        rc = fail("its parent's status file shows both numbers");
+        rc = fail(R_PID_BOTH, "its parent's status file shows both numbers");
     }
     write(go[1], &c, 1);
-    if (waitpid(first, &status, 0) != first || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (child_failed(waitpid(first, &status, 0) == first, status, R_PID_ONE)) {
         rc = 1;
     }
     return rc;
@@ -452,7 +617,7 @@ static int pid_ns(void)
 static int net(void)
 {
     if (unshare(CLONE_NEWNET) != 0 || !unreachable()) {
-        return fail("a new network namespace reaches nothing");
+        return fail(R_NET, "a new network namespace reaches nothing");
     }
     return 0;
 }
@@ -461,7 +626,7 @@ static int net(void)
 static int ipc(void)
 {
     if (unshare(CLONE_NEWIPC) != 0 || shmget(SHM_KEY, 0, 0) != -1 || errno != ENOENT) {
-        return fail("a new ipc namespace has none of the first's objects");
+        return fail(R_IPC, "a new ipc namespace has none of the first's objects");
     }
     return 0;
 }
@@ -483,31 +648,32 @@ static int mnt(void)
 
     mkdir("/tmp/nsmnt", 0755);
     if (pipe(up) != 0 || pipe(down) != 0) {
-        return fail("pipe");
+        return fail(R_MNT, "pipe");
     }
     fflush(stdout);
     pid = fork();
     if (pid == 0) {
         if (unshare(CLONE_NEWNS) != 0 || mount("nsmusl", "/tmp/nsmnt", "tmpfs", 0, NULL) != 0 ||
             (fd = open("/tmp/nsmnt/inner", O_CREAT | O_WRONLY, 0644)) < 0) {
-            _exit(fail("mount tmpfs in a new mount namespace"));
+            fail(R_MNT, "mount tmpfs in a new mount namespace");
+            _exit(failed_status());
         }
         close(fd);
         write(up[1], &c, 1);
         read(down[0], &c, 1);
-        _exit(stat("/tmp/nsmnt/inner", &st) == 0 ? 0 : 1);
+        _exit(stat("/tmp/nsmnt/inner", &st) == 0 ? 0 : R_MNT_INSIDE + 1);
     }
     close(up[1]);
     close(down[0]);
     if (read(up[0], &c, 1) == 1) {
         if (stat("/tmp/nsmnt/inner", &st) == 0) {
-            rc = fail("the mount is not seen outside its namespace");
+            rc = fail(R_MNT_OUTSIDE, "the mount is not seen outside its namespace");
         }
         write(down[1], &c, 1);
     }
     close(up[0]);
     close(down[1]);
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (child_failed(waitpid(pid, &status, 0) == pid, status, R_MNT)) {
         rc = 1;
     }
     return rc;
@@ -524,7 +690,7 @@ static int sandbox(void)
     int status;
 
     if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0) {
-        return fail("become uid 1000");
+        return fail(R_SANDBOX_USER, "become uid 1000");
     }
     fflush(stdout);
     pid = syscall(SYS_clone, CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET | SIGCHLD, 0, 0, 0, 0);
@@ -533,7 +699,7 @@ static int sandbox(void)
     }
     if (pid < 0 || waitpid((pid_t)pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("one clone makes a user, a pid and a network namespace");
+        return fail(R_SANDBOX, "one clone makes a user, a pid and a network namespace");
     }
     return 0;
 }
@@ -551,29 +717,29 @@ static int user(void)
     snprintf(map, sizeof(map), "0 %u 1\n", NS_USER);
     snprintf(back, sizeof(back), "%10u %10u %10u\n", 0u, NS_USER, 1u);
     if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0) {
-        return fail("become uid 1000");
+        return fail(R_USER_BECOME, "become uid 1000");
     }
     if (unshare(CLONE_NEWUSER) != 0 || getuid() != 65534 || getgid() != 65534) {
-        return fail("ids outside the maps read as 65534");
+        return fail(R_USER_UNMAPPED, "ids outside the maps read as 65534");
     }
     if (put("/proc/self/uid_map", map) != 0 || put("/proc/self/setgroups", "deny") != 0 ||
         put("/proc/self/gid_map", map) != 0) {
-        return fail("write the maps");
+        return fail(R_USER_MAPS, "write the maps");
     }
     if (getuid() != 0 || geteuid() != 0 || getgid() != 0) {
-        return fail("the mapped ids");
+        return fail(R_USER_IDS, "the mapped ids");
     }
     if (get("/proc/self/uid_map", buf, sizeof(buf)) <= 0 || strcmp(buf, back) != 0) {
-        return fail("the map reads back");
+        return fail(R_USER_BACK, "the map reads back");
     }
     if (put("/proc/self/uid_map", map) == 0 || errno != EPERM) {
-        return fail("a map is written once");
+        return fail(R_USER_ONCE, "a map is written once");
     }
     if (chroot("/") != 0) {
-        return fail("the user namespace's root may chroot");
+        return fail(R_USER_CHROOT, "the user namespace's root may chroot");
     }
     if (unshare(CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNET) != 0 || sethostname("inner", 5) != 0) {
-        return fail("privilege in the user namespace makes the other kinds");
+        return fail(R_USER_KINDS, "privilege in the user namespace makes the other kinds");
     }
     return 0;
 }
@@ -595,7 +761,7 @@ static int setid(void)
     if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
         unshare(CLONE_NEWUSER) != 0 || put("/proc/self/uid_map", map) != 0 ||
         put("/proc/self/setgroups", "deny") != 0 || put("/proc/self/gid_map", map) != 0) {
-        return fail("map the caller's own ids");
+        return fail(R_SETID_MAP, "map the caller's own ids");
     }
     if (ids != NULL) {
         snprintf(ids_arg, sizeof(ids_arg), "ids=%s", ids);
@@ -608,7 +774,8 @@ static int setid(void)
         _exit(127);
     }
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        return fail("an exec in a user namespace ignores a set-id bit of an owner it does not map");
+        return fail(R_SETID_EXEC,
+                    "an exec in a user namespace ignores a set-id bit of an owner it does not map");
     }
     return 0;
 }
@@ -636,15 +803,15 @@ static int empty_root(void)
 
     fd = open("/proc/self/status", O_RDONLY | O_CLOEXEC);
     if (fd < 0 || lseek(fd, 5, SEEK_SET) != 5) {
-        return fail("open and seek a file for its fdinfo");
+        return fail(R_FDINFO_OPEN, "open and seek a file for its fdinfo");
     }
     snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
     if (get(path, buf, sizeof(buf)) <= 0 || strcmp(buf, "pos:\t5\nflags:\t02000000\n")) {
-        return fail("a file of fdinfo has the offset and the flags");
+        return fail(R_FDINFO, "a file of fdinfo has the offset and the flags");
     }
     if (setgid(NS_USER) != 0 || setuid(NS_USER) != 0 || prctl(PR_SET_DUMPABLE, 1) != 0 ||
         unshare(CLONE_NEWUSER) != 0 || (proc = open("/proc", O_RDONLY | O_DIRECTORY)) < 0) {
-        return fail("become uid 1000 in a user namespace");
+        return fail(R_EMPTY_USER, "become uid 1000 in a user namespace");
     }
     fflush(stdout);
     pid = syscall(SYS_clone, CLONE_FS | SIGCHLD, 0, 0, 0, 0);
@@ -653,21 +820,22 @@ static int empty_root(void)
     }
     if (pid < 0 || waitpid((pid_t)pid, &status, 0) != pid || !WIFEXITED(status) ||
         WEXITSTATUS(status) != 0) {
-        return fail("a helper sharing the directories chroots to /proc/self/fdinfo");
+        return fail(R_EMPTY_HELPER,
+                    "a helper sharing the directories chroots to /proc/self/fdinfo");
     }
     if (access("/proc", F_OK) == 0 || !(d = opendir("/"))) {
-        return fail("the root holds nothing");
+        return fail(R_EMPTY_NOTHING, "the root holds nothing");
     }
     while ((de = readdir(d)) != NULL) {
         entries += strcmp(de->d_name, ".") != 0 && strcmp(de->d_name, "..") != 0;
     }
     closedir(d);
     if (entries != 0 || mkdir("/x", 0755) == 0) {
-        return fail("the root holds nothing and takes nothing");
+        return fail(R_EMPTY_TAKES, "the root holds nothing and takes nothing");
     }
     fd = openat(proc, "self/fd/", O_RDONLY | O_DIRECTORY);
     if (fd < 0 || close(fd) != 0) {
-        return fail("a descriptor of /proc opened before the chroot reaches self/fd");
+        return fail(R_EMPTY_PROC, "a descriptor of /proc opened before the chroot reaches self/fd");
     }
     return 0;
 }
@@ -680,15 +848,16 @@ static int wide_flags(void)
 {
 #if defined __x86_64__
     if (syscall(SYS_unshare, 1UL << 32) != -1 || errno != EINVAL) {
-        return fail("unshare of a flag past 32 bits is not EINVAL");
+        return fail(R_WIDE, "unshare of a flag past 32 bits is not EINVAL");
     }
 #endif
     return 0;
 }
 
 /**
- * Make the System V segment the IPC check looks for, run the checks, and
- * remove the segment. Returns 0 when every check passes, and 1 otherwise.
+ * Make the System V segment the IPC check looks for, run the checks, remove
+ * the segment, and report the rows. Returns 0 when every check passes, and 1
+ * otherwise.
  */
 int main(int argc, char **argv)
 {
@@ -696,12 +865,23 @@ int main(int argc, char **argv)
     int rc;
 
     probe_args(argc, argv);
+    report_begin(report_case(environ, "guest.default.nsmusl"));
+#if defined __x86_64__
+    report_branch("arch", "x86-64");
+#else
+    report_branch("arch", "i686");
+#endif
     if (id < 0) {
-        return fail("shmget");
+        fail(R_SEGMENT, "shmget");
+        report_rows();
+        return 1;
     }
-    rc = wide_flags() || in_child(uts) || in_child(pid_ns) || in_child(net) || in_child(ipc) ||
-         mnt() || in_child(sandbox) || in_child(user) || in_child(setid) || in_child(empty_root);
+    rc = wide_flags() || in_child(uts, R_UTS_LINK) || in_child(pid_ns, R_PID_KEEP) ||
+         in_child(net, R_NET) || in_child(ipc, R_IPC) || mnt() ||
+         in_child(sandbox, R_SANDBOX_USER) || in_child(user, R_USER_BECOME) ||
+         in_child(setid, R_SETID_MAP) || in_child(empty_root, R_FDINFO_OPEN);
     shmctl(id, IPC_RMID, NULL);
+    report_rows();
     if (rc) {
         return 1;
     }
