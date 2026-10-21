@@ -65,11 +65,11 @@
  * A failed case of a suite that `stops` leaves the suite's other cases to run
  * before the set stops. A case suite runs beside a suite of the registry. A
  * manifest that cannot be read, of another suite's family, with a case of a
- * domain other than host and guest, that reads its input, needs ports, loop
- * devices or a fixture other than scratch, or has no case on the
- * architecture is refused, and so is a case suite without casecheck, and a
- * guest case of the init role, booted by OVMF, ending other than by an exit,
- * or with a disk of no disk fixture.
+ * domain other than host, guest and machine, that reads its input, needs
+ * ports, loop devices or a fixture other than scratch, or has no case on the
+ * architecture is refused, and so is a case suite without casecheck, a guest
+ * case of the init role, booted by OVMF, ending other than by an exit, or
+ * with a disk of no disk fixture, and a machine case with arguments.
  *
  * A guest case boots its own machine of its profile, its program stored to
  * etude-guest from the image and run there: rngprobe passes on the processor
@@ -84,6 +84,18 @@
  * `rach2-fixture/kernel` in its place and passes, and the cases that boot
  * another node boot it, each kernel told by its digest in the preparation's
  * record and in QEMU's command line. A missing QEMU or image fails the test.
+ *
+ * A suite of machine cases runs a scenario of the tree's, a shell script that
+ * keeps a console in its workspace as the case's identity says, with one
+ * argument, its invocation. The invocation gives each artifact's digest in the
+ * run's store under the evidence, which the run removes at its end, the case's
+ * tool and the stand-in for QEMU found on the path, the accelerator, each
+ * step's bound and the cleanup's, and the workspace as its scratch. A clean
+ * console passes, and so does one with the critical record that the case's
+ * machine declares; a console with a panic fails at the panic's line, and keeps
+ * the workspace with its console; a scenario whose report stops short and that
+ * exits 1, as one whose machine's transport was lost does, fails; and a
+ * scenario that keeps no console is incomplete. Each attempt is placed qemu.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -100,6 +112,7 @@
 #include <unistd.h>
 
 #include "compat/fixdir_host.c"
+#include "sha256.h"
 #include "etude/history.h"
 #include "etude/ledger.h"
 #include "etude/legacy.h"
@@ -249,6 +262,83 @@ static const char probe[] = "#!/bin/sh\n"
                             "esac\n"
                             "echo \"@etude 1 end 1\"\n";
 
+/* The scenario of the fixture's machine cases. It takes the scratch from
+ * its invocation, keeps the console `evidence/vm.1.console` there and
+ * reports, as its case's identity says: a clean console, one with a panic,
+ * one with the record of init's death that the case's machine declares, a
+ * report that stops short with the exit status 1, as a lost transport gives,
+ * or no console at all. */
+static const char scenario[] =
+    "#!/bin/sh\n"
+    "echo \"scenario: $0 $*\"\n"
+    "scratch=$(sed -n 's/.*\"scratch\":\"\\([^\"]*\\)\".*/\\1/p' \"$1\")\n"
+    "mkdir -p \"$scratch/evidence\"\n"
+    "c=$scratch/evidence/vm.1.console\n"
+    "echo 'Rach2 kernel booting' > \"$c\"\n"
+    "echo \"@etude 1 begin $ETUDE_CASE\"\n"
+    "case $ETUDE_CASE in\n"
+    "*.panic) echo '<2>[    0.500000] panic: page fault' >> \"$c\" ;;\n"
+    "*.allowed) echo '<2>[    1.250000] init: exited with status 1' >> \"$c\" ;;\n"
+    "*.lost) echo '@etude 1 progress stage 1'; exit 1 ;;\n"
+    "*.noconsole) rm -r \"$scratch/evidence\" ;;\n"
+    "esac\n"
+    "echo '@etude 1 assert booted pass'\n"
+    "echo '@etude 1 progress stage 1'\n"
+    "echo '@etude 1 end 1'\n";
+
+/* The form of a machine case of the fixture, with its identity and its
+ * machine's `critical` member, or nothing. */
+static const char machine_form[] =
+    "{\"case_id\": \"%s\", \"behavior\": \"The fixture's scenario keeps a console as its case "
+    "says\",\n"
+    " \"units\": [\"tests/host/etude_legacyset_hosttest.c\"], \"domain\": \"machine\",\n"
+    " \"architectures\": [\"i686\"],\n"
+    " \"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null},\n"
+    " \"requirements\": {\"host_api\": \"posix\", \"tools\": [\"sh\"], \"features\": {}},\n"
+    " \"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\",\n"
+    "  \"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"},\n"
+    "  {\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\",\n"
+    "  \"cleanup\": \"nothing outside its scratch directory\"},\n"
+    " \"steps\": [{\"step_id\": \"boot\", \"stage\": \"execute\", \"machine\": \"vm\",\n"
+    "  \"does\": \"boot the machine and keep its console\"}],\n"
+    " \"machines\": [{\"machine_id\": \"vm\", \"qemu\": {\"kernel\": \"kernel\",\n"
+    "  \"initrd\": null,"
+    "  \"disks\": [\"disk\"], \"cpu\": \"max\", \"processors\": 1, \"memory_bytes\": 134217728,\n"
+    "  \"firmware\": \"direct\", \"devices\": [], \"boot_options\": []}, \"console\": \"serial\",\n"
+    "  \"qmp\": true, \"helper\": false%s}],\n"
+    " \"assertions\": [{\"assertion_id\": \"booted\", \"checks\": \"the machine booted\",\n"
+    "  \"source\": \"scenario\"}],\n"
+    " \"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": 0},\n"
+    " \"progress\": [{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step has "
+    "ended\",\n"
+    "  \"limit\": 1}],\n"
+    " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 30000000, \"ceiling_us\": "
+    "600000000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 600000000},\n"
+    "  \"stages\": {\"boot\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": "
+    "600000000},\n"
+    "  \"cleanup\": {\"floor_us\": 100000, \"initial_us\": 7000000, \"ceiling_us\": "
+    "600000000}}},\n"
+    " \"resources\": {\"cpu_millis\": 100, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
+    "268435456,\n"
+    "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 0, \"loop_devices\": 0},\n"
+    " \"prepare\": [{\"name\": \"kernel\", \"node\": \"rach2/kernel\", \"per_architecture\": "
+    "true},\n"
+    "  {\"name\": \"disk\", \"node\": \"images/disk.img\", \"per_architecture\": true},\n"
+    "  {\"name\": \"scenario\", \"node\": \"cases/scenario\", \"per_architecture\": false}],\n"
+    " \"timing\": [], \"native\": {\"plan\": \"none\", \"class\": \"boot\",\n"
+    "  \"reason\": \"the fixture's machine is a stand-in\"}}";
+
+/* The machine cases of the family `machine`, each with its machine's
+ * `critical` member. */
+static const struct {
+    const char *id, *critical;
+} machine_cases[] = {{"fixture.machine.clean", ""},
+                     {"fixture.machine.panic", ""},
+                     {"fixture.machine.allowed", ", \"critical\": \"init: exited\""},
+                     {"fixture.machine.lost", ""},
+                     {"fixture.machine.noconsole", ""}};
+
 /* One case of a fixture manifest, which manifest_text writes. */
 struct fcase {
     const char *id;
@@ -317,11 +407,12 @@ static const struct fcase other_cases[] = {
  * with the text `from` made `to`, or the case of `other` for `noarch`. */
 static const struct {
     const char *name, *from, *to;
-} refusals[] = {{"domain", "\"domain\": \"host\"", "\"domain\": \"machine\""},
+} refusals[] = {{"domain", "\"domain\": \"host\"", "\"domain\": \"native\""},
                 {"stdin", "\"stdin\": null", "\"stdin\": \"input\""},
                 {"ports", "\"ports\": 0", "\"ports\": 1"},
                 {"loops", "\"loop_devices\": 0", "\"loop_devices\": 1"},
                 {"fixture", "{\"fixture\": \"scratch\"}", "{\"fixture\": \"network\"}"},
+                {"machineargs", "\"domain\": \"host\"", "\"domain\": \"machine\""},
                 {"noarch", NULL, NULL}};
 
 /* The form of a guest case of a fixture manifest: the tree's rngprobe on
@@ -877,6 +968,25 @@ static int guest_text(char *buf, size_t size, const char *family, const struct g
     return k >= 0 && (size_t)k < size ? 0 : -1;
 }
 
+/** Write in `buf` the manifest of the family `machine`; 0, or -1 when it
+ * does not fit. */
+static int machine_text(char *buf, size_t size)
+{
+    size_t i, n = sizeof(machine_cases) / sizeof(machine_cases[0]);
+    int k;
+
+    k = snprintf(buf, size,
+                 "{\"schema_version\": 1, \"family_id\": \"fixture.machine\",\n"
+                 " \"summary\": \"Machine cases of the set driver's fixture\",\n \"cases\": [");
+    for (i = 0; k >= 0 && (size_t)k < size && i < n; i++) {
+        k += snprintf(buf + k, size - (size_t)k, machine_form, machine_cases[i].id,
+                      machine_cases[i].critical);
+        if (k >= 0 && (size_t)k < size)
+            k += snprintf(buf + k, size - (size_t)k, i + 1 < n ? ",\n" : "]}\n");
+    }
+    return k >= 0 && (size_t)k < size ? 0 : -1;
+}
+
 /** Write in `out` the text `text` with its first `from` made `to`; 0, or -1
  * when it has no `from` or the result does not fit. */
 static int replaced(char *out, size_t size, const char *text, const char *from, const char *to)
@@ -896,12 +1006,15 @@ static int replaced(char *out, size_t size, const char *text, const char *from, 
  * `badguest`; 0, or -1. */
 static int make_cases(void)
 {
-    static char text[16384], changed[16384];
+    static char text[32768], changed[32768];
     char path[PATH_LEN], name[64];
     size_t i;
     int bad = 0;
 
     bad |= write_text(in(path, sizeof(path), "cases/probe.sh"), probe, 0755);
+    bad |= write_text(in(path, sizeof(path), "cases/scenario.sh"), scenario, 0755);
+    bad |= machine_text(text, sizeof(text)) != 0 ||
+           write_text(in(path, sizeof(path), "cases/machine/machine.json"), text, 0644) != 0;
     bad |= manifest_text(text, sizeof(text), "fixture.good", good_cases, 4) != 0 ||
            write_text(in(path, sizeof(path), "cases/good/good.json"), text, 0644) != 0;
     bad |= manifest_text(text, sizeof(text), "fixture.mixed", mixed_cases, 4) != 0 ||
@@ -979,7 +1092,8 @@ static void make_tree(void)
                                        "cases/mixed",
                                        "cases/bad",
                                        "cases/guest",
-                                       "cases/badguest"};
+                                       "cases/badguest",
+                                       "cases/machine"};
     static char source[1 << 20], newpath[8192], rules[8192];
     const char *oldpath = getenv("PATH");
     char path[PATH_LEN], owner[64];
@@ -1829,7 +1943,10 @@ static void test_cases_refused(void)
         {"good", "cases/good/absent.json", "cases/good/absent.json: "},
         {"other", "cases/good/good.json", "its family fixture.good is not of the suite other"},
         {"bad", "cases/bad/domain.json",
-         "fixture.bad.one: a case of the domain machine; the set driver runs host and guest cases "
+         "fixture.bad.one: a case of the domain native; the set driver runs host, guest and "
+         "machine cases alone"},
+        {"bad", "cases/bad/machineargs.json",
+         "fixture.bad.one: a machine case has arguments, but its scenario takes its invocation "
          "alone"},
         {"bad", "cases/bad/stdin.json", "fixture.bad.one: the case reads standard input"},
         {"bad", "cases/bad/ports.json", "fixture.bad.one: the case needs local ports"},
@@ -1872,6 +1989,105 @@ static int plan_has(const struct run *r, const char *text)
         if (strstr(r->h.line[i], "\"kind\":\"plan\"") != NULL)
             return strstr(r->h.line[i], text) != NULL;
     return 0;
+}
+
+/** Say whether the invocation of the attempt of case member `tail`,
+ * `CASE.rR`, of run `r` has the text `text`. */
+static int invocation_has(const struct run *r, const char *tail, const char *text)
+{
+    static char doc[OUT_LEN];
+    char path[PATH_LEN * 2];
+
+    fix_format(path, sizeof(path), "%s/output/%s.invocation", r->results, tail);
+    return read_text(path, doc, sizeof(doc)) > 0 && strstr(doc, text) != NULL;
+}
+
+/** Write in `out` the member `"NAME":"DIGEST"` of an invocation's artifacts
+ * for the file `file` of the tree. */
+static void digest_member(char *out, size_t size, const char *name, const char *file)
+{
+    static char data[4096];
+    unsigned char sum[32];
+    char path[PATH_LEN], hex[65];
+    struct sha256 h;
+    long n = read_text(in(path, sizeof(path), file), data, sizeof(data));
+
+    sha256_init(&h);
+    sha256_update(&h, (const unsigned char *)data, n > 0 ? (size_t)n : 0);
+    sha256_final(&h, sum);
+    sha256_hex(sum, hex);
+    fix_format(out, size, "\"%s\":\"%s\"", name, hex);
+}
+
+/** A suite of machine cases: their scenario's invocations, and the
+ * judgement of each one's report, end and console. */
+static void test_machine(void)
+{
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, 0, "cases/machine/machine.json"}};
+    static struct run r;
+    char text[PATH_LEN * 2], console[PATH_LEN * 2];
+    int before = fails;
+
+    r.name = "machine";
+    r.members = m;
+    r.n = 1;
+    set_run(&r);
+    CHECK(r.status == 1, "machine: a case did not pass");
+    CHECK(r.read == 0, "machine: the history is whole");
+    CHECK(count_kind(&r.h, "attempt") == 5, "machine: an attempt of each case");
+    CHECK(case_is(&r, "fixture.machine.clean", "i686", 0, "pass", NULL),
+          "machine: a clean console passes");
+    CHECK(case_is(&r, "fixture.machine.allowed", "i686", 0, "pass", NULL),
+          "machine: the critical record its machine declares passes");
+    CHECK(case_is(&r, "fixture.machine.panic", "i686", 0, "failure",
+                  "etude.kernel failed: the console has <2>[    0.500000] panic: page fault"),
+          "machine: a panic on the console fails etude.kernel");
+    CHECK(case_is(&r, "fixture.machine.lost", "i686", 0, "failure", NULL),
+          "machine: a report cut short with status 1 fails");
+    CHECK(case_is(&r, "fixture.machine.noconsole", "i686", 0, "incomplete",
+                  "etude.kernel is missing: casecheck attempt was given no console"),
+          "machine: no console is incomplete");
+    fix_format(text, sizeof(text),
+               "scenario: %s/build/cases/scenario %s/output/"
+               "fixture.machine.clean.r0.invocation",
+               tree, r.results);
+    CHECK(output_has(&r, "fixture.machine.clean.r0", text),
+          "machine: the scenario takes its invocation alone");
+    digest_member(text, sizeof(text), "kernel", "build/rach2/kernel");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the kernel's digest");
+    digest_member(text, sizeof(text), "disk", "build/images/disk.img");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the disk's digest");
+    digest_member(text, sizeof(text), "scenario", "cases/scenario.sh");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
+          "invocation: the scenario's digest");
+    fix_format(text, sizeof(text), "\"store\":\"%s/%s.store\"", r.evidence, r.run_id);
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the store");
+    fix_format(text, sizeof(text), "%s/%s.store", r.evidence, r.run_id);
+    CHECK(!exists(text), "machine: the store of the artifacts is removed at the end");
+    fix_format(text, sizeof(text), "\"qemu_i686\":\"%s/qemu/qemu-system-i386\"", tree);
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
+          "invocation: the emulator found on the path");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"tools\":{\"sh\":\"/") &&
+              invocation_has(&r, "fixture.machine.clean.r0", "\"accel\":\"tcg\"") &&
+              invocation_has(&r, "fixture.machine.clean.r0", "\"steps\":{\"boot\":20000000}") &&
+              invocation_has(&r, "fixture.machine.clean.r0", "\"cleanup_us\":7000000"),
+          "invocation: the tools, the accelerator and the bounds");
+    fix_format(text, sizeof(text), "\"scratch\":\"%s/%s.fixture.machine.clean.r0\"", r.evidence,
+               r.run_id);
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the scratch");
+    CHECK(!kept(&r, "fixture.machine.clean.r0"), "machine: the workspace removed after a pass");
+    fix_format(console, sizeof(console), "%s/%s.fixture.machine.panic.r0/evidence/vm.1.console",
+               r.evidence, r.run_id);
+    CHECK(exists(console), "machine: the console kept after a failure");
+    CHECK(results_has(&r, "fixture.machine.clean.r0", "\"placement\":\"qemu\"") &&
+              results_has(&r, "fixture.machine.clean.r0", "\"observed_by\":\"host_process\""),
+          "machine: placed qemu, its end observed by its host process");
+    CHECK(plan_has(&r, "\"domain\":\"qemu\"") && !plan_has(&r, "\"domain\":\"host\""),
+          "machine: the plan's items are of the domain qemu");
+    CHECK(r.claims == 0, "machine: the ledger has no claim");
+    CHECK(!r.leaks, "machine: the driver leaks nothing");
+    show(&r, before);
 }
 
 /** Give the store of guest artifacts that run `r` left under its evidence,
@@ -2202,6 +2418,7 @@ int main(int argc, char **argv)
     test_cases_mixed();
     test_cases_stops();
     test_cases_beside();
+    test_machine();
     test_cases_refused();
     test_guest();
     if (fails != 0)

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "legacyset",
-  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver, its cases and its guest attempts, each fault found by its own row",
+  "summary": "etude_legacyset_hosttest.c against a private copy of etude's set driver, its cases, its guest attempts and its machine cases, each fault found by its own row",
   "tree": "private",
   "sources": [
     "tools/etude/posix/legacy_set.c",
@@ -561,14 +561,14 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_cases.c",
-          "find": "    if (domain == NULL || (strcmp(domain, \"host\") != 0 && strcmp(domain, \"guest\") != 0))\n",
+          "find": "    if (domain == NULL || (strcmp(domain, \"host\") != 0 && strcmp(domain, \"guest\") != 0 &&\n                           strcmp(domain, \"machine\") != 0))\n",
           "replace": "    if (domain == NULL)\n"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
-          ": fixture.bad.one: a case of the domain machine; the set driver runs host and guest cases alone: "
+          ": fixture.bad.one: a case of the domain native; the set driver runs host, guest and machine cases alone: "
         ]
       }
     },
@@ -748,8 +748,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "        j.console = legacy_guest_console(m->g);\n",
-          "replace": "        j.console = NULL;\n"
+          "find": "        j.nconsoles = 1;\n",
+          "replace": "        j.nconsoles = 0;\n"
         }
       ],
       "fails": {
@@ -850,8 +850,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "m->k != NULL && m->k->guest ? \"qemu\" : \"host\", m->workload,",
-          "replace": "\"host\", m->workload,"
+          "find": "m->k != NULL && (m->k->guest || m->k->machine) ? \"qemu\" : \"host\",",
+          "replace": "\"host\","
         }
       ],
       "fails": {
@@ -893,6 +893,108 @@
         "status": 1,
         "lines": [
           ": kernel: the cases of another node booted it under -n: "
+        ]
+      }
+    },
+    {
+      "name": "machine-consoles",
+      "summary": "a machine case's consoles are not found in its workspace",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "strcmp(e->d_name + len - 8, \".console\") == 0",
+          "replace": "strcmp(e->d_name + len - 8, \".console\") != 0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": machine: a clean console passes: "
+        ]
+      }
+    },
+    {
+      "name": "machine-placement",
+      "summary": "a machine case is judged placed host",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "j.placement = m->k->machine ? \"qemu\" : \"host\";",
+          "replace": "j.placement = \"host\";"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": machine: a clean console passes: "
+        ]
+      }
+    },
+    {
+      "name": "machine-invocation",
+      "summary": "a machine case's scenario is not given its invocation",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (k->machine)\n        c->argv[a++] = m->invocation;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": machine: a clean console passes: "
+        ]
+      }
+    },
+    {
+      "name": "machine-digests",
+      "summary": "each artifact of a machine case is published from its first goal",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "fit(path, sizeof(path), \"%s/%s\", x->tree, k->goals[g])",
+          "replace": "fit(path, sizeof(path), \"%s/%s\", x->tree, k->goals[0])"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": invocation: the disk's digest"
+        ]
+      }
+    },
+    {
+      "name": "machine-plandomain",
+      "summary": "the plan gives a machine case's item the domain host",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "m->k != NULL && (m->k->guest || m->k->machine) ? \"qemu\" : \"host\",",
+          "replace": "m->k != NULL && m->k->guest ? \"qemu\" : \"host\","
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": machine: the plan's items are of the domain qemu"
+        ]
+      }
+    },
+    {
+      "name": "machine-arguments",
+      "summary": "a machine case with arguments is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (k->machine && args->count > 0)\n",
+          "replace": "    if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "a machine case has arguments, but its scenario takes its invocation alone"
         ]
       }
     }

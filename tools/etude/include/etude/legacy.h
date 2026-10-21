@@ -122,8 +122,8 @@ struct etude_legacy_member {
     uint64_t memory_mib; /* the most guest memory its machines ask for at once */
     int serial;          /* it runs before the others, with nothing beside it */
     int stops;           /* its failure cancels the suites not yet started */
-    const char *cases;   /* the manifest whose host and guest cases run the
-                            suite, from the tree's root unless absolute, or
+    const char *cases;   /* the manifest whose host, guest or machine cases run
+                            the suite, from the tree's root unless absolute, or
                             NULL for a suite of the registry */
 };
 
@@ -162,8 +162,8 @@ struct etude_legacy_set_opts {
                                     `prepare.record` under `results` */
     const char *evidence;        /* the directory under which a suite that does not pass
                                     keeps its work, and each case its workspace;
-                                    the guest cases' store of artifacts is made in
-                                    it for the run */
+                                    the store of the guest and machine cases'
+                                    artifacts is made in it for the run */
     const char *status;          /* the status record, rewritten as the run goes, or NULL */
     const char *stamp;           /* a file touched once the preparation has ended, or NULL */
     const char *commit;          /* the tree's commit, or NULL when it has none */
@@ -191,20 +191,22 @@ struct etude_legacy_set_opts {
  * with `o->stop_on_fail`, the first member that does not pass does so at
  * once.
  *
- * A member with `cases` is run by the host and guest cases of its manifest
- * that run on `o->arch` or on none, each repetition of each a member of its
- * own that keeps the suite's `serial`. Their artifacts are goals of the
- * preparation; with `o->kernel`, the kernel that a guest case boots from the
- * node `rach2/kernel` is `rach2-KERNEL/kernel` in its place. Each runs in a
- * workspace of its own under `o->evidence`, under the case's initial
- * bounds, with a claim of the case's resources: a
- * host case's program with ETUDE_TREE naming the tree, and a guest case's
- * program on a machine of its QEMU profile, through etude-guest, with the
- * memory the launcher reserves for the machine as its claim. `o->casecheck`
- * judges each attempt, a guest's placed `qemu` with the machine's console. A
- * manifest that cannot be read, of another suite's family, with no case on
- * the architecture, or with a case that the set driver cannot run
- * (legacy_manifest_read) is refused.
+ * A member with `cases` is run by the host, guest and machine cases of its
+ * manifest that run on `o->arch` or on none, each repetition of each a
+ * member of its own that keeps the suite's `serial`. Their artifacts are
+ * goals of the preparation; with `o->kernel`, the kernel that a guest case
+ * boots from the node `rach2/kernel` is `rach2-KERNEL/kernel` in its place.
+ * Each runs in a workspace of its own under `o->evidence`, under the case's
+ * initial bounds, with a claim of the case's resources: a host case's
+ * program with ETUDE_TREE naming the tree, a guest case's program on a
+ * machine of its QEMU profile, through etude-guest, with the memory the
+ * launcher reserves for the machine as its claim, and a machine case's
+ * scenario with its invocation, after its artifacts are published to the
+ * run's store. `o->casecheck` judges each attempt, a guest's placed `qemu`
+ * with the machine's console and a machine case's with the consoles its
+ * scenario kept. A manifest that cannot be read, of another suite's family,
+ * with no case on the architecture, or with a case that the set driver
+ * cannot run (legacy_manifest_read) is refused.
  *
  * The history is one stream under `o->results`, with the plan of one item
  * for each suite of the registry, the case `legacy.SUITE` of the family

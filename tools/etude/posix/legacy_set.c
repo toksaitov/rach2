@@ -2,13 +2,14 @@
  * legacy_set.c: the set driver on POSIX systems. It runs the suites of one
  * run of tests/run as one run of etude: it prepares them under a claim of
  * every limited resource of the machine, admits each suite of the registry,
- * and each item of a suite run by the host and guest cases of a manifest,
- * through the machine's ledger with the old runner's host lock and a port
- * block, runs a suite as `etude-legacy run` under a watchdog of the whole
- * suite, a host case's program in its workspace and a guest case's machine
- * (legacy_guest.c) under the case's own watchdog, and writes the run's
- * history and its status record.
+ * and each item of a suite run by the host, guest and machine cases of a
+ * manifest, through the machine's ledger with the old runner's host lock and
+ * a port block, runs a suite as `etude-legacy run` under a watchdog of the
+ * whole suite, a host case's program and a machine case's scenario in its
+ * workspace and a guest case's machine (legacy_guest.c) under the case's own
+ * watchdog, and writes the run's history and its status record.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
@@ -25,6 +26,7 @@
 #endif
 
 #include "../compare.h"
+#include "etude/artifact.h"
 #include "etude/bridge.h"
 #include "etude/history.h"
 #include "etude/ledger.h"
@@ -54,8 +56,14 @@ extern char **environ;
 /* From the preparation's termination signal to its kill. */
 #define PREP_GRACE_US UINT64_C(15000000)
 
-/* From a case's termination signal to its kill. */
-#define CASE_GRACE_US UINT64_C(5000000)
+/* From a case's termination signal to its kill, which a machine case's
+ * scenario has beside its cleanup's bound; and what a scenario keeps of each
+ * console and of each output, and how often etude-guest's frames are sent
+ * again. */
+#define CASE_GRACE_US  UINT64_C(5000000)
+#define CONSOLE_BYTES  (UINT64_C(64) << 20)
+#define SCENARIO_BYTES (UINT64_C(1) << 20)
+#define RESEND_US      UINT64_C(2000000)
 
 /* The seconds a watchdog of a whole suite or of the preparation allows past
  * the bound that etude-legacy keeps itself, for it to end and report. */
@@ -168,6 +176,10 @@ struct member {
                                             given */
     struct legacy_guest *g;              /* a guest case's attempt while it runs */
     char guest_err[PATH_LEN];            /* the standard error of a guest's program */
+    /* A machine case's scenario invocation, and the digests of its artifacts
+     * by its goals once they are published. */
+    char invocation[PATH_LEN];
+    char (*digests)[ETUDE_DIGEST_HEX + 1];
     char inventory[65];
     char workload[400], assertions[400], profile[400]; /* blob references */
     struct command c;
@@ -194,7 +206,8 @@ struct set {
                            given, the members of one suite together */
     size_t n;
     char tree[PATH_LEN];               /* the tree's absolute path */
-    struct etude_store *objects;       /* the guest cases' artifacts, or NULL */
+    struct etude_store *objects;       /* the guest and machine cases' artifacts,
+                                          or NULL */
     char objects_dir[PATH_LEN];        /* their store, under the evidence */
     struct legacy_manifest *manifests; /* by the request's members; a suite
                                           of the registry has none */
@@ -819,8 +832,8 @@ static int write_plan(struct set *x)
         cmp_printf(&t,
                    ",\"architecture\":\"%s\",\"domain\":\"%s\",\"workload\":%s,"
                    "\"assertions\":%s,\"profile\":%s,\"repetition\":%lld,\"attempt_ids\":[",
-                   m->arch, m->k != NULL && m->k->guest ? "qemu" : "host", m->workload,
-                   m->assertions, m->profile, m->rep);
+                   m->arch, m->k != NULL && (m->k->guest || m->k->machine) ? "qemu" : "host",
+                   m->workload, m->assertions, m->profile, m->rep);
         string(&t, m->c.id);
         cmp_printf(&t, "]}");
     }
@@ -1357,19 +1370,58 @@ static enum etude_end end_named(const char *end)
                                           : ETUDE_END_LOST;
 }
 
+/** Compare two strings for qsort. */
+static int by_name(const void *a, const void *b)
+{
+    return strcmp(*(char *const *)a, *(char *const *)b);
+}
+
+/**
+ * Give in `out` the consoles of machine case member `m`, the files
+ * `MACHINE.N.console` that its scenario keeps in `evidence/` of its
+ * workspace, in the order of their names, at most LEGACY_CONSOLES of them,
+ * from malloc; their count, or 0 for none or a directory that cannot be
+ * read.
+ */
+static size_t consoles_of(const struct member *m, char **out)
+{
+    char dir[PATH_LEN];
+    struct dirent *e;
+    size_t n = 0, len;
+    DIR *d;
+
+    if (fit(dir, sizeof(dir), "%s/evidence", m->work) != 0 || (d = opendir(dir)) == NULL)
+        return 0;
+    while ((e = readdir(d)) != NULL && n < LEGACY_CONSOLES) {
+        len = strlen(e->d_name);
+        if (len > 8 && strcmp(e->d_name + len - 8, ".console") == 0 &&
+            (out[n] = malloc(strlen(dir) + len + 2)) != NULL) {
+            snprintf(out[n], strlen(dir) + len + 2, "%s/%s", dir, e->d_name);
+            n++;
+        }
+    }
+    closedir(d);
+    qsort(out, n, sizeof(*out), by_name);
+    return n;
+}
+
 /**
  * Judge the case of member `m`, which has finished, by casecheck's
  * judgement of its output and its end. A guest case is judged as placed
  * under QEMU, with the machine's console, by the end etude-guest reported;
- * a fault of its session is a disruption beside casecheck's reason.
+ * a fault of its session is a disruption beside casecheck's reason. A
+ * machine case is judged as placed under QEMU too, by its scenario's end,
+ * with the consoles its scenario kept.
  */
 static void judge_case(struct set *x, struct member *m)
 {
     struct command *c = &m->c;
     const struct etude_supervised_result *r = etude_supervised_result(c->sup);
     const char *why = m->g != NULL ? legacy_guest_why(m->g) : "";
+    char *consoles[LEGACY_CONSOLES];
     struct legacy_judge j;
     struct legacy_judgement v;
+    size_t i;
 
     took(c, r);
     memset(&j, 0, sizeof(j));
@@ -1378,14 +1430,18 @@ static void judge_case(struct set *x, struct member *m)
     j.manifest = m->manifest->path;
     j.case_id = m->case_id;
     j.arch = m->arch;
+    j.consoles = consoles;
     j.output = c->out;
     j.run_id = x->run_id;
     j.attempt_id = c->id;
     j.item_id = m->item_id;
-    j.placement = "host";
+    j.placement = m->k->machine ? "qemu" : "host";
+    if (m->k->machine)
+        j.nconsoles = consoles_of(m, consoles);
     if (m->g != NULL) {
         j.placement = "qemu";
-        j.console = legacy_guest_console(m->g);
+        consoles[0] = (char *)legacy_guest_console(m->g);
+        j.nconsoles = 1;
         j.end = legacy_guest_end(m->g, r, &j.value);
         c->end = end_named(j.end);
         c->value = j.value;
@@ -1396,6 +1452,8 @@ static void judge_case(struct set *x, struct member *m)
     j.results = m->judged_out;
     j.errors = m->judge_err;
     legacy_judge_run(&j, &v);
+    for (i = 0; m->k->machine && i < j.nconsoles; i++)
+        free(consoles[i]);
     m->judged = v.doc;
     m->njudged = v.len;
     if (v.outcome == LEGACY_UNJUDGED)
@@ -1498,6 +1556,7 @@ static int results(const struct set *x, const struct member *m, struct cmp_text 
     struct cmp_text d = {NULL, 0, 0, 0};
     int guest = m->k != NULL && m->k->guest;
     const char *by = guest ? "etude_guest" : "host_process", *check;
+    const char *placement = m->k != NULL && (guest || m->k->machine) ? "qemu" : "host";
     int value = c->value;
 
     if (m->judged != NULL)
@@ -1518,7 +1577,7 @@ static int results(const struct set *x, const struct member *m, struct cmp_text 
     cmp_printf(&d,
                ",\"inventory_sha256\":\"%s\",\"placement\":\"%s\",\"termination\":{\"end\":"
                "\"%s\",\"value\":",
-               m->inventory, guest ? "qemu" : "host", end_name(c->end));
+               m->inventory, placement, end_name(c->end));
     if (value >= 0 && value <= 255)
         cmp_printf(&d, "%d", value);
     else
@@ -1947,6 +2006,191 @@ static int prepare(struct set *x)
     return c->outcome == PASS ? 0 : 1;
 }
 
+/* ---- The machine cases. ---- */
+
+/** Open the store of the guest and machine cases' artifacts, under the
+ * evidence, once; 0, or -1 with why in `why`. */
+static int open_objects(struct set *x, char *why, size_t size)
+{
+    if (x->objects != NULL)
+        return 0;
+    if (fit(x->objects_dir, sizeof(x->objects_dir), "%s/%s.store", x->o->evidence, x->run_id) !=
+            0 ||
+        (x->objects = etude_store_open(x->objects_dir)) == NULL) {
+        (void)fit(why, size, "the store of its artifacts, %s, cannot be opened: %s", x->objects_dir,
+                  strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/** Write into `out` the path of the program `name`: `name` itself when it
+ * has a slash, or the first executable file of that name in a directory of
+ * PATH; 0, or -1 when there is none. */
+static int on_path(const char *name, char *out, size_t size)
+{
+    const char *dir = getenv("PATH"), *end;
+
+    if (strchr(name, '/') != NULL)
+        return fit(out, size, "%s", name) == 0 && access(out, X_OK) == 0 ? 0 : -1;
+    for (; dir != NULL && *dir != '\0'; dir = *end == ':' ? end + 1 : end) {
+        end = dir + strcspn(dir, ":");
+        if (end > dir && fit(out, size, "%.*s/%s", (int)(end - dir), dir, name) == 0 &&
+            access(out, X_OK) == 0)
+            return 0;
+    }
+    return -1;
+}
+
+/**
+ * Write the scenario invocation of machine case member `m`, whose artifacts
+ * are published, for the emulators `qemu` of i686 and x86-64: each step's
+ * bound is the case's gap, and its cleanup's bound is the manifest's, or the
+ * case's grace when it gives none.
+ *
+ * @return 0, or -1 with the reason in `why`.
+ */
+static int write_invocation(const struct set *x, const struct member *m, char qemu[2][PATH_LEN],
+                            char *why, size_t size)
+{
+    const struct legacy_case *k = m->k;
+    const struct json *tools = json_member(json_member(k->json, "requirements"), "tools");
+    const struct json *steps = json_member(k->json, "steps");
+    struct cmp_text d = {NULL, 0, 0, 0};
+    char path[PATH_LEN];
+    size_t i;
+    FILE *f;
+    int rc = -1;
+
+    cmp_printf(&d, "{\"schema_version\":1,\"run_id\":");
+    string(&d, x->run_id);
+    cmp_printf(&d, ",\"attempt_id\":");
+    string(&d, m->c.id);
+    cmp_printf(&d, ",\"manifest\":");
+    string(&d, m->manifest->path);
+    cmp_printf(&d, ",\"case_id\":");
+    string(&d, k->case_id);
+    cmp_printf(&d, ",\"architecture\":");
+    string(&d, k->arch);
+    cmp_printf(&d, ",\"store\":");
+    string(&d, x->objects_dir);
+    cmp_printf(&d, ",\"artifacts\":{");
+    for (i = 0; i < k->ngoals; i++) {
+        cmp_printf(&d, i > 0 ? "," : "");
+        string(&d, k->names[i]);
+        cmp_printf(&d, ":\"%s\"", m->digests[i]);
+    }
+    cmp_printf(&d, "},\"tools\":{");
+    for (i = 0; tools != NULL && tools->type == JSON_ARRAY && i < tools->count; i++) {
+        if (tools->item[i]->type != JSON_STRING ||
+            on_path(tools->item[i]->string, path, sizeof(path)) != 0) {
+            fit(why, size, "its tool %s is not on PATH",
+                tools->item[i]->type == JSON_STRING ? tools->item[i]->string : "?");
+            free(d.data);
+            return -1;
+        }
+        cmp_printf(&d, i > 0 ? "," : "");
+        string(&d, tools->item[i]->string);
+        cmp_printf(&d, ":");
+        string(&d, path);
+    }
+    cmp_printf(&d, "},\"site\":{\"accel\":");
+    string(&d, x->o->accel);
+    cmp_printf(&d, ",\"qemu_i686\":");
+    string(&d, qemu[0]);
+    cmp_printf(&d, ",\"qemu_x86_64\":");
+    string(&d, qemu[1]);
+    cmp_printf(&d, ",\"ovmf_i686\":null,\"ovmf_x86_64\":null},\"steps\":{");
+    for (i = 0; steps != NULL && steps->type == JSON_ARRAY && i < steps->count; i++) {
+        cmp_printf(&d, i > 0 ? "," : "");
+        string(&d, json_text(steps->item[i], "step_id"));
+        cmp_printf(&d, ":%llu", (unsigned long long)k->gap_us);
+    }
+    cmp_printf(&d, "},\"ports\":[],\"cleanup_us\":%llu,\"scratch\":",
+               (unsigned long long)(k->stage_us[ETUDE_STAGE_CLEANUP] > 0
+                                        ? k->stage_us[ETUDE_STAGE_CLEANUP]
+                                        : CASE_GRACE_US));
+    string(&d, m->work);
+    cmp_printf(&d,
+               ",\"grace_us\":%llu,\"console_max_bytes\":%llu,\"output_max_bytes\":%llu,"
+               "\"resend_us\":%llu}\n",
+               (unsigned long long)CASE_GRACE_US, (unsigned long long)CONSOLE_BYTES,
+               (unsigned long long)SCENARIO_BYTES, (unsigned long long)RESEND_US);
+    if (d.failed)
+        errno = ENOMEM;
+    else if ((f = fopen(m->invocation, "w")) != NULL) {
+        rc = fwrite(d.data, 1, d.length, f) == d.length ? 0 : -1;
+        rc |= fclose(f) != 0 ? -1 : 0;
+    }
+    if (rc != 0)
+        fit(why, size, "its invocation %s could not be written: %s", m->invocation,
+            strerror(errno));
+    free(d.data);
+    return rc;
+}
+
+/** Publish the artifacts of machine case member `m` to the run's store, and
+ * write its invocation; 0, or -1 with the reason in `why`. */
+static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN], char *why,
+                          size_t size)
+{
+    const struct legacy_case *k = m->k;
+    const char *emulator = qemu[strcmp(k->arch, "x86_64") == 0];
+    char path[PATH_LEN];
+    size_t g;
+
+    if (strchr(emulator, '/') == NULL) {
+        fit(why, size, "its emulator %s is not on PATH", emulator);
+        return -1;
+    }
+    if ((m->digests = calloc(k->ngoals + 1, sizeof(*m->digests))) == NULL) {
+        fit(why, size, "memory ran out");
+        return -1;
+    }
+    for (g = 0; g < k->ngoals; g++)
+        if (fit(path, sizeof(path), "%s/%s", x->tree, k->goals[g]) != 0 ||
+            etude_store_put(x->objects, path, NULL, m->digests[g], NULL) != 0) {
+            fit(why, size, "its artifact %s, %s, could not be published: %s", k->names[g],
+                k->goals[g], strerror(errno));
+            return -1;
+        }
+    return write_invocation(x, m, qemu, why, size);
+}
+
+/**
+ * Publish the artifacts of each machine case member to the run's store, and
+ * write its scenario invocation. A member whose artifacts or invocation
+ * cannot be made ends before it runs, incomplete, with the reason as a
+ * disruption.
+ */
+static void publish(struct set *x)
+{
+    static const char *const emulators[] = {"qemu-system-i386", "qemu-system-x86_64"};
+    char qemu[2][PATH_LEN], why[REASON_LEN];
+    struct member *m;
+    size_t i;
+    int opened;
+
+    for (i = 0; i < x->n && (x->mem[i].k == NULL || !x->mem[i].k->machine); i++) {
+    }
+    if (i == x->n)
+        return;
+    for (i = 0; i < 2; i++)
+        if (on_path(emulators[i], qemu[i], PATH_LEN) != 0)
+            snprintf(qemu[i], PATH_LEN, "%s", emulators[i]);
+    opened = open_objects(x, why, sizeof(why)) == 0;
+    for (i = 0; i < x->n; i++) {
+        m = &x->mem[i];
+        if (m->k == NULL || !m->k->machine || m->c.state != QUEUED)
+            continue;
+        if (opened && publish_member(x, m, qemu, why, sizeof(why)) == 0)
+            continue;
+        came_out(&m->c, INCOMPLETE, 1, "%s", why);
+        not_run(x, &m->c, INCOMPLETE, m->c.reason, 1);
+        write_attempt(x, m);
+    }
+}
+
 /* ---- The suites. ---- */
 
 /** Say whether command `c` holds or runs on what the machine admitted. */
@@ -2055,22 +2299,6 @@ static size_t case_vars(struct member *m, char **vars)
         n++;
     }
     return n;
-}
-
-/** Open the store of the guest cases' artifacts, under the evidence, once;
- * 0, or -1 with why in `why`. */
-static int open_objects(struct set *x, char *why, size_t size)
-{
-    if (x->objects != NULL)
-        return 0;
-    if (fit(x->objects_dir, sizeof(x->objects_dir), "%s/%s.store", x->o->evidence, x->run_id) !=
-            0 ||
-        (x->objects = etude_store_open(x->objects_dir)) == NULL) {
-        (void)fit(why, size, "the store of its artifacts, %s, cannot be opened: %s", x->objects_dir,
-                  strerror(errno));
-        return -1;
-    }
-    return 0;
 }
 
 /**
@@ -2431,6 +2659,7 @@ static int check_cases(struct set *x)
     const struct etude_legacy_set_opts *o = x->o;
     char why[PATH_LEN + 80];
     size_t i, k;
+    int machines = 0;
 
     x->n = registry_suites(o);
     if (x->n == o->nmembers)
@@ -2449,9 +2678,15 @@ static int check_cases(struct set *x)
         if (legacy_manifest_read(&x->manifests[i], x->tree, o->members[i].cases,
                                  o->members[i].suite, o->arch, o->kernel) != 0)
             return refuse(x, x->manifests[i].why);
-        for (k = 0; k < x->manifests[i].ncases; k++)
+        for (k = 0; k < x->manifests[i].ncases; k++) {
             x->n += (size_t)x->manifests[i].cases[k].reps;
+            machines |= x->manifests[i].cases[k].machine;
+        }
     }
+    if (machines && (o->results[0] != '/' || o->evidence[0] != '/'))
+        return refuse(x, "a machine case's scenario runs in its workspace and is given the "
+                         "paths of its invocation, so the results and the evidence must be "
+                         "absolute paths");
     return 0;
 }
 
@@ -2542,7 +2777,8 @@ static int member_command(struct set *x, struct member *m)
 
 /** Name the files of case member `m`, the repetition `m->rep` of its case:
  * its item, its attempt, its workspace, its output and casecheck's, its
- * program, and the variables its program is given; 0, or -1. */
+ * program, a machine case's invocation, and the variables its program is
+ * given; 0, or -1. */
 static int case_paths(struct set *x, struct member *m)
 {
     const struct legacy_case *k = m->k;
@@ -2562,6 +2798,7 @@ static int case_paths(struct set *x, struct member *m)
         fit(m->judged_out, sizeof(m->judged_out), "%s/%s.results", x->output, tail) != 0 ||
         fit(m->judge_err, sizeof(m->judge_err), "%s/%s.judge", x->output, tail) != 0 ||
         fit(m->guest_err, sizeof(m->guest_err), "%s/%s.err", x->output, tail) != 0 ||
+        fit(m->invocation, sizeof(m->invocation), "%s/%s.invocation", x->output, tail) != 0 ||
         fit(m->program, sizeof(m->program), "%s/%s", x->tree, k->goals[k->program]) != 0)
         return -1;
     snprintf(m->vars[v++], sizeof(m->vars[0]), "ETUDE_CASE=%s", k->case_id);
@@ -2583,7 +2820,8 @@ static int case_paths(struct set *x, struct member *m)
  * shared and no port. A guest case's machine, whose memory is what its QEMU
  * profile reserves, takes a port block as a suite does, and the host lock
  * alone when it claims more than half the memory; its watchdog bounds the
- * stages the manifest bounds.
+ * stages the manifest bounds. A machine case's scenario is given its
+ * invocation, and the bound of its cleanup stage beside the grace.
  */
 static int case_command(struct set *x, struct member *m)
 {
@@ -2614,7 +2852,7 @@ static int case_command(struct set *x, struct member *m)
     c->exclusive = m->m->serial || c->alone;
     c->is_case = 1;
     c->live = x->n == 1;
-    c->grace_us = CASE_GRACE_US;
+    c->grace_us = CASE_GRACE_US + (k->machine ? k->stage_us[ETUDE_STAGE_CLEANUP] : 0);
     c->wd.case_us = k->case_us;
     c->wd.gap_us = k->gap_us;
     c->wd.witnesses = k->witnesses;
@@ -2623,7 +2861,7 @@ static int case_command(struct set *x, struct member *m)
     c->cleanup = ETUDE_CLEANUP_CONFIRMED;
     c->end = ETUDE_END_STOPPED;
     c->value = -1;
-    if ((c->argv = calloc(k->nargs + 6, sizeof(*c->argv))) == NULL) {
+    if ((c->argv = calloc(k->nargs + 7, sizeof(*c->argv))) == NULL) {
         errno = ENOMEM;
         return -1;
     }
@@ -2632,6 +2870,8 @@ static int case_command(struct set *x, struct member *m)
     c->argv[a++] = "exec \"$@\" >\"$0\" 2>&1";
     c->argv[a++] = c->out;
     c->argv[a++] = m->program;
+    if (k->machine)
+        c->argv[a++] = m->invocation;
     for (i = 0; i < k->nargs; i++)
         c->argv[a++] = (char *)k->args[i];
     x->jobs[m - x->mem].id = c->id;
@@ -2893,6 +3133,7 @@ static void tear_down(struct set *x)
         free(x->mem[i].c.argv);
         free(x->mem[i].c.envp);
         free(x->mem[i].judged);
+        free(x->mem[i].digests);
     }
     for (i = 0; x->manifests != NULL && i < x->o->nmembers; i++)
         legacy_manifest_free(&x->manifests[i]);
@@ -2934,6 +3175,7 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
         goto out;
     }
     if (prepare(&x) == 0) {
+        publish(&x);
         drive(&x);
     } else {
         for (i = 0; i < x.n; i++)

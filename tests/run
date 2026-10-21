@@ -846,6 +846,7 @@ SCHEMAS=${RACH2_ETUDE_SCHEMAS:-$REPO/tools/etude/schemas}
 RECORD=$WORK/prepare.record
 RESULTS=${RACH2_RESULTS:-$WORK/results}
 mkdir -p "$RESULTS" "$REPO/build/tests/failed"
+RESULTS=$(cd "$RESULTS" && pwd) || exit 1
 # The families of cases, `FAMILY PATH` a line, each checked by its schema and
 # rules first, so that a manifest at fault refuses every run; a suite is run
 # by the family whose identity ends in its name.

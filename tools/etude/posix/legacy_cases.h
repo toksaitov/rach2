@@ -1,6 +1,6 @@
 /*
- * legacy_cases.h: the host and guest cases of a manifest as the set driver
- * runs them, and the judge of one attempt of such a case, `casecheck
+ * legacy_cases.h: the host, guest and machine cases of a manifest as the set
+ * driver runs them, and the judge of one attempt of such a case, `casecheck
  * attempt`.
  */
 #ifndef ETUDE_LEGACY_CASES_H
@@ -26,6 +26,8 @@ struct legacy_case {
     long long seed;
     int scratch;        /* its isolation has the `scratch` fixture */
     int guest;          /* it is of the domain `guest`, placed under QEMU */
+    int machine;        /* it is of the domain `machine`, whose program is
+                           its scenario */
     char **goals;       /* its prepare artifacts as make goals of the tree,
                            `build/NODE` or `build/x86_64/NODE`, with a guest
                            case's `rach2/kernel` as `rach2-NAME/kernel`
@@ -36,8 +38,8 @@ struct legacy_case {
     const char **args; /* the workload's arguments */
     size_t nargs;
     uint64_t case_us, gap_us; /* the initial bounds of the case and the gap */
-    /* A guest case's initial bound of each stage the manifest bounds, by
-     * enum etude_stage; 0 for one bounded by the case alone. */
+    /* A guest or machine case's initial bound of each stage the manifest
+     * bounds, by enum etude_stage; 0 for one bounded by the case alone. */
     uint64_t stage_us[ETUDE_WATCH_STAGES];
     const struct json *qemu; /* a guest case's QEMU profile, or NULL */
     struct etude_witness_bound *witnesses;
@@ -65,14 +67,15 @@ struct legacy_manifest {
  * The last part of its family's identity must be the suite's name, at least
  * one case must run on `arch`, and each that does must have a program that
  * is an artifact of its `prepare`, no standard input, ports, loop devices or
- * host locks, and no fixture but `scratch`, or for a guest case `scratch`
- * and `disk`. A guest case must also be of the role `ordinary` or `boot`,
- * end as `exited` or `signaled`, and have a QEMU profile of direct firmware
- * or SeaBIOS, reserved memory, and a kernel, a RAM image and disks that are
- * artifacts of its `prepare`, each disk a CD, an empty disk or one of a
- * `disk` fixture. The schema's other rules are the caller's to check. The
- * caller frees `m` with legacy_manifest_free whether or not the manifest
- * was taken.
+ * host locks, and no fixture but `scratch`, or for a guest or machine case
+ * `scratch` and `disk`. A machine case has no arguments, since its scenario
+ * takes its invocation alone. A guest case must also be of the role
+ * `ordinary` or `boot`, end as `exited` or `signaled`, and have a QEMU
+ * profile of direct firmware or SeaBIOS, reserved memory, and a kernel, a
+ * RAM image and disks that are artifacts of its `prepare`, each disk a CD,
+ * an empty disk or one of a `disk` fixture. The schema's other rules are the
+ * caller's to check. The caller frees `m` with legacy_manifest_free whether
+ * or not the manifest was taken.
  *
  * With `kernel`, the NAME of `-n NAME`, a guest case whose QEMU profile
  * boots the node `rach2/kernel` is given the goal of `rach2-NAME/kernel` for
@@ -95,6 +98,9 @@ enum legacy_judged {
     LEGACY_INCOMPLETE = 3
 };
 
+/* The most consoles of a machine case that casecheck is given. */
+#define LEGACY_CONSOLES 64
+
 /* One attempt of a case to judge, as casecheck's arguments give it. */
 struct legacy_judge {
     const char *casecheck; /* casecheck's path */
@@ -103,7 +109,9 @@ struct legacy_judge {
     const char *case_id;
     const char *arch;      /* the item's architecture */
     const char *placement; /* host or qemu */
-    const char *console;   /* a machine's console, or NULL for none */
+    char *const *consoles; /* the machines' consoles, `MACHINE.N.console` for a
+                              machine case */
+    size_t nconsoles;      /* at most LEGACY_CONSOLES */
     const char *output;    /* the program's output */
     const char *run_id, *attempt_id, *item_id;
     const char *end;     /* exited, signaled, stopped or lost */
@@ -123,9 +131,9 @@ struct legacy_judgement {
 
 /**
  * Judge the attempt `j` names by `casecheck attempt`, run with no input and
- * killed after LEGACY_JUDGE_S seconds, with the console as its `-k` when `j`
- * gives one. Its document is kept only when it exited 0, 1 or 3 and the
- * document parses.
+ * killed after LEGACY_JUDGE_S seconds, with a `-k` for each of its consoles.
+ * Its document is kept only when it exited 0, 1 or 3 and the document
+ * parses.
  */
 void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out);
 

@@ -1,8 +1,8 @@
 /*
- * legacy_cases.c: the host and guest cases of a suite's manifest as the set
- * driver runs them. It reads the manifest, gives each case that runs on the
- * run's architecture its program, its arguments, its bounds, its claim and
- * the canonical documents of its item, and judges an attempt by
+ * legacy_cases.c: the host, guest and machine cases of a suite's manifest as
+ * the set driver runs them. It reads the manifest, gives each case that runs
+ * on the run's architecture its program, its arguments, its bounds, its
+ * claim and the canonical documents of its item, and judges an attempt by
  * `casecheck attempt`.
  */
 #include <dirent.h>
@@ -192,12 +192,14 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     const char *domain = json_text(k->json, "domain"), *f;
     size_t i;
 
-    if (domain == NULL || (strcmp(domain, "host") != 0 && strcmp(domain, "guest") != 0))
+    if (domain == NULL || (strcmp(domain, "host") != 0 && strcmp(domain, "guest") != 0 &&
+                           strcmp(domain, "machine") != 0))
         return refuse(m,
-                      "%s: a case of the domain %s; the set driver runs host and guest cases "
-                      "alone",
+                      "%s: a case of the domain %s; the set driver runs host, guest and machine "
+                      "cases alone",
                       k->case_id, domain != NULL ? domain : "?");
     k->guest = strcmp(domain, "guest") == 0;
+    k->machine = strcmp(domain, "machine") == 0;
     if (iso == NULL || in == NULL || locks == NULL)
         return refuse(m, "%s: the case lacks its isolation, its input or its locks", k->case_id);
     if (in->type != JSON_NULL)
@@ -210,15 +212,16 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
                       k->case_id);
     for (i = 0; i < iso->count; i++) {
         f = json_text(iso->item[i], "fixture");
-        if (f != NULL && k->guest && strcmp(f, "disk") == 0)
+        if (f != NULL && (k->guest || k->machine) && strcmp(f, "disk") == 0)
             continue;
         if (f == NULL || strcmp(f, "scratch") != 0)
             return refuse(m,
                           "%s: the case needs the fixture %s; the set driver gives scratch alone, "
-                          "and disk to a guest case",
+                          "and disk to a guest or machine case",
                           k->case_id, f != NULL ? f : "?");
         k->scratch = 1;
     }
+    k->scratch |= k->machine;
     k->cpu_millis = (uint64_t)count_of(r, "cpu_millis");
     k->memory_bytes = (uint64_t)count_of(r, "memory_bytes");
     k->disk_bytes = (uint64_t)count_of(r, "disk_bytes");
@@ -309,21 +312,18 @@ static int stage_of(const char *name)
 
 /**
  * Check what guest case `k` needs of the driver beyond a host case's: its
- * role, its end, its QEMU profile and its artifacts; take its stages'
- * bounds, and the memory etude_qemu_memory reserves for its machine as its
- * claim; 0, or -1 after a refusal.
+ * role, its end, its QEMU profile and its artifacts; take the memory
+ * etude_qemu_memory reserves for its machine as its claim; 0, or -1 after a
+ * refusal.
  */
 static int guest_of(struct legacy_manifest *m, struct legacy_case *k, const char *arch)
 {
     const struct json *e = typed(k->json, "execution", JSON_OBJECT);
-    const struct json *stages = typed(typed(k->json, "bounds", JSON_OBJECT), "stages", JSON_OBJECT);
     const char *role = json_text(e, "role");
     const char *end = json_text(typed(k->json, "termination", JSON_OBJECT), "end");
     const char *firmware, *initrd;
     struct etude_qemu_profile p;
     struct etude_qemu_memory mem;
-    size_t i;
-    int s;
 
     k->qemu = typed(typed(k->json, "requirements", JSON_OBJECT), "qemu", JSON_OBJECT);
     if (role == NULL || (strcmp(role, "ordinary") != 0 && strcmp(role, "boot") != 0))
@@ -360,9 +360,6 @@ static int guest_of(struct legacy_manifest *m, struct legacy_case *k, const char
                       "which the set driver runs alone",
                       k->case_id);
     k->memory_bytes = mem.resident_bytes + mem.overhead_bytes;
-    for (i = 0; stages != NULL && i < stages->count; i++)
-        if ((s = stage_of(stages->item[i]->name)) >= 0)
-            k->stage_us[s] = initial_of(stages->item[i]);
     return 0;
 }
 
@@ -378,6 +375,11 @@ static int workload_of(struct legacy_manifest *m, struct legacy_case *k)
     if (args == NULL || seed == NULL || k->reps < 1 ||
         (seed->type != JSON_NULL && seed->type != JSON_INTEGER))
         return refuse(m, "%s: the case's workload lacks its arguments, repetitions or seed",
+                      k->case_id);
+    if (k->machine && args->count > 0)
+        return refuse(m,
+                      "%s: a machine case has arguments, but its scenario takes its invocation "
+                      "alone",
                       k->case_id);
     if ((k->args = calloc(args->count + 1, sizeof(*k->args))) == NULL)
         return refuse(m, "memory ran out");
@@ -402,18 +404,22 @@ static int witness_kind(const char *kind)
                                           : -1;
 }
 
-/** Take the bounds of case `k` and its witnesses of progress; 0, or -1
- * after a refusal. */
+/** Take the bounds of case `k`, its stages' for a guest or machine case, and
+ * its witnesses of progress; 0, or -1 after a refusal. */
 static int bounds_of(struct legacy_manifest *m, struct legacy_case *k)
 {
     const struct json *b = typed(k->json, "bounds", JSON_OBJECT);
     const struct json *p = typed(k->json, "progress", JSON_ARRAY), *w;
+    const struct json *stages = typed(b, "stages", JSON_OBJECT);
     struct etude_witness_bound *wb;
     size_t i;
-    int kind;
+    int kind, s;
 
     k->case_us = initial_of(typed(b, "case", JSON_OBJECT));
     k->gap_us = initial_of(typed(b, "gap", JSON_OBJECT));
+    for (i = 0; (k->guest || k->machine) && stages != NULL && i < stages->count; i++)
+        if ((s = stage_of(stages->item[i]->name)) >= 0)
+            k->stage_us[s] = initial_of(stages->item[i]);
     if (k->case_us == 0 || k->gap_us == 0 || p == NULL)
         return refuse(m, "%s: the case lacks its bounds or its progress", k->case_id);
     if ((k->witnesses = calloc(p->count + 1, sizeof(*k->witnesses))) == NULL)
@@ -500,7 +506,7 @@ static int take_case(struct legacy_manifest *m, const struct json *c, const char
         return -1;
     workload_document(c, item_arch, &k->workload);
     inventory_document(c, &k->inventory);
-    profile_document(c, k->guest ? "qemu" : "host", &k->profile);
+    profile_document(c, k->guest || k->machine ? "qemu" : "host", &k->profile);
     return 0;
 }
 
@@ -703,8 +709,8 @@ static void judge_take(const struct legacy_judge *j, int status, struct legacy_j
 void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out)
 {
     char value[16];
-    char *argv[24];
-    size_t k = 0;
+    char *argv[20 + 2 * LEGACY_CONSOLES];
+    size_t k = 0, i;
     pid_t pid;
     int status;
 
@@ -714,9 +720,9 @@ void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out
     argv[k++] = "-s";
     argv[k++] = (char *)j->schemas;
     argv[k++] = "attempt";
-    if (j->console != NULL) {
+    for (i = 0; i < j->nconsoles && i < LEGACY_CONSOLES; i++) {
         argv[k++] = "-k";
-        argv[k++] = (char *)j->console;
+        argv[k++] = j->consoles[i];
     }
     argv[k++] = (char *)j->manifest;
     argv[k++] = (char *)j->case_id;
