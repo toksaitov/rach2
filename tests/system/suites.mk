@@ -675,18 +675,14 @@ run-servicelog: rach2 utils check-busybox $(MKMBR) $(HARNESS)
 # `tests/run usb`: the USB stack, from a port to a keystroke, the cases of
 # tests/cases/machine.usb.json, each a boot of its own.
 # `tests/run mount`: the partition nodes, the block path through a device
-# that sleeps or never answers, and mount(2) and the claims it makes (see
-# tests/system/suites/mount.sh). Its disk is the test disk with a FAT32
-# partition added at 49 MiB by mkmbr and mtools.
-MOUNT_DISK = $(IMAGES_DIR)/mount-test.disk
-run-mount: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFIXTURE) $(MKMBR) $(HARNESS)
-	sh tests/system/suites/mount.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(MOUNT_DISK) \
-	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`"
-# The disks of the mount cases (tests/cases/machine.mount.json), made for each
-# architecture, since the FAT32 volume holds its tests/hello and
-# tests/memprobe. MOUNT_TEST_DISK is the test disk with a 48 MiB KRFFS
-# partition at LBA 2048 and a 14 MiB FAT32 one at LBA 100352, whose volume
-# mtools fills as a used one is: a name written, deleted and written again.
+# that sleeps or never answers, mount(2) and the claims it makes, and the FAT
+# driver mounted from BusyBox's shell. It is the cases of
+# tests/cases/machine.mount.json, which etude runs, and has no target here.
+# The disks of the mount cases are made for each architecture, since the
+# FAT32 volume holds its tests/hello and tests/memprobe. MOUNT_TEST_DISK is
+# the test disk with a 48 MiB KRFFS partition at LBA 2048 and a 14 MiB FAT32
+# one at LBA 100352, whose volume mtools fills as a used one is: a name
+# written, deleted and written again.
 # mformat's -T makes the volume the partition's 28672 sectors, since the
 # driver refuses a volume that claims more sectors than its partition has.
 # pattern.bin is 128 sectors, each 128 copies of its own number and a dot.
