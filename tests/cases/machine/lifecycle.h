@@ -3,14 +3,16 @@
  * declared assertion reported once, waits and searches of a console that
  * report what they found, a value read off a console, a program run from the
  * kernel's debug shell and judged by the record that hands the shell back,
- * the end of a machine by QMP's quit, a look at its processors, and
- * fsck.krffs on a disk copy.
+ * the end of a machine by QMP's quit, a look at its processors, fsck.krffs
+ * on a disk copy, the kernel's record of its clock's check, and a clock
+ * reference on the host for clockmusl.
  */
 #ifndef LIFECYCLE_H
 #define LIFECYCLE_H
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #include "etude/scenario.h"
 
@@ -140,6 +142,44 @@ char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, co
  */
 char *lc_handback(struct lc *l, struct etude_case_machine *m, const char *machine, uint64_t from,
                   uint64_t *at, const char *id);
+
+/**
+ * Judge the `len` bytes of `w`, the window of a program run at the debug
+ * shell, as lc_run judges it, putting what decided it in `why`.
+ *
+ * @return 1 when the program exited with status 0.
+ */
+int lc_exited0(const char *w, size_t len, char *why, size_t size);
+
+/**
+ * Find the kernel's record `timing: tick N Hz, ...` at the start of a line of
+ * the `len` bytes of `w`, and give its level: 6 when its clock's period
+ * accounting passed its check on fixed readings, 3 when it did not; another
+ * level's record does not count.
+ *
+ * @return the level of the first record of level 6, else of level 3, or 0
+ *         when there is none.
+ */
+int lc_timing_level(const char *w, size_t len);
+
+/**
+ * Start the clock reference for clockmusl: a child that answers on a UDP
+ * port of 127.0.0.1, which the guest reaches at QEMU's host, 10.0.2.2. Each
+ * request `CLOCKREF N` gets back `CLOCKREF N MONO REAL`, the host's monotonic
+ * and calendar clocks in nanoseconds, read as the request is answered.
+ *
+ * @return the child's pid, with the port in `*port`, or -1.
+ */
+pid_t lc_clockref_start(unsigned *port);
+
+/** End the clock reference `pid`, when it is not -1, and reap it. */
+void lc_clockref_stop(pid_t pid);
+
+/**
+ * Say whether a line of the `len` bytes of `w` is clockmusl's result of its
+ * comparison with the reference, `CLOCKMUSL REFERENCE OK`, whole.
+ */
+int lc_clockref_said(const char *w, size_t len);
 
 /**
  * Report assertion `id` from a search of the console after `from`: it holds

@@ -2,9 +2,16 @@
  * lifecycle.c: the code the scenarios of tests/cases/machine/ share, over
  * libetude-case.
  */
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "history_json.h"
 #include "lifecycle.h"
@@ -399,6 +406,105 @@ char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, co
         return NULL;
     }
     return lc_handback(l, m, machine, from, at, id);
+}
+
+int lc_exited0(const char *w, size_t len, char *why, size_t size)
+{
+    return score_window(w, len, why, size);
+}
+
+int lc_timing_level(const char *w, size_t len)
+{
+    size_t at, from;
+    int level = 0;
+
+    for (at = 0; at < len; at++) {
+        if (at != 0 && w[at - 1] != '\n')
+            continue;
+        from = lc_past_prefix(w, len, at);
+        if (from == at || from + 8 > len || memcmp(w + from, "timing: ", 8) != 0)
+            continue;
+        if (w[at + 1] == '6')
+            return 6;
+        if (w[at + 1] == '3')
+            level = 3;
+    }
+    return level;
+}
+
+/** Answer clockmusl's requests on the bound UDP socket `fd` until killed. */
+static void clockref_serve(int fd)
+{
+    struct sockaddr_in peer;
+    socklen_t size;
+    struct timespec mono, real;
+    char packet[160], tail;
+    unsigned sequence;
+    ssize_t n;
+
+    for (;;) {
+        size = sizeof(peer);
+        n = recvfrom(fd, packet, sizeof(packet) - 1, 0, (struct sockaddr *)&peer, &size);
+        if (n <= 0)
+            continue;
+        packet[n] = '\0';
+        if (sscanf(packet, "CLOCKREF %u %c", &sequence, &tail) != 1 ||
+            clock_gettime(CLOCK_MONOTONIC, &mono) != 0 || clock_gettime(CLOCK_REALTIME, &real) != 0)
+            continue;
+        n = snprintf(packet, sizeof(packet), "CLOCKREF %u %lld %lld", sequence,
+                     (long long)mono.tv_sec * 1000000000LL + mono.tv_nsec,
+                     (long long)real.tv_sec * 1000000000LL + real.tv_nsec);
+        sendto(fd, packet, (size_t)n, 0, (struct sockaddr *)&peer, size);
+    }
+}
+
+pid_t lc_clockref_start(unsigned *port)
+{
+    struct sockaddr_in a;
+    socklen_t size = sizeof(a);
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    pid_t pid;
+
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (fd < 0 || bind(fd, (struct sockaddr *)&a, size) != 0 ||
+        getsockname(fd, (struct sockaddr *)&a, &size) != 0) {
+        if (fd >= 0)
+            close(fd);
+        return -1;
+    }
+    *port = ntohs(a.sin_port);
+    pid = fork();
+    if (pid == 0)
+        clockref_serve(fd);
+    close(fd);
+    return pid;
+}
+
+void lc_clockref_stop(pid_t pid)
+{
+    if (pid > 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+    }
+}
+
+int lc_clockref_said(const char *w, size_t len)
+{
+    static const char result[] = "CLOCKMUSL REFERENCE OK";
+    size_t at, end, n = sizeof(result) - 1;
+
+    for (at = 0; at + n <= len; at++) {
+        if ((at != 0 && w[at - 1] != '\n') || memcmp(w + at, result, n) != 0)
+            continue;
+        end = at + n;
+        if (end < len && w[end] == '\r')
+            end++;
+        if (end < len && w[end] == '\n')
+            return 1;
+    }
+    return 0;
 }
 
 int lc_end(struct lc *l, struct etude_case_machine *m, struct etude_termination *end)
