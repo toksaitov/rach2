@@ -146,37 +146,51 @@ static void to_kts(long long ns, struct kts *ts)
 /* The count of SIGALRM deliveries to on_alarm. */
 static volatile sig_atomic_t alarms;
 
-/** Count one SIGALRM in `alarms`. */
+/* The word of the interrupted wait, which on_alarm changes from 7 to 8. */
+static volatile uint32_t *alarm_word;
+
+/** Count one SIGALRM in `alarms` and set the wait's word to 8. */
 static void on_alarm(int sig)
 {
     (void)sig;
     alarms++;
+    *alarm_word = 8;
 }
 
 /**
- * Wait five seconds on `word`, which must be 7, with a SIGALRM handler
- * installed with SA_RESTART and a timer that delivers the signal 20 ms in.
- * Returns the futex call's value, or -errno; SIGALRM is back at its default
- * action on return.
+ * Wait five seconds on `word` for 7, with a SIGALRM handler installed with
+ * SA_RESTART and a timer that delivers the signal 20 ms in, until the signal
+ * comes while the call waits. The handler sets the word to 8, so a signal
+ * that comes before the call compares the word ends the call at once with
+ * EAGAIN, and the wait is tried again, at most 20 times; so does a wait the
+ * kernel restarts after the handler. Returns the last futex call's value, or
+ * -errno; `word` is 7 again and SIGALRM back at its default action on return.
  */
 static long interrupted_wait(volatile uint32_t *word)
 {
     struct sigaction sa;
     struct itimerval it;
     struct kts ts;
-    long r;
+    long r = -EAGAIN;
+    int tries;
 
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_alarm;
     sa.sa_flags = SA_RESTART;
+    alarm_word = word;
     sigaction(SIGALRM, &sa, NULL);
-    memset(&it, 0, sizeof(it));
-    it.it_value.tv_usec = 20000;
-    setitimer(ITIMER_REAL, &it, NULL);
-    ts.sec = 5;
-    ts.nsec = 0;
-    r = futex(word, FUTEX_WAIT, 7, &ts, 0);
+    for (tries = 0; tries < 20 && r == -EAGAIN; tries++) {
+        *word = 7;
+        alarms = 0;
+        memset(&it, 0, sizeof(it));
+        it.it_value.tv_usec = 20000;
+        setitimer(ITIMER_REAL, &it, NULL);
+        ts.sec = 5;
+        ts.nsec = 0;
+        r = futex(word, FUTEX_WAIT, 7, &ts, 0);
+    }
     signal(SIGALRM, SIG_DFL);
+    *word = 7;
     return r;
 }
 
