@@ -10,10 +10,15 @@
  * A native run (probe_args.h) gives the echo server as `peer=A.B.C.D:PORT`,
  * in place of the gateway and the port, and the closed port of the same host
  * as `closed=PORT`, in place of 9.
+ *
+ * Beside its own lines it writes etude's report records (probe_report.h),
+ * one assertion for each test, for the case ETUDE_CASE names or
+ * machine.socket.tcptest, whose scenario runs it at the debug shell.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -222,6 +227,11 @@ void probe_main(unsigned long *sp)
     int fd, fd2, n, msglen, passed = 0, failed = 0;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 2 + sp[0]), "machine.socket.tcptest"));
+    report_plan("connect");
+    report_plan("echo");
+    report_plan("close");
+    report_plan("closed-refused");
     msglen = (int)strlen(msg);
 
     puts("TCP socket test starting...");
@@ -232,14 +242,16 @@ void probe_main(unsigned long *sp)
     fd = make_stream_socket();
     if (fd < 0) {
         puts("FAILED (socket)");
+        report_stop("the stream socket did not open");
         sys_exit(1);
     }
     if (connect_to(fd, server_port()) == 0) {
         puts("OK");
+        report_held();
         passed++;
     } else {
         puts("FAILED");
-        failed++;
+        report_stop("the connect to the echo server failed");
         sys_exit(1);
     }
 
@@ -247,16 +259,19 @@ void probe_main(unsigned long *sp)
     print("Test 2: write + read echo... ");
     if (sys_write(fd, msg, (size_t)msglen) != msglen) {
         puts("FAILED (write)");
+        report_fail("echo", "the write of the message fell short");
         failed++;
     } else {
         n = sys_read(fd, buf, sizeof(buf));
         if (n == msglen && mem_eq(buf, (const uint8_t *)msg, msglen)) {
             puts("OK");
+            report_pass("echo");
             passed++;
         } else {
             print("FAILED (n=");
             print_num(n);
             puts(")");
+            report_fail("echo", "what was read back is not what was written");
             failed++;
         }
     }
@@ -265,9 +280,11 @@ void probe_main(unsigned long *sp)
     print("Test 3: close... ");
     if (sys_close(fd) == 0) {
         puts("OK");
+        report_pass("close");
         passed++;
     } else {
         puts("FAILED");
+        report_fail("close", "close did not return 0");
         failed++;
     }
 
@@ -276,17 +293,21 @@ void probe_main(unsigned long *sp)
     fd2 = make_stream_socket();
     if (fd2 < 0) {
         puts("FAILED (socket)");
+        report_fail("closed-refused", "the second stream socket did not open");
         failed++;
     } else {
         if (connect_to(fd2, closed_port()) < 0) {
             puts("OK (refused)");
+            report_pass("closed-refused");
             passed++;
         } else {
             puts("FAILED (connected?)");
+            report_fail("closed-refused", "a connect to the closed port succeeded");
             failed++;
         }
         sys_close(fd2);
     }
+    report_end();
 
     puts("");
     print("Results: ");

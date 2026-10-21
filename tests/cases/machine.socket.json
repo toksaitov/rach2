@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.socket",
+  "summary": "The guest opens connections of its own, to an echo server on the host that it reaches at the user network's gateway",
+  "cases": [
+    {
+      "case_id": "machine.socket.udptest",
+      "behavior": "A UDP socket binds, finds nothing to read, sends to the host's echo server and receives the same bytes, and refuses to receive into a kernel address",
+      "units": ["socket", "udptest", "tests/system/runner/hostpeer.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"message": "rach2-udp-echo", "local_port": 12345}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "socket_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case stops the echo server and the machine"
+      },
+      "steps": [
+        {"step_id": "serve", "stage": "prepare",
+         "does": "start hostpeer echo on the case's port, until it is stopped"},
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image to the debug shell"},
+        {"step_id": "udptest", "stage": "execute", "machine": "guest",
+         "does": "run udptest with the port at the debug shell and take its report from the console"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [
+        {"service_id": "echo", "program": "hostpeer", "ready": "hostpeer: echoing",
+         "does": "echo what arrives over TCP and UDP on 127.0.0.1 at the case's port, which the guest reaches at 10.0.2.2"}
+      ],
+      "assertions": [
+        {"assertion_id": "socket", "checks": "socket(AF_INET, SOCK_DGRAM) opens a socket", "source": "scenario"},
+        {"assertion_id": "bind", "checks": "the socket binds the local port", "source": "scenario"},
+        {"assertion_id": "empty-eagain", "checks": "a MSG_DONTWAIT receive on the empty socket answers EAGAIN", "source": "scenario"},
+        {"assertion_id": "echo", "checks": "the message sent to the echo server comes back with the same bytes", "source": "scenario"},
+        {"assertion_id": "kernel-pointer", "checks": "with the echo still queued, a receive into a kernel address answers EFAULT", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "hostpeer", "node": "tests/system/hostpeer", "per_architecture": false},
+        {"name": "socket_scenario", "node": "tests/cases/machine/socket_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the echo server is the host's, reached at the gateway of QEMU's user network; tests/native/probes.cases runs udptest against a peer"}
+    },
+    {
+      "case_id": "machine.socket.tcptest",
+      "behavior": "A TCP socket connects to the host's echo server, reads back what it wrote and closes with a FIN the server sees, and a connect to a closed port is refused",
+      "units": ["socket", "tcptest", "tests/system/runner/hostpeer.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"message": "hello-tcp-echo", "closed_port": 9}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "socket_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case stops the echo server and the machine"
+      },
+      "steps": [
+        {"step_id": "serve", "stage": "prepare",
+         "does": "start hostpeer echo on the case's port, until it is stopped"},
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot the test image to the debug shell"},
+        {"step_id": "tcptest", "stage": "execute", "machine": "guest",
+         "does": "run tcptest with the port at the debug shell and take its report from the console"},
+        {"step_id": "close", "stage": "execute",
+         "does": "find the echo server's line that the guest closed its end, and stop the server"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [
+        {"service_id": "echo", "program": "hostpeer", "ready": "hostpeer: echoing",
+         "does": "echo what arrives over TCP and UDP on 127.0.0.1 at the case's port, which the guest reaches at 10.0.2.2, and say when a peer closes its end"}
+      ],
+      "assertions": [
+        {"assertion_id": "connect", "checks": "a stream socket connects to the echo server", "source": "scenario"},
+        {"assertion_id": "echo", "checks": "a 14-byte write is read back whole and equal", "source": "scenario"},
+        {"assertion_id": "close", "checks": "close of the connected socket returns 0", "source": "scenario"},
+        {"assertion_id": "closed-refused", "checks": "a connect to a closed port of the host is refused, and returns", "source": "scenario"},
+        {"assertion_id": "peer-closed", "checks": "the echo server reads the end of the stream that the guest's close sent", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "hostpeer", "node": "tests/system/hostpeer", "per_architecture": false},
+        {"name": "socket_scenario", "node": "tests/cases/machine/socket_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the echo server is the host's, reached at the gateway of QEMU's user network; tests/native/probes.cases runs tcptest against a peer"}
+    }
+  ]
+}

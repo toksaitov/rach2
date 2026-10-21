@@ -4,6 +4,10 @@
  * port its argument names. It exits 0 when the five tests pass and 1
  * otherwise.
  *
+ * Beside its own lines it writes etude's report records (probe_report.h),
+ * one assertion for each test, for the case ETUDE_CASE names or
+ * machine.socket.udptest, whose scenario runs it at the debug shell.
+ *
  * A native run (probe_args.h) gives the echo server as `peer=A.B.C.D:PORT`,
  * in place of the gateway and the port, and the local port it binds through
  * `ports=OLD:NEW,...`, in place of 12345.
@@ -11,6 +15,7 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 /* An address of the kernel's, outside user space: 1 MiB on i386, where the
  * kernel is linked, and on x86-64 the last page, in the kernel's half. */
@@ -210,6 +215,7 @@ static int reject_kernel_pointer(int fd, int queued)
     print("Test 5: recvfrom into a kernel pointer is rejected... ");
     if (!queued) {
         puts("FAILED (no queued echo)");
+        report_notrun("kernel-pointer", "no echo was queued to receive");
         return 0;
     }
     args[0] = (uint32_t)fd;
@@ -221,11 +227,13 @@ static int reject_kernel_pointer(int fd, int queued)
     n = socketcall(SC_RECVFROM, args);
     if (n == EFAULT) {
         puts("OK (EFAULT)");
+        report_pass("kernel-pointer");
         return 1;
     } else {
         print("FAILED (got ");
         print_num(n);
         puts(")");
+        report_fail("kernel-pointer", "the receive did not answer EFAULT");
         return 0;
     }
 }
@@ -256,6 +264,7 @@ void probe_main(unsigned long *sp)
     int fd, n, msglen, passed = 0, failed = 0, ready;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 2 + sp[0]), "machine.socket.udptest"));
     msglen = (int)strlen(msg);
 
     puts("UDP socket test starting...");
@@ -269,9 +278,16 @@ void probe_main(unsigned long *sp)
     fd = socketcall(SC_SOCKET, args);
     if (fd >= 0) {
         puts("OK");
+        report_pass("socket");
         passed++;
     } else {
         puts("FAILED");
+        report_fail("socket", "socket(AF_INET, SOCK_DGRAM) failed");
+        report_notrun("bind", "no socket opened");
+        report_notrun("empty-eagain", "no socket opened");
+        report_notrun("echo", "no socket opened");
+        report_notrun("kernel-pointer", "no socket opened");
+        report_end();
         failed++;
         sys_exit(1);
     }
@@ -284,9 +300,11 @@ void probe_main(unsigned long *sp)
     args[2] = 16;
     if (socketcall(SC_BIND, args) == 0) {
         puts("OK");
+        report_pass("bind");
         passed++;
     } else {
         puts("FAILED");
+        report_fail("bind", "the bind of the local port failed");
         failed++;
     }
 
@@ -301,11 +319,13 @@ void probe_main(unsigned long *sp)
     n = socketcall(SC_RECVFROM, args);
     if (n == EAGAIN) {
         puts("OK (EAGAIN)");
+        report_pass("empty-eagain");
         passed++;
     } else {
         print("FAILED (got ");
         print_num(n);
         puts(")");
+        report_fail("empty-eagain", "the receive on the empty socket did not answer EAGAIN");
         failed++;
     }
 
@@ -339,11 +359,13 @@ void probe_main(unsigned long *sp)
 
     if (n == msglen && mem_eq(buf, (const uint8_t *)msg, msglen)) {
         puts("OK");
+        report_pass("echo");
         passed++;
     } else {
         print("FAILED (n=");
         print_num(n);
         puts(")");
+        report_fail("echo", "the echo is not the bytes sent");
         failed++;
     }
 
@@ -353,6 +375,7 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
+    report_end();
     puts("");
     print("Results: ");
     print_num(passed);
