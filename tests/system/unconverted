@@ -45,7 +45,6 @@ tests/musl/timerfdmusl.c: 1 sleep
 tests/musl/unixmusl.c: 1 sleep
 tests/pingtest.c: 1 sleep
 tests/pollprobe.c: 1 sleep
-tests/poolprobe.c: 1 sleep
 tests/procprobe.c: 1 sleep
 tests/rawprobe.c: 1 sleep
 tests/sigprobe.c: 1 sleep

@@ -3,28 +3,33 @@
  * kernel heap back where it started after a thousand each of pipes, ptys
  * and sockets.
  *
- * In each of four rounds, eight children each open and hold six pipes, or
- * five pty masters, or six datagram sockets, or fork four children of their
- * own, and tell the parent through one shared pipe that they have them; each
- * then waits for the parent's word before letting go, and the parent gives
- * it only after all eight have reported. So forty-eight pipes, forty ptys,
- * forty-eight sockets and, in the last round, forty processes besides the
- * parent and the shell are live at once. Then the parent opens and closes a
- * pipe, a pty and a socket a thousand times each, and the heap's `HeapUsed`
- * in `/proc/meminfo` must be what it was before, with `HeapPages` within two
- * pages of it, so nothing leaked.
+ * `poolprobe live` runs four rounds. In each, eight children each open and
+ * hold six pipes, or five pty masters, or six datagram sockets, or fork four
+ * children of their own, and tell the parent through one shared pipe that
+ * they have them; each then waits for the parent's word before letting go,
+ * and the parent gives it only after all eight have reported. So forty-eight
+ * pipes, forty ptys, forty-eight sockets and, in the last round, forty
+ * processes besides the parent are live at once.
  *
- * Given `machine=native` (probe_args.h), the probe still makes and closes
- * the thousands, but leaves out the comparisons of the heap, since the
- * kernel's heap is shared with every process of a machine that is already
- * up.
+ * `poolprobe heap` opens and closes a pipe, a pty and a socket a thousand
+ * times each, and after each thousand the heap's `HeapUsed` in
+ * `/proc/meminfo` must be what it was before, with `HeapPages` within two
+ * pages of it, so nothing leaked. One object of each kind is made and closed
+ * before the first reading, since the first of a kind may set up state the
+ * kernel keeps for every later one, which is no leak. The heap is the whole
+ * kernel's, so the probe writes nothing between the first reading and the
+ * last: its report records follow the three comparisons, and the process
+ * that reads its output has nothing to do meanwhile.
  *
- * Prints "POOLPROBE OK" and exits 0, or "POOLPROBE FAIL: " and the reason
- * and exits 1.
+ * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
+ * names, guest.pools.live or guest.pools.heap without it, and beside them
+ * "POOLPROBE OK" with exit status 0, or "POOLPROBE FAIL: " and the reason
+ * with exit status 1. Any other mode is refused with status 2.
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define AF_INET    2
 #define SOCK_DGRAM 2
@@ -47,6 +52,19 @@ static size_t strlen(const char *s)
     return n;
 }
 
+/** Whether the strings `a` and `b` are equal; NULL equals nothing. */
+static int same(const char *a, const char *b)
+{
+    if (a == 0 || b == 0) {
+        return 0;
+    }
+    while (*a != '\0' && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
 /** Write `s` and a newline to standard output. */
 static void puts(const char *s)
 {
@@ -54,22 +72,14 @@ static void puts(const char *s)
     syscall3(SYS_WRITE, 1, (long)"\n", 1);
 }
 
-/** Print "POOLPROBE FAIL: " and `why`, and exit 1. */
+/** Report the planned assertion that failed with `why`, print
+ * "POOLPROBE FAIL: " and `why`, and exit 1. */
 static void fail(const char *why)
 {
+    report_stop(why);
     syscall3(SYS_WRITE, 1, (long)"POOLPROBE FAIL: ", 16);
     puts(why);
     sys_exit(1);
-}
-
-/** Sleep for `ms` milliseconds. */
-static void sleep_ms(int ms)
-{
-    long ts[2];
-
-    ts[0] = ms / 1000;
-    ts[1] = (ms % 1000) * 1000000;
-    syscall2(SYS_NANOSLEEP, (long)ts, 0);
 }
 
 /** A UDP socket: its descriptor, or a negated errno. */
@@ -199,25 +209,22 @@ static void crossed(int kind, int per_child, const char *what)
     syscall1(SYS_CLOSE, ack[0]);
     syscall1(SYS_CLOSE, ack[1]);
     ack_fd = -1;
+    report_held();
 }
 
-/** Make and close a thousand objects of `kind` (0 a pipe, 1 a pty master, 2
- * a socket), and fail with `what` unless HeapUsed is unchanged and
- * HeapPages within two pages of where it was; given `machine=native`, make
- * no comparison. */
-static void cycle(int kind, const char *what)
+/** Make and close `count` objects of `kind` (0 a pipe, 1 a pty master, 2 a
+ * socket); 0, or -1 when one could not be made. */
+static int make_close(int kind, int count)
 {
-    unsigned used0 = probe_meminfo("HeapUsed:"), pages0 = probe_meminfo("HeapPages:");
-    unsigned used1, pages1;
     int i;
 
-    for (i = 0; i < 1000; i++) {
+    for (i = 0; i < count; i++) {
         if (kind == 0) {
             int pair[2];
 
             pair[0] = pair[1] = -1;
             if (syscall1(SYS_PIPE, (long)pair) != 0) {
-                fail(what);
+                return -1;
             }
             syscall1(SYS_CLOSE, pair[0]);
             syscall1(SYS_CLOSE, pair[1]);
@@ -225,18 +232,72 @@ static void cycle(int kind, const char *what)
             int fd = kind == 1 ? syscall3(SYS_OPEN, (long)"/dev/ptmx", O_RDWR, 0) : open_socket();
 
             if (fd < 0) {
-                fail(what);
+                return -1;
             }
             syscall1(SYS_CLOSE, fd);
         }
     }
-    if (probe_native()) {
-        return;
+    return 0;
+}
+
+/** Make and close a thousand objects of `kind`; 1 when each was made, and
+ * HeapUsed is unchanged and HeapPages within two pages of where it was. */
+static int cycle(int kind)
+{
+    unsigned used0 = probe_meminfo("HeapUsed:"), pages0 = probe_meminfo("HeapPages:");
+    unsigned used1, pages1;
+
+    if (make_close(kind, 1000) != 0) {
+        return 0;
     }
     used1 = probe_meminfo("HeapUsed:");
     pages1 = probe_meminfo("HeapPages:");
-    if (used1 != used0 || pages1 + 2 < pages0 || pages1 > pages0 + 2) {
-        fail(what);
+    return used1 == used0 && pages1 + 2 >= pages0 && pages1 <= pages0 + 2;
+}
+
+/** The four rounds, each reported as it ends. */
+static void live(void)
+{
+    report_plan("pipes");
+    report_plan("ptys");
+    report_plan("sockets");
+    report_plan("processes");
+    crossed(0, 6, "forty-eight pipes at once");
+    crossed(1, 5, "forty ptys at once");
+    crossed(2, 6, "forty-eight sockets at once");
+    crossed(3, 4, "forty processes at once");
+}
+
+/** The three cycles, measured before anything is reported. */
+static void heap(const char *case_id)
+{
+    static const char *const why[] = {"a thousand pipes made and closed left the heap changed",
+                                      "a thousand ptys made and closed left the heap changed",
+                                      "a thousand sockets made and closed left the heap changed"};
+    int meminfo = probe_meminfo("HeapUsed:") != 0xFFFFFFFFu;
+    int warm = meminfo && make_close(0, 1) == 0 && make_close(1, 1) == 0 && make_close(2, 1) == 0;
+    int held = 0, kind;
+
+    while (warm && held < 3 && cycle(held)) {
+        held++;
+    }
+    report_begin(case_id);
+    report_plan("meminfo");
+    report_plan("pipe-heap");
+    report_plan("pty-heap");
+    report_plan("socket-heap");
+    if (!meminfo) {
+        fail("HeapUsed in /proc/meminfo");
+    }
+    report_held();
+    if (!warm) {
+        fail("a pipe, a pty or a socket made before the first reading");
+    }
+    for (kind = 0; kind < held; kind++) {
+        report_held();
+    }
+    if (held < 3) {
+        fail(why[held]);
     }
 }
 
@@ -244,20 +305,26 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe: the four rounds, then the three cycles. */
+/** The probe, entered with `sp` at argc: the mode its argument names. */
 void probe_main(unsigned long *sp)
 {
-    probe_args((int)sp[0], (char **)(sp + 1));
-    if (probe_meminfo("HeapUsed:") == 0xFFFFFFFFu) {
-        fail("HeapUsed in /proc/meminfo");
+    int argc = (int)sp[0];
+    char **argv = (char **)(sp + 1);
+    char **envp = argv + argc + 1;
+    const char *mode;
+
+    probe_args(argc, argv);
+    mode = probe_word(1);
+    if (same(mode, "live")) {
+        report_begin(report_case(envp, "guest.pools.live"));
+        live();
+    } else if (same(mode, "heap")) {
+        heap(report_case(envp, "guest.pools.heap"));
+    } else {
+        puts("POOLPROBE FAIL: usage: poolprobe live | heap");
+        sys_exit(2);
     }
-    crossed(0, 6, "forty-eight pipes at once");
-    crossed(1, 5, "forty ptys at once");
-    crossed(2, 6, "forty-eight sockets at once");
-    crossed(3, 4, "forty processes at once");
-    cycle(0, "a thousand pipes made and closed left the heap changed");
-    cycle(1, "a thousand ptys made and closed left the heap changed");
-    cycle(2, "a thousand sockets made and closed left the heap changed");
+    report_end();
     puts("POOLPROBE OK");
     sys_exit(0);
 }
