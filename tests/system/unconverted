@@ -15,7 +15,6 @@ tests/host/fat32_hosttest.c: 1 skip
 tests/host/netif_hosttest.c: 1 sleep
 tests/host/pwauth_hosttest.c: 2 sleep
 tests/jobprobe.c: 1 sleep
-tests/lagprobe.c: 1 sleep
 tests/loadprobe.c: 1 sleep
 tests/loopprobe.c: 1 sleep
 tests/memprobe.c: 1 sleep
@@ -47,8 +46,6 @@ tests/pollprobe.c: 1 sleep
 tests/procprobe.c: 1 sleep
 tests/rawprobe.c: 1 sleep
 tests/sigprobe.c: 1 sleep
-tests/system/suites/exfat.sh: 3 skip
-tests/system/suites/fatwrite.sh: 2 skip
 tests/timeprobe.c: 1 sleep
 tests/waitprobe.c: 1 sleep
 tests/xsaveprobe.c: 1 sleep

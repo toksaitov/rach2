@@ -1,0 +1,490 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.exfat",
+  "summary": "exFAT written by the kernel from a program, across reboots, through a crash and its repair, from BusyBox, by two writers under the lag device, and unmounted after a failed write with VolumeDirty kept, judged on the host by mkexfatfixture's walk and reader and the external checker; the program is tests/cases/machine/fswrite_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.exfat.volume",
+      "behavior": "exFAT written from a program and unmounted, judged on the host by the walk and the reader and the external checker, read back after a reboot, ended in the middle of a write sequence and checked by the next writable mount, then written from BusyBox; each boot carries the volume the one before it left",
+      "units": ["exfat"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {
+        "arguments": [],
+        "inputs": {"volume_sectors": 32768, "pattern_bytes": 65536},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "fswrite_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["exfat-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the disk's copy, which it keeps after a failure; the scenario removes the files it reads out of the volume once they are judged the same"
+      },
+      "steps": [
+        {
+          "step_id": "write",
+          "stage": "execute",
+          "machine": "probe",
+          "does": "boot the test image on the disk's copy and run fatwriteprobe write exfat at the debug shell, then end the machine with QMP's quit"
+        },
+        {
+          "step_id": "written",
+          "stage": "execute",
+          "does": "walk the volume with mkexfatfixture --check, read pattern.bin and list the names with mkexfatfixture --read and --list, and run the external checker over a copy of the volume"
+        },
+        {
+          "step_id": "readback",
+          "stage": "execute",
+          "machine": "probe",
+          "does": "boot the test image again and run fatwriteprobe readback exfat, then end the machine with QMP's quit"
+        },
+        {
+          "step_id": "crash",
+          "stage": "execute",
+          "machine": "probe",
+          "does": "boot the test image, run fatwriteprobe crash exfat and end the machine with QMP's quit once it says FATWRITE WRITING"
+        },
+        {
+          "step_id": "crashed",
+          "stage": "execute",
+          "does": "read VolumeDirty of the volume the killed machine left, with mkexfatfixture --dump"
+        },
+        {
+          "step_id": "repair",
+          "stage": "execute",
+          "machine": "probe",
+          "does": "boot the test image and run fatwriteprobe repair exfat, whose writable mount checks the volume, then end the machine with QMP's quit"
+        },
+        {
+          "step_id": "repaired",
+          "stage": "execute",
+          "does": "walk the repaired volume and keep its line of lost clusters"
+        },
+        {
+          "step_id": "busybox",
+          "stage": "execute",
+          "machine": "busybox",
+          "does": "boot os-real, log in as root at the console, mount the volume, copy, move, write and remove on it with BusyBox, and unmount it"
+        },
+        {
+          "step_id": "final",
+          "stage": "execute",
+          "does": "walk the volume, read the copied program on the host and compare it with os-real's /bin/busybox, and run the external checker, repairing its copy first when the volume has lost clusters"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "probe",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": ["exfat-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": ["rach2.rescue"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "busybox",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": ["exfat-disk"],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "wrote",
+          "checks": "fatwriteprobe write exfat exits 0 after FATWRITE OK (wrote): it mounted the volume, wrote pattern.bin, a long-named file, a directory and a file in it, a renamed, a removed and an fsynced file, and unmounted the volume",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "walk-written",
+          "checks": "mkexfatfixture --check finds the written volume consistent",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reader-pattern",
+          "checks": "mkexfatfixture --read reads pattern.bin as 65536 bytes, byte i being (i * 31 + 7) mod 256",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "reader-names",
+          "checks": "mkexfatfixture --list lists pattern.bin, Long Name File.txt, Sub Dir, renamed.txt and synced.txt, and not gone.txt",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "checker-written",
+          "checks": "the external checker, macOS's fsck_exfat or exfatprogs' fsck.exfat on the host or in etude's tooling machine, calls a copy of the written volume clean",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-back",
+          "checks": "fatwriteprobe readback exfat exits 0 after FATWRITE OK (read back) on the next boot: every byte and name, the long name with its case folded, the renamed and removed names gone",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "crash-writing",
+          "checks": "fatwriteprobe crash exfat says FATWRITE WRITING once the first file of its sequence is written",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "crash-dirty",
+          "checks": "the volume the machine ended in the middle of the write sequence left has VolumeDirty set, as mkexfatfixture --dump reports it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "repaired",
+          "checks": "fatwriteprobe repair exfat exits 0 after FATWRITE OK (repaired): the writable mount after the crash keeps a file of the sequence and unmounts",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "repair-recorded",
+          "checks": "that mount's records say exfat: check: the volume was not unmounted cleanly, and exfat: check: consistent",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "walk-repaired",
+          "checks": "the walk finds the repaired volume consistent, the lost clusters that the crash may leave and the mount's check leaves aside",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "bb-files",
+          "checks": "BusyBox on os-real mounts the volume as exfat, copies /bin/busybox onto it, makes a directory, moves the copy into it as Busy Box, writes a file, removes renamed.txt, and cmp finds the copy's bytes the same",
+          "source": "scenario"
+        },
+        {"assertion_id": "bb-unmounted", "checks": "umount of the volume succeeds", "source": "scenario"},
+        {
+          "assertion_id": "walk-busybox",
+          "checks": "the walk finds the volume consistent after BusyBox, the repaired walk's lost clusters aside",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "host-copy",
+          "checks": "mkexfatfixture --read reads d/Busy Box as the bytes of os-real's /bin/busybox, which readfile.krffs takes out of the image",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "checker-final",
+          "checks": "the external checker calls a copy of the volume clean after BusyBox, having repaired the copy first when the repaired walk found lost clusters",
+          "source": "scenario"
+        }
+      ],
+      "branches": [
+        {
+          "group_id": "checker",
+          "decided_by": "report",
+          "alternatives": [
+            {"alternative_id": "present", "when": null, "assertions": ["checker-written", "checker-final"]},
+            {"alternative_id": "absent", "when": null, "assertions": []}
+          ]
+        }
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 9}],
+      "bounds": {
+        "case": {"floor_us": 10000000, "initial_us": 1800000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "exfat-disk", "node": "images/exfat-test.disk", "per_architecture": true},
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "readfile.krffs", "node": "krffs/readfile.krffs", "per_architecture": false},
+        {"name": "fstool", "node": "tests/cases/host/fstool", "per_architecture": false},
+        {
+          "name": "fswrite_scenario",
+          "node": "tests/cases/machine/fswrite_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "disk",
+        "reason": "the case ends a machine in the middle of a write sequence and reads the disk it left on the host between boots"
+      }
+    },
+    {
+      "case_id": "machine.exfat.writers",
+      "behavior": "two writers and a sync at once on exFAT under the lag device, on a fresh copy of the disk, each file whole and the volume consistent",
+      "units": ["exfat"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"lag_ticks": 3, "writers": 2, "syncs": 20}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
+      "execution": {
+        "program": "fswrite_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["exfat-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "writers",
+          "stage": "execute",
+          "machine": "lag",
+          "does": "boot the test image with the lag device over disk 0, the disk's flushes kept from the host, and run lagprobe writers exfat at the debug shell, then end the machine with QMP's quit"
+        },
+        {
+          "step_id": "host",
+          "stage": "execute",
+          "does": "walk the volume, and run the external checker over a copy of it"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "lag",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "exfat-disk", "flush": false}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": ["rach2.blocklag=3", "rach2.rescue"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "writers",
+          "checks": "lagprobe writers exfat exits 0 after LAGPROBE OK: two children write a file each while the parent syncs the volume twenty times, every sync returns 0, each file reads back as its own bytes, and the volume unmounts",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "walk-writers",
+          "checks": "mkexfatfixture --check finds the volume consistent",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "checker-writers",
+          "checks": "the external checker calls a copy of the volume clean",
+          "source": "scenario"
+        }
+      ],
+      "branches": [
+        {
+          "group_id": "checker",
+          "decided_by": "report",
+          "alternatives": [
+            {"alternative_id": "present", "when": null, "assertions": ["checker-writers"]},
+            {"alternative_id": "absent", "when": null, "assertions": []}
+          ]
+        }
+      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 10000000, "initial_us": 900000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "exfat-disk", "node": "images/exfat-test.disk", "per_architecture": true},
+        {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
+        {"name": "fstool", "node": "tests/cases/host/fstool", "per_architecture": false},
+        {
+          "name": "fswrite_scenario",
+          "node": "tests/cases/machine/fswrite_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "rach2/sys/block/lag.c:222-223",
+          "assumes": "the lag device answers each request of disk 0's partitions three kernel ticks late as the stimulus, so that the requests of the writers and the sync interleave; the case judges the files and the volume they leave, never elapsed time",
+          "uncertainty_us": null
+        },
+        {
+          "kind": "injected_delay",
+          "where": "tests/lagprobe.c:369",
+          "assumes": "sleep_ms, through which the parent spaces its syncs 30 ms apart across the writers' run, as the stimulus; the probe judges each file's bytes and every sync's result, never elapsed time",
+          "uncertainty_us": null
+        }
+      ],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the lag device over disk 0 is set on the kernel's boot line"
+      }
+    },
+    {
+      "case_id": "machine.exfat.latefail",
+      "behavior": "a write that fails after the mount set VolumeDirty makes the exFAT mount read-only, the mount still unmounts, and VolumeDirty stays set on the disk",
+      "units": ["exfat"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"lag_ticks": 3, "failed_write": 32}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "fswrite_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["exfat-disk"]}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk's copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "latefail",
+          "stage": "execute",
+          "machine": "lag",
+          "does": "boot the test image with the lag device over disk 0 failing its 32nd write, the disk's flushes kept from the host, and run lagprobe latefail exfat at the debug shell, then end the machine with QMP's quit"
+        },
+        {
+          "step_id": "host",
+          "stage": "execute",
+          "does": "read VolumeFlags, byte 106 of the volume's main boot sector, from the disk's copy"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "lag",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "test-image",
+            "disks": [{"name": "exfat-disk", "flush": false}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": ["rach2.blocklag=3", "rach2.blockfail=32", "rach2.rescue"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "latefail",
+          "checks": "lagprobe latefail exfat exits 0 after LAGPROBE OK: a file is created and written and synced until a write fails, /proc/mounts then says the mount is read-only, and the mount unmounts",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "latefail-read-only",
+          "checks": "the kernel says vfs: read-only: /lb, the mount the failed write made read-only",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "latefail-dirty",
+          "checks": "VolumeFlags on the disk has bit 1, VolumeDirty, set after the unmount",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {
+        "case": {"floor_us": 10000000, "initial_us": 900000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 134217728,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "exfat-disk", "node": "images/exfat-test.disk", "per_architecture": true},
+        {
+          "name": "fswrite_scenario",
+          "node": "tests/cases/machine/fswrite_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "rach2/sys/block/lag.c:222-223",
+          "assumes": "the lag device answers each request of disk 0's partitions three kernel ticks late, and fails its 32nd write, as the stimulus; the case judges the mount's state and the disk's flags after the failure, never elapsed time",
+          "uncertainty_us": null
+        }
+      ],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the lag device and its failed write are set on the kernel's boot line"
+      }
+    }
+  ]
+}

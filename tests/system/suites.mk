@@ -766,12 +766,19 @@ run-conload: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
 	sh tests/system/suites/conload.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(CONLOAD_DISK)
 
 # `tests/run fatwrite`: FAT32 written from a program, read back after a
-# reboot, judged by the host's walk and mtools, taken through a crash and its
-# repair, written from BusyBox, and written by two processes under the lag.
-FATWRITE_DISK = $(IMAGES_DIR)/fatwrite-test.disk
-run-fatwrite: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKFATFIXTURE) $(MKMBR) $(HARNESS)
-	sh tests/system/suites/fatwrite.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(FATWRITE_DISK) \
-	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKFATFIXTURE)
+# reboot, judged by the host's walk, mtools and fsck.fat where the host has
+# it, taken through a crash and its repair, written from BusyBox, and written
+# by two processes under the lag. They are the machine cases of
+# tests/cases/machine.fatwrite.json, which etude runs, and have no target
+# here. Each case boots a private copy of this disk: the test disk with an
+# empty FAT32 volume of 14 MiB in its second partition, at sector 100352.
+$(IMAGES_DIR)/fatwrite-test.disk: krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) \
+                                  $(MKDISK) build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
+                                  $(MKMBR) | preflight krffs tests
+	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp"' EXIT; \
+	    $(MKDISK) krffs/manifests/disk-test.manifest "$$temp" 64 48; \
+	    $(MKMBR) --lba "$$temp" 2048:98304:7f 100352:28672:0c; \
+	    mformat -i "$$temp@@51380224" -F -T 28672 -v M37FAT ::; mv "$$temp" $@
 
 # `tests/run loopdev`: a file system in a file, through a loop device: a FAT32,
 # an ext2 and a KRFFS image on a FAT32 volume, each mounted, written and read
@@ -929,11 +936,19 @@ run-agentsaccept: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(RUNUTIL) $(MKMBR
 # judged by the host's reader and the external checker where the host has
 # one, taken through a crash and its repair, written from BusyBox and by
 # two processes under the lag, and unmounted after a failed write
-# with its dirty bit still set.
-EXFAT_DISK = $(IMAGES_DIR)/exfat-test.disk
-run-exfat: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATFIXTURE) $(MKMBR) $(HARNESS)
-	sh tests/system/suites/exfat.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(EXFAT_DISK) \
-	    $(OS_REAL_IMAGE) "`cat krffs/rach2_demo_password`" $(MKEXFATFIXTURE)
+# with its dirty bit still set. They are the machine cases of
+# tests/cases/machine.exfat.json, which etude runs, and have no target here.
+# Each case boots a private copy of this disk: the test disk with an empty
+# exFAT volume of 16 MiB in its second partition, at sector 100352.
+$(IMAGES_DIR)/exfat-test.disk: krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) \
+                               $(MKDISK) build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
+                               $(MKMBR) $(MKEXFATFIXTURE) | preflight krffs tests
+	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp" "$$temp.vol"' EXIT; \
+	    $(MKDISK) krffs/manifests/disk-test.manifest "$$temp" 80 48; \
+	    $(MKMBR) --lba "$$temp" 2048:98304:7f 100352:32768:07; \
+	    $(MKEXFATFIXTURE) "$$temp.vol" --empty; \
+	    dd if="$$temp.vol" of="$$temp" bs=512 seek=100352 conv=notrunc 2>/dev/null; \
+	    mv "$$temp" $@
 
 # `tests/run diskrate`: the storage paths timed in the machine and held under
 # bounds: the raw device, a file on exFAT and on FAT32 written and read, two
