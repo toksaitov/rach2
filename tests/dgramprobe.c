@@ -25,6 +25,12 @@
  * success; a failure prints "DGRAMPROBE FAIL: " with the reason and exits 1.
  * Freestanding; direct system calls (probe.h).
  *
+ * Beside its own lines it writes etude's report records (probe_report.h),
+ * one assertion for each row, for the case ETUDE_CASE names or
+ * machine.dgram.dgramprobe, whose scenario runs it at the debug shell. A
+ * failed check ends the probe: its assertion fails and those after it are
+ * not run.
+ *
  * The machine is QEMU's: its address is 10.0.2.15, its subnet's broadcast
  * 10.0.2.255 and its interface eth0; the probe binds UDP ports 7500 to
  * 7503, 7511 and 7600 to 7607, and the low-port row drops to uid 1000 and
@@ -37,6 +43,7 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 typedef unsigned int uint32_t;
 typedef unsigned short uint16_t;
@@ -210,14 +217,26 @@ static void say(const char *s)
     sys_write(STDOUT_FILENO, s, n);
 }
 
-/** Print "DGRAMPROBE FAIL: `what`" and exit 1. */
+/** Print "DGRAMPROBE FAIL: `what`", report it, and exit 1. */
 static void fail(const char *what)
 {
     say("DGRAMPROBE FAIL: ");
     say(what);
     say("\n");
+    report_stop(what);
     sys_exit(1);
 }
+
+/* The report's assertions, one for each row, in the order the probe checks
+ * them. */
+static const char *const rows[] = {
+    "no-peer-refused", "connected-write", "source-port", "peer-only",
+    "outsider-refused", "peer-after-outsider", "not-socket", "unspec-disconnect",
+    "unspec-stream", "packet-connect", "packet-binding", "reuse-both",
+    "reuse-reply", "reuse-close", "low-port", "connect-beside-bound",
+    "broadcast-refused", "broadcast-sent", "options-read-back", "bind-device-name",
+    "bind-device-ifreq"
+};
 
 static uint8_t sa[16];
 static uint8_t buf[64];
@@ -456,6 +475,10 @@ void probe_main(unsigned long *sp)
     uint32_t name_len = 0;
 
     take_arguments(sp);
+    report_begin(report_case((char **)(sp + 2 + sp[0]), "machine.dgram.dgramprobe"));
+    for (i = 0; i < (int)(sizeof(rows) / sizeof(rows[0])); i++) {
+        report_plan(rows[i]);
+    }
     take_addresses();
     while (ifname[name_len] != '\0') {
         name_len++;
@@ -475,6 +498,7 @@ void probe_main(unsigned long *sp)
     if (sys_write(client, "x", 1) != -EDESTADDRREQ) {
         fail("a write with no peer was not refused");
     }
+    report_held();
 
     /* Connected, it writes to its peer without being told again. */
     set_sockaddr(our_ip, peer_port);
@@ -497,6 +521,7 @@ void probe_main(unsigned long *sp)
     if (r != 5 || buf[0] != 'h' || buf[4] != 'o') {
         fail("what the peer received is not what was written");
     }
+    report_held();
 
     /* And it hears from that peer and from nobody else. */
     args[0] = (uint32_t)client;
@@ -510,6 +535,7 @@ void probe_main(unsigned long *sp)
     if (client_port == 0) {
         fail("a connected datagram socket has no source port for a reply");
     }
+    report_held();
 
     set_sockaddr(our_ip, client_port);
     args[0] = (uint32_t)peer;
@@ -547,6 +573,7 @@ void probe_main(unsigned long *sp)
     expect_refused(refused, client,
                    "a connected socket received from a sender it is not connected to",
                    "the third socket's datagram was neither received nor refused");
+    report_held();
 
     /* A sender at another address: the suite's datagram, through a forward. */
     outside = open_bound(outside_port);
@@ -562,6 +589,7 @@ void probe_main(unsigned long *sp)
     expect_refused(refused, outside,
                    "a connected socket received from an address that is not its peer's",
                    "the suite's datagram from outside was neither received nor refused");
+    report_held();
     /* The same socket still hears its peer. */
     set_sockaddr(our_ip, outside_port);
     args[0] = (uint32_t)peer;
@@ -583,6 +611,7 @@ void probe_main(unsigned long *sp)
         fail("the socket that ignored the outsider also ignored its peer");
     }
     sys_close(outside);
+    report_held();
 
     /* The descriptor is checked before the address. */
     args[0] = 1; /* the console */
@@ -591,6 +620,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_CONNECT, args) != -ENOTSOCK) {
         fail("a connect on a descriptor that is not a socket reported the address instead");
     }
+    report_held();
 
     /* A two-byte AF_UNSPEC address disconnects a datagram socket. */
     set_sockaddr(0, 0);
@@ -604,6 +634,7 @@ void probe_main(unsigned long *sp)
     if (sys_write(client, "x", 1) != -EDESTADDRREQ) {
         fail("a write after disconnecting was not refused");
     }
+    report_held();
 
     /* A stream socket has no disconnect. */
     set_sockaddr(0, 0);
@@ -622,6 +653,7 @@ void probe_main(unsigned long *sp)
         fail("a stream socket accepted a two-byte disconnect");
     }
     sys_close(stream);
+    report_held();
 
     /* A packet socket has no peer, and takes no UDP binding. */
     for (i = 0; i < 8; i++) {
@@ -643,9 +675,11 @@ void probe_main(unsigned long *sp)
         }
         sys_close(pkt);
     }
+    report_held();
     if (open_bound(spare_port) < 0) {
         fail("the UDP binding table was exhausted by packet sockets");
     }
+    report_held();
 
     /* Two sockets on one port, as a DHCP client's renewal binds port 68. */
     listener = open_bound(renew_port);
@@ -694,6 +728,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_BIND, args) != 0) {
         fail("two sockets that both asked to share a port could not");
     }
+    report_held();
 
     /* The sender connects to the peer, so the peer's answer is its own. */
     set_sockaddr(our_ip, peer_port);
@@ -743,6 +778,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_RECVFROM, args) != -EAGAIN) {
         fail("the listener took a datagram the connected socket had asked for");
     }
+    report_held();
 
     /* Closing the sender leaves the listener bound. */
     sys_close(sender);
@@ -766,6 +802,7 @@ void probe_main(unsigned long *sp)
         fail("closing one of two sockets on a port unbound the other");
     }
     sys_close(listener);
+    report_held();
 
     /* A port below 1024 is root's: uid 1000 binding port 68 is EACCES. */
     pid = sys_fork();
@@ -798,6 +835,7 @@ void probe_main(unsigned long *sp)
     if (((status >> 8) & 0xff) != 0) {
         fail("an ordinary user bound a port below 1024");
     }
+    report_held();
 
     /* A connect beside eight bound sockets answers 0 or EAGAIN. */
     for (i = 0; i < 8; i++) {
@@ -823,6 +861,7 @@ void probe_main(unsigned long *sp)
             sys_close(fillers[i]);
         }
     }
+    report_held();
 
     /* Broadcasting is asked for, not assumed. */
     set_sockaddr(BCAST_IP, peer_port);
@@ -840,6 +879,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_SENDTO, args) != -EACCES) {
         fail("the subnet's broadcast address was not treated as a broadcast");
     }
+    report_held();
 
     on = 1;
     args[0] = (uint32_t)client;
@@ -860,6 +900,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_SENDTO, args) != 1) {
         fail("a broadcast was refused after the socket asked to broadcast");
     }
+    report_held();
 
     /* The options read back. */
     on = 0;
@@ -887,6 +928,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_GETSOCKOPT, args) != 0 || on != 1) {
         fail("SO_REUSEADDR did not read back as set");
     }
+    report_held();
 
     /* SO_BINDTODEVICE takes the machine's interface and no other. */
     args[0] = (uint32_t)client;
@@ -907,6 +949,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_SETSOCKOPT, args) != 0) {
         fail("an empty name did not unbind");
     }
+    report_held();
     /* BusyBox sends a whole `struct ifreq`, with the name at the front. */
     for (i = 0; i < IFREQ_SIZE; i++) {
         ifreq[i] = 0;
@@ -933,10 +976,12 @@ void probe_main(unsigned long *sp)
         ifreq[name_len - 1] != (uint8_t)ifname[name_len - 1] || ifreq[name_len] != 0) {
         fail("the bound interface did not read back as its name");
     }
+    report_held();
 
     sys_close(client);
     sys_close(other);
     sys_close(peer);
+    report_end();
     say("DGRAMPROBE OK\n");
     sys_exit(0);
 }

@@ -271,7 +271,7 @@ tests/credprobe.c:child_main complexity 46 a probe, one sequence of steps in the
 tests/credprobe.c:child_main lines 105 a probe, one sequence of steps in the order the log records them
 
 tests/dgramprobe.c:probe_main complexity 79 a probe, one sequence of steps in the order the log records them
-tests/dgramprobe.c:probe_main lines 505 a probe, one sequence of steps in the order the log records them
+tests/dgramprobe.c:probe_main lines 522 a probe, one sequence of steps in the order the log records them
 
 tests/dirprobe.c:_start complexity 61 a probe, one sequence of steps in the order the log records them
 tests/dirprobe.c:_start lines 272 a probe, one sequence of steps in the order the log records them
