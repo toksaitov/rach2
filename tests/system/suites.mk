@@ -1390,7 +1390,8 @@ run-diskdiag: rach2 rach2-metal rach2-metal-image $(HARNESS) $(SHA256TOOL) $(RUN
 	sh tests/system/suites/diskdiag.sh $(BOOT_KERNEL) $(METAL_KERNEL) $(METAL_IMAGE) \
 	    $(DISKDIAG_PORT)
 # `tests/run subset`: each optional device probe left out, and proved left
-# out.
+# out. They are the cases of tests/cases/guest.subset.json, which etude runs,
+# and have no target here.
 # `tests/run usb`: the USB stack, from a port to a keystroke, in the boots
 # that `tests/system/suites/usb.sh` counts and describes.
 # `tests/run mount`: the partition nodes, the block path through a device
@@ -1677,9 +1678,6 @@ run-usbdisk: $(DEMO_CREDS) rach2 tests krffs test-image os-real-image $(MKEXFATF
 
 run-usb: rach2 tests krffs test-image $(HARNESS) $(MKMBR) harness-kernel
 	sh tests/system/suites/usb.sh $(HARNESS_KERNEL) $(TEST_IMAGE) $(HARNESS)
-# (see tests/system/suites/subset.sh).
-run-subset: rach2 tests krffs test-image $(HARNESS)
-	sh tests/system/suites/subset.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS)
 # `tests/run diskpolicy`: the read-only kernel does not write the disk, shown on
 # the bytes rather than on a return value. The same disk is booted with each
 # kernel; the ordinary one must change it, which is what makes the other half

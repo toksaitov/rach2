@@ -48,3 +48,4 @@ musl/smpmusl smp
 musl/clockloadmusl clock
 musl/textbusymusl textbusy
 musl/bindholdmusl textbusy
+bootlogprobe subset

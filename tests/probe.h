@@ -125,6 +125,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_TIMES             100
 #define SYS_PTRACE            101
 #define SYS_GETUID            102
+#define SYS_SYSLOG            103
 #define SYS_GETGID            104
 #define SYS_SETUID            105
 #define SYS_SETGID            106
@@ -335,6 +336,7 @@ static __inline__ long syscall0(long n)
 #define SYS_TRUNCATE          92
 #define SYS_FTRUNCATE         93
 #define SYS_FCHMOD            94
+#define SYS_SYSLOG            103
 #define SYS_SETITIMER         104
 #define SYS_GETITIMER         105
 #define SYS_WAIT4             114
