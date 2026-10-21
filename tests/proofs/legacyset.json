@@ -1065,6 +1065,92 @@
           "the case needs local ports, which the set driver gives a machine case alone"
         ]
       }
+    },
+    {
+      "name": "boundary-unpermitted",
+      "summary": "a machine case of the lazy boundary profile runs at a site whose policy does not permit it",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (!x->boundary_lazy) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": boundary-unproved: ",
+          ": boundary-nosite: "
+        ]
+      }
+    },
+    {
+      "name": "boundary-any-value",
+      "summary": "a policy's boundary_lazy that names another profile permits the lazy boundary profile",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "if (first && last && strcmp(line, BOUNDARY_PERMIT) == 0)",
+          "replace": "if (first && last && strncmp(line, \"boundary_lazy \", 14) == 0)"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": boundary-unproved: "
+        ]
+      }
+    },
+    {
+      "name": "boundary-never",
+      "summary": "the invocation does not pass on the site's permission of the lazy boundary profile",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "               x->boundary_lazy ? \"true\" : \"false\");\n",
+          "replace": "               \"false\");\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "boundary: the invocation permits the lazy boundary profile"
+        ]
+      }
+    },
+    {
+      "name": "boundary-always",
+      "summary": "the invocation permits the lazy boundary profile whatever the site's policy",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "               x->boundary_lazy ? \"true\" : \"false\");\n",
+          "replace": "               \"true\");\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "invocation: a run of no site does not permit the lazy boundary profile"
+        ]
+      }
+    },
+    {
+      "name": "boundary-short",
+      "summary": "a machine case of the lazy boundary profile runs on a claim the ledger's memory limit cut short",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (m->k->memory_bytes > x->cap[ETUDE_LEGACY_MEMORY].amount) {\n",
+          "replace": "    if (0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": boundary-short: "
+        ]
+      }
     }
   ]
 }

@@ -100,6 +100,17 @@
  * A case's invocation gives the local ports it declares, from 2400 past the
  * caller's port block on, none given twice, and a set of machine cases with
  * ports and `locks` is refused.
+ * Their invocations, of a run that no site policy admitted, do not permit
+ * the lazy boundary memory profile.
+ *
+ * A suite of one machine case, on x86_64, whose machine is of the lazy 72 GiB
+ * boundary profile with the case's 4 GiB reservation: given a site policy
+ * with the line `boundary_lazy bigmem-boundary-v1`, its invocation permits
+ * the profile, its scenario passes, and the ledger's claim holds 4 GiB of
+ * memory and not 72 GiB. Given a policy whose line names no profile, no
+ * policy, or a ledger whose memory limit is less than 4 GiB, it ends
+ * incomplete before its scenario starts, with the reason and no invocation;
+ * a policy that cannot be read is refused.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -271,7 +282,8 @@ static const char probe[] = "#!/bin/sh\n"
  * reports, as its case's identity says: a clean console, one with a panic,
  * one with the record of init's death that the case's machine declares, a
  * report that stops short with the exit status 1, as a lost transport gives,
- * or no console at all. */
+ * or no console at all. The boundary case also prints the memory of the
+ * claims in the ledger that FIXTURE_LEDGER names. */
 static const char scenario[] =
     "#!/bin/sh\n"
     "echo \"scenario: $0 $*\"\n"
@@ -285,6 +297,7 @@ static const char scenario[] =
     "*.allowed) echo '<2>[    1.250000] init: exited with status 1' >> \"$c\" ;;\n"
     "*.lost) echo '@etude 1 progress stage 1'; exit 1 ;;\n"
     "*.noconsole) rm -r \"$scratch/evidence\" ;;\n"
+    "*.accounting) sed -n 's/^resource memory_bytes /ledger: &/p' \"$FIXTURE_LEDGER/claims\" ;;\n"
     "esac\n"
     "echo '@etude 1 assert booted pass'\n"
     "echo '@etude 1 progress stage 1'\n"
@@ -343,6 +356,59 @@ static const struct {
                      {"fixture.machine.allowed", ", \"critical\": \"init: exited\"", 1},
                      {"fixture.machine.lost", "", 0},
                      {"fixture.machine.noconsole", "", 0}};
+
+/* The family `boundary`: one machine case of a machine of the lazy 72 GiB
+ * boundary profile on x86-64, with the boundary's 4 GiB reservation, which
+ * the fixture's scenario runs. */
+static const char boundary_manifest[] =
+    "{\"schema_version\": 1, \"family_id\": \"fixture.boundary\",\n"
+    " \"summary\": \"A boundary machine case of the set driver's fixture\",\n \"cases\": [\n"
+    "{\"case_id\": \"fixture.boundary.accounting\", \"behavior\": \"The fixture's scenario "
+    "keeps a console in place of the boundary boot\",\n"
+    " \"units\": [\"tests/host/etude_legacyset_hosttest.c\"], \"domain\": \"machine\",\n"
+    " \"architectures\": [\"x86_64\"],\n"
+    " \"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null},\n"
+    " \"requirements\": {\"host_api\": \"posix\", \"tools\": [\"sh\"], \"features\": {}},\n"
+    " \"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\",\n"
+    "  \"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}],\n"
+    "  \"children\": \"none\", \"cleanup\": \"nothing outside its scratch directory\"},\n"
+    " \"steps\": [{\"step_id\": \"boot\", \"stage\": \"execute\", \"machine\": \"vm\",\n"
+    "  \"does\": \"boot the machine and keep its console\"}],\n"
+    " \"machines\": [{\"machine_id\": \"vm\", \"qemu\": {\"kernel\": \"kernel\",\n"
+    "  \"initrd\": \"initrd\", \"disks\": [], \"cpu\": \"max-nopdpe1gb\", \"processors\": 1,\n"
+    "  \"memory_bytes\": 77309411328, \"memory_profile\": \"bigmem-boundary-v1\",\n"
+    "  \"firmware\": \"direct\", \"devices\": [], \"boot_options\": [\"rach2.rescue\"]},\n"
+    "  \"console\": \"serial\", \"qmp\": true, \"helper\": false}],\n"
+    " \"assertions\": [{\"assertion_id\": \"booted\", \"checks\": \"the machine booted\",\n"
+    "  \"source\": \"scenario\"}],\n"
+    " \"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": 0},\n"
+    " \"progress\": [{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step has "
+    "ended\",\n"
+    "  \"limit\": 1}],\n"
+    " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 30000000, \"ceiling_us\": "
+    "600000000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 600000000},\n"
+    "  \"stages\": {\"boot\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": "
+    "600000000},\n"
+    "  \"cleanup\": {\"floor_us\": 100000, \"initial_us\": 7000000, \"ceiling_us\": "
+    "600000000}}},\n"
+    " \"resources\": {\"cpu_millis\": 100, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
+    "4294967296,\n"
+    "  \"disk_bytes\": 0, \"guest_memory\": {\"configured_bytes\": 77309411328,\n"
+    "  \"resident_bytes\": 2147483648, \"backing\": \"lazy\"}, \"locks\": [], \"ports\": 0,\n"
+    "  \"loop_devices\": 0},\n"
+    " \"prepare\": [{\"name\": \"kernel\", \"node\": \"rach2/kernel\", \"per_architecture\": "
+    "true},\n"
+    "  {\"name\": \"initrd\", \"node\": \"images/disk.img\", \"per_architecture\": true},\n"
+    "  {\"name\": \"scenario\", \"node\": \"cases/scenario\", \"per_architecture\": false}],\n"
+    " \"timing\": [], \"native\": {\"plan\": \"none\", \"class\": \"boot\",\n"
+    "  \"reason\": \"the fixture's machine is a stand-in\"}}]}\n";
+
+/* The site policies a set may be given: one that permits the lazy boundary
+ * profile, and one whose permission names no profile the driver knows. */
+static const char site_permits[] = "etude-site 1\nendpoint linux\n"
+                                   "boundary_lazy bigmem-boundary-v1\nwait 3\n";
+static const char site_other[] = "etude-site 1\nendpoint linux\nboundary_lazy yes\nwait 3\n";
 
 /* One case of a fixture manifest, which manifest_text writes. */
 struct fcase {
@@ -558,6 +624,8 @@ struct run {
     const char *var;    /* a variable the driver runs with, or NULL */
     const char *arch;   /* the architecture, or NULL for i686 */
     const char *kernel; /* the NAME of `-n NAME`, or NULL */
+    const char *site;   /* the site's policy, or NULL for none */
+    unsigned limit_mib; /* the ledger's memory limit, or 0 for MEMORY_MIB */
     int nojudge;        /* the driver is given no casecheck */
     int guest;          /* it runs guest cases, on the real QEMU */
     pid_t pid;
@@ -1020,6 +1088,8 @@ static int make_cases(void)
     bad |= write_text(in(path, sizeof(path), "cases/scenario.sh"), scenario, 0755);
     bad |= machine_text(text, sizeof(text)) != 0 ||
            write_text(in(path, sizeof(path), "cases/machine/machine.json"), text, 0644) != 0;
+    bad |=
+        write_text(in(path, sizeof(path), "cases/boundary/boundary.json"), boundary_manifest, 0644);
     bad |= manifest_text(text, sizeof(text), "fixture.good", good_cases, 4) != 0 ||
            write_text(in(path, sizeof(path), "cases/good/good.json"), text, 0644) != 0;
     bad |= manifest_text(text, sizeof(text), "fixture.mixed", mixed_cases, 4) != 0 ||
@@ -1098,7 +1168,8 @@ static void make_tree(void)
                                        "cases/bad",
                                        "cases/guest",
                                        "cases/badguest",
-                                       "cases/machine"};
+                                       "cases/machine",
+                                       "cases/boundary"};
     static char source[1 << 20], newpath[8192], rules[8192];
     const char *oldpath = getenv("PATH");
     char path[PATH_LEN], owner[64];
@@ -1121,6 +1192,9 @@ static void make_tree(void)
     bad |= write_text(in(path, sizeof(path), "Makefile"), source, 0644);
     bad |= write_text(in(path, sizeof(path), "fixture.sh"), script, 0644);
     bad |= write_text(in(path, sizeof(path), "qemu/qemu-system-i386"), standin, 0755);
+    bad |= write_text(in(path, sizeof(path), "qemu/qemu-system-x86_64"), standin, 0755);
+    bad |= write_text(in(path, sizeof(path), "site.permits"), site_permits, 0644);
+    bad |= write_text(in(path, sizeof(path), "site.other"), site_other, 0644);
     bad |= write_text(in(path, sizeof(path), "build/.run.lock/owner"), owner, 0644);
     bad |= make_cases();
     bad |= read_text("tests/system/runner/runutil.c", source, sizeof(source)) <= 0;
@@ -1170,7 +1244,7 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     o->ledger = r->ledger != NULL ? r->ledger : ledger;
     o->account = "fixture";
     o->cap[ETUDE_LEGACY_CPU] = 8000;
-    o->cap[ETUDE_LEGACY_MEMORY] = (uint64_t)MEMORY_MIB << 20;
+    o->cap[ETUDE_LEGACY_MEMORY] = (uint64_t)(r->limit_mib != 0 ? r->limit_mib : MEMORY_MIB) << 20;
     o->cap[ETUDE_LEGACY_DISK] = UINT64_C(64) << 30;
     o->locks = r->locks ? locks : NULL;
     o->wait = 30;
@@ -1185,6 +1259,7 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     o->evidence = r->evidence;
     o->status = r->status_file;
     o->args = r->name;
+    o->site = r->site;
 }
 
 /**
@@ -2099,6 +2174,8 @@ static void test_machine(void)
               invocation_has(&r, "fixture.machine.allowed.r0", "\"ports\":[9402]") &&
               invocation_has(&r, "fixture.machine.panic.r0", "\"ports\":[]"),
           "invocation: the ports of the caller's block, each case's its own");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"boundary_lazy\":false}"),
+          "invocation: a run of no site does not permit the lazy boundary profile");
     fix_format(text, sizeof(text), "\"scratch\":\"%s/%s.fixture.machine.clean.r0\"", r.evidence,
                r.run_id);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the scratch");
@@ -2114,6 +2191,103 @@ static void test_machine(void)
     CHECK(r.claims == 0, "machine: the ledger has no claim");
     CHECK(!r.leaks, "machine: the driver leaks nothing");
     show(&r, before);
+}
+
+/** Say whether the scenario of the boundary case of run `r` started. */
+static int boundary_started(const struct run *r)
+{
+    static char text[OUT_LEN];
+    char path[PATH_LEN * 2];
+
+    fix_format(path, sizeof(path), "%s/output/fixture.boundary.accounting.r0.log", r->results);
+    return read_text(path, text, sizeof(text)) > 0 && has_start(text, "scenario: ");
+}
+
+/**
+ * Run the boundary case of run `r` on x86_64, and check that it ended
+ * before its scenario started with the reason `why`, its invocation not
+ * written.
+ */
+static void boundary_refused(struct run *r, const char *row, const char *why)
+{
+    static const struct etude_legacy_member m[] = {
+        {"boundary", 0, 0, 0, "cases/boundary/boundary.json"}};
+    int before = fails;
+
+    r->name = row;
+    r->members = m;
+    r->n = 1;
+    r->arch = "x86_64";
+    set_run(r);
+    CHECK(r->status == 1, row);
+    CHECK(case_is(r, "fixture.boundary.accounting", "x86_64", 0, "incomplete", why), row);
+    CHECK(!boundary_started(r), row);
+    CHECK(!invocation_has(r, "fixture.boundary.accounting.r0", "{"), row);
+    CHECK(r->claims == 0, row);
+    show(r, before);
+}
+
+/**
+ * The boundary case: at a site whose policy permits the lazy boundary
+ * profile, its invocation says so, its scenario runs and passes, and its
+ * claim holds the case's 4 GiB, not the machine's 72 GiB. Without that
+ * permission, from a policy without the line or with no policy, and with a
+ * ledger whose memory limit would cut the claim short, it ends incomplete
+ * before its scenario starts. A policy that cannot be read is refused.
+ */
+static void test_boundary(void)
+{
+    static const struct etude_legacy_member m[] = {
+        {"boundary", 0, 0, 0, "cases/boundary/boundary.json"}};
+    static const char deny[] =
+        "the site's policy does not permit the lazy memory profile bigmem-boundary-v1";
+    static struct run r, other, none, small, missing;
+    static char site[PATH_LEN], var[PATH_LEN + 32], policy[PATH_LEN];
+    char text[PATH_LEN * 2];
+    int before = fails;
+
+    fix_format(var, sizeof(var), "FIXTURE_LEDGER=%s", ledger);
+    r.name = "boundary";
+    r.members = m;
+    r.n = 1;
+    r.arch = "x86_64";
+    r.site = in(site, sizeof(site), "site.permits");
+    r.var = var;
+    set_run(&r);
+    CHECK(r.status == 0, "boundary: a permitted site's case passed");
+    CHECK(case_is(&r, "fixture.boundary.accounting", "x86_64", 0, "pass", NULL),
+          "boundary: the case passed");
+    CHECK(boundary_started(&r), "boundary: the scenario ran");
+    CHECK(invocation_has(&r, "fixture.boundary.accounting.r0", "\"boundary_lazy\":true}"),
+          "boundary: the invocation permits the lazy boundary profile");
+    fix_format(text, sizeof(text), "%s/qemu/qemu-system-x86_64", tree);
+    CHECK(invocation_has(&r, "fixture.boundary.accounting.r0", text),
+          "boundary: the emulator of x86-64 found on the path");
+    CHECK(output_has(&r, "fixture.boundary.accounting.r0",
+                     "ledger: resource memory_bytes 4294967296"),
+          "boundary: the claim holds the case's 4 GiB");
+    CHECK(!output_has(&r, "fixture.boundary.accounting.r0",
+                      "ledger: resource memory_bytes 77309411328"),
+          "boundary: the claim does not hold the machine's 72 GiB");
+    CHECK(r.claims == 0, "boundary: the ledger has no claim");
+    CHECK(!r.leaks, "boundary: the driver leaks nothing");
+    show(&r, before);
+
+    other.site = in(policy, sizeof(policy), "site.other");
+    boundary_refused(&other, "boundary-unproved", deny);
+    boundary_refused(&none, "boundary-nosite", deny);
+    small.site = site;
+    small.limit_mib = 4095;
+    boundary_refused(&small, "boundary-short",
+                     "its 4294967296 bytes of memory are more than the run's limit of "
+                     "4293918720, and a machine of bigmem-boundary-v1 runs only on its whole "
+                     "reservation");
+    missing.members = m;
+    missing.n = 1;
+    missing.arch = "x86_64";
+    missing.site = in(text, sizeof(text), "site.absent");
+    refused(&missing, "boundary-nopolicy", "boundary-nopolicy: a policy that cannot be read",
+            "the site's policy ");
 }
 
 /** Give the store of guest artifacts that run `r` left under its evidence,
@@ -2445,6 +2619,7 @@ int main(int argc, char **argv)
     test_cases_stops();
     test_cases_beside();
     test_machine();
+    test_boundary();
     test_cases_refused();
     test_machine_locks();
     test_guest();

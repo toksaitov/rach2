@@ -98,6 +98,12 @@ extern char **environ;
 /* The most variables a case's program is given by its item. */
 #define CASE_VARS 5
 
+/* The memory profile of the 72 GiB boundary boot, and the line of the site
+ * policy that permits its lazy backing, which the owner adds once the
+ * site's acceptance of that boot has passed. */
+#define BOUNDARY_PROFILE "bigmem-boundary-v1"
+#define BOUNDARY_PERMIT  "boundary_lazy " BOUNDARY_PROFILE
+
 static const char *const resource_names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
 static const char *const outcome_names[] = {"pass", "failure", "incomplete", "cancelled"};
 
@@ -227,6 +233,8 @@ struct set {
     char policy[400];             /* the reference of the budget policy */
     char stop_reason[REASON_LEN]; /* why the members not ended are cancelled */
     int stopping;
+    /* The site's policy permits the lazy boundary profile. */
+    int boundary_lazy;
     int failed; /* the history or the ledger failed */
     uint64_t status_us;
     struct etude_reading start, first;
@@ -2108,7 +2116,8 @@ static int write_invocation(const struct set *x, const struct member *m, char qe
     string(&d, qemu[0]);
     cmp_printf(&d, ",\"qemu_x86_64\":");
     string(&d, qemu[1]);
-    cmp_printf(&d, ",\"ovmf_i686\":null,\"ovmf_x86_64\":null},\"steps\":{");
+    cmp_printf(&d, ",\"ovmf_i686\":null,\"ovmf_x86_64\":null,\"boundary_lazy\":%s},\"steps\":{",
+               x->boundary_lazy ? "true" : "false");
     for (i = 0; steps != NULL && steps->type == JSON_ARRAY && i < steps->count; i++) {
         cmp_printf(&d, i > 0 ? "," : "");
         string(&d, json_text(steps->item[i], "step_id"));
@@ -2140,6 +2149,44 @@ static int write_invocation(const struct set *x, const struct member *m, char qe
     return rc;
 }
 
+/**
+ * Say whether machine case member `m` may run here. A case that declares a
+ * machine of the boundary profile needs the site's permission and a claim of
+ * its whole `memory_bytes`, which the ledger's memory limit would otherwise
+ * cut short; the launcher takes the case's `memory_bytes` as what the claim
+ * holds.
+ *
+ * @return 0, or -1 with the reason in `why`.
+ */
+static int boundary_admits(const struct set *x, const struct member *m, char *why, size_t size)
+{
+    const struct json *machines = json_member(m->k->json, "machines");
+    const char *profile;
+    size_t i;
+    int boundary = 0;
+
+    for (i = 0; machines != NULL && machines->type == JSON_ARRAY && i < machines->count; i++) {
+        profile = json_text(json_member(machines->item[i], "qemu"), "memory_profile");
+        boundary |= profile != NULL && strcmp(profile, BOUNDARY_PROFILE) == 0;
+    }
+    if (!boundary)
+        return 0;
+    if (!x->boundary_lazy) {
+        (void)fit(why, size, "the site's policy does not permit the lazy memory profile %s",
+                  BOUNDARY_PROFILE);
+        return -1;
+    }
+    if (m->k->memory_bytes > x->cap[ETUDE_LEGACY_MEMORY].amount) {
+        (void)fit(why, size,
+                  "its %llu bytes of memory are more than the run's limit of %llu, and a "
+                  "machine of %s runs only on its whole reservation",
+                  (unsigned long long)m->k->memory_bytes,
+                  (unsigned long long)x->cap[ETUDE_LEGACY_MEMORY].amount, BOUNDARY_PROFILE);
+        return -1;
+    }
+    return 0;
+}
+
 /** Publish the artifacts of machine case member `m` to the run's store, and
  * write its invocation; 0, or -1 with the reason in `why`. */
 static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN], char *why,
@@ -2150,6 +2197,8 @@ static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN
     char path[PATH_LEN];
     size_t g;
 
+    if (boundary_admits(x, m, why, size) != 0)
+        return -1;
     if (strchr(emulator, '/') == NULL) {
         fit(why, size, "its emulator %s is not on PATH", emulator);
         return -1;
@@ -2732,6 +2781,40 @@ static int check_cases(struct set *x)
     return 0;
 }
 
+/** Read whether the site's policy `x->o->site` permits the lazy boundary
+ * profile: it does when a whole line of it is BOUNDARY_PERMIT. 0, or 2
+ * after a refusal when the policy cannot be read. */
+static int check_site(struct set *x)
+{
+    char line[256], why[PATH_LEN + 80];
+    size_t n;
+    int first = 1, last;
+    FILE *f;
+
+    if (x->o->site == NULL)
+        return 0;
+    if ((f = fopen(x->o->site, "r")) == NULL) {
+        snprintf(why, sizeof(why), "the site's policy %s: %s", x->o->site, strerror(errno));
+        return refuse(x, why);
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        n = strlen(line);
+        last = (n > 0 && line[n - 1] == '\n') || feof(f);
+        if (n > 0 && line[n - 1] == '\n')
+            line[--n] = '\0';
+        if (first && last && strcmp(line, BOUNDARY_PERMIT) == 0)
+            x->boundary_lazy = 1;
+        first = last;
+    }
+    if (ferror(f)) {
+        snprintf(why, sizeof(why), "the site's policy %s cannot be read", x->o->site);
+        fclose(f);
+        return refuse(x, why);
+    }
+    fclose(f);
+    return 0;
+}
+
 /** Check the request before anything runs; 0, or 2 after a refusal. */
 static int check(struct set *x)
 {
@@ -2742,7 +2825,7 @@ static int check(struct set *x)
         return 2;
     if (o->arch == NULL || (strcmp(o->arch, "i686") != 0 && strcmp(o->arch, "x86_64") != 0))
         return refuse(x, "the architecture must be i686 or x86_64");
-    if (check_given(x) != 0)
+    if (check_given(x) != 0 || check_site(x) != 0)
         return 2;
     if (o->commit != NULL && !commit_name(o->commit))
         return refuse(x, "the commit must be 40 or 64 lowercase hexadecimal digits");

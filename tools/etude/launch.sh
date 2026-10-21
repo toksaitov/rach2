@@ -25,6 +25,7 @@ if [ ! -e "$site" ] && [ ! -L "$site" ] && [ "${ETUDE_SITE+x}" != x ]; then
 fi
 [ -r "$site" ] || refuse "cannot read $site"
 header="" endpoint="" launcher="" ledger="" locks="" bridge="" capacity="" wait="" seconds=""
+boundary=""
 seen=" "
 while IFS=' ' read -r key value || [ -n "$key$value" ]; do
     case $seen in *" $key "*) refuse "duplicate field $key" ;; esac
@@ -40,10 +41,13 @@ while IFS=' ' read -r key value || [ -n "$key$value" ]; do
         capacity) [ -z "$capacity" ] || refuse 'duplicate capacity'; capacity=$value ;;
         wait) [ -z "$wait" ] || refuse 'duplicate wait'; wait=$value ;;
         seconds) [ -z "$seconds" ] || refuse 'duplicate seconds'; seconds=$value ;;
+        boundary_lazy) boundary=$value ;;
         *) refuse "unknown field $key" ;;
     esac
 done < "$site"
 [ "$header" = 1 ] || refuse 'incompatible site format'
+# The optional boundary_lazy permits the lazy 72 GiB boundary profile it names.
+case $boundary in ''|bigmem-boundary-v1) ;; *) refuse 'boundary_lazy must be bigmem-boundary-v1' ;; esac
 case $(uname -s)/$endpoint in Linux/linux|Darwin/macos) ;; *) refuse 'endpoint is disabled or incompatible' ;; esac
 for path in "$site" "$launcher" "$ledger" "$locks" "${bridge:-}"; do
     case $path in /*) ;; *) refuse "not an absolute path: $path" ;; esac

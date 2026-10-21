@@ -168,6 +168,8 @@ struct etude_legacy_set_opts {
     const char *stamp;           /* a file touched once the preparation has ended, or NULL */
     const char *commit;          /* the tree's commit, or NULL when it has none */
     const char *args;            /* what the run was asked, for the status record */
+    const char *site;            /* the installed site policy that admitted the run,
+                                    or NULL for none */
     FILE *out;                   /* the progress, and each suite's output */
     volatile sig_atomic_t *stop; /* as for a preparation */
 };
@@ -202,11 +204,16 @@ struct etude_legacy_set_opts {
  * machine of its QEMU profile, through etude-guest, with the memory the
  * launcher reserves for the machine as its claim, and a machine case's
  * scenario with its invocation, after its artifacts are published to the
- * run's store. `o->casecheck` judges each attempt, a guest's placed `qemu`
- * with the machine's console and a machine case's with the consoles its
- * scenario kept. A manifest that cannot be read, of another suite's family,
- * with no case on the architecture, or with a case that the set driver
- * cannot run (legacy_manifest_read) is refused.
+ * run's store. The invocation permits the lazy boundary memory profile only
+ * when the policy `o->site` has the line `boundary_lazy bigmem-boundary-v1`;
+ * a machine case that declares such a machine ends before its scenario
+ * starts when the policy lacks it, or when the ledger's memory limit is less
+ * than the case's `memory_bytes`. `o->casecheck` judges each attempt, a
+ * guest's placed `qemu` with the machine's console and a machine case's with
+ * the consoles its scenario kept. A manifest that cannot be read, of another
+ * suite's family, with no case on the architecture, or with a case that the
+ * set driver cannot run (legacy_manifest_read) is refused, and so is a
+ * request whose `o->site` cannot be read.
  *
  * The history is one stream under `o->results`, with the plan of one item
  * for each suite of the registry, the case `legacy.SUITE` of the family

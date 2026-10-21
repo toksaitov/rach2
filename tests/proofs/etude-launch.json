@@ -365,6 +365,40 @@
           "etude-launch-test: failed: job-limit:"
         ]
       }
+    },
+    {
+      "name": "boundary-unknown",
+      "summary": "a policy that permits the lazy boundary profile refused as one with an unknown field",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "        boundary_lazy) boundary=$value ;;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: boundary:"
+        ]
+      }
+    },
+    {
+      "name": "boundary-any",
+      "summary": "a permission of the lazy boundary profile that names another profile admitted",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "case $boundary in ''|bigmem-boundary-v1) ;;",
+          "replace": "case $boundary in *) ;;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: boundary:"
+        ]
+      }
     }
   ]
 }

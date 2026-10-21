@@ -67,7 +67,7 @@ static int usage(void)
             "       etude-legacy set -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE "
             "-S SCHEMAS [-K CASECHECK] [-d LOCKS] [-t TREE] [-a ARCH] [-n KERNEL] [-p RECORD] "
             "[-W WAIT] [-s SECONDS] [-i IDLE] [-j WIDTH] [-k] [-r STATUS] [-m STAMP] "
-            "[-g COMMIT] [-q ARGS] SELECTION\n");
+            "[-g COMMIT] [-q ARGS] [-P SITE] SELECTION\n");
     return 2;
 }
 
@@ -279,6 +279,8 @@ static const char **text_option(struct etude_legacy_set_opts *o, int opt)
         return &o->commit;
     case 'q':
         return &o->args;
+    case 'P':
+        return &o->site;
     default:
         return NULL;
     }
@@ -290,7 +292,7 @@ static int set_options(int argc, char **argv, struct etude_legacy_set_opts *o)
     const char **text;
     int opt, have_cap = 0;
 
-    while ((opt = getopt(argc, argv, "l:c:o:e:S:K:d:t:a:n:p:W:s:i:j:kr:m:g:q:")) != -1) {
+    while ((opt = getopt(argc, argv, "l:c:o:e:S:K:d:t:a:n:p:W:s:i:j:kr:m:g:q:P:")) != -1) {
         if ((text = text_option(o, opt)) != NULL)
             *text = optarg;
         else if (opt == 'c' && limits_of(optarg, o->cap) == 0)

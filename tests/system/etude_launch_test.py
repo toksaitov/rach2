@@ -318,6 +318,20 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     assert not observed.exists()
     write(tree / "tests/system/suites.mk", "# RACH2_PORT_OFFSET\n")
 
+    # The permission of the lazy boundary profile names that profile alone;
+    # a policy with it admits a command as one without it does.
+    stage = "boundary"
+    build_env = dict(env, EXPECT_MEMORY="5368709120")
+    for value, status in (("bigmem-boundary-v1", 0), ("yes", 2), ("bigmem-boundary-v2", 2)):
+        write(site, policy + f"boundary_lazy {value}\n")
+        run([str(launcher), "build", sys.executable, str(observer)], build_env, tree, status=status)
+        if status == 0:
+            saw()
+            clear()
+        else:
+            assert not observed.exists(), value
+    write(site, policy)
+
     # Two ordinary host selections overlap; a large or serial one waits.
     stage = "concurrency"
     write(bin / "id", '#!/bin/sh\n[ "$1" != -un ] || { echo "$TEST_ACCOUNT"; exit; }\nexec /usr/bin/id "$@"\n', executable=True)

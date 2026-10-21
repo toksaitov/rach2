@@ -895,6 +895,11 @@ capacity="$((WORKERS * claim_cpu)),$(((MEMORY_MIB + WORKERS * 128) * 1048576)),$
 commit=$(git -C "$REPO" rev-parse --verify -q HEAD 2>/dev/null) || commit=""
 case "$commit" in *[!0-9a-f]*) commit="" ;; esac
 [ "$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" = "$REPO" ] || commit=""
+# The installed site policy that admitted this run, whose line
+# `boundary_lazy bigmem-boundary-v1` lets a machine case boot the lazy
+# 72 GiB boundary profile; a run admitted by no site has none.
+admitted=""
+[ "${ETUDE_ADMITTED:-}" != "$site" ] || admitted=$site
 # shellcheck disable=SC2329 # run from the traps
 forward() { SIGNALLED=$1; [ -z "$DRIVER" ] || kill "-$1" "$DRIVER" 2>/dev/null; }
 trap 'forward INT' INT; trap 'forward TERM' TERM; trap 'forward HUP' HUP
@@ -902,7 +907,7 @@ trap 'forward INT' INT; trap 'forward TERM' TERM; trap 'forward HUP' HUP
 "$ETUDE_LEGACY" set -t "$REPO" -a "$ARCH" ${RACH2_KERNEL:+-n "$RACH2_KERNEL"} \
     -l "$WORK/ledger" -c "$capacity" -j "$WORKERS" -o "$RESULTS" -e "$REPO/build/tests/failed" \
     -S "$SCHEMAS" ${MANIFESTS:+-K "$WORK/etude/casecheck"} -p "$RECORD" -i "$IDLE_SECONDS" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
-    ${commit:+-g "$commit"} ${RACH2_STOP_ON_FAIL:+-k} -q "$*" "$WORK/selection" &
+    ${commit:+-g "$commit"} ${RACH2_STOP_ON_FAIL:+-k} ${admitted:+-P "$admitted"} -q "$*" "$WORK/selection" &
 DRIVER=$!
 watch_scripts &
 WATCHER=$!
