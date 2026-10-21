@@ -1048,28 +1048,29 @@ static void unlink_case(void)
  */
 static void orphan_truncate_case(void)
 {
-    int fd, held, duplicate, wall, i;
+    int fd, other, duplicate, wall, i;
 
     fd = syscall3(SYS_OPEN, (long)HELD, O_CREAT | O_RDWR, 0600);
     want_ok("create orphan truncate file", fd);
     want_eq("seed orphan truncate file", syscall3(SYS_WRITE, fd, (long)"abc", 3), 3);
     wall = syscall3(SYS_CREAT, (long)WALL, 0600, 0);
     want_ok("allocate orphan truncate neighbour", wall);
-    held = syscall3(SYS_OPEN, (long)HELD, O_RDWR, 0);
-    want_ok("independent orphan truncate open", held);
+    other = syscall3(SYS_OPEN, (long)HELD, O_RDWR, 0);
+    want_ok("independent orphan truncate open", other);
     duplicate = syscall1(SYS_DUP, fd);
     want_ok("duplicate orphan truncate open", duplicate);
     want_eq("unlink before truncate", syscall1(SYS_UNLINK, (long)HELD), 0);
     want_eq("shrink orphan", syscall3(SYS_FTRUNCATE, fd, 1, 0), 0);
-    want_fd_size("independent open sees orphan shrink", held, 1);
+    want_fd_size("independent open sees orphan shrink", other, 1);
     want_eq("shrink preserves shared offset", syscall3(SYS_LSEEK, duplicate, 0, 1), 3);
-    want_bytes("orphan shrink preserves first byte", held, "a", 1);
+    want_bytes("orphan shrink preserves first byte", other, "a", 1);
     want_eq("grow orphan", syscall3(SYS_FTRUNCATE, fd, LEAK_CHUNK, 0), 0);
-    want_fd_size("independent open sees relocated orphan", held, LEAK_CHUNK);
+    want_fd_size("independent open sees relocated orphan", other, LEAK_CHUNK);
     want_fd_size("duplicate sees relocated orphan", duplicate, LEAK_CHUNK);
     want_eq("growth preserves shared offset", syscall3(SYS_LSEEK, duplicate, 0, 1), 3);
-    want_eq("rewind relocated orphan", syscall3(SYS_LSEEK, held, 0, 0), 0);
-    want_eq("read relocated orphan", syscall3(SYS_READ, held, (long)rdbuf, LEAK_CHUNK), LEAK_CHUNK);
+    want_eq("rewind relocated orphan", syscall3(SYS_LSEEK, other, 0, 0), 0);
+    want_eq("read relocated orphan", syscall3(SYS_READ, other, (long)rdbuf, LEAK_CHUNK),
+            LEAK_CHUNK);
     want_eq("relocated orphan retains first byte", rdbuf[0], 'a');
     for (i = 1; i < LEAK_CHUNK; i++) {
         want_eq("orphan growth is zero filled", rdbuf[i], 0);
@@ -1077,8 +1078,8 @@ static void orphan_truncate_case(void)
     want_eq("truncate keeps orphan nameless", syscall3(SYS_OPEN, (long)HELD, O_RDONLY, 0), -ENOENT);
     want_eq("close orphan writer", syscall1(SYS_CLOSE, fd), 0);
     want_eq("close orphan duplicate", syscall1(SYS_CLOSE, duplicate), 0);
-    want_fd_size("last open retains relocated orphan", held, LEAK_CHUNK);
-    want_eq("close last orphan holder", syscall1(SYS_CLOSE, held), 0);
+    want_fd_size("last open retains relocated orphan", other, LEAK_CHUNK);
+    want_eq("close last orphan holder", syscall1(SYS_CLOSE, other), 0);
     want_eq("close orphan neighbour", syscall1(SYS_CLOSE, wall), 0);
     want_eq("remove orphan neighbour", syscall1(SYS_UNLINK, (long)WALL), 0);
 }

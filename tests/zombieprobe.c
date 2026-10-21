@@ -70,7 +70,7 @@ static void report_failed(int check, const char *what)
     for (i = WRITER; i < CHECKS; i++) {
         if (i == check) {
             report_fail(check_ids[i], what);
-        } else if (i != WRITER || check == WRITER) {
+        } else if (i != WRITER) {
             report_notrun(check_ids[i], check == WRITER ? "the writer was not started"
                                                         : "the rounds stopped at another check");
         }

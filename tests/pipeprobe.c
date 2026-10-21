@@ -610,7 +610,7 @@ static void case_refill(void)
 
 /** One step of case (i): write `len` bytes of `pat` at `sa` and read them at
  * `da` of `got`. Returns 0, or the stage that failed, as case (i) counts. */
-static int sweep_one(int p[2], const char *pat, char *got, int len, int sa, int da)
+static int sweep_one(const int p[2], const char *pat, char *got, int len, int sa, int da)
 {
     int i;
 

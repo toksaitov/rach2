@@ -1074,8 +1074,8 @@ static void plan(char **envp)
     static const char *const changes[] = {"addr-eexist",       "addr-del",          "addr-restore",
                                           "default-route-add", "default-route-del", "link-up",
                                           "mtu-eopnotsupp",    "delneigh-enoent"};
-    static const char *const lookups[] = {"route-get-local", "route-get-unicast", "rule-dump",
-                                          "qdisc-dump"};
+    static const char *const lookup_ids[] = {"route-get-local", "route-get-unicast", "rule-dump",
+                                             "qdisc-dump"};
     static const char *const table[] = {"second-addr",       "neigh-permanent", "neigh-forget",
                                         "route-add",         "proc-net-route",  "route-del",
                                         "route-enetunreach", "route-on-link"};
@@ -1086,7 +1086,7 @@ static void plan(char **envp)
     report_begin(report_case(envp, "guest.default.netlinkmusl"));
     PLAN(before);
     PLAN_CHANGES(changes);
-    PLAN(lookups);
+    PLAN(lookup_ids);
     PLAN_CHANGES(table);
     PLAN(after);
 }

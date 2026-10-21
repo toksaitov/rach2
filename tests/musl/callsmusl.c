@@ -1701,7 +1701,7 @@ static void plan(void)
                                          "mincore",
                                          "getcpu",
                                          "personality"};
-    static const char *const messages[] = {"sendmmsg", "recvmmsg"};
+    static const char *const message_ids[] = {"sendmmsg", "recvmmsg"};
     static const char *const middle[] = {"clock-gettime64",
                                          "time-call",
                                          "close-range-cloexec",
@@ -1747,7 +1747,7 @@ static void plan(void)
 #if defined __x86_64__
     plan_row("ids-unsigned");
 #endif
-    PLAN(messages);
+    PLAN(message_ids);
 #if defined __x86_64__
     plan_row("recvmmsg-wide-count");
     plan_row("socket-wide-domain");

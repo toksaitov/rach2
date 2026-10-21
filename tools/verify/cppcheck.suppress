@@ -133,6 +133,15 @@ intToPointerCast:*tests/musl/ptracemusl.c
 knownConditionTrueFalse:*tests/musl/sigframemusl.c
 knownConditionTrueFalse:*tests/musl/mapmusl.c
 
+# The probes report a branch by the architecture they are built for, and the
+# 32-bit pass reads the x86-64 branch's condition as a constant.
+knownConditionTrueFalse:*tests/musl/execargmusl.c
+knownConditionTrueFalse:*tests/musl/statmusl.c
+
+# `passed` reports the assertion that held and returns 0, so that it stands
+# between the checks of a chain joined by `||`.
+knownConditionTrueFalse:*tests/musl/ptracemusl.c
+
 # Linux's struct stat64 and struct rusage, laid out member for member for a
 # call the probe makes by number.
 unusedStructMember:*tests/musl/fdcallmusl.c

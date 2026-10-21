@@ -274,11 +274,9 @@ tests/dgramprobe.c:probe_main complexity 79 a probe, one sequence of steps in th
 tests/dgramprobe.c:probe_main lines 522 a probe, one sequence of steps in the order the log records them
 
 
-tests/dirtest.c:_start lines 108 a probe, one sequence of steps in the order the log records them
 
 tests/dnstest.c:main complexity 30 a probe, one sequence of steps in the order the log records them
 
-tests/dup2test.c:_start lines 173 a probe, one sequence of steps in the order the log records them
 
 tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the order the log records them
 tests/ext2probe.c:links_rows lines 134 a probe, one sequence of steps in the order the log records them
@@ -517,10 +515,7 @@ tests/mountprobe.c:rows_placing complexity 26 a probe, one sequence of steps in 
 tests/mountprobe.c:rows_reading complexity 26 a probe, one sequence of steps in the order the log records them
 
 tests/musl/addusermusl.c:check_concurrent complexity 53 a test's rows, each a case, read as one table
-tests/musl/addusermusl.c:check_concurrent lines 168 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_created complexity 27 a test's rows, each a case, read as one table
-tests/musl/addusermusl.c:check_injection complexity 33 a test's rows, each a case, read as one table
-tests/musl/addusermusl.c:check_injection lines 107 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case, read as one table
 
 tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one table
@@ -531,7 +526,6 @@ tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one tabl
 
 tests/musl/clockidmusl.c:sleeps complexity 29 a test's rows, each a case, read as one table
 
-tests/musl/clonemusl.c:main complexity 26 a test's rows, each a case, read as one table
 tests/musl/clonemusl.c:raw params 7 the parameters are the arguments of one call the test makes, passed through
 
 tests/musl/devtest.c:main complexity 30 a test's rows, each a case, read as one table
@@ -592,14 +586,11 @@ tests/musl/vforkmusl.c:main complexity 27 a test's rows, each a case, read as on
 
 tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, read as one table
 
-tests/mvtest.c:_start lines 175 a probe, one sequence of steps in the order the log records them
 
 tests/netifprobe.c:netif_main complexity 132 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:netif_main lines 563 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:packet_on_second lines 148 a probe, one sequence of steps in the order the log records them
 
-tests/ownprobe.c:child_main complexity 41 a probe, one sequence of steps in the order the log records them
-tests/ownprobe.c:child_main lines 124 a probe, one sequence of steps in the order the log records them
 
 tests/packetprobe.c:probe_main complexity 134 a probe, one sequence of steps in the order the log records them
 tests/packetprobe.c:probe_main lines 608 a probe, one sequence of steps in the order the log records them
@@ -612,16 +603,12 @@ tests/pingtest.c:probe_main lines 162 a probe, one sequence of steps in the orde
 tests/pingtest.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
 
-tests/procprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
-tests/procprobe.c:probe_main lines 399 a probe, one sequence of steps in the order the log records them
 
 
 tests/rawprobe.c:probe_main complexity 30 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:probe_main lines 370 a probe, one sequence of steps in the order the log records them
 
-tests/rmtest.c:_start lines 138 a probe, one sequence of steps in the order the log records them
 
-tests/stattest.c:probe_main lines 177 a probe, one sequence of steps in the order the log records them
 
 tests/stdintest.c:_start lines 115 a probe, one sequence of steps in the order the log records them
 
@@ -659,8 +646,6 @@ tests/system/runner/runutil.c:supervise lines 158 a parser over an external form
 
 tests/udptest.c:probe_main lines 134 a probe, one sequence of steps in the order the log records them
 
-tests/unlinkdirprobe.c:probe_main complexity 35 a probe, one sequence of steps in the order the log records them
-tests/unlinkdirprobe.c:probe_main lines 151 a probe, one sequence of steps in the order the log records them
 
 tests/usbdiskprobe.c:part_hold complexity 43 a probe, one sequence of steps in the order the log records them
 tests/usbdiskprobe.c:part_hold lines 118 a probe, one sequence of steps in the order the log records them

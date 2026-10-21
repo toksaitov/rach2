@@ -169,39 +169,13 @@ enum {
     CHECKS
 };
 
-static const struct {
-    const char *id;
-    const char *text;
-} checks[CHECKS] = {
-    {"dir-path", "the directory's path"},
-    {"dir-and-link", "making the directory and the link"},
-    {"abort-core", "an abort with no core flag"},
-    {"file-where-link", "the file where the link was"},
-    {"read-core", "reading the core file"},
-    {"elf-header", "the ELF header"},
-    {"one-note", "two note segments"},
-    {"prstatus", "NT_PRSTATUS"},
-    {"prpsinfo", "NT_PRPSINFO"},
-    {"auxv", "NT_AUXV"},
-    {"segments-inside", "a segment past the end of the file"},
-    {"mark", "the mark in the child's data"},
-    {"two-page", "a core past a two-page limit"},
-    {"read-short", "reading the short core file"},
-    {"short-header", "the short core's ELF header"},
-    {"short-notes-whole", "the short core's notes cut short"},
-    {"short-notes", "no note segment in the short core"},
-    {"short-cut", "a short core with every segment whole"},
-    {"short-limit", "a short core with more bytes than its limit"},
-    {"threads-core", "a process of two threads left no core"},
-    {"threads-status", "the core of two threads has no status for each"},
-    {"threads-regs", "the spinning thread's registers in the core are not the ones it stopped with "
-                     "before its memory was copied"},
-    {"limit-zero", "a core with the limit 0"},
-    {"not-dumpable", "a core from a process that is not dumpable"},
-    {"hole-dirs", "the directories of the counting children"},
-    {"hole-children", "a child that rebuilt its stack's top and aborted"},
-    {"hole-count", "the limit a child counted from its regions"},
-    {"hole-zero", "a limit of the bytes before the zero at the end took the zero"},
+static const char *const check_ids[CHECKS] = {
+    "dir-path",          "dir-and-link", "abort-core", "file-where-link", "read-core",
+    "elf-header",        "one-note",     "prstatus",   "prpsinfo",        "auxv",
+    "segments-inside",   "mark",         "two-page",   "read-short",      "short-header",
+    "short-notes-whole", "short-notes",  "short-cut",  "short-limit",     "threads-core",
+    "threads-status",    "threads-regs", "limit-zero", "not-dumpable",    "hole-dirs",
+    "hole-children",     "hole-count",   "hole-zero",
 };
 
 /** In the process that began the report, report every check before `check`
@@ -216,11 +190,11 @@ static void report_at(int check, const char *why)
     }
     for (i = 0; i < CHECKS; i++) {
         if (i < check) {
-            report_pass(checks[i].id);
+            report_pass(check_ids[i]);
         } else if (i == check) {
-            report_fail(checks[i].id, why);
+            report_fail(check_ids[i], why);
         } else {
-            report_notrun(checks[i].id, "an earlier check failed");
+            report_notrun(check_ids[i], "an earlier check failed");
         }
     }
     report_end();
