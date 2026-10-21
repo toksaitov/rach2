@@ -97,9 +97,9 @@ all : $(KERNEL_BIN)
 # Makefile before each link, so a changed checker is rebuilt first.
 #
 # The kernel every loader reads has no debug sections. They are more than half
-# of the linked file, which with them would not fit the 2 MiB kernel slot of a
-# boot partition (tools/image/mkdisk_grub.sh). The linked file with them is
-# kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB.
+# of the linked file, which with them would nearly fill the 4 MiB kernel slot
+# of a boot partition (tools/image/mkdisk_grub.sh). The linked file with them
+# is kept beside the kernel as `kernel.debug`, which debug.sh loads into GDB.
 # Both keep the symbol table, which the checker's `_end` test and `nm` read.
 # The rule names this file among its inputs, so a change to how the kernel is
 # made makes it again.

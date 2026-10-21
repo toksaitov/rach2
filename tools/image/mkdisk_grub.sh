@@ -170,8 +170,11 @@ SOURCE_DATE_EPOCH="${SOURCE_DATE_EPOCH:-1700000000}"
 export SOURCE_DATE_EPOCH
 
 # The candidate slot: bootctl rewrites these bytes in place and never
-# touches FAT metadata, so the file's size is fixed at build time.
-SLOT_BYTES=2097152
+# touches FAT metadata, so the file's size is fixed at build time. It is
+# 4 MiB: room for the kernel TinyCC builds on the machine itself, which is
+# larger than GCC's, and the longest file bootslot walks at one sector per
+# cluster (BOOTSLOT_MAX_FILE_CLUSTERS).
+SLOT_BYTES=4194304
 # The rewritable menu's slot. bootctl overwrites these bytes in place and never
 # extends the file or moves its chain, so the size is fixed at build time and is
 # a whole number of clusters at either geometry this script produces.

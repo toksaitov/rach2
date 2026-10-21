@@ -113,7 +113,7 @@ if [ "${1:-all}" != libraries ]; then
         fail "linker script edit did not reach the kernel"
     echo "build-inputs-test: passed: linker script edit reaches the validated kernel"
     # The loaders read a kernel without debug sections, which is what keeps it
-    # inside a boot slot's 2 MiB; GDB reads kernel.debug, which has them.
+    # inside a boot slot's 4 MiB; GDB reads kernel.debug, which has them.
     if i686-elf-readelf -S "$WORK/kernel/kernel" | grep -q '\.debug_'; then
         fail "the kernel a loader reads carries debug sections"
     fi
