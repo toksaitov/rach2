@@ -319,23 +319,23 @@ run-console: rach2 tests krffs test-image $(HARNESS)
 # blockprobe's 6 MiB fit in the 8 MiB cache of this machine, so it proves that
 # data written and fsynced through the cache reads back whole; the stress
 # suite's 33 MiB exercise eviction.
-# `tests/run bootpart`: /proc/cmdline and the level-one disk devices. Three
-# boots of one disk: as mkdisk built it there is a single KRFFS partition, so
-# /dev/bootpart must be absent from stat and open; after the boot fixture adds a
-# FAT-typed partition of known bytes, the probe drives the device end to end
-# (the 0600 mode from both stat paths, seeks against the partition size, known
-# bytes at a seek, a written sector read back, exactly 0 at the end, -ENOSPC
-# past it, -EINVAL unaligned, -EACCES unprivileged); and a third boot mounts a
-# RAM image instead of the disk and requires both /dev/bootpart and
-# /dev/grubcore anyway, since a machine that mounts nothing from its disk must
-# still manage its boot partition and its boot loader, which is what recovery
-# depends on. A fourth boot attaches a sparse 260 GB drive over AHCI and reads
-# known sectors at 5 GiB and at 258 GiB, which a 32-bit file offset could not
-# address. It is that large on purpose: a few gigabytes would be satisfied by an
-# implementation that kept 33 bits, and it is attached over AHCI because the ATA
-# driver's 28-bit LBA stops at 128 GiB.
-BOOTPART_TEST_IMAGE = $(IMAGES_DIR)/bootpart-test.disk
-WIDE_TEST_IMAGE = $(IMAGES_DIR)/wide-test.disk
+# `tests/run bootpart`: /proc/cmdline and the level-one disk devices. They
+# are the four cases of tests/cases/machine.bootpart.json, which etude runs,
+# and have no target here, each a boot that runs bootprobe at the debug
+# shell. On the disk as mkdisk.sh made it, with a single KRFFS partition,
+# /dev/bootpart must be absent from stat and open. On the boot fixture, which
+# adds a FAT-typed partition of known bytes, the probe drives the device end
+# to end (the 0600 mode from both stat paths, seeks against the partition
+# size, known bytes at a seek, a written sector read back, exactly 0 at the
+# end, -ENOSPC past it, -EINVAL unaligned, -EACCES unprivileged). A third
+# boot mounts a RAM image instead of the disk and requires both /dev/bootpart
+# and /dev/grubcore anyway, since a machine that mounts nothing from its disk
+# must still manage its boot partition and its boot loader, which is what
+# recovery depends on. A fourth attaches a sparse 260 GiB drive over AHCI and
+# reads known sectors at 5 GiB and at 258 GiB, which a 32-bit file offset
+# could not address. It is that large on purpose: a few gigabytes would be
+# satisfied by an implementation that kept 33 bits, and it is attached over
+# AHCI because the ATA driver's 28-bit LBA stops at 128 GiB.
 FD_HOSTTEST = build/tests/host/fd_hosttest
 FD_HOSTTEST_SOURCES = tests/host/fd_hosttest.c rach2/sys/fs/fd.c \
                      rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -353,27 +353,6 @@ $(FD_HOSTTEST): $(FD_HOSTTEST_SOURCES) rach2/sys/proc/process.c
 # the guest's flushes from the host (cache=unsafe), as tests/system/Readme.md
 # says.
 # Its cases are tests/cases/guest.fdlock.json, with no target here.
-run-bootpart: rach2 tests krffs test-image $(MKFIXTURE) $(HARNESS)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTPART_TEST_IMAGE) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 90 --ok "BOOTPROBE ABSENT OK" probe=bootprobe
-	$(MKFIXTURE) boot $(BOOTPART_TEST_IMAGE)
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue rach2.bootprobe=fixture" \
-	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 90 --ok "BOOTPROBE OK" probe=bootprobe
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --append "rach2.rescue rach2.bootprobe=ramroot" \
-	    --drive "file=$(BOOTPART_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 90 --ok "BOOTPROBE RAMROOT OK" probe=bootprobe
-	$(MKFIXTURE) wide $(WIDE_TEST_IMAGE)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=wide" \
-	    --drive "file=$(WIDE_TEST_IMAGE),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 180 --ok "BOOTPROBE WIDE OK" probe=bootprobe
 # The disks of the bootpart cases, tests/cases/machine.bootpart.json, made for
 # each architecture, since their root holds tests/bootprobe: the disk that
 # mkdisk.sh makes of disk-test.manifest, with one KRFFS partition, and that
