@@ -13,6 +13,14 @@
 #include "etude/scenario.h"
 
 /*
+ * The longest line drive_send types: what the guest terminal's canonical line
+ * holds before its newline (N_TTY_LINE_MAX less one, rach2/sys/tty/n_tty.h).
+ * A line typed while a command still runs reaches the shell through that
+ * line, not its line editor, and loses whatever is past this length.
+ */
+#define DRIVE_LINE_MAX 255
+
+/*
  * One boot of a machine, driven at its console as a person types at it.
  * Each call after the first one that did not complete does nothing and
  * fails, so that a scenario writes a boot's exchange as one sequence and
@@ -53,6 +61,10 @@ int drive_expect(struct drive *d, const char *text);
 
 /**
  * Type the line that `fmt` gives, and a newline, at the console.
+ *
+ * A line longer than DRIVE_LINE_MAX bytes is refused, typed or not, since
+ * whether the shell reads it whole depends on whether its last command has
+ * ended.
  *
  * @return 0, or -1 with `d->why` saying why.
  */

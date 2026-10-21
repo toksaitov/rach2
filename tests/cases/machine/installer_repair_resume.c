@@ -175,11 +175,11 @@ static void record(struct resume *r)
     drive_send(&d, "%s",
                "echo service:x:2004:2004::/srv/alice:/bin/sh >> /etc/passwd; echo "
                "empty:x:2005:2005::/srv/empty:/bin/sh >> /etc/passwd");
-    drive_send(&d,
-               "mkdir -p /srv/alice/.ssh; echo '%s' > /srv/alice/.ssh/authorized_keys; chown -R "
-               "2004:2004 /srv/alice; chmod 750 /srv/alice/.ssh; chmod 640 "
-               "/srv/alice/.ssh/authorized_keys",
+    drive_send(&d, "mkdir -p /srv/alice/.ssh; echo '%s' > /srv/alice/.ssh/authorized_keys",
                r->keys[0]);
+    drive_send(&d, "%s",
+               "chown -R 2004:2004 /srv/alice; chmod 750 /srv/alice/.ssh; chmod 640 "
+               "/srv/alice/.ssh/authorized_keys");
     drive_send(&d, "%s",
                "sha256sum /etc/dropbear/* /etc/ssh/ssh_host_* /root/.ssh/authorized_keys "
                "/home/test/.ssh/authorized_keys | sed s/^/KEYHASH:/");

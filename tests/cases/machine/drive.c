@@ -127,7 +127,7 @@ int drive_expect(struct drive *d, const char *text)
 
 int drive_send(struct drive *d, const char *fmt, ...)
 {
-    char line[4096];
+    char line[DRIVE_LINE_MAX + 2];
     enum etude_status st;
     va_list ap;
     int n;
@@ -137,8 +137,8 @@ int drive_send(struct drive *d, const char *fmt, ...)
     va_start(ap, fmt);
     n = vsnprintf(line, sizeof(line) - 1, fmt, ap);
     va_end(ap);
-    if (n < 0 || (size_t)n >= sizeof(line) - 1)
-        return fail(d, ETUDE_REFUSED, "a line longer than %zu bytes", sizeof(line) - 2);
+    if (n < 0 || n > DRIVE_LINE_MAX)
+        return fail(d, ETUDE_REFUSED, "a line longer than %d bytes", DRIVE_LINE_MAX);
     line[n] = '\n';
     line[n + 1] = '\0';
     st = etude_type(d->m, line);
