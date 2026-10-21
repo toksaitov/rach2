@@ -1050,6 +1050,21 @@ $(CASE_IMAGES)/recovery-keyless.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach2-r
 	    krffs/manifests/rach2-recovery.manifest > $@.manifest
 	! grep -q '^optional-file.*authorized_keys' $@.manifest
 	$(MKIMAGE) $@.manifest $@ 4
+# The files of the tree that the installer-repair cases read
+# (tests/cases/machine.installer-repair.json), copied into the build, since a
+# case's preparation names its artifacts by a node of the build tree: the demo
+# password and root's demo key, which the images built here take, and GRUB's
+# EFI image, which a disk the update converts must carry.
+CASE_FIXTURES = build/tests/cases/fixtures
+$(CASE_FIXTURES)/demo-password: $(DEMO_CREDS)
+	@mkdir -p $(@D)
+	cp krffs/rach2_demo_password $@
+$(CASE_FIXTURES)/demo-ed25519: $(DEMO_CREDS)
+	@mkdir -p $(@D)
+	cp krffs/rach2_demo_ed25519 $@
+$(CASE_FIXTURES)/bootx64.efi: vendor/grub/bootx64.efi
+	@mkdir -p $(@D)
+	cp $< $@
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.
