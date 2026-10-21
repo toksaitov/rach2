@@ -134,10 +134,10 @@ void probe_main(unsigned long *sp)
         sys_exit(CHILD_EXIT_STATUS);
     }
 
-    report_held();
     print("OK (parent, child PID=");
     print_num(pid);
     puts(")");
+    report_held();
 
     print("Parent: Calling waitpid()... ");
     child_pid = sys_waitpid(pid, &status, 0);

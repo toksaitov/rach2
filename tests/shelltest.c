@@ -162,10 +162,10 @@ void probe_main(unsigned long *sp)
         sys_exit(1);
     }
 
-    report_held();
     print("OK (parent, child PID=");
     print_num(pid);
     puts(")");
+    report_held();
 
     print("Parent: Waiting for child... ");
     child_pid = sys_waitpid(pid, &status, 0);
