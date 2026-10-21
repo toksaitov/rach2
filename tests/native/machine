@@ -23,3 +23,4 @@ musl/clockloadmusl the emulator stopped by the host and the clocks compared with
 musl/creddisk three boots of one disk image after _exit
 musl/keygennoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
 musl/saltnoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
+musl/procfilesmusl the os-real applets with a held host connection and a known image size

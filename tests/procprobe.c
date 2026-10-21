@@ -282,12 +282,10 @@ static const struct row {
 
 #define ROWS ((int)(sizeof(rows) / sizeof(rows[0])))
 
-/* Each row's verdict so far, 0 when no check of it ran, 1 when its checks
- * passed and 2 when one failed; the message of its first failed check; and
- * whether this is `procprobe mount`. */
+/* Each row's verdict so far, 0 when no check ran, 1 when all passed and 2
+ * when one failed, with the message of its first failed check. */
 static char verdict[ROWS];
 static const char *verdict_why[ROWS];
-static int mount_only;
 
 /** The index in `rows` of the assertion `id`, or -1. */
 static int row_of(const char *id)
@@ -332,8 +330,6 @@ static void rows_report(void)
             report_pass(rows[i].id);
         } else if (verdict[i] == 2) {
             report_fail(rows[i].id, verdict_why[i]);
-        } else if (mount_only) {
-            report_notrun(rows[i].id, "procprobe mount reads only the root's line of /proc/mounts");
         } else if (probe_native() && rows[i].kind == ROW_MACHINE) {
             report_notrun(rows[i].id,
                           "machine=native leaves out the whole machine's tables and counts");
@@ -1127,8 +1123,8 @@ static void handshake_release(struct handshake *h)
 static char buf[4096];
 static char path[32];
 
-/** Write the report, print the verdict and exit with the count of failures,
- * so the mount-only run and the whole run report alike. */
+/** Write the full probe's report, print its verdict and exit with its
+ * failure count. */
 static void done(void)
 {
     rows_report();
@@ -2532,6 +2528,32 @@ static void netfile_rows(void)
     }
 }
 
+/** Report this boot's root mount against the expected argument, then exit. */
+static void mount_case(unsigned long *sp)
+{
+    const char *want = probe_word(2);
+    int n, i = 0, same;
+
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "machine.procfiles.mount"));
+    n = slurp("/proc/mounts", buf, (int)sizeof(buf));
+    same = n > 0 && buf[n - 1] == '\n';
+    print_rootmount(buf, n);
+    if (want != 0) {
+        while (i < n && want[i] != '\0' && buf[i] == want[i]) {
+            i++;
+        }
+        same = same && i < n && want[i] == '\0' && buf[i] == '\n';
+    }
+    if (same) {
+        report_pass("mount");
+    } else {
+        report_fail("mount", "the root mount differs from the boot profile");
+    }
+    report_end();
+    puts(same ? "PROCPROBE OK" : "PROCPROBE FAIL");
+    sys_exit(same ? 0 : 1);
+}
+
 /**
  * The probe, entered with `sp` at argc: with an argument beginning with 'm',
  * the root's mount line alone, since the three boots that differ are booted
@@ -2542,24 +2564,18 @@ static void netfile_rows(void)
 void probe_main(unsigned long *sp)
 {
     const char *mode;
-    int n;
 
     probe_args((int)sp[0], (char **)(sp + 1));
+    mode = probe_word(1);
+    if (mode != 0 && mode[0] == 'm') {
+        mount_case(sp);
+    }
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.procprobe"));
 #if defined __x86_64__
     report_branch("arch", "x86-64");
 #else
     report_branch("arch", "i686");
 #endif
-    mode = probe_word(1);
-    /* `procprobe mount`: the root's mount line and nothing else. */
-    if (mode != 0 && mode[0] == 'm') {
-        mount_only = 1;
-        n = slurp("/proc/mounts", buf, (int)sizeof(buf));
-        check("mounts-newline", n > 0 && buf[n - 1] == '\n', "/proc/mounts ends with its newline");
-        print_rootmount(buf, n);
-        done();
-    }
 
     memory_file_rows();
 

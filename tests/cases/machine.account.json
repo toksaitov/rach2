@@ -1,0 +1,451 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.account",
+  "summary": "The in-house account tools and BusyBox account tools through the console; tests/cases/machine/account_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.account.simple",
+      "behavior": "bare commands work after login; the created account has its home and shell; the unprivileged login reaches its home; a wrong password neither authenticates nor runs the command; the account authenticates with its own password; set-id passwd changes the caller password; the old password is refused without a shell; the new password is refused for another account; the new password reaches the correct home",
+      "units": [
+        "account"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "account_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machines and services and removes private disks after success, keeping failed evidence"
+      },
+      "steps": [
+        {
+          "step_id": "create",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "create and authenticate an account, then change its password"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "simple",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "path",
+          "checks": "bare commands work after login",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "created",
+          "checks": "the created account has its home and shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "test-home",
+          "checks": "the unprivileged login reaches its home",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "wrong-refused",
+          "checks": "a wrong password neither authenticates nor runs the command",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "right-accepted",
+          "checks": "the account authenticates with its own password",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "passwd",
+          "checks": "set-id passwd changes the caller password",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "old-refused",
+          "checks": "the old password is refused without a shell",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "other-refused",
+          "checks": "the new password is refused for another account",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "new-accepted",
+          "checks": "the new password reaches the correct home",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "account_scenario",
+          "node": "tests/cases/machine/account_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "test-password",
+          "node": "tests/cases/credentials/rach2_test_password",
+          "per_architecture": false
+        },
+        {
+          "name": "simple",
+          "node": "images/os-simple.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the scenario judges the declared image and the state of its console or disk across cold boots"
+      }
+    },
+    {
+      "case_id": "machine.account.real",
+      "behavior": "chpasswd reports the changed password; su changes to the requested uid; a wrong password cannot reach root; passwd refuses a wrong old password; passwd refuses another account record; set-id passwd changes the caller password; the changed password authenticates after a cold boot; httpd mints an MD5 crypt hash; anonymous HTTP is refused without serving the page; httpd accepts the hash it minted; mkpasswd matches the system crypt SHA512 vector; the regular uid is within 1000..60000; the system uid is within 100..999; the shadow record has a SHA512 hash; the account joined the shared group; the regular account is gone from every database and member list after reboot; the system account is gone from every database and member list after reboot; the shared group survives deleting its member",
+      "units": [
+        "account"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "account_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machines and services and removes private disks after success, keeping failed evidence"
+      },
+      "steps": [
+        {
+          "step_id": "create",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "create and authenticate both kinds of account"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "cold boot, authenticate and inspect databases and hash programs, then delete"
+        },
+        {
+          "step_id": "deleted",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "cold boot and require both deletions in every database"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "disk",
+                "bus": "ide"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "chpasswd",
+          "checks": "chpasswd reports the changed password",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "authenticated",
+          "checks": "su changes to the requested uid",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "root-refused",
+          "checks": "a wrong password cannot reach root",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "wrong-old-refused",
+          "checks": "passwd refuses a wrong old password",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "other-refused",
+          "checks": "passwd refuses another account record",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "passwd",
+          "checks": "set-id passwd changes the caller password",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cold-authentication",
+          "checks": "the changed password authenticates after a cold boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "md5-hash",
+          "checks": "httpd mints an MD5 crypt hash",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "http-refused",
+          "checks": "anonymous HTTP is refused without serving the page",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "http-authenticated",
+          "checks": "httpd accepts the hash it minted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "sha512-hash",
+          "checks": "mkpasswd matches the system crypt SHA512 vector",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "regular-id",
+          "checks": "the regular uid is within 1000..60000",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "system-id",
+          "checks": "the system uid is within 100..999",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "shadow",
+          "checks": "the shadow record has a SHA512 hash",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "membership",
+          "checks": "the account joined the shared group",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "regular-deleted",
+          "checks": "the regular account is gone from every database and member list after reboot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "system-deleted",
+          "checks": "the system account is gone from every database and member list after reboot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "shared-survives",
+          "checks": "the shared group survives deleting its member",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "account_scenario",
+          "node": "tests/cases/machine/account_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "test-password",
+          "node": "tests/cases/credentials/rach2_test_password",
+          "per_architecture": false
+        },
+        {
+          "name": "disk",
+          "node": "images/account-test.disk",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the scenario judges the declared image and the state of its console or disk across cold boots"
+      }
+    }
+  ]
+}

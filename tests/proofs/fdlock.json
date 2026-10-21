@@ -1,16 +1,30 @@
 {
   "schema_version": 1,
   "proof": "fdlock",
-  "summary": "the fdlock suite on i686 with seven faults in the locking of open descriptors",
+  "summary": "The etude fdlock cases with faults in namespace locking, orphan truncation and shared raw offsets",
   "tree": "shared",
-  "sources": ["rach2/sys/fs/fd.c", "rach2/sys/syscall_fs.c", "rach2/sys/fs/vfs.c"],
-  "artifacts": ["${WORK}/kernel"],
+  "sources": [
+    "rach2/sys/fs/fd.c",
+    "rach2/sys/syscall_fs.c",
+    "rach2/sys/fs/vfs.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
   "build": {
-    "argv": ["/bin/sh", "-c", "make -s rach2 tests krffs build/tests/host/fd_hosttest build/tests/system/mkfixture build/tests/system/harness ARCH=i686 </dev/null && cp build/rach2/kernel ${WORK}/kernel"],
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "make -s rach2 tests krffs build/tests/host/fd_hosttest build/tests/system/mkfixture build/tests/system/harness ARCH=i686 </dev/null && cp build/rach2/kernel ${WORK}/kernel"
+    ],
     "bound_s": 3600
   },
   "test": {
-    "argv": ["/bin/sh", "-c", "rm -f build/images/fdlock-test.disk.orphan.log build/images/fdlock-test.disk.raw.log; status=0; make -s run-fdlock ARCH=i686 </dev/null || status=$?; for log in build/images/fdlock-test.disk.orphan.log build/images/fdlock-test.disk.raw.log; do [ ! -f $log ] || cat $log; done; exit $status"],
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec sh tests/proofs/guest.sh run fdlock \"run: fdlock: PASS\""
+    ],
     "bound_s": 1200
   },
   "faults": [
@@ -18,73 +32,127 @@
       "name": "namespace",
       "summary": "operations on a description of a file system whose namespace is serialised made without the namespace lock",
       "edits": [
-        {"file": "rach2/sys/fs/fd.c", "find": "    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {\n        vfs_ns_lock(ofd->vmnt);\n    }\n", "replace": ""},
-        {"file": "rach2/sys/fs/fd.c", "find": "    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {\n        vfs_ns_unlock(ofd->vmnt);\n    }\n", "replace": ""}
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {\n        vfs_ns_lock(ofd->vmnt);\n    }\n",
+          "replace": ""
+        },
+        {
+          "file": "rach2/sys/fs/fd.c",
+          "find": "    if (ofd->vmnt && ofd->vmnt->type->ns_serialised) {\n        vfs_ns_unlock(ofd->vmnt);\n    }\n",
+          "replace": ""
+        }
       ],
       "fails": {
-        "lines": ["operation receives relocated handle"]
+        "lines": [
+          "operation receives relocated handle"
+        ]
       }
     },
     {
       "name": "raw-read",
       "summary": "a raw device's read made without the shared offset held",
       "edits": [
-        {"file": "rach2/sys/syscall_fs.c", "find": "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n    struct open_file *held = ops_offset_held(entry);", "replace": "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n    struct open_file *held = devfs_fd_is_raw(entry) ? NULL : ops_offset_held(entry);"}
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n    struct open_file *held = ops_offset_held(entry);",
+          "replace": "static int32_t read_ops(fd_entry_t *entry, char __user *buf, uint32_t count)\n{\n    struct open_file *held = devfs_fd_is_raw(entry) ? NULL : ops_offset_held(entry);"
+        }
       ],
       "fails": {
-        "lines": ["concurrent raw reader consumes second sector"]
+        "lines": [
+          "concurrent raw reader consumes second sector"
+        ]
       }
     },
     {
       "name": "raw-write",
       "summary": "a raw device's write made without the shared offset held",
       "edits": [
-        {"file": "rach2/sys/syscall_fs.c", "find": "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n    struct open_file *held = ops_offset_held(entry);", "replace": "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n    struct open_file *held = devfs_fd_is_raw(entry) ? NULL : ops_offset_held(entry);"}
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n    struct open_file *held = ops_offset_held(entry);",
+          "replace": "static int32_t write_ops(fd_entry_t *entry, const char __user *buf, uint32_t count)\n{\n    struct open_file *held = devfs_fd_is_raw(entry) ? NULL : ops_offset_held(entry);"
+        }
       ],
       "fails": {
-        "lines": ["raw shared offset retains both operations"]
+        "lines": [
+          "raw shared offset retains both operations"
+        ]
       }
     },
     {
       "name": "lseek",
       "summary": "a raw device's lseek made without the descriptor lock",
       "edits": [
-        {"file": "rach2/sys/syscall_fs.c", "find": "    fd_ofd_lock(entry->ofd);\n    if (!devfs_fd_raw_size(entry, &raw_size)) {\n        fd_ofd_unlock(entry->ofd);\n        return -ENXIO;\n    }\n    rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);\n", "replace": "    if (!devfs_fd_raw_size(entry, &raw_size)) {\n        return -ENXIO;\n    }\n    rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);\n"},
-        {"file": "rach2/sys/syscall_fs.c", "find": "    fd_ofd_unlock(entry->ofd);\n    return rc != 0 ? rc : (long)resolved;\n", "replace": "    return rc != 0 ? rc : (long)resolved;\n"}
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    fd_ofd_lock(entry->ofd);\n    if (!devfs_fd_raw_size(entry, &raw_size)) {\n        fd_ofd_unlock(entry->ofd);\n        return -ENXIO;\n    }\n    rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);\n",
+          "replace": "    if (!devfs_fd_raw_size(entry, &raw_size)) {\n        return -ENXIO;\n    }\n    rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, (long long)offset, whence, &resolved);\n"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "    fd_ofd_unlock(entry->ofd);\n    return rc != 0 ? rc : (long)resolved;\n",
+          "replace": "    return rc != 0 ? rc : (long)resolved;\n"
+        }
       ],
       "fails": {
-        "lines": ["raw lseek waits for transfer offset"]
+        "lines": [
+          "raw lseek waits for transfer offset"
+        ]
       }
     },
     {
       "name": "llseek",
       "summary": "a raw device's _llseek made without the descriptor lock",
       "edits": [
-        {"file": "rach2/sys/syscall_fs.c", "find": "            fd_ofd_lock(entry->ofd);\n            if (!devfs_fd_raw_size(entry, &raw_size)) {\n                fd_ofd_unlock(entry->ofd);\n                return -ENXIO;\n            }\n            off = (long long)", "replace": "            if (!devfs_fd_raw_size(entry, &raw_size)) {\n                return -ENXIO;\n            }\n            off = (long long)"},
-        {"file": "rach2/sys/syscall_fs.c", "find": "            fd_ofd_unlock(entry->ofd);\n            if (rc != 0) {\n                return rc;\n            }\n            return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;\n", "replace": "            if (rc != 0) {\n                return rc;\n            }\n            return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;\n"}
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            fd_ofd_lock(entry->ofd);\n            if (!devfs_fd_raw_size(entry, &raw_size)) {\n                fd_ofd_unlock(entry->ofd);\n                return -ENXIO;\n            }\n            off = (long long)",
+          "replace": "            if (!devfs_fd_raw_size(entry, &raw_size)) {\n                return -ENXIO;\n            }\n            off = (long long)"
+        },
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "            fd_ofd_unlock(entry->ofd);\n            if (rc != 0) {\n                return rc;\n            }\n            return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;\n",
+          "replace": "            if (rc != 0) {\n                return rc;\n            }\n            return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;\n"
+        }
       ],
       "fails": {
-        "lines": ["raw llseek waits for transfer offset"]
+        "lines": [
+          "raw llseek waits for transfer offset"
+        ]
       }
     },
     {
       "name": "orphan",
       "summary": "a KRFFS file truncated by the path an unlinked file no longer has",
       "edits": [
-        {"file": "rach2/sys/fs/vfs.c", "find": "    rc = krffs_truncate_node(&n, (uint32_t)size);", "replace": "    {\n        char path[256];\n\n        if (krffs_node_path(handle, path, sizeof(path)) != 0) {\n            return -EIO;\n        }\n        rc = krffs_truncate(path + (path[0] == '/'), (uint32_t)size);\n        n = krffs_resolve(path + (path[0] == '/'));\n    }"}
+        {
+          "file": "rach2/sys/fs/vfs.c",
+          "find": "    rc = krffs_truncate_node(&n, (uint32_t)size);",
+          "replace": "    {\n        char path[256];\n\n        if (krffs_node_path(handle, path, sizeof(path)) != 0) {\n            return -EIO;\n        }\n        rc = krffs_truncate(path + (path[0] == '/'), (uint32_t)size);\n        n = krffs_resolve(path + (path[0] == '/'));\n    }"
+        }
       ],
       "fails": {
-        "lines": ["shrink orphan (got -5)"]
+        "lines": [
+          "shrink orphan (got -5)"
+        ]
       }
     },
     {
       "name": "readv",
       "summary": "a ready device read through the device's own read and not read_ops",
       "edits": [
-        {"file": "rach2/sys/syscall_fs.c", "find": "        if (!(entry->ops->poll(entry, POLLIN, &wq) & POLLIN)) {\n            return 0;\n        }\n\n        return read_ops(entry, buf, count);\n", "replace": "        if (!(entry->ops->poll(entry, POLLIN, &wq) & POLLIN)) {\n            return 0;\n        }\n\n        return entry->ops->read(entry, buf, count);\n"}
+        {
+          "file": "rach2/sys/syscall_fs.c",
+          "find": "        if (!(entry->ops->poll(entry, POLLIN, &wq) & POLLIN)) {\n            return 0;\n        }\n\n        return read_ops(entry, buf, count);\n",
+          "replace": "        if (!(entry->ops->poll(entry, POLLIN, &wq) & POLLIN)) {\n            return 0;\n        }\n\n        return entry->ops->read(entry, buf, count);\n"
+        }
       ],
       "fails": {
-        "lines": ["raw readv reserves its second sector"]
+        "lines": [
+          "raw readv reserves its second sector"
+        ]
       }
     }
   ]

@@ -186,6 +186,11 @@ manifest etude-disk
 sentinel /blockprobe 0755:0:0
 init none
 
+# An additional probe in the procfiles copy of os-real.
+manifest procfiles-extra
+sentinel /procfilesmusl 0755:0:0
+init none
+
 # The image `tests/run loopdev` mounts through a loop device: two data files
 # and no program, so it stages no set-id node and has no init to run.
 manifest loopimg-test

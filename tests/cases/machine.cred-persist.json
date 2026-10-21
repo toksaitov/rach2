@@ -1,0 +1,265 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.cred-persist",
+  "summary": "Credential replacements and lock publication and release survive cold boots; tests/musl/creddisk.c reports each row",
+  "cases": [
+    {
+      "case_id": "machine.cred-persist.reboots",
+      "behavior": "credential replacements preserve their contents, modes and owners across cold boots; a killed writer leaves a reported lock, and an explicit release remains absent after the next boot",
+      "units": [
+        "cred-persist"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "credpersist_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops the machines and services and removes private disks after success, keeping failed evidence"
+      },
+      "steps": [
+        {
+          "step_id": "write",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "run creddisk and cut power after its report, retaining the private disk"
+        },
+        {
+          "step_id": "read",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "run creddisk and cut power after its report, retaining the private disk"
+        },
+        {
+          "step_id": "final",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "run creddisk and cut power after its report, retaining the private disk"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "disk",
+                "bus": "ide"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk",
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "write-begin",
+          "checks": "the first transaction acquires the credential lock",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "write-publish",
+          "checks": "credtarget is published and flushed before the transaction ends",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "write-release",
+          "checks": "the first transaction releases its lock",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "write-begin-held",
+          "checks": "the second transaction acquires the credential lock",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "write-publish-held",
+          "checks": "credalso is published and flushed before the writer exits holding its lock",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-no-temps",
+          "checks": "neither replacement leaves a temporary file after the cold boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-released-bytes",
+          "checks": "credtarget contains replaced followed by a newline at mode 0600 with root owner and group",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-held-bytes",
+          "checks": "credalso contains replaced followed by a newline at mode 0640 with root owner and group",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-held-lock",
+          "checks": "the lock held by the cut-off writer survives the cold boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-capture",
+          "checks": "the refused transaction diagnostic can be captured independently",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-refused",
+          "checks": "a transaction cannot acquire the lock from the previous boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-lock-kept",
+          "checks": "the refused acquisition leaves the previous lock in place",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-removal-advice",
+          "checks": "the stale-lock diagnostic tells the operator to remove the lock",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-remove-lock",
+          "checks": "the stale lock can be removed by its path",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-reacquire",
+          "checks": "a transaction acquires the lock after the stale lock is removed",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-republish",
+          "checks": "credtarget is published again with released followed by a newline and flushed",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "read-release",
+          "checks": "the second boot releases the transaction and leaves no lock",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "final-no-lock",
+          "checks": "the released lock is still absent after the third cold boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "final-no-temps",
+          "checks": "the last publication leaves no temporary file after the cold boot",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "final-released-bytes",
+          "checks": "credtarget still contains released followed by a newline at mode 0600 with root owner and group",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 1800000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 120000000,
+            "ceiling_us": 600000000
+          },
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 536870912,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "credpersist_scenario",
+          "node": "tests/cases/machine/credpersist_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "disk",
+          "node": "images/cred-persist-test.disk",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the scenario judges the declared image and the state of its console or disk across cold boots"
+      }
+    }
+  ]
+}

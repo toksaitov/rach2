@@ -49,3 +49,4 @@ musl/clockloadmusl clock
 musl/textbusymusl textbusy
 musl/bindholdmusl textbusy
 bootlogprobe subset
+musl/procfilesmusl procfiles

@@ -130,9 +130,8 @@ MKFATFIXTURE = build/tests/host/mkfatfixture
 $(MKFATFIXTURE): tests/host/mkfatfixture.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-# The host end of a connection (tests/system/runner/hostpeer.c): the live TCP
-# connection procfiles looks for in /proc/net/tcp, and the echo server the
-# socket suite sends to.
+# The host end of a connection (tests/system/runner/hostpeer.c): the echo
+# server the socket suite sends to.
 $(HOSTPEER): tests/system/runner/hostpeer.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
@@ -1433,3 +1432,28 @@ prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_
 # ends, and bind mounts retain removed KRFFS boot-root files until last close.
 # They are the cases of tests/cases/guest.textbusy.json, which etude runs on
 # x86-64, and have no target here.
+
+# Artifacts of the process and account cases in tests/cases/.
+$(IMAGES_DIR)/fdlock-raw.disk: $(ETUDE_DISK) $(MKFIXTURE)
+	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp"' EXIT; \
+	    cp $(ETUDE_DISK) "$$temp"; $(MKFIXTURE) boot "$$temp"; mv "$$temp" $@
+
+$(CRED_PERSIST_DISK): $(ARCH_BUILD)/tests/musl/creddisk krffs/manifests/cred-persist-test.manifest $(MKDISK) $(IMAGE_TOOLS) | preflight rach2 musl-programs krffs
+	$(MKDISK) krffs/manifests/cred-persist-test.manifest $@ 64 48
+
+$(ACCOUNT_TEST_DISK): krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) $(MKDISK) $(IMAGE_TOOLS) | preflight rach2 krffs $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+
+$(LOGIN_TEST_STRICT): $(ARCH_BUILD)/utils/sbin/init-login krffs/manifests/login-test-strict.manifest $(IMAGE_TOOLS) | preflight utils busybox krffs
+	$(MKIMAGE) krffs/manifests/login-test-strict.manifest $@ 10
+
+$(LOGIN_TEST_SHELL): $(ARCH_BUILD)/utils/sbin/init-shell krffs/manifests/login-test-shell.manifest $(IMAGE_TOOLS) | preflight utils busybox krffs
+	$(MKIMAGE) krffs/manifests/login-test-shell.manifest $@ 10
+
+$(IMAGES_DIR)/procfiles-real.krffs: $(ARCH_BUILD)/tests/musl/procfilesmusl $(OS_REAL_IMAGE) krffs/manifests/procfiles-extra.manifest | preflight musl-programs krffs
+	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp"' EXIT; \
+	    cp $(OS_REAL_IMAGE) "$$temp"; \
+	    build/krffs/stageimage.krffs krffs/manifests/procfiles-extra.manifest "$$temp"; \
+	    mv "$$temp" $@
+
+$(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-programs

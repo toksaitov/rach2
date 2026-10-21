@@ -46,6 +46,10 @@
 #include <sys/stat.h>
 
 #include "pwauth.h"
+#include "../probe_report.h"
+#include "../creddisk_rows.h"
+
+extern char **environ;
 
 /* The two staged files, root's, at modes 0600 and 0640, and the texts
  * `TARGET` has before the first boot, after it, and after the second. */
@@ -58,6 +62,7 @@
 /** Print the failure line and return 1, the status every case fails with. */
 static int fail(const char *what)
 {
+    report_stop(what);
     printf("CREDDISK FAIL (%s)\n", what);
 
     return 1;
@@ -148,19 +153,25 @@ static int write_boot(void)
     if (cred_txn_begin("creddisk") != 0) {
         return fail("could not take the transaction the replacement runs under");
     }
+    report_held();
     if (cred_rewrite(TARGET, AFTER, sizeof(AFTER) - 1) != CRED_PUBLISHED) {
         return fail("the replacement was not published and flushed");
     }
+    report_held();
     if (cred_txn_end() != 0) {
         return fail("could not end the transaction the replacement ran under");
     }
+    report_held();
 
     if (cred_txn_begin("creddisk") != 0) {
         return fail("could not take the transaction the cut-off writer holds");
     }
+    report_held();
     if (cred_rewrite(ALSO, AFTER, sizeof(AFTER) - 1) != CRED_PUBLISHED) {
         return fail("the cut-off writer's replacement was not published and flushed");
     }
+    report_held();
+    report_end();
     printf("CREDDISK OK (wrote)\n");
     fflush(stdout);
     _exit(0);
@@ -185,21 +196,26 @@ static int read_boot(void)
     if (temps_left(TARGET) != 0 || temps_left(ALSO) != 0) {
         return fail("a temporary file outlived the boot that published");
     }
+    report_held();
     if (!has(TARGET, AFTER, 0600)) {
         return fail("the released replacement did not survive the boot");
     }
+    report_held();
     if (!has(ALSO, AFTER, 0640)) {
         return fail("the cut-off writer's replacement did not survive the boot");
     }
+    report_held();
     if (!present(CRED_LOCK_PATH)) {
         return fail("the cut-off writer's lock did not survive the boot");
     }
+    report_held();
 
     log = open("/credreport.txt", O_CREAT | O_TRUNC | O_WRONLY, 0600);
     saved = dup(2);
     if (log < 0 || saved < 0 || dup2(log, 2) != 2) {
         return fail("could not capture what the refused acquire reports");
     }
+    report_held();
     close(log);
     taken = cred_txn_begin_at("creddisk", CRED_LOCK_PATH, 0);
     dup2(saved, 2);
@@ -209,26 +225,34 @@ static int read_boot(void)
 
         return fail("an acquire took the lock a killed writer left");
     }
+    report_held();
     if (!present(CRED_LOCK_PATH)) {
         return fail("a refused acquire removed the lock it reported");
     }
+    report_held();
     if (slurp("/credreport.txt", report, sizeof(report)) < 0 || strstr(report, "remove") == NULL) {
         return fail("a lock left by a boot that is over was reported with no way out");
     }
+    report_held();
     unlink("/credreport.txt");
 
     if (unlink(CRED_LOCK_PATH) != 0) {
         return fail("could not remove the stale lock by hand");
     }
+    report_held();
     if (cred_txn_begin("creddisk") != 0) {
         return fail("could not take a transaction once the stale lock was gone");
     }
+    report_held();
     if (cred_rewrite(TARGET, RELEASED, sizeof(RELEASED) - 1) != CRED_PUBLISHED) {
         return fail("the second replacement was not published and flushed");
     }
+    report_held();
     if (cred_txn_end() != 0 || present(CRED_LOCK_PATH)) {
         return fail("ending the transaction did not drop the lock");
     }
+    report_held();
+    report_end();
     printf("CREDDISK OK (released)\n");
 
     return 0;
@@ -243,15 +267,29 @@ static int release_boot(void)
     if (present(CRED_LOCK_PATH)) {
         return fail("a released lock outlived the boot that released it");
     }
+    report_held();
     if (temps_left(TARGET) != 0) {
         return fail("a temporary file outlived the boot that published");
     }
+    report_held();
     if (!has(TARGET, RELEASED, 0600)) {
         return fail("the second replacement did not survive the boot");
     }
+    report_held();
+    report_end();
     printf("CREDDISK OK (read back)\n");
 
     return 0;
+}
+
+/** Add the rows of boot (0 to 2) to the report's planned path. */
+static void plan_rows(unsigned boot)
+{
+    const char *const *row;
+
+    for (row = creddisk_rows[boot]; *row != 0; row++) {
+        report_plan(*row);
+    }
 }
 
 /** Run the boot that the text of `TARGET` names; 0, or 1 on a failure. */
@@ -259,16 +297,20 @@ int main(void)
 {
     char content[64];
 
+    report_begin(report_case(environ, "machine.cred-persist.reboots"));
     if (slurp(TARGET, content, sizeof(content)) < 0) {
         return fail("the staged file is not there at all");
     }
     if (strcmp(content, BEFORE) == 0) {
+        plan_rows(0);
         return write_boot();
     }
     if (strcmp(content, AFTER) == 0) {
+        plan_rows(1);
         return read_boot();
     }
     if (strcmp(content, RELEASED) == 0) {
+        plan_rows(2);
         return release_boot();
     }
 

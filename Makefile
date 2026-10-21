@@ -711,8 +711,10 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
-# The network scenarios that also read a probe's report on the console.
-NETPROBE_SCENARIOS = build/tests/cases/machine/netif_scenario
+# The network and process scenarios that read a probe's console report.
+NETPROBE_SCENARIOS = build/tests/cases/machine/netif_scenario \
+                     build/tests/cases/machine/login_scenario build/tests/cases/machine/account_scenario \
+                     build/tests/cases/machine/procfiles_scenario build/tests/cases/machine/credpersist_scenario
 $(NETPROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                        tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
                        tests/cases/machine/console_report.c tests/cases/machine/console_report.h \
@@ -720,6 +722,8 @@ $(NETPROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
+build/tests/cases/machine/credpersist_scenario: tests/creddisk_rows.h
 
 # The USB scenarios share usbcase.c.
 USB_SCENARIOS = build/tests/cases/machine/usb_scenario build/tests/cases/machine/usbdisk_scenario

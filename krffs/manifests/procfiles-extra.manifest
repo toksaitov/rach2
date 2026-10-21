@@ -1,0 +1,2 @@
+# The applet probe added to a private copy of os-real for machine.procfiles.
+file 0755 /procfilesmusl build/tests/musl/procfilesmusl

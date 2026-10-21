@@ -14,3 +14,8 @@ dir 1777 /tmp
 # files larger together than the page cache's share of the disk, written,
 # synced and read back.
 file 0755 /blockprobe build/tests/blockprobe
+
+# The descriptor lifetime and root mount cases, run by etude-guest.
+file 0755 /fdstale build/tests/fdstale
+file 0755 /bootprobe build/tests/bootprobe
+file 0755 /procprobe build/tests/procprobe
