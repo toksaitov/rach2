@@ -18,11 +18,16 @@
  * same from user space; telling them apart needs a host test or a count of
  * the kernel's copies.
  *
- * Prints "COWREGRANT OK" on success. Freestanding; direct system calls
- * (probe.h).
+ * Prints "COWREGRANT OK" on success. etude's report (probe_report.h), for
+ * the case ETUDE_CASE names, has an assertion for each check of the cycles,
+ * `fork`, `child`, `parent-unchanged` and `regrant-write`, reported once
+ * the cycles end, and `memfree`, the reads of MemFree and its fall. The
+ * first failure fails its assertion and leaves those not yet reported not
+ * run. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -81,13 +86,35 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/** Print "COWREGRANT FAIL: " and `why`, and exit 1. */
-static void fail(const char *why)
+/* The assertions, in the order they are reported, and how many of them
+ * have held. */
+enum { FORK, CHILD, PARENT_UNCHANGED, REGRANT_WRITE, MEMFREE, ASSERTIONS };
+static const char *const ids[ASSERTIONS] = {"fork", "child", "parent-unchanged", "regrant-write",
+                                            "memfree"};
+static int held;
+
+/** Print "COWREGRANT FAIL: " and `why`, report the assertion `which` failed
+ * and those after the held ones not run, and exit 1. */
+static void fail(int which, const char *why)
 {
+    int i;
+
     sys_write(STDOUT_FILENO, "COWREGRANT FAIL: ", 17);
     puts(why);
+    for (i = held; i < ASSERTIONS; i++) {
+        if (i == which) {
+            report_fail(ids[i], why);
+        } else {
+            report_notrun(ids[i], "a failed check ended the cycles");
+        }
+    }
+    report_end();
     sys_exit(1);
 }
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
 
 /**
  * Run WARMUP and then CYCLES cycles of fork, the child's write, the reap and
@@ -95,27 +122,28 @@ static void fail(const char *why)
  * when MemFree after the cycles is more than SLACK below where it was after
  * the warm-up. The child exits 7 when its copy held the parent's value and
  * took its own write, 11 when it did not inherit the value and 12 when its
- * write did not stick.
+ * write did not stick. `_start` calls it with the initial stack.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int pid, status, i;
     unsigned free_kb = 0, end_kb;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.cowregrant"));
     for (i = 0; i < WARMUP + CYCLES; i++) {
         unsigned base = 0x10000u + (unsigned)i;
 
         if (i == WARMUP) {
             free_kb = probe_meminfo("MemFree:");
             if (free_kb == 0xFFFFFFFFu) {
-                fail("MemFree in /proc/meminfo");
+                fail(MEMFREE, "MemFree in /proc/meminfo");
             }
         }
         shared_val = base;
 
         pid = sys_fork();
         if (pid < 0) {
-            fail("frames exhausted: the re-grant arm leaks a frame");
+            fail(FORK, "frames exhausted: the re-grant arm leaks a frame");
         }
         if (pid == 0) {
             if (shared_val != base) {
@@ -129,26 +157,31 @@ PROBE_START void _start(void)
         }
 
         if (sys_waitpid(pid, &status, 0) != pid) {
-            fail("waitpid");
+            fail(CHILD, "waitpid");
         }
         if (!WIFEXITED(status) || WEXITSTATUS(status) != 7) {
-            fail("child split path did not run cleanly");
+            fail(CHILD, "child split path did not run cleanly");
         }
         if (shared_val != base) {
-            fail("parent bytes changed: re-grant of a still-shared frame");
+            fail(PARENT_UNCHANGED, "parent bytes changed: re-grant of a still-shared frame");
         }
 
         shared_val = base + 0x20000u; /* re-grant arm: sole owner, in place */
         if (shared_val != base + 0x20000u) {
-            fail("re-grant write did not stick");
+            fail(REGRANT_WRITE, "re-grant write did not stick");
         }
     }
 
+    for (; held < MEMFREE; held++) {
+        report_pass(ids[held]);
+    }
     end_kb = probe_meminfo("MemFree:");
     if (end_kb == 0xFFFFFFFFu || (free_kb > end_kb && free_kb - end_kb > SLACK)) {
-        fail("MemFree fell across the cycles: the re-grant arm leaks a frame");
+        fail(MEMFREE, "MemFree fell across the cycles: the re-grant arm leaks a frame");
     }
 
+    report_pass(ids[MEMFREE]);
+    report_end();
     puts("COWREGRANT OK");
     sys_exit(0);
 }

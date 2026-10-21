@@ -18,17 +18,28 @@
  * and the victim's `exit-file`, are made in the working directory, which is
  * `/` on the test image and the case's own directory in a native run, and
  * removed before the probe exits. The row and the bound are the first two
- * arguments without `=` (probe_args.h). Freestanding; direct system calls
- * (probe.h).
+ * arguments without `=` (probe_args.h).
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has the
+ * assertions `fixture`, the rows that run, `normal`, `signal` and `exec`,
+ * and `cleanup`, the removal of the fixtures. A row that fails leaves the
+ * rows after it not run, and `cleanup` is reported on every path after the
+ * report begins. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
 #include "probe_args.h"
+#include "probe_report.h"
 
 #define SIGKILL 9
 
-/* The name of the row running, for the result lines. */
+/* The name of the row running, for the result lines, and the assertion of
+ * each row. */
 static const char *row;
+static const char *const row_ids[3] = {"normal", "signal", "exec"};
+
+/* Why the last row that failed did. */
+static const char *row_why;
 static int fixture_dir;
 static int fixture_file;
 
@@ -201,6 +212,7 @@ static int run_row(int mode, int timeout)
     char byte = 0;
     row = mode == 0 ? "normal" : (mode == 1 ? "signal" : "exec");
     if (call(SYS_PIPE, (long)report, 0, 0) != 0) {
+        row_why = "the report pipe could not be made";
         return 0;
     }
     pid = call(SYS_FORK, 0, 0, 0);
@@ -217,6 +229,7 @@ static int run_row(int mode, int timeout)
     call(SYS_CLOSE, report[0], 0, 0);
     if (!ok) {
         result("EXITPROBE FAIL ", ": reap or release");
+        row_why = "no report that the reap held came within the bound";
         if (pid > 0) {
             end_reaper(pid, timeout);
         }
@@ -224,6 +237,7 @@ static int run_row(int mode, int timeout)
     }
     ok = call(SYS_WAITPID, pid, (long)&status, 0) == pid && status == 0;
     result(ok ? "EXITPROBE OK " : "EXITPROBE FAIL ", ": status, eof, echild, proc absent");
+    row_why = "the reaper did not exit 0";
     return ok;
 }
 
@@ -258,17 +272,37 @@ static int fixture(void)
     return ok;
 }
 
-/** Remove the supervisor's fixtures after the rows have ended. */
+/** Remove the supervisor's fixtures after the rows have ended, report
+ * `cleanup` and end the report. */
 static void finish(int status)
 {
+    int clean = 1;
+
     call(SYS_UNLINK, (long)"exit-file", 0, 0);
     if (fixture_file && call(SYS_UNLINK, (long)"exit-bad", 0, 0) != 0) {
-        status = 1;
+        clean = 0;
     }
     if (fixture_dir && call(SYS_RMDIR, (long)"exit-cwd", 0, 0) != 0) {
+        clean = 0;
+    }
+    if (clean) {
+        report_pass("cleanup");
+    } else {
+        report_fail("cleanup", "exit-bad or exit-cwd could not be removed");
         status = 1;
     }
+    report_end();
     die(status);
+}
+
+/** Report the rows `from` to `last` not run, for `why`. */
+static void rows_not_run(int from, int last, const char *why)
+{
+    int i;
+
+    for (i = from; i <= last; i++) {
+        report_notrun(row_ids[i], why);
+    }
 }
 
 /** The probe's entry, given the initial stack `sp`: run all rows or the one
@@ -297,15 +331,22 @@ void probe_main(unsigned long *sp)
             die(94);
         }
     }
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.exitprobe"));
     row = "fixture";
     if (!fixture()) {
         result("EXITPROBE FAIL ", ": create");
+        report_fail("fixture", "exit-cwd or exit-bad could not be made");
+        rows_not_run(first, last, "the fixtures were not made");
         finish(1);
     }
+    report_pass("fixture");
     for (i = first; i <= last; i++) {
         if (!run_row(i, timeout)) {
+            report_fail(row_ids[i], row_why);
+            rows_not_run(i + 1, last, "an earlier row failed");
             finish(1);
         }
+        report_pass(row_ids[i]);
     }
     finish(0);
 }

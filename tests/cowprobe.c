@@ -12,10 +12,17 @@
  *      warm-up: each shared frame is reference-counted and freed when the
  *      last owner exits. A leak of a frame a cycle would cost 256 KiB.
  *
- * Prints "COWPROBE OK" and exits 0 on success.
+ * Prints "COWPROBE OK" and exits 0 on success. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each check: `share`, the child's view and write of the page; `isolation`,
+ * the parent's copy after the child's write; `parent-write`; `cycles`, the
+ * forks and reaps of case 3; and `memfree`, the reads of MemFree and its
+ * fall. The first failure fails its assertion and leaves those not yet
+ * reported not run.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -74,30 +81,60 @@ static void puts(const char *s)
     sys_write(STDOUT_FILENO, "\n", 1);
 }
 
-/** Print "COWPROBE FAIL: " and `why`, and exit 1. */
-static void fail(const char *why)
+/* The assertions, in the order they are reported, and how many of them
+ * have held. */
+enum { SHARE, ISOLATION, PARENT_WRITE, FORK_CYCLES, MEMFREE, ASSERTIONS };
+static const char *const ids[ASSERTIONS] = {"share", "isolation", "parent-write", "cycles",
+                                            "memfree"};
+static int held;
+
+/** Report the next assertion held. */
+static void hold(void)
 {
+    report_pass(ids[held++]);
+}
+
+/** Print "COWPROBE FAIL: " and `why`, report the assertion `which` failed
+ * and those after the held ones not run, and exit 1. */
+static void fail(int which, const char *why)
+{
+    int i;
+
     sys_write(STDOUT_FILENO, "COWPROBE FAIL: ", 15);
     puts(why);
+    for (i = held; i < ASSERTIONS; i++) {
+        if (i == which) {
+            report_fail(ids[i], why);
+        } else {
+            report_notrun(ids[i], "an earlier check failed");
+        }
+    }
+    report_end();
     sys_exit(1);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /**
- * The probe: the three cases in order. The child of cases 1 and 2 exits 42
+ * The probe: the three cases in order, called by `_start` with the initial
+ * stack. The child of cases 1 and 2 exits 42
  * when it saw the parent's value and its own write took, 10 when it did not
  * see the value and 11 when its write did not take.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
     int pid, status, i;
     unsigned free_kb = 0, end_kb;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.cowprobe"));
     /* 1 + 2: share then split. */
     shared_val = 0xAAAAu;
 
     pid = sys_fork();
     if (pid < 0) {
-        fail("fork");
+        fail(SHARE, "fork");
     }
     if (pid == 0) {
         if (shared_val != 0xAAAAu) {
@@ -111,22 +148,25 @@ PROBE_START void _start(void)
     }
 
     if (sys_waitpid(pid, &status, 0) != pid) {
-        fail("waitpid");
+        fail(SHARE, "waitpid");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 42) {
-        fail("child did not observe share-then-split");
+        fail(SHARE, "child did not observe share-then-split");
     }
+    hold();
 
     /* The child's write leaves the parent's copy unchanged. */
     if (shared_val != 0xAAAAu) {
-        fail("parent copy changed (isolation broken)");
+        fail(ISOLATION, "parent copy changed (isolation broken)");
     }
+    hold();
 
     /* The parent has the frame's last reference: the write keeps the page. */
     shared_val = 0xCCCCu;
     if (shared_val != 0xCCCCu) {
-        fail("parent write did not stick");
+        fail(PARENT_WRITE, "parent write did not stick");
     }
+    hold();
 
     /* 3: fork, split and exit cycles give back every frame they take. */
     for (i = 0; i < WARMUP + CYCLES; i++) {
@@ -135,26 +175,29 @@ PROBE_START void _start(void)
         if (i == WARMUP) {
             free_kb = probe_meminfo("MemFree:");
             if (free_kb == 0xFFFFFFFFu) {
-                fail("MemFree in /proc/meminfo");
+                fail(MEMFREE, "MemFree in /proc/meminfo");
             }
         }
         p = sys_fork();
         if (p < 0) {
-            fail("frames exhausted across repeated forks");
+            fail(FORK_CYCLES, "frames exhausted across repeated forks");
         }
         if (p == 0) {
             shared_val = (unsigned)i;
             sys_exit(7);
         }
         if (sys_waitpid(p, &status, 0) != p || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
-            fail("repeated fork/reap");
+            fail(FORK_CYCLES, "repeated fork/reap");
         }
     }
+    hold();
     end_kb = probe_meminfo("MemFree:");
     if (end_kb == 0xFFFFFFFFu || (free_kb > end_kb && free_kb - end_kb > SLACK)) {
-        fail("MemFree fell across fork, split and exit cycles: a frame leaks");
+        fail(MEMFREE, "MemFree fell across fork, split and exit cycles: a frame leaks");
     }
 
+    hold();
+    report_end();
     puts("COWPROBE OK");
     sys_exit(0);
 }

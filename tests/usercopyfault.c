@@ -11,10 +11,13 @@
  * calls open with a path that starts near the end, so the copy runs off the
  * mapped page into the hole.
  *
- * Prints "USERCOPYFAULT OK" and exits 0 on success.
+ * Prints "USERCOPYFAULT OK" and exits 0 on success. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has one assertion,
+ * `efault`, failed with the first step that does not hold.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -81,17 +84,25 @@ static void fail(const char *why)
 {
     sys_write(STDOUT_FILENO, "USERCOPYFAULT FAIL: ", 20);
     puts(why);
+    report_stop(why);
     sys_exit(1);
 }
 
-/** The probe, as the file's opening comment describes; it exits 1 through
- * `fail` at the first step that does not hold. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe, as the file's opening comment describes, which `_start` calls
+ * with the initial stack; it exits 1 through `fail` at the first step that
+ * does not hold. */
+void probe_main(unsigned long *sp)
 {
     long p;
     char *path;
     int i, r;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.usercopyfault"));
+    report_plan("efault");
     p = mmap_anon(2 * PAGE, PROT_READ | PROT_WRITE);
     if (sys_failed(p)) {
         fail("mmap two pages");
@@ -118,6 +129,8 @@ PROBE_START void _start(void)
         fail("open did not reject the run-off path with -EFAULT");
     }
 
+    report_held();
+    report_end();
     puts("USERCOPYFAULT OK");
     sys_exit(0);
 }

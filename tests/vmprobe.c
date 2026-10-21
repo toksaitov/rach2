@@ -9,9 +9,17 @@
  * "VMPROBE FAIL count=N" and exits with N, the count of failed checks. The
  * wild-pointer case is a separate program (vmfault), since it kills the
  * process.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each check, which `check` names: `brk-grow`, `brk-zero`,
+ * `brk-readback`, `brk-shrink`, `mmap`, `mmap-zero`, `mmap-readback`,
+ * `munmap`, `collision-map`, `collision-above`, `collision-refused` and
+ * `stack`. A check left out because the mapping it needs failed is reported
+ * not run.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -103,13 +111,35 @@ static void print_num(int n)
 
 static int fails = 0;
 
-/** Count a failure and print `msg` when `cond` is false. */
-static void check(int cond, const char *msg)
+/** Begin the part of the assertion `id` (probe_report.h), unless it is the
+ * part open. */
+static void part(const char *id)
 {
+    static const char *open;
+    int i = 0;
+
+    if (open != 0) {
+        while (id[i] != '\0' && open[i] == id[i]) {
+            i++;
+        }
+        if (open[i] == id[i]) {
+            return;
+        }
+    }
+    report_part(id);
+    open = id;
+}
+
+/** Count a failure of the assertion `id` and print `msg` when `cond` is
+ * false. */
+static void check(int cond, const char *id, const char *msg)
+{
+    part(id);
     if (!cond) {
         fails++;
         print("  FAIL: ");
         puts(msg);
+        report_miss(msg);
     }
 }
 
@@ -142,10 +172,15 @@ static int recurse(int n)
     return n + deeper;
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** The probe: the four cases of the opening comment in order, each counted
- * by `check`. */
-PROBE_START void _start(void)
+ * by `check`; `_start` calls it with the initial stack. */
+void probe_main(unsigned long *sp)
 {
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.vmprobe"));
     puts("vmprobe: start");
 
     /* 1. brk: query, grow four pages, lazy-zero, read/write, shrink. */
@@ -156,16 +191,16 @@ PROBE_START void _start(void)
         volatile unsigned char *heap = (volatile unsigned char *)base;
         unsigned i;
 
-        check(got == want, "brk grow returns new break");
-        check(heap[0] == 0 && heap[PAGE] == 0 && heap[3 * PAGE + 17] == 0,
+        check(got == want, "brk-grow", "brk grow returns new break");
+        check(heap[0] == 0 && heap[PAGE] == 0 && heap[3 * PAGE + 17] == 0, "brk-zero",
               "fresh heap pages read zero");
         for (i = 0; i < 4 * PAGE; i += 137) {
             heap[i] = (unsigned char)(i & 0xFF);
         }
         for (i = 0; i < 4 * PAGE; i += 137) {
-            check(heap[i] == (unsigned char)(i & 0xFF), "heap read-back matches");
+            check(heap[i] == (unsigned char)(i & 0xFF), "brk-readback", "heap read-back matches");
         }
-        check(sys_brk(base) == base, "brk shrink returns base");
+        check(sys_brk(base) == base, "brk-shrink", "brk shrink returns base");
     }
 
     /* 2. mmap anonymous: map eight pages, lazy-zero, read/write, munmap. */
@@ -175,16 +210,22 @@ PROBE_START void _start(void)
         volatile unsigned char *m = (volatile unsigned char *)p;
         unsigned i;
 
-        check(!sys_failed((long)p), "mmap returns an address, not -errno");
+        check(!sys_failed((long)p), "mmap", "mmap returns an address, not -errno");
         if (!sys_failed((long)p)) {
-            check(m[0] == 0 && m[5 * PAGE] == 0 && m[len - 1] == 0, "fresh mmap pages read zero");
+            check(m[0] == 0 && m[5 * PAGE] == 0 && m[len - 1] == 0, "mmap-zero",
+                  "fresh mmap pages read zero");
             for (i = 0; i < len; i += 251) {
                 m[i] = (unsigned char)((i * 7) & 0xFF);
             }
             for (i = 0; i < len; i += 251) {
-                check(m[i] == (unsigned char)((i * 7) & 0xFF), "mmap read-back matches");
+                check(m[i] == (unsigned char)((i * 7) & 0xFF), "mmap-readback",
+                      "mmap read-back matches");
             }
-            check(sys_munmap(p, len) == 0, "munmap succeeds");
+            check(sys_munmap(p, len) == 0, "munmap", "munmap succeeds");
+        } else {
+            report_notrun("mmap-zero", "the mapping failed");
+            report_notrun("mmap-readback", "the mapping failed");
+            report_notrun("munmap", "the mapping failed");
         }
     }
 
@@ -192,25 +233,32 @@ PROBE_START void _start(void)
     {
         unsigned long p = mmap_anon(PAGE, PROT_READ | PROT_WRITE);
 
-        check(!sys_failed((long)p), "mmap for the brk collision succeeds");
+        check(!sys_failed((long)p), "collision-map", "mmap for the brk collision succeeds");
         if (!sys_failed((long)p)) {
             unsigned long old = sys_brk(0);
 
-            check(p >= old, "mmap placed the page above the break");
+            check(p >= old, "collision-above", "mmap placed the page above the break");
             if (p >= old) {
                 /* A break at p + PAGE would overlap [p, p + PAGE). */
                 unsigned long got = sys_brk(p + PAGE);
 
-                check(got == old, "brk refuses to grow over an mmap region");
-                check(got != p + PAGE, "brk did not honor the colliding request");
+                check(got == old, "collision-refused", "brk refuses to grow over an mmap region");
+                check(got != p + PAGE, "collision-refused",
+                      "brk did not honor the colliding request");
+            } else {
+                report_notrun("collision-refused", "the page was not above the break");
             }
             sys_munmap(p, PAGE);
+        } else {
+            report_notrun("collision-above", "the mapping failed");
+            report_notrun("collision-refused", "the mapping failed");
         }
     }
 
     /* 4. Stack growth by about 64 KiB of recursion, far past the first page. */
-    check(recurse(64) == 64 * 65 / 2, "stack grew under deep recursion");
+    check(recurse(64) == 64 * 65 / 2, "stack", "stack grew under deep recursion");
 
+    report_finish();
     if (fails == 0) {
         puts("VMPROBE OK");
     } else {

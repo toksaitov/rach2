@@ -8,10 +8,15 @@
  * and exits with 7, and the parent then gets its pid and that status).
  *
  * Prints "MISCPROBE OK" and exits 0 when all pass, and "MISCPROBE FAIL" with
- * the count of failed checks as its status otherwise.
+ * the count of failed checks as its status otherwise. etude's report
+ * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
+ * each check, which `check` names: `getppid`, `umask-default`, `umask-set`,
+ * `times-ticks`, `times-fields`, `times-within`, `sysinfo`,
+ * `sysinfo-procs`, `sysinfo-mem-unit` and `vfork`.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 /* Linux's struct sysinfo, of longs: its size, and the offsets of procs and
  * mem_unit, on i386 and on x86-64. */
@@ -126,23 +131,33 @@ static int sum_within(long a, long b, long t)
 }
 
 static int fails = 0;
-/** Count a failure and print `msg` when `cond` is false. */
-static void check(int cond, const char *msg)
+/** Report the assertion `id`, and count a failure and print `msg` when
+ * `cond` is false. */
+static void check(int cond, const char *id, const char *msg)
 {
     if (!cond) {
         fails++;
         syscall3(SYS_WRITE, 1, (long)"  FAIL: ", 8);
         puts(msg);
+        report_fail(id, msg);
+    } else {
+        report_pass(id);
     }
 }
 
-/** The probe: the five checks of the opening comment in order. */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
+/** The probe: the five checks of the opening comment in order, called by
+ * `_start` with the initial stack. */
+void probe_main(unsigned long *sp)
 {
     int me = getpid();
     int st;
     int pid;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.miscprobe"));
     puts("MISCPROBE START");
 
     /* getppid: a child reports the probe's pid as its parent. */
@@ -151,13 +166,13 @@ PROBE_START void _start(void)
         sys_exit(getppid() == me ? 0 : 1);
     }
     check(pid > 0 && waitpid(pid, &st, 0) == pid && (st & 0x7f) == 0 && ((st >> 8) & 0xff) == 0,
-          "child getppid() == parent pid");
+          "getppid", "child getppid() == parent pid");
 
     /* umask: set returns the previous mask; the value is remembered. */
     {
         int prev = umask(0027);
-        check(prev == 022, "umask() returns the default 022");
-        check(umask(0022) == 0027, "umask() returns the value just set");
+        check(prev == 022, "umask-default", "umask() returns the default 022");
+        check(umask(0022) == 0027, "umask-set", "umask() returns the value just set");
     }
 
     /* times: a positive tick count, and CPU times within it. */
@@ -166,10 +181,10 @@ PROBE_START void _start(void)
         long t;
         tms[0] = tms[1] = tms[2] = tms[3] = -1;
         t = times(tms);
-        check(t > 0, "times() returns a positive tick count");
-        check(tms[0] >= 0 && tms[1] >= 0 && tms[2] >= 0 && tms[3] >= 0,
+        check(t > 0, "times-ticks", "times() returns a positive tick count");
+        check(tms[0] >= 0 && tms[1] >= 0 && tms[2] >= 0 && tms[3] >= 0, "times-fields",
               "times() fills the tms fields");
-        check(sum_within(tms[0], tms[1], t) && sum_within(tms[2], tms[3], t),
+        check(sum_within(tms[0], tms[1], t) && sum_within(tms[2], tms[3], t), "times-within",
               "times() reports no more CPU time than the ticks since boot");
     }
 
@@ -178,20 +193,21 @@ PROBE_START void _start(void)
         unsigned char si[SI_SIZE];
         unsigned short procs;
         unsigned int mem_unit;
-        check(sysinfo(si) == 0, "sysinfo() ok");
+        check(sysinfo(si) == 0, "sysinfo", "sysinfo() ok");
         procs = (unsigned short)(si[SI_PROCS] | (si[SI_PROCS + 1] << 8));
         mem_unit = (unsigned int)si[SI_MEM_UNIT] | ((unsigned int)si[SI_MEM_UNIT + 1] << 8) |
                    ((unsigned int)si[SI_MEM_UNIT + 2] << 16) |
                    ((unsigned int)si[SI_MEM_UNIT + 3] << 24);
-        check(procs >= 1, "sysinfo() counts at least one process");
-        check(mem_unit == 1, "sysinfo() mem_unit == 1");
+        check(procs >= 1, "sysinfo-procs", "sysinfo() counts at least one process");
+        check(mem_unit == 1, "sysinfo-mem-unit", "sysinfo() mem_unit == 1");
     }
 
     /* vfork: the child exits 7 from the call's own instructions. */
     pid = vfork_exit(7);
-    check(pid > 0 && waitpid(pid, &st, 0) == pid && ((st >> 8) & 0xff) == 7,
+    check(pid > 0 && waitpid(pid, &st, 0) == pid && ((st >> 8) & 0xff) == 7, "vfork",
           "vfork() child runs and exits 7");
 
+    report_end();
     if (fails == 0) {
         puts("MISCPROBE OK");
     } else {

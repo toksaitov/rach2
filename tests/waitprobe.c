@@ -16,10 +16,22 @@
  * accept and read block on the wait queue and are woken by the card's
  * interrupt, since a datagram cannot be delivered hermetically here.
  *
- * Prints "WAITPROBE OK". Freestanding; direct system calls (probe.h).
+ * The file the probe opens is "hello.txt" in the working directory, or the
+ * one the argument `hello=PATH` names (probe_args.h), which an etude case
+ * gives, since its working directory is a workspace of its own.
+ *
+ * Prints "WAITPROBE OK". etude's report (probe_report.h), for the case
+ * ETUDE_CASE names, has an assertion for each check, which `check` names:
+ * `open`, `setfl-nonblock`, `getfl-nonblock`, `setfl-clear`,
+ * `getfl-clear`, `close-stderr`, `reopen-fd2`, `close-stdin`, `reopen-fd0`,
+ * `read-fd0`, `fork`, `asleep` and `eintr`; those the failed fork or the
+ * child not seen asleep leave out are reported not run. Freestanding;
+ * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_args.h"
+#include "probe_report.h"
 
 #define STDIN_FILENO  0
 #define STDOUT_FILENO 1
@@ -38,9 +50,9 @@
 #define AF_INET    2
 #define SOCK_DGRAM 2
 
-/* "hello, world\n", in the working directory: the root as the test image
- * runs the probe, the workspace in a native run. */
-#define HELLO "hello.txt"
+/* "hello, world\n", in the working directory unless `hello=PATH` names it:
+ * the root as the test image runs the probe, the workspace in a native run. */
+#define HELLO probe_arg("hello", "hello.txt")
 
 /** exit(2) with `status`; does not return. */
 static void sys_exit(int status)
@@ -68,13 +80,23 @@ static void puts(const char *s)
 
 static int fails = 0;
 
-/** Count a failure and print `msg` when `cond` is 0. */
-static void check(int cond, const char *msg)
+/** Count a failure and print `msg` when `cond` is 0, and in the process that
+ * began the report, report the assertion `id`, which the forked child's
+ * check of its own fork does not. */
+static void check(int cond, const char *id, const char *msg)
 {
     if (!cond) {
         fails++;
         syscall3(SYS_WRITE, STDOUT_FILENO, (long)"  FAIL: ", 8);
         puts(msg);
+    }
+    if (report_getpid() != report_owner) {
+        return;
+    }
+    if (!cond) {
+        report_fail(id, msg);
+    } else {
+        report_pass(id);
     }
 }
 
@@ -200,36 +222,45 @@ static void eintr_child(void)
     sys_exit((rc == -EINTR && got_usr1) ? 0 : 1);
 }
 
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
+
 /** Run cases (a) to (c), and exit with the count of the checks that
- * failed. */
-PROBE_START void _start(void)
+ * failed; `_start` calls it with the initial stack. */
+void probe_main(unsigned long *sp)
 {
     char buf[16];
     int fd, r, n, pid, status;
 
+    probe_args((int)sp[0], (char **)(sp + 1));
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.waitprobe"));
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
-    check(fd >= 0, "open hello.txt");
-    check(syscall3(SYS_FCNTL, fd, F_SETFL, O_NONBLOCK) == 0, "F_SETFL O_NONBLOCK");
-    check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) != 0, "F_GETFL reports O_NONBLOCK");
-    check(syscall3(SYS_FCNTL, fd, F_SETFL, 0) == 0, "F_SETFL clear");
-    check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) == 0, "F_GETFL no longer O_NONBLOCK");
+    check(fd >= 0, "open", "open hello.txt");
+    check(syscall3(SYS_FCNTL, fd, F_SETFL, O_NONBLOCK) == 0, "setfl-nonblock",
+          "F_SETFL O_NONBLOCK");
+    check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) != 0, "getfl-nonblock",
+          "F_GETFL reports O_NONBLOCK");
+    check(syscall3(SYS_FCNTL, fd, F_SETFL, 0) == 0, "setfl-clear", "F_SETFL clear");
+    check((syscall3(SYS_FCNTL, fd, F_GETFL, 0) & O_NONBLOCK) == 0, "getfl-clear",
+          "F_GETFL no longer O_NONBLOCK");
     syscall1(SYS_CLOSE, fd);
 
     r = syscall1(SYS_CLOSE, STDERR_FILENO);
-    check(r == 0, "close(stderr) is legal");
+    check(r == 0, "close-stderr", "close(stderr) is legal");
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
-    check(fd == STDERR_FILENO, "reopen lands on the freed fd 2");
+    check(fd == STDERR_FILENO, "reopen-fd2", "reopen lands on the freed fd 2");
     syscall1(SYS_CLOSE, fd);
 
-    check(syscall1(SYS_CLOSE, STDIN_FILENO) == 0, "close(stdin) is legal");
+    check(syscall1(SYS_CLOSE, STDIN_FILENO) == 0, "close-stdin", "close(stdin) is legal");
     fd = syscall3(SYS_OPEN, (long)HELLO, O_RDONLY, 0);
-    check(fd == STDIN_FILENO, "reopen lands on the freed fd 0");
+    check(fd == STDIN_FILENO, "reopen-fd0", "reopen lands on the freed fd 0");
     n = rd(fd, buf, 5);
-    check(n == 5 && eqn(buf, "hello", 5), "read through reopened fd 0");
+    check(n == 5 && eqn(buf, "hello", 5), "read-fd0", "read through reopened fd 0");
     syscall1(SYS_CLOSE, fd);
 
     pid = syscall1(SYS_FORK, 0);
-    check(pid >= 0, "fork");
+    check(pid >= 0, "fork", "fork");
     if (pid == 0) {
         eintr_child();
     } else if (pid > 0) {
@@ -248,14 +279,21 @@ PROBE_START void _start(void)
             }
             syscall2(SYS_NANOSLEEP, (long)&ts, 0);
         }
-        check(r == 0, "the child was seen asleep in its recvfrom");
+        check(r == 0, "asleep", "the child was seen asleep in its recvfrom");
         if (r == 0) {
             syscall2(SYS_KILL, pid, SIGUSR1);
             r = syscall3(SYS_WAITPID, pid, (long)&status, 0);
-            check(r == pid && status == 0, "child recvfrom interrupted with -EINTR (no hang)");
+            check(r == pid && status == 0, "eintr",
+                  "child recvfrom interrupted with -EINTR (no hang)");
+        } else {
+            report_notrun("eintr", "the child was not seen asleep");
         }
+    } else {
+        report_notrun("asleep", "the fork failed");
+        report_notrun("eintr", "the fork failed");
     }
 
+    report_end();
     if (fails == 0) {
         puts("WAITPROBE OK");
     } else {

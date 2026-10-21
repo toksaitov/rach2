@@ -12,9 +12,16 @@
  * dynamic loader and crt1 read on Linux. Its entry also checks that every
  * general register but the stack pointer is 0, since i386's crt1 registers
  * a nonzero EDX with atexit.
+ *
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each check, which `check` names: `registers-zero`,
+ * `stack-aligned`, `argv`, `envp`, `auxv-end`, `pagesz`, `phdr`, `phent`,
+ * `clktck`, `secure`, `entry`, `minsigstksz`, `random` and `random-page`,
+ * each failed with its first failed check.
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 typedef unsigned int u32;
 typedef unsigned char u8;
@@ -102,14 +109,36 @@ static void put_byte(u8 b)
 
 static int fails;
 
-/** Count a failure and print `msg` when `cond` is false. */
-static void check(int cond, const char *msg)
+/** Begin the part of the assertion `id` (probe_report.h), unless it is the
+ * part open. */
+static void part(const char *id)
 {
+    static const char *open;
+    int i = 0;
+
+    if (open != 0) {
+        while (id[i] != '\0' && open[i] == id[i]) {
+            i++;
+        }
+        if (open[i] == id[i]) {
+            return;
+        }
+    }
+    report_part(id);
+    open = id;
+}
+
+/** Count a failure of the assertion `id` and print `msg` when `cond` is
+ * false. */
+static void check(int cond, const char *id, const char *msg)
+{
+    part(id);
     if (!cond) {
         puts_("FAIL: ");
         puts_(msg);
         puts_("\n");
         fails++;
+        report_miss(msg);
     }
 }
 
@@ -175,6 +204,7 @@ static void check_entry_regs(void)
 {
     int i;
 
+    part("registers-zero");
     for (i = 0; i < ENTRY_REGS; i++) {
         if (entry_regs[i] != 0) {
             puts_("FAIL: ");
@@ -183,7 +213,49 @@ static void check_entry_regs(void)
             put_u32((u32)entry_regs[i]);
             puts_("\n");
             fails++;
+            report_miss("a general register but the stack pointer was not 0 at entry");
         }
+    }
+}
+
+/**
+ * Check that AT_RANDOM, at `random_ptr`, gives 16 bytes in the page of the
+ * initial stack pointer `sp`, not all zero, and print them. The page's check
+ * comes between the two of `random`, which is reported once both have run.
+ */
+static void check_random(const u8 *random_ptr, const unsigned long *sp)
+{
+    int present = random_ptr != 0;
+    u32 acc = 1;
+    int i;
+
+    if (!present) {
+        puts_("FAIL: no AT_RANDOM\n");
+        fails++;
+    }
+    check(((unsigned long)random_ptr & ~0xFFFul) == ((unsigned long)sp & ~0xFFFul), "random-page",
+          "AT_RANDOM not in the initial stack page");
+    if (random_ptr) {
+        const u8 *r = random_ptr;
+
+        acc = 0;
+        puts_("AT_RANDOM=");
+        for (i = 0; i < 16; i++) {
+            put_byte(r[i]);
+            acc |= r[i];
+        }
+        puts_("\n");
+        if (acc == 0) {
+            puts_("FAIL: AT_RANDOM all zero\n");
+            fails++;
+        }
+    }
+    if (!present) {
+        report_fail("random", "no AT_RANDOM");
+    } else if (acc == 0) {
+        report_fail("random", "AT_RANDOM all zero");
+    } else {
+        report_pass("random");
     }
 }
 
@@ -213,12 +285,13 @@ void probe_main(unsigned long *sp)
     unsigned long entry = 0;
     unsigned long minsigstksz = 0;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.auxvprobe"));
     puts_("auxvprobe: starting\n");
 
     check_entry_regs();
 
     /* The initial stack pointer is 16-byte aligned. */
-    check(((unsigned long)sp & 0xF) == 0, "esp not 16-byte aligned");
+    check(((unsigned long)sp & 0xF) == 0, "stack-aligned", "esp not 16-byte aligned");
 
     /* argc and argv[]. */
     argc = (int)sp[0];
@@ -226,13 +299,13 @@ void probe_main(unsigned long *sp)
     puts_("argc=");
     put_u32((u32)argc);
     puts_("\n");
-    check(argc >= 1, "argc < 1");
+    check(argc >= 1, "argv", "argc < 1");
     for (i = 0; i < argc; i++) {
         puts_("  argv: ");
         puts_(argv[i]);
         puts_("\n");
     }
-    check(argv[argc] == 0, "argv not NULL-terminated");
+    check(argv[argc] == 0, "argv", "argv not NULL-terminated");
 
     /* envp[] begins just past argv's NULL. */
     envp = (char **)&argv[argc + 1];
@@ -242,7 +315,7 @@ void probe_main(unsigned long *sp)
         puts_("\n");
         envc++;
     }
-    check(envc >= 1, "no envp entries");
+    check(envc >= 1, "envp", "no envp entries");
 
     /* The auxv pairs begin just past envp's NULL. */
     auxv = (unsigned long *)&envp[envc + 1];
@@ -283,33 +356,19 @@ void probe_main(unsigned long *sp)
             minsigstksz = val;
         }
     }
-    check(saw_null, "auxv not AT_NULL-terminated");
-    check(pagesz == 4096, "AT_PAGESZ != 4096");
-    check(phnum != 0, "AT_PHNUM == 0");
-    check(phdr != 0, "AT_PHDR == 0");
-    check(phent == PHENT_SIZE, "AT_PHENT != " PHENT_TEXT);
-    check(clktck == 100, "AT_CLKTCK != 100");
-    check(saw_secure && secure == 0, "AT_SECURE missing or nonzero");
-    check(entry != 0, "AT_ENTRY == 0");
-    check(minsigstksz > 512, "AT_MINSIGSTKSZ missing or smaller than a frame");
+    check(saw_null, "auxv-end", "auxv not AT_NULL-terminated");
+    check(pagesz == 4096, "pagesz", "AT_PAGESZ != 4096");
+    check(phnum != 0, "phdr", "AT_PHNUM == 0");
+    check(phdr != 0, "phdr", "AT_PHDR == 0");
+    check(phent == PHENT_SIZE, "phent", "AT_PHENT != " PHENT_TEXT);
+    check(clktck == 100, "clktck", "AT_CLKTCK != 100");
+    check(saw_secure && secure == 0, "secure", "AT_SECURE missing or nonzero");
+    check(entry != 0, "entry", "AT_ENTRY == 0");
+    check(minsigstksz > 512, "minsigstksz", "AT_MINSIGSTKSZ missing or smaller than a frame");
 
-    /* AT_RANDOM: 16 bytes in the initial stack page, not all zero. */
-    check(random_ptr != 0, "no AT_RANDOM");
-    check(((unsigned long)random_ptr & ~0xFFFul) == ((unsigned long)sp & ~0xFFFul),
-          "AT_RANDOM not in the initial stack page");
-    if (random_ptr) {
-        u8 *r = random_ptr;
-        u32 acc = 0;
+    check_random(random_ptr, sp);
 
-        puts_("AT_RANDOM=");
-        for (i = 0; i < 16; i++) {
-            put_byte(r[i]);
-            acc |= r[i];
-        }
-        puts_("\n");
-        check(acc != 0, "AT_RANDOM all zero");
-    }
-
+    report_finish();
     if (fails == 0) {
         puts_("auxvprobe: ALL OK\n");
     } else {

@@ -11,10 +11,16 @@
  * refused, and that a '..' path that comes out on a device or a directory
  * still reaches it.
  *
- * Prints "PATHCANON OK". Freestanding; direct system calls (probe.h).
+ * Prints "PATHCANON OK". etude's report (probe_report.h), for the case
+ * ETUDE_CASE names, has an assertion for each case in order: `mkdir-proc`,
+ * with the mkdir of /cx, `mkdir-dev`, `devnull-open`, `devnull-write`,
+ * `dotdot-dir`, `execve-eacces` and `cleanup`, the removal of /cx; the first
+ * failure fails its assertion and leaves the rest not run. Freestanding;
+ * direct system calls (probe.h).
  */
 
 #include "probe.h"
+#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -69,8 +75,13 @@ static void fail(const char *why)
 {
     syscall3(SYS_WRITE, STDOUT_FILENO, (long)"PATHCANON FAIL: ", 16);
     puts(why);
+    report_stop(why);
     sys_exit(1);
 }
+
+void probe_main(unsigned long *sp);
+
+PROBE_SP_ENTRY;
 
 /**
  * Run the cases in order and fail at the first that does not hold: mkdir
@@ -79,12 +90,20 @@ static void fail(const char *why)
  * /cx/../dev/null fails with -EACCES, the answer for a path on a synthetic
  * mount, where a path that reached the KRFFS root would fail with -ENOENT.
  * The refusal is what keeps a file an image placed under a synthetic prefix
- * on the KRFFS root from being run.
+ * on the KRFFS root from being run. `_start` calls it with the initial
+ * stack.
  */
-PROBE_START void _start(void)
+void probe_main(unsigned long *sp)
 {
-    int fd;
+    static const char *const plan[] = {"mkdir-proc",    "mkdir-dev",  "devnull-open",
+                                       "devnull-write", "dotdot-dir", "execve-eacces",
+                                       "cleanup"};
+    int fd, i;
 
+    report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.pathcanon"));
+    for (i = 0; i < (int)(sizeof(plan) / sizeof(plan[0])); i++) {
+        report_plan(plan[i]);
+    }
     if (syscall2(SYS_MKDIR, (long)"/cx", 0755) != 0) {
         fail("mkdir /cx");
     }
@@ -93,23 +112,28 @@ PROBE_START void _start(void)
     if (syscall2(SYS_MKDIR, (long)"/cx/../proc", 0755) == 0) {
         fail("mkdir /cx/../proc created a KRFFS shadow of synthetic /proc");
     }
+    report_held();
     if (syscall2(SYS_MKDIR, (long)"/cx/../dev", 0755) == 0) {
         fail("mkdir /cx/../dev created a KRFFS shadow of synthetic /dev");
     }
+    report_held();
 
     fd = syscall3(SYS_OPEN, (long)"/cx/../dev/null", O_RDWR, 0);
     if (fd < 0) {
         fail("/cx/../dev/null did not reach the device");
     }
+    report_held();
     if (syscall3(SYS_WRITE, fd, (long)"x", 1) != 1) {
         fail("write to /dev/null via a '..' path");
     }
+    report_held();
     syscall2(SYS_CLOSE, fd, 0);
 
     fd = syscall3(SYS_OPEN, (long)"/cx/../cx", O_RDONLY, 0);
     if (fd < 0) {
         fail("/cx/../cx did not resolve to the real directory");
     }
+    report_held();
     syscall2(SYS_CLOSE, fd, 0);
 
     {
@@ -119,10 +143,13 @@ PROBE_START void _start(void)
             fail("execve of a synthetic path was not refused with EACCES");
         }
     }
+    report_held();
 
     if (cleanup() != 0) {
         fail("remove fixture directory");
     }
+    report_held();
+    report_end();
     puts("PATHCANON OK");
     sys_exit(0);
 }
