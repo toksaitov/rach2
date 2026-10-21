@@ -202,7 +202,7 @@ done
     # Owner commands admit their build and test steps independently,
     # preserving quoting, standard input and the command's own status.
     stage = "owner"
-    env.update(EXPECT_MEMORY="103079215104")
+    env.update(EXPECT_MEMORY="5368709120")
     testing = root / "owner/tools/dev/testing.sh"
     testing.parent.mkdir(parents=True)
     shutil.copyfile(sources / "tools/dev/testing.sh", testing)
@@ -232,7 +232,7 @@ exec '{runutil}' ports '{locks}' 2 '{sys.executable}' '{observer}'
 ''',
           executable=True)
     result = root / "result"
-    env.update(EXPECT_MEMORY="103079215104")
+    env.update(EXPECT_MEMORY="5368709120")
     with (locks / "rach2-ports.0").open("r+") as occupied:
         fcntl.lockf(occupied, fcntl.LOCK_EX)
         run([str(launcher), "-r", str(result), "legacy", str(program)], env, tree)
@@ -273,7 +273,7 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     # A command nested in an admitted owner command reuses its claim and
     # still supplies the separate result that bisection reads.
     stage = "nested"
-    env.update(EXPECT_MEMORY="103079215104")
+    env.update(EXPECT_MEMORY="5368709120")
     nested = f"{observe} && '{launcher}' -r '{result}' legacy '{sys.executable}' '{observer}'"
     run([str(launcher), "build", "/bin/sh", "-c", nested], env, tree)
     assert result.read_text() == "exited 0\n"

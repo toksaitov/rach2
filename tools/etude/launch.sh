@@ -90,7 +90,7 @@ positive()
 legacy_resources()
 {
     case ${1##*/} in sh|bash|dash) shift ;; esac
-    case ${1:-} in tests/run|*/tests/run) shift ;; *) mode=alone; return ;; esac
+    case ${1:-} in tests/run|*/tests/run) shift ;; *) run_share "$RACH2_MEMORY_MIB"; return ;; esac
     if [ "${1:-}" = inventory ]; then build_resources true; return; fi
     [ -r tests/registry ] || refuse 'cannot read the suite registry'
     # serial is an optional host isolation field after the architectures.
@@ -133,13 +133,21 @@ legacy_resources()
     if printf '%s\n' "$selection" | awk '$2 == "serial" { found = 1 } END { exit !found }'; then
         RACH2_WORKERS=1
     fi
+    run_share "$guest"
+}
+
+# Give the processors and memory of a test run of RACH2_WORKERS workers whose
+# guests take GUEST MiB in all; an opaque command, whose builds and suites
+# cannot be read before it runs, is given the whole guest pool.
+run_share() # run_share GUEST
+{
     cpus=${RACH2_CPUS:-2}
     positive "$cpus" RACH2_CPUS
     [ "$cpus" -le 64 ] || refuse 'invalid RACH2_CPUS'
     processors=$((RACH2_WORKERS * cpus * 500))
     [ "$processors" -ge "$((RACH2_WORKERS * 1000))" ] || processors=$((RACH2_WORKERS * 1000))
     # Native host checks use one GiB per worker beside the guest pool.
-    memory=$(((guest + RACH2_WORKERS * 1152 + 1024) * 1048576))
+    memory=$((($1 + RACH2_WORKERS * 1152 + 1024) * 1048576))
     [ "$memory" -ge "$build_memory" ] || memory=$build_memory
 }
 
@@ -195,7 +203,14 @@ case $kind in
     build)
         build_resources "$@"
         for goal do [ "$goal" != test ] || mode=alone; done
-        case ${1##*/} in sh|bash|dash) mode=alone; jobs=$((cpu / 1000)) ;; esac
+        case ${1##*/} in
+            sh|bash|dash)
+                build_processors=$processors build_claim=$memory
+                run_share "$RACH2_MEMORY_MIB"
+                [ "$processors" -ge "$build_processors" ] || processors=$build_processors
+                [ "$memory" -ge "$build_claim" ] || memory=$build_claim
+                ;;
+        esac
         ;;
     legacy) legacy_resources "$@" ;;
     alone) mode=alone ;;

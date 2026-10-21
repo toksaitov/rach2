@@ -299,19 +299,36 @@
       }
     },
     {
-      "name": "opaque-shell-shared",
-      "summary": "an older owner transport shares an unsized shell command",
+      "name": "opaque-shell-alone",
+      "summary": "a shell command takes the host alone",
       "edits": [
         {
           "file": "tools/etude/launch.sh",
-          "find": "        case ${1##*/} in sh|bash|dash) mode=alone; jobs=$((cpu / 1000)) ;; esac",
-          "replace": "        :"
+          "find": "                run_share \"$RACH2_MEMORY_MIB\"",
+          "replace": "                mode=alone"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           "etude-launch-test: failed: owner:"
+        ]
+      }
+    },
+    {
+      "name": "opaque-legacy-alone",
+      "summary": "an unreadable legacy command takes the host alone",
+      "edits": [
+        {
+          "file": "tools/etude/launch.sh",
+          "find": "*) run_share \"$RACH2_MEMORY_MIB\"; return ;;",
+          "replace": "*) mode=alone; return ;;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "etude-launch-test: failed: legacy:"
         ]
       }
     },
