@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "etude-guest-boot",
+  "summary": "the set driver starts etude-guest and completes rngprobe on qemu64 without hardware entropy",
+  "tree": "shared",
+  "sources": [
+    "tools/etude/guest/guest.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude-guest",
+    "${WORK}/etude_legacyset_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 test-image build/tools/etude/casecheck && ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude -I tools/etude/posix tests/host/etude_legacyset_hosttest.c tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c tools/etude/posix/legacy_guest.c tools/etude/serial.c tools/etude/guest/wire.c tools/etude/posix/store.c tools/etude/digest.c tools/etude/json.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c tools/etude/watchdog.c tools/etude/supervise.c tools/etude/qemu_profile.c tools/etude/posix/qemu.c tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c tools/etude/posix/bridge.c tools/etude/posix/status.c tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c tools/etude/compare_run.c tools/etude/history.c tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c -o ${WORK}/etude_legacyset_hosttest && sh tests/proofs/guest.sh copy ${WORK} tools/etude/guest/etude-guest"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_legacyset_hosttest",
+      "--guest-only"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "etude-legacyset-test: fail: "
+  },
+  "faults": [
+    {
+      "name": "no-insecure-fallback",
+      "summary": "the boot token fails when urandom cannot read without hardware entropy",
+      "edits": [
+        {
+          "file": "tools/etude/guest/guest.c",
+          "find": "#if defined(__rach2__)\n        if (n != (long)sizeof(rnd))\n            n = getrandom(rnd, sizeof(rnd), GRND_INSECURE);\n#endif\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": guest: rngprobe passed on qemu64: ",
+          ": guest: qemu64 completed the fail-closed checks: "
+        ]
+      }
+    }
+  ]
+}

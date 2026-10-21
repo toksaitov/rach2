@@ -25,6 +25,9 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/resource.h>
+#if defined(__rach2__)
+#include <sys/random.h>
+#endif
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
@@ -374,7 +377,9 @@ static void token_of(const void *p, size_t n, char out[ETUDE_FRAME_TOKEN_LEN + 1
  * the host tests run etude-guest too, has one in the sysctl
  * kern.bootsessionuuid. Rach2 has none, and the first etude-guest of a boot
  * writes random bytes to a file in /dev/shm, a tmpfs that every boot mounts
- * empty, for every later one to read. The file is published whole by
+ * empty, for every later one to read. These bytes distinguish boots and
+ * need no secure random source; GRND_INSECURE supplies them when Rach2
+ * cannot read /dev/urandom. The file is published whole by
  * link(2), so a reader never sees a part, and it is used only when this user
  * owns it and nobody else may write it.
  */
@@ -405,12 +410,15 @@ static int find_boot(void)
     }
     if (stat(path, &st) < 0) {
         fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
-        if (fd < 0 || read(fd, rnd, sizeof(rnd)) != (ssize_t)sizeof(rnd)) {
-            if (fd >= 0)
-                close(fd);
+        n = fd < 0 ? -1 : read(fd, rnd, sizeof(rnd));
+        if (fd >= 0)
+            close(fd);
+#if defined(__rach2__)
+        if (n != (long)sizeof(rnd))
+            n = getrandom(rnd, sizeof(rnd), GRND_INSECURE);
+#endif
+        if (n != (long)sizeof(rnd))
             return -1;
-        }
-        close(fd);
         sha256_hex(rnd, hex);
         snprintf(tmp, sizeof(tmp), "%s.%ld", path, (long)getpid());
         fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);

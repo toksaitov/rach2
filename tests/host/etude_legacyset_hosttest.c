@@ -75,7 +75,8 @@
  * etude-guest from the image and run there: rngprobe passes on the processor
  * `max`, with its branch `trusted` decided by the profile's features, with the
  * program's output, the console kept for casecheck and the plan's domain
- * `qemu`; a boot on `qemu64` past its stage's bound is stopped and incomplete;
+ * `qemu`; rngprobe passes on `qemu64` with its branch `fail-closed`; a boot
+ * past its stage's bound is stopped and incomplete;
  * each machine is given its profile's processor, which a wrapper of QEMU
  * records; and the run's store of artifacts is removed at its end. A missing
  * QEMU or image fails the test.
@@ -381,11 +382,10 @@ struct gcase {
     unsigned boot_ms; /* the bound of its boot */
 };
 
-/* The family `guest`: rngprobe on a processor with a random source, and a
- * boot on one without, bounded far below what the boot takes. etude-guest
- * reads /dev/urandom for its boot's token, which a machine without a random
- * source refuses, so no program runs on `qemu64`. */
+/* The family `guest`: rngprobe with and without a random source, and a
+ * boot bounded far below what the boot takes. */
 static const struct gcase guest_cases[] = {{"fixture.guest.rng", "max", 60000},
+                                           {"fixture.guest.closed", "qemu64", 60000},
                                            {"fixture.guest.boot", "qemu64", 200}};
 
 /* The family `badguest`, whose one case the refused manifests change. */
@@ -904,7 +904,8 @@ static int make_cases(void)
         fix_format(name, sizeof(name), "cases/bad/%s.json", refusals[i].name);
         bad |= write_text(in(path, sizeof(path), name), changed, 0644);
     }
-    bad |= guest_text(text, sizeof(text), "fixture.guest", guest_cases, 2) != 0 ||
+    bad |= guest_text(text, sizeof(text), "fixture.guest", guest_cases,
+                      sizeof(guest_cases) / sizeof(guest_cases[0])) != 0 ||
            write_text(in(path, sizeof(path), "cases/guest/guest.json"), text, 0644) != 0;
     bad |= guest_text(text, sizeof(text), "fixture.badguest", badguest_cases, 1);
     for (i = 0; i < sizeof(guest_refusals) / sizeof(guest_refusals[0]); i++) {
@@ -1885,8 +1886,8 @@ static void show_guest(const struct run *r)
 
 /**
  * A suite run by guest cases on the real QEMU: rngprobe on the processor
- * `max`, whose features decide its branch, and a boot on `qemu64` that runs
- * past its stage's bound.
+ * `max` and `qemu64`, whose features decide its branch, and a boot that
+ * runs past its stage's bound.
  */
 static void test_guest(void)
 {
@@ -1904,13 +1905,21 @@ static void test_guest(void)
     set_run(&r);
     CHECK(r.status == 1, "guest: the boot past its bound fails the run");
     CHECK(r.read == 0, "guest: the history is whole");
-    CHECK(count_kind(&r.h, "attempt") == 2, "guest: an attempt of each case");
+    CHECK(count_kind(&r.h, "attempt") == 3, "guest: an attempt of each case");
     CHECK(case_is(&r, "fixture.guest.rng", guest_arch, 0, "pass", NULL),
           "guest: rngprobe passed on max");
     CHECK(results_has(&r, "fixture.guest.rng.r0",
                       "{\"group_id\":\"source\",\"alternative_id\":\"trusted\",\"decided_by\":"
                       "\"feature\"}"),
           "guest: max's features decide the branch trusted");
+    CHECK(case_is(&r, "fixture.guest.closed", guest_arch, 0, "pass", NULL),
+          "guest: rngprobe passed on qemu64");
+    CHECK(results_has(&r, "fixture.guest.closed.r0",
+                      "{\"group_id\":\"source\",\"alternative_id\":\"fail-closed\",\"decided_by\":"
+                      "\"feature\"}"),
+          "guest: qemu64's features decide the branch fail-closed");
+    CHECK(output_has(&r, "fixture.guest.closed.r0", "RNGPROBE OK (fail-closed)"),
+          "guest: qemu64 completed the fail-closed checks");
     fix_format(path, sizeof(path), "%s/qemu.argv", guest_evidence);
     CHECK(read_text(path, text, sizeof(text)) > 0 && strstr(text, "-cpu max,") != NULL &&
               strstr(text, "-cpu qemu64,") != NULL,
@@ -2102,6 +2111,12 @@ int main(int argc, char **argv)
     unsetenv("RACH2_DEADLINES");
     unsetenv("FIXTURE_BREAK");
     make_tree();
+    if (argc == 2 && strcmp(argv[1], "--guest-only") == 0) {
+        test_guest();
+        if (fails == 0)
+            fix_passed();
+        return fails != 0;
+    }
     test_mixed();
     test_ports();
     test_width();
