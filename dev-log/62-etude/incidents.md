@@ -1,4 +1,4 @@
-# Incidents of phase #589, 2026-10-20 to 21
+# Incidents of phase #589, 2026-10-20 to 22
 
 The faults that the process showed while phase #589 converted the suites to etude's cases, each with its cause, what it cost and its fix. Times are UTC+6, the owner's local time.
 
@@ -32,6 +32,10 @@ The faults that the process showed while phase #589 converted the suites to etud
 * Each architecture's core run asks the admission ledger for 12 processors, so ci's two runs take all 24 of the testing host's and no worker's check is admitted for the 45 minutes they last. To let #672 through, the coordinating session cancelled two core runs and stopped a queued run of worker a's between 23:05 and 23:10, and did not look at the ledger afterwards. Their claims stayed until the ledger could confirm that their processes were gone, and in those minutes it refused every launch that could not fit beside them as `No space left on device`. ci's next core run, of #672's commit, failed at `build` on both architectures (#821, #822) without compiling anything, opened hold #823, and two checks of the coordinating session's failed the same way. The hold was closed by hand at 23:15 and core started again. #824 limits each core run to 6 processors, and a session that stops a run now confirms that its claim has left the ledger before it goes on.
 
 The cancelled x86-64 job of [run 39640741431](https://github.com/toksaitov/rach2/actions/runs/39640741431) listed keeper 1969691 under "Terminate orphan process" at 23:12:02; the i686 job listed keeper 1943840 at 23:12:05. These were the two keepers of #820's unreleased claims. GitHub Actions' [job cleanup](https://github.com/actions/runner/blob/v2.338.0/src/Runner.Worker/JobExtension.cs) reads `RUNNER_TRACKING_ID` from each new process's environment and kills those of the job, including a keeper in its own session. Issue #820 clears the inherited marker bytes in the keeper after it forks the case, and in the compatibility lock holder. The case retains its marker. The fixture job and its mutation proof require the supervisors to survive the sweep, confirm cleanup and release admission.
+
+## The orphaned process group
+
+The host test of `etude-guest` closed its pipes before killing it. The helper could read the closed input, cancel the attempt and kill its process group before SIGKILL reached the helper. Issue #799 replaced the test's wait for a process ID to disappear with a FIFO that witnesses its exit, but the pipe-close race remained and failed both architectures in #833 and #834. A loaded repetition failed on attempt 23: the first process had exited, but the group member was already gone. Giving the helper 100 ms after the pipes closed reproduced both i686 failures in all three trials. Killing and reaping the helper before closing its pipes passed 200 loaded repetitions, with no completion bound changed. The testing skill now states this order for a test that needs orphaned processes. The full host suite under the added CPU load also exceeded the FAT32 and exFAT tests' bounds, recorded separately in #835.
 
 ## The manager
 

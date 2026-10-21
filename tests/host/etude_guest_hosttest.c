@@ -92,19 +92,20 @@ static void remove_tree(const char *path)
         fprintf(stderr, "etude_guest_hosttest: could not remove %s\n", path);
 }
 
-/** End the guest, if one runs, and close its pipes. */
+/** Kill and reap the guest before closing its pipes. Closing them first
+ * lets it cancel the attempts whose orphaned state the tests need. */
 static void end_guest(void)
 {
-    if (to_guest >= 0)
-        close(to_guest);
-    if (from_guest >= 0)
-        close(from_guest);
-    to_guest = from_guest = -1;
     if (guest > 0) {
         kill(guest, SIGKILL);
         waitpid(guest, NULL, 0);
     }
     guest = -1;
+    if (to_guest >= 0)
+        close(to_guest);
+    if (from_guest >= 0)
+        close(from_guest);
+    to_guest = from_guest = -1;
 }
 
 /* The processes that hold the groups of check_group_records, or -1. */
@@ -1038,8 +1039,8 @@ static void check_orphan_group(void)
     end_guest();
     CHECK(release >= 0 && write(release, "exit\n", 5) == 5,
           "the first process is released after etude-guest ends");
-    CHECK(all_gone(leader_end, 10000) && alive(member),
-          "the first process ends after etude-guest and leaves a process in its group");
+    CHECK(all_gone(leader_end, 10000), "the first process ends after etude-guest");
+    CHECK(alive(member), "the ended first process leaves a process in its group");
     if (release >= 0)
         close(release);
     start_guest("--stdio", (char *)NULL);
