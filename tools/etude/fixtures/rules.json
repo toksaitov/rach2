@@ -8052,6 +8052,1127 @@
           }
         ]
       }
+    },
+    {
+      "case_id": "fixture.rules.suspend-machine",
+      "behavior": "the host stops the machine thirty times while it runs, and its clocks keep the host's",
+      "units": [
+        "clock"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null,
+        "suspensions": [
+          {
+            "suspension_id": "stalls",
+            "machine": "elsewhere",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "stops"
+          }
+        ]
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "shutdown_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "shutdown-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "stall",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the machine and stop and resume its QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "stopped",
+          "checks": "the machine ends by itself, by QEMU's SHUTDOWN event",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poweroff-status",
+          "checks": "QEMU exits with the status a power-off gives",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "clean-unmount",
+          "checks": "the kernel says shutdown: clean unmount: dirty-mount flag cleared",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-halt-fallback",
+          "checks": "the kernel never says halting instead",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "said-poweroff",
+          "checks": "the kernel says poweroff: powering off",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "not-restart",
+          "checks": "the kernel never says reboot: restarting",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fsck-clean",
+          "checks": "fsck.krffs exits 0 and does not call the copy not cleanly unmounted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "marker-survives",
+          "checks": "the second boot reads back the marker written just before the power-off",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        },
+        {
+          "witness_id": "fsck",
+          "kind": "quiet",
+          "means": "fsck.krffs has ended",
+          "limit": null,
+          "bound": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        },
+        {
+          "witness_id": "stops",
+          "kind": "counter",
+          "means": "a stop of the machine's QEMU was seen",
+          "limit": 30
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "shutdown-disk",
+          "node": "images/shutdown-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "fsck.krffs",
+          "node": "krffs/fsck.krffs",
+          "per_architecture": false
+        },
+        {
+          "name": "shutdown_scenario",
+          "node": "tests/cases/machine/shutdown_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "poweroff ends the machine, and the readback needs a boot of the disk the stop left"
+      }
+    },
+    {
+      "case_id": "fixture.rules.suspend-witness",
+      "behavior": "the host stops the machine thirty times while it runs, and its clocks keep the host's",
+      "units": [
+        "clock"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null,
+        "suspensions": [
+          {
+            "suspension_id": "stalls",
+            "machine": "fixture",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "stage"
+          }
+        ]
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "shutdown_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "shutdown-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "stall",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the machine and stop and resume its QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "stopped",
+          "checks": "the machine ends by itself, by QEMU's SHUTDOWN event",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poweroff-status",
+          "checks": "QEMU exits with the status a power-off gives",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "clean-unmount",
+          "checks": "the kernel says shutdown: clean unmount: dirty-mount flag cleared",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-halt-fallback",
+          "checks": "the kernel never says halting instead",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "said-poweroff",
+          "checks": "the kernel says poweroff: powering off",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "not-restart",
+          "checks": "the kernel never says reboot: restarting",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fsck-clean",
+          "checks": "fsck.krffs exits 0 and does not call the copy not cleanly unmounted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "marker-survives",
+          "checks": "the second boot reads back the marker written just before the power-off",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        },
+        {
+          "witness_id": "fsck",
+          "kind": "quiet",
+          "means": "fsck.krffs has ended",
+          "limit": null,
+          "bound": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "shutdown-disk",
+          "node": "images/shutdown-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "fsck.krffs",
+          "node": "krffs/fsck.krffs",
+          "per_architecture": false
+        },
+        {
+          "name": "shutdown_scenario",
+          "node": "tests/cases/machine/shutdown_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "poweroff ends the machine, and the readback needs a boot of the disk the stop left"
+      }
+    },
+    {
+      "case_id": "fixture.rules.suspend-limit",
+      "behavior": "the host stops the machine thirty times while it runs, and its clocks keep the host's",
+      "units": [
+        "clock"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null,
+        "suspensions": [
+          {
+            "suspension_id": "stalls",
+            "machine": "fixture",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "stops"
+          }
+        ]
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "shutdown_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "shutdown-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "stall",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the machine and stop and resume its QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "stopped",
+          "checks": "the machine ends by itself, by QEMU's SHUTDOWN event",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poweroff-status",
+          "checks": "QEMU exits with the status a power-off gives",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "clean-unmount",
+          "checks": "the kernel says shutdown: clean unmount: dirty-mount flag cleared",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-halt-fallback",
+          "checks": "the kernel never says halting instead",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "said-poweroff",
+          "checks": "the kernel says poweroff: powering off",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "not-restart",
+          "checks": "the kernel never says reboot: restarting",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fsck-clean",
+          "checks": "fsck.krffs exits 0 and does not call the copy not cleanly unmounted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "marker-survives",
+          "checks": "the second boot reads back the marker written just before the power-off",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        },
+        {
+          "witness_id": "fsck",
+          "kind": "quiet",
+          "means": "fsck.krffs has ended",
+          "limit": null,
+          "bound": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        },
+        {
+          "witness_id": "stops",
+          "kind": "counter",
+          "means": "a stop of the machine's QEMU was seen",
+          "limit": 10
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "shutdown-disk",
+          "node": "images/shutdown-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "fsck.krffs",
+          "node": "krffs/fsck.krffs",
+          "per_architecture": false
+        },
+        {
+          "name": "shutdown_scenario",
+          "node": "tests/cases/machine/shutdown_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "poweroff ends the machine, and the readback needs a boot of the disk the stop left"
+      }
+    },
+    {
+      "case_id": "fixture.rules.suspend-twice",
+      "behavior": "the host stops the machine thirty times while it runs, and its clocks keep the host's",
+      "units": [
+        "clock"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null,
+        "suspensions": [
+          {
+            "suspension_id": "stalls",
+            "machine": "fixture",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "stops"
+          },
+          {
+            "suspension_id": "stalls",
+            "machine": "fixture",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "more"
+          }
+        ]
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "shutdown_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "shutdown-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "stall",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the machine and stop and resume its QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "stopped",
+          "checks": "the machine ends by itself, by QEMU's SHUTDOWN event",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poweroff-status",
+          "checks": "QEMU exits with the status a power-off gives",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "clean-unmount",
+          "checks": "the kernel says shutdown: clean unmount: dirty-mount flag cleared",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-halt-fallback",
+          "checks": "the kernel never says halting instead",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "said-poweroff",
+          "checks": "the kernel says poweroff: powering off",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "not-restart",
+          "checks": "the kernel never says reboot: restarting",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fsck-clean",
+          "checks": "fsck.krffs exits 0 and does not call the copy not cleanly unmounted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "marker-survives",
+          "checks": "the second boot reads back the marker written just before the power-off",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        },
+        {
+          "witness_id": "fsck",
+          "kind": "quiet",
+          "means": "fsck.krffs has ended",
+          "limit": null,
+          "bound": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        },
+        {
+          "witness_id": "stops",
+          "kind": "counter",
+          "means": "a stop of the machine's QEMU was seen",
+          "limit": 30
+        },
+        {
+          "witness_id": "more",
+          "kind": "counter",
+          "means": "a stop of the machine's QEMU was seen",
+          "limit": 30
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "shutdown-disk",
+          "node": "images/shutdown-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "fsck.krffs",
+          "node": "krffs/fsck.krffs",
+          "per_architecture": false
+        },
+        {
+          "name": "shutdown_scenario",
+          "node": "tests/cases/machine/shutdown_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "poweroff ends the machine, and the readback needs a boot of the disk the stop left"
+      }
+    },
+    {
+      "case_id": "fixture.rules.suspend-shared",
+      "behavior": "the host stops the machine thirty times while it runs, and its clocks keep the host's",
+      "units": [
+        "clock"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null,
+        "suspensions": [
+          {
+            "suspension_id": "stalls",
+            "machine": "fixture",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "stops"
+          },
+          {
+            "suspension_id": "more",
+            "machine": "fixture",
+            "cycles": 30,
+            "run_us": 700000,
+            "stop_us": 300000,
+            "witness": "stops"
+          }
+        ]
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "shutdown_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "shutdown-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "stall",
+          "stage": "execute",
+          "machine": "fixture",
+          "does": "boot the machine and stop and resume its QEMU"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "fixture",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              "shutdown-disk"
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 134217728,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.fsdisk"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "stopped",
+          "checks": "the machine ends by itself, by QEMU's SHUTDOWN event",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "poweroff-status",
+          "checks": "QEMU exits with the status a power-off gives",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "clean-unmount",
+          "checks": "the kernel says shutdown: clean unmount: dirty-mount flag cleared",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-halt-fallback",
+          "checks": "the kernel never says halting instead",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "said-poweroff",
+          "checks": "the kernel says poweroff: powering off",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "not-restart",
+          "checks": "the kernel never says reboot: restarting",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "fsck-clean",
+          "checks": "fsck.krffs exits 0 and does not call the copy not cleanly unmounted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "marker-survives",
+          "checks": "the second boot reads back the marker written just before the power-off",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 3
+        },
+        {
+          "witness_id": "fsck",
+          "kind": "quiet",
+          "means": "fsck.krffs has ended",
+          "limit": null,
+          "bound": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        },
+        {
+          "witness_id": "stops",
+          "kind": "counter",
+          "means": "a stop of the machine's QEMU was seen",
+          "limit": 60
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 90000000,
+          "ceiling_us": 300000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 90000000,
+            "ceiling_us": 300000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 67108864,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "shutdown-disk",
+          "node": "images/shutdown-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "fsck.krffs",
+          "node": "krffs/fsck.krffs",
+          "per_architecture": false
+        },
+        {
+          "name": "shutdown_scenario",
+          "node": "tests/cases/machine/shutdown_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "poweroff ends the machine, and the readback needs a boot of the disk the stop left"
+      }
     }
   ]
 }

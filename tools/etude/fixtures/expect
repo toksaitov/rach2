@@ -7,6 +7,7 @@
 # The examples of the contracts are valid, and judge as their Readme says.
 0 -r ../../.. manifest ../schemas/case.guest.example.json ../schemas/case.host.example.json ../../../tests/cases/machine.shutdown.json
 0 manifest ./usb.json
+0 manifest ./suspend.json
 0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-lost: incomplete
 0 results ../schemas/results.example.jsonl ../schemas/case.guest.example.json | example-attempt-errno-notrun: failure
 0 schema invocation ../schemas/invocation.example.json
@@ -69,6 +70,11 @@
 1 manifest ./rules.json | usb-disk-twice: the disk stick is given twice in a profile
 1 manifest ./rules.json | usb-vga: the device vga has no member but its model
 1 manifest ./rules.json | capture-card: the capture net1 names no network card of 1
+1 manifest ./rules.json | suspend-machine: the suspension stalls stops elsewhere, which the case does not declare
+1 manifest ./rules.json | suspend-witness: the suspension stalls counts its stops on stage, which is no counter witness
+1 manifest ./rules.json | suspend-limit: the suspension stalls has 30 cycles, past the limit 10 of its witness stops
+1 manifest ./rules.json | suspend-twice: the suspension stalls is declared twice
+1 manifest ./rules.json | suspend-shared: the witness stops counts the stops of two suspensions
 1 -r ./tree manifest ./rules.json | timing-nofile: tests/absent.c:1: no such file in the tree
 1 -r ./tree manifest ./rules.json | timing-pastend: tests/delay.txt:9: the file ends at line 4
 1 manifest ./prefix.json | fixture.other.vectors: a case of the family fixture.prefix has an identity

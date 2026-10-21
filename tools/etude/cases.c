@@ -839,6 +839,66 @@ static void rule_steps(const struct rule *r)
     }
 }
 
+/** Returns the witness `id` of the case's `progress`, or NULL. */
+static const struct json *witness(const struct rule *r, const char *id)
+{
+    const struct json *list = json_member(r->c, "progress");
+    size_t i;
+
+    for (i = 0; list != NULL && i < list->count; i++) {
+        if (same(json_text(list->item[i], "witness_id"), id)) {
+            return list->item[i];
+        }
+    }
+    return NULL;
+}
+
+/**
+ * Each suspension of a workload stops a machine of the case, under an
+ * identity of its own, and counts its stops on a counter witness of its own
+ * whose limit is at least its cycles.
+ */
+static void rule_suspensions(const struct rule *r)
+{
+    const struct json *list = json_member(json_member(r->c, "workload"), "suspensions");
+    const struct json *machines = json_member(r->c, "machines");
+    const char *case_id = json_text(r->c, "case_id");
+    size_t i, j;
+
+    unique(r, list, "suspension_id", "the suspension");
+    for (i = 0; list != NULL && i < list->count; i++) {
+        const struct json *s = list->item[i];
+        const char *id = json_text(s, "suspension_id"), *machine = json_text(s, "machine");
+        const char *counter = json_text(s, "witness");
+        const struct json *w = witness(r, counter);
+        const struct json *limit = json_member(w, "limit"), *cycles = json_member(s, "cycles");
+
+        if (machine != NULL && !has_member(machines, "machine_id", machine)) {
+            finding(r->file, line_at(s, "machine"),
+                    "%s: the suspension %s stops %s, which the case does not declare", case_id, id,
+                    machine);
+        }
+        if (counter != NULL && !same(json_text(w, "kind"), "counter")) {
+            finding(r->file, line_at(s, "witness"),
+                    "%s: the suspension %s counts its stops on %s, which is no counter witness of "
+                    "the case",
+                    case_id, id, counter);
+        } else if (limit != NULL && cycles != NULL && limit->type == JSON_INTEGER &&
+                   cycles->type == JSON_INTEGER && limit->integer < cycles->integer) {
+            finding(r->file, line_at(s, "cycles"),
+                    "%s: the suspension %s has %lld cycles, past the limit %lld of its witness %s",
+                    case_id, id, cycles->integer, limit->integer, counter);
+        }
+        for (j = 0; j < i; j++) {
+            if (counter != NULL && same(counter, json_text(list->item[j], "witness"))) {
+                finding(r->file, line_at(s, "witness"),
+                        "%s: the witness %s counts the stops of two suspensions", case_id, counter);
+                break;
+            }
+        }
+    }
+}
+
 /**
  * Returns 1 when a forward of the devices `devs` that comes before forward
  * `j` of device `i` forwards the local port of `f` by its protocol.
@@ -1425,6 +1485,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_attached(&r);
     rule_captures(&r);
     rule_steps(&r);
+    rule_suspensions(&r);
     rule_networks(&r);
     rule_faults(&r);
     rule_bounds(&r);

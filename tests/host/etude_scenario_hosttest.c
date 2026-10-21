@@ -68,9 +68,15 @@
  * frames of one machine's card recorded in its capture, QEMU accepts a
  * connection at the forwarded TCP port and has bound the forwarded UDP port,
  * /tcptest reaches the peer through the guest forward and is refused it at the
- * gateway, and the kernel finds the size of the media row's empty disk. With
- * ETUDE_TEST_FORWARD set the program runs the two forward rows alone, and with
- * ETUDE_TEST_FAULT_ONLY set the reboot row and the fault row alone.
+ * gateway, the kernel finds the size of the media row's empty disk, and the
+ * kernel is stopped and resumed thirty times by a declared suspension and then
+ * powers off. Under the stand-in, which writes the monotonic clock on its
+ * console every TICK_MS, the same suspension holds each stop, with no time
+ * written inside one and one after each; a stop signal, a step's bound and a
+ * kill of the scenario during a stop each leave no stopped QEMU. With
+ * ETUDE_TEST_FORWARD set the program runs the two forward rows alone, with
+ * ETUDE_TEST_FAULT_ONLY set the reboot row and the fault row alone, and with
+ * ETUDE_TEST_SUSPEND_ONLY the stand-in's suspension rows alone.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -131,6 +137,20 @@ static int fails;
 #define HOLD_ATTEMPT_MS 300000
 #define GONE_MS         15000
 #define ROW_PROCS       64
+
+/* The suspension rows: the cycles and intervals of the rows that run them
+ * all; the stop of the rows that end during their one stop, which the end
+ * must cut short; their steps' bound, within the attempt's, and the bound of
+ * suspend-bound's step that ends its stop; the interval of the stand-in's
+ * ticks, and the most ticks a scenario reads. */
+#define STALLS         30
+#define STALL_RUN_US   100000u
+#define STALL_US       50000u
+#define LONG_STOP_US   120000000u
+#define STALL_STEP_US  20000000u
+#define STALL_BOUND_US 3000000u
+#define TICK_MS        2
+#define TICKS_MAX      65536
 
 /* The media rows' empty disk, 4 TiB as the uefi suite's, on NVMe, and their
  * CD, whose medium is the artifact `disk`. */
@@ -506,6 +526,56 @@ static int fake_connect(const char *path)
     return fd;
 }
 
+/* The stand-in prints ticks on its console once it is told to, and the file
+ * that its SIGTERM handler writes, in the mode `tick`. */
+static int fake_ticking;
+static char fake_ended[PATH_MAX];
+
+/** Write `fake: terminated` to the file fake_ended names, and exit. */
+static void fake_term(int sig)
+{
+    int fd = open(fake_ended, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+    if (fd >= 0) {
+        if (write(fd, "fake: terminated\n", 17) != 17)
+            _exit(119);
+        close(fd);
+    }
+    _exit(128 + sig);
+}
+
+/** Have SIGTERM write ETUDE_TEST_MARK.ended in the mode `mode` of `tick`. */
+static void fake_arm(const char *mode)
+{
+    if (strcmp(mode, "tick") != 0 || getenv("ETUDE_TEST_MARK") == NULL)
+        return;
+    snprintf(fake_ended, sizeof(fake_ended), "%s.ended", getenv("ETUDE_TEST_MARK"));
+    signal(SIGTERM, fake_term);
+}
+
+/** Give the milliseconds the stand-in waits for its sockets: TICK_MS once it
+ * ticks, or -1 for no limit. */
+static int fake_wait_ms(void)
+{
+    return fake_ticking ? TICK_MS : -1;
+}
+
+/** Write a tick on the console `con`, once the stand-in ticks and while the
+ * console is open: `tick N`, N the monotonic clock in microseconds, as the
+ * library's executor reads it. */
+static void fake_tick(int con)
+{
+    struct timespec ts;
+    char text[64];
+
+    if (!fake_ticking || con < 0)
+        return;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    snprintf(text, sizeof(text), "tick %llu\r\n",
+             (unsigned long long)ts.tv_sec * 1000000u + (unsigned long long)ts.tv_nsec / 1000u);
+    put(con, text);
+}
+
 /** Find the value after `head` of the argument after option `opt`. */
 static const char *fake_arg(int argc, char **argv, const char *opt, const char *head)
 {
@@ -719,8 +789,9 @@ static pid_t fake_guest(int con, const char *line)
  * first disk, at `disk` or none at NULL, `poweroff`, `nmi`, which prints the
  * kernel's records of an NMI and its panic and halts the processors, `stop`,
  * which halts them without a record, `stop one`, which halts the first,
- * `die`, `closecon`, `closeqmp`, `peer PORT TEXT` and `exec /etude-guest`.
- * A console or QMP that it closes has its descriptor set to -1.
+ * `die`, `closecon`, `closeqmp`, `peer PORT TEXT`, `tick`, which starts the
+ * ticks, and `exec /etude-guest`. A console or QMP that it closes has its
+ * descriptor set to -1.
  */
 static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *disk,
                          const char *mode)
@@ -760,6 +831,9 @@ static void fake_console(struct fake_in *con, struct fake_in *qmp, const char *d
         qmp->fd = -1;
     } else if (strncmp(con->line, "peer ", 5) == 0) {
         fake_peer(con->fd, con->line + 5);
+    } else if (strcmp(con->line, "tick") == 0) {
+        fake_ticking = 1;
+        put(con->fd, "fake: ticking\r\n");
     } else if (strncmp(con->line, "exec /etude-guest", 17) == 0) {
         fake_guest(con->fd, con->line);
         close(con->fd);
@@ -859,7 +933,8 @@ static int fake_record(const char *path, const unsigned char *head, size_t n, co
  * the machine runs, in the mode `media` say each of its `-drive` and `-device`
  * arguments on the console, as fake_drives does, print the value of each
  * `-netdev`, say that the shell is ready, and act on what the console types,
- * as fake_console does.
+ * as fake_console does. Once it ticks, it writes a tick every TICK_MS. In the
+ * mode `tick`, SIGTERM writes ETUDE_TEST_MARK.ended before the stand-in ends.
  */
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
@@ -880,6 +955,7 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         return 125;
     if (fake_arg(argc, argv, "-smp", "") != NULL)
         fake_cpus = (unsigned)atoi(fake_arg(argc, argv, "-smp", ""));
+    fake_arm(mode);
     if (disk != NULL) {
         snprintf(path, sizeof(path), "%s", disk);
         if (strchr(path, ',') != NULL)
@@ -908,7 +984,9 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         p[0].fd = con.fd;
         p[1].fd = qmp.fd;
         p[0].events = p[1].events = POLLIN;
-        if (poll(p, 2, -1) < 0)
+        r = poll(p, 2, fake_wait_ms());
+        fake_tick(con.fd);
+        if (r < 0)
             continue;
         if (qmp.fd >= 0 && p[1].revents != 0) {
             r = fake_read(&qmp);
@@ -1185,6 +1263,110 @@ static int scenario_lost(struct etude_case *c, const char *how)
                  end.end == ETUDE_END_QEMU_EXITED &&
                      end.value == (strcmp(how, "die") == 0 ? SIGKILL : 0),
                  "taken for another end");
+    return 0;
+}
+
+/**
+ * Put in `ticks` the times of the stand-in's ticks on the console of the
+ * first boot of fixture, whose evidence is whole once the machine has ended,
+ * and give their count.
+ */
+static size_t read_ticks(struct etude_case *c, uint64_t *ticks, size_t max)
+{
+    const char *path = etude_evidence(c, "fixture.1.console");
+    FILE *f = path != NULL ? fopen(path, "rb") : NULL;
+    char line[256], *at;
+    size_t n = 0;
+
+    while (f != NULL && fgets(line, sizeof(line), f) != NULL)
+        if ((at = strstr(line, "tick ")) != NULL && n < max)
+            ticks[n++] = strtoull(at + 5, NULL, 10);
+    if (f != NULL)
+        fclose(f);
+    return n;
+}
+
+/**
+ * Judge the `done` stops of a suspension of STALLS cycles: each held for
+ * STALL_US at least; and, given the `n` ticks of the stand-in in `ticks`, no
+ * tick inside a stop, and a tick after each stop and before the next, so
+ * that the stand-in ran again after every stop.
+ */
+static void judge_stops(struct etude_case *c, const struct etude_stop *stops, unsigned done,
+                        const uint64_t *ticks, size_t n)
+{
+    unsigned i, held = 0, idle = 0, again = 0;
+    uint64_t next;
+    size_t t;
+    int in, after;
+
+    for (i = 0; i < done && i < STALLS; i++) {
+        next = i + 1 < done ? stops[i + 1].stopped_us : UINT64_MAX;
+        in = after = 0;
+        held += stops[i].resumed_us >= stops[i].stopped_us + STALL_US;
+        for (t = 0; t < n; t++) {
+            in |= ticks[t] > stops[i].stopped_us && ticks[t] < stops[i].resumed_us;
+            after |= ticks[t] > stops[i].resumed_us && ticks[t] < next;
+        }
+        idle += !in;
+        again += after;
+    }
+    etude_assert(c, "held", done == STALLS && held == STALLS, "a stop was cut short");
+    if (ticks == NULL)
+        return;
+    etude_assert(c, "no-run", done == STALLS && idle == STALLS, "the stand-in ticked in a stop");
+    etude_assert(c, "resumed", done == STALLS && again == STALLS,
+                 "the stand-in did not tick after a stop");
+}
+
+/**
+ * Run the suspension rows. In suspend and real-suspend the machine runs the
+ * STALLS cycles of its suspension and powers off, and under the stand-in it
+ * ticks all the while. In suspend-stop and suspend-kill the test stops or
+ * kills the scenario during the one long stop, which the witness announces.
+ * In suspend-bound the step's bound ends that stop, and the machine then
+ * answers QMP and powers off in the next step.
+ */
+static int scenario_suspend(struct etude_case *c, const char *row)
+{
+    static struct etude_stop stops[STALLS];
+    static uint64_t ticks[TICKS_MAX];
+    int real = strcmp(row, "real-suspend") == 0, bound = strcmp(row, "suspend-bound") == 0;
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    enum etude_status st;
+    unsigned done = 0;
+    char *reply = NULL;
+    uint64_t at;
+
+    if (etude_step(c, "stall") != ETUDE_OK || etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+        return 1;
+    at = wait_for(c, m, "suspended", "Type 'help'", 0);
+    at = wait_for(c, m, "suspended", real ? "\n> " : "> ", at);
+    if (!real) {
+        etude_type(m, "tick\n");
+        wait_for(c, m, "suspended", "tick ", at);
+    }
+    st = etude_suspend(m, "stalls", stops, STALLS, &done);
+    if (strcmp(row, "suspend-stop") == 0 || strcmp(row, "suspend-kill") == 0) {
+        expect(c, "suspend-stopped", st, ETUDE_STOPPED);
+        return 0;
+    }
+    if (bound) {
+        expect(c, "suspend-bounded", st, ETUDE_BOUND);
+        if (etude_step(c, "after") != ETUDE_OK)
+            return 1;
+        expect(c, "answers", etude_qmp(m, "query-status", NULL, &reply), ETUDE_OK);
+        free(reply);
+    } else {
+        expect(c, "suspended", st, ETUDE_OK);
+    }
+    etude_type(m, real ? "poweroff\r" : "poweroff\n");
+    expect(c, "stopped", etude_wait_end(m, &end), ETUDE_OK);
+    etude_assert(c, "shutdown", end.end == ETUDE_END_SHUTDOWN, "not a shutdown");
+    if (!bound)
+        judge_stops(c, stops, done, real ? NULL : ticks,
+                    real ? 0 : read_ticks(c, ticks, TICKS_MAX));
     return 0;
 }
 
@@ -1822,9 +2004,35 @@ static int reboot_row(const char *row)
            strcmp(row, "real-reboot") == 0 || strcmp(row, "network") == 0;
 }
 
+/** Say whether `row` is one of the rows that scenario_suspend runs. */
+static int suspend_row(const char *row)
+{
+    return strncmp(row, "suspend", 7) == 0 || strcmp(row, "real-suspend") == 0;
+}
+
+/** Run row `row` when its scenario takes the case alone; -1 for another row. */
+static int scenario_alone(struct etude_case *c, const char *row)
+{
+    static const struct {
+        const char *name;
+        int (*run)(struct etude_case *);
+    } rows[] = {{"real-overlay", scenario_overlay},
+                {"bound", scenario_bound},
+                {"fault", scenario_fault},
+                {"stop", scenario_stop},
+                {"misuse", scenario_misuse}};
+    size_t i;
+
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        if (strcmp(row, rows[i].name) == 0)
+            return rows[i].run(c);
+    return -1;
+}
+
 int etude_scenario(struct etude_case *c)
 {
     const char *row = getenv("ETUDE_TEST_ROW");
+    int status;
 
     if (row == NULL)
         return 1;
@@ -1835,16 +2043,8 @@ int etude_scenario(struct etude_case *c)
     if (strcmp(row, "lost") == 0 || strcmp(row, "die") == 0 || strcmp(row, "closecon") == 0 ||
         strcmp(row, "closeqmp") == 0)
         return scenario_lost(c, row);
-    if (strcmp(row, "real-overlay") == 0)
-        return scenario_overlay(c);
-    if (strcmp(row, "bound") == 0)
-        return scenario_bound(c);
-    if (strcmp(row, "fault") == 0)
-        return scenario_fault(c);
-    if (strcmp(row, "stop") == 0)
-        return scenario_stop(c);
-    if (strcmp(row, "misuse") == 0)
-        return scenario_misuse(c);
+    if ((status = scenario_alone(c, row)) != -1)
+        return status;
     if (strcmp(row, "wrong") == 0 || strcmp(row, "damaged") == 0 || strcmp(row, "memory") == 0)
         return scenario_noboot(c, row);
     if (strcmp(row, "guest") == 0 || strcmp(row, "real-guest") == 0)
@@ -1855,6 +2055,8 @@ int etude_scenario(struct etude_case *c)
         return scenario_media(c, row[0] == 'r');
     if (strcmp(row, "forward") == 0 || strcmp(row, "real-forward") == 0)
         return scenario_forward(c, row[0] == 'r');
+    if (suspend_row(row))
+        return scenario_suspend(c, row);
     return scenario_services(c, row);
 }
 
@@ -2090,16 +2292,41 @@ static unsigned free_port(int type)
     return port;
 }
 
+/**
+ * Give in `holds` the workload's suspensions of row `r`, and in `witness` the
+ * counter witness of their stops, as members of JSON objects; both are empty
+ * for a row with none. The suspend and real-suspend rows stop fixture STALLS
+ * times; the other suspension rows stop it once, for LONG_STOP_US.
+ */
+static void row_suspensions(const struct row *r, char *holds, size_t hsize, char *witness,
+                            size_t wsize)
+{
+    int all = strcmp(r->name, "suspend") == 0 || strcmp(r->name, "real-suspend") == 0;
+
+    holds[0] = witness[0] = '\0';
+    if (!suspend_row(r->name))
+        return;
+    fix_format(holds, hsize,
+               ", \"suspensions\": [{\"suspension_id\": \"stalls\", \"machine\": \"fixture\", "
+               "\"cycles\": %u, \"run_us\": %u, \"stop_us\": %u, \"witness\": \"stalls\"}]",
+               all ? STALLS : 1, all ? STALL_RUN_US : 1000u, all ? STALL_US : LONG_STOP_US);
+    fix_format(witness, wsize,
+               ", {\"witness_id\": \"stalls\", \"kind\": \"counter\", \"means\": \"a stop was "
+               "seen\", \"limit\": %u}",
+               STALLS);
+}
+
 /** Write row `r`'s case, as one family's manifest, to `path`. A memory row
  * of two machines reserves the boundary machine's memory, and in
  * memory-share and memory-qmp the other's as well. */
 static int write_manifest(const char *path, const struct row *r)
 {
-    char steps[2048], asserts[4096], machine[4096], text[16384];
+    char steps[2048], asserts[4096], machine[4096], text[16384], holds[512], witness[256];
     unsigned long long reserved = 268435456;
 
     json_list(steps, sizeof(steps), r->steps, 1);
     json_list(asserts, sizeof(asserts), r->asserts, 0);
+    row_suspensions(r, holds, sizeof(holds), witness, sizeof(witness));
     if (boundary_pair(r)) {
         fix_format(machine, sizeof(machine), "%s", memory_machines);
         reserved = strcmp(r->name, "memory-pair") != 0 ? 4563402752ull : 4294967296ull;
@@ -2144,7 +2371,7 @@ static int write_manifest(const char *path, const struct row *r)
         "{\"schema_version\": 1, \"family_id\": \"test.scenario\", \"summary\": \"rows\", "
         "\"cases\": [{\"case_id\": \"test.scenario.%s\", \"behavior\": \"a row\", \"units\": "
         "[\"none\"], \"domain\": \"machine\", \"architectures\": [\"i686\", \"x86_64\"], "
-        "\"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null}, "
+        "\"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null%s}, "
         "\"requirements\": {\"host_api\": \"c\", \"tools\": %s, \"features\": {}}, "
         "\"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\", "
         "\"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}, "
@@ -2154,7 +2381,7 @@ static int write_manifest(const char *path, const struct row *r)
         "[{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step "
         "ended\", \"limit\": 8}, {\"witness_id\": \"waiting\", \"kind\": \"quiet\", \"means\": "
         "\"a wait\", \"limit\": null, \"bound\": {\"floor_us\": 1, \"initial_us\": 2, "
-        "\"ceiling_us\": 3}}], \"bounds\": {\"case\": {\"floor_us\": 1, \"initial_us\": 2, "
+        "\"ceiling_us\": 3}}%s], \"bounds\": {\"case\": {\"floor_us\": 1, \"initial_us\": 2, "
         "\"ceiling_us\": 3}, \"gap\": {\"floor_us\": 1, \"initial_us\": 2, \"ceiling_us\": 3}, "
         "\"stages\": {}}, \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, "
         "\"memory_bytes\": %llu, \"disk_bytes\": 67108864, \"locks\": [], \"ports\": %d, "
@@ -2165,8 +2392,8 @@ static int write_manifest(const char *path, const struct row *r)
         "\"node\": \"v\", \"per_architecture\": false}, {\"name\": \"killer\", \"node\": \"x\", "
         "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
         "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
-        r->name, overlay_row(r) ? "[\"qemu-img\"]" : "[]", steps, machine,
-        forward_row(r) ? forward_services : "", asserts, reserved, forward_row(r) ? 3 : 0);
+        r->name, holds, overlay_row(r) ? "[\"qemu-img\"]" : "[]", steps, machine,
+        forward_row(r) ? forward_services : "", asserts, witness, reserved, forward_row(r) ? 3 : 0);
     return write_file(path, text, strlen(text));
 }
 
@@ -3202,6 +3429,23 @@ static const struct row stop_row[] = {
      0, 1, 0, NULL, 0, NULL, 0},
 };
 
+/* The suspension rows: thirty cycles, a stop signal and a kill during a
+ * stop, and a step's bound that ends a stop. */
+static const struct row suspend_rows[] = {
+    {"suspend", "tick", "stall:fixture", "suspended stopped shutdown held no-run resumed", NULL, 0,
+     STALL_STEP_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
+    {"suspend-stop", "tick", "stall:fixture", "suspend-stopped", NULL, 0, STALL_STEP_US, 1, 0, 1, 0,
+     NULL, 0, "fixture.1.capture=query-status: {\"return\": {\"status\": \"running\"", SIGTERM},
+    {"suspend-bound", "tick", "stall:fixture after:fixture",
+     "suspend-bounded answers stopped shutdown", NULL, 0, LOSS_US, 0, 1, 0, 0, "stall",
+     STALL_BOUND_US, NULL, 0},
+    {"suspend-kill", "tick", "stall:fixture", "suspend-stopped", NULL, 0, STALL_STEP_US, -1, 0, 0,
+     0, NULL, 0, NULL, SIGKILL},
+};
+
+/* What stops or kills a suspension row during its first stop. */
+#define STALLED "@etude 1 progress stalls 1\n"
+
 /* The damaged row, run on a store whose kernel is damaged. */
 static const struct row damaged_row[] = {
     {"damaged", "disk", "boot:fixture", "refused damaged", "disk", 0, STEP_US, 0, 1, 1, 0, NULL, 0,
@@ -3223,6 +3467,8 @@ static const struct row real_rows[] = {
      REAL_US, 0, 1, 0, 1, NULL, 0, NULL, 0},
     {"real-media", NULL, "boot:fixture", "sparse drives stopped", NULL, 0, REAL_US, 0, 1, 0, 0,
      NULL, 0, NULL, 0},
+    {"real-suspend", NULL, "stall:fixture", "suspended stopped shutdown held", "disk", 0, REAL_US,
+     0, 1, 0, 0, NULL, 0, NULL, 0},
 };
 
 /* The forward rows, under the stand-in and under the real QEMU. */
@@ -3236,11 +3482,35 @@ static const struct row forward_rows[] = {
      NULL, 0, REAL_US, 0, 1, 0, 0, "closed", CLOSED_US, NULL, 0},
 };
 
+/**
+ * Run the suspension rows: thirty cycles judged by the stand-in's ticks; a
+ * stop signal during a stop, after which the machine answers QMP in the
+ * scenario's cleanup; a step's bound during a stop; and a kill of the
+ * scenario during a stop, after which the stopped stand-in must take the
+ * SIGTERM of its keeper, which writes the row's marker, and end.
+ */
+static void test_suspend(const struct site *s)
+{
+    struct row_run killed;
+    char ended[PATH_MAX];
+
+    run_row(&suspend_rows[0], s, NULL);
+    run_row(&suspend_rows[1], s, STALLED);
+    run_row(&suspend_rows[2], s, NULL);
+    row_start(&killed, &suspend_rows[3], s, 0);
+    row_finish(&killed, STALLED, 0);
+    CHECK(killed.a.stopped, "suspend-kill: killed during its stop");
+    row_gone("suspend-kill");
+    fix_format(ended, sizeof(ended), "%s/suspend-kill.ended", fix_dir());
+    CHECK(file_has(ended, "fake: terminated"), "suspend-kill: the stopped QEMU took its SIGTERM");
+}
+
 /** Run the audio rows and the capture rows, unless ETUDE_TEST_CAPTURE_ONLY or
  * ETUDE_TEST_AUDIO_ONLY asks for one kind alone, and then the stand-in rows,
- * the fault row, the stop row, the forward row and the damaged row; or the
- * forward row alone when `forward_only` is set, or the reboot row and the
- * fault row alone when ETUDE_TEST_FAULT_ONLY is. */
+ * the fault row, the stop row, the suspension rows, the forward row and the
+ * damaged row; or the forward row alone when `forward_only` is set, the
+ * reboot row and the fault row alone when ETUDE_TEST_FAULT_ONLY is, or the
+ * suspension rows alone when ETUDE_TEST_SUSPEND_ONLY is. */
 static void test_stand_in(int forward_only)
 {
     struct site s;
@@ -3255,6 +3525,12 @@ static void test_stand_in(int forward_only)
     if (!forward_only && getenv("ETUDE_TEST_FAULT_ONLY") != NULL) {
         run_row(&stand_in_rows[0], &s, NULL);
         run_row(fault_row, &s, NULL);
+        CHECK(!machines_left(), "every stand-in QEMU has ended");
+        etude_store_close(s.store);
+        return;
+    }
+    if (getenv("ETUDE_TEST_SUSPEND_ONLY") != NULL) {
+        test_suspend(&s);
         CHECK(!machines_left(), "every stand-in QEMU has ended");
         etude_store_close(s.store);
         return;
@@ -3274,6 +3550,7 @@ static void test_stand_in(int forward_only)
             run_row(&stand_in_rows[i], &s, NULL);
         run_row(fault_row, &s, NULL);
         run_row(stop_row, &s, WAITING);
+        test_suspend(&s);
         run_row(pair_row, &s, NULL);
         test_isolation(&s);
     }
@@ -3332,7 +3609,7 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
     forward_only = getenv("ETUDE_TEST_FORWARD") != NULL && *getenv("ETUDE_TEST_FORWARD") != '\0';
     test_stand_in(forward_only);
     if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL && getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL &&
-        getenv("ETUDE_TEST_FAULT_ONLY") == NULL &&
+        getenv("ETUDE_TEST_FAULT_ONLY") == NULL && getenv("ETUDE_TEST_SUSPEND_ONLY") == NULL &&
         (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
         test_real(forward_only);
     if (fails != 0)

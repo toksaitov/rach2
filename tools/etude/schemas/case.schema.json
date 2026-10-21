@@ -71,7 +71,20 @@
         "arguments": {"type": "array", "items": {"type": "string", "pattern": "^[ -~]*$"}},
         "inputs": {"type": "object", "additionalProperties": {"oneOf": [{"$ref": "#/$defs/count"}, {"$ref": "#/$defs/text"}]}},
         "repetitions": {"$ref": "#/$defs/positive"},
-        "seed": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]}
+        "seed": {"oneOf": [{"$ref": "#/$defs/count"}, {"type": "null"}]},
+        "suspensions": {"type": "array", "items": {"$ref": "#/$defs/suspension"}, "minItems": 1}
+      }
+    },
+    "suspension": {
+      "type": "object", "additionalProperties": false,
+      "required": ["suspension_id", "machine", "cycles", "run_us", "stop_us", "witness"],
+      "properties": {
+        "suspension_id": {"$ref": "#/$defs/id"},
+        "machine": {"$ref": "#/$defs/id"},
+        "cycles": {"$ref": "#/$defs/positive"},
+        "run_us": {"$ref": "#/$defs/positive"},
+        "stop_us": {"$ref": "#/$defs/positive"},
+        "witness": {"$ref": "#/$defs/id"}
       }
     },
     "requirements": {

@@ -180,6 +180,43 @@ enum etude_status etude_guest(struct etude_case_machine *m, const char *name,
  */
 enum etude_status etude_wait_end(struct etude_case_machine *m, struct etude_termination *end);
 
+/* One stop of a suspension: two times of the host's CLOCK_MONOTONIC, in
+ * microseconds, between which the machine's QEMU process was stopped. */
+struct etude_stop {
+    uint64_t stopped_us; /* the executor saw every thread of QEMU stopped */
+    uint64_t resumed_us; /* just before it sent SIGCONT */
+};
+
+/**
+ * Run suspension `suspension` of the manifest on its machine `m`, as the
+ * host descheduling a machine under load: `cycles` times, let the machine
+ * run for `run_us`, stop its QEMU process with SIGSTOP, hold it stopped for
+ * `stop_us` from when the executor saw it stop, and resume it with SIGCONT,
+ * going on once the executor has seen it continue. The workload declares the
+ * suspension, in the case's `workload.suspensions`, so its intervals are the
+ * stimulus of the case and not a wait for an event; each stop seen advances
+ * the suspension's counter witness. While QEMU is stopped no processor of
+ * the guest runs and no timer of QEMU's fires, and neither the console nor
+ * QMP answers; a QMP `stop` differs, since QEMU's timers go on under it.
+ *
+ * The cycles run within the step's bound. A machine that ends, a bound that
+ * expires and a stop of the case end them, and the library resumes QEMU
+ * before it returns, whatever the status. When the scenario's own process
+ * ends instead, its keeper of QEMU sends SIGCONT after SIGTERM, so that no
+ * machine is left stopped and none is waited for while it is.
+ *
+ * `*done` counts the cycles that ran whole, on any return, and `stops`, which
+ * has room for `max`, gets the first `max` of their stops.
+ *
+ * @return ETUDE_OK when every cycle ran; ETUDE_LOST when the machine
+ *         ended; ETUDE_BOUND or ETUDE_STOPPED; ETUDE_FAILED when the
+ *         executor could not signal QEMU; and ETUDE_REFUSED outside a step,
+ *         for a suspension the manifest does not declare, or one declared
+ *         for another machine.
+ */
+enum etude_status etude_suspend(struct etude_case_machine *m, const char *suspension,
+                                struct etude_stop *stops, size_t max, unsigned *done);
+
 /**
  * Record that boot `m` ended in the fault `end` while its QEMU may still run,
  * as the kernel's panic stops every processor without an event of QEMU's.

@@ -89,6 +89,15 @@ struct service_decl {
     struct etude_case_service *now; /* its latest start, or NULL */
 };
 
+/* A suspension of the case's workload. */
+struct suspension_decl {
+    const char *id;
+    const char *machine;
+    const char *witness; /* a counter witness: the stops seen so far */
+    uint64_t cycles, run_us, stop_us;
+    uint64_t stops; /* the stops seen so far, over every call */
+};
+
 /* A declared assertion of the scenario's, and what it was given. */
 struct assertion {
     const char *id;
@@ -178,6 +187,8 @@ struct etude_case {
     size_t decl_count;
     struct service_decl *sdecls;
     size_t sdecl_count;
+    struct suspension_decl *holds;
+    size_t hold_count;
     unsigned *ports; /* the ports the plan reserved */
     size_t port_count;
     struct assertion *asserts;
@@ -590,6 +601,40 @@ static int load_services(struct etude_case *c)
     return 0;
 }
 
+static struct machine_decl *find_decl(struct etude_case *c, const char *id);
+
+/** Read the suspensions of the workload, each of a machine of the case's
+ * with a witness, at least one cycle and both intervals. */
+static int load_suspensions(struct etude_case *c)
+{
+    const struct eh_json *list = eh_json_get(eh_json_get(c->kase, "workload"), "suspensions");
+    const struct eh_json *s;
+    size_t i = 0;
+
+    c->hold_count = jcount(list);
+    c->holds = calloc(c->hold_count + 1, sizeof(*c->holds));
+    if (c->holds == NULL)
+        return -1;
+    for (s = list != NULL ? list->child : NULL; s != NULL; s = s->next, i++) {
+        struct suspension_decl *h = &c->holds[i];
+
+        h->id = jtext(s, "suspension_id");
+        h->machine = jtext(s, "machine");
+        h->witness = jtext(s, "witness");
+        h->cycles = jnum(s, "cycles");
+        h->run_us = jnum(s, "run_us");
+        h->stop_us = jnum(s, "stop_us");
+        if (h->id == NULL || find_decl(c, h->machine) == NULL || h->witness == NULL ||
+            h->cycles == 0 || h->run_us == 0 || h->stop_us == 0) {
+            diag("suspension %lu of the workload has no identity, machine of the case, witness, "
+                 "cycles or intervals",
+                 (unsigned long)i);
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /** Read the ports the plan reserved: as many as the case declares, each
  * a port above 1023 that is given once. */
 static int load_ports(struct etude_case *c)
@@ -725,7 +770,8 @@ static int load(struct etude_case *c, const char *path)
         return -1;
     }
     if (load_artifacts(c) != 0 || load_tools(c) != 0 || load_steps(c) != 0 ||
-        load_services(c) != 0 || load_ports(c) != 0 || load_assertions(c) != 0 || load_site(c) != 0)
+        load_services(c) != 0 || load_suspensions(c) != 0 || load_ports(c) != 0 ||
+        load_assertions(c) != 0 || load_site(c) != 0)
         return -1;
     c->store = etude_store_open(store);
     if (c->store == NULL) {
@@ -2231,6 +2277,114 @@ enum etude_status etude_fault(struct etude_case_machine *m, enum etude_end end)
     return ETUDE_OK;
 }
 
+/* ---- Suspensions. ---- */
+
+/** Say whether machine `arg` has ended, or its QEMU has been seen stopped. */
+static int machine_stopped(void *arg)
+{
+    const struct etude_machine_result *r = mres(arg);
+
+    return r->state == ETUDE_MACHINE_ENDED || r->qemu->suspension == ETUDE_SUSPEND_STOPPED;
+}
+
+/** Say whether machine `arg` has ended, or its QEMU has been seen to go on
+ * after a stop. */
+static int machine_resumed(void *arg)
+{
+    const struct etude_machine_result *r = mres(arg);
+
+    return r->state == ETUDE_MACHINE_ENDED || r->qemu->suspension == ETUDE_SUSPEND_NONE;
+}
+
+/**
+ * Serve the case until `until`, an end of one interval of a suspension of
+ * machine `m`, or until `done` says so when it is not NULL.
+ *
+ * @return ETUDE_OK at `until` or when `done` says so, with the machine still
+ *         there; ETUDE_LOST when it has ended; ETUDE_BOUND when the step's
+ *         bound comes first; or ETUDE_STOPPED.
+ */
+static enum etude_status interval(struct etude_case_machine *m, done_fn done, uint64_t until)
+{
+    uint64_t deadline = step_deadline(m->c);
+    enum etude_status st;
+
+    st = serve_until(m->c, done != NULL ? done : machine_ended, m, NULL,
+                     until != 0 && until < deadline ? until : deadline, 1);
+    if (st == ETUDE_BOUND && posix_now_us() < deadline)
+        st = ETUDE_OK;
+    if (mres(m)->state == ETUDE_MACHINE_ENDED)
+        return ETUDE_LOST;
+    return st;
+}
+
+/** Find the suspension `id` of the workload, or NULL. */
+static struct suspension_decl *find_suspension(struct etude_case *c, const char *id)
+{
+    size_t i;
+
+    for (i = 0; id != NULL && i < c->hold_count; i++)
+        if (strcmp(c->holds[i].id, id) == 0)
+            return &c->holds[i];
+    return NULL;
+}
+
+/**
+ * Run one cycle of suspension `h` on machine `m`: the run, the stop and the
+ * resumption, which the executor has seen. Give the stop in `stop`.
+ */
+static enum etude_status cycle(struct etude_case_machine *m, struct suspension_decl *h,
+                               struct etude_stop *stop)
+{
+    enum etude_status st = interval(m, NULL, posix_now_us() + h->run_us);
+
+    if (st != ETUDE_OK)
+        return st;
+    if (etude_machine_suspend(m->m) != 0)
+        return mres(m)->state == ETUDE_MACHINE_ENDED || errno == ESRCH ? ETUDE_LOST : ETUDE_FAILED;
+    st = interval(m, machine_stopped, 0);
+    if (st != ETUDE_OK)
+        return st;
+    stop->stopped_us = mres(m)->qemu->suspended_us;
+    etude_progress(m->c, h->witness, ++h->stops);
+    st = interval(m, NULL, stop->stopped_us + h->stop_us);
+    stop->resumed_us = posix_now_us();
+    if (st != ETUDE_OK)
+        return st;
+    if (etude_machine_resume(m->m) != 0)
+        return ETUDE_FAILED;
+    return interval(m, machine_resumed, 0);
+}
+
+enum etude_status etude_suspend(struct etude_case_machine *m, const char *suspension,
+                                struct etude_stop *stops, size_t max, unsigned *done)
+{
+    struct suspension_decl *h = find_suspension(m->c, suspension);
+    enum etude_status st = ETUDE_OK;
+    struct etude_stop stop;
+    uint64_t i;
+
+    *done = 0;
+    if (h == NULL || strcmp(h->machine, m->decl->id) != 0 || m->c->cur < 0) {
+        diag("machine %s: suspension %s is not one of its own, or no step runs", m->decl->id,
+             suspension != NULL ? suspension : "(none)");
+        m->c->faults++;
+        return ETUDE_REFUSED;
+    }
+    if (stop_asked)
+        return ETUDE_STOPPED;
+    for (i = 0; i < h->cycles && st == ETUDE_OK; i++) {
+        st = cycle(m, h, &stop);
+        if (st == ETUDE_OK && *done < max)
+            stops[*done] = stop;
+        if (st == ETUDE_OK)
+            (*done)++;
+    }
+    if (etude_machine_resume(m->m) != 0 && st == ETUDE_OK)
+        st = ETUDE_FAILED;
+    return st;
+}
+
 /* ---- etude-guest's attempts. ---- */
 
 /** Give the SHA-256 of `n` bytes at `p` in hex. */
@@ -2931,6 +3085,7 @@ static void case_free(struct etude_case *c)
     free(c->steps);
     free(c->decls);
     free(c->sdecls);
+    free(c->holds);
     free(c->ports);
     free(c->asserts);
     if (c->store != NULL)
