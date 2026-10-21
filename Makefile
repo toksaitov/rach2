@@ -489,18 +489,8 @@ $(CASE_PASSWORDS): build/tests/cases/credentials/%: krffs/shadow
 	@mkdir -p $(@D)
 	cp krffs/$* $@.tmp && chmod 600 $@.tmp && mv $@.tmp $@
 
-# The scenarios of etude's machine cases (tests/cases/machine), each a program
-# of its own linked with libetude-case, the scenarios' console driver and the
-# code its suite's scenarios share, lib_SUITE.c; and their host scripts,
-# copied as the host cases' programs are.
-CASE_LIB = tests/cases/machine/drive.c $(wildcard tests/cases/machine/lib_*.c)
-build/tests/cases/machine/%: tests/cases/machine/%.c $(CASE_LIB) \
-                             $(wildcard tests/cases/machine/*.h) $(ETUDE_CASE_SRC) \
-                             tools/etude/include/etude/scenario.h tools/etude/include/etude/qemu.h \
-                             tools/etude/serial.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude -Itools/etude/include \
-	    -Itools/etude/guest -Iutils -Itests/cases/machine
+# The host scripts of etude's machine cases (tests/cases/machine), copied as
+# the host cases' programs are.
 build/tests/cases/machine/%: tests/cases/machine/%.sh
 	@mkdir -p $(@D)
 	cp $< $@.tmp && chmod 755 $@.tmp && mv $@.tmp $@
@@ -800,6 +790,17 @@ build/tests/cases/machine/sshpeer: tests/cases/machine/sshpeer.c
 build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
+
+# The other scenarios drive their machines at the console, each linked with
+# the console driver, drive.c, and the code that the scenarios of each suite
+# share, lib_SUITE.c.
+CASE_LIB = tests/cases/machine/drive.c $(wildcard tests/cases/machine/lib_*.c)
+build/tests/cases/machine/%: tests/cases/machine/%.c $(CASE_LIB) \
+                             $(wildcard tests/cases/machine/drive.h tests/cases/machine/lib_*.h) \
+                             $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Itools/etude/guest -Iutils -Itests/cases/machine
 
 HOSTCHECK  = build/tools/setup/hostcheck
 MACHINENET = build/tools/dev/machine_net
