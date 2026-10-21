@@ -1096,45 +1096,16 @@ build/tests/cases/grow/grow_measure.awk: tests/system/checkers/grow_measure.awk
 build/tests/cases/grow/grow_tool.sh build/tests/cases/grow/grow_measure.awk:
 	@mkdir -p $(@D)
 	cp $< $@.tmp && mv $@.tmp $@
-# `tests/run installer`: the install stick and the program on it. The stick is
-# booted through the firmware with no kernel given to the emulator, so what runs
-# is what GRUB reads off it.
-INSTALLER_DIR = $(IMAGES_DIR)/installer
-INSTALLER_PORT := $(call port,2327)
-# The repair half forwards SSH too, for its key login after a resumed update,
-# and the pool runs it beside the install half, so it has a port of its own.
-INSTALLER_REPAIR_PORT := $(call port,2329)
-run-installer: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKEXFATFIXTURE) $(MKGPT) $(RUNUTIL)
-	sh tests/system/install_stick_test.sh $(INSTALL_STICK) $(SEALED_DISK) $(SEALED_EXT2) \
-	    $(INSTALLER_DIR)/stick-update
-	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
-	    $(INSTALLER_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
-	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 install
-# `tests/run installer-repair`: the other half, the machine that will not boot.
-# Its own entry so the pool runs the two beside each other: each is minutes of
-# hashing in the emulator, and one after the other they are the longest suite
-# in the tree.
-INSTALLER_REPAIR_DIR = $(IMAGES_DIR)/installer-repair
-# The rehearsal of the sitting: the small form, minutes, in the registry;
-# RACH2_REHEARSE_LENOVO runs the same rows at the machine's size, most of
-# an hour. Its directory is its own, since the suite kills what runs under
-# its directory at its start and the installer suite runs beside it in
-# the pool.
-INSTALLER_REHEARSE_DIR = $(IMAGES_DIR)/installer-rehearse
-# `tests/run installer-rehearse`: the rehearsal of the machine sitting in its
-# small form, minutes: the same rows RACH2_REHEARSE_LENOVO runs at the
-# machine's size in most of an hour.
-run-installer-rehearse: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) $(HARNESS) $(GROWSET) $(MKGPT) $(RUNUTIL)
-	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
-	    $(INSTALLER_REHEARSE_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
-	    $(INSTALLER_DISK) $(INSTALLER_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 rehearse
-
-run-installer-repair: $(DEMO_CREDS) $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(PTYDRIVE) \
-                      $(HARNESS) $(MKEXFATFIXTURE) $(MKGPT) $(INSTALLER_MBR_DISK) $(RUNUTIL)
-	sh tests/system/suites/installer.sh $(INSTALL_STICK) $(SEALED_DISK) $(HARNESS) \
-	    $(INSTALLER_REPAIR_DIR) "`cat krffs/rach2_demo_password`" $(INSTALL_TEST_STICK) \
-	    $(INSTALLER_DISK) $(INSTALLER_REPAIR_PORT) $(PTYDRIVE) krffs/rach2_demo_ed25519 repair \
-	    $(INSTALLER_EXT2) $(INSTALLER_MBR_DISK)
+# `tests/run installer`: the install stick and the installer on the machines
+# it boots, as the cases of tests/cases/machine.installer.json.
+# `tests/run installer-repair`: the machine that will not boot, restored,
+# updated or converted from the stick, each update also stopped part way and
+# run again, as the cases of tests/cases/machine.installer-repair.json.
+# `tests/run installer-rehearse`: the rehearsal of the Lenovo's install
+# sitting in its small form, as the case of
+# tests/cases/machine.installer-rehearse.json; tests/system/rehearse_sitting.sh
+# runs it by hand at the machine's size. Etude runs the three, and they have
+# no target here.
 # `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
 # installed disk, from that disk's recovery entry, from the same disk with its
 # boot partition's menu deleted, from the install stick's image as a USB

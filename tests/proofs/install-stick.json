@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "proof": "install-stick",
-  "summary": "install_stick_test.sh on i686, on an install stick made by the rule of a private copy of mk/images.mk from this tree's recovery ISO, a sealed disk and the installer root",
-  "tree": "private",
+  "summary": "the case machine.installer.stick-update on i686, through tests/run installer, on the install stick made by the rule of mk/images.mk",
+  "tree": "shared",
   "sources": ["mk/images.mk"],
-  "artifacts": ["${WORK}/stick.img"],
+  "artifacts": ["${WORK}/stick.sha256"],
   "build": {
-    "argv": ["/bin/sh", "-c", "tag=; [ ! -f krffs/recovery_authorized_keys ] || tag=-with-key; make -s -j8 rach2 build/images/installer-root.ext2 rach2-recovery-image build/tests/system/harness build/tests/system/runutil build/tools/image/mkmbr build/tools/image/fatchains build/tools/image/grubembed build/tools/image/stickcheck build/tests/host/mkexfatfixture ARCH=i686 </dev/null && make -s build/images/rach2-recovery$tag.iso ARCH=i686 </dev/null && rm -rf ${WORK}/input ${WORK}/images ${WORK}/stick.img && mkdir -p ${WORK}/input ${WORK}/images && cp build/images/installer-root.ext2 ${WORK}/input/rach2-metal-disk.ext2 && RACH2_DISK_BOOT_MB=64 RACH2_DISK_CLUSTER=8 RACH2_DISK_RECOVERY_MB=64 RACH2_DISK_RECOVERY_KERNEL=build/rach2-recovery/kernel RACH2_DISK_RECOVERY_IMAGE=build/images/rach2-recovery$tag.krffs RACH2_DISK_EXT2_MB=64 RACH2_DISK_EXT2_IMAGE=${WORK}/input/rach2-metal-disk.ext2 sh tools/image/mkdisk_grub.sh build/rach2/kernel ${WORK}/input/rach2-sealed.disk </dev/null && printf '%s\\n' 'IMAGES_DIR = ${WORK}/images' \"RECOVERY_KEY_TAG = $tag\" \"RECOVERY_ISO = build/images/rach2-recovery$tag.iso\" 'SEALED_DISK = ${WORK}/input/rach2-sealed.disk' 'SEALED_EXT2 = ${WORK}/input/rach2-metal-disk.ext2' 'MKEXFATFIXTURE = build/tests/host/mkexfatfixture' 'MKMBR = build/tools/image/mkmbr' 'STICKCHECK = build/tools/image/stickcheck' 'FATCHAINS = build/tools/image/fatchains' 'GRUBEMBED = build/tools/image/grubembed' 'include ${SRC}/mk/images.mk' >${WORK}/Makefile && make -s -f ${WORK}/Makefile rach2-install-stick ARCH=i686 </dev/null && mv ${WORK}/images/rach2-install-stick$tag.img ${WORK}/stick.img"],
+    "argv": ["/bin/sh", "-c", "tag=; [ ! -f krffs/recovery_authorized_keys ] || tag=-with-key; make -s -j8 rach2 rach2-recovery-image build/images/rach2-recovery$tag.iso build/tools/image/mkmbr build/tools/image/stickcheck build/tests/host/mkexfatfixture ARCH=i686 </dev/null && rm -f build/images/rach2-install-stick$tag.img build/images/cases/install-stick.img && make -s build/images/rach2-install-stick$tag.img ARCH=i686 </dev/null && shasum -a 256 < build/images/rach2-install-stick$tag.img > ${WORK}/stick.sha256"],
     "bound_s": 3600
   },
   "test": {
-    "argv": ["/bin/sh", "-c", "rm -rf ${WORK}/test && exec sh tests/system/install_stick_test.sh ${WORK}/stick.img ${WORK}/input/rach2-sealed.disk ${WORK}/input/rach2-metal-disk.ext2 ${WORK}/test"],
-    "bound_s": 2400
+    "argv": ["/bin/sh", "-c", "ARCH=i686 exec sh tests/proofs/guest.sh run installer 'run: installer: PASS'"],
+    "bound_s": 7200
   },
   "faults": [
     {
@@ -22,7 +22,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["install-stick-test: missing root image"]
+        "lines": ["@etude 1 assert root-on-volume fail"]
       }
     },
     {
@@ -33,7 +33,7 @@
       ],
       "fails": {
         "status": 1,
-        "lines": ["STICKFAIL: space"]
+        "lines": ["@etude 1 assert saved fail"]
       }
     }
   ]
