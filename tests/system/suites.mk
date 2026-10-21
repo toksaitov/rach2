@@ -1065,6 +1065,39 @@ $(CASE_FIXTURES)/demo-ed25519: $(DEMO_CREDS)
 $(CASE_FIXTURES)/bootx64.efi: vendor/grub/bootx64.efi
 	@mkdir -p $(@D)
 	cp $< $@
+# The disks of the grow cases (tests/cases/machine.grow.json), which
+# tests/system/grow_fixture.sh makes: the 16 GiB disk of a 1 GiB root the
+# measured grow grows, the same disk with its entry already at the end, the
+# installed machine's disk on a 64 MiB root on each table, the exFAT store of
+# its grow's backups, and the recovery stick with room for them. The guest's
+# wrapper of the measured grow and its checker are copied under
+# build/tests/cases/grow.
+$(CASE_IMAGES)/grow-base.disk: tests/system/grow_fixture.sh $(MKMBR)
+	@mkdir -p $(@D)
+	sh tests/system/grow_fixture.sh base $(MKMBR) $@
+$(CASE_IMAGES)/grow-full.disk: $(CASE_IMAGES)/grow-base.disk tests/system/grow_fixture.sh $(MKMBR)
+	sh tests/system/grow_fixture.sh full $(MKMBR) $< $@
+$(CASE_IMAGES)/grow-machine-mbr.disk: $(INSTALLER_MBR_DISK) tests/system/grow_fixture.sh $(MKMBR) $(MKGPT)
+	@mkdir -p $(@D)
+	sh tests/system/grow_fixture.sh target mbr $< $(MKMBR) $(MKGPT) $@
+$(CASE_IMAGES)/grow-machine-gpt.disk: $(GROW_GPT_DISK) tests/system/grow_fixture.sh $(MKMBR) $(MKGPT)
+	@mkdir -p $(@D)
+	sh tests/system/grow_fixture.sh target gpt $< $(MKMBR) $(MKGPT) $@
+$(CASE_IMAGES)/grow-machine-%.store: tests/system/grow_fixture.sh tools/dev/machine_grow_plan.sh \
+                                     tools/dev/machine_grow.sh $(RECOVERY_IMAGE) $(GROWSET) \
+                                     $(MKEXFATFIXTURE) $(MKMBR)
+	@mkdir -p $(@D)
+	RACH2_ARCH=$(ARCH) sh tests/system/grow_fixture.sh store $* $(MKEXFATFIXTURE) $(MKMBR) $@
+$(CASE_IMAGES)/grow-stick.img: $(RECOVERY_ISO) $(INSTALLER_DISK) tools/image/mkinstallstick.sh \
+                               $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(SHA256TOOL)
+	@mkdir -p $(@D)
+	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(INSTALLER_DISK) $@ \
+	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) '' 32
+build/tests/cases/grow/grow_tool.sh: tests/system/fixtures/grow_tool.sh
+build/tests/cases/grow/grow_measure.awk: tests/system/checkers/grow_measure.awk
+build/tests/cases/grow/grow_tool.sh build/tests/cases/grow/grow_measure.awk:
+	@mkdir -p $(@D)
+	cp $< $@.tmp && mv $@.tmp $@
 # `tests/run installer`: the install stick and the program on it. The stick is
 # booted through the firmware with no kernel given to the emulator, so what runs
 # is what GRUB reads off it.
