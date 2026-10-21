@@ -1,5 +1,5 @@
 /**
- * mkfixture: build the two disk fixtures the probe suites need.
+ * mkfixture: build the three disk fixtures the probe suites need.
  *
  * `mkfixture boot DISK` rewrites a mkdisk.sh disk into the bootprobe
  * fixture. mkdisk builds an MBR whose entry 1 is the KRFFS partition at
@@ -22,6 +22,14 @@
  * offset k is (j * 7 + 3 + k / GiB) & 0xff), and an MBR signature with no
  * partitions, so that discovery runs and publishes no boot partition. The
  * file is sparse, so all of it costs kilobytes.
+ *
+ * `mkfixture auth DISK` builds the disk of the authority cases
+ * (tests/cases/guest.authority.json): 4 GiB of zeros, sparse, with an MBR
+ * signature and no partitions, so that discovery publishes /dev/grubcore and
+ * no boot partition. bootprobe writes it at 3 GiB, past what a signed 32-bit
+ * offset reaches, and requires the sector there to be zero before the write.
+ * etude reads the whole artifact to take its digest and to copy it for each
+ * case, so it is no larger than the probe needs.
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -36,6 +44,7 @@
 #define WIDE_SIZE (260 * GIB)
 #define WIDE_NEAR (5 * GIB)
 #define WIDE_FAR  (258 * GIB)
+#define AUTH_SIZE (4 * GIB)
 
 /** Store `v` at `p`, little-endian. */
 static void w32(unsigned char *p, uint32_t v)
@@ -151,6 +160,27 @@ static int make_wide(const char *path)
     return 0;
 }
 
+/** `mkfixture auth PATH`: create the sparse disk of the authority cases at
+ * `path`; 0, or 1 having said why. */
+static int make_auth(const char *path)
+{
+    FILE *f = fopen(path, "wb");
+
+    if (f == NULL) {
+        fprintf(stderr, "mkfixture: auth: cannot create %s\n", path);
+        return 1;
+    }
+    if (fseeko(f, (off_t)AUTH_SIZE - 1, SEEK_SET) != 0 || fputc(0, f) == EOF ||
+        fseeko(f, 510, SEEK_SET) != 0 || fputc(0x55, f) == EOF || fputc(0xAA, f) == EOF ||
+        fclose(f) != 0) {
+        fprintf(stderr, "mkfixture: auth: cannot write %s\n", path);
+        return 1;
+    }
+    printf("mkfixture: auth: %s: %llu bytes of zeros and an MBR signature\n", path,
+           (unsigned long long)AUTH_SIZE);
+    return 0;
+}
+
 /** Dispatch on the first argument; 2 for a usage error. */
 int main(int argc, char **argv)
 {
@@ -158,6 +188,8 @@ int main(int argc, char **argv)
         return make_boot(argv[2]);
     if (argc == 3 && strcmp(argv[1], "wide") == 0)
         return make_wide(argv[2]);
-    fprintf(stderr, "usage: mkfixture {boot|wide} <disk-image>\n");
+    if (argc == 3 && strcmp(argv[1], "auth") == 0)
+        return make_auth(argv[2]);
+    fprintf(stderr, "usage: mkfixture {boot|wide|auth} <disk-image>\n");
     return 2;
 }

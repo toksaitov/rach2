@@ -109,7 +109,7 @@ A suite that starts QEMU itself with `-serial stdio < FIFO > LOG` sources `drive
 * `checkers/pcapcheck.c` reads a QEMU packet capture: `bcast` checks a broadcast datagram, a source address, an ARP reply or request, or the gateway a packet left through; `netconsole` checks the kernel's netconsole frames and the log in them; `rawwire` checks the hop limits and checksum of the raw-socket probe's sends.
 * `checkers/wavcheck.c` reads the recording of QEMU's `wav` audio backend and checks that the machine played the square-wave notes it was asked for, in order, and no other tone, measuring each 50 ms by the median length of the wave's runs, which a period played twice or missed does not move. It accepts at most 16 frequencies and refuses a longer list.
 * `checkers/usblatency.awk` and `checkers/grow_measure.awk` read the USB latency records and the grow's counters off a console log.
-* `fixtures/mkfixture.c` makes the disk `bootprobe` reads, a FAT-typed partition filled with the probe's pattern, and a sparse 260 GiB disk with known sectors at 5 GiB and 258 GiB for the 64-bit disk offsets; `mkext2fixture.sh` makes the ext2 suite's fixture disk.
+* `fixtures/mkfixture.c` makes three disks for `bootprobe`: a FAT-typed partition filled with the probe's pattern, a sparse 260 GiB disk with known sectors at 5 GiB and 258 GiB for the 64-bit disk offsets, and the `authority` cases' disk, 4 GiB of zeros with an MBR signature; `mkext2fixture.sh` makes the ext2 suite's fixture disk.
 * The other C files under `fixtures/` are programs the self-tests compile: the runner's helper with test hooks, a worker that leaves processes behind, a dummy SSH peer, and the VFS unmount path with substitutes. `fixtures/grow_tool.sh` is typed into the recovery machine by the grow suite to wrap its ext2 tools with counter reads.
 
 ### The fake API server
@@ -175,6 +175,7 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `usb-latency-guest.json`: the `usb` suite's two wake-to-dispatch rows, against a kernel without preemption after a device interrupt and one without the service point in a large random read.
 * `xsave.json`: `xsaveprobe`'s report, judged as etude will under the processor profile `max`, and the frame host tests, against eight faults in `sys/arch/x86/fpu.c`, and the report of a processor without XSAVE and AVX, which that profile refuses.
 * `textbusy.json` and `bindhold.json`: the `textbusy` suite, as its entry above says.
+* `authority.json`: the `authority` cases, against an everyday kernel built with the recovery kernel's banner, one that compiles the write of its whole disk, and raw windows that move one sector a driver call.
 * `fdlock.json`: the `fdlock` suite, against seven faults in the locking of the namespace, of raw transfers and seeks, and in the truncation of an orphan file.
 * `probe-roots.json` and `ext2-map.json`: the ext2 rows of `vfsprobe` and `musl/mapmusl` on an ext2 root.
 * `ext2-batch-probe.json`: the ext2 driver's count of disk commands for batched writes.

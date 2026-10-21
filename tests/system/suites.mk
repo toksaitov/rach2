@@ -649,33 +649,22 @@ run-menu: $(DEMO_CREDS) rach2 krffs $(OS_REAL_SMALL_EXT2) $(MANIFEST_PARTS_os_re
 	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(MENU_TEST_DISK)
 	sh tests/system/suites/menu.sh $(MENU_TEST_DISK) \
 	    "`cat krffs/rach2_demo_password`"
-# `tests/run authority`: which kernel may write the whole disk. Two boots of one
-# probe against one sparse image, differing only in the kernel. The everyday
-# build must refuse a write to /dev/disk0 with -EPERM and the sector must still
-# be zero afterwards, so the refusal is proved to have written nothing rather
-# than merely returned an error. The recovery build must write a sector past 2
-# GiB, read it back byte for byte, and take a 200-sector write in one call,
-# which is what makes a whole-disk reflash finishable: one sector per driver
-# call would turn a 500 MiB write into a million cache flushes.
+# `tests/run authority`: which kernel may write the whole disk. The
+# authority is read off each built kernel, and then each boots the test image
+# with a disk over AHCI: the everyday build must refuse a write to /dev/disk0
+# with -EPERM and the sector must still be zero afterwards, so the refusal is
+# proved to have written nothing rather than merely returned an error; the
+# recovery build must write a sector past 2 GiB, read it back byte for byte,
+# and take a 200-sector write in one call, which is what makes a whole-disk
+# reflash finishable: one sector per driver call would turn a 500 MiB write
+# into a million cache flushes. They are the cases of
+# tests/cases/guest.authority.json, which etude runs, and have no target here.
 #
-# The two kernels are the same sources built with different switches into
-# different object trees, and check_recovery.sh reads the authority back off
-# each artifact so a mislabelled one cannot reach this test.
-AUTH_TEST_IMAGE = $(IMAGES_DIR)/auth-test.disk
-run-authority: rach2 rach2-recovery tests krffs test-image $(MKFIXTURE) $(HARNESS)
-	$(MKFIXTURE) wide $(AUTH_TEST_IMAGE)
-	sh tools/inspect/check_recovery.sh $(BOOT_KERNEL) ordinary
-	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-ordinary" \
-	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 180 --ok "BOOTPROBE AUTH ORDINARY OK" probe=bootprobe
-	$(HARNESS) --kernel $(RECOVERY_KERNEL) --initrd $(TEST_IMAGE) \
-	    --append "rach2.disk=ahci rach2.rescue rach2.diskdiag rach2.bootprobe=auth-recovery" \
-	    --drive "file=$(AUTH_TEST_IMAGE),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 180 --ok "BOOTPROBE AUTH RECOVERY OK" probe=bootprobe
+# The disk of the boots, which the cases' preparation names: 4 GiB of zeros
+# with an MBR signature, made beside its name and renamed into place.
+$(IMAGES_DIR)/auth-test.disk: $(MKFIXTURE)
+	@mkdir -p $(@D)
+	$(MKFIXTURE) auth $@.tmp && mv $@.tmp $@
 # `tests/run install`: the machine installs its own kernel. Builds the GRUB disk
 # around the host kernel, boots it with no -kernel, and runs the whole install
 # loop twice as root: a marker edited into the banner source, the kernel built

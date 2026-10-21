@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "proof": "authority",
+  "summary": "the authority cases, on the architecture ARCH names, against an everyday kernel with the recovery kernel's banner, one that compiles the write of its whole disk, and raw windows that move one sector a driver call",
+  "tree": "shared",
+  "sources": ["rach2/sys/block/recovery.c", "rach2/sys/fs/devfs.c", "Makefile"],
+  "artifacts": ["${WORK}/kernel", "${WORK}/recovery/kernel"],
+  "build": {
+    "argv": ["/bin/sh", "-c", "sh tests/proofs/guest.sh make rach2 rach2-recovery && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel && mkdir -p ${WORK}/recovery && sh tests/proofs/guest.sh copy ${WORK}/recovery rach2-recovery/kernel"],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": ["/bin/sh", "-c", "exec sh tests/proofs/guest.sh run authority 'run: authority: PASS'"],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "banner",
+      "summary": "the everyday kernel built with the recovery kernel's banner, which the host case reads off the artifact, and without the check of make rach2-recovery that refuses to build it",
+      "edits": [
+        {"file": "rach2/sys/block/recovery.c", "find": "const char recovery_policy_banner[] = \"rach2: disk authority: ordinary\";", "replace": "const char recovery_policy_banner[] = \"rach2: disk authority: recovery\";"},
+        {"file": "Makefile", "find": "\tsh tools/inspect/check_recovery.sh $(KERNEL) ordinary\n", "replace": ""}
+      ],
+      "fails": {
+        "lines": ["failure: banner failed: check-recovery: ", "kernel does not carry the ordinary banner"]
+      }
+    },
+    {
+      "name": "write",
+      "summary": "the everyday kernel built with the write of its whole disk that only the recovery kernel may have",
+      "edits": [
+        {"file": "rach2/sys/fs/devfs.c", "find": "#ifdef RACH2_RECOVERY\nstatic int32_t dev_disk_write(", "replace": "#if 1\nstatic int32_t dev_disk_write("}
+      ],
+      "fails": {
+        "lines": ["guest.authority.ordinary on ", "failure: authority failed: an everyday kernel refuses the write"]
+      }
+    },
+    {
+      "name": "batch",
+      "summary": "raw windows that move one sector a driver call, so that a whole-disk reflash takes a call and a cache flush for each sector",
+      "edits": [
+        {"file": "rach2/sys/fs/devfs.c", "find": "#define RAW_BATCH_SECTORS DEVFS_RAW_BATCH_SECTORS", "replace": "#define RAW_BATCH_SECTORS 1"}
+      ],
+      "fails": {
+        "lines": ["guest.authority.recovery on ", "failure: authority failed: ", "guest.authority.ordinary on ", "failure: window-batch failed: "]
+      }
+    }
+  ]
+}
