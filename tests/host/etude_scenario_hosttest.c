@@ -52,14 +52,16 @@
  * refused before QEMU starts. This program is also the peer that a scenario
  * runs as a service; two machines at once reach it, a service ended unseen is a
  * fault, and failing rows at each stage end their own processes while a held
- * row keeps its own. With the real QEMU, a disk root on AHCI written at the
- * debug shell and powered off is read back by the next boot, etude-guest runs
- * the test image's /hello, two machines run /tcptest against the peer, the
- * frames of one machine's card recorded in its capture, QEMU accepts a
- * connection at the forwarded TCP port and has bound the forwarded UDP port,
- * /tcptest reaches the peer through the guest forward and is refused it at the
- * gateway, and the kernel finds the size of the media row's empty disk. With
- * ETUDE_TEST_FORWARD set the program runs the two forward rows alone.
+ * row keeps its own. With the real QEMU, a disk root written at the debug shell
+ * and powered off is read back by the next boot, from a private copy on AHCI
+ * and from a qcow2 overlay over the disk on an IDE drive with a serial, whose
+ * map lists the write and whose raw conversion has it; etude-guest runs the
+ * test image's /hello, two machines run /tcptest against the peer, the frames
+ * of one machine's card recorded in its capture, QEMU accepts a connection at
+ * the forwarded TCP port and has bound the forwarded UDP port, /tcptest reaches
+ * the peer through the guest forward and is refused it at the gateway, and the
+ * kernel finds the size of the media row's empty disk. With ETUDE_TEST_FORWARD
+ * set the program runs the two forward rows alone.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -969,6 +971,70 @@ static int scenario_reboot(struct etude_case *c, int real)
     return 0;
 }
 
+/**
+ * Run the overlay row: the real kernel writes its disk root through a qcow2
+ * overlay over the disk; `qemu-img map` lists a cluster the overlay holds,
+ * `qemu-img convert` gives a raw disk with the write, and the next boot of the
+ * same overlay reads it back.
+ */
+static int scenario_overlay(struct etude_case *c)
+{
+    const char *nonce = getenv("ETUDE_TEST_NONCE");
+    const char *over, *again, *raw = etude_evidence(c, "over.raw");
+    char *map[] = {"qemu-img", "map", "--output=json", NULL, NULL};
+    char *convert[] = {"qemu-img", "convert", "-f", "qcow2", "-O", "raw", NULL, NULL, NULL};
+    char *scan[] = {"scanner", "tool", "scan", NULL, (char *)nonce, NULL};
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    char line[128], raw_path[4096];
+    uint64_t at;
+
+    if (raw == NULL || etude_step(c, "write") != ETUDE_OK ||
+        etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+        return 1;
+    snprintf(raw_path, sizeof(raw_path), "%s", raw);
+    over = etude_private_copy(c, "over");
+    at = wait_for(c, m, "stopped", "\n> ", wait_for(c, m, "stopped", "Type 'help'", 0));
+    snprintf(line, sizeof(line), "write /marker %s\r", nonce);
+    etude_type(m, line);
+    wait_for(c, m, "stopped", "\n> ", at);
+    etude_type(m, "poweroff\r");
+    expect(c, "stopped", etude_wait_end(m, &end), ETUDE_OK);
+    etude_assert(c, "shutdown", end.end == ETUDE_END_SHUTDOWN, "not a shutdown");
+    if (etude_step(c, "check") != ETUDE_OK)
+        return 1;
+    map[3] = (char *)over;
+    expect(c, "map-ran", etude_host(c, map, "map", &end), ETUDE_OK);
+    etude_assert(c, "map-written",
+                 end.end == ETUDE_END_EXITED && end.value == 0 &&
+                     file_has(etude_evidence(c, "map"), "\"depth\": 0"),
+                 "the map lists no cluster of the overlay");
+    convert[6] = (char *)over;
+    convert[7] = raw_path;
+    expect(c, "converted", etude_host(c, convert, "convert", &end), ETUDE_OK);
+    scan[3] = raw_path;
+    etude_assert(c, "raw-has",
+                 end.end == ETUDE_END_EXITED && end.value == 0 &&
+                     etude_host(c, scan, "scan", &end) == ETUDE_OK && end.end == ETUDE_END_EXITED &&
+                     end.value == 0,
+                 "the raw disk lacks the write");
+    unlink(raw_path);
+    if (etude_step(c, "readback") != ETUDE_OK ||
+        etude_boot(c, "fixture", NULL, &m, &end) != ETUDE_OK)
+        return 1;
+    again = etude_private_copy(c, "over");
+    etude_assert(c, "same-overlay", over != NULL && again == over, "another overlay");
+    at = wait_for(c, m, "readback", "\n> ", wait_for(c, m, "readback", "Type 'help'", 0));
+    etude_type(m, "cat /marker\r");
+    if (etude_console_wait(m, nonce, at, &at) == ETUDE_OK)
+        etude_assert(c, "readback", 1, NULL);
+    else
+        etude_assert(c, "readback", 0, "the write was not read back");
+    etude_type(m, "poweroff\r");
+    expect(c, "second-stop", etude_wait_end(m, &end), ETUDE_OK);
+    return 0;
+}
+
 /** Read two boots' recordings with a host tool and keep failed evidence. */
 static int scenario_audio(struct etude_case *c, int keep)
 {
@@ -1673,6 +1739,8 @@ int etude_scenario(struct etude_case *c)
     if (strcmp(row, "lost") == 0 || strcmp(row, "die") == 0 || strcmp(row, "closecon") == 0 ||
         strcmp(row, "closeqmp") == 0)
         return scenario_lost(c, row);
+    if (strcmp(row, "real-overlay") == 0)
+        return scenario_overlay(c);
     if (strcmp(row, "bound") == 0)
         return scenario_bound(c);
     if (strcmp(row, "stop") == 0)
@@ -1700,7 +1768,8 @@ struct row {
     const char *mode;    /* the stand-in's mode, or NULL for a real QEMU */
     const char *steps;   /* the case's steps, `id:machine` or `id`, by spaces */
     const char *asserts; /* its assertions, by spaces */
-    const char *disk;    /* the machine's disk, or NULL */
+    const char *disk;    /* the machine's disk: "disk", "over" for an overlay
+                            over it, or NULL */
     int helper;          /* the machine runs etude-guest */
     uint64_t bound_us;   /* each step's bound */
     int want_status;     /* the scenario's exit status */
@@ -1848,14 +1917,27 @@ static int media(const struct row *r)
     return strcmp(r->name, "media") == 0 || strcmp(r->name, "real-media") == 0;
 }
 
+/* The disk of a row whose machine boots a qcow2 overlay over the disk. */
+static const char overlay_disk[] =
+    "[{\"name\": \"over\", \"base\": \"disk\", \"cluster_bytes\": 4096, \"discard\": true, "
+    "\"serial\": \"ETUDE-OVERLAY\"}]";
+
+/** Say whether row `r`'s machine boots an overlay, which `qemu-img` reads. */
+static int overlay_row(const struct row *r)
+{
+    return r->disk != NULL && strcmp(r->disk, "over") == 0;
+}
+
 /** Give the `disks` of row `r`'s machine, as JSON; a real row's disk is on
- * AHCI. */
+ * AHCI, and an overlay on IDE. */
 static const char *row_disks(const struct row *r)
 {
     if (media(r))
         return MEDIA_DISKS;
     if (r->disk == NULL)
         return "[]";
+    if (overlay_row(r))
+        return overlay_disk;
     return r->mode == NULL ? "[{\"name\": \"disk\", \"bus\": \"ahci\"}]" : "[\"disk\"]";
 }
 
@@ -1964,7 +2046,7 @@ static int write_manifest(const char *path, const struct row *r)
         "\"cases\": [{\"case_id\": \"test.scenario.%s\", \"behavior\": \"a row\", \"units\": "
         "[\"none\"], \"domain\": \"machine\", \"architectures\": [\"i686\", \"x86_64\"], "
         "\"workload\": {\"arguments\": [], \"inputs\": {}, \"repetitions\": 1, \"seed\": null}, "
-        "\"requirements\": {\"host_api\": \"c\", \"tools\": [], \"features\": {}}, "
+        "\"requirements\": {\"host_api\": \"c\", \"tools\": %s, \"features\": {}}, "
         "\"execution\": {\"program\": \"scenario\", \"stdin\": null, \"role\": \"ordinary\", "
         "\"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"}, "
         "{\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\", \"cleanup\": "
@@ -1984,8 +2066,8 @@ static int write_manifest(const char *path, const struct row *r)
         "\"node\": \"v\", \"per_architecture\": false}, {\"name\": \"killer\", \"node\": \"x\", "
         "\"per_architecture\": false}], \"timing\": [], \"native\": {\"plan\": \"none\", "
         "\"class\": \"boot\", \"reason\": \"a test\"}}]}",
-        r->name, steps, machine, forward_row(r) ? forward_services : "", asserts, reserved,
-        forward_row(r) ? 3 : 0);
+        r->name, overlay_row(r) ? "[\"qemu-img\"]" : "[]", steps, machine,
+        forward_row(r) ? forward_services : "", asserts, reserved, forward_row(r) ? 3 : 0);
     return write_file(path, text, strlen(text));
 }
 
@@ -2049,6 +2131,7 @@ struct site {
     struct etude_store *store;
     char store_dir[PATH_MAX];
     char qemu_i686[PATH_MAX], qemu_x86_64[PATH_MAX];
+    char qemu_img[PATH_MAX]; /* the overlay row's tool, or "" */
     const char *arch;
     char kernel[65], disk[65], initrd[65], scanner[65], inv[65], killer[65], broken[65];
 };
@@ -2058,6 +2141,7 @@ static int write_scenario(const char *path, const struct row *r, const struct si
                           const char *manifest, const char *scratch)
 {
     char steps[1024] = "", one[160], word[64], text[8192], ports[48] = "";
+    char tools[PATH_MAX + 32] = "";
     const char *p = r->steps;
     size_t n;
 
@@ -2076,12 +2160,14 @@ static int write_scenario(const char *path, const struct row *r, const struct si
     if (forward_row(r))
         fix_format(ports, sizeof(ports), "%u, %u, %u", forward_ports[0], forward_ports[1],
                    row_port);
+    if (overlay_row(r))
+        fix_format(tools, sizeof(tools), "\"qemu-img\": \"%s\"", s->qemu_img);
     fix_format(text, sizeof(text),
                "{\"schema_version\": 1, \"run_id\": \"test-run\", \"attempt_id\": \"test-%s\", "
                "\"manifest\": \"%s\", \"case_id\": \"test.scenario.%s\", \"architecture\": "
                "\"%s\", \"store\": \"%s\", \"artifacts\": {\"kernel\": \"%s\", \"disk\": \"%s\", "
                "\"initrd\": \"%s\", \"scanner\": \"%s\", \"invocation\": \"%s\", \"killer\": "
-               "\"%s\", \"disk2\": \"%s\", \"broken\": \"%s\"}, \"tools\": {}, \"site\": "
+               "\"%s\", \"disk2\": \"%s\", \"broken\": \"%s\"}, \"tools\": {%s}, \"site\": "
                "{\"accel\": \"tcg\", \"boundary_lazy\": %s, \"qemu_i686\": \"%s\", "
                "\"qemu_x86_64\": \"%s\", \"ovmf_i686\": null, \"ovmf_x86_64\": null}, "
                "\"steps\": {%s}, \"ports\": [%s], \"cleanup_us\": 30000000, \"scratch\": \"%s\", "
@@ -2090,8 +2176,8 @@ static int write_scenario(const char *path, const struct row *r, const struct si
                "\"resend_us\": 200000}",
                r->name, manifest, r->name, boundary_pair(r) ? "x86_64" : s->arch, s->store_dir,
                s->kernel, s->disk, s->initrd, s->scanner, s->inv, s->killer, s->disk, s->broken,
-               boundary_pair(r) ? "true" : "false", s->qemu_i686, s->qemu_x86_64, steps, ports,
-               scratch, r->mode != NULL ? 300000u : 5000000u);
+               tools, boundary_pair(r) ? "true" : "false", s->qemu_i686, s->qemu_x86_64, steps,
+               ports, scratch, r->mode != NULL ? 300000u : 5000000u);
     return write_file(path, text, strlen(text));
 }
 
@@ -2834,9 +2920,10 @@ static int real_site(struct site *s)
 
     s->arch = arch;
     if (on_path("qemu-system-i386", s->qemu_i686, sizeof(s->qemu_i686)) == NULL ||
-        on_path("qemu-system-x86_64", s->qemu_x86_64, sizeof(s->qemu_x86_64)) == NULL) {
-        printf("etude-scenario-test: fail: cannot run the boots: no qemu-system-i386 and "
-               "qemu-system-x86_64 on PATH\n");
+        on_path("qemu-system-x86_64", s->qemu_x86_64, sizeof(s->qemu_x86_64)) == NULL ||
+        on_path("qemu-img", s->qemu_img, sizeof(s->qemu_img)) == NULL) {
+        printf("etude-scenario-test: fail: cannot run the boots: no qemu-system-i386, "
+               "qemu-system-x86_64 and qemu-img on PATH\n");
         return -1;
     }
     snprintf(kernel, sizeof(kernel), "%s/rach2/kernel", dir);
@@ -2954,6 +3041,9 @@ static const struct row real_rows[] = {
     {"real-reboot", NULL, "write:fixture check readback:fixture",
      "on-ahci stopped shutdown host-ran host-sees same-copy readback second-stop", "disk", 0,
      REAL_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
+    {"real-overlay", NULL, "write:fixture check readback:fixture",
+     "stopped shutdown map-ran map-written converted raw-has same-overlay readback second-stop",
+     "over", 0, REAL_US, 0, 1, 0, 0, NULL, 0, NULL, 0},
     {"real-guest", NULL, "run:fixture", "guest-pass guest-exit", NULL, 1, REAL_US, 0, 1, 0, 0, NULL,
      0, NULL, 0},
     {"real-peer", NULL, "serve alpha:alpha beta:beta",

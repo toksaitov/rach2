@@ -50,8 +50,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "if (++ide > IDE_PLACES ||",
-          "replace": "if (++ide > IDE_PLACES + 1 ||"
+          "find": "if (++*ide > IDE_PLACES ||",
+          "replace": "if (++*ide > IDE_PLACES + 1 ||"
         }
       ],
       "fails": {
@@ -81,19 +81,19 @@
       }
     },
     {
-      "name": "ide-serial",
-      "summary": "a disk on IDE is taken with a serial, which the launcher does not give it",
+      "name": "cd-serial",
+      "summary": "a CD on IDE is taken with a serial",
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "IDE_PLACES || d->serial != NULL ||",
-          "replace": "IDE_PLACES ||"
+          "find": "(d->cdrom && (d->serial != NULL || d->qcow2))",
+          "replace": "(d->cdrom && d->qcow2)"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
-          ": a serial on IDE: "
+          ": a serial on a CD: "
         ],
         "only": true
       }
@@ -104,7 +104,7 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": " || (d->cdrom && d->discard))",
+          "find": " ||\n            (d->cdrom && d->discard))",
           "replace": ")"
         }
       ],
@@ -201,7 +201,8 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": a serial with a comma: "
+          ": a serial with a comma: ",
+          ": a serial with a comma on IDE: "
         ],
         "only": true
       }
@@ -266,8 +267,8 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "media=%s%s\", (*ide)++,",
-          "replace": "media=%s%s\", (unsigned)n,"
+          "find": "media=%s%s\", type,\n                 (*ide)++,",
+          "replace": "media=%s%s\", type,\n                 (unsigned)n,"
         }
       ],
       "fails": {
@@ -449,7 +450,7 @@
       "edits": [
         {
           "file": "tools/etude/qemu_profile.c",
-          "find": "if (++ahci > AHCI_PORTS || ",
+          "find": "if (++*ahci > AHCI_PORTS || ",
           "replace": "if ("
         }
       ],

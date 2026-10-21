@@ -13,28 +13,29 @@
  * host-alone: a stand-in QEMU must quit within a grace of 300 ms
  *
  * The command lines of profiles, and the profiles the launcher refuses, are
- * checked as text, disks on IDE, AHCI and NVMe, a CD, disks that boot first and
- * the firmware's flash among them; `--argv` runs these rows alone. A capture of
- * a card's frames is a filter-dump after the card, and a capture of a card the
- * profile lacks is refused; `--capture` runs these rows alone. Thirteen
- * stand-in machines then run at once, each with an end of its own, and each
- * must keep its own console and end: a QEMU that fails before it connects is an
- * unexpected exit, and one that reports that it could not start the accelerator
- * is a failed accelerator; so is one whose QMP reports another accelerator in
- * use, through query-accelerators or, for a QEMU without that command,
- * query-kvm. QMP's SHUTDOWN events of the guest give a shutdown, a reset and a
- * panic; one of the host, or an exit without an event, is an unexpected exit; a
- * cancellation of a machine that obeys QMP's quit, of one that ignores both
- * quit and SIGTERM, and of one that never answers QMP is a cancellation. Each
- * leaves no process and no socket behind. With the real QEMU, the kernel of the
- * architecture ARCH names boots under TCG to the debug shell, the first boot
- * with an empty disk on IDE and two on AHCI that the kernel must find where the
- * profile put them, and its `poweroff` must give a shutdown; a cancellation at
- * the prompt must give a cancellation, and an accelerator this host's QEMU does
- * not have must give a failed accelerator. OVMF's code image, as
- * tools/setup/ovmf_path.sh finds it, boots from the launcher's read-only flash
- * with a CD and an empty disk of 4 TiB on NVMe, and its boot manager must name
- * both; `--uefi` runs this row alone.
+ * checked as text, disks on IDE, AHCI and NVMe, a CD, disks that boot first,
+ * qcow2 overlays, an IDE disk with a serial and the firmware's flash among
+ * them; `--argv` runs these rows alone. A capture of a card's frames is a
+ * filter-dump after the card, and a capture of a card the profile lacks is
+ * refused; `--capture` runs these rows alone. Thirteen stand-in machines then
+ * run at once, each with an end of its own, and each must keep its own console
+ * and end: a QEMU that fails before it connects is an unexpected exit, and one
+ * that reports that it could not start the accelerator is a failed
+ * accelerator; so is one whose QMP reports another accelerator in use, through
+ * query-accelerators or, for a QEMU without that command, query-kvm. QMP's
+ * SHUTDOWN events of the guest give a shutdown, a reset and a panic; one of the
+ * host, or an exit without an event, is an unexpected exit; a cancellation of a
+ * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, and
+ * of one that never answers QMP is a cancellation. Each leaves no process and
+ * no socket behind. With the real QEMU, the kernel of the architecture ARCH
+ * names boots under TCG to the debug shell, the first boot with an empty disk
+ * on IDE and two on AHCI that the kernel must find where the profile put them,
+ * and its `poweroff` must give a shutdown; a cancellation at the prompt must
+ * give a cancellation, and an accelerator this host's QEMU does not have must
+ * give a failed accelerator. OVMF's code image, as tools/setup/ovmf_path.sh
+ * finds it, boots from the launcher's read-only flash with a CD and an empty
+ * disk of 4 TiB on NVMe, and its boot manager must name both; `--uefi` runs
+ * this row alone.
  *
  * The memory rows check the reservations of an ordinary profile and of the
  * boundary profile, refuse a changed boundary profile and a site that has not
@@ -1245,17 +1246,18 @@ static void disk_line(const struct etude_qemu_profile *p, const struct etude_qem
  */
 static void test_disk_lines(const struct etude_qemu_profile *p, const struct etude_qemu_site *site)
 {
-    static const struct etude_qemu_disk mixed[] = {{"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0},
-                                                   {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
-                                                   {"/d/a1", ETUDE_BUS_AHCI, 0, NULL, 1, NULL, 1},
-                                                   {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
-                                                   {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
-    static const struct etude_qemu_disk cd[] = {{"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
-                                                {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 1},
-                                                {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
-                                                {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
-    static const struct etude_qemu_disk nvme[] = {{"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1},
-                                                  {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
+    static const struct etude_qemu_disk mixed[] = {
+        {"/d/a0", ETUDE_BUS_AHCI, 0, NULL, 0, NULL, 0, 0},
+        {"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+        {"/d/a1", ETUDE_BUS_AHCI, 0, NULL, 1, NULL, 1, 0},
+        {"/d/i1", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
+    static const struct etude_qemu_disk cd[] = {{"/d/i0", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+                                                {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 1, 0},
+                                                {"/d/i2", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+                                                {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
+    static const struct etude_qemu_disk nvme[] = {{"/d/n", ETUDE_BUS_NVME, 0, "s", 0, NULL, 1, 0},
+                                                  {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
     struct etude_qemu_profile b = *p;
 
     b.firmware = ETUDE_FIRMWARE_SEABIOS;
@@ -1309,12 +1311,22 @@ static void test_disks(const struct etude_qemu_profile *p, const struct etude_qe
     disks_row(p, site, d, 0, "a CD on NVMe");
     fill_disks(d, 1, 0);
     d[0].serial = "s";
-    disks_row(p, site, d, 0, "a serial on IDE");
-    d[0].serial = NULL;
+    disks_row(p, site, d, 1, "a serial on IDE");
+    d[0].serial = "a,b";
+    disks_row(p, site, d, 0, "a serial with a comma on IDE");
+    d[0].serial = "s";
     d[0].cdrom = 1;
+    disks_row(p, site, d, 0, "a serial on a CD");
+    d[0].serial = NULL;
+    d[0].qcow2 = 1;
+    disks_row(p, site, d, 0, "a CD of an overlay");
+    d[0].qcow2 = 0;
     d[0].discard = 1;
     disks_row(p, site, d, 0, "a CD with discard");
     d[0].cdrom = 0;
+    d[0].qcow2 = 1;
+    disks_row(p, site, d, 1, "an overlay with discard");
+    d[0].qcow2 = 0;
     d[0].discard = 0;
     d[0].path = "";
     disks_row(p, site, d, 0, "a disk of no file");
@@ -1351,15 +1363,57 @@ static void test_accel_names(void)
           "no program before the option");
 }
 
+/** Check the command lines of profile `p` under each firmware. */
+static void test_firmware(const struct etude_qemu_profile *p, struct etude_qemu_site *site)
+{
+    static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
+    struct etude_qemu_profile b;
+    char *argv[ETUDE_QEMU_ARGS_MAX], buf[4096];
+
+    b = *p;
+    b.firmware = ETUDE_FIRMWARE_OVMF;
+    b.initrd = NULL;
+    b.boot_options = NULL;
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-drive") == 0 &&
+              strcmp(argv[15], "if=pflash,format=raw,readonly=on,file=/f/ov,,mf") == 0 &&
+              strcmp(argv[16], "-drive") == 0,
+          "ovmf");
+    b.cpu = "max-nopdpe1gb";
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[8], "-cpu") == 0 &&
+              strcmp(argv[9], "max,rdrand=on,rdseed=on,xsave=on,avx=on,"
+                              "pdpe1gb=off,enforce=on") == 0,
+          "a profile with present and absent features");
+    b.cpu = p->cpu;
+    b.architecture = "i686";
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], "/q/x86_64") == 0 &&
+              has_arg(argv, "-drive", "if=pflash,format=raw,readonly=on,file=/f/ov,,mf"),
+          "i686 on x86-64 ovmf");
+    site->ovmf_i686 = "/f/i686";
+    site->ovmf_x86_64 = NULL;
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == ENOENT, "no x86-64 ovmf for i686");
+    site->ovmf_x86_64 = "/f/ov,mf";
+    b.firmware = ETUDE_FIRMWARE_SEABIOS;
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], "/q/i686") == 0 &&
+              strcmp(argv[14], "-drive") == 0,
+          "seabios");
+    b.boot_options = options;
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == EINVAL, "seabios with a command line");
+    b.boot_options = NULL;
+    b.disks = NULL;
+    CHECK(make(&b, site, argv, buf, sizeof(buf)) == EINVAL, "seabios without a disk");
+}
+
 /** Check the command lines of profiles, and the profiles that are refused. */
 static void test_argv(void)
 {
     static const struct etude_qemu_disk disks[] = {
-        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0},
-        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL, 0},
-        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL, 0},
-        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 0},
-        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0}};
+        {"/d/one,two.img", ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0},
+        {"/d/big,img", ETUDE_BUS_NVME, 0, "rach2big", 1, NULL, 0, 0},
+        {"/d/b.img", ETUDE_BUS_IDE, 0, NULL, 1, NULL, 0, 0},
+        {"/d/grow,1.qcow2", ETUDE_BUS_IDE, 0, "GROWTEST", 1, NULL, 0, 1},
+        {"/d/r.iso", ETUDE_BUS_IDE, 1, NULL, 0, NULL, 0, 0},
+        {"/d/n.qcow2", ETUDE_BUS_NVME, 0, "rach2.n-1", 0, NULL, 0, 1},
+        {NULL, ETUDE_BUS_IDE, 0, NULL, 0, NULL, 0, 0}};
     static const char *const options[] = {"rach2.fsdisk", "quiet=1", NULL};
     static const char *const want =
         "/q/x86_64 -accel kvm -nodefaults -display none -no-reboot -S "
@@ -1370,7 +1424,11 @@ static void test_argv(void)
         "detect-zeroes=unmap -device nvme,drive=etude-disk1,serial=rach2big "
         "-drive file=/d/b.img,format=raw,if=ide,index=1,media=disk,discard=unmap,"
         "detect-zeroes=unmap "
-        "-drive file=/d/r.iso,format=raw,if=ide,index=2,media=cdrom,readonly=on "
+        "-drive file=/d/grow,,1.qcow2,format=qcow2,if=none,id=etude-disk3,discard=unmap,"
+        "detect-zeroes=unmap -device ide-hd,drive=etude-disk3,bus=ide.1,unit=0,serial=GROWTEST "
+        "-drive file=/d/r.iso,format=raw,if=ide,index=3,media=cdrom,readonly=on "
+        "-drive file=/d/n.qcow2,format=qcow2,if=none,id=etude-disk5 "
+        "-device nvme,drive=etude-disk5,serial=rach2.n-1 "
         "-netdev user,id=net0 -device rtl8139,netdev=net0 -netdev user,id=net1 "
         "-device e1000,netdev=net1 -vga std -device ahci "
         "-chardev socket,id=etude-console,path=/s/c -serial chardev:etude-console "
@@ -1404,37 +1462,7 @@ static void test_argv(void)
     }
     CHECK(make_in(&p, &site, argv, 10, buf, sizeof(buf)) == E2BIG, "few arguments");
     CHECK(make_in(&p, &site, argv, ETUDE_QEMU_ARGS_MAX, buf, 100) == E2BIG, "few bytes");
-    b = p;
-    b.firmware = ETUDE_FIRMWARE_OVMF;
-    b.initrd = NULL;
-    b.boot_options = NULL;
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[14], "-drive") == 0 &&
-              strcmp(argv[15], "if=pflash,format=raw,readonly=on,file=/f/ov,,mf") == 0 &&
-              strcmp(argv[16], "-drive") == 0,
-          "ovmf");
-    b.cpu = "max-nopdpe1gb";
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[8], "-cpu") == 0 &&
-              strcmp(argv[9], "max,rdrand=on,rdseed=on,xsave=on,avx=on,"
-                              "pdpe1gb=off,enforce=on") == 0,
-          "a profile with present and absent features");
-    b.cpu = p.cpu;
-    b.architecture = "i686";
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], "/q/x86_64") == 0 &&
-              has_arg(argv, "-drive", "if=pflash,format=raw,readonly=on,file=/f/ov,,mf"),
-          "i686 on x86-64 ovmf");
-    site.ovmf_i686 = "/f/i686";
-    site.ovmf_x86_64 = NULL;
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == ENOENT, "no x86-64 ovmf for i686");
-    site.ovmf_x86_64 = "/f/ov,mf";
-    b.firmware = ETUDE_FIRMWARE_SEABIOS;
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == 0 && strcmp(argv[0], "/q/i686") == 0 &&
-              strcmp(argv[14], "-drive") == 0,
-          "seabios");
-    b.boot_options = options;
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == EINVAL, "seabios with a command line");
-    b.boot_options = NULL;
-    b.disks = NULL;
-    CHECK(make(&b, &site, argv, buf, sizeof(buf)) == EINVAL, "seabios without a disk");
+    test_firmware(&p, &site);
 #define REFUSED(field, value, row)                                     \
     do {                                                               \
         b = p;                                                         \

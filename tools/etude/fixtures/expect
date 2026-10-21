@@ -283,7 +283,9 @@
 1 manifest ./network-invalid.json | fixture.network.invalid.bad-machine: invalid QEMU network options or duplicate station address
 
 # A profile's disks are of the forms the launcher attaches, and attaches
-# together, each given once; an empty disk is no artifact and has one size.
+# together, each given once; an empty disk is no artifact and has one size;
+# an overlay is a machine's, its base is an artifact and its name is none,
+# and it is the same overlay wherever its name is given.
 0 manifest ./disks.json
 1 manifest ./disks-bad.json | twice: the disk stick is given twice in a profile
 1 manifest ./disks-bad.json | ide-five: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
@@ -294,6 +296,11 @@
 1 manifest ./disks-bad.json | ahci-seven: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
 1 manifest ./disks-bad.json | boot-two: the launcher attaches at most 8 disks of a profile, four of them on IDE and six on AHCI, and one at most that boots first
 1 manifest ./disks-bad.json | boot-direct: the disk b1 boots first beside the direct firmware
+1 manifest ./disks-bad.json | overlay-base: the overlay's base grow-base is no artifact that prepare lists
+1 manifest ./disks-bad.json | overlay-name: the overlay stick has the name of an artifact
+1 manifest ./disks-bad.json | overlay-differs: the overlay grow-target is given another base, cluster size or kind
+1 manifest ./disks-bad.json | overlay-kind: the overlay grow-target is given another base, cluster size or kind
+1 manifest ./rules.json | overlay-guest: the overlay grow-target is not of a machine's profile
 1 manifest ./disks-shape.json | /disks/0: has no member "serial"
 1 manifest ./disks-shape.json | /disks/1: has "serial", which this form does not allow
 1 manifest ./disks-shape.json | /disks/2/bus: is not "ide"
@@ -306,6 +313,12 @@
 1 manifest ./disks-shape.json | /disks/9/bus: is not "ide"
 1 manifest ./disks-shape.json | /disks/10/boot: is a string, where the schema wants a boolean
 1 manifest ./disks-shape.json | /disks/11/boot: is not false
+1 manifest ./disks-shape.json | /disks/12: has no member "cluster_bytes"
+1 manifest ./disks-shape.json | /disks/13: has "cluster_bytes", which this form does not allow
+1 manifest ./disks-shape.json | /disks/14: has "size_bytes", which this form does not allow
+1 manifest ./disks-shape.json | /disks/15: has "base", which this form does not allow
+1 manifest ./disks-shape.json | /disks/16/cluster_bytes: 3000 is not one of the values the schema allows
+1 manifest ./disks-shape.json | /disks/17: has "serial", which this form does not allow
 
 # A machine's cards forward only the ports the case reserves, each once by a
 # protocol; the cards of a guest case's boot forward none and are not

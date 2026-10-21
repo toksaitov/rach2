@@ -80,6 +80,25 @@ int etude_store_check(const struct etude_store *s, const char *digest, uint64_t 
 int etude_store_copy(const struct etude_store *s, const char *digest, const char *dest);
 
 /**
+ * Make `dest`, a file that must not exist, an empty qcow2 overlay over
+ * object `digest`, whose absolute path it names as its raw backing file, in
+ * clusters of `cluster_bytes`, a power of two from 512 to 2 MiB.
+ *
+ * The overlay has the object's size and allocates no cluster, so that
+ * QEMU's writes go to the overlay alone and `qemu-img map` lists what they
+ * changed. The object is not read, and the caller checks it by its digest.
+ *
+ * @return 0, or -1 with errno set: EINVAL for a malformed digest, a cluster
+ *         size out of range, or an object that is empty or not a whole number
+ *         of 512-byte sectors; EFBIG for an object whose L1 table would pass
+ *         QEMU's 32 MiB; ENAMETOOLONG for an object path that does not fit
+ *         the first cluster; EEXIST for a `dest` that exists; or an error of
+ *         the system, after which `dest` is removed.
+ */
+int etude_store_overlay(const struct etude_store *s, const char *digest, uint32_t cluster_bytes,
+                        const char *dest);
+
+/**
  * Remove each partial file whose writer has ended, and give their count in
  * `*removed` when it is not NULL.
  *

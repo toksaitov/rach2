@@ -84,10 +84,14 @@ const char *etude_artifact(struct etude_case *c, const char *name);
  * Give the path of a private writable copy of artifact `name`, made for this
  * attempt and removed in its cleanup unless the attempt failed. For the name
  * of an empty disk that a machine's profile declares with `size_bytes`, give
- * instead a sparse file of that size, made at the first call, given again at
+ * instead a sparse file of that size; and for the name of an overlay that it
+ * declares with `base`, an empty qcow2 file whose raw backing file is the
+ * base's object, so that a host tool such as `qemu-img` can read its map or
+ * convert it between boots. Either is made at the first call, given again at
  * each later one, and removed as a copy is.
  *
- * @return the path, owned by the library, or NULL as for etude_artifact.
+ * @return the path, owned by the library, or NULL as for etude_artifact, or
+ *         when the overlay cannot be made.
  */
 const char *etude_private_copy(struct etude_case *c, const char *name);
 

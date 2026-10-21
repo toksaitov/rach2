@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "fixture.disks",
-  "summary": "Disks of each form the launcher attaches: a copy on IDE, a CD, empty disks on NVMe and on AHCI in two machines, and a disk that boots first",
+  "summary": "Disks of each form the launcher attaches: a copy on IDE, a CD, empty disks on NVMe and on AHCI in two machines, a disk that boots first, and qcow2 overlays on IDE and NVMe",
   "cases": [
     {
       "case_id": "fixture.disks.media",
@@ -138,6 +138,72 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "boot", "reason": "the firmware boots the CD and the NVMe disk"}
+    },
+    {
+      "case_id": "fixture.disks.overlay",
+      "behavior": "A machine writes a qcow2 overlay over the stick on IDE with a serial, beside one on NVMe, and a second machine boots the first overlay",
+      "units": ["uefi"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "media_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the overlays, which it keeps after a failure"
+      },
+      "steps": [
+        {"step_id": "install", "stage": "execute", "machine": "installer",
+         "does": "boot the overlays and write the first"},
+        {"step_id": "boot", "stage": "execute", "machine": "installed",
+         "does": "boot the first overlay again"}
+      ],
+      "machines": [
+        {"machine_id": "installer",
+         "qemu": {"kernel": "kernel", "initrd": null,
+                  "disks": [{"name": "target", "base": "stick", "cluster_bytes": 4096, "discard": true,
+                             "serial": "GROWTEST"},
+                            {"name": "spare", "bus": "nvme", "serial": "rach2spare", "base": "stick",
+                             "cluster_bytes": 65536}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed",
+         "qemu": {"kernel": "kernel", "initrd": null,
+                  "disks": [{"name": "target", "base": "stick", "cluster_bytes": 4096, "discard": true,
+                             "serial": "GROWTEST"}],
+                  "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "installed", "checks": "the first boot says it wrote the overlay", "source": "scenario"},
+        {"assertion_id": "booted", "checks": "the second boot reads the write back", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1342177280, "disk_bytes": 268435456,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/rach2-stick.img", "per_architecture": true},
+        {"name": "media_scenario", "node": "tests/cases/machine/media_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the firmware boots the overlay"}
     }
   ]
 }

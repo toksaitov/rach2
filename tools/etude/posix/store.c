@@ -32,6 +32,17 @@
 /* The buffer of a copy; a chunk read that is all zeros is left a hole. */
 #define COPY_CHUNK (1u << 20)
 
+/* An overlay's qcow2 header: its magic, "QFI\xfb"; the length of version 3's
+ * header; the type of the extension that gives the backing file's format;
+ * where the backing file's name begins, past that extension and the end of
+ * the extensions; 16-bit refcounts; and the largest L1 table QEMU opens. */
+#define QCOW_MAGIC          0x514649fbu
+#define QCOW_HEADER         104
+#define QCOW_EXT_FORMAT     0xe2792acau
+#define QCOW_NAME           (QCOW_HEADER + 16 + 8)
+#define QCOW_REFCOUNT_ORDER 4
+#define QCOW_L1_MAX         (UINT64_C(32) << 20)
+
 struct etude_store {
     char *dir;
     char *objects; /* DIGEST: the objects, read-only */
@@ -463,6 +474,133 @@ int etude_store_copy(const struct etude_store *s, const char *digest, const char
         errno = EBADMSG;
         return -1;
     }
+    return 0;
+}
+
+/** Put the low `n` bytes of `v` at `p`, most significant first. */
+static void put_be(unsigned char *p, uint64_t v, int n)
+{
+    while (n-- > 0) {
+        p[n] = (unsigned char)v;
+        v >>= 8;
+    }
+}
+
+/**
+ * Write the clusters of an empty qcow2 version 3 overlay of `size` bytes in
+ * clusters of 2^`bits` bytes over the raw file `base`, an absolute path, to
+ * `fd`. The header, the backing file's format and name share cluster 0; the
+ * refcount table, its blocks and the L1 table follow, each cluster counted
+ * once, and the L1 table is left zero, so no cluster of the overlay is
+ * allocated and every read falls through to the base.
+ */
+static int write_overlay(int fd, const char *base, uint64_t size, unsigned bits)
+{
+    uint64_t cluster = (uint64_t)1 << bits, l2_span = (cluster / 8) << bits;
+    uint64_t l1 = (size + l2_span - 1) / l2_span, l1_clusters = (l1 * 8 + cluster - 1) / cluster;
+    uint64_t per_block = cluster / 2, blocks = 0, table = 0, total, i;
+    size_t name = strlen(base);
+    unsigned char *buf;
+    int e;
+
+    if (l1 * 8 > QCOW_L1_MAX) {
+        errno = EFBIG;
+        return -1;
+    }
+    if (QCOW_NAME + name > cluster) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    do {
+        total = blocks + table;
+        blocks = (1 + table + blocks + l1_clusters + per_block - 1) / per_block;
+        table = (blocks * 8 + cluster - 1) / cluster;
+    } while (blocks + table != total);
+    total = 1 + table + blocks + l1_clusters;
+    buf = calloc((size_t)(1 + table + blocks), (size_t)cluster);
+    if (buf == NULL)
+        return -1;
+    put_be(buf, QCOW_MAGIC, 4);
+    put_be(buf + 4, 3, 4);
+    put_be(buf + 8, QCOW_NAME, 8);
+    put_be(buf + 16, name, 4);
+    put_be(buf + 20, bits, 4);
+    put_be(buf + 24, size, 8);
+    put_be(buf + 36, l1, 4);
+    put_be(buf + 40, (1 + table + blocks) * cluster, 8);
+    put_be(buf + 48, cluster, 8);
+    put_be(buf + 56, table, 4);
+    put_be(buf + 96, QCOW_REFCOUNT_ORDER, 4);
+    put_be(buf + 100, QCOW_HEADER, 4);
+    put_be(buf + QCOW_HEADER, QCOW_EXT_FORMAT, 4);
+    put_be(buf + QCOW_HEADER + 4, 3, 4);
+    memcpy(buf + QCOW_HEADER + 8, "raw", 3);
+    memcpy(buf + QCOW_NAME, base, name);
+    for (i = 0; i < blocks; i++)
+        put_be(buf + cluster + i * 8, (1 + table + i) * cluster, 8);
+    for (i = 0; i < total; i++)
+        put_be(buf + (1 + table) * cluster + i * 2, 1, 2);
+    if (write(fd, buf, (size_t)((1 + table + blocks) * cluster)) !=
+            (ssize_t)((1 + table + blocks) * cluster) ||
+        ftruncate(fd, (off_t)(total * cluster)) != 0) {
+        e = errno != 0 ? errno : EIO;
+        free(buf);
+        errno = e;
+        return -1;
+    }
+    free(buf);
+    return 0;
+}
+
+int etude_store_overlay(const struct etude_store *s, const char *digest, uint32_t cluster_bytes,
+                        const char *dest)
+{
+    char *path, *base;
+    struct stat st;
+    unsigned bits = 9;
+    int fd, e;
+
+    while (bits < 21 && ((uint32_t)1 << bits) < cluster_bytes)
+        bits++;
+    if (!store_is_digest(digest) || cluster_bytes != ((uint32_t)1 << bits)) {
+        errno = EINVAL;
+        return -1;
+    }
+    path = store_join(s->objects, digest);
+    if (path == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    base = realpath(path, NULL);
+    free(path);
+    if (base == NULL)
+        return -1;
+    if (stat(base, &st) != 0) {
+        e = errno;
+        free(base);
+        errno = e;
+        return -1;
+    }
+    if (!S_ISREG(st.st_mode) || st.st_size == 0 || st.st_size % 512 != 0) {
+        free(base);
+        errno = EINVAL;
+        return -1;
+    }
+    fd = open(dest, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        free(base);
+        return -1;
+    }
+    errno = 0;
+    if (write_overlay(fd, base, (uint64_t)st.st_size, bits) != 0 || close(fd) != 0) {
+        e = errno;
+        close(fd);
+        unlink(dest);
+        free(base);
+        errno = e;
+        return -1;
+    }
+    free(base);
     return 0;
 }
 

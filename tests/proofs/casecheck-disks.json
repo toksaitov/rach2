@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "casecheck-disks",
-  "summary": "casecheck's self-test lines of a profile's disks, each fault in a private copy of cases.c or of the case schema found by its own line",
+  "summary": "casecheck's self-test lines of a profile's disks and overlays, each fault in a private copy of cases.c or of the case schema found by its own line",
   "tree": "private",
   "sources": [
     "tools/etude/cases.c",
@@ -23,7 +23,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "d=$TMPDIR/selftest && mkdir -p $d/fixtures && cp tools/etude/fixtures/disks.json tools/etude/fixtures/disks-bad.json tools/etude/fixtures/disks-shape.json $d/fixtures/ && grep -F ' ./disks' tools/etude/fixtures/expect > $d/fixtures/expect && ln -s ${WORK}/schemas $d/schemas && ${WORK}/casecheck --selftest $d/fixtures; s=$?; rm -rf $d; exit $s"
+      "d=$TMPDIR/selftest && mkdir -p $d/fixtures && cp tools/etude/fixtures/disks.json tools/etude/fixtures/disks-bad.json tools/etude/fixtures/disks-shape.json tools/etude/fixtures/rules.json $d/fixtures/ && grep -F -e ' ./disks' -e '| overlay-guest:' tools/etude/fixtures/expect > $d/fixtures/expect && ln -s ${WORK}/schemas $d/schemas && ${WORK}/casecheck --selftest $d/fixtures; s=$?; rm -rf $d; exit $s"
     ],
     "bound_s": 60,
     "fail_prefix": "casecheck selftest: line "
@@ -74,8 +74,8 @@
       "edits": [
         {
           "file": "tools/etude/cases.c",
-          "find": "    if (has_member(json_member(r->c, \"prepare\"), \"name\", name)) {\n",
-          "replace": "    if (0) {\n"
+          "find": "    if (has_member(json_member(r->c, \"prepare\"), \"name\", name)) {\n        finding(r->file, v->line, \"%s: the empty disk",
+          "replace": "    if (0) {\n        finding(r->file, v->line, \"%s: the empty disk"
         }
       ],
       "fails": {
@@ -110,8 +110,8 @@
       "edits": [
         {
           "file": "tools/etude/cases.c",
-          "find": "        if (json_member(disks->item[i], \"size_bytes\") == NULL) {\n",
-          "replace": "        if (1) {\n"
+          "find": "        } else if (json_member(disks->item[i], \"size_bytes\") == NULL) {\n",
+          "replace": "        } else if (1) {\n"
         }
       ],
       "fails": {
@@ -145,8 +145,8 @@
       "edits": [
         {
           "file": "tools/etude/schemas/case.schema.json",
-          "find": "\"then\": {\"required\": [\"serial\"]}, \"else\"",
-          "replace": "\"then\": {}, \"else\""
+          "find": "\"then\": {\"required\": [\"serial\"]}}",
+          "replace": "\"then\": {}}"
         }
       ],
       "fails": {
@@ -158,13 +158,13 @@
       }
     },
     {
-      "name": "ide-serial",
-      "summary": "the schema takes a serial on IDE",
+      "name": "cd-serial",
+      "summary": "the schema takes a serial on a CD",
       "edits": [
         {
           "file": "tools/etude/schemas/case.schema.json",
-          "find": "\"else\": {\"not\": {\"required\": [\"serial\"]}}",
-          "replace": "\"else\": {}"
+          "find": "\"cdrom\"}}},\n             \"then\": {\"not\": {\"required\": [\"serial\"]}}}",
+          "replace": "\"cdrom\"}}},\n             \"then\": {}}"
         }
       ],
       "fails": {
@@ -200,8 +200,8 @@
       "edits": [
         {
           "file": "tools/etude/schemas/case.schema.json",
-          "find": ", \"not\": {\"required\": [\"size_bytes\"]}",
-          "replace": ""
+          "find": "\"discard\": {\"const\": false}}, \"not\": {\"required\": [\"size_bytes\"]}",
+          "replace": "\"discard\": {\"const\": false}}"
         }
       ],
       "fails": {
@@ -280,6 +280,169 @@
         "status": 1,
         "lines": [
           "| /disks/7/bus: \"usb\" is not one of the values the schema allows"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "overlay-base",
+      "summary": "an overlay's base is not required to be a prepared artifact",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "            prepared(r, json_member(disks->item[i], \"base\"), \"the overlay's base\");\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| overlay-base: the overlay's base grow-base is no artifact that prepare lists"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "overlay-name",
+      "summary": "an overlay with the name of a prepared artifact is not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "        finding(r->file, v->line, \"%s: the overlay %s has the name of an artifact\", case_id, name);\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| overlay-name: the overlay stick has the name of an artifact"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "overlay-guest",
+      "summary": "an overlay of the requirements' profile is not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "    if (i == 0) {\n        finding(r->file, v->line, \"%s: the overlay %s is not of a machine's profile\"",
+          "replace": "    if (0) {\n        finding(r->file, v->line, \"%s: the overlay %s is not of a machine's profile\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| overlay-guest: the overlay grow-target is not of a machine's profile"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "overlay-kind",
+      "summary": "a name given to an overlay and to an empty disk is not reported",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "&& !same_overlay(v, w)) {",
+          "replace": "&& 0) {"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| overlay-differs: the overlay grow-target is given another base, cluster size or kind",
+          "| overlay-kind: the overlay grow-target is given another base, cluster size or kind"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "overlay-cluster",
+      "summary": "two cluster sizes of one overlay are taken for the same overlay",
+      "edits": [
+        {
+          "file": "tools/etude/cases.c",
+          "find": "ca != NULL && cb != NULL && ca->integer == cb->integer;",
+          "replace": "ca != NULL && cb != NULL;"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| overlay-differs: the overlay grow-target is given another base, cluster size or kind"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "base-cluster",
+      "summary": "the schema takes an overlay without its cluster size",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"then\": {\"required\": [\"cluster_bytes\"], \"not\"",
+          "replace": "\"then\": {\"not\""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/12: has no member \"cluster_bytes\""
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "cluster-alone",
+      "summary": "the schema takes a cluster size without a base",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"else\": {\"not\": {\"required\": [\"cluster_bytes\"]}}",
+          "replace": "\"else\": {}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/13: has \"cluster_bytes\", which this form does not allow"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "overlay-empty",
+      "summary": "the schema takes an overlay that is an empty disk",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"required\": [\"cluster_bytes\"], \"not\": {\"required\": [\"size_bytes\"]}}",
+          "replace": "\"required\": [\"cluster_bytes\"]}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/14: has \"size_bytes\", which this form does not allow"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "cd-base",
+      "summary": "the schema takes a CD that is an overlay",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"then\": {\"not\": {\"required\": [\"base\"]}}",
+          "replace": "\"then\": {}"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/15: has \"base\", which this form does not allow"
         ],
         "only": true
       }
@@ -387,6 +550,24 @@
         "status": 1,
         "lines": [
           "| /disks/11/boot: is not false"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "bus-serial",
+      "summary": "the schema takes a serial on AHCI",
+      "edits": [
+        {
+          "file": "tools/etude/schemas/case.schema.json",
+          "find": "\"enum\": [\"ahci\", \"device\"]",
+          "replace": "\"enum\": [\"device\"]"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "| /disks/17: has \"serial\", which this form does not allow"
         ],
         "only": true
       }

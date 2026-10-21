@@ -23,7 +23,8 @@
  * again. Six processes prepare one node at once: one runs the recipe, the
  * others reuse its product, and a reader never sees a partial one. A
  * controller killed while its recipe runs leaves nothing, and its lock
- * goes with it.
+ * goes with it. An overlay of an object is an empty qcow2 file over it, in
+ * each cluster size QEMU opens, and one QEMU cannot open is refused.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -578,6 +579,135 @@ static void test_sparse(void)
     CHECK(etude_store_put(s, copy, want, d, NULL) == 0, "sparse: copy: the same content");
     etude_store_close(s);
     free(data);
+}
+
+/** Give the `n` bytes at `p` as a number, most significant first. */
+static uint64_t get_be(const unsigned char *p, int n)
+{
+    uint64_t v = 0;
+
+    while (n-- > 0)
+        v = v << 8 | *p++;
+    return v;
+}
+
+/* An overlay row: its object's size, its cluster size, the entries of its
+ * L1 table and its clusters in all. */
+struct overlay_want {
+    uint64_t size;
+    uint32_t cluster;
+    uint64_t l1, clusters;
+    const char *row;
+};
+
+/**
+ * Check the overlay `buf` of `len` bytes over the object at `real` as `w`
+ * says: its header, its backing file and its format, an empty L1 table, and
+ * its length, each cluster counted once by its refcounts.
+ */
+static void overlay_check(const unsigned char *buf, uint64_t len, const char *real,
+                          const struct overlay_want *w)
+{
+    uint64_t size = w->size, l1 = w->l1, clusters = w->clusters;
+    uint32_t cluster = w->cluster;
+    const char *row = w->row;
+    uint64_t n = strlen(real), table = get_be(buf + 48, 8), l1_at = get_be(buf + 40, 8), i;
+    uint64_t block = table + 8 <= len ? get_be(buf + table, 8) : len;
+
+    CHECK(len == clusters * cluster, row);
+    CHECK(memcmp(buf, "QFI\xfb", 4) == 0 && get_be(buf + 4, 4) == 3, row);
+    CHECK(get_be(buf + 20, 4) < 32 && ((uint64_t)1 << get_be(buf + 20, 4)) == cluster &&
+              get_be(buf + 24, 8) == size,
+          row);
+    CHECK(get_be(buf + 16, 4) == n && memcmp(buf + get_be(buf + 8, 8), real, n) == 0, row);
+    CHECK(get_be(buf + 104, 4) == 0xe2792acau && get_be(buf + 108, 4) == 3 &&
+              memcmp(buf + 112, "raw", 3) == 0 && get_be(buf + 120, 8) == 0,
+          row);
+    CHECK(get_be(buf + 36, 4) == l1 && l1_at % cluster == 0 && l1_at + l1 * 8 <= len, row);
+    CHECK(get_be(buf + 96, 4) == 4 && get_be(buf + 100, 4) == 104 && get_be(buf + 56, 4) >= 1, row);
+    for (i = 0; i < l1 && l1_at + l1 * 8 <= len; i++)
+        CHECK(get_be(buf + l1_at + i * 8, 8) == 0, row);
+    for (i = 0; block + (i + 1) * 2 <= len && i < cluster / 2; i++)
+        CHECK(get_be(buf + block + i * 2, 2) == (i < clusters), row);
+}
+
+/**
+ * Store an object of `w->size` bytes, make an overlay of it, and check the
+ * overlay as overlay_check does, and that the object stays read-only.
+ */
+static void overlay_row(struct etude_store *s, const struct overlay_want *w)
+{
+    const char *row = w->row;
+    const char *src = fix_path("overlay-src"), *dest = fix_path("overlay.qcow2");
+    char d[ETUDE_DIGEST_HEX + 1], path[PATH_MAX], real[PATH_MAX];
+    unsigned char *buf = NULL;
+    struct stat st;
+    long got;
+    int fd;
+
+    unlink(dest);
+    fd = open(src, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    CHECK(fd >= 0 && ftruncate(fd, (off_t)w->size) == 0 && put_all(fd, "base", 4) == 0, row);
+    if (fd >= 0)
+        close(fd);
+    if (etude_store_put(s, src, NULL, d, NULL) != 0 || etude_store_path(s, d, path, sizeof(path)) ||
+        realpath(path, real) == NULL || etude_store_overlay(s, d, w->cluster, dest) != 0 ||
+        stat(dest, &st) != 0 || (buf = malloc((size_t)st.st_size)) == NULL ||
+        (fd = open(dest, O_RDONLY)) < 0) {
+        printf("etude-artifact-test: fail: %s: no overlay: %s\n", row, strerror(errno));
+        fails++;
+        free(buf);
+        return;
+    }
+    got = read(fd, buf, (size_t)st.st_size);
+    close(fd);
+    CHECK(got == (long)st.st_size, row);
+    if (got == (long)st.st_size && st.st_size >= 128)
+        overlay_check(buf, (uint64_t)st.st_size, real, w);
+    CHECK(stat(path, &st) == 0 && (st.st_mode & 0222) == 0, row);
+    free(buf);
+}
+
+/**
+ * An overlay of an object is an empty qcow2 file whose backing file is the
+ * object's path, of the object's size, in each cluster size from QEMU's
+ * least to its greatest; and the overlays QEMU cannot open, of a cluster size
+ * it lacks, of an object not a whole number of sectors, over an object
+ * absent, or over a `dest` that exists, are refused.
+ */
+static void test_overlay(void)
+{
+    static const struct overlay_want rows[] = {
+        {1u << 20, 4096, 1, 4, "overlay: 1 MiB in 4 KiB clusters"},
+        {(4u << 20) + 512, 4096, 3, 4, "overlay: past an L2 table's span"},
+        {4u << 20, 512, 128, 5, "overlay: 512-byte clusters, two of L1"},
+        {8u << 20, 2u << 20, 1, 4, "overlay: 2 MiB clusters"}};
+    const char *src = fix_path("overlay-src"), *dest = fix_path("overlay.qcow2");
+    char d[ETUDE_DIGEST_HEX + 1];
+    struct etude_store *s = etude_store_open(fix_path("overlay"));
+    struct stat st;
+    size_t i;
+
+    CHECK(s != NULL, "overlay");
+    if (s == NULL)
+        return;
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++)
+        overlay_row(s, &rows[i]);
+    CHECK(etude_store_put(s, src, NULL, d, NULL) == 0 &&
+              etude_store_overlay(s, d, 4096, dest) == -1 && errno == EEXIST,
+          "overlay: exists");
+    CHECK(unlink(dest) == 0, "overlay");
+    CHECK(etude_store_overlay(s, d, 1000, dest) == -1 && errno == EINVAL, "overlay: 1000 bytes");
+    CHECK(etude_store_overlay(s, d, 256, dest) == -1 && errno == EINVAL, "overlay: 256 bytes");
+    CHECK(etude_store_overlay(s, d, 4u << 20, dest) == -1 && errno == EINVAL, "overlay: 4 MiB");
+    CHECK(etude_store_overlay(s, "xyz", 4096, dest) == -1 && errno == EINVAL, "overlay: digest");
+    sha_hex("absent", 6, d);
+    CHECK(etude_store_overlay(s, d, 4096, dest) == -1 && errno == ENOENT, "overlay: absent");
+    CHECK(write_text(src, "not a sector\n") == 0 && etude_store_put(s, src, NULL, d, NULL) == 0 &&
+              etude_store_overlay(s, d, 4096, dest) == -1 && errno == EINVAL,
+          "overlay: a partial sector");
+    CHECK(stat(dest, &st) == -1 && errno == ENOENT, "overlay: a refused one is not left");
+    etude_store_close(s);
 }
 
 /**
@@ -1242,6 +1372,7 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
     test_put();
     test_sparse();
+    test_overlay();
     test_interrupt();
     test_graph();
     test_refused();

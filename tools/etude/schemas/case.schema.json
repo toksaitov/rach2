@@ -166,15 +166,26 @@
             "serial": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,19}$"},
             "discard": {"type": "boolean"},
             "boot": {"type": "boolean"},
-            "size_bytes": {"$ref": "#/$defs/positive"}
+            "size_bytes": {"$ref": "#/$defs/positive"},
+            "base": {"$ref": "#/$defs/name"},
+            "cluster_bytes": {"enum": [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576, 2097152]}
           },
           "allOf": [
             {"if": {"required": ["bus"], "properties": {"bus": {"const": "device"}}},
              "then": {"required": ["id"], "properties": {"media": {"const": "disk"}, "boot": {"const": false}}}, "else": {"not": {"required": ["id"]}}},
             {"if": {"required": ["bus"], "properties": {"bus": {"const": "nvme"}}},
-             "then": {"required": ["serial"]}, "else": {"not": {"required": ["serial"]}}},
+             "then": {"required": ["serial"]}},
+            {"if": {"required": ["bus"], "properties": {"bus": {"enum": ["ahci", "device"]}}},
+             "then": {"not": {"required": ["serial"]}}},
             {"if": {"required": ["media"], "properties": {"media": {"const": "cdrom"}}},
-             "then": {"properties": {"bus": {"const": "ide"}, "discard": {"const": false}}, "not": {"required": ["size_bytes"]}}}
+             "then": {"properties": {"bus": {"const": "ide"}, "discard": {"const": false}}, "not": {"required": ["size_bytes"]}}},
+            {"if": {"required": ["media"], "properties": {"media": {"const": "cdrom"}}},
+             "then": {"not": {"required": ["serial"]}}},
+            {"if": {"required": ["media"], "properties": {"media": {"const": "cdrom"}}},
+             "then": {"not": {"required": ["base"]}}},
+            {"if": {"required": ["base"]},
+             "then": {"required": ["cluster_bytes"], "not": {"required": ["size_bytes"]}},
+             "else": {"not": {"required": ["cluster_bytes"]}}}
           ]
         }
       ]

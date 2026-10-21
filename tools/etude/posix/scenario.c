@@ -2,9 +2,9 @@
  * scenario.c: libetude-case on POSIX systems, the library a machine scenario
  * links with. It reads the attempt's invocation and its case, reports the
  * scenario's assertions, boots the case's machines on the QEMU launcher with
- * private copies of their disks, runs host tools, services and etude-guest's
- * attempts beside them, bounds every wait by its step, and ends what it owns
- * after collecting its diagnostics.
+ * private copies, empty disks and overlays as their disks, runs host tools,
+ * services and etude-guest's attempts beside them, bounds every wait by its
+ * step, and ends what it owns after collecting its diagnostics.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -103,7 +103,7 @@ struct made {
     int dir;
 };
 
-/* An empty disk of the attempt, made at its first use. */
+/* An empty disk or an overlay of the attempt, made at its first use. */
 struct blank {
     struct blank *next;
     const char *name; /* the manifest's */
@@ -118,6 +118,8 @@ struct disk_decl {
     const char *serial; /* NULL for none */
     uint64_t size;      /* an empty disk's size in bytes, or 0 for an artifact's */
     const char *id;     /* the identity a device's `drive` names, on a device */
+    const char *base;   /* an overlay's base artifact, or NULL */
+    uint64_t cluster;   /* an overlay's cluster size in bytes, or 0 */
 };
 
 struct etude_case_machine {
@@ -366,11 +368,12 @@ static int jhas(const struct eh_json *v, const char *s)
 /**
  * Read `v`, a disk of a profile's `disks`, into `d`: an artifact's name, a
  * private copy on IDE, or an object that gives the name, the bus, the
- * medium, the serial, `discard`, `boot`, an empty disk's size, and the
- * identity of a disk that a device attaches.
+ * medium, the serial, `discard`, `boot`, an empty disk's size, an overlay's
+ * base and cluster size, and the identity of a disk that a device attaches.
  *
- * @return 0, or -1 for a disk of another form, or of a bus or medium that
- *         the library does not attach.
+ * @return 0, or -1 for a disk of another form, of a bus or medium that the
+ *         library does not attach, or with a base and no cluster size or a
+ *         cluster size and no base.
  */
 static int disk_decl(const struct eh_json *v, struct disk_decl *d)
 {
@@ -402,7 +405,9 @@ static int disk_decl(const struct eh_json *v, struct disk_decl *d)
     d->boot = jbool(v, "boot") == 1;
     d->size = jnum(v, "size_bytes");
     d->id = jtext(v, "id");
-    return 0;
+    d->base = jtext(v, "base");
+    d->cluster = jnum(v, "cluster_bytes");
+    return (d->base == NULL) == (d->cluster == 0) && d->cluster <= UINT32_MAX ? 0 : -1;
 }
 
 /** Find the disk `name` of the profile `qp` and read it into `d`; -1 when
@@ -988,12 +993,67 @@ static const char *empty_disk(struct etude_case *c, const char *name, uint64_t s
     return b->path;
 }
 
+/** Find the overlay `name` that a machine's profile declares, into `d`; -1
+ * when none does. */
+static int find_overlay(const struct etude_case *c, const char *name, struct disk_decl *d)
+{
+    size_t i;
+
+    for (i = 0; i < c->decl_count; i++)
+        if (find_disk(c->decls[i].qemu, name, d) == 0 && d->base != NULL)
+            return 0;
+    return -1;
+}
+
+/**
+ * Give the path of overlay `d`, an empty qcow2 file in `copies/` of the
+ * scratch whose backing file is its base's object, made at its first use and
+ * given again after.
+ */
+static const char *overlay_disk(struct etude_case *c, const struct disk_decl *d)
+{
+    struct blank *b;
+    char path[4096];
+
+    for (b = c->blanks; b != NULL; b = b->next)
+        if (strcmp(b->name, d->name) == 0)
+            return b->path;
+    if (find_artifact(c, d->name) != NULL || !file_name(d->name)) {
+        diag("disk %s: an overlay is no artifact, and its name is a file's", d->name);
+        c->faults++;
+        return NULL;
+    }
+    if (etude_artifact(c, d->base) == NULL)
+        return NULL;
+    if (scratch_path(c, "copies", d->name, path, sizeof(path)) != 0 ||
+        etude_store_overlay(c->store, find_artifact(c, d->base)->digest, (uint32_t)d->cluster,
+                            path) != 0) {
+        diag("disk %s: no overlay over %s: %s", d->name, d->base, strerror(errno));
+        c->faults++;
+        return NULL;
+    }
+    made(c, path, 0);
+    b = calloc(1, sizeof(*b));
+    if (b == NULL || (b->path = dup_text(path)) == NULL) {
+        free(b);
+        c->faults++;
+        return NULL;
+    }
+    b->name = d->name;
+    b->next = c->blanks;
+    c->blanks = b;
+    return b->path;
+}
+
 const char *etude_private_copy(struct etude_case *c, const char *name)
 {
     struct artifact *a = find_artifact(c, name);
     uint64_t size = name != NULL ? empty_size(c, name) : 0;
+    struct disk_decl d;
     char path[4096];
 
+    if (name != NULL && find_overlay(c, name, &d) == 0)
+        return overlay_disk(c, &d);
     if (size != 0)
         return empty_disk(c, name, size);
     if (a == NULL || !disk_fixture(c, name)) {
@@ -1591,6 +1651,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
         m->disks[i].discard = d.discard;
         m->disks[i].id = d.id;
         m->disks[i].boot = d.boot;
+        m->disks[i].qcow2 = d.base != NULL;
     }
     m->disks[i].path = NULL;
     p->architecture = c->arch;

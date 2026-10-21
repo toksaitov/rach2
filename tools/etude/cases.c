@@ -326,7 +326,10 @@ static const struct json *disk_name(const struct json *v)
     return v->type == JSON_OBJECT ? json_member(v, "name") : v;
 }
 
-/** Requires the artifacts of a QEMU profile; an empty disk is none. */
+/**
+ * Requires the artifacts of a QEMU profile; an empty disk is none, and an
+ * overlay's is its base.
+ */
 static void prepared_qemu(const struct rule *r, const struct json *qemu)
 {
     const struct json *disks = json_member(qemu, "disks");
@@ -338,7 +341,9 @@ static void prepared_qemu(const struct rule *r, const struct json *qemu)
     prepared(r, json_member(qemu, "kernel"), "the kernel");
     prepared(r, json_member(qemu, "initrd"), "the initial RAM image");
     for (i = 0; disks != NULL && i < disks->count; i++) {
-        if (json_member(disks->item[i], "size_bytes") == NULL) {
+        if (json_member(disks->item[i], "base") != NULL) {
+            prepared(r, json_member(disks->item[i], "base"), "the overlay's base");
+        } else if (json_member(disks->item[i], "size_bytes") == NULL) {
             prepared(r, disk_name(disks->item[i]), "the disk");
         }
     }
@@ -554,6 +559,7 @@ static void profile_disks(const struct rule *r, const struct json *qemu)
             d[i].serial = json_text(v, "serial");
             d[i].id = d[i].bus == ETUDE_BUS_DEVICE ? places[i] : NULL;
             d[i].boot = boot != NULL && boot->integer != 0;
+            d[i].qcow2 = json_member(v, "base") != NULL;
         }
         if (boot != NULL && boot->integer != 0 && same(json_text(qemu, "firmware"), "direct")) {
             finding(r->file, v->line, "%s: the disk %s boots first beside the direct firmware",
@@ -601,9 +607,60 @@ static void empty_disk(const struct rule *r, const struct json *v, size_t i, siz
 }
 
 /**
+ * Returns 1 when disks `a` and `b` are overlays of one base and cluster size.
+ */
+static int same_overlay(const struct json *a, const struct json *b)
+{
+    const struct json *ca = json_member(a, "cluster_bytes"), *cb = json_member(b, "cluster_bytes");
+
+    return json_member(a, "base") != NULL && same(json_text(a, "base"), json_text(b, "base")) &&
+           ca != NULL && cb != NULL && ca->integer == cb->integer;
+}
+
+/**
+ * Reports disk `v`, of profile `i`, when it is an overlay that the
+ * requirements' profile gives, since libetude-case makes it for a machine;
+ * whose name is an artifact that prepare lists; or whose name another disk of
+ * a profile gives as anything but the same overlay.
+ */
+static void overlay_disk(const struct rule *r, const struct json *v, size_t i)
+{
+    const char *name = disk_name(v)->string, *case_id = json_text(r->c, "case_id");
+    const struct json *machines = json_member(r->c, "machines");
+    size_t profiles = 1 + (machines != NULL ? machines->count : 0), k, l;
+
+    if (json_member(v, "base") == NULL) {
+        return;
+    }
+    if (i == 0) {
+        finding(r->file, v->line, "%s: the overlay %s is not of a machine's profile", case_id,
+                name);
+    }
+    if (has_member(json_member(r->c, "prepare"), "name", name)) {
+        finding(r->file, v->line, "%s: the overlay %s has the name of an artifact", case_id, name);
+    }
+    for (k = 0; k < profiles; k++) {
+        const struct json *disks = json_member(profile_at(r, k), "disks");
+
+        for (l = 0; disks != NULL && l < disks->count; l++) {
+            const struct json *w = disks->item[l];
+
+            if (w != v && same(disk_name(w)->string, name) && !same_overlay(v, w)) {
+                finding(r->file, v->line,
+                        "%s: the overlay %s is given another base, cluster size or kind", case_id,
+                        name);
+                return;
+            }
+        }
+    }
+}
+
+/**
  * The disks of each QEMU profile are ones the launcher attaches together,
  * each given once. An empty disk, one of `size_bytes`, is no artifact of
- * prepare, and every profile that gives it gives it one size.
+ * prepare, and every profile that gives it gives it one size. An overlay,
+ * one of `base`, is a machine's, has a name no artifact of prepare has, and
+ * is the same overlay wherever a profile gives its name.
  */
 static void rule_disks(const struct rule *r)
 {
@@ -616,6 +673,7 @@ static void rule_disks(const struct rule *r)
         profile_disks(r, profile_at(r, i));
         for (j = 0; disks != NULL && j < disks->count; j++) {
             empty_disk(r, disks->item[j], i, j);
+            overlay_disk(r, disks->item[j], i);
         }
     }
 }

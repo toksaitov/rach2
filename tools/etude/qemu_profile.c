@@ -250,6 +250,29 @@ static int device_disk_ok(const struct etude_qemu_disk *disks, const struct etud
     return 1;
 }
 
+/**
+ * Check disk `d`, on IDE, AHCI or NVMe, against its controller, `*ide` and
+ * `*ahci` counting the disks on IDE and on AHCI before it: a place free; a CD
+ * on IDE alone, of a raw medium, without a serial or `discard`; and a serial
+ * on IDE or NVMe alone, which NVMe needs.
+ *
+ * @return 0, or EINVAL.
+ */
+static int bus_disk_check(const struct etude_qemu_disk *d, size_t *ide, size_t *ahci)
+{
+    if (d->bus == ETUDE_BUS_IDE) {
+        if (++*ide > IDE_PLACES || (d->cdrom && (d->serial != NULL || d->qcow2)) ||
+            (d->cdrom && d->discard))
+            return EINVAL;
+    } else if (d->bus == ETUDE_BUS_AHCI) {
+        if (++*ahci > AHCI_PORTS || d->serial != NULL || d->cdrom)
+            return EINVAL;
+    } else if (d->bus != ETUDE_BUS_NVME || d->cdrom || d->serial == NULL) {
+        return EINVAL;
+    }
+    return 0;
+}
+
 int etude_qemu_disks_check(const struct etude_qemu_disk *disks)
 {
     const struct etude_qemu_disk *d;
@@ -262,18 +285,11 @@ int etude_qemu_disks_check(const struct etude_qemu_disk *disks)
             return EINVAL;
         if (d->boot && ++boot > 1)
             return EINVAL;
-        if (d->bus == ETUDE_BUS_DEVICE) {
-            if (!device_disk_ok(disks, d))
-                return EINVAL;
-        } else if (d->bus == ETUDE_BUS_IDE) {
-            if (++ide > IDE_PLACES || d->serial != NULL || (d->cdrom && d->discard))
-                return EINVAL;
-        } else if (d->bus == ETUDE_BUS_AHCI) {
-            if (++ahci > AHCI_PORTS || d->serial != NULL || d->cdrom)
-                return EINVAL;
-        } else if (d->bus != ETUDE_BUS_NVME || d->cdrom || !serial_word(d->serial)) {
+        if (d->bus == ETUDE_BUS_DEVICE ? !device_disk_ok(disks, d)
+                                       : bus_disk_check(d, &ide, &ahci) != 0)
             return EINVAL;
-        }
+        if (d->serial != NULL && !serial_word(d->serial))
+            return EINVAL;
     }
     return 0;
 }
@@ -821,31 +837,34 @@ static void add_audio(struct line *l, const char *card, const char *path)
 /**
  * Add the arguments that attach disk `d`, the `n`th of the profile counted
  * from 0; `*ide` counts the places of the IDE controllers taken before it,
- * and `*ahci` the ports of the ich9-ahci. A disk on IDE that boots first is
- * a device of its own, since only a device takes a boot index.
+ * and `*ahci` the ports of the ich9-ahci. A disk on IDE that boots first or
+ * has a serial is a device of its own, since only a device takes a boot index
+ * or a serial.
  */
 static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, unsigned *ide,
                      unsigned *ahci)
 {
     const char *discard = d->discard ? ",discard=unmap,detect-zeroes=unmap" : "";
+    const char *type = d->qcow2 ? "qcow2" : "raw";
     const char *boot = d->boot ? ",bootindex=0" : "";
     char format[128], id[32], device[128];
 
     if (d->bus == ETUDE_BUS_DEVICE) {
-        snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s", d->id, discard);
+        snprintf(format, sizeof(format), "file=%%s,format=%s,if=none,id=%s%s", type, d->id,
+                 discard);
         add(l, 0, "-drive");
         add(l, 1, format, d->path);
         return;
     }
-    if (d->bus == ETUDE_BUS_IDE && !d->boot) {
-        snprintf(format, sizeof(format), "file=%%s,format=raw,if=ide,index=%u,media=%s%s", (*ide)++,
-                 d->cdrom ? "cdrom,readonly=on" : "disk", discard);
+    if (d->bus == ETUDE_BUS_IDE && !d->boot && d->serial == NULL) {
+        snprintf(format, sizeof(format), "file=%%s,format=%s,if=ide,index=%u,media=%s%s", type,
+                 (*ide)++, d->cdrom ? "cdrom,readonly=on" : "disk", discard);
         add(l, 0, "-drive");
         add(l, 1, format, d->path);
         return;
     }
     snprintf(id, sizeof(id), "etude-disk%u", (unsigned)n);
-    snprintf(format, sizeof(format), "file=%%s,format=raw,if=none,id=%s%s%s", id,
+    snprintf(format, sizeof(format), "file=%%s,format=%s,if=none,id=%s%s%s", type, id,
              d->cdrom ? ",media=cdrom,readonly=on" : "", discard);
     add(l, 0, "-drive");
     add(l, 1, format, d->path);
@@ -857,8 +876,9 @@ static void add_disk(struct line *l, const struct etude_qemu_disk *d, size_t n, 
     if (d->bus == ETUDE_BUS_AHCI) {
         snprintf(device, sizeof(device), "ide-hd,drive=%s,bus=etude-ahci.%u", id, (*ahci)++);
     } else {
-        snprintf(device, sizeof(device), "%s,drive=%s,bus=ide.%u,unit=%u",
-                 d->cdrom ? "ide-cd" : "ide-hd", id, *ide / 2, *ide % 2);
+        snprintf(device, sizeof(device), "%s,drive=%s,bus=ide.%u,unit=%u%s%s",
+                 d->cdrom ? "ide-cd" : "ide-hd", id, *ide / 2, *ide % 2,
+                 d->serial != NULL ? ",serial=" : "", d->serial != NULL ? d->serial : "");
         (*ide)++;
     }
     add(l, 0, "%s%s", device, boot);

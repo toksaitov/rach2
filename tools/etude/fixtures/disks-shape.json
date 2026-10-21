@@ -42,7 +42,7 @@
             "initrd": null,
             "disks": [
               {"name": "no-serial", "bus": "nvme", "size_bytes": 1048576},
-              {"name": "ide-serial", "serial": "stick"},
+              {"name": "cd-serial", "media": "cdrom", "serial": "stick"},
               {"name": "cd-nvme", "media": "cdrom", "bus": "nvme", "serial": "cd"},
               {"name": "cd-empty", "media": "cdrom", "size_bytes": 1048576},
               {"name": "cd-discard", "media": "cdrom", "discard": true},
@@ -52,7 +52,13 @@
               {"name": "format", "format": "qcow2"},
               {"name": "ahci-cd", "bus": "ahci", "media": "cdrom"},
               {"name": "boot-word", "boot": "yes"},
-              {"name": "device-boot", "bus": "device", "id": "stick", "boot": true}
+              {"name": "device-boot", "bus": "device", "id": "stick", "boot": true},
+              {"name": "no-cluster", "base": "stick"},
+              {"name": "cluster-alone", "cluster_bytes": 4096},
+              {"name": "overlay-empty", "base": "stick", "cluster_bytes": 4096, "size_bytes": 1048576},
+              {"name": "overlay-cd", "media": "cdrom", "base": "stick", "cluster_bytes": 4096},
+              {"name": "cluster-odd", "base": "stick", "cluster_bytes": 3000},
+              {"name": "ahci-serial", "bus": "ahci", "serial": "stick"}
             ],
             "cpu": "max",
             "processors": 1,

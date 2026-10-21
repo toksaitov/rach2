@@ -120,6 +120,7 @@ struct etude_qemu_disk {
                            ETUDE_BUS_DEVICE alone */
     int boot;           /* the firmware boots this disk first; one disk at most,
                            and none on ETUDE_BUS_DEVICE */
+    int qcow2;          /* the file is a qcow2 overlay over a raw base, not raw */
 };
 
 /* The most disks of a profile, of which four at most are on IDE and six on
@@ -207,10 +208,10 @@ struct etude_qemu_site {
  * what the launcher attaches: at most ETUDE_QEMU_DISKS, of which at most four
  * are on IDE, CDs among them, and six on AHCI; a path for each; an NVMe disk
  * with a serial; a serial that is a word of at most ETUDE_QEMU_SERIAL_MAX
- * printable characters without a comma, on NVMe alone; a CD on IDE, without
- * `discard`; an identity of QEMU's, given once, for each disk on
- * ETUDE_BUS_DEVICE alone; and at most one disk that boots first, on another
- * bus.
+ * printable characters without a comma, on NVMe and IDE alone; a CD on IDE,
+ * of a raw medium, without a serial or `discard`; an identity of QEMU's, given
+ * once, for each disk on ETUDE_BUS_DEVICE alone; and at most one disk that
+ * boots first, on another bus.
  *
  * @return 0, or EINVAL.
  */
