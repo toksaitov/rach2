@@ -1,6 +1,5 @@
 # shellcheck shell=bash
 # muse-tmux: the same scripted Muse session in its interactive screen.
-# bound: 600
 # hosts: muse.fakeapi.test
 # script: fakeapi/muse.json
 # script-filter: muse_verify.py

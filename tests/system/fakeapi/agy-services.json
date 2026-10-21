@@ -10,6 +10,10 @@
                  "headers": {"Host": "antigravity-unleash.goog"}},
      "reply": {"status": 404}},
     {"unordered": true, "repeat": true,
+     "request": {"method": "POST", "path": "/api/client/metrics",
+                 "headers": {"Host": "antigravity-unleash.goog"}},
+     "reply": {"status": 404}},
+    {"unordered": true, "repeat": true,
      "request": {"method": "POST", "path": "/log",
                  "headers": {"Host": "play.googleapis.com"}},
      "reply": {"status": 404}}

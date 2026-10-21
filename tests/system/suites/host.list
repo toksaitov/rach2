@@ -38,3 +38,4 @@ check_asm|600|TinyCC's assemblers against GNU as|sh vendor/tcc/check_asm.sh
 check_ldscript|600|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_ldscript.sh
 together|600|the makers of several fixture files run once for a parallel request of their files|sh tests/system/together_test.sh
 host_suite|300|the host suite runs its checks at once, each in its own scratch, with one result each|sh tests/system/host_suite_test.sh
+agent_select|60|focused agent selections preserve order and refuse invalid names|python3 -B tests/system/agent_select_test.py

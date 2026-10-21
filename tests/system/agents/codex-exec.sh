@@ -24,7 +24,6 @@
 # program's digest before and after the session, the free frames sampled each
 # second and the time of each step; codex_session_verify.py judges them on the
 # host with every recorded request.
-# bound: 900
 # hosts: fakeapi.test api.openai.com chatgpt.com auth.openai.com api.github.com
 # hosts: raw.githubusercontent.com
 # script: fakeapi/codex.json

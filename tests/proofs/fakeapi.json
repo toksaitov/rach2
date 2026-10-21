@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "fakeapi",
-  "summary": "the fakeapi suite on x86-64 against a fault in the plain protocol's check of a request and one in the server's verdict; the server is Python and runs as it is, so nothing is built",
+  "summary": "the fakeapi case on x86-64 against faults in request matching, failure counting and the final exit status; the server is Python, so the build records its sources",
   "tree": "shared",
   "sources": [
     "tests/system/fakeapi/proto_plain.py",
@@ -40,7 +40,8 @@
       ],
       "fails": {
         "lines": [
-          "fakeapi-test: FAIL: the server answered a request its script does not expect"
+          "fakeapi-test: FAIL: the server answered a request its script does not expect",
+          "@etude 1 notrun server-verdict"
         ]
       }
     },
@@ -56,7 +57,26 @@
       ],
       "fails": {
         "lines": [
-          "fakeapi-test: FAIL: the server's verdict, status 0, did not fail the run for the unexpected request"
+          "the server's verdict did not match the exchange",
+          "@etude 1 notrun record"
+        ]
+      }
+    },
+    {
+      "name": "wrong-exit-status",
+      "summary": "the server prints the expected failed verdict but exits 0",
+      "edits": [
+        {
+          "file": "tests/system/fakeapi/fakeapi.py",
+          "find": "            log(\"result: fail: \" + \"; \".join(faults))\n            return 1",
+          "replace": "            log(\"result: fail: \" + \"; \".join(faults))\n            return 0"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "the server's verdict did not match the exchange",
+          "@etude 1 notrun record"
         ]
       }
     }

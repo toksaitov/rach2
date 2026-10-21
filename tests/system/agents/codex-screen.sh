@@ -13,7 +13,6 @@
 # codex-screen.json adds the three to the script. Once Codex has ended, no
 # process it started may be left; the host verifies the session as for
 # codex-exec.
-# bound: 1200
 # hosts: fakeapi.test api.openai.com chatgpt.com auth.openai.com api.github.com
 # hosts: raw.githubusercontent.com
 # script: fakeapi/codex.json

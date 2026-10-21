@@ -12,7 +12,6 @@
 # answer and ends the session with /exit. Beside the first turn Claude Code
 # asks the model for the session's title, which the script also has. The
 # host verifies the session as for claude-print.
-# bound: 1200
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
 # hosts: http-intake.logs.us5.datadoghq.com

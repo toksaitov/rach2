@@ -7,7 +7,6 @@
 # it, and rehearsed in QEMU against the fake API server.
 #
 # Usage: agents_accept.sh lenovo USER [ADDRESS]
-#        agents_accept.sh qemu KERNEL IMAGE DISK PORT APIPORT
 #
 # For each agent of RACH2_ACCEPT_AGENTS, `claude codex agy muse` unless it
 # names fewer, the script makes a disposable repository on the machine,
@@ -56,17 +55,9 @@
 # ~/.gemini/antigravity-cli/antigravity-oauth-token, ~/.config/muse/auth.json
 # and ~/.config/gh/hosts.yml. The log is build/images/agents-accept-lenovo.log.
 #
-# `qemu` is the rehearsal, which `tests/run agentsaccept` runs: it boots
-# KERNEL with `rach2.root=ext2` on DISK, a copy of IMAGE, the GNU root with
-# every package of the agents layer, as the agents suite does, with SSH on
-# the host's PORT and no route out but the fake API server on APIPORT. The
-# account is the test account, by the test key. `guest.sh setup` gives it
-# dummy keys and settings that point each agent at the server, and the
-# server plays tests/system/accept/agents/AGENT.json: its `session` while
-# the agent's steps run, and its `after` for its request after the reboot,
-# each of which must pass, every step played and no request it does not
-# have. The credential files are the dummy keys and the token `setup` gives
-# gh. The log is DISK.log, and the console's DISK.console.
+# Etude calls the internal `etude ACTION AGENT` mode on private GNU roots.
+# Its scenario boots the machine and starts and stops each API script; these
+# actions run the same SSH, session and credential assertions as on Lenovo.
 #
 # It prints a line for each step, `agents-accept: PASS` and exits 0, or
 # `agents-accept: FAIL (N)` and exits 1; a usage error exits 2.
@@ -86,36 +77,34 @@ case $MODE in
         HOST=${3:-${RACH2_MACHINE_ADDRESS:-192.168.0.106}}
         PORT=22
         KEY=${RACH2_ACCEPT_KEY:-}
+        AGENTS=${RACH2_ACCEPT_AGENTS:-claude codex agy muse}
+        ROOT_KEY=$REPO/krffs/rach2_demo_ed25519
         mkdir -p "$REPO/build/images"
         LOG=$REPO/build/images/agents-accept-lenovo.log
         ;;
-    qemu)
-        [ $# -eq 6 ] ||
-            { echo "usage: agents_accept.sh qemu KERNEL IMAGE DISK PORT APIPORT" >&2; exit 2; }
-        KERNEL=$2
-        IMAGE=$3
-        DISK=$4
-        PORT=$5
-        APIPORT=$6
+    etude)
+        [ $# -eq 3 ] || exit 2
+        GUEST_MODE=qemu
+        ACTION=$2
+        AGENTS=$3
         USERNAME="test"
         HOST=127.0.0.1
-        KEY=$REPO/krffs/rach2_test_ed25519
-        LOG=$DISK.log
+        PORT=${AGENT_PORT:?}
+        KEY=${AGENT_TEST_KEY:?}
+        ROOT_KEY=${AGENT_ROOT_KEY:?}
+        LOG=${AGENT_WORK:?}/accept.log
         ;;
     *)
         echo "usage: agents_accept.sh lenovo USER [ADDRESS]" >&2
-        echo "       agents_accept.sh qemu KERNEL IMAGE DISK PORT APIPORT" >&2
         exit 2
         ;;
 esac
-AGENTS=${RACH2_ACCEPT_AGENTS:-claude codex agy muse}
 for agent in $AGENTS; do
     case $agent in
         claude | codex | agy | muse) ;;
         *) echo "agents_accept.sh: no agent named $agent" >&2; exit 2 ;;
     esac
 done
-ROOT_KEY=$REPO/krffs/rach2_demo_ed25519
 MAC=${RACH2_MACHINE_MAC:-28:d2:44:7e:e0:af}
 PACKAGES=$REPO/vendor/gnu/agents/packages
 FAKEAPI=$REPO/tests/system/fakeapi/fakeapi.py
@@ -124,40 +113,50 @@ CANCEL="Run the shell command sleep 600 in the foreground and wait for it to fin
 WORK_PROMPT="Read notes.txt and do what it says. Check the change with check.sh, then commit it."
 
 work=""
+TMUX_PID=""
+SOCKET_DIR=""
 HOME_M=""
-QPID=""
-SPID=""
-SERVER_STATUS=""
 FAILS=0
 
-# The host's own tmux and the master SSH connection that the commands share;
-# both live in the scratch directory, whose path stays short enough for a
-# socket's name.
+# Use a relative socket name within the private directory of an etude case.
 h() {
-    tmux -S "$work/tmux" "$@"
+    if [ -n "$SOCKET_DIR" ]; then
+        (cd "$SOCKET_DIR" && tmux -S tmux "$@")
+    else
+        tmux -S "$work/tmux" "$@"
+    fi
 }
 
-# m COMMAND: run COMMAND on the machine as the account, over the master
-# connection, which the first call opens, with no input.
+# m COMMAND: run COMMAND as the account, over SSH, with no input.
 m() {
     mi "$@" < /dev/null
 }
 
 # mi COMMAND: run COMMAND as m does, with this script's input as its own.
 mi() {
+    if [ "$MODE" = etude ]; then
+        ssh_mode_options='-F /dev/null -o IdentitiesOnly=yes'
+        ssh_control=none
+    else
+        ssh_mode_options='-o ControlMaster=auto -o ControlPersist=yes'
+        ssh_control=$work/ssh
+    fi
+    # shellcheck disable=SC2086 # fixed SSH options, without paths
     ssh -p "$PORT" ${KEY:+-i "$KEY"} -o BatchMode=yes -o StrictHostKeyChecking=no \
         -o "UserKnownHostsFile=$work/known" -o "ConnectTimeout=$(scaled 30)" \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR \
-        -o ControlMaster=auto -o "ControlPath=$work/ssh" -o ControlPersist=yes \
-        "$USERNAME@$HOST" "$@"
+        $ssh_mode_options -o "ControlPath=$ssh_control" "$USERNAME@$HOST" "$@"
 }
 
 # root COMMAND: run COMMAND on the machine as root, by the development key.
 root() {
+    ssh_root_options=""
+    [ "$MODE" != etude ] || ssh_root_options='-F /dev/null -o IdentitiesOnly=yes'
+    # shellcheck disable=SC2086 # fixed SSH options, without paths
     ssh -n -p "$PORT" -i "$ROOT_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
         -o "UserKnownHostsFile=$work/known" -o "ConnectTimeout=$(scaled 30)" \
         -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR \
-        "root@$HOST" "$@"
+        $ssh_root_options "root@$HOST" "$@"
 }
 
 # say TEXT: print TEXT as a line of the log.
@@ -176,40 +175,20 @@ record() {
     { echo "agents-accept: $1:"; printf '%s\n' "$2" | sed '/^ *$/d; s/^/    /'; } >> "$LOG"
 }
 
-# stop_server: stop the fake server, which writes its verdict as it ends, and
-# keep its status in SERVER_STATUS.
-stop_server() {
-    spid=$SPID
-    SPID=""
-    if [ -n "$spid" ]; then
-        kill -TERM "$spid" 2> /dev/null || true
-        wait "$spid" 2> /dev/null
-        SERVER_STATUS=$?
-    fi
-}
-
-# Close the host's tmux, stop the QEMU mode's machine and the server, end the
-# agents' sessions on the Lenovo and the master connection, and remove the
-# disk and the scratch directory; only then wait for the machine and the
-# server to end. tests/run kills a suite it stops two seconds after asking it
-# to end, so the removals come before every wait.
+# End host and guest terminal sessions and remove scratch on every exit.
 # shellcheck disable=SC2329 # the traps call it
 cleanup() {
     [ -z "$work" ] || h kill-server 2> /dev/null
-    [ -z "$QPID" ] || kill -9 "$QPID" 2> /dev/null
-    [ -z "$SPID" ] || kill -TERM "$SPID" 2> /dev/null
+    [ -z "$TMUX_PID" ] || wait "$TMUX_PID" 2>/dev/null
+    [ -z "$SOCKET_DIR" ] || rm -rf "$SOCKET_DIR"
     if [ -n "$work" ]; then
         if [ "$MODE" = lenovo ] && [ -n "$HOME_M" ]; then
             m 'tmux -L rach2-accept kill-server' 2> /dev/null
         fi
         ssh -o "ControlPath=$work/ssh" -O exit "$USERNAME@$HOST" 2> /dev/null
-        rm -rf "$work"
+        [ "$MODE" = etude ] || rm -rf "$work"
         work=""
     fi
-    [ "$MODE" != qemu ] || rm -f "$DISK"
-    [ -z "$QPID" ] || wait "$QPID" 2> /dev/null
-    QPID=""
-    stop_server
 }
 trap 'cleanup' EXIT
 trap 'cleanup; exit 130' INT
@@ -223,16 +202,23 @@ give_up() {
     exit 1
 }
 
-: > "$LOG"
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
+if [ "$MODE" = etude ]; then
+    work=${AGENT_WORK:?}
+    mkdir -p "$work"
+else
+    : > "$LOG"
+    work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
+fi
 
 # The agent's own words and keys: its prompt, by a text the screen shows only
 # while the agent waits for a request; the text it shows only while it works,
 # and any it shows while it starts, when it may yet ask a question;
 # the mark before the selected answer of a question; how it ends; what more it
 # needs after a cancelled turn; and the menu it shows when nobody is signed in.
+# A fresh etude Codex home must select its model before its prompt is ready.
 agent_set() {
     LOADING=""
+    MODEL_SELECTED=yes
     case $1 in
         claude)
             READY="bypass permissions on"
@@ -243,6 +229,7 @@ agent_set() {
             SIGNIN="Select login method"
             ;;
         codex)
+            [ "$MODE" != etude ] || MODEL_SELECTED=""
             READY="? for shortcuts"
             BUSY="esc to interrupt"
             LOADING="loading"
@@ -404,7 +391,9 @@ question() {
         claude.*"Yes, I trust this folder"*) choose "Yes, I trust this folder" Down ;;
         claude.*"Yes, I accept"*) choose "Yes, I accept" Down ;;
         codex.*"Trust and continue"*) choose "1. Trust and continue" Up ;;
-        codex.*"Use existing model"*) choose "2. Use existing model" Down ;;
+        codex.*"Use existing model"*)
+            choose "2. Use existing model" Down && MODEL_SELECTED=yes
+            ;;
         agy.*"Choose your color scheme"*) leave "Choose your color scheme" ;;
         agy.*"Terms of Service & Data Use"*)
             press Enter "[ ] Yes, I agree" && press Down ">  Previous" &&
@@ -435,7 +424,8 @@ idle() {
             end=$(($(date +%s) + $2))
             continue
         fi
-        if shows "$READY" && ! shows "$BUSY" && { [ -z "$LOADING" ] || ! shows "$LOADING"; }; then
+        if [ -n "$MODEL_SELECTED" ] && shows "$READY" && ! shows "$BUSY" &&
+            { [ -z "$LOADING" ] || ! shows "$LOADING"; }; then
             calm=$((calm + 1))
             [ "$calm" -lt 2 ] || return 0
         else
@@ -541,6 +531,7 @@ until_guest() {
 attach() {
     # shellcheck disable=SC2016 # the quotes are the client's, around the path
     client="exec ssh -tt -p $PORT ${KEY:+-i '$KEY'} -o BatchMode=yes -o StrictHostKeyChecking=no"
+    [ "$MODE" != etude ] || client="$client -F /dev/null -o IdentitiesOnly=yes"
     client="$client -o 'UserKnownHostsFile=$work/known' -o ControlPath=none"
     client="$client -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR"
     client="$client $USERNAME@$HOST tmux -u -L rach2-accept new-session -A -s rach2-accept-$agent"
@@ -559,6 +550,7 @@ step_session() {
     until_guest "the client attached" "$(scaled 60)" "120x39 120x39 1" pane "$agent" || return 1
     keys -l "bash ~/rach2-accept/guest.sh run $agent start" && keys Enter
     idle "the first prompt" "$(scaled 600)" || return 1
+    record "$agent: the first prompt" "$SCREEN"
     say "$agent: the screen waits for a request: OK"
     OUT=$(guest exe "$agent")
     [ "$OUT" = "/opt/$agent/bin/$agent" ] ||
@@ -618,15 +610,25 @@ step_session() {
     quit || return 1
     keys -l "bash ~/rach2-accept/guest.sh run $agent resume" && keys Enter
     idle "the reopened conversation" "$(scaled 300)" || return 1
-    OUT=$(screen all | awk '/rach2-accept: ended with status/ { text = "" } { text = text $0 "\n" }
-        END { printf "%s", text }')
-    case $OUT in
-        *"sleep 600"*) say "$agent: reopened the conversation: OK" ;;
-        *)
+    end=$(($(date +%s) + $(scaled 300)))
+    while :; do
+        SCREEN=$(screen)
+        if question; then
+            continue
+        fi
+        OUT=$(screen all | awk '/rach2-accept: ended with status/ { text = "" } { text = text $0 "\n" }
+            END { printf "%s", text }')
+        case $OUT in
+            *"sleep 600"*) say "$agent: reopened the conversation: OK"; break ;;
+        esac
+        if [ "$(date +%s)" -ge "$end" ]; then
             record "$agent: the screen" "$OUT"
             bad "$agent: the reopened screen has no [sleep 600] of the cancelled request"
-            ;;
-    esac
+            return 1
+        fi
+        # interval: the reopened conversation is read every two seconds
+        sleep 2
+    done
     quit
 }
 
@@ -658,77 +660,6 @@ until_guest_some() {
     done
 }
 
-# serve AGENT PART: play PART of the agent's script for the fake server,
-# with its repository at the account's ~/rach2-accept/AGENT, in the QEMU
-# mode; nothing on the Lenovo.
-serve() {
-    [ "$MODE" = qemu ] || return 0
-    python3 -B -c 'import json, sys
-script = json.load(open(sys.argv[1]))[sys.argv[2]]
-text = json.dumps(script).replace("@REPO@", sys.argv[3])
-open(sys.argv[4], "w").write(text)' "$SCRIPTS/$1.json" "$2" "$HOME_M/rach2-accept/$1" \
-        "$work/$1.$2.json" || give_up "the server's script $1.$2"
-    python3 -B "$FAKEAPI" serve "$work/$1.$2.json" "$DISK.$1.$2.record" "$work/ca" "$APIPORT" \
-        > /dev/null 2> "$DISK.$1.$2.server" &
-    SPID=$!
-    n=0
-    until grep -q "fakeapi: listening on" "$DISK.$1.$2.server"; do
-        n=$((n + 1))
-        [ "$n" -lt 30 ] || give_up "the server did not listen for $1: $(cat "$DISK.$1.$2.server")"
-        # interval: the server's log is read once a second
-        sleep 1
-    done
-}
-
-# unserve AGENT PART: stop the fake server and require its verdict to pass.
-unserve() {
-    [ "$MODE" = qemu ] || return 0
-    stop_server
-    if [ "$SERVER_STATUS" = 0 ]; then
-        say "$1: the fake server played the $2 script: OK"
-    else
-        bad "$1: the fake server's verdict on the $2 script: $(tail -n 1 "$DISK.$1.$2.server")"
-    fi
-}
-
-# boot: start the QEMU mode's machine, with the fake server's names in its
-# /etc/hosts, its authority in the account's ~/rach2-accept/ca.pem, and the
-# account's settings for the fake server.
-boot() {
-    RUNUTIL=$REPO/build/tests/system/runutil
-    MKMBR=$REPO/build/tools/image/mkmbr
-    hosts=$(python3 -B -c 'import json, sys
-print(" ".join(sorted({n for f in sys.argv[1:] for n in json.load(open(f))["hosts"]})))' \
-        "$SCRIPTS"/*.json) || give_up "the fake server's names"
-    # shellcheck disable=SC2086 # the names are one word each
-    python3 -B "$FAKEAPI" ca "$work/ca" $hosts > "$work/ca.log" 2>&1 ||
-        give_up "the certificate authority: $(cat "$work/ca.log")"
-    size=$(($(wc -c < "$IMAGE") / 1048576))
-    rm -f "$DISK"
-    if ! dd if=/dev/zero of="$DISK" bs=1048576 count=0 seek=$((size + 2)) 2> /dev/null ||
-        ! dd if="$IMAGE" of="$DISK" bs=1048576 seek=1 conv=notrunc,sparse 2> /dev/null ||
-        ! "$MKMBR" --lba "$DISK" "2048:$((size * 2048)):83" > /dev/null; then
-        give_up "the disk"
-    fi
-    "${RACH2_QEMU:-qemu-system-x86_64}" -cpu max -m 4096 -display none -kernel "$KERNEL" \
-        -append "rach2.root=ext2" \
-        -device ich9-ahci,id=ahci0 \
-        -drive "if=none,id=drv0,file=$DISK,format=raw" -device ide-hd,drive=drv0,bus=ahci0.0 \
-        -netdev "user,id=n0,restrict=on,hostfwd=tcp::$PORT-:22,guestfwd=tcp:10.0.2.100:443-cmd:python3 -B $FAKEAPI relay $APIPORT" \
-        -device rtl8139,netdev=n0 \
-        -serial stdio < /dev/null > "$DISK.console" 2>&1 &
-    QPID=$!
-    "$RUNUTIL" until "$DISK.console" "init: sshd: started as pid" "$(scaled 400)" ||
-        give_up "init did not start the SSH server; the console: $DISK.console"
-    answer "$(scaled 900)" || give_up "no SSH answer from the machine"
-    lines=""
-    for name in $hosts; do
-        lines="${lines}10.0.2.100 $name\\n"
-    done
-    root "printf '$lines' >> /etc/hosts" || give_up "the fake server's names in /etc/hosts"
-    say "the machine boots, with the fake server's names: OK"
-}
-
 # answer SECONDS: wait until the account logs in over SSH, for at most
 # SECONDS, through a new master connection.
 answer() {
@@ -741,13 +672,8 @@ answer() {
     done
 }
 
-say "accepting the agents $AGENTS on $USERNAME@$HOST, in the mode $MODE"
-if [ "$MODE" = qemu ]; then
-    [ "${RACH2_ARCH:-x86_64}" = x86_64 ] || give_up "the agents layer is x86-64 only"
-    boot
-else
-    answer 30 || give_up "no SSH answer from $USERNAME@$HOST"
-fi
+# Stage the shared guest driver, versions and credentials for either mode.
+acceptance_setup() {
 # shellcheck disable=SC2016 # the machine's shell expands it
 HOME_M=$(m 'printf %s "$HOME"') || give_up "the account's home"
 OUT=$(m 'if [ -d ~/rach2-accept ] && [ ! -f ~/rach2-accept/.rach2-accept ]; then echo foreign; fi')
@@ -762,7 +688,7 @@ for file in "$REPO"/tests/system/fakeapi/repo/*; do
     mi "cat > ~/rach2-accept/fixture/${file##*/}" < "$file" ||
         give_up "the script's files on the machine"
 done
-if [ "$MODE" = qemu ]; then
+if [ "$MODE" = etude ]; then
     if ! mi 'cat > ~/rach2-accept/ca.pem' < "$work/ca/ca.pem" || ! guest setup; then
         give_up "the settings for the fake server"
     fi
@@ -785,16 +711,110 @@ for program in $AGENTS gh; do
     esac
 done
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential files"
+guest credentials "${GUEST_MODE:-$MODE}" $AGENTS > "$work/credentials.before" || give_up "the credential files"
 while read -r file digest; do
     [ "$digest" != missing ] || bad "no credential file $file"
 done < "$work/credentials.before"
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-OUT=$(guest filtered "$MODE" $AGENTS)
+OUT=$(guest filtered "${GUEST_MODE:-$MODE}" $AGENTS)
 case $OUT in
     "0 of "[1-9]*) say "the machine's filter removes every credential string: OK" ;;
     *) give_up "the machine's filter leaves [$OUT] of the credential files' strings" ;;
 esac
+}
+
+if [ "$MODE" = etude ]; then
+    HOME_M=/home/test
+    case $ACTION in
+        prepare)
+            hosts=$(python3 -B -c 'import json,sys; print(" ".join(sorted({n for f in sys.argv[1:] for n in json.load(open(f))["hosts"]})))' "$SCRIPTS/$AGENTS.json" "$SCRIPTS/gh.json") || exit 1
+            # shellcheck disable=SC2086 # DNS names from the scripts
+            python3 -B "$FAKEAPI" ca "$work/ca" $hosts || exit 1
+            for part in session after; do
+                python3 -B -c 'import json,sys; s=json.load(open(sys.argv[1]))[sys.argv[2]]; open(sys.argv[4],"w").write(json.dumps(s).replace("@REPO@",sys.argv[3]))' "$SCRIPTS/$AGENTS.json" "$part" "$HOME_M/rach2-accept/$AGENTS" "$work/$part.json" || exit 1
+            done
+            python3 -B -c 'import json,sys; json.dump(json.load(open(sys.argv[1]))["after"],open(sys.argv[2],"w"))' "$SCRIPTS/gh.json" "$work/gh.json" || exit 1
+            ;;
+        setup)
+            hosts=$(python3 -B -c 'import json,sys; print(" ".join(sorted({n for f in sys.argv[1:] for n in json.load(open(f))["hosts"]})))' "$SCRIPTS/$AGENTS.json" "$SCRIPTS/gh.json") || exit 1
+            lines=""
+            for name in $hosts; do lines="${lines}10.0.2.100 $name\\n"; done
+            root "printf '$lines' >> /etc/hosts" || give_up "the fake server's names"
+            acceptance_setup
+            ;;
+        session)
+            SOCKET_DIR=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
+            (cd "$SOCKET_DIR" && exec tmux -f /dev/null -D -S tmux) > "$work/tmux.log" 2>&1 &
+            TMUX_PID=$!
+            # interval: wait for the foreground server's socket
+            until [ -S "$SOCKET_DIR/tmux" ]; do kill -0 "$TMUX_PID" || exit 1; sleep 0.1; done
+            h new-session -d -s accept -x 120 -y 40 -n script
+            h set-option -g remain-on-exit on
+            h set-option -g default-terminal tmux-256color
+            agent=$AGENTS
+    agent_set "$agent"
+    say "$agent: the session"
+    step_session
+    h kill-window -t "accept:$agent" 2> /dev/null
+    m "tmux -L rach2-accept kill-session -t rach2-accept-$agent" 2> /dev/null
+            h kill-server 2>/dev/null
+            wait "$TMUX_PID" || :
+            TMUX_PID=""
+            ;;
+        credentials)
+# shellcheck disable=SC2086 # AGENTS is the validated list of program names
+guest credentials "${GUEST_MODE:-$MODE}" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
+if cmp -s "$work/credentials.before" "$work/credentials.after"; then
+    say "the credential files are as they were before the reboot: OK"
+else
+    bad "the credential files changed in the reboot: $(cut -d ' ' -f 1 "$work/credentials.after" |
+        tr '\n' ' ')"
+fi
+            ;;
+        after|gh)
+            if [ "$ACTION" = gh ]; then program=gh; else program=$AGENTS; fi
+    OUT=$(guest version "$program")
+    if [ "$OUT" = "$(cat "$work/version.$program")" ]; then
+        say "$program: the version and the program are as they were: OK"
+    else
+        bad "$program: changed: [$(printf '%s' "$OUT" | tr '\n' ' ')]"
+    fi
+    agent=$program
+    OUT=$(guest run "$program" once 2>&1)
+    record "$program: its answer after the reboot" "$OUT"
+    case $program.$OUT in
+        gh.*"rach2-accept: ended with status 0") say "gh: signed in after the reboot: OK" ;;
+        gh.*) bad "gh: gh auth status failed after the reboot" ;;
+        *"rach2-accept: ended with status 0")
+            if printf '%s\n' "$OUT" | grep -qi "signed in"; then
+                say "$program: answered a request after the reboot: OK"
+            else
+                bad "$program: its answer after the reboot does not say it is signed in"
+            fi
+            ;;
+        *) bad "$program: no answer after the reboot: $(printf '%s\n' "$OUT" | tail -n 1)" ;;
+    esac
+            ;;
+        finish)
+
+OUT=$(mi "bash ~/rach2-accept/guest.sh secrets ${GUEST_MODE:-$MODE} $AGENTS" < "$LOG")
+case $OUT in
+    "0 of "*) say "the log has none of the credential files' strings: OK" ;;
+    *) bad "the log has $OUT of the credential files' strings" ;;
+esac
+m 'rm -rf ~/rach2-accept' || bad "$HOME_M/rach2-accept was not removed"
+            ;;
+        *) exit 2 ;;
+    esac
+    [ "$FAILS" -eq 0 ] || exit 1
+    echo "agents-accept: $ACTION: PASS"
+    [ "$ACTION" != finish ] || echo "agents-accept: PASS"
+    exit 0
+fi
+
+say "accepting the agents $AGENTS on $USERNAME@$HOST, in the mode $MODE"
+answer 30 || give_up "no SSH answer from $USERNAME@$HOST"
+acceptance_setup
 
 h new-session -d -s accept -x 120 -y 40 -n script
 h set-option -g remain-on-exit on
@@ -802,11 +822,9 @@ h set-option -g default-terminal tmux-256color
 for agent in $AGENTS; do
     agent_set "$agent"
     say "$agent: the session"
-    serve "$agent" session
     step_session
     h kill-window -t "accept:$agent" 2> /dev/null
     m "tmux -L rach2-accept kill-session -t rach2-accept-$agent" 2> /dev/null
-    unserve "$agent" session
 done
 
 # The reboot, as root; on the Lenovo only after the machine has said it is
@@ -831,7 +849,7 @@ done
 say "the machine rebooted: OK"
 
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "$MODE" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
+guest credentials "${GUEST_MODE:-$MODE}" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
 if cmp -s "$work/credentials.before" "$work/credentials.after"; then
     say "the credential files are as they were before the reboot: OK"
 else
@@ -846,7 +864,6 @@ for program in $AGENTS gh; do
         bad "$program: changed: [$(printf '%s' "$OUT" | tr '\n' ' ')]"
     fi
     agent=$program
-    serve "$program" after
     OUT=$(guest run "$program" once 2>&1)
     record "$program: its answer after the reboot" "$OUT"
     case $program.$OUT in
@@ -861,10 +878,9 @@ for program in $AGENTS gh; do
             ;;
         *) bad "$program: no answer after the reboot: $(printf '%s\n' "$OUT" | tail -n 1)" ;;
     esac
-    unserve "$program" after
 done
 
-OUT=$(mi "bash ~/rach2-accept/guest.sh secrets $MODE $AGENTS" < "$LOG")
+OUT=$(mi "bash ~/rach2-accept/guest.sh secrets ${GUEST_MODE:-$MODE} $AGENTS" < "$LOG")
 case $OUT in
     "0 of "*) say "the log has none of the credential files' strings: OK" ;;
     *) bad "the log has $OUT of the credential files' strings" ;;

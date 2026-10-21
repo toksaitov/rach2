@@ -18,7 +18,6 @@
 # and after the loop; worker_session_verify.py judges them on the host with
 # every recorded request. The loop's environment has the settings of the
 # claude-print row and the model, which worker.sh does not choose.
-# bound: 900
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
 # hosts: http-intake.logs.us5.datadoghq.com

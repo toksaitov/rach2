@@ -734,13 +734,20 @@ NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine
                 build/tests/cases/machine/drill_scenario \
                 build/tests/cases/machine/install_scenario \
                 build/tests/cases/machine/sealed_scenario \
-                build/tests/cases/machine/grub_scenario
+                build/tests/cases/machine/grub_scenario \
+                build/tests/cases/machine/agents_scenario
 $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
+
+# The fake API service and relay of the agent machine cases.
+build/tests/cases/machine/agent_server build/tests/cases/machine/agent_relay: build/tests/cases/machine/%: tests/cases/machine/%.sh
+	@mkdir -p $(@D)
+	cp $< $@
+	chmod 755 $@
 
 # The network, process and disk scenarios that read a probe's console
 # report.

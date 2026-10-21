@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.fakeapi",
+  "summary": "The fakeapi suite under agents_scenario.c, each independent workload on a private GNU disk and restricted network",
+  "cases": [
+    {
+      "case_id": "machine.fakeapi.curl",
+      "behavior": "fakeapi: curl, with a private GNU root, SSH port and fake API server",
+      "units": ["fakeapi"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "curl"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["sh", "python3", "ssh", "scp", "openssl", "rm"], "features": {}},
+      "execution": {
+        "program": "agents_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "the ordinary test account in the guest; root installs private fixtures",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["gnu-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends its machines and API services; workload actions reap host children and retain private evidence only after a failure"
+      },
+      "steps": [
+        {"step_id": "prepare", "stage": "execute", "does": "make the private CA and API scripts"},
+        {"step_id": "server", "stage": "execute", "does": "start the API service on the allocated port"},
+        {"step_id": "boot", "stage": "boot", "does": "boot the private GNU disk until init starts sshd", "machine": "gnu"},
+        {"step_id": "setup", "stage": "execute", "does": "log in over SSH and stage the workload files"},
+        {"step_id": "workload", "stage": "execute", "does": "run the guest workload and judge its output"},
+        {"step_id": "verdict", "stage": "execute", "does": "stop the server and judge its verdict"},
+        {"step_id": "verify", "stage": "execute", "does": "judge the server record and returned archive"}
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [{"name": "gnu-disk", "bus": "ahci"}],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 1073741824,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "rtl8139",
+                "restrict": true,
+                "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}],
+                "guest_forwards": [{"address": "10.0.2.100", "guest_port": 443, "port": 1, "relay": ["agent_relay"]}]
+              }
+            ],
+            "boot_options": ["rach2.root=ext2"]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "fakeapi",
+          "program": "agent_server",
+          "ready": "fakeapi: listening on",
+          "does": "play the private script over TLS on the case port, recording each request and printing a final verdict on SIGTERM"
+        }
+      ],
+      "assertions": [
+        {"assertion_id": "fixture", "checks": "the private CA and row script are prepared", "source": "scenario"},
+        {"assertion_id": "boot", "checks": "the private GNU root mounts and init starts sshd", "source": "scenario"},
+        {"assertion_id": "ssh", "checks": "the test account reaches the private machine over SSH and receives the CA, fixtures and row files", "source": "scenario"},
+        {
+          "assertion_id": "application",
+          "checks": "the restricted route, certificate rejection, TLS GET, JSON POST, server-sent events, WebSocket ping and messages, unexpected request and the following request each have their expected result",
+          "source": "scenario"
+        },
+        {"assertion_id": "server-verdict", "checks": "the server reports exactly the deliberate unexpected fifth request as a failure", "source": "scenario"},
+        {"assertion_id": "record", "checks": "the server record contains each HTTP request and WebSocket message in order", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a declared operation ended", "limit": 7}],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000},
+        "gap": {"floor_us": 1000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 400000000, "ceiling_us": 1200000000}, "cleanup": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 180000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1610612736, "disk_bytes": 6442450944, "locks": [], "ports": 2, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-disk", "node": "images/etude-fakeapi.disk", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "test-key", "node": "tests/cases/credentials/rach2_test_ed25519", "per_architecture": false},
+        {"name": "agent_server", "node": "tests/cases/machine/agent_server", "per_architecture": false},
+        {"name": "agent_relay", "node": "tests/cases/machine/agent_relay", "per_architecture": false},
+        {"name": "agents_scenario", "node": "tests/cases/machine/agents_scenario", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the test needs a fresh GNU root and the restricted QEMU user network whose only outbound route reaches this case API service"}
+    }
+  ]
+}

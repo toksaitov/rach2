@@ -6,7 +6,6 @@
 # sign-in address and the prompt for the code the browser shows. Every
 # process of the program exits once tmux has ended. A native run leaves out
 # the screen, which needs QEMU's restricted network to be offline.
-# bound: 900
 
 # screen WHAT SECONDS TEXT: wait until the pane shows TEXT, and keep the
 # pane in OUT.

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "agents-accept",
-  "summary": "the agentsaccept suite, the QEMU mode of agents_accept.sh, on x86-64 with Claude Code alone, against a kernel that does not tell a terminal's programs that its window changed size",
+  "summary": "the agentsaccept case of Claude Code on x86-64 against a kernel that does not tell terminal programs that their window changed size",
   "tree": "shared",
   "sources": [
     "rach2/sys/tty/pty.c"

@@ -8,7 +8,6 @@
 # ~/.codex/packages. Codex starts its background server, and makes that
 # copy, before it draws the screen. Last, `codex features list` says that
 # the server is off, as /etc/codex/config.toml sets it.
-# bound: 900
 
 row() {
     local pane pids

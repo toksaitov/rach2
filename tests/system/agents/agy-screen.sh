@@ -11,7 +11,6 @@
 # first turn the program asks a smaller model for the conversation's title,
 # which the script has as an unordered step. The host verifies the session as
 # for agy-print.
-# bound: 1200
 # hosts: fakeapi.test generativelanguage.googleapis.com
 # hosts: antigravity-unleash.goog play.googleapis.com
 # script: fakeapi/agy-session.json

@@ -80,11 +80,6 @@ together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
 port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
 GNU_PORT        := $(call port,2296)
-FAKEAPI_PORT    := $(call port,2300)
-AGENTS_PORT     := $(call port,2301)
-AGENTS_API_PORT := $(call port,2302)
-AGENTSACCEPT_PORT     := $(call port,2303)
-AGENTSACCEPT_API_PORT := $(call port,2304)
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 # The suites' wall-clock limit tool (see its rule below).
@@ -879,15 +874,6 @@ run-gnu: $(DEMO_CREDS) musl-programs rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRI
 	sh tests/system/suites/gnu.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(GNU_TEST_DISK) \
 	    $(GNU_PORT) "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
 
-# `tests/run fakeapi`: the fake API server the agents' suites talk to, with
-# its test certificate authority, proved from the GNU system with curl on a
-# network whose route out is closed. Like the gnu suite, it boots the GNU
-# system's image, which its own target asks for.
-FAKEAPI_TEST_DISK = $(IMAGES_DIR)/fakeapi-test.disk
-run-fakeapi: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR)
-	sh tests/system/suites/fakeapi.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(FAKEAPI_TEST_DISK) \
-	    $(FAKEAPI_PORT)
-
 # `tests/run codexapi`: OpenAI's Responses protocol in the fake API server,
 # proved against the host's Codex at the pinned version, in a fresh home and
 # a network namespace with only a loopback interface: Codex reads a file,
@@ -904,26 +890,27 @@ run-fakeapi: $(DEMO_CREDS) rach2 os-real-gnu-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR
 # of tests/cases/host.museapi.json, which etude runs, and have no target
 # here.
 
-# `tests/run agents`: the agents layer on the x86-64 GNU system, and the
-# tests of the project's loops there, each row run over OpenSSH as the test
-# account on a machine whose only route out is to the fake API server on the
-# host. Its image, like the gnu suite's,
-# is built on a Linux host only and is not among the products `prepare-all`
-# builds.
-AGENTS_TEST_DISK = $(IMAGES_DIR)/agents-test.disk
-run-agents: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(DEADLINE) $(RUNUTIL) $(MKMBR)
-	sh tests/system/suites/agents.sh $(BOOT_KERNEL) $(OS_REAL_GNU_AGENTS_EXT2) $(AGENTS_TEST_DISK) \
-	    $(AGENTS_PORT) $(AGENTS_API_PORT)
+# `tests/run agents`: the pinned GNU agent packages and their headless and
+# interactive sessions, each row over SSH on a private GNU disk against its
+# fake API service, as the cases of tests/cases/machine.agents.json.
 
-# `tests/run agentsaccept`: the rehearsal of the agents' acceptance on the
-# Lenovo, tests/system/accept/agents_accept.sh in its QEMU mode, on the root
-# the agents suite boots: each agent's session in tmux over SSH, cancelled,
-# resized, reconnected and reopened, a reboot, and each agent's answer after
-# it, against the fake API server.
-AGENTSACCEPT_DISK = $(IMAGES_DIR)/agentsaccept-test.disk
-run-agentsaccept: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(RUNUTIL) $(MKMBR)
-	sh tests/system/accept/agents_accept.sh qemu $(BOOT_KERNEL) $(OS_REAL_GNU_AGENTS_EXT2) \
-	    $(AGENTSACCEPT_DISK) $(AGENTSACCEPT_PORT) $(AGENTSACCEPT_API_PORT)
+# `tests/run agentsaccept`: each agent's work, cancellation, resized terminal,
+# reconnected SSH client and reopened conversation, then a reboot and the
+# unchanged credentials, versions and authenticated requests, as the cases
+# of tests/cases/machine.agentsaccept.json.
+
+# `tests/run fakeapi`: curl's TLS, JSON and server-sent events, a WebSocket
+# exchange and an unexpected request that fails the API server's verdict,
+# on a restricted GNU machine, as tests/cases/machine.fakeapi.json.
+
+# The agent and fake API cases boot private copies of these GNU disks.
+$(IMAGES_DIR)/etude-agents.disk: $(OS_REAL_GNU_AGENTS_EXT2) $(MKMBR) tests/cases/machine/agent_disk.sh
+	@mkdir -p $(@D)
+	sh tests/cases/machine/agent_disk.sh $< $@ $(MKMBR)
+
+$(IMAGES_DIR)/etude-fakeapi.disk: $(OS_REAL_GNU_EXT2) $(MKMBR) tests/cases/machine/agent_disk.sh
+	@mkdir -p $(@D)
+	sh tests/cases/machine/agent_disk.sh $< $@ $(MKMBR)
 
 # `tests/run exfat`: exFAT written from a program, read back after a reboot,
 # judged by the host's reader and the external checker where the host has

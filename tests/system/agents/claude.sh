@@ -6,7 +6,6 @@
 # account signed in. Claude Code keeps its configuration in its home and
 # makes a directory under TMPDIR, so the row gives it both in WORK. Nothing
 # here needs the network.
-# bound: 300
 
 row() {
     export HOME="$WORK/home" TMPDIR="$WORK/tmp"

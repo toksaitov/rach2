@@ -18,7 +18,6 @@
 # else. The row's script has the last answer held, and while the program
 # waits for it the row requires the process to run Google's file with
 # nothing preloaded.
-# bound: 900
 # hosts: fakeapi.test generativelanguage.googleapis.com
 # hosts: antigravity-unleash.goog play.googleapis.com
 # script: fakeapi/agy-session.json

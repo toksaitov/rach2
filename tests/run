@@ -512,7 +512,8 @@ scripts_inventory() {
         ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
            tests/system/*.py tests/system/accept/agents/* tests/system/checkers/*.awk tests/system/fixtures/*.sh \
            tests/system/agents/* tests/system/fakeapi/* tests/system/fakeapi/repo/* tools/flow/* \
-           tools/image/*.sh krffs/*.sh tests/cases/*.json tests/cases/host/*.sh krffs/manifests/* 2>/dev/null
+           tools/image/*.sh krffs/*.sh tests/cases/*.json tests/cases/host/*.sh tests/cases/machine/*.c tests/cases/machine/*.h \
+           tests/cases/machine/*.sh tests/cases/machine/*.py krffs/manifests/* 2>/dev/null
     } ) | present
 }
 hasher() {
@@ -874,6 +875,16 @@ for suite in "$@"; do
     esac
     family=$(family_of "$suite")
     if [ -n "$family" ]; then
+        rows=""
+        case $suite in
+            agents) rows=${RACH2_AGENTS_ROWS:-} ;;
+            agentsaccept) rows=${RACH2_ACCEPT_AGENTS:-} ;;
+        esac
+        if [ -n "$rows" ]; then
+            selected=$WORK/$suite.json
+            python3 "$REPO/tests/cases/machine/agent_select.py" "${family#* }" "$rows" "$selected" || exit 2
+            family="${family%% *} $selected"
+        fi
         echo "$suite $(suite_memory "$suite")$flags cases=${family#* }"
         echo "$suite ${family%% *}" >> "$WORK/map"
     else

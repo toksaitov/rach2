@@ -15,7 +15,6 @@
 # machine has no route anywhere else. The row's script has the last answer
 # held, and while the program waits for it the row requires the process to
 # run Anthropic's file with nothing preloaded.
-# bound: 900
 # hosts: fakeapi.test api.anthropic.com platform.claude.com claude.com
 # hosts: downloads.claude.ai raw.githubusercontent.com
 # hosts: http-intake.logs.us5.datadoghq.com

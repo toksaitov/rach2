@@ -8,7 +8,6 @@
 # server here, gets GitHub's answer to a bad token, 401, and gh reports it;
 # a native run leaves that out, since only QEMU's network reaches the fake
 # server by that name.
-# bound: 300
 # hosts: api.github.com
 
 row() {

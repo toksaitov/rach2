@@ -8,7 +8,6 @@
 # runs its check, edits the greeting and commits, against the fake Model API.
 # The host verifies the returned repository and every recorded request. A
 # native run leaves out the session, which needs the fake API server.
-# bound: 600
 # hosts: muse.fakeapi.test
 # script: fakeapi/muse.json
 
