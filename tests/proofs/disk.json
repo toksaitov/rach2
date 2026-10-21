@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "proof": "disk",
+  "summary": "the cases of tests/run disk, disk-ahci and disk-q35 under etude, against a blockprobe that compares each file with another's pattern, and an AHCI driver that takes a controller at function 0 alone, which only the q35 machine's at 0:31.2 is not",
+  "tree": "shared",
+  "sources": [
+    "tests/blockprobe.c",
+    "rach2/sys/block/ahci.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel",
+    "${WORK}/blockprobe"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 tests && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel tests/blockprobe"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run disk disk-ahci disk-q35 </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "pattern",
+      "summary": "blockprobe compares each file it reads back with the pattern of the next file",
+      "edits": [
+        {
+          "file": "tests/blockprobe.c",
+          "find": "buf[i] == pattern(f, i)",
+          "replace": "buf[i] == pattern(f + 1u, i)"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: disk: FAIL",
+          "run: disk-ahci: FAIL",
+          "run: disk-q35: FAIL",
+          "intact failed: file 0 differs from its pattern at byte 0"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "function-zero",
+      "summary": "the AHCI driver takes a controller only at function 0 of its device, which the q35 machine's at 0:31.2 is not",
+      "edits": [
+        {
+          "file": "rach2/sys/block/ahci.c",
+          "find": "        if (dev.prog_if == AHCI_PCI_PROGIF) {\n",
+          "replace": "        if (dev.prog_if == AHCI_PCI_PROGIF && dev.function == 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: disk: PASS",
+          "run: disk-ahci: PASS",
+          "run: result: failed: disk-q35"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

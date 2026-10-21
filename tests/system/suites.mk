@@ -504,20 +504,12 @@ run-diskfull: rach2 tests krffs test-image $(HARNESS)
 run-socket: rach2 tests krffs test-image $(HARNESS) $(HOSTPEER) $(RUNUTIL)
 	sh tests/system/suites/socket.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
 	    $(HARNESS) $(HOSTPEER) $(SOCKET_PORT)
-# `tests/run disk`: the disk-backed page-cache integrity check. Builds a disk
-# image holding blockprobe, boots disk-only with KRFFS on the real ATA disk
-# through the cache (rach2.fsdisk), and runs blockprobe from the debug shell,
-# passing on its "BLOCKPROBE OK" serial token. blockprobe's 6 MiB fit in the
-# 8 MiB cache of this machine, so it proves that data written and fsynced
-# through the cache reads back whole; the stress suite's 33 MiB exercise
-# eviction.
-DISK_TEST_IMAGE = $(IMAGES_DIR)/disk-test.disk
-run-disk: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_IMAGE) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(DISK_TEST_IMAGE),format=raw,if=ide,index=0,media=disk" \
-	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_IMAGE).log probe=blockprobe
+# `tests/run disk`: the disk-backed page-cache integrity check. It is the case
+# of tests/cases/guest.disk.json, which etude runs, and has no target here:
+# blockprobe on a KRFFS root that rach2.fsdisk mounts from a disk on IDE.
+# blockprobe's 6 MiB fit in the 8 MiB cache of this machine, so it proves that
+# data written and fsynced through the cache reads back whole; the stress
+# suite's 33 MiB exercise eviction.
 # `tests/run bootpart`: /proc/cmdline and the level-one disk devices. Three
 # boots of one disk: as mkdisk built it there is a single KRFFS partition, so
 # /dev/bootpart must be absent from stat and open; after the boot fixture adds a
@@ -811,7 +803,7 @@ run-cred-persist: rach2 musl-programs krffs $(HARNESS)
 # `tests/run crash`: prove the dirty-mount flag detects an unclean shutdown. A
 # crashed boot (killed after mounting) leaves the on-disk dirty bit set for
 # fsck.krffs to report; a clean halt clears it. Its own image so it cannot race
-# `tests/run disk` on a shared file under `make -j`.
+# another suite on a shared file under `make -j`.
 CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 # The capture `tests/run raw` reads the hop limits and the checksum out of.
 RAW_PCAP = $(IMAGES_DIR)/raw$(NIC_TAG).pcap
@@ -1984,38 +1976,18 @@ run-stress: rach2 tests krffs $(HARNESS)
 # stay on if=ide.
 AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
               --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
-# Per-bus image names so an ATA target and its AHCI twin can run under `make -j`
-# without racing on a shared file (each recipe re-stages its image first).
-DISK_TEST_AHCI_IMAGE = $(IMAGES_DIR)/disk-test-ahci.disk
-# The q35 run boots the same fixture as the AHCI one but must not share the
-# file: each recipe stages its own copy, and two suites staging one path at the
-# same time leaves one of them checking a file the other has just renamed away.
-DISK_TEST_Q35_IMAGE = $(IMAGES_DIR)/disk-test-q35.disk
 PERSIST_AHCI_DISK    = $(IMAGES_DIR)/persist-test-ahci.disk
 STRESS_AHCI_DISK     = $(IMAGES_DIR)/stress-test-ahci.disk
 # `tests/run disk-ahci`: the disk suite's page-cache integrity check with the
-# disk on an AHCI controller.
-run-disk-ahci: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_AHCI_IMAGE) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(DISK_TEST_AHCI_IMAGE),format=raw,if=none,id=drv0" \
-	    $(AHCI_ATTACH) \
-	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_AHCI_IMAGE).log probe=blockprobe
+# disk on an AHCI controller. It is the case of
+# tests/cases/guest.disk-ahci.json, which etude runs, and has no target here.
 # `tests/run disk-q35`: the same disk proof on the q35 machine, whose AHCI
 # controller is built in at 0:31.2, function 2 of the multi-function device 31.
-# That is the laptop's exact topology, and no other test exercises it: every
-# other AHCI test attaches a separate controller that lands at function 0, so a
-# scan that never walked past function 0 would pass all of them and fail on the
-# real machine.
-run-disk-q35: rach2 tests krffs $(HARNESS)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(DISK_TEST_Q35_IMAGE) 64 48
-	$(HARNESS) --kernel $(BOOT_KERNEL) \
-	    --append "rach2.disk=ahci rach2.fsdisk rach2.rescue" \
-	    --drive "file=$(DISK_TEST_Q35_IMAGE),format=raw,if=none,id=drv0" \
-	    --qemu-arg=-machine --qemu-arg=q35 --qemu-arg=-cpu --qemu-arg=max \
-	    --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ide.0 \
-	    --timeout 120 --steptmo 90 --ok "BLOCKPROBE OK" --log $(DISK_TEST_Q35_IMAGE).log probe=blockprobe
+# That is the Lenovo's topology, and no other test exercises it: every other
+# AHCI test attaches a separate controller that lands at function 0, so a scan
+# that never walked past function 0 would pass all of them and fail on the
+# real machine. It is the case of tests/cases/guest.disk-q35.json, which etude
+# runs, and has no target here.
 # `tests/run disks`: two disks of different sizes on one AHCI controller,
 # both in /proc/disk with their ports and sizes, both with nodes, a
 # partition of each mounted and written, and the second disk's file found

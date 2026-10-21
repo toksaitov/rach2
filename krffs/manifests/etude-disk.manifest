@@ -1,0 +1,16 @@
+# The disk of etude's cases that boot a KRFFS root on disk (tests/cases/):
+# mkdisk.sh builds it, and each case boots a private copy of it with
+# rach2.fsdisk and rach2.rescue, so that the kernel mounts the KRFFS of its
+# partition through the page cache.
+#
+# The debug shell starts /etude-guest, which keeps its state and the cases'
+# workspaces under /tmp, on the disk. A case's program is staged here when
+# the cases that boot this disk run it, and etude-guest sends any other.
+
+file 0755 /etude-guest build/tools/etude/guest/etude-guest
+dir 1777 /tmp
+
+# blockprobe, the program of guest.disk, guest.disk-ahci and guest.disk-q35:
+# files larger together than the page cache's share of the disk, written,
+# synced and read back.
+file 0755 /blockprobe build/tests/blockprobe

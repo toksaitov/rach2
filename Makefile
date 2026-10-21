@@ -127,6 +127,7 @@ OS_REAL_EXT2    = $(IMAGES_DIR)/os-real.ext2
 METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 OS_REAL_GRUB_DISK = $(IMAGES_DIR)/os-real-grub$(RECOVERY_KEY_TAG).disk
+ETUDE_DISK      = $(IMAGES_DIR)/etude-disk.disk
 MKIMAGE         = krffs/mkimage.sh
 BINFIND         = build/tools/inspect/binfind
 ELFCHECK        = build/tools/inspect/elfcheck
@@ -341,6 +342,7 @@ MANIFEST_DEPS_rach2_metal := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-meta
 MANIFEST_DEPS_rach2_recovery := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-recovery.manifest)
 MANIFEST_DEPS_rach2_metal_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal-disk.manifest)
 MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.manifest)
+MANIFEST_DEPS_etude_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/etude-disk.manifest)
 # The targets that build what os-real's manifest stages, and grub-test's,
 # which is os-real's with two more files. Every rule that stages either names
 # them as prerequisites, order-only in the rule of a file, so that a tree with
@@ -349,7 +351,8 @@ MANIFEST_PARTS_os_real = utils check-busybox check-tcc check-pdpmake check-setid
                          check-dropbearmulti check-e2fsck ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
-    $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test))
+    $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
+    $(MANIFEST_DEPS_etude_disk))
 STAGED_IN_MANIFESTS = $(filter $(ARCH_MUSL)/% $(TCC_STAGE)/%,$(MANIFEST_INPUTS))
 MUSL_KNOWN = $(sort $(MUSL_OUTPUTS) $(filter $(ARCH_MUSL)/%,$(STAGED_IN_MANIFESTS)))
 TCC_KNOWN = $(sort $(TCC_OUTPUTS) $(filter $(TCC_STAGE)/%,$(STAGED_IN_MANIFESTS)))
@@ -891,6 +894,12 @@ musl-programs: $(LIBC_STAMP)
 # 13 MiB, of which the programs take 7.0 on i686 and 6.3 on x86-64.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish tools/etude/guest
 	$(MKIMAGE) krffs/manifests/test.manifest $@ 13 5120
+
+# The disk of etude's cases that boot a KRFFS root on disk, such as those of
+# tests/cases/guest.disk.json: 64 MiB with a KRFFS partition of 48, of which
+# each case boots a private copy. A case's preparation names it as a goal.
+$(ETUDE_DISK): krffs/manifests/etude-disk.manifest $(MANIFEST_DEPS_etude_disk) $(MKDISK) $(IMAGE_TOOLS) | preflight krffs tests tools/etude/guest
+	$(MKDISK) krffs/manifests/etude-disk.manifest $@ 64 48
 
 # The os-simple image: a small Unix built out of this project's own code. init
 # execs /bin/login, so this image needs the account databases;

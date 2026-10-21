@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.disk-q35",
+  "summary": "The page cache of a KRFFS root mounted from a disk on the AHCI controller of the q35 machine, function 2 of the multi-function device 31, as on the Lenovo; the program is tests/blockprobe.c",
+  "cases": [
+    {
+      "case_id": "guest.disk-q35.blockprobe",
+      "behavior": "files written through the page cache of a KRFFS root mounted from a disk on the q35 machine's own AHCI controller at 0:31.2, larger together than the cache, synced and read back, keep every byte",
+      "units": ["disk-q35", "blockprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "etude-disk", "bus": "ide"}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.disk=ahci", "rach2.fsdisk", "rach2.rescue"], "machine": "q35"}},
+      "execution": {"program": "blockprobe", "stdin": null, "role": "ordinary", "privileges": "root, which writes the root directory", "isolation": [{"fixture": "disk", "names": ["etude-disk"]}], "children": "none", "cleanup": "it removes each file that compares equal; the disk is the attempt's private copy"},
+      "assertions": [
+        {"assertion_id": "written", "checks": "each of the 24 files of 256 KiB opens, is written whole and is synced", "source": "program"},
+        {"assertion_id": "read", "checks": "each file opens again and reads back whole", "source": "program"},
+        {"assertion_id": "intact", "checks": "every byte read back equals the pattern of its file and offset", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "blockprobe", "node": "tests/blockprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "etude-disk", "node": "images/etude-disk.disk", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the page cache's window it tests exists only for a KRFFS root that rach2.fsdisk mounts from the boot disk"}
+    }
+  ]
+}

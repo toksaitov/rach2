@@ -1,13 +1,12 @@
-# The disk of `tests/run disk` and of the other suites that boot a KRFFS root
-# on disk: probes the kernel's debug shell runs from it.
+# The disk of the suites that boot a KRFFS root on disk: probes the
+# kernel's debug shell runs from it.
 #
 # mkdisk.sh builds it, and a suite boots it with rach2.fsdisk and
 # rach2.rescue, so the kernel mounts the KRFFS from the disk through the page
-# cache. In `tests/run disk` the debug shell runs `exec /blockprobe`, which
-# writes files larger together than the page cache, syncs them, and reads
-# every byte back; its "BLOCKPROBE OK" on the serial line is the result.
-# ahciprobe is the queue suite's, and lagprobe that of the mount, fatwrite
-# and exfat suites.
+# cache. blockprobe writes files larger together than the page cache, syncs
+# them, and reads every byte back; the bus suite runs it on each layout of
+# its disks, and the queue suite's ahciprobe runs it beside raw reads.
+# lagprobe is the probe of the mount, fatwrite and exfat suites.
 file 0755 /blockprobe build/tests/blockprobe
 file 0755 /ahciprobe build/tests/ahciprobe
 
