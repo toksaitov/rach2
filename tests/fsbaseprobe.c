@@ -18,7 +18,8 @@
  * loads others, each process must keep its own across two thousand yields
  * between them on one processor. A tracer must read a stopped child's
  * selectors with PTRACE_PEEKUSER, and selectors it writes with
- * PTRACE_POKEUSER must be the child's when it runs again.
+ * PTRACE_POKEUSER must be the child's when it runs again, a null one with
+ * RPL 3 as any null selector.
  *
  * arch_prctl is x86-64's alone; on i686 the probe says its rows did not run
  * and passes.
@@ -469,7 +470,9 @@ static void run_selector_switches(void)
  * The selectors through ptrace. The child stops itself with the user data
  * selector in DS, ES, FS and GS; the parent reads them, writes the user
  * code selector to DS and FS and a null selector of RPL 3 to ES and GS, and
- * lets it run on to check them.
+ * lets it run on to check them. The child takes any null selector in ES and
+ * GS, since an `iretq` to user mode, as at the end of an interrupt in the
+ * child, may make a null selector 0: QEMU does so for DS and ES.
  */
 static void run_selector_ptrace(void)
 {
@@ -480,8 +483,8 @@ static void run_selector_ptrace(void)
     if (pid == 0) {
         syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0);
         syscall2(SYS_KILL, syscall0(SYS_GETPID), SIGSTOP);
-        if (ds_sel() != GDT_USER_CODE || es_sel() != 3 || fs_sel() != GDT_USER_CODE ||
-            gs_sel() != 3) {
+        if (ds_sel() != GDT_USER_CODE || (es_sel() & ~3ul) != 0 || fs_sel() != GDT_USER_CODE ||
+            (gs_sel() & ~3ul) != 0) {
             sys_exit(5);
         }
         sys_exit(0);
