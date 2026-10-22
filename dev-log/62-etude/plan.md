@@ -20,6 +20,18 @@ These were made on 2026-10-19.
 * Protection from stuck tests is part of the design, since a stuck test costs every worker time.
 * Timing is recorded per case and per run in a structured history, for profiling and for finding a slowdown on the same machine.
 
+## Research
+
+The owner asked for [research](research.md) before this plan was written, and Codex finished it on 19 October. The coordinating session failed to act on it. It did not show the research to the owner whole, though the owner asked to see the results; it did not check this plan against it; and it did not raise the findings the plan left out until the owner found their effects on 23 October, too late to change the phase's design or the tasks already done. On that day the owner saw no point in further research. The findings, by the research's section, and what became of each:
+
+* Taken: a test runner in portable C (C4), one catalog of cases with stable names (C1), one admission authority for each machine, shared by every account (C3), a run left unfinished reported apart from a failure (A4, C6), and limits measured from earlier runs on the same machine in place of fixed seconds (C6).
+* Missed: an Apple Silicon Mac cannot accelerate an x86 guest, so it must emulate it under TCG or send the work to an x86 machine (A5), and each environment is measured before the design relies on it (C10). This plan put a whole run, the GNU build among it, on the Mac under TCG without measuring it. The build was estimated at 2 to 4 days when the owner found it on 23 October, and moved to a Linux virtual machine on the Mac (#873).
+* Missed: 53 of the 101 suites were to become cases of shared families (B1, B2). Etude has one case file for each of the 103 suites.
+* Missed: the cuts of B4, rows that check nothing and diagnostic work, out of the compulsory runs. On 23 October the owner decided that each suite's pointless tests are deleted in this phase.
+* Missed: small reproducible subsets of the tests for an agent's quick checks, the practice of the parallel compiler project (A1). This plan has no such sample.
+* Missed: the migration in 43 tasks (C9). This plan has 96.
+* Set aside by the owner on 23 October: a deliberate fault to prove each new test (A1, C8, C9). No test is proven by a mutation.
+
 ## What the tree has now
 
 * `tests/run` is a shell program. Its accelerator choice (`set_accel`) knows KVM, HVF and TCG, and not WHPX; ci, the release and every account on the testing host run TCG.
