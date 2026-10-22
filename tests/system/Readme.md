@@ -147,7 +147,7 @@ A suite is a line in `tests/registry` and a family of cases, `tests/cases/FAMILY
 
 A script that writes several files at once has one pattern rule, whose targets are `$(call together,FILES)`, which make runs once for all of them, since GNU Make 3.81, the make of macOS, has no grouped targets (`&:`); the comment on `together` in `suites.mk` says what else 3.81 needs. Add the script to the list in `together_test.sh`, which checks each one.
 
-A suite waits for what the machine prints and bounds each wait; a shell suite writes the bound as `$(scaled N)`, and the harness scales its own. A suite that keeps an interval on purpose marks it and lists it in `intervals`. A program the suite runs is listed in `tests/probe-suites` with the suite's name.
+A suite waits for what the machine prints and sets no time limit of its own: etude's watchdog ends a case that has made no progress for longer than its bounds allow. A suite that keeps an interval on purpose marks it and lists it in `intervals`. A program the suite runs is listed in `tests/probe-suites` with the suite's name.
 
 ## Limits
 
