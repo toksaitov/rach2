@@ -82,7 +82,7 @@ run_case()
     name=$2
     expected=$3
     log=$work/$phase.$name.log
-    "$work/$phase" "$name" "$work/$phase.$name" > "$log" 2>&1 &
+    "$work/$phase" "$name" > "$log" 2>&1 &
     child=$!
     status=0
     wait "$child" || status=$?

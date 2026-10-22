@@ -118,7 +118,7 @@ build()
     echo "poll-kernels: building $order"
     # A source change within the object's timestamp unit must still compile.
     rm -f "$work/$out/sys/io/poll.o" "$work/$out/kernel"
-    "$runner" watch poll-kernels 120 "$work/$order.jobs" \
+    "$runner" watch poll-kernels 120 \
         make -s -C "$work/rach2" -j4 "ELFCHECK=$checker" "ARCH=$RACH2_ARCH" &
     child=$!
     rc=0

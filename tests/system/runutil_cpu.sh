@@ -1,8 +1,9 @@
 #!/bin/sh
 # runutil_cpu.sh [--mutate | --texts]: quiet CPU work below deadline must
-# keep a suite alive across process groups. An unrelated CPU worker must not
-# keep an idle suite alive. --mutate removes descendant CPU accounting in a
-# private helper, requires the busy row to fail, then rebuilds and restores it.
+# keep a watched command alive across process groups. An unrelated CPU worker
+# must not keep an idle command alive. --mutate removes descendant CPU
+# accounting in a private helper, requires the busy row to fail, then rebuilds
+# and restores it.
 set -eu
 case ${1:-} in
     '') mutate=0 ;;
@@ -62,7 +63,7 @@ busy()
 {
     phase=$1
     expected=$2
-    "$work/runutil" suite cpu 3 "$work/$phase" \
+    "$work/runutil" watch cpu 3 \
         "$work/deadline" 60 "$work/worker" > "$work/$phase.log" 2>&1 &
     runner=$!
     status=0
@@ -80,7 +81,7 @@ build
 busy fixed 0
 "$work/worker" &
 unrelated=$!
-"$work/runutil" suite idle 3 "$work/idle" \
+"$work/runutil" watch idle 3 \
     "$work/deadline" 60 sleep 30 > "$work/idle.log" 2>&1 &
 runner=$!
 status=0

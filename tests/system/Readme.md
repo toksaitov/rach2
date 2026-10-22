@@ -71,7 +71,7 @@ A case that does not pass keeps its workspace as `build/tests/failed/RUN.CASE.rR
 
 ### Completion bounds
 
-A suite waits for a token and judges what the kernel counts, never the clock; a number of seconds in a suite is a completion bound. `RACH2_TIMEOUT_FACTOR=F` multiplies every bound, for a single suite or a set: the runner passes it on as `RACH2_DEADLINES=scaled` and `RACH2_DEADLINE_FACTOR=F`, which the harness, `runtests`, `ptydrive`, `hostpeer` and `runutil until` and `gone` read, and a shell suite writes a bound as `$(scaled N)` from `deadline.sh`. A bound that asserts a rate, the time a row applies a load for, a guest's own deadline and the idleness limit are not multiplied. The runner measures nothing about the host.
+A suite waits for a token and judges what the kernel counts, never the clock; a number of seconds in a suite is a completion bound. `RACH2_TIMEOUT_FACTOR=F` multiplies every bound, for a single suite or a set: the runner passes it on as `RACH2_DEADLINES=scaled` and `RACH2_DEADLINE_FACTOR=F`, which the harness, `runtests`, `ptydrive` and `hostpeer` read, and a shell suite writes a bound as `$(scaled N)` from `deadline.sh`. A bound that asserts a rate, the time a row applies a load for, a guest's own deadline and the idleness limit are not multiplied. The runner measures nothing about the host.
 
 The `clock` suite is the one exception, since the clock is what it tests: it compares the guest's clocks with the host's across thirty stops of the machine, within 250 ms, which its case declares as a clock reference (see [`machine.clock.json`](../cases/machine.clock.json)).
 
@@ -89,7 +89,7 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 * `ptydrive.c` runs a command, such as `ssh`, on a pseudo-terminal of a given size and answers one password prompt from an environment variable, which it removes from the command's environment and from the output it passes on.
 * `deadline.c` runs a command in a process group of its own and kills the group when a time limit passes, with status 124.
 * `screentext.c` prints the text a framebuffer console shows in a QEMU screen dump, matching each cell against the kernel's own font, `rach2/sys/display/vga_font.c`; `--colors` prints how many colours the dump has.
-* `runutil.c` is the runner's helper above. Built at `build/tests/system/runutil`, it is also the suites' wait: `runutil until FILE PATTERN SECS [COUNT]` returns 0 once COUNT lines of FILE, one by default, match the basic regular expression PATTERN, and 1 when SECS pass first; `runutil gone PID SECS` returns 0 once the process has ended.
+* `runutil.c` is the runner's helper above. Built at `build/tests/system/runutil`, its `watch NAME IDLE COMMAND` also runs a command for `tools/dev/poll_kernels.sh` and `accept/su_command.sh`, and stops it, with status 124, when for IDLE seconds it has written nothing and its processes have used next to no processor time.
 
 A suite that starts QEMU itself with `-serial stdio < FIFO > LOG` sources `drive.sh`: `drive_feed` holds the FIFO open, `drive_type` types a line once the output it answers has arrived, `drive_expect` and `drive_prompt` wait for fresh output after the last match or the first line typed since it, `drive_sent` waits until the typed lines are in the machine's input, and `drive_login` logs in.
 
@@ -235,7 +235,7 @@ A suite is a line in `tests/registry` and a family of cases, `tests/cases/FAMILY
 
 A script that writes several files at once has one pattern rule, whose targets are `$(call together,FILES)`, which make runs once for all of them, since GNU Make 3.81, the make of macOS, has no grouped targets (`&:`); the comment on `together` in `suites.mk` says what else 3.81 needs. Add the script to the list in `together_test.sh`, which checks each one.
 
-A suite waits for what the machine prints and bounds each wait; a shell suite writes the bound as `$(scaled N)`, and the harness and `runutil until` scale theirs. A suite that keeps an interval on purpose marks it and lists it in `intervals`. A program the suite runs is listed in `tests/probe-suites` with the suite's name.
+A suite waits for what the machine prints and bounds each wait; a shell suite writes the bound as `$(scaled N)`, and the harness scales its own. A suite that keeps an interval on purpose marks it and lists it in `intervals`. A program the suite runs is listed in `tests/probe-suites` with the suite's name.
 
 A new test is trusted only after it has been made to fail, as `AGENTS.md` says. A row of the `default` suite gets a fault in its probe's catalogue, `tests/proofs/probe-PROBE.json`; another row gets a catalogue of its own, as the [testing skill](../../.agents/skills/testing/SKILL.md) says.
 

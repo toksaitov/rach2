@@ -80,8 +80,8 @@ static int fixture_setpgid(pid_t pid, pid_t group)
 #undef setpgid
 
 /**
- * `runutil_group CASE LEDGER` runs runutil's `watch` over this program's own
- * `report`, with LEDGER as its ledger, and returns runutil's status.
+ * `runutil_group CASE` runs runutil's `watch` over this program's own
+ * `report`, and returns runutil's status.
  *
  * `report` checks that it leads its own process group and exits 23, so that
  * runutil_group.sh can tell its status from runutil's. runutil should run it
@@ -89,21 +89,20 @@ static int fixture_setpgid(pid_t pid, pid_t group)
  */
 int main(int argc, char **argv)
 {
-    char *watch[] = {argv[0], "watch", "group", "5", NULL, argv[0], "report", NULL};
+    char *watch[] = {argv[0], "watch", "group", "5", argv[0], "report", NULL};
     if (argc == 2 && !strcmp(argv[1], "report")) {
         if (getpgrp() != getpid())
             fixture_error("the executed command is in the wrong group");
         puts("runutil-group: result: command ran in its own group");
         return 23;
     }
-    if (argc != 3)
-        fixture_error("expected a case and a ledger path");
+    if (argc != 2)
+        fixture_error("expected a case");
     mode = argv[1];
     if (strcmp(mode, "assigned") && strcmp(mode, "denied") && strcmp(mode, "child") &&
         strcmp(mode, "session"))
         fixture_error("unknown case");
     if (pipe(barrier) != 0)
         fixture_error("pipe failed");
-    watch[4] = argv[2];
-    return runutil_main(7, watch);
+    return runutil_main(6, watch);
 }

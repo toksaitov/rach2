@@ -655,8 +655,6 @@ tests/system/runner/runtests.c:main lines 244 a parser over an external format, 
 tests/system/runner/runtests.c:marker_at params 8 a parser over an external format, one check per field in the format's order
 tests/system/runner/runtests.c:selftest lines 142 the checker's own selftest, its cases in one table
 
-tests/system/runner/runutil.c:check_token complexity 29 a parser over an external format, one check per field in the format's order
-tests/system/runner/runutil.c:main complexity 36 a parser over an external format, one check per field in the format's order
 tests/system/runner/runutil.c:supervise complexity 54 a parser over an external format, one check per field in the format's order
 tests/system/runner/runutil.c:supervise lines 158 a parser over an external format, one check per field in the format's order
 
