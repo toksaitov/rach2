@@ -21,21 +21,26 @@
 # two compilers side by side, the first unchanged; the shells sh, bash, and
 # dash, zsh, ksh, mksh, yash, fish, tcsh and csh where the host has them,
 # each with its startup files' output, a false result line among it; sh and
-# its tools from BusyBox, as on Rach2, where the host has BusyBox; a build
-# stopped by SIGTERM, which leaves nothing, and by SIGKILL, whose directory
-# the next build passes by; a failed compile; a script cut short, which
-# changes nothing; damaged source; two builds of one version at once, of
-# which one is published; a local build under a parallel make with a variable
-# of its own, neither of which reaches the compiles; Windows, whose version
-# has neither etude-remote nor etude-bridge; a commit's source; and the real
-# build.
+# its tools from BusyBox, as on Rach2; a build stopped by SIGTERM, which
+# leaves nothing, and by SIGKILL, whose directory the next build passes by; a
+# failed compile; a script cut short, which changes nothing; damaged source;
+# two builds of one version at once, of which one is published; a local
+# build under a parallel make with a variable of its own, neither of which
+# reaches the compiles; Windows, whose version has neither etude-remote nor
+# etude-bridge; a commit's source; and the real build.
+#
+# The busybox row runs on the host when it has BusyBox, and otherwise in
+# etude's tooling machine (tests/system/tooling.sh), whose Ubuntu has it: the
+# job runs this test with --busybox against the private copy. The row is not
+# run when neither has BusyBox.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored and the rows run again at the end.
 # --texts puts each fault into the copy, requires only that it changes the
-# file, and runs no row.
+# file, and runs no row. --busybox runs the busybox row alone, and exits 3
+# when the host has no BusyBox.
 #
-# Usage: sh tests/system/etude_version_test.sh [--mutate | --texts]
+# Usage: sh tests/system/etude_version_test.sh [--mutate | --texts | --busybox]
 #
 set -u
 unset MAKEFLAGS MFLAGS MAKELEVEL
@@ -44,7 +49,8 @@ case ${1:-} in
     '') mode=check ;;
     --mutate) mode=mutate ;;
     --texts) mode=texts ;;
-    *) echo 'etude-version-test: usage: etude_version_test.sh [--mutate | --texts]' >&2; exit 2 ;;
+    --busybox) mode=busybox ;;
+    *) echo 'etude-version-test: usage: etude_version_test.sh [--mutate | --texts | --busybox]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
@@ -161,6 +167,21 @@ if [ -n "$busybox" ]; then
             *) ln -s "$busybox" "$work/busybox/$a" || exit 1 ;;
         esac
     done
+fi
+
+# Where the busybox row ran, and why it did not.
+ranbusybox=
+nobusybox=
+tooling=
+if [ -z "$busybox" ] && [ "$mode" != busybox ]; then
+    REPO=$repo
+    # shellcheck source=tests/system/tooling.sh
+    . "$repo/tests/system/tooling.sh"
+    if tooling_made; then
+        tooling=1
+    else
+        nobusybox='no busybox on this host, and no made tooling machine'
+    fi
 fi
 
 # fault NAME: put fault NAME into the private copy, or the original for
@@ -350,7 +371,12 @@ row()
                 shell_row "$s" || return 1
             done ;;
         busybox)
-            [ -z "$busybox" ] || shell_row "$work/busybox/sh" "$work/busybox" ;;
+            if [ -n "$busybox" ]; then
+                shell_row "$work/busybox/sh" "$work/busybox" || return 1
+                ranbusybox='on this host'
+            elif [ -n "$tooling" ]; then
+                busybox_elsewhere
+            fi ;;
         term)
             state
             echo TERM > "$FIX/interrupt"
@@ -468,6 +494,26 @@ row()
     esac
 }
 
+# busybox_elsewhere: run the busybox row against the copy in the tooling
+# machine, with this test and the copy in one tar file, since the job's volume
+# keeps no file's mode.
+busybox_elsewhere()
+{
+    rm -rf "$work/job" && mkdir -p "$work/job/tests/system" || exit 1
+    cp "$repo/tests/system/etude_version_test.sh" "$work/job/tests/system/" &&
+        cp -R "$TREE/tools" "$TREE/utils" "$work/job/" &&
+        COPYFILE_DISABLE=1 tar -c --format ustar -f "$work/job.tar" -C "$work/job" tests tools utils || exit 1
+    echo 'tar -x -f job.tar && sh tests/system/etude_version_test.sh --busybox' > "$work/job.sh"
+    rc=0
+    tooling run -m 1024 -t 300 -i "$work/job.tar" "$work/job.sh" > "$work/out" 2> "$work/err" || rc=$?
+    case $rc in
+        0) ranbusybox='in the tooling machine' ;;
+        3) nobusybox='no busybox on this host or in the tooling machine' ;;
+        126) nobusybox='no busybox on this host, and no made tooling machine' ;;
+        *) why "the tooling machine's job ended with status $rc"; return 1 ;;
+    esac
+}
+
 # sha [FILE]: print the SHA-256 of FILE or of standard input.
 sha()
 {
@@ -516,11 +562,19 @@ if [ "$mode" = texts ]; then
     done
     exit 0
 fi
+if [ "$mode" = busybox ]; then
+    [ -n "$busybox" ] || { echo 'etude-version-test: not run: busybox: no busybox on this host'; exit 3; }
+    fault none
+    rows=busybox
+    rows >&2 || exit 1
+    echo 'etude-version-test: result: pass: busybox'
+    exit 0
+fi
 fault none
 rows >&2 || exit 1
 if [ "$mode" = mutate ]; then
     bb=
-    [ -z "$busybox" ] || bb=' busybox'
+    [ -z "$ranbusybox" ] || bb=' busybox'
     expect_fault no-reuse "reuse versions shells$bb revision" || exit 1
     expect_fault no-digest 'damaged' || exit 1
     expect_fault keep-build 'term failed damaged race' || exit 1
@@ -532,6 +586,7 @@ if [ "$mode" = mutate ]; then
     rows >&2 || exit 1
     echo 'etude-version-test: result: pass: seven faults caught and restored'
 fi
-echo "etude-version-test: shells: $shells${busybox:+ busybox}"
-[ -n "$busybox" ] || echo 'etude-version-test: not run: busybox: no busybox on this host'
+echo "etude-version-test: shells: $shells${ranbusybox:+ busybox}"
+[ -z "$ranbusybox" ] || echo "etude-version-test: busybox: $ranbusybox"
+[ -z "$nobusybox" ] || echo "etude-version-test: not run: busybox: $nobusybox"
 echo 'etude-version-test: result: pass: 15 rows'
