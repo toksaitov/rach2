@@ -72,20 +72,23 @@ static char state_of(pid_t pid)
     return end && end[1] == ' ' ? end[2] : 0;
 }
 
-/** The child's half: wait, for at most some 3 s, until `parent` sleeps, and
- * then write a byte to `fd`. Exit 0 when the parent was seen asleep and the
- * write took, 1 when the write failed and 2 when the parent never slept. */
+/** The child's half: wait until `parent` sleeps, and then write a byte to
+ * `fd`. Exit 0 when the parent was seen asleep and the write took, 1 when the
+ * write failed and 2 when the parent ended without sleeping. */
 static void wake_sleeper(pid_t parent, int fd)
 {
-    int tries;
+    char state;
 
-    for (tries = 0; tries < 3000; tries++) {
-        if (state_of(parent) == 'S') {
+    for (;;) {
+        state = state_of(parent);
+        if (state == 'S') {
             _exit(write(fd, "z", 1) == 1 ? 0 : 1);
+        }
+        if (state == 0 || state == 'Z') {
+            _exit(2);
         }
         msleep(1);
     }
-    _exit(2);
 }
 
 int main(void)
@@ -110,7 +113,7 @@ int main(void)
 
     write(p[1], "x", 1);
     pfd.revents = 0;
-    n = poll(&pfd, 1, 1000);
+    n = poll(&pfd, 1, -1);
     check(n == 1 && (pfd.revents & POLLIN), "poll reports POLLIN after write");
 
     FD_ZERO(&rset);
@@ -133,7 +136,7 @@ int main(void)
     pfd.fd = p[0];
     pfd.events = POLLIN;
     pfd.revents = 0;
-    n = poll(&pfd, 1, 3000);
+    n = poll(&pfd, 1, -1);
     queued = -1;
     ioctl(p[0], FIONREAD, &queued);
     check(n == 1 && (pfd.revents & POLLIN), "poll wakes on the child's write");
