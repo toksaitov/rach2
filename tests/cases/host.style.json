@@ -217,9 +217,9 @@
       "behavior": "a changed libc, start file, libgcc or linker script relinks what uses it, and the loaded kernel keeps no debug sections",
       "units": ["style", "`tests/system/build_inputs_test.sh`"],
       "domain": "host",
-      "architectures": "none",
+      "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["build-inputs"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "i686-elf-gcc"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": ["make", "i686-elf-gcc", "x86_64-elf-gcc"], "features": {}},
       "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
       "assertions": [
         {"assertion_id": "link-inputs", "checks": "tests/system/build_inputs_test.sh passes", "source": "program"}
@@ -393,7 +393,7 @@
       "behavior": "one tree stages one image: names in strcmp order and no host time of day in a node",
       "units": ["style", "`tools/verify/check_repro.sh`"],
       "domain": "host",
-      "architectures": "none",
+      "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["repro"], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "posix", "tools": ["make", "sh"], "features": {}},
       "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},

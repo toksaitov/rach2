@@ -183,9 +183,9 @@ inhouse_ch() {
 
 # ---- The cases. ----
 
-# Every tool a case runs is on the path. The link-dependency test builds
-# i686's fixture whatever ARCH is; the other cases that compile use ARCH's
-# cross toolchain.
+# Every tool a case runs is on the path. The compilation databases are made
+# from i686's build whatever ARCH is; the cases that compile use ARCH's cross
+# toolchain.
 case_tools() {
     for t in i686-gcc:i686-elf-gcc i686-readelf:i686-elf-readelf \
              cross-gcc:${ABI_CROSS}gcc cross-readelf:${ABI_CROSS}readelf \
