@@ -113,7 +113,7 @@ static unsigned int spin(void)
 
 /**
  * Fork a child that spins until the kernel has charged it `ticks` of user
- * time, or for a thousand ticks, then exits with status 0. Returns its pid.
+ * time, then exits with status 0. Returns its pid.
  */
 static pid_t spinning_child(long ticks)
 {
@@ -121,10 +121,11 @@ static pid_t spinning_child(long ticks)
 
     if (pid == 0) {
         struct tms tm;
-        clock_t start = times(&tm);
 
-        while ((long)tm.tms_utime < ticks && (long)(times(&tm) - start) < 1000) {
+        times(&tm);
+        while ((long)tm.tms_utime < ticks) {
             spin();
+            times(&tm);
         }
         _exit(0);
     }
