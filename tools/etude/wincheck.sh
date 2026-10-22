@@ -77,17 +77,23 @@ fi
 # copy DIR: copy the sources to DIR/tools/etude and DIR/utils.
 copy() {
     e=$1/tools/etude
-    mkdir -p "$e/win" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils"
+    mkdir -p "$e/win" "$e/posix" "$e/guest" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils"
     cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
     cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$src"/tooling.c "$src"/etude_tooling.c \
         "$src"/history.c "$src"/history_json.h "$src"/history_json.c "$src"/history_collect.c \
         "$src"/watchdog.c "$src"/supervise.c "$src"/hold.h "$src"/etude_hold.c "$src"/portlock.c \
         "$src"/etude_ports.c "$e/"
+    cp "$src"/*.c "$src"/*.h "$src"/sources.mk "$src"/version.mk "$e/"
+    cp "$src"/posix/*.c "$src"/posix/*.h "$e/posix/"
+    cp "$src"/guest/wire.c "$src"/guest/wire.h "$e/guest/"
+    cp "$src"/win/bridge.c "$e/win/"
+    cp "$src"/posix/qemu.c "$src"/posix/posix.h "$src"/posix/store.c "$src"/posix/store.h "$e/posix/"
+    cp "$src"/win/files.c "$src"/win/files.h "$src"/win/sockets.h "$src"/win/wincollectionfix.c "$e/win/"
     cp "$src"/volume/volume.h "$src"/volume/volume.c "$src"/volume/etude_volume.c "$e/volume/"
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
     cp "$src"/win/winexec.h "$src"/win/winexec.c "$src"/win/winsys.c "$src"/win/winfmt.h \
-        "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/noqemu.c "$src"/win/wintarget.c \
+        "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/wintarget.c \
         "$src"/win/winfixture.h "$src"/win/winfixture.c "$src"/win/winexecfix.c \
         "$src"/win/winledgerfix.c "$src"/win/winrunfix.c "$src"/win/wintoolfix.c \
         "$src"/win/winstand.c "$src"/win/hold.c "$src"/win/winholdfix.c "$src"/win/winportsfix.c \
@@ -99,25 +105,33 @@ copy() {
 compile() {
     (
         cd "$1/tools/etude/win"
-        executor='exec.c ../capture.c winexec.c winsys.c winfmt.c'
+        executor='exec.c ../capture.c winexec.c winsys.c winfmt.c files.c'
         history='../history.c ../history_json.c ../history_collect.c ../../../utils/sha256.c'
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I ../../../utils -o winfixture.exe winfixture.c winexecfix.c \
-            winledgerfix.c winrunfix.c wintoolfix.c winholdfix.c winportsfix.c ../ledger.c \
-            ../watchdog.c ../supervise.c noqemu.c $executor ../../../utils/sha256.c -lws2_32
+            winledgerfix.c winrunfix.c wintoolfix.c winholdfix.c winportsfix.c ../ledger.c ../watchdog.c \
+            ../supervise.c ../history_json.c ../posix/qemu.c ../posix/store.c ../qemu_profile.c ../processor.c wincollectionfix.c $executor ../../../utils/sha256.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
-        "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
+        "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
         "$cc" $2 -I ../volume -o winstand.exe winstand.c ../volume/volume.c
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -o etude-tooling.exe ../etude_tooling.c ../tooling.c $executor \
-            $history -lws2_32
+            $history -lws2_32 -lbcrypt
         # shellcheck disable=SC2086
         "$cc" $2 -o etude-volume.exe ../volume/etude_volume.c ../volume/volume.c
         # shellcheck disable=SC2086
         "$cc" $2 -o etude-hold.exe ../etude_hold.c hold.c winfmt.c
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I .. -o etude-ports.exe ../etude_ports.c ../portlock.c winfmt.c
+    ) </dev/null
+    (
+        cd "$1"
+        # shellcheck disable=SC2016 # make expands the source-list variable
+        make -f tools/etude/version.mk OUT=tools/etude/win EXE=.exe CC="$cc" CFLAGS="$2" \
+            'LEGACY_SRC=$(ETUDE_LEGACY_WIN_SRC)' LEGACY_FLAGS=-D_WIN32_WINNT=0x0A00 \
+            LEGACY_LIBS='-lws2_32 -lbcrypt' 'BRIDGE_SRC=$(ETUDE_BRIDGE_WIN_SRC)' \
+            BRIDGE_FLAGS=-D_WIN32_WINNT=0x0A00 BRIDGE_LIBS='-lws2_32 -lbcrypt' all bridge collection
     ) </dev/null
 }
 
@@ -138,7 +152,8 @@ copy "$work/ok"
 compile "$work/ok" "$flags -Wall -Wextra -Werror"
 w=$work/ok/tools/etude/win
 "$pecheck" "$w/winfixture.exe" "$w/wintarget.exe" "$w/winstand.exe" "$w/etude-tooling.exe" \
-    "$w/etude-volume.exe" "$w/etude-hold.exe" "$w/etude-ports.exe"
+    "$w/etude-volume.exe" "$w/etude-hold.exe" "$w/etude-ports.exe" "$w/etude-legacy.exe" \
+    "$w/etude-bridge.exe" "$w/casecheck.exe" "$w/history_check.exe" "$w/history_lines.exe"
 if fixtures "$work/ok" "$work/ok.log" "$@"; then
     cat "$work/ok.log"
     finished=1

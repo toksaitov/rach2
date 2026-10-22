@@ -97,7 +97,7 @@ struct etude_output {
     int closed;     /* nonzero once the stream reached its end */
 };
 
-/* Where a suspension of an attempt's process is, on POSIX systems. */
+/* Where a suspension of an attempt's process is. */
 enum etude_suspension {
     ETUDE_SUSPEND_NONE,    /* not suspended, or seen to continue after a stop */
     ETUDE_SUSPEND_ASKED,   /* SIGSTOP sent; the stop not yet seen */
@@ -126,7 +126,7 @@ struct etude_exec_result {
     uint64_t started_us;  /* monotonic times: the start was asked, */
     uint64_t ended_us;    /* the end of the process was seen, */
     uint64_t finished_us; /* and the cleanup was done */
-    /* The suspensions of etude_exec_suspend, on POSIX systems alone. */
+    /* The suspensions of etude_exec_suspend. */
     enum etude_suspension suspension;
     unsigned suspensions;  /* the stops the keeper saw */
     uint64_t suspended_us; /* monotonic times: the keeper saw the last stop, */
@@ -187,9 +187,13 @@ int etude_exec_start(struct etude_exec *ex, const struct etude_exec_spec *spec,
 struct etude_proc *etude_exec_wait(struct etude_exec *ex, int timeout_ms);
 
 /* A descriptor of the caller's that etude_exec_watch waits on beside the
- * attempts' own: a file descriptor or a socket on POSIX systems. */
+ * attempts' own: a file descriptor or socket on POSIX, a socket on Windows. */
 struct etude_watch {
+#ifdef _WIN32
+    intptr_t fd;
+#else
     int fd;
+#endif
     int events;  /* ETUDE_WATCH_IN, ETUDE_WATCH_OUT or both */
     int revents; /* what was found ready, with ETUDE_WATCH_END for a
                     closed or failed descriptor */
@@ -200,12 +204,11 @@ struct etude_watch {
 #define ETUDE_WATCH_END 4
 
 /**
- * Wait as etude_exec_wait does, and also for one of the `n` descriptors of
- * `w` to be ready, which sets its `revents` and returns NULL.
- *
+ * Wait as etude_exec_wait does, and also for one of the `n` descriptors of `w`
+ * to be ready, which sets its `revents` and returns NULL.
  * Each call serves the attempts at least once, so that a `timeout_ms` of 0
- * reads what is ready and returns at once. Only the POSIX executor has it,
- * for the QEMU launcher, which does not yet run on Windows.
+ * reads what is ready and returns at once. On Windows the descriptors are
+ * Winsock sockets.
  */
 struct etude_proc *etude_exec_watch(struct etude_exec *ex, int timeout_ms, struct etude_watch *w,
                                     size_t n);
@@ -218,20 +221,18 @@ struct etude_proc *etude_exec_watch(struct etude_exec *ex, int timeout_ms, struc
 void etude_exec_cancel(struct etude_proc *p);
 
 /**
- * Suspend an attempt that runs: its keeper sends SIGSTOP to the case's
- * process group, and the result's `suspension` becomes ETUDE_SUSPEND_STOPPED,
- * with `suspended_us`, once the keeper has seen the case's process stop,
- * every thread of it, by waitpid(2). A stopped process runs nothing and
- * answers nothing until it is resumed.
- *
- * Only the POSIX executor has it. A cancellation sends SIGCONT after its
+ * Suspend an attempt that runs: its keeper sends SIGSTOP to the case's process
+ * group, and the result's `suspension` becomes ETUDE_SUSPEND_STOPPED, with
+ * `suspended_us`, once the keeper has seen the case's process stop, every
+ * thread of it, by waitpid(2). A stopped process runs nothing and answers
+ * nothing until it is resumed.
+ * On Windows the executor suspends every process of the job and records the
+ * stop once all are suspended. A cancellation on POSIX sends SIGCONT after its
  * SIGTERM, and so does the keeper when its controller has gone, so that no
- * case is left stopped and a stopped case ends by its own handling of
- * SIGTERM.
- *
- * @return 0, or -1 with errno ESRCH for an attempt whose process has ended
- *         or that is cancelled, EBUSY for one whose suspension is not
- *         ETUDE_SUSPEND_NONE, or EPIPE when its keeper has gone.
+ * case is left stopped and a stopped case ends by its own handling of SIGTERM.
+ * @return 0, or -1 with errno ESRCH for an attempt whose process has ended or
+ * that is cancelled, EBUSY for one whose suspension is not ETUDE_SUSPEND_NONE,
+ * or EPIPE when its keeper has gone.
  */
 int etude_exec_suspend(struct etude_proc *p);
 

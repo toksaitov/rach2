@@ -26,8 +26,8 @@
 # failed compile; a script cut short, which changes nothing; damaged source;
 # two builds of one version at once, of which one is published; a local
 # build under a parallel make with a variable of its own, neither of which
-# reaches the compiles; Windows, whose version has etude-ports but neither
-# etude-remote nor etude-bridge; a commit's source; and the real build.
+# reaches the compiles; Windows, with native collection and admission
+# programs and no etude-remote; a commit's source; and the real build.
 #
 # The busybox row runs on the host when it has BusyBox, and otherwise in
 # etude's tooling machine (tests/system/tooling.sh), whose Ubuntu has it: the
@@ -427,7 +427,7 @@ row()
             [ "$(cat "$FIX/ssh.log")" = "-T -o BatchMode=yes -- machine $windows_command" ] ||
                 { why "ssh was run as: $(cat "$FIX/ssh.log")"; return 1; }
             [ "$(sed -n 's/^platform //p' "$dir/version")" = 'windows x86_64' ] &&
-                [ "$(sed -n 's/^program \([^ ]*\) .*/\1/p' "$dir/version" | tr '\n' ' ')" = 'casecheck.exe etude-hold.exe etude-ports.exe history_check.exe ' ] ||
+                [ "$(sed -n 's/^program \([^ ]*\) .*/\1/p' "$dir/version" | tr '\n' ' ')" = 'casecheck.exe etude-bridge.exe etude-hold.exe etude-legacy.exe etude-ports.exe history_check.exe history_lines.exe ' ] ||
                 { why 'not a version for Windows'; return 1; } ;;
         revision)
             state

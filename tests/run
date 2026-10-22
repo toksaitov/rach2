@@ -623,9 +623,9 @@ set_accel() {
                 RACH2_QEMU_ACCEL=tcg
             fi
             ;;
-        kvm|hvf|tcg) ;;
+        kvm|hvf|whpx|tcg) ;;
         *)
-            echo "run: result: refused: RACH2_QEMU_ACCEL must be kvm, hvf or tcg" >&2
+            echo "run: result: refused: RACH2_QEMU_ACCEL must be kvm, hvf, whpx or tcg" >&2
             return 1
             ;;
     esac

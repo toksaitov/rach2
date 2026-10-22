@@ -2,16 +2,29 @@
  * lifecycle.c: the code the scenarios of tests/cases/machine/ share, over
  * libetude-case.
  */
+#ifndef _WIN32
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/socket.h>
 #include <sys/wait.h>
+#endif
 #include <time.h>
 #include <unistd.h>
+
+#ifdef _WIN32
+#include "win/winexec.h"
+#include "win/winfmt.h"
+typedef intptr_t clock_socket;
+typedef int socklen_t;
+#else
+typedef int clock_socket;
+#endif
 
 #include "history_json.h"
 #include "lifecycle.h"
@@ -433,7 +446,7 @@ int lc_timing_level(const char *w, size_t len)
 }
 
 /** Answer clockmusl's requests on the bound UDP socket `fd` until killed. */
-static void clockref_serve(int fd)
+static void clockref_serve(clock_socket fd)
 {
     struct sockaddr_in peer;
     socklen_t size;
@@ -445,12 +458,30 @@ static void clockref_serve(int fd)
     for (;;) {
         size = sizeof(peer);
         n = recvfrom(fd, packet, sizeof(packet) - 1, 0, (struct sockaddr *)&peer, &size);
-        if (n <= 0)
+        if (n <= 0) {
+#ifdef _WIN32
+            return;
+#else
             continue;
+#endif
+        }
         packet[n] = '\0';
+#ifdef _WIN32
+        if (sscanf(packet, "CLOCKREF %u %c", &sequence, &tail) != 1)
+            continue;
+        {
+            uint64_t us = etude_win_mono_us();
+            int64_t utc = etude_win_utc_us();
+            mono.tv_sec = (time_t)(us / 1000000u);
+            mono.tv_nsec = (long)(us % 1000000u * 1000);
+            real.tv_sec = (time_t)(utc / 1000000);
+            real.tv_nsec = (long)(utc % 1000000 * 1000);
+        }
+#else
         if (sscanf(packet, "CLOCKREF %u %c", &sequence, &tail) != 1 ||
             clock_gettime(CLOCK_MONOTONIC, &mono) != 0 || clock_gettime(CLOCK_REALTIME, &real) != 0)
             continue;
+#endif
         n = snprintf(packet, sizeof(packet), "CLOCKREF %u %lld %lld", sequence,
                      (long long)mono.tv_sec * 1000000000LL + mono.tv_nsec,
                      (long long)real.tv_sec * 1000000000LL + real.tv_nsec);
@@ -458,6 +489,54 @@ static void clockref_serve(int fd)
     }
 }
 
+#ifdef _WIN32
+static SOCKET clockref_socket = INVALID_SOCKET;
+static HANDLE clockref_thread;
+
+/** Answer clock requests until the owner closes the socket. */
+static DWORD WINAPI clockref_worker(void *arg)
+{
+    clockref_serve((clock_socket)(uintptr_t)arg);
+    return 0;
+}
+
+pid_t lc_clockref_start(unsigned *port)
+{
+    struct sockaddr_in a;
+    int size = sizeof a;
+    if (etude_win_net_start() != 0 || clockref_thread != NULL)
+        return -1;
+    clockref_socket =
+        WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, 0, WSA_FLAG_NO_HANDLE_INHERIT);
+    memset(&a, 0, sizeof a);
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (clockref_socket == INVALID_SOCKET ||
+        bind(clockref_socket, (struct sockaddr *)&a, size) != 0 ||
+        getsockname(clockref_socket, (struct sockaddr *)&a, &size) != 0)
+        goto fail;
+    *port = ntohs(a.sin_port);
+    clockref_thread =
+        CreateThread(NULL, 0, clockref_worker, (void *)(uintptr_t)clockref_socket, 0, NULL);
+    if (clockref_thread != NULL)
+        return 1;
+fail:
+    if (clockref_socket != INVALID_SOCKET)
+        closesocket(clockref_socket);
+    clockref_socket = INVALID_SOCKET;
+    return -1;
+}
+void lc_clockref_stop(pid_t pid)
+{
+    if (pid <= 0 || clockref_thread == NULL)
+        return;
+    closesocket(clockref_socket);
+    WaitForSingleObject(clockref_thread, INFINITE);
+    CloseHandle(clockref_thread);
+    clockref_thread = NULL;
+    clockref_socket = INVALID_SOCKET;
+}
+#else
 pid_t lc_clockref_start(unsigned *port)
 {
     struct sockaddr_in a;
@@ -489,6 +568,8 @@ void lc_clockref_stop(pid_t pid)
         waitpid(pid, NULL, 0);
     }
 }
+
+#endif
 
 int lc_clockref_said(const char *w, size_t len)
 {

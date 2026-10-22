@@ -121,4 +121,14 @@ int fx_hold_killed(void);
  */
 int fx_ports(void);
 
+/**
+ * Native artifact publication keeps bytes, file identities and large offsets.
+ */
+int fx_collection_files(void);
+/**
+ * QEMU starts under the requested accelerator and leaves no process on
+ * failure.
+ */
+int fx_collection_qemu(void);
+
 #endif

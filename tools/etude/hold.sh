@@ -21,6 +21,12 @@
 # parent's, up to the first process.
 etude_held()
 {
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*)
+            [ -n "${RACH2_HOLD_HELPER:-}" ] && [ -x "$RACH2_HOLD_HELPER" ] || return 1
+            "$RACH2_HOLD_HELPER" -q "$1"
+            return $? ;;
+    esac
     etude_held_owner=${RACH2_TREE_HELD:-}
     [ -n "$etude_held_owner" ] || return 1
     [ "$(sed -n 's/^pid //p' "$1/build/.run.lock/owner" 2>/dev/null)" = "$etude_held_owner" ] ||
@@ -49,6 +55,27 @@ etude_hold()
     trap 'rm -rf ${etude_hold_dir:+"$etude_hold_dir"}; exit 130' INT
     trap 'rm -rf ${etude_hold_dir:+"$etude_hold_dir"}; exit 143' TERM
     etude_hold_dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-hold.XXXXXX") || exit 1
+    case $(uname -s) in
+        MINGW*|MSYS*|UCRT*|CLANG*)
+            trap '[ -z "$etude_hold_dir" ] || rm -rf "$etude_hold_dir"' 0
+            if ! "${ETUDE_WIN_CC:-/ucrt64/bin/gcc}" -std=c99 -O2 -static -D_WIN32_WINNT=0x0A00 \
+                -o "$etude_hold_dir/etude-hold.exe" "$etude_hold_repo/tools/etude/etude_hold.c" \
+                "$etude_hold_repo/tools/etude/win/hold.c" "$etude_hold_repo/tools/etude/win/winfmt.c"; then
+                echo "$etude_hold_name: etude-hold did not compile" >&2
+                exit 1
+            fi
+            RACH2_HOLD_HELPER=$(cygpath -m "$etude_hold_dir/etude-hold.exe") || exit 1
+            export RACH2_HOLD_HELPER
+            if etude_held "$etude_hold_repo"; then
+                rm -rf "$etude_hold_dir"
+                unset RACH2_HOLD_HELPER
+                trap - 0 HUP INT TERM
+                return 0
+            fi
+            "$RACH2_HOLD_HELPER" "$etude_hold_repo" "$etude_hold_name" \
+                "$(cygpath -m "$(command -v sh)")" "$@"
+            exit $? ;;
+    esac
     if ! cc -std=c99 -O2 -D_DEFAULT_SOURCE -o "$etude_hold_dir/etude-hold" \
         "$etude_hold_repo/tools/etude/etude_hold.c" "$etude_hold_repo/tools/etude/posix/hold.c"; then
         echo "$etude_hold_name: etude-hold did not compile" >&2

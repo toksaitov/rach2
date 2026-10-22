@@ -177,12 +177,18 @@ static DWORD make_job(struct etude_win_sup *s, struct etude_win_child *c)
     return 0;
 }
 
-/** Open the file of standard input: PATH, or the NUL device. */
+/** Open standard input: PATH, the inherited handle for "-", or NUL. */
 static DWORD open_stdin(const char *path, HANDLE *in)
 {
     SECURITY_ATTRIBUTES sa;
     wchar_t *w = NULL;
 
+    if (path != NULL && strcmp(path, "-") == 0) {
+        if (!DuplicateHandle(GetCurrentProcess(), GetStdHandle(STD_INPUT_HANDLE),
+                             GetCurrentProcess(), in, 0, TRUE, DUPLICATE_SAME_ACCESS))
+            return GetLastError();
+        return 0;
+    }
     sa.nLength = sizeof sa;
     sa.lpSecurityDescriptor = NULL;
     sa.bInheritHandle = TRUE;

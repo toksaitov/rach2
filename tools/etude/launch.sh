@@ -48,9 +48,9 @@ done < "$site"
 [ "$header" = 1 ] || refuse 'incompatible site format'
 # The optional boundary_lazy permits the lazy 72 GiB boundary profile it names.
 case $boundary in ''|bigmem-boundary-v1) ;; *) refuse 'boundary_lazy must be bigmem-boundary-v1' ;; esac
-case $(uname -s)/$endpoint in Linux/linux|Darwin/macos) ;; *) refuse 'endpoint is disabled or incompatible' ;; esac
+case $(uname -s)/$endpoint in Linux/linux|Darwin/macos|MINGW*/windows|MSYS*/windows|UCRT*/windows|CLANG*/windows) ;; *) refuse 'endpoint is disabled or incompatible' ;; esac
 for path in "$site" "$launcher" "$ledger" "$locks" "${bridge:-}"; do
-    case $path in /*) ;; *) refuse "not an absolute path: $path" ;; esac
+    case $path in /*|[A-Za-z]:/*) ;; *) refuse "not an absolute path: $path" ;; esac
 done
 [ -x "$bridge" ] && [ -x "$launcher" ] && [ -d "$locks" ] && [ -d "$ledger" ] ||
     refuse 'installed endpoint is unavailable'
@@ -222,7 +222,7 @@ esac
 make_real=$(command -v make) || refuse 'make is unavailable'
 case $make_real in */etude-bin/make) make_real=${ETUDE_MAKE_REAL:-} ;; esac
 ETUDE_MAKE_REAL=$make_real
-case $ETUDE_MAKE_REAL in /*) ;; *) refuse 'make is not an absolute path' ;; esac
+case $ETUDE_MAKE_REAL in /*|[A-Za-z]:/*) ;; *) refuse 'make is not an absolute path' ;; esac
 make_dir=${launcher%/*}/etude-bin
 [ -x "$make_dir/make" ] || refuse 'installed make wrapper is unavailable'
 PATH=$make_dir:$PATH

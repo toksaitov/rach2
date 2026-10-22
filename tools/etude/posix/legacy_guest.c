@@ -14,6 +14,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
+
 #include "etude/qemu.h"
 #include "../json.h"
 #include "legacy_guest.h"
@@ -322,6 +328,9 @@ static int make_profile(struct legacy_guest *g)
 /** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
 static const char *on_path(const char *name, char *out, size_t size)
 {
+#ifdef _WIN32
+    return etude_win_program(name, out, size) == 0 ? out : NULL;
+#else
     const char *path = getenv("PATH"), *end;
     size_t len;
 
@@ -337,6 +346,7 @@ static const char *on_path(const char *name, char *out, size_t size)
             return out;
     }
     return NULL;
+#endif
 }
 
 /** Fill the site of the attempt's machine: the accelerator and QEMU's
@@ -346,6 +356,10 @@ static int make_site(struct legacy_guest *g)
     int x86_64 = strcmp(g->spec.arch, "x86_64") == 0;
     const char *program = x86_64 ? "qemu-system-x86_64" : "qemu-system-i386";
 
+#ifdef _WIN32
+    if (strcmp(g->spec.accel, "whpx") == 0)
+        program = "qemu-system-x86_64";
+#endif
     if (etude_accel_parse(g->spec.accel, &g->site.accel) != 0)
         return failed(g->why, sizeof(g->why), "the accelerator %s is not QEMU's", g->spec.accel);
     if (on_path(program, x86_64 ? g->qemu_x86_64 : g->qemu_i686, PATH_LEN) == NULL)
@@ -670,6 +684,39 @@ static void step(struct legacy_guest *g, uint64_t now)
     }
 }
 
+#ifdef _WIN32
+/** Keep QEMU's own diagnostics when it ends before the guest can report. */
+static void boot_lost(struct legacy_guest *g, const struct etude_machine_result *r)
+{
+    char path[PATH_LEN];
+    FILE *f;
+    const struct etude_output *output[2] = {&r->qemu->out, &r->qemu->err};
+    const char *names[2] = {"qemu.stdout", "qemu.stderr"};
+    size_t i, line;
+    for (i = 0; i < 2; i++) {
+        if (output[i]->kept == 0)
+            continue;
+        if ((size_t)snprintf(path, sizeof path, "%s/%s", g->spec.work, names[i]) >= sizeof path)
+            continue;
+        f = fopen(path, "wb");
+        if (f != NULL) {
+            if (fwrite(output[i]->data, 1, output[i]->kept, f) != output[i]->kept)
+                fprintf(stderr, "etude-legacy: could not keep %s\n", path);
+            if (fclose(f) != 0)
+                fprintf(stderr, "etude-legacy: could not close %s\n", path);
+        }
+    }
+    line = r->qemu->err.data != NULL ? strcspn(r->qemu->err.data, "\r\n") : 0;
+    if (r->end == ETUDE_END_ACCEL_FAILED)
+        lose(g, "QEMU refused the requested accelerator %s: %.*s", g->spec.accel, (int)line,
+             line ? r->qemu->err.data : "no diagnostic");
+    else if (line)
+        lose(g, "QEMU ended before its debug shell greeted: %.*s", (int)line, r->qemu->err.data);
+    else
+        lose(g, "the machine ended before its debug shell greeted");
+}
+#endif
+
 void legacy_guest_serve(struct legacy_guest *g)
 {
     const struct etude_machine_result *r = etude_machine_result(g->m);
@@ -682,7 +729,11 @@ void legacy_guest_serve(struct legacy_guest *g)
             start_session(g, at, now);
         else if (r->state == ETUDE_MACHINE_ENDED || r->console.closed ||
                  r->console.total > r->console.kept)
+#ifdef _WIN32
+            boot_lost(g, r);
+#else
             lose(g, "the machine ended before its debug shell greeted");
+#endif
     }
     feed_session(g, now);
     step(g, now);

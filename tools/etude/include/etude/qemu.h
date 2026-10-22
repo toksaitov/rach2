@@ -416,12 +416,13 @@ int etude_machine_type(struct etude_machine *m, const char *text, size_t n);
 void etude_machine_cancel(struct etude_machine *m);
 
 /**
- * Suspend the machine's QEMU process by etude_exec_suspend, on POSIX
- * systems: QEMU's process group gets SIGSTOP, and the `suspension` of its
- * result, `qemu`, becomes ETUDE_SUSPEND_STOPPED once every thread of QEMU
- * has stopped. No processor of the guest runs, no timer of QEMU's fires and
- * neither the console nor QMP answers until etude_machine_resume; QMP's
- * `stop`, which pauses the processors while QEMU runs on, is not the same.
+ * Suspend the machine's QEMU process by etude_exec_suspend: SIGSTOP for its
+ * process group on POSIX systems, native process suspension of its job on
+ * Windows. The `suspension` of its result, `qemu`, becomes
+ * ETUDE_SUSPEND_STOPPED once every thread of QEMU has stopped. No processor
+ * of the guest runs, no timer of QEMU's fires and neither the console nor
+ * QMP answers until etude_machine_resume; QMP's `stop`, which pauses the
+ * processors while QEMU runs on, is not the same.
  *
  * @return 0, or -1 with errno EAGAIN before QMP has started the machine,
  *         ESRCH once it has ended or is being cancelled, or the errno of
@@ -430,8 +431,9 @@ void etude_machine_cancel(struct etude_machine *m);
 int etude_machine_suspend(struct etude_machine *m);
 
 /**
- * Resume a suspended machine by etude_exec_resume: QEMU's process group gets
- * SIGCONT. A machine not suspended is left as it is.
+ * Resume a suspended machine by etude_exec_resume: SIGCONT for its process
+ * group on POSIX systems, native process resumption on Windows. A machine
+ * not suspended is left as it is.
  *
  * @return 0, or -1 with the errno of etude_exec_resume.
  */

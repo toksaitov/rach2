@@ -295,3 +295,7 @@ unusedStructMember:*tools/etude/include/etude/status.h
 # The hold's process identity: cppcheck checks hold.h alone, and its members
 # are read in etude_hold.c, posix/hold.c and win/hold.c.
 unusedStructMember:*tools/etude/hold.h
+
+# The native file-status and directory records are public across translation
+# units; their fields are read by the shared store and collection driver.
+unusedStructMember:*tools/etude/win/files.h

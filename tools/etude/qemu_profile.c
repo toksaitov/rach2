@@ -1162,11 +1162,19 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     for (i = 0; i < device_count(p->devices); i++)
         add_device(&l, p, &p->devices[i], &nics);
     add(&l, 0, "-chardev");
+#ifdef _WIN32
+    add(&l, 1, "socket,id=etude-console,host=127.0.0.1,port=%s", console);
+#else
     add(&l, 1, "socket,id=etude-console,path=%s", console);
+#endif
     add(&l, 0, "-serial");
     add(&l, 0, "chardev:etude-console");
     add(&l, 0, "-chardev");
+#ifdef _WIN32
+    add(&l, 1, "socket,id=etude-qmp,host=127.0.0.1,port=%s", qmp);
+#else
     add(&l, 1, "socket,id=etude-qmp,path=%s", qmp);
+#endif
     add(&l, 0, "-mon");
     add(&l, 0, "chardev=etude-qmp,mode=control");
     if (count(p->boot_options) > 0) {

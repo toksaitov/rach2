@@ -22,6 +22,11 @@
 /* How long etude_exec_start waits for a refused case to end, in ms. */
 #define REFUSED_BOUND 60000
 
+struct paused_process {
+    HANDLE process;
+    DWORD pid;
+};
+
 struct etude_proc {
     struct etude_exec *ex;
     struct etude_proc *next;
@@ -36,6 +41,8 @@ struct etude_proc {
     int unrecorded; /* a descendant's registration failed */
     int cancelled;
     int finished;
+    struct paused_process *paused;
+    size_t npaused;
     int returned;
     struct etude_exec_result r;
 };
@@ -146,6 +153,10 @@ static struct etude_proc *proc_new(const struct etude_exec_spec *spec)
 /** Free an attempt's memory. */
 static void proc_release(struct etude_proc *p)
 {
+    size_t i;
+    for (i = 0; i < p->npaused; i++)
+        CloseHandle(p->paused[i].process);
+    free(p->paused);
     capture_free(&p->r.out);
     capture_free(&p->r.err);
     free(p->attempt_id);
@@ -405,4 +416,189 @@ void etude_exec_free(struct etude_exec *ex)
         etude_proc_free(ex->procs);
     etude_win_sup_close(&ex->sup, REFUSED_BOUND);
     free(ex);
+}
+
+/** Wait for process events and nonblocking sockets in bounded slices. */
+struct etude_proc *etude_exec_watch(struct etude_exec *ex, int timeout_ms, struct etude_watch *w,
+                                    size_t n)
+{
+    uint64_t began = etude_win_mono_us();
+    struct etude_proc *p;
+    WSAPOLLFD *fds = calloc(n + 1, sizeof *fds);
+    size_t i;
+    int ready, slice;
+    if (fds == NULL)
+        return NULL;
+    for (;;) {
+        for (i = 0; i < n; i++) {
+            fds[i].fd = (SOCKET)w[i].fd;
+            fds[i].events = ((w[i].events & ETUDE_WATCH_IN) ? POLLRDNORM : 0) |
+                            ((w[i].events & ETUDE_WATCH_OUT) ? POLLWRNORM : 0);
+            w[i].revents = 0;
+        }
+        p = etude_exec_wait(ex, 0);
+        ready = n == 0 ? 0 : WSAPoll(fds, (ULONG)n, 0);
+        for (i = 0; i < n; i++) {
+            w[i].revents =
+                ((fds[i].revents & (POLLRDNORM | POLLIN)) ? ETUDE_WATCH_IN : 0) |
+                ((fds[i].revents & POLLWRNORM) ? ETUDE_WATCH_OUT : 0) |
+                ((fds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) ? ETUDE_WATCH_END : 0);
+        }
+        if (p != NULL || ready != 0 || ex->output ||
+            (timeout_ms >= 0 && etude_win_mono_us() - began >= (uint64_t)timeout_ms * 1000u)) {
+            free(fds);
+            return p;
+        }
+        slice = 10;
+        if (timeout_ms >= 0) {
+            uint64_t elapsed = etude_win_mono_us() - began;
+            uint64_t limit = (uint64_t)timeout_ms * 1000u;
+            uint64_t left = elapsed < limit ? limit - elapsed : 0;
+            if (left / 1000 < (uint64_t)slice)
+                slice = (int)(left / 1000);
+        }
+        if (slice > 0)
+            etude_win_poll(&ex->sup, (DWORD)slice);
+    }
+}
+
+/** Suspend or resume every thread of a process through the native API. */
+static int process_pause(HANDLE process, int suspend)
+{
+    typedef LONG(NTAPI * pause_fn)(HANDLE);
+    pause_fn fn = (pause_fn)(void *)GetProcAddress(
+        GetModuleHandleW(L"ntdll.dll"), suspend ? "NtSuspendProcess" : "NtResumeProcess");
+    if (fn == NULL || fn(process) < 0) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Release the handles of a suspension, resuming every process still present.
+ */
+static int resume_job(struct etude_proc *p)
+{
+    size_t i;
+    int rc = 0;
+    for (i = 0; i < p->npaused; i++) {
+        if (WaitForSingleObject(p->paused[i].process, 0) != WAIT_OBJECT_0 &&
+            process_pause(p->paused[i].process, 0) != 0)
+            rc = -1;
+        CloseHandle(p->paused[i].process);
+    }
+    free(p->paused);
+    p->paused = NULL;
+    p->npaused = 0;
+    return rc;
+}
+
+/** Suspend a newly found process of the job, keeping its identity open. */
+static int pause_member(struct etude_proc *p, DWORD pid)
+{
+    struct paused_process *next;
+    HANDLE process;
+    BOOL member;
+    size_t i;
+    for (i = 0; i < p->npaused; i++)
+        if (p->paused[i].pid == pid)
+            return 0;
+    process = OpenProcess(PROCESS_SUSPEND_RESUME | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE,
+                          FALSE, pid);
+    if (process == NULL)
+        return GetLastError() == ERROR_INVALID_PARAMETER ? 0 : -1;
+    if (!IsProcessInJob(process, p->child->job, &member)) {
+        CloseHandle(process);
+        errno = EIO;
+        return -1;
+    }
+    if (!member || WaitForSingleObject(process, 0) == WAIT_OBJECT_0) {
+        CloseHandle(process);
+        return 0;
+    }
+    next = realloc(p->paused, (p->npaused + 1) * sizeof *next);
+    if (next == NULL || process_pause(process, 1) != 0) {
+        if (next != NULL)
+            p->paused = next;
+        CloseHandle(process);
+        return -1;
+    }
+    p->paused = next;
+    next[p->npaused].pid = pid;
+    next[p->npaused++].process = process;
+    return 1;
+}
+
+/** Read the job's live process list, growing until the whole list fits. */
+static JOBOBJECT_BASIC_PROCESS_ID_LIST *job_members(HANDLE job)
+{
+    DWORD size = 1024;
+    JOBOBJECT_BASIC_PROCESS_ID_LIST *list;
+    while (size <= (1u << 20)) {
+        list = malloc(size);
+        if (list == NULL)
+            return NULL;
+        if (QueryInformationJobObject(job, JobObjectBasicProcessIdList, list, size, NULL))
+            return list;
+        free(list);
+        if (GetLastError() != ERROR_MORE_DATA)
+            break;
+        size *= 2;
+    }
+    return NULL;
+}
+
+/** Suspend every process of the job before recording the stop. */
+int etude_exec_suspend(struct etude_proc *p)
+{
+    JOBOBJECT_BASIC_PROCESS_ID_LIST *list;
+    size_t i;
+    int changed, rc;
+    if (p->finished || p->cancelled || p->child->main_ended) {
+        errno = ESRCH;
+        return -1;
+    }
+    if (p->r.suspension != ETUDE_SUSPEND_NONE) {
+        errno = EBUSY;
+        return -1;
+    }
+    do {
+        list = job_members(p->child->job);
+        if (list == NULL) {
+            resume_job(p);
+            errno = EIO;
+            return -1;
+        }
+        changed = 0;
+        for (i = 0; i < list->NumberOfProcessIdsInList; i++) {
+            rc = pause_member(p, (DWORD)list->ProcessIdList[i]);
+            if (rc < 0) {
+                free(list);
+                resume_job(p);
+                errno = EIO;
+                return -1;
+            }
+            changed |= rc;
+        }
+        free(list);
+    } while (changed);
+    p->r.suspension = ETUDE_SUSPEND_STOPPED;
+    p->r.suspended_us = etude_win_mono_us();
+    p->r.suspensions++;
+    return 0;
+}
+
+/** Resume every process kept by the suspension and release its handle. */
+int etude_exec_resume(struct etude_proc *p)
+{
+    int rc;
+    if (p->r.suspension == ETUDE_SUSPEND_NONE)
+        return 0;
+    rc = resume_job(p);
+    if (rc != 0)
+        return -1;
+    p->r.suspension = ETUDE_SUSPEND_NONE;
+    p->r.resumed_us = etude_win_mono_us();
+    return 0;
 }

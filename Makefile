@@ -458,13 +458,26 @@ $(SIZECHECK): tools/verify/sizecheck.c
 # tools/ci/run.sh run. Etude is hosted C99, so the validator is compiled as
 # C99. sources.mk lists the sources of etude's programs, for this build and
 # for a cached version's.
+ETUDE_LINK = $(HOST_LINK)
 include tools/etude/sources.mk
+ifeq ($(OS),Windows_NT)
+ETUDE_LEGACY_SRC = $(ETUDE_LEGACY_WIN_SRC)
+ETUDE_BRIDGE_SRC = $(ETUDE_BRIDGE_WIN_SRC)
+ETUDE_CASE_LIB_SRC = $(ETUDE_CASE_LIB_WIN_SRC)
+ETUDE_HOST_SRC = $(ETUDE_HOST_WIN_SRC)
+ETUDE_TOOLING_SRC = $(ETUDE_TOOLING_WIN_SRC)
+ETUDE_HOLD_SRC = $(ETUDE_HOLD_WIN_SRC)
+ETUDECC ?= /ucrt64/bin/gcc
+ETUDE_LINK = sh tools/etude/compile.sh $(ETUDECC) $@ $(HOSTCFLAGS) $(ETUDE_PLATFORM_FLAGS) $(filter %.c,$^) $(ETUDE_PLATFORM_LIBS)
+ETUDE_PLATFORM_FLAGS = -D_WIN32_WINNT=0x0A00 -static
+ETUDE_PLATFORM_LIBS = -lws2_32 -lbcrypt
+endif
 $(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/digest.h tools/etude/json.h \
               tools/etude/schema.h tools/etude/include/etude/processor.h \
               tools/etude/include/etude/history.h tools/etude/include/etude/qemu.h \
               tools/etude/history_json.h utils/sha256.h
 	@mkdir -p $(dir $@)
-	$(HOST_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
+	$(ETUDE_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
 
 # The programs of etude's host cases (tests/cases/host), which the cases'
 # preparation names, one for both architectures.
@@ -521,7 +534,7 @@ ETUDEHISTORY = build/tools/etude/history_check
 $(ETUDEHISTORY): $(ETUDE_HISTORY_CHECK_SRC) tools/etude/history_json.h \
                  tools/etude/include/etude/history.h utils/sha256.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99
+	$(ETUDE_LINK) -std=c99
 
 # The comparison of a run's cases with their timing history
 # (tools/etude/compare.c).
@@ -545,7 +558,7 @@ ETUDELINES = build/tools/etude/history_lines
 $(ETUDELINES): $(ETUDE_HISTORY_LINES_SRC) tools/etude/lines.h tools/etude/history_json.h \
                tools/etude/include/etude/history.h utils/sha256.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99
+	$(ETUDE_LINK) -std=c99
 
 # The forecast and the check of a run's budget (tools/etude/budget.c).
 ETUDEBUDGET = build/tools/etude/history_budget
@@ -583,7 +596,7 @@ $(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
                 tools/etude/include/etude/ledger.h tools/etude/include/etude/portlock.h \
                 tools/etude/posix/posix.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
 
 # etude-ports (tools/etude/etude_ports.c), which runs a command holding the
 # host lock and a block of host ports.
@@ -605,7 +618,7 @@ $(ETUDELEDGER): $(ETUDE_LEDGER_SRC) tools/etude/include/etude/ledger.h \
 ETUDEHOLD = build/tools/etude/etude-hold
 $(ETUDEHOLD): $(ETUDE_HOLD_SRC) tools/etude/hold.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
 
 # etude's tooling machine (tools/etude/tooling.c), which runs on a host the
 # commands it lacks, built here so that `make` compiles it under the host
@@ -617,10 +630,10 @@ $(ETUDETOOLING): $(ETUDE_TOOLING_SRC) tools/etude/include/etude/tooling.h \
                  tools/etude/posix/posix.h tools/etude/capture.h tools/etude/history_json.h \
                  utils/sha256.h | $(ETUDEVOLUME)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99
+	$(ETUDE_LINK) -std=c99
 
 # etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
 # starts beside a case, built here so that `make` compiles it under the host
@@ -628,7 +641,7 @@ $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
 ETUDELOAD = build/tools/etude/etude-load
 $(ETUDELOAD): $(ETUDE_LOAD_SRC) tools/etude/include/etude/repeat.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+	$(HOST_LINK) $(ETUDE_PLATFORM_LIBS) $(ETUDE_PLATFORM_FLAGS) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
 # etude-host (tools/etude/posix/etude_host.c), which runs the host checks of
 # `tests/run host` several at once.
@@ -636,7 +649,7 @@ ETUDEHOST = build/tools/etude/etude-host
 $(ETUDEHOST): $(ETUDE_HOST_SRC) tools/etude/include/etude/exec.h tools/etude/posix/posix.h \
               tools/etude/capture.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
 # etude-legacy (tools/etude/posix/etude_legacy.c), the preparation adapter
 # that builds what the suites of tests/run read before one starts:
@@ -656,7 +669,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
                 tools/etude/include/etude/artifact.h tools/etude/include/etude/frame.h \
                 tools/etude/guest/wire.h tools/etude/posix/store.h
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
 
 # The machine scenarios of etude's cases (tests/cases/machine/), each linked
@@ -714,19 +727,19 @@ $(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                         tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
                         $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
 $(ETUDEGUEST_SCENARIO): build/tests/cases/machine/%: tests/cases/machine/%.c \
                         tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
                         tools/etude/guest/wire.h tools/etude/include/etude/frame.h \
                         $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
 
 # The machine scenarios that also link the reader of a probe's report on the
@@ -741,7 +754,7 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                     tests/cases/machine/console_report.c tests/cases/machine/console_report.h \
                     $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 # The network scenarios share netcase.c, and so do the scenarios of the GRUB
@@ -762,7 +775,7 @@ $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 # The fake API service and relay of the agent machine cases.
@@ -782,7 +795,7 @@ $(NETPROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                        tests/cases/machine/console_report.c tests/cases/machine/console_report.h \
                        $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 build/tests/cases/machine/credpersist_scenario: tests/creddisk_rows.h
@@ -793,7 +806,7 @@ $(USB_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/usbcase.c tests/cases/machine/usbcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils
 
 # The host's side of the network cases' connections that are not logins: a
@@ -832,7 +845,7 @@ CONSOLE_LIB = tests/cases/machine/drive.c tests/cases/machine/lib_grow.c \
 $(CONSOLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c $(CONSOLE_LIB) \
                       $(CONSOLE_LIB:.c=.h) $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Itools/etude/guest -Iutils -Itests/cases/machine
 
 HOSTCHECK  = build/tools/setup/hostcheck
@@ -1604,5 +1617,12 @@ distclean: clean
 	rm -rf build
 
 
+
+ifeq ($(OS),Windows_NT)
+$(ETUDELEGACY) $(ETUDEBRIDGE) $(ETUDEHOST) $(ETUDETOOLING) \
+$(LIFECYCLE_SCENARIOS) $(ETUDEGUEST_SCENARIO) $(DISK_SCENARIOS): \
+    tools/etude/win/files.h tools/etude/win/sockets.h tools/etude/win/winexec.h \
+    tools/etude/win/winfmt.h tools/etude/compile.sh
+endif
 
 endif # ETUDE_WRAP

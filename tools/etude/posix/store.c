@@ -16,6 +16,12 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
+
 #include "etude/artifact.h"
 #include "sha256.h"
 #include "store.h"
@@ -136,6 +142,17 @@ static int dir_make(const char *path)
 /** Synchronize directory `path`, so that a name made in it is durable. */
 static int dir_sync(const char *path)
 {
+#ifdef _WIN32
+    struct stat st;
+    /* Publication uses MoveFileExW with MOVEFILE_WRITE_THROUGH. */
+    if (stat(path, &st) != 0)
+        return -1;
+    if (!S_ISDIR(st.st_mode)) {
+        errno = ENOTDIR;
+        return -1;
+    }
+    return 0;
+#else
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     int e;
 
@@ -149,6 +166,7 @@ static int dir_sync(const char *path)
     }
     close(fd);
     return 0;
+#endif
 }
 
 /** Write all of `buf`; 0 or -1 with errno set. */
@@ -240,6 +258,9 @@ fail:
 /** Lock all of `fd` for `type` without waiting; 0, or -1 with errno set. */
 static int lock_try(int fd, short type)
 {
+#ifdef _WIN32
+    return etude_win_file_lock(fd, type, 0);
+#else
     struct flock fl;
 
     memset(&fl, 0, sizeof(fl));
@@ -250,6 +271,21 @@ static int lock_try(int fd, short type)
     if (errno == EACCES)
         errno = EAGAIN;
     return -1;
+#endif
+}
+
+/** Wait until the digests file's lock is held. */
+static int store_wait_lock(int fd)
+{
+#ifdef _WIN32
+    return etude_win_file_lock(fd, F_WRLCK, 1);
+#else
+    struct flock fl;
+    memset(&fl, 0, sizeof fl);
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    return fcntl(fd, F_SETLKW, &fl);
+#endif
 }
 
 /**
@@ -483,21 +519,22 @@ static void digests_keep(const char *cache, const char *path, const struct statu
     char line[DIGESTS_LINE], old[ETUDE_DIGEST_HEX + 1], *other;
     char *lock = suffixed(cache, ".lock"), *next = suffixed(cache, ".new");
     struct status e, now;
-    struct flock fl;
     struct stat st;
     size_t kept = 1;
     FILE *in, *out = NULL;
     int fd = -1, ok, saved = errno;
 
-    if (lock == NULL || next == NULL || path[0] != '/' || strchr(path, '\n') != NULL ||
-        strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
+    if (lock == NULL || next == NULL ||
+#ifdef _WIN32
+        !etude_win_absolute(path) ||
+#else
+        path[0] != '/' ||
+#endif
+        strchr(path, '\n') != NULL || strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
         goto done;
     parent_make(cache);
-    memset(&fl, 0, sizeof(fl));
-    fl.l_type = F_WRLCK;
-    fl.l_whence = SEEK_SET;
-    if ((fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) < 0 ||
-        fcntl(fd, F_SETLKW, &fl) != 0 || (out = fopen(next, "w")) == NULL)
+    if ((fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) < 0 || store_wait_lock(fd) != 0 ||
+        (out = fopen(next, "w")) == NULL)
         goto done;
     ok = digests_put(out, k, hex, path) == 0;
     if ((in = fopen(cache, "r")) != NULL) {

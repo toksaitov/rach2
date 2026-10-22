@@ -136,6 +136,14 @@ etude_main()
     # shellcheck disable=SC2016 # make expands the variable
     hold='HOLD_SRC=$(ETUDE_HOLD_SRC)'
     hold_flags=-D_DEFAULT_SOURCE
+    # shellcheck disable=SC2016 # make expands the variable
+    legacy='LEGACY_SRC=$(ETUDE_LEGACY_SRC)'
+    legacy_flags=-D_DEFAULT_SOURCE
+    legacy_libs=
+    # shellcheck disable=SC2016 # make expands the variable
+    bridge='BRIDGE_SRC=$(ETUDE_BRIDGE_SRC)'
+    bridge_flags=-D_DEFAULT_SOURCE
+    bridge_libs=
     root=${ETUDE_CACHE:-}
     case $platform in
         linux*|macos*)
@@ -143,7 +151,16 @@ etude_main()
         windows*)
             cc=${ETUDE_CC:-/ucrt64/bin/gcc}
             exe=.exe
-            targets='all hold ports'
+            targets='all bridge hold ports collection'
+            flags='-std=c99 -O2 -static'
+            # shellcheck disable=SC2016 # make expands the variable
+            legacy='LEGACY_SRC=$(ETUDE_LEGACY_WIN_SRC)'
+            legacy_flags=-D_WIN32_WINNT=0x0A00
+            legacy_libs='-lws2_32 -lbcrypt'
+            # shellcheck disable=SC2016 # make expands the variable
+            bridge='BRIDGE_SRC=$(ETUDE_BRIDGE_WIN_SRC)'
+            bridge_flags=$legacy_flags
+            bridge_libs=$legacy_libs
             # shellcheck disable=SC2016 # make expands the variable
             hold='HOLD_SRC=$(ETUDE_HOLD_WIN_SRC)'
             hold_flags=-D_WIN32_WINNT=0x0A00
@@ -192,7 +209,7 @@ flags $flags"
         etude_fail "the source arrived damaged: its digest is not $ETUDE_SOURCE"
     # shellcheck disable=SC2086 # CC is a command line
     # shellcheck disable=SC2086 # TARGETS is a list of targets
-    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" "$hold" HOLD_FLAGS="$hold_flags" $targets) >&2 ||
+    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" "$hold" HOLD_FLAGS="$hold_flags" "$legacy" LEGACY_FLAGS="$legacy_flags" LEGACY_LIBS="$legacy_libs" "$bridge" BRIDGE_FLAGS="$bridge_flags" BRIDGE_LIBS="$bridge_libs" $targets) >&2 ||
         etude_fail "the build of $key failed"
     {
         printf '%s\n' "$identity"

@@ -125,3 +125,35 @@ ETUDE_CASE_LIB_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c 
                      tools/etude/posix/process.c tools/etude/posix/store.c \
                      tools/etude/capture.c tools/etude/history_json.c \
                      tools/etude/guest/wire.c utils/sha256.c
+
+# Native Windows implementations used by the collection and its scenarios.
+ETUDE_WIN_EXEC_SRC = tools/etude/win/exec.c tools/etude/win/winexec.c \
+                     tools/etude/win/winsys.c tools/etude/win/winfmt.c \
+                     tools/etude/win/files.c tools/etude/capture.c
+ETUDE_LEGACY_WIN_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
+                       tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
+                       tools/etude/posix/legacy_guest.c tools/etude/serial.c \
+                       tools/etude/guest/wire.c tools/etude/posix/store.c \
+                       tools/etude/digest.c tools/etude/json.c $(ETUDE_WIN_EXEC_SRC) \
+                       tools/etude/watchdog.c tools/etude/supervise.c \
+                       tools/etude/qemu_profile.c tools/etude/posix/qemu.c \
+                       tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c \
+                       tools/etude/win/bridge.c tools/etude/portlock.c tools/etude/posix/status.c \
+                       tools/etude/compare.c tools/etude/baseline.c \
+                       tools/etude/compare_report.c tools/etude/compare_run.c \
+                       tools/etude/history.c tools/etude/history_json.c \
+                       tools/etude/history_collect.c utils/sha256.c
+ETUDE_CASE_LIB_WIN_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c \
+                         tools/etude/serial.c tools/etude/processor.c \
+                         tools/etude/posix/qemu.c tools/etude/qemu_profile.c \
+                         $(ETUDE_WIN_EXEC_SRC) tools/etude/posix/store.c \
+                         tools/etude/history_json.c tools/etude/guest/wire.c utils/sha256.c
+
+ETUDE_HOST_WIN_SRC = tools/etude/posix/etude_host.c $(ETUDE_WIN_EXEC_SRC)
+ETUDE_TOOLING_WIN_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
+                        $(ETUDE_WIN_EXEC_SRC) tools/etude/history.c \
+                        tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c
+
+# Native admission command and its independently held compatibility locks.
+ETUDE_BRIDGE_WIN_SRC = tools/etude/posix/etude_bridge.c tools/etude/win/bridge.c \
+                       tools/etude/portlock.c tools/etude/ledger.c $(ETUDE_WIN_EXEC_SRC) utils/sha256.c

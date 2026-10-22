@@ -1,6 +1,6 @@
 /*
  * etude_host.c: etude-host, which runs the host checks of `tests/run host`
- * several at once on the POSIX executor, each with a scratch directory of its
+ * several at once on the host executor, each with a scratch directory of its
  * own, and prints one result for every check of its selection.
  */
 #include <dirent.h>
@@ -11,6 +11,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
 
 #include "etude/exec.h"
 #include "posix.h"
@@ -266,7 +272,9 @@ static int dropped(const char *var)
  */
 static int make_env(struct run *r)
 {
+#ifndef _WIN32
     extern char **environ;
+#endif
     size_t n = 0, k = 0, i;
 
     while (environ[n] != NULL)
@@ -355,8 +363,12 @@ static int start_step(struct run *r, struct check *c)
     char *log = log_of(r, c, c->step);
     char *tmpdir = join("TMPDIR=", r->scratch, "/");
     char *tmpvar = tmpdir == NULL ? NULL : join(tmpdir, c->name, "");
-    char *argv[] = {"/bin/sh",    "-c", "exec >\"$1\" 2>&1; eval \"$2\"",
-                    "etude-host", log,  c->step == STEP_COMPILE ? c->compile : c->run,
+    char *argv[] = {(char *)ETUDE_SHELL,
+                    "-c",
+                    "exec >\"$1\" 2>&1; eval \"$2\"",
+                    "etude-host",
+                    log,
+                    c->step == STEP_COMPILE ? c->compile : c->run,
                     NULL};
     struct etude_exec_spec spec;
     int err = 0;
@@ -695,7 +707,11 @@ static int run_all(struct run *r, unsigned jobs)
 /** Give the processors online, at least 1 and at most JOBS_MAX. */
 static unsigned processors(void)
 {
+#ifdef _WIN32
+    long n = (long)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+#else
     long n = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
 
     return n < 1 ? 1 : n > JOBS_MAX ? JOBS_MAX : (unsigned)n;
 }
@@ -724,6 +740,10 @@ static const char *dir_of(const char *path)
 /** Catch the stop signals without restarting the executor's waits. */
 static void catch_stops(void)
 {
+#ifdef _WIN32
+    signal(SIGTERM, note_stop);
+    signal(SIGINT, note_stop);
+#else
     static const int sigs[] = {SIGTERM, SIGINT, SIGHUP};
     struct sigaction sa;
     size_t i;
@@ -733,6 +753,7 @@ static void catch_stops(void)
     sigemptyset(&sa.sa_mask);
     for (i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
         sigaction(sigs[i], &sa, NULL);
+#endif
 }
 
 /** Print the run's last line and give its exit status. */

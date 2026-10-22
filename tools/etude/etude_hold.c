@@ -48,7 +48,8 @@ struct hold {
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: etude-hold [-r] [-s SCRATCH] TREE NAME COMMAND [ARG...]\n");
+    fprintf(stderr, "usage: etude-hold [-r] [-s SCRATCH] TREE NAME COMMAND [ARG...]\n       "
+                    "etude-hold -q TREE\n");
     return 2;
 }
 
@@ -366,11 +367,13 @@ int main(int argc, char **argv)
 {
     struct hold h;
     const char *scratch = NULL, *tree;
-    int i;
+    int i, query = 0;
 
     memset(&h, 0, sizeof h);
     for (i = 1; i < argc && argv[i][0] == '-'; i++) {
-        if (strcmp(argv[i], "-r") == 0)
+        if (strcmp(argv[i], "-q") == 0)
+            query = 1;
+        else if (strcmp(argv[i], "-r") == 0)
             h.run = 1;
         else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc)
             scratch = argv[++i];
@@ -380,10 +383,11 @@ int main(int argc, char **argv)
         } else
             return usage();
     }
-    if (argc - i < 3 || argv[i][0] == '\0' || argv[i + 1][0] == '\0')
+    if ((query ? argc - i != 1 : argc - i < 3) || argv[i][0] == '\0' ||
+        (!query && argv[i + 1][0] == '\0'))
         return usage();
     tree = argv[i];
-    h.name = argv[i + 1];
+    h.name = query ? "etude-hold" : argv[i + 1];
     h.argv = argv + i + 2;
     if (scratch != NULL)
         hold_remove(scratch);
@@ -393,6 +397,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "%s: the tree's path is too long\n", h.name);
         return 2;
     }
+    if (query)
+        return held_for_ancestor(&h) ? 0 : 1;
     if (held_for_ancestor(&h)) {
         hold_exec(h.argv);
         fprintf(stderr, "%s: cannot run %s: %s\n", h.name, h.argv[0], strerror(errno));

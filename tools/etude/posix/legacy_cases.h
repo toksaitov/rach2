@@ -158,4 +158,7 @@ void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out
 /** Remove the tree at `path`, not following links; 0 once it is gone. */
 int legacy_remove_tree(const char *path);
 
+/** Say whether PATH is absolute on the host platform. */
+int legacy_absolute(const char *path);
+
 #endif

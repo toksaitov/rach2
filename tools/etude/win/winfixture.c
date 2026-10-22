@@ -1140,6 +1140,8 @@ static const struct {
     {"exec-unrun", fx_exec_unrun},
     {"exec-sample", fx_exec_sample},
     {"exec-poll", fx_exec_poll},
+    {"collection-files", fx_collection_files},
+    {"collection-qemu", fx_collection_qemu},
     {"ledger", fx_ledger},
     {"runtime-crash", fx_runtime_crash},
     {"runtime-hang", fx_runtime_hang},

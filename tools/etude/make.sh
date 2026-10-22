@@ -25,7 +25,7 @@ case ${ETUDE_BUILD_JOBS:-} in
 esac
 [ "${#ETUDE_BUILD_JOBS}" -le 4 ] && [ "$ETUDE_BUILD_JOBS" -le 1024 ] || exit 2
 case ${ETUDE_MAKE_REAL:-} in
-    /*) ;;
+    /*|[A-Za-z]:/*) ;;
     *) echo 'etude-make: make is not an absolute path' >&2; exit 2 ;;
 esac
 [ "$ETUDE_MAKE_REAL" != "$0" ] || exit 2

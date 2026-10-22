@@ -1,8 +1,8 @@
 /*
- * legacy_set.c: the set driver on POSIX systems. It runs the suites of one
- * run of tests/run as one run of etude, each suite by the host, guest and
- * machine cases of its manifest: it prepares their artifacts under a claim of
- * every limited resource of the machine, admits each repetition of each case
+ * legacy_set.c: the set driver on POSIX systems and Windows. It runs the
+ * suites of one run of tests/run as one run of etude, each by the host, guest
+ * and machine cases of its manifest: it prepares their artifacts under a
+ * claim of every limited resource of the machine, admits each repetition
  * through the machine's ledger, with the old runner's host lock and, for a
  * guest case, a port block, runs a host case's program and a machine case's
  * scenario in its workspace and a guest case's machine (legacy_guest.c)
@@ -12,17 +12,27 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#ifndef _WIN32
 #include <poll.h>
+#endif
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#ifndef _WIN32
 #include <sys/utsname.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 #ifdef __APPLE__
 #include <sys/sysctl.h>
+#endif
+
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
 #endif
 
 #include "../compare.h"
@@ -39,7 +49,9 @@
 #include "posix.h"
 #include "sha256.h"
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 /* How often a request that waits for room, or a claim that waits for the
  * old locks, is asked again, since neither gives notice when it frees. */
@@ -344,7 +356,10 @@ static void digest_of(const char *bytes, size_t n, char hex[65])
 /** Fill `boot` with the identity of this boot, or "-" where there is none. */
 static void boot_read(char *boot, size_t size)
 {
-#if defined(__linux__)
+#if defined(_WIN32)
+    if (etude_win_boot_id(boot, size) != 0)
+        boot[0] = '\0';
+#elif defined(__linux__)
     FILE *f = fopen("/proc/sys/kernel/random/boot_id", "r");
 
     if (f == NULL || fgets(boot, (int)size, f) == NULL)
@@ -359,7 +374,7 @@ static void boot_read(char *boot, size_t size)
         len = 0;
     boot[len < size ? len : size - 1] = '\0';
 #endif
-#if defined(__linux__) || defined(__APPLE__)
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     if (boot[0] == '\0')
         snprintf(boot, size, "-");
     else
@@ -1869,7 +1884,11 @@ static int prepare(struct set *x)
             return 1;
         }
         status(x, 0);
+#ifdef _WIN32
+        Sleep(ASK_MS);
+#else
         poll(NULL, 0, ASK_MS);
+#endif
     }
     granted(x, c);
     c->state = LOCKING;
@@ -1946,6 +1965,9 @@ static int open_objects(struct set *x, char *why, size_t size)
  * PATH; 0, or -1 when there is none. */
 static int on_path(const char *name, char *out, size_t size)
 {
+#ifdef _WIN32
+    return etude_win_program(name, out, size);
+#else
     const char *dir = getenv("PATH"), *end;
 
     if (strchr(name, '/') != NULL)
@@ -1957,6 +1979,7 @@ static int on_path(const char *name, char *out, size_t size)
             return 0;
     }
     return -1;
+#endif
 }
 
 /**
@@ -2153,9 +2176,15 @@ static void publish(struct set *x)
     }
     if (i == x->n)
         return;
-    for (i = 0; i < 2; i++)
-        if (on_path(emulators[i], qemu[i], PATH_LEN) != 0)
-            snprintf(qemu[i], PATH_LEN, "%s", emulators[i]);
+    for (i = 0; i < 2; i++) {
+        const char *name = emulators[i];
+#ifdef _WIN32
+        if (strcmp(x->o->accel, "whpx") == 0)
+            name = emulators[1];
+#endif
+        if (on_path(name, qemu[i], PATH_LEN) != 0)
+            snprintf(qemu[i], PATH_LEN, "%s", name);
+    }
     opened = open_objects(x, why, sizeof(why)) == 0;
     for (i = 0; i < x->n; i++) {
         m = &x->mem[i];
@@ -2517,7 +2546,11 @@ static void drive(struct set *x)
             return;
         status(x, 0);
         if (busy == 0) {
+#ifdef _WIN32
+            Sleep(ASK_MS);
+#else
             poll(NULL, 0, ASK_MS);
+#endif
             continue;
         }
         f = etude_supervise_wait(x->sup, ASK_MS);
@@ -2574,14 +2607,15 @@ static int check_given(struct set *x)
         o->schemas == NULL || o->account == NULL || o->account[0] == '\0')
         return refuse(x, "the tree, the program, the results, the evidence, the schemas and the "
                          "account must be given");
-    if (o->ledger == NULL || o->ledger[0] != '/' || (o->locks != NULL && o->locks[0] != '/'))
+    if (o->ledger == NULL || !legacy_absolute(o->ledger) ||
+        (o->locks != NULL && !legacy_absolute(o->locks)))
         return refuse(x, "the ledger and the lock directory must be absolute paths");
     for (i = 0; i < 3; i++)
         if (o->cap[i] == 0)
             return refuse(x, "every limit of the machine must be above 0");
     if (o->accel == NULL || (strcmp(o->accel, "kvm") != 0 && strcmp(o->accel, "hvf") != 0 &&
-                             strcmp(o->accel, "tcg") != 0))
-        return refuse(x, "the accelerator must be kvm, hvf or tcg");
+                             strcmp(o->accel, "whpx") != 0 && strcmp(o->accel, "tcg") != 0))
+        return refuse(x, "the accelerator must be kvm, hvf, whpx or tcg");
     if (o->cpus == 0 || o->cpus > 64 || o->seconds == 0 || o->wait == 0)
         return refuse(x, "the processors, the wait and the bound must be above 0");
     return 0;
@@ -2643,7 +2677,7 @@ static int check_cases(struct set *x)
     }
     if (ports > 0 && check_ports(x, ports) != 0)
         return 2;
-    if (machines && (o->results[0] != '/' || o->evidence[0] != '/'))
+    if (machines && (!legacy_absolute(o->results) || !legacy_absolute(o->evidence)))
         return refuse(x, "a machine case's scenario runs in its workspace and is given the "
                          "paths of its invocation, so the results and the evidence must be "
                          "absolute paths");
@@ -2791,7 +2825,7 @@ static int case_command(struct set *x, struct member *m)
         errno = ENOMEM;
         return -1;
     }
-    c->argv[a++] = "/bin/sh";
+    c->argv[a++] = (char *)ETUDE_SHELL;
     c->argv[a++] = "-c";
     c->argv[a++] = "exec \"$@\" >\"$0\" 2>&1";
     c->argv[a++] = c->out;
@@ -2878,7 +2912,7 @@ static int prep_command(struct set *x)
         errno = ENOMEM;
         return -1;
     }
-    c->argv[k++] = "/bin/sh";
+    c->argv[k++] = (char *)ETUDE_SHELL;
     c->argv[k++] = "-c";
     c->argv[k++] = "exec \"$@\" >\"$0\" 2>&1";
     c->argv[k++] = c->out;
@@ -2906,7 +2940,9 @@ static int identify(struct set *x)
 {
     const struct etude_legacy_set_opts *o = x->o;
     char host[256], stamp[32];
+#ifndef _WIN32
     struct utsname u;
+#endif
     time_t now = time(NULL);
     struct tm tm;
 
@@ -2914,20 +2950,33 @@ static int identify(struct set *x)
         return refuse(x, "the clock cannot be read");
     snprintf(x->run_id, sizeof(x->run_id), "tests.%s.%s.%ld", o->arch, stamp, (long)getpid());
     snprintf(x->seconds, sizeof(x->seconds), "%u", o->seconds);
+#ifdef _WIN32
+    DWORD host_size = sizeof(host);
+    if (!GetComputerNameA(host, &host_size))
+#else
     if (gethostname(host, sizeof(host)) != 0)
+#endif
         snprintf(host, sizeof(host), "localhost");
     host[sizeof(host) - 1] = '\0';
     token_of(host, x->machine_id, sizeof(x->machine_id));
     boot_read(x->boot_id, sizeof(x->boot_id));
-#ifdef __APPLE__
+#if defined(_WIN32)
+    x->os = "windows";
+    if (strcmp(x->boot_id, "-") == 0)
+        return refuse(x, "the Windows boot identifier cannot be read");
+#elif defined(__APPLE__)
     x->os = "macos";
 #else
     x->os = "linux";
 #endif
+#ifdef _WIN32
+    etude_win_version(x->os_version, sizeof x->os_version);
+#else
     if (uname(&u) == 0)
         snprintf(x->os_version, sizeof(x->os_version), "%s", u.release);
     else
         snprintf(x->os_version, sizeof(x->os_version), "unknown");
+#endif
     return 0;
 }
 

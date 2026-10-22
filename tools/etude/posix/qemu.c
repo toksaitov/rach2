@@ -11,11 +11,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#endif
 #include <unistd.h>
+
+#ifdef _WIN32
+#include "../win/files.h"
+#include "../win/sockets.h"
+#else
+typedef int etude_socket;
+#define socket_read  read
+#define socket_write write
+#define socket_close close
+#endif
 
 #include "../capture.h"
 #include "../history_json.h"
@@ -63,12 +75,16 @@ struct etude_machine {
     struct etude_machine *next;
     char *attempt_id;
     enum etude_accel accel;
-    char dir[sizeof(((struct sockaddr_un *)0)->sun_path) - 2]; /* with room
+#ifdef _WIN32
+    char dir[4096];
+#else
+    char dir[sizeof(((struct sockaddr_un *)0)->sun_path) - 2];
+#endif /* with room \
                                                                   for "/c" */
-    char console_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
-    char qmp_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
-    int console_listen, qmp_listen; /* -1 once QEMU has connected */
-    int console, qmp;               /* QEMU's connections; -1 once closed */
+    char console_path[128];
+    char qmp_path[128];
+    etude_socket console_listen, qmp_listen; /* -1 once QEMU has connected */
+    etude_socket console, qmp;               /* QEMU's connections; -1 once closed */
     int console_file;
     char *audio_path;
     int audio_created, audio_temporary;
@@ -123,6 +139,7 @@ static void close_fd(int *fd)
     *fd = -1;
 }
 
+#ifndef _WIN32
 /** Make descriptor `fd` nonblocking and closed on exec. */
 static void fd_flags(int fd)
 {
@@ -156,17 +173,56 @@ static int listen_at(const char *path)
     return fd;
 }
 
+#else
+/** Make a socket nonblocking and noninheritable. */
+static void fd_flags(etude_socket fd)
+{
+    u_long on = 1;
+    ioctlsocket(fd, FIONBIO, &on);
+    SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0);
+}
+
+/** Listen exclusively on a dynamically assigned loopback port. */
+static etude_socket listen_at(char *path)
+{
+    unsigned short port;
+    SOCKET s;
+    if (etude_win_net_start() != 0) {
+        errno = EIO;
+        return -1;
+    }
+    s = etude_win_listen(&port);
+    if (s == INVALID_SOCKET) {
+        errno = EIO;
+        return -1;
+    }
+    fd_flags((etude_socket)s);
+    snprintf(path, 128, "%u", port);
+    return (etude_socket)s;
+}
+#endif
+
+/** Close a socket and mark it closed. */
+static void close_socket_fd(etude_socket *fd)
+{
+    if (*fd >= 0)
+        socket_close(*fd);
+    *fd = -1;
+}
+
 /** Remove the machine's sockets and close what is open. */
 static void machine_close(struct etude_machine *m)
 {
-    close_fd(&m->console_listen);
-    close_fd(&m->qmp_listen);
-    close_fd(&m->console);
-    close_fd(&m->qmp);
+    close_socket_fd(&m->console_listen);
+    close_socket_fd(&m->qmp_listen);
+    close_socket_fd(&m->console);
+    close_socket_fd(&m->qmp);
     close_fd(&m->console_file);
     if (m->dir[0] != '\0') {
+#ifndef _WIN32
         unlink(m->console_path);
         unlink(m->qmp_path);
+#endif
     }
 }
 
@@ -202,10 +258,15 @@ static void machine_release(struct etude_machine *m)
  */
 static int machine_dir(struct etude_machine *m)
 {
+#ifdef _WIN32
+    const char *tmp = etude_win_temp();
+    if (tmp == NULL)
+        return -1;
+#else
     const char *tmp = getenv("TMPDIR");
-
     if (tmp == NULL || tmp[0] != '/' || strlen(tmp) + sizeof("/etude-qemu.XXXXXX") > sizeof(m->dir))
         tmp = "/tmp";
+#endif
     if ((size_t)snprintf(m->dir, sizeof(m->dir), "%s/etude-qemu.XXXXXX", tmp) >= sizeof(m->dir)) {
         m->dir[0] = '\0';
         errno = ENAMETOOLONG;
@@ -215,8 +276,10 @@ static int machine_dir(struct etude_machine *m)
         m->dir[0] = '\0';
         return -1;
     }
+#ifndef _WIN32
     snprintf(m->console_path, sizeof(m->console_path), "%s/c", m->dir);
     snprintf(m->qmp_path, sizeof(m->qmp_path), "%s/q", m->dir);
+#endif
     return 0;
 }
 
@@ -349,15 +412,15 @@ int etude_qemu_start(struct etude_qemu *q, const struct etude_machine_spec *spec
     line.max = ETUDE_QEMU_ARGS_MAX;
     line.buf = buf;
     line.size = QEMU_LINE_BYTES;
+    if ((m->console_listen = listen_at(m->console_path)) < 0 ||
+        (m->qmp_listen = listen_at(m->qmp_path)) < 0)
+        goto fail;
     e = etude_qemu_argv(spec->profile, spec->site, m->console_path, m->qmp_path, m->audio_path,
                         &line);
     if (e != 0) {
         errno = e;
         goto fail;
     }
-    if ((m->console_listen = listen_at(m->console_path)) < 0 ||
-        (m->qmp_listen = listen_at(m->qmp_path)) < 0)
-        goto fail;
     if (spec->console_path != NULL &&
         (m->console_file =
              open(spec->console_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644)) < 0)
@@ -426,13 +489,13 @@ static void console_read(struct etude_machine *m, size_t limit)
     ssize_t n;
 
     while (m->console >= 0 && (limit == 0 || total < limit)) {
-        n = read(m->console, buf, sizeof(buf));
+        n = socket_read(m->console, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return;
         if (n <= 0) {
-            close_fd(&m->console);
+            close_socket_fd(&m->console);
             m->r.console.closed = 1;
             m->changed = 1;
             return;
@@ -451,7 +514,7 @@ static int qmp_write(struct etude_machine *m, const char *json)
     if (m->qmp < 0)
         return -1;
     do {
-        n = write(m->qmp, json, len);
+        n = socket_write(m->qmp, json, len);
     } while (n < 0 && errno == EINTR);
     if (n != (ssize_t)len) {
         m->qmp_state = QMP_GONE;
@@ -662,13 +725,13 @@ static void qmp_read(struct etude_machine *m)
     ssize_t n, i;
 
     while (m->qmp >= 0) {
-        n = read(m->qmp, buf, sizeof(buf));
+        n = socket_read(m->qmp, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return;
         if (n <= 0) {
-            close_fd(&m->qmp);
+            close_socket_fd(&m->qmp);
             if (m->qmp_state != QMP_QUIT)
                 m->qmp_state = QMP_GONE;
             return;
@@ -695,7 +758,7 @@ static void console_write(struct etude_machine *m)
     ssize_t n;
 
     while (m->console >= 0 && m->input_len > 0) {
-        n = write(m->console, m->input, m->input_len);
+        n = socket_write(m->console, m->input, m->input_len);
         if (n < 0 && errno == EINTR)
             continue;
         if (n < 0)
@@ -706,9 +769,9 @@ static void console_write(struct etude_machine *m)
 }
 
 /** Take QEMU's connection to listening socket `*listener`, and remove it. */
-static void take_connection(int *listener, int *conn, const char *path)
+static void take_connection(etude_socket *listener, etude_socket *conn, const char *path)
 {
-    int fd;
+    etude_socket fd;
 
     if (*listener < 0)
         return;
@@ -717,8 +780,12 @@ static void take_connection(int *listener, int *conn, const char *path)
         return;
     fd_flags(fd);
     *conn = fd;
-    close_fd(listener);
+    close_socket_fd(listener);
+#ifndef _WIN32
     unlink(path);
+#else
+    (void)path;
+#endif
 }
 
 /** Give the end of a machine whose QEMU has ended. */

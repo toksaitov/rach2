@@ -10,7 +10,11 @@
 #include "etude/ledger.h"
 #include "posix.h"
 
+#ifdef _WIN32
+#include "../win/files.h"
+#else
 extern char **environ;
+#endif
 static volatile sig_atomic_t stopped;
 
 /** Record cancellation for the executor's next turn. */
@@ -53,6 +57,31 @@ static void output(const struct etude_output *o, size_t *seen, FILE *f)
     }
 }
 
+#ifdef _WIN32
+/** Copy the command's vector with its program resolved on native PATH. */
+static char **windows_command(char **argv)
+{
+    char program[4096], **out;
+    size_t n = 0;
+
+    if (etude_win_program(argv[0], program, sizeof(program)) != 0)
+        return NULL;
+    while (argv[n] != NULL)
+        n++;
+    out = calloc(n + 1, sizeof(*out));
+    if (out == NULL)
+        return NULL;
+    out[0] = strdup(program);
+    if (out[0] == NULL) {
+        free(out);
+        return NULL;
+    }
+    for (size_t i = 1; i < n; i++)
+        out[i] = argv[i];
+    return out;
+}
+#endif
+
 /**
  * Run one command, with a registered process and a bound on its whole life.
  *
@@ -70,6 +99,9 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     uint64_t until = posix_now_us() + (uint64_t)seconds * 1000000;
     size_t out = 0, err = 0;
     int rc = -1, done = 0;
+#ifdef _WIN32
+    char **command = NULL;
+#endif
 
     if (ex == NULL) {
         fprintf(stderr, "etude-bridge: executor: %s\n", strerror(errno));
@@ -79,10 +111,20 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
         fprintf(stderr, "etude-bridge: verdict: %s\n", strerror(errno));
         goto done;
     }
+#ifdef _WIN32
+    if ((command = windows_command(argv)) == NULL) {
+        fprintf(stderr, "etude-bridge: start: %s: %s\n", argv[0], strerror(errno));
+        goto done;
+    }
+#endif
     memset(&spec, 0, sizeof(spec));
     spec.stdin_path = input ? "-" : NULL;
     spec.attempt_id = id;
+#ifdef _WIN32
+    spec.argv = command;
+#else
     spec.argv = argv;
+#endif
     spec.envp = environ;
     spec.output_max = 64u << 20;
     spec.grace_us = 2000000;
@@ -134,6 +176,12 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
 done:
     if (ex != NULL)
         etude_exec_free(ex);
+#ifdef _WIN32
+    if (command != NULL) {
+        free(command[0]);
+        free(command);
+    }
+#endif
     return rc;
 }
 
@@ -207,7 +255,11 @@ static int admit(struct etude_ledger *l, const char *id, const char *account,
     while (etude_ledger_admit(l, id, account, res + 1, 1, cap + 1, 1, seconds != 0) != 0) {
         e = errno;
         if (seconds != 0 && e == EAGAIN && !stopped && posix_now_us() < until) {
+#ifdef _WIN32
+            Sleep(1000);
+#else
             sleep(1);
+#endif
             continue;
         }
         if (seconds != 0 && (e == EAGAIN || stopped))
@@ -235,7 +287,11 @@ static int parse(int argc, char **argv, struct request *q)
     int opt;
 
     memset(q, 0, sizeof(*q));
+#ifdef _WIN32
+    q->dir = etude_win_temp();
+#else
     q->dir = "/tmp";
+#endif
     while ((opt = getopt(argc, argv, "+ipd:w:r:")) != -1) {
         switch (opt) {
         case 'i':
@@ -261,8 +317,13 @@ static int parse(int argc, char **argv, struct request *q)
     }
     argc -= optind;
     argv += optind;
-    if (argc < 8 || argv[0][0] != '/' || q->dir[0] != '/' || amounts(argv[4], q->res) != 0 ||
-        amounts(argv[5], q->cap) != 0)
+    if (argc < 8 || amounts(argv[4], q->res) != 0 || amounts(argv[5], q->cap) != 0)
+        return -1;
+#ifdef _WIN32
+    if (!etude_win_absolute(argv[0]) || !etude_win_absolute(q->dir))
+#else
+    if (argv[0][0] != '/' || q->dir[0] != '/')
+#endif
         return -1;
     q->alone = strcmp(argv[3], "alone") == 0;
     if (!q->alone && strcmp(argv[3], "shared") != 0)
@@ -311,8 +372,13 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
     }
     if (q->legacy) {
         snprintf(offset, sizeof(offset), "%d", etude_bridge_offset(b));
+#ifdef _WIN32
+        _putenv_s("RACH2_PORT_OFFSET", offset);
+        _putenv_s("RACH2_HOST_LOCK", "");
+#else
         setenv("RACH2_PORT_OFFSET", offset, 1);
         unsetenv("RACH2_HOST_LOCK");
+#endif
     }
     return b;
 }
@@ -324,9 +390,16 @@ int main(int argc, char **argv)
     struct etude_ledger *l;
     struct etude_bridge *b;
     enum etude_cleanup cleanup = ETUDE_CLEANUP_CONFIRMED;
+#ifndef _WIN32
     struct sigaction sa;
+#endif
     int rc;
 
+#ifdef _WIN32
+    extern int etude_win_bridge_main(int argc, char **argv);
+    if (argc > 1 && strcmp(argv[1], "--bridge-holder") == 0)
+        return etude_win_bridge_main(argc, argv);
+#endif
     if (parse(argc, argv, &q) != 0)
         return usage();
     if (q.legacy && (getenv("RACH2_PORT_OFFSET") != NULL || getenv("SSH_TEST_PORT") != NULL)) {
@@ -334,12 +407,17 @@ int main(int argc, char **argv)
                 "etude-bridge: result: refused: legacy port overrides bypass reservations\n");
         return refused(q.record);
     }
+#ifdef _WIN32
+    if (signal(SIGTERM, stop) == SIG_ERR || signal(SIGINT, stop) == SIG_ERR)
+        return refused(q.record);
+#else
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = stop;
     sigemptyset(&sa.sa_mask);
     sigaction(SIGTERM, &sa, NULL);
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGHUP, &sa, NULL);
+#endif
     l = etude_ledger_open(q.ledger);
     b = take(l, &q);
     if (b == NULL) {

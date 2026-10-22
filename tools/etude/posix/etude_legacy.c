@@ -6,13 +6,21 @@
  */
 #include <errno.h>
 #include <limits.h>
+#ifndef _WIN32
 #include <pwd.h>
+#endif
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
 
 #include "etude/legacy.h"
 #include "json.h"
@@ -42,6 +50,10 @@ static void note_stop(int sig)
 /** Catch the stop signals without restarting the executor's waits. */
 static void catch_stops(void)
 {
+#ifdef _WIN32
+    signal(SIGTERM, note_stop);
+    signal(SIGINT, note_stop);
+#else
     static const int sigs[] = {SIGTERM, SIGINT, SIGHUP};
     struct sigaction sa;
     size_t i;
@@ -51,6 +63,7 @@ static void catch_stops(void)
     sigemptyset(&sa.sa_mask);
     for (i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
         sigaction(sigs[i], &sa, NULL);
+#endif
 }
 
 /** Print the usage and give the status of a wrong usage. */
@@ -280,7 +293,9 @@ static int set_main(int argc, char **argv, const char *self)
     struct etude_legacy_set_opts o;
     char program[PATH_MAX], account[64];
     const char *cpus = getenv("RACH2_CPUS");
+#ifndef _WIN32
     struct passwd *pw = getpwuid(getuid());
+#endif
     long n;
 
     memset(&o, 0, sizeof(o));
@@ -302,10 +317,16 @@ static int set_main(int argc, char **argv, const char *self)
         return 2;
     }
     o.cpus = cpus == NULL || *cpus == '\0' ? 2u : number_of(cpus, 64);
+#ifdef _WIN32
+    DWORD account_size = sizeof(account);
+    if (!GetUserNameA(account, &account_size))
+        snprintf(account, sizeof(account), "windows");
+#else
     if (pw != NULL && strlen(pw->pw_name) < sizeof(account))
         snprintf(account, sizeof(account), "%s", pw->pw_name);
     else
         snprintf(account, sizeof(account), "uid%ld", (long)getuid());
+#endif
     o.account = account;
     if ((n = selection_of(argv[optind], members, names, cases)) < 0)
         return 2;
@@ -318,6 +339,12 @@ static int set_main(int argc, char **argv, const char *self)
 
 int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    extern int etude_win_bridge_main(int argc, char **argv);
+    if (argc > 1 && strcmp(argv[1], "--bridge-holder") == 0)
+        return etude_win_bridge_main(argc, argv);
+#endif
+
     json_program = "etude-legacy";
     if (argc >= 2 && strcmp(argv[1], "prepare") == 0)
         return prepare_main(argc - 1, argv + 1);

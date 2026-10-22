@@ -3,7 +3,7 @@
  * history, tells the case's progress apart from the rest of its output, and
  * says when a bound has run out; the supervisor runs host attempts and QEMU
  * machines under their watchdogs and ends them when one runs out, machines on
- * POSIX systems alone. tools/etude/Readme.md gives the rules.
+ * POSIX systems and Windows. tools/etude/Readme.md gives the rules.
  */
 #ifndef ETUDE_WATCHDOG_H
 #define ETUDE_WATCHDOG_H

@@ -9,6 +9,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#ifdef _WIN32
+#include "../../win/files.h"
+#endif
 
 #include "etude/exec.h"
 

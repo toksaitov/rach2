@@ -15,12 +15,20 @@
 #include <dirent.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
+
 #include "etude/artifact.h"
 #include "etude/exec.h"
 #include "etude/legacy.h"
 #include "posix.h"
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 /* The time from a step's termination signal to its kill. make removes the
  * target it was writing when it is stopped, and tests/run gave it as long. */
@@ -236,7 +244,10 @@ static int tree_held(const struct prep *p)
         fclose(f);
     free(line);
     free(path);
-    return ok && (kill((pid_t)pid, 0) == 0 || errno == EPERM);
+    {
+        struct etude_pid id;
+        return ok && etude_process_state(pid, &id) == 1;
+    }
 }
 
 /** Take the architecture and the kernel; 0, or 2 after a refusal. */
@@ -361,7 +372,11 @@ static int make_env(struct prep *p, const char *path)
 /** Make the work directory and the executor; 0, or 2 after an error. */
 static int open_work(struct prep *p)
 {
+#ifdef _WIN32
+    const char *tmp = etude_win_temp();
+#else
     const char *tmp = getenv("TMPDIR");
+#endif
     const char *path = getenv("PATH");
 
     if (tmp == NULL || *tmp == '\0')
@@ -459,7 +474,7 @@ static char **step_argv(const struct step *s, const char *log)
         n++;
     if ((argv = calloc(n + 7, sizeof(*argv))) == NULL)
         return NULL;
-    argv[k++] = "/bin/sh";
+    argv[k++] = (char *)ETUDE_SHELL;
     argv[k++] = "-c";
     argv[k++] = (char *)s->script;
     argv[k++] = "etude-legacy";
@@ -739,7 +754,12 @@ static char *digests_path(const char *tree)
  * taken from its root. */
 static char *artifact_path(const char *tree, const char *name)
 {
-    return name[0] == '/' ? strdup(name) : format("%s/%s", tree, name);
+#ifdef _WIN32
+    int absolute = etude_win_absolute(name);
+#else
+    int absolute = name[0] == '/';
+#endif
+    return absolute ? strdup(name) : format("%s/%s", tree, name);
 }
 
 /** Write the record's head to `f`. */

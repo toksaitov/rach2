@@ -16,6 +16,12 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
+
 #include "../history_json.h"
 #include "../serial.h"
 #include "etude/artifact.h"
@@ -25,7 +31,9 @@
 #include "posix.h"
 #include "sha256.h"
 
+#ifndef _WIN32
 extern char **environ;
+#endif
 
 /* The text the kernel's debug shell prints when it is ready for a command,
  * and the command that makes etude-guest the boot's designated init. */
@@ -213,7 +221,9 @@ struct etude_case {
 };
 
 /* The descriptors of the pipe that the stop signals write. */
+#ifndef _WIN32
 static int stop_pipe[2] = {-1, -1};
+#endif
 static volatile sig_atomic_t stop_asked;
 
 /** Say what went wrong on stderr, as `etude-case: detail`. */
@@ -232,18 +242,24 @@ static void diag(const char *fmt, ...)
 static void on_stop(int sig)
 {
     int e = errno;
-    char b = (char)sig;
-
+    (void)sig;
     stop_asked = 1;
-    if (stop_pipe[1] >= 0 && write(stop_pipe[1], &b, 1) < 0) {
-        /* The pipe is full, so a wait is already due to wake. */
+#ifndef _WIN32
+    {
+        char b = (char)sig;
+        if (stop_pipe[1] >= 0 && write(stop_pipe[1], &b, 1) < 0) {
+        }
     }
+#endif
     errno = e;
 }
 
 /** Make the stop pipe and catch SIGTERM, SIGINT and SIGHUP. */
 static int catch_stops(void)
 {
+#ifdef _WIN32
+    return signal(SIGTERM, on_stop) == SIG_ERR || signal(SIGINT, on_stop) == SIG_ERR ? -1 : 0;
+#else
     struct sigaction sa;
     int i;
 
@@ -260,6 +276,7 @@ static int catch_stops(void)
         sigaction(SIGHUP, &sa, NULL) != 0)
         return -1;
     return 0;
+#endif
 }
 
 /* ---- Documents. ---- */
@@ -504,7 +521,13 @@ static int load_tools(struct etude_case *c)
     for (t = names != NULL ? names->child : NULL; t != NULL; t = t->next, i++) {
         c->tools[i].name = t->type == 's' ? t->string : NULL;
         c->tools[i].path = c->tools[i].name != NULL ? jtext(given, c->tools[i].name) : NULL;
-        if (c->tools[i].path == NULL || c->tools[i].path[0] != '/') {
+        if (c->tools[i].path == NULL ||
+#ifdef _WIN32
+            !etude_win_absolute(c->tools[i].path)
+#else
+            c->tools[i].path[0] != '/'
+#endif
+        ) {
             diag("the invocation gives no absolute path of tool %s",
                  c->tools[i].name != NULL ? c->tools[i].name : "(unnamed)");
             return -1;
@@ -1369,10 +1392,14 @@ static void host_finished(struct etude_case *c, struct etude_proc *p, struct etu
 static enum etude_status serve_until(struct etude_case *c, done_fn done, void *arg,
                                      struct etude_proc **host, uint64_t until, int stoppable)
 {
+#ifndef _WIN32
     struct etude_watch w;
+#endif
     struct etude_proc *finished;
     uint64_t now, soonest;
+#ifndef _WIN32
     char drain[64];
+#endif
 
     for (;;) {
         now = posix_now_us();
@@ -1386,12 +1413,21 @@ static enum etude_status serve_until(struct etude_case *c, done_fn done, void *a
         soonest = sessions_due(c);
         if (soonest == 0 || soonest > until)
             soonest = until;
+#ifndef _WIN32
         w.fd = stop_pipe[0];
         w.events = ETUDE_WATCH_IN;
+#endif
+#ifdef _WIN32
+        etude_qemu_watch(c->q, wait_ms(soonest, now) < 10 ? wait_ms(soonest, now) : 10, NULL, 0,
+                         &finished);
+#else
         etude_qemu_watch(c->q, wait_ms(soonest, now), &w, 1, &finished);
+#endif
+#ifndef _WIN32
         if (w.revents != 0)
             while (read(stop_pipe[0], drain, sizeof(drain)) > 0) {
             }
+#endif
         if (finished != NULL)
             host_finished(c, finished, host);
     }
@@ -2996,8 +3032,12 @@ static int stopped_by_signal(const struct etude_case_service *s)
 {
     const struct etude_exec_result *r = etude_proc_result(s->p);
 
+#ifdef _WIN32
+    return r->end == ETUDE_END_STOPPED;
+#else
     return r->exit_end == ETUDE_END_SIGNALED &&
            (r->exit_value == SIGTERM || r->exit_value == SIGKILL);
+#endif
 }
 
 /**

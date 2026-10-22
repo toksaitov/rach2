@@ -8,6 +8,12 @@
 #include <string.h>
 #include <sys/time.h>
 
+#ifdef _WIN32
+#include "../win/files.h"
+#else
+#define ETUDE_SHELL "/bin/sh"
+#endif
+
 #include "etude/status.h"
 
 /* The names of the stages, as the history gives them, by enum etude_stage. */
