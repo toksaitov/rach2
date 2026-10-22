@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "guest.packet.packetprobe",
-      "behavior": "A packet socket refuses what it does not support, sends a DHCP discover whole and receives the broadcast offer that ip_rx drops, keeps ARP and IPv4 frames apart, frees its binding at close, and is refused to an ordinary user",
+      "behavior": "A packet socket refuses what it does not support, sends a DHCP discover whole and receives the broadcast offer that ip_rx drops, keeps ARP and IPv4 frames apart, is listed in /proc/net/packet while bound and not after its close, and is refused to an ordinary user",
       "units": ["packet", "packetprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -56,10 +56,10 @@
         {"assertion_id": "ipv4-only", "checks": "every frame the IPv4 socket receives is IPv4", "source": "program"},
         {"assertion_id": "both-answered", "checks": "the ARP socket receives a reply from the address the request asked about, and the IPv4 socket an IPv4 frame", "source": "program"},
         {"assertion_id": "arp-cache", "checks": "/proc/net/arp has the gateway the machine resolved", "source": "program"},
-        {"assertion_id": "heap-read", "checks": "/proc/meminfo gives HeapUsed", "source": "program"},
         {"assertion_id": "reopen", "checks": "four packet sockets in a row each open and bind after the one before closed", "source": "program"},
-        {"assertion_id": "bind-takes-heap", "checks": "each of those binds makes HeapUsed grow", "source": "program"},
-        {"assertion_id": "close-frees", "checks": "after the four closes HeapUsed is what it was before them", "source": "program"},
+        {"assertion_id": "table-read", "checks": "/proc/self/fd gives each socket's inode, and /proc/net/packet reads with Linux's heading", "source": "program"},
+        {"assertion_id": "bind-listed", "checks": "each bound socket has one row of /proc/net/packet, by its inode", "source": "program"},
+        {"assertion_id": "close-frees", "checks": "after each close /proc/net/packet has no row of the socket closed", "source": "program"},
         {"assertion_id": "unprivileged-refused", "checks": "a child that drops to an ordinary user is refused a packet socket with EPERM, and exits normally", "source": "program"}
       ],
       "branches": [
@@ -68,7 +68,7 @@
            {"alternative_id": "own", "when": null,
             "assertions": ["discover-sent", "offer-polled", "select-agrees", "offer-ipv4", "no-control", "offer-address", "no-flags",
                            "bootp-broadcast", "empty-eagain", "no-address-written", "second-offer", "true-length", "truncated-address",
-                           "capacity", "third-offer", "rebind-drops", "bind-takes-heap", "close-frees"]},
+                           "capacity", "third-offer", "rebind-drops"]},
            {"alternative_id": "shared", "when": null, "assertions": []}
          ]}
       ],

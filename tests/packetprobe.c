@@ -20,10 +20,8 @@
  * probe takes the interface of the default route when no `ifname` is given
  * (probe_netif.h), reads its index, and its address when no `addr` is
  * given, from the machine in place of 1 and 10.0.2.15, and leaves out the
- * discovers and
- * their offers, which need a DHCP server on a network of their own, the
- * receives that need a socket nothing else reaches, and the two comparisons
- * of HeapUsed, which the machine's other processes move.
+ * discovers and their offers, which need a DHCP server on a network of their
+ * own, and the receives that need a socket nothing else reaches.
  *
  * Prints "PACKETPROBE OK" and exits 0 on success, or "PACKETPROBE FAIL: " and
  * the reason and exits 1. Beside its own lines it writes etude's report
@@ -283,10 +281,10 @@ static const struct {
     {"ipv4-only", 0},
     {"both-answered", 0},
     {"arp-cache", 0},
-    {"heap-read", 0},
     {"reopen", 0},
-    {"bind-takes-heap", 1},
-    {"close-frees", 1},
+    {"table-read", 0},
+    {"bind-listed", 0},
+    {"close-frees", 0},
     {"unprivileged-refused", 0},
 };
 
@@ -510,26 +508,89 @@ static void dotted(char *out, uint32_t ip)
 }
 
 /**
- * Open, bind and close four packet sockets in a row, and fail unless the
- * kernel heap is back where it started.
+ * Write the inode of the socket on descriptor `fd` into `out`, which has
+ * room for `cap` bytes, as the decimal digits and a NUL that its
+ * /proc/self/fd link, `socket:[N]`, gives: the count of digits, or 0 when the
+ * link cannot be read or names no socket.
+ */
+static int socket_inode(int fd, char *out, int cap)
+{
+    static const char prefix[] = "/proc/self/fd/";
+    char path[sizeof(prefix) + 12], link[48];
+    int k, n, i, d;
+
+    for (k = 0; prefix[k] != '\0'; k++) {
+        path[k] = prefix[k];
+    }
+    for (d = 1; fd / d >= 10; d *= 10) {
+    }
+    for (; d > 0; d /= 10) {
+        path[k++] = (char)('0' + fd / d % 10);
+    }
+    path[k] = '\0';
+    n = (int)syscall3(SYS_READLINK, (long)path, (long)link, (long)sizeof(link));
+    if (n < 10 || n >= (int)sizeof(link) || link[n - 1] != ']') {
+        return 0;
+    }
+    link[n] = '\0';
+    if (!contains(link, 8, "socket:[")) {
+        return 0;
+    }
+    for (i = 8, k = 0; i < n - 1 && k < cap - 1; i++) {
+        out[k++] = link[i];
+    }
+    out[k] = '\0';
+    return k;
+}
+
+/**
+ * The rows of /proc/net/packet whose last column, the inode, is `inode`, or
+ * -1 when the file cannot be read or lacks Linux's heading.
+ */
+static int packet_rows(const char *inode)
+{
+    char *text = (char *)frame;
+    int n = read_file("/proc/net/packet", text, (int)sizeof(frame));
+    int i, end, start, k, rows = 0;
+
+    if (n <= 0 || !contains(text, n, "Inode\n")) {
+        return -1;
+    }
+    for (i = 0; i < n && text[i] != '\n'; i++) {
+    }
+    while (++i < n) {
+        for (end = i; end < n && text[end] != '\n'; end++) {
+        }
+        for (k = end; k > i && text[k - 1] == ' '; k--) {
+        }
+        for (start = k; start > i && text[start - 1] != ' '; start--) {
+        }
+        text[k] = '\0';
+        rows += same(text + start, inode);
+        i = end;
+    }
+    return rows;
+}
+
+/**
+ * Open, bind and close four packet sockets in a row, and fail unless each
+ * bind puts the socket in the kernel's table of packet bindings and each
+ * close takes it out.
  *
- * A binding is a record from the heap on the list the receive path walks, so
- * a close that kept it would leave HeapUsed in /proc/meminfo larger by one
- * record each time, and frames would go on being queued for a socket nobody
- * can read. Each bind must make the heap grow, which shows that the record is
- * counted there and the final comparison can see one that was kept.
+ * A binding is a record on the list the receive path walks, and
+ * /proc/net/packet has a row for each, with the inode its socket's
+ * /proc/self/fd link gives. A close that kept the binding would leave the
+ * row, and frames would go on being queued for a socket nobody can read. The
+ * check reads only the probe's own rows, so the other sockets of the machine
+ * do not move it.
  */
 static void check_close_releases(void)
 {
     unsigned long args[3];
     struct sockaddr_ll_probe sll;
-    unsigned int before, opened;
+    char inode[12];
     int fd, r, k;
 
-    before = probe_meminfo("HeapUsed:");
-    if (before == 0xFFFFFFFFu) {
-        fail("heap-read", "HeapUsed could not be read from /proc/meminfo");
-    }
     for (k = 0; k < 4; k++) {
         args[0] = AF_PACKET;
         args[1] = SOCK_DGRAM;
@@ -538,7 +599,6 @@ static void check_close_releases(void)
         if (fd < 0) {
             fail_n("reopen", "a packet socket did not open after an earlier one closed", fd);
         }
-        opened = probe_meminfo("HeapUsed:");
         sll = zero_sll;
         sll.sll_family = AF_PACKET;
         sll.sll_protocol = ETH_P_IP_BE;
@@ -550,15 +610,28 @@ static void check_close_releases(void)
         if (r != 0) {
             fail_n("reopen", "a bind after an earlier socket closed was refused", r);
         }
-        if (!probe_native() && probe_meminfo("HeapUsed:") <= opened) {
-            fail("bind-takes-heap", "a bind took nothing from the heap, so the heap cannot show "
-                                    "whether a close frees the binding");
+        if (socket_inode(fd, inode, (int)sizeof(inode)) == 0) {
+            fail("table-read", "/proc/self/fd gave no inode for a packet socket");
+        }
+        r = packet_rows(inode);
+        if (r < 0) {
+            fail("table-read", "/proc/net/packet could not be read");
+        }
+        if (r != 1) {
+            fail_n("bind-listed", "a bound packet socket did not have one row in /proc/net/packet",
+                   r);
         }
         sys_close(fd);
-    }
-    if (!probe_native() && probe_meminfo("HeapUsed:") != before) {
-        fail("close-frees", "four packet sockets bound and closed left the heap other than it "
-                            "was, so a close kept its binding");
+        r = packet_rows(inode);
+        if (r < 0) {
+            fail("table-read", "/proc/net/packet could not be read");
+        }
+        if (r != 0) {
+            fail_n("close-frees",
+                   "a closed packet socket was still in /proc/net/packet, so the "
+                   "close kept its binding",
+                   r);
+        }
     }
 }
 
