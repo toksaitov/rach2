@@ -38,6 +38,12 @@ extern const char *etude_guest_fault;
  * freestanding <limits.h> of the host tests' build has no PATH_MAX. */
 #define PATH_CAP 4096
 
+/* The seconds a holder of a scratch FIFO sleeps: a day, longer than the host
+ * case's watchdog lets a check go without progress, so that while the test
+ * runs only a kill ends a holder, and one that a killed test leaves ends by
+ * itself. */
+#define HOLD_SECONDS "86400"
+
 static int failures;
 static char work[512];
 /* The scratch directory by its resolved path, with no symbolic link and no
@@ -868,8 +874,9 @@ static void check_interruptions(void)
 {
     static const char hang[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
                                "echo $$ > \"$MARKS.leader\"\n"
-                               "sleep 60 &\necho $! > \"$MARKS.member\"\n"
-                               "\"$HOSTTEST\" --setsid sleep 60 &\necho \"@etude 1 child $!\"\n"
+                               "sleep " HOLD_SECONDS " &\necho $! > \"$MARKS.member\"\n"
+                               "\"$HOSTTEST\" --setsid sleep " HOLD_SECONDS " &\n"
+                               "echo \"@etude 1 child $!\"\n"
                                "echo $! > \"$MARKS.escaped\"\necho ready\nwait\n";
     struct ending e;
     struct got g;
@@ -1015,7 +1022,7 @@ static int settled_confirmed(const char *token)
 static void check_orphan_group(void)
 {
     static const char leaving[] = "#!/bin/sh\nexec 9> \"$MARKS.open\"\n"
-                                  "echo $$ > \"$MARKS.leader\"\nsleep 60 &\n"
+                                  "echo $$ > \"$MARKS.leader\"\nsleep " HOLD_SECONDS " &\n"
                                   "echo $! > \"$MARKS.member\"\n"
                                   "exec 8> \"$MARKS.leader-open\"\necho ready\n"
                                   "read release < \"$MARKS.release\"\n";
@@ -1096,7 +1103,7 @@ static long make_group(const char *name, int own_session, long *group)
         for (i = 3; i < 1024; i++)
             if (i != fd)
                 close(i);
-        execl("/bin/sleep", "sleep", "120", (char *)NULL);
+        execl("/bin/sleep", "sleep", HOLD_SECONDS, (char *)NULL);
         _exit(127);
     }
     close(p[1]);
