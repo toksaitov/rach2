@@ -1,14 +1,25 @@
 # mk/gnu-image.mk: the GNU system's root (vendor/gnu/Readme.md), the os-real
 # system of krffs/manifests/os-real-gnu.manifest with the GNU layer installed
 # over it by vendor/gnu/install_root.sh, as an ext2 volume the kernel boots
-# with rach2.root=ext2. It is built where the GNU layer is, on a Linux host,
-# and is not part of `all`. 4096 MiB: the system takes 1.2 GiB of it, and the
-# rest is room for what the machine compiles and fetches. The prerequisites
-# are those of os-real's ext2 image, less Dropbear, with the overlay, the list
-# with the CA bundle's digest and the five stamps of the GNU layer. The root
-# has the packages of the agents layer that GNU_AGENTS names
-# (mk/gnu-agents.mk); os-real-gnu-agents.ext2, the root of `tests/run
+# with rach2.root=ext2. It is not part of `all`. 4096 MiB: the system takes
+# 1.2 GiB of it, and the rest is room for what the machine compiles and
+# fetches. The root has the packages of the agents layer that GNU_AGENTS
+# names (mk/gnu-agents.mk); os-real-gnu-agents.ext2, the root of `tests/run
 # agents`, has every package the layer has.
+#
+# On an x86-64 Linux host the image is built where the GNU layer is. Its
+# prerequisites are those of os-real's ext2 image, less Dropbear, with the
+# overlay, the list with the CA bundle's digest, the five stamps of the
+# layer, and the list and the stamps of the agents' packages it has. On any
+# other host, or wherever GNU_TOOLING is set to a word, the layer and the
+# image are built in etude's tooling machine by vendor/gnu/tooling_image.sh,
+# on a disk that keeps the layer's build tree between its jobs. There the
+# stamps are on that disk, where only the machine's make reads them, so the
+# image depends on what they depend on instead: the sources of each stamp,
+# ports.link, and the recipe of each agents' package it has. The host builds
+# the products the manifest stages, the machine's program etude-tooling and
+# the digest tool that checks the image the machine sends back.
+GNU_TOOLING ?= $(if $(filter Linux_x86_64,$(shell uname -s)_$(shell uname -m)),,yes)
 OS_REAL_GNU_EXT2 = $(IMAGES_DIR)/os-real-gnu.ext2
 OS_REAL_GNU_AGENTS_EXT2 = $(IMAGES_DIR)/os-real-gnu-agents.ext2
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
@@ -23,6 +34,7 @@ GNU_IMAGE_ORDER = preflight krffs rach2 utils check-busybox check-tcc check-pdpm
 os-real-gnu-ext2: $(OS_REAL_GNU_EXT2)
 os-real-gnu-agents-ext2: $(OS_REAL_GNU_AGENTS_EXT2)
 
+ifeq ($(GNU_TOOLING),)
 $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
@@ -30,6 +42,25 @@ $(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) |
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
+else
+GNU_TOOLING_DEPS = $(filter-out $(GNU_IMAGE_STAMPS),$(GNU_IMAGE_DEPS)) \
+                   $(sort $(GNU_TOOLCHAIN_SOURCES) $(GNU_PORTS_SOURCES) $(GNU_NATIVE_SOURCES) \
+                          $(GNU_GDB_SOURCES) $(GNU_JS_SOURCES) $(GNU_CHROMIUM_SOURCES)) \
+                   $(GNU_PORTS_LINK) vendor/gnu/tooling_image.sh vendor/gnu/tooling_job.sh
+GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDETOOLING) $(SHA256TOOL)
+GNU_AGENTS_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(filter $(GNU_AGENTS_ALL),$(GNU_AGENTS_ON)))
+GNU_AGENTS_ALL_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(GNU_AGENTS_ALL))
+
+$(OS_REAL_GNU_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
+                     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
+	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 4096
+
+$(OS_REAL_GNU_AGENTS_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_RECIPES) \
+                            $(GNU_AGENTS_SOURCES) | $(GNU_TOOLING_ORDER)
+	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" GNU_LINK="$(GNU_LINK)" \
+	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 4096
+endif
 
 # `make machine`: everything an installed machine is given, in one target, so
 # that no part of it is left from an older build: the kernel, the recovery
@@ -39,7 +70,7 @@ $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENT
 # runs first, since the GNU root carries the sources and a style fix made
 # after the build changes it. The key is minted by a make of its own, because
 # make reads the recovery image's name, which says whether it has a key, when
-# it starts. Like the GNU root, this builds on a Linux host.
+# it starts. The GNU root is built as the rules above say.
 .PHONY: machine
 machine:
 	sh tests/run style

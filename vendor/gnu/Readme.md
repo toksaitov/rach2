@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host only and is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 72 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, an x86-64 Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
@@ -12,7 +12,7 @@ The Make targets build for the architecture `ARCH` names, so `make ARCH=x86_64 g
 * `make gnu-js`: the SpiderMonkey shell ([`spidermonkey/`](spidermonkey/Readme.md)).
 * `make gnu-chromium`: Debian's chromium-headless-shell with its libraries ([`chromium/`](chromium/Readme.md)).
 * `make ARCH=x86_64 GNU_AGENTS=NAME... gnu-agents`: the packages of the agents layer that `GNU_AGENTS` names, or every one for `all` ([`agents/`](agents/Readme.md)).
-* `make os-real-gnu-ext2`: the root image, `build/images/os-real-gnu.ext2` or `build/x86_64/images/os-real-gnu.ext2`, 4096 MiB and sparse, which needs all of the above; of the agents layer it has the packages `GNU_AGENTS` names. `make machine` builds it with the kernels and the recovery image an installed machine takes.
+* `make os-real-gnu-ext2`: the root image, `build/images/os-real-gnu.ext2` or `build/x86_64/images/os-real-gnu.ext2`, 4096 MiB and sparse, which needs all of the above; of the agents layer it has the packages `GNU_AGENTS` names. `make os-real-gnu-agents-ext2` builds `os-real-gnu-agents.ext2`, which has every package. `make machine` builds the first with the kernels and the recovery image an installed machine takes. On a host other than x86-64 Linux these two targets build the layer and the image in the tooling machine, as [Building](#building) says, and the targets above them are not used.
 
 Each target is behind a stamp; [`mk/Readme.md`](../../mk/Readme.md) says what rebuilds it. The scripts also run alone, with `RACH2_ARCH` for the architecture:
 
@@ -107,13 +107,30 @@ The build host is an x86-64 Linux with a C and C++ compiler, GNU make, gawk, bis
 
 Under make the scripts share the caller's jobs; alone they use every processor, or `GNU_JOBS` processors in the subdirectories' scripts.
 
+### In the tooling machine
+
+On any other host, or with `GNU_TOOLING=1` on Linux, `make os-real-gnu-ext2` and `make os-real-gnu-agents-ext2` run [`tooling_image.sh`](tooling_image.sh), which builds the layer and the image in etude's tooling machine ([`tools/etude/Readme.md`](../../tools/etude/Readme.md#the-tooling-machine)), an x86-64 Ubuntu in QEMU, under TCG on a Mac with Apple silicon. The machine has the tools above, and its job runs the layer's own scripts and rules. The host builds what the manifest stages from os-real, which the machine cannot build without the cross compilers, and stages the tree as one tar archive: the files git tracks or would track, those products, and the file of the extracted musl that the KRFFS tools compile. The job, [`tooling_job.sh`](tooling_job.sh), runs with a network on two raw disks:
+
+* The build disk, `tooling.disk` in the layer's build tree on the host (`build/vendor/gnu/` or `build/x86_64/vendor/gnu/`): a sparse file of 80 GiB with an ext4 volume, mounted at `/gnu`. It has the tree in `/gnu/rach2`, whose layer's build tree and `vendor/gnu/downloads` stay from job to job, the job's logs in `/gnu/log`, of which it keeps the last 20, and the job's scratch. The machine trims the volume at the end of each job, so the file holds about the blocks the volume uses: some 35 GiB once the layer is built. The volume is mounted without delayed allocation, so that a stamp on it follows the files its step wrote.
+* The image's disk: a new sparse file of the image's size, which the job writes the image to.
+
+The job replaces the rest of the tree on the build disk with the host's, each file with the time the host gave it, runs make for the layer's targets as the account `rach2`, uid 1000, and then `tools/image/mkext2.sh` with `install_root.sh` as the rule for a Linux host does. It copies the image to its disk, and the host renames the file into place once its SHA-256 is the one the job computed in the machine. Each line the job's make writes is printed on the host as it comes, and at the end of the job etude-tooling's account of the boot, its `etude-tooling: cost:` line.
+
+The host's make cannot read the stamps, which are on the build disk, so the image depends on what the stamps depend on: their scripts, recipes and lists of sources, `ports.link`, and the recipe of each package of the agents layer the image has. A change to any of them runs a job, whose make rebuilds what the change touched. A job that stops, by an interrupt, its deadline or a failure, loses the step it was in, as a stopped make on Linux does, and the next make goes on from the stamps on the disk. One job at a time uses a build disk; a second waits for it.
+
+The environment sets the machine's shape: `GNU_TOOLING_CPUS` its processors and make's jobs, 8; `GNU_TOOLING_MIB` its memory, 12288 MiB; `GNU_TOOLING_DISK_GIB` the build disk's size, 80 GiB, which a larger value grows; and `GNU_TOOLING_SECONDS` the job's deadline, four days. `make ARCH=x86_64 os-real-gnu-ext2` builds the x86-64 root. `make GNU_TOOLING_DRY_RUN=1 os-real-gnu-ext2` runs the machine's make with `-n`, which shows what a job would rebuild, and makes no image.
+
+A build disk grows to some 35 GiB as its layer is built, and an image's sparse file takes about what the system in it uses, so the two architectures' disks may not fit beside each other on a host that keeps 40 GiB free, as `RACH2_MIN_FREE_GIB` asks of the loops. Once an architecture's images are made, its build tree on the host, `build/vendor/gnu` or `build/x86_64/vendor/gnu` with the disk in it, may be removed as other idle build output may; the next build of that architecture then starts from nothing.
+
 ## Updating
 
 To update a port, verify the new tarball's signature with `gpgv` and the key the header of `sources.txt` names, replace the port's line with the new version, URL and digest, set `VERSION` in its recipe, and run `build_port.sh NAME`. A change to `sources.txt` rebuilds every port under `make gnu-ports`, and a change to a toolchain line (binutils, GCC, GMP, MPFR, MPC, glibc, Linux, libxcrypt) rebuilds the toolchain and everything built with it. A new port is a recipe and a line; `--all` builds every recipe in `ports/`.
 
 ## Limits
 
-* The layer builds on an x86-64 Linux host only.
+* The layer's own targets, from `make gnu-toolchain` to `make gnu-agents`, build on an x86-64 Linux host only; elsewhere only the two root images are built, in the tooling machine.
+* The tooling machine runs under TCG on a Mac with Apple silicon, so the first build of the layer there takes many hours. On a Mac mini with an M4, the toolchain's binutils step took 605 seconds in a machine of 4 processors, where the testing host, a Ryzen 7950X3D with 32 threads, takes about 70; at that ratio the layer, which takes the testing host about 51 minutes, takes some 7 hours for one architecture, and its steps that use every thread of a large host take longer.
+* An image the tooling machine makes is the image a Linux host makes from the same tree only as far as the build is reproducible: the machine's Ubuntu, compilers, mke2fs and mandoc are those of the day it was made, and a program that records the account or the host it was built on records `rach2` and `etude-tooling`.
 * There is no PAM: OpenSSH, sudo, shadow and cronie are built without it.
 * D-Bus activates no service, since Debian's `dbus` package, which has the activation helper, is not installed.
 * chromium-headless-shell and D-Bus are Debian's binaries, not built here.

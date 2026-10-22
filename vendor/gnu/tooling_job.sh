@@ -1,0 +1,183 @@
+#!/bin/sh
+#
+# tooling_job.sh: the job that builds the GNU layer and its root image in
+# etude's tooling machine, which tooling_image.sh runs there.
+#
+# etude-tooling's job runner (tools/etude/tooling/runner.sh) runs it as root
+# in the job's working directory, which holds two inputs: tree.tar.gz, the
+# tree the host staged, and job.env, the shell assignments of RACH2_ARCH,
+# GNU_AGENTS, GNU_LINK, RACH2_PATH_MAP, MUSL_CRYPT_SRC, IMAGE (the image's
+# file name), SIZE (its size in MiB), JOBS (make's jobs) and DRY_RUN.
+# ETUDE_DISK1 is the layer's build disk, an ext4 volume labelled rach2-gnu
+# that persists between jobs; a disk on which blkid finds no signature, as a
+# new one, is formatted, and a disk with any other volume is refused.
+# ETUDE_DISK2, which a dry run does not have, is the image's disk, of the
+# image's size and reading as zeros.
+#
+# The job mounts the build disk at /gnu and replaces the tree in /gnu/rach2
+# with the host's, keeping the layer's build tree, build/vendor/gnu or
+# build/x86_64/vendor/gnu, and vendor/gnu/downloads. As the account rach2,
+# uid 1000, it then runs make for the layer's targets in that tree, and
+# tools/image/mkext2.sh with install_root.sh as mk/gnu-image.mk's rule for a
+# Linux host does. It copies the image to ETUDE_DISK2, sparse, and writes its
+# SHA-256 to the file `digest`. Under DRY_RUN make runs with -n, and no image
+# is made. The volume is mounted without delayed allocation, so a stamp that
+# a stopped machine left on the disk follows the files its step wrote.
+#
+# make's output and the scripts' go to a log of the job's own in /gnu/log,
+# which keeps the last 20, and to the machine's second serial port, each line
+# after the prefix `gnu-vm: `. That port is etude-tooling's channel, which
+# passes over lines it does not know and keeps them in channel.log in the
+# job's directory, where tooling_image.sh reads them while the job runs; the
+# console, the first port, is not used, since its getty hangs up the port
+# once it starts. The standard output has the outcome, and the end of the log
+# after a failure.
+#
+# Usage: sh tooling_job.sh
+#
+
+set -u
+
+MNT=/gnu
+TREE=$MNT/rach2
+CHAN=/dev/ttyS1
+BUILDER=rach2
+BUILDER_ID=1000
+LABEL=rach2-gnu
+
+fail()
+{
+    echo "gnu: job: $*" >&2
+    exit 1
+}
+
+# builder COMMAND...: run COMMAND as the build's account, with an
+# environment of its own.
+builder()
+{
+    setpriv --reuid=$BUILDER_ID --regid=$BUILDER_ID --clear-groups \
+        env -i HOME=$MNT/home LANG=C.UTF-8 TMPDIR=$MNT/tmp \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
+}
+
+# logged COMMAND...: run COMMAND as the build's account, its output in the
+# log and on the channel; the status is the command's.
+logged()
+{
+    { builder "$@" 2>&1; echo $? > /run/gnu-job-status; } |
+        tee -a "$LOG" | sed -u 's/^/gnu-vm: /' > "$CHAN"
+    return "$(cat /run/gnu-job-status)"
+}
+
+# mount_disk: format the build disk when it is empty, check it, mount it,
+# and grow its volume to the disk.
+mount_disk()
+{
+    type=$(blkid -p -o value -s TYPE "$DISK" 2>/dev/null)
+    if [ -z "$type" ]; then
+        if blkid -p "$DISK" > /dev/null 2>&1; then
+            fail "the build disk has a signature blkid cannot name; it is not the layer's"
+        fi
+        mkfs.ext4 -q -L $LABEL -m 0 -E lazy_itable_init=1,lazy_journal_init=1,nodiscard "$DISK" ||
+            fail 'mkfs.ext4 failed on the build disk'
+        echo "gnu: job: formatted the build disk"
+    elif [ "$type" != ext4 ] || [ "$(blkid -p -o value -s LABEL "$DISK")" != $LABEL ]; then
+        fail "the build disk has a $type volume, not the layer's ext4 volume $LABEL"
+    fi
+    e2fsck -p "$DISK" > /dev/null 2>&1
+    [ $? -le 2 ] || fail 'e2fsck found faults in the build disk that it does not repair'
+    mkdir -p $MNT
+    mount -o noinit_itable,nodelalloc "$DISK" $MNT || fail 'the build disk does not mount'
+    resize2fs "$DISK" > /dev/null 2>&1 || fail 'resize2fs cannot grow the volume to the disk'
+}
+
+# sync_tree: as the build's account, replace the tree with the host's,
+# keeping the layer's build tree and its downloads, and the times the host
+# gave each file.
+sync_tree()
+{
+    cd $TREE || exit 1
+    keep=./build$SUFFIX/vendor/gnu
+    find . -mindepth 1 \( -path "$keep" -o -path ./vendor/gnu/downloads \) -prune -o \
+        ! -type d -exec rm -f {} + || exit 1
+    find . -mindepth 1 -type d -empty ! -path "$keep" ! -path "$keep/*" \
+        ! -path ./vendor/gnu/downloads ! -path './vendor/gnu/downloads/*' -delete || exit 1
+    tar -x -z -f "$WORK/tree.tar.gz" --warning=no-unknown-keyword || exit 1
+    echo "gnu: job: the tree has $(find . -path "$keep" -prune -o -type f -print | wc -l) files"
+}
+
+# build_layer: as the build's account, run make for the layer's targets.
+build_layer()
+{
+    cd $TREE || exit 1
+    # shellcheck disable=SC2086 # DRY_RUN is empty or -n
+    exec make --no-print-directory -j"$JOBS" $DRY_RUN ARCH="$RACH2_ARCH" GNU_AGENTS="$GNU_AGENTS" \
+        GNU_LINK="$GNU_LINK" gnu-ports gnu-native gnu-gdb gnu-js gnu-chromium gnu-agents
+}
+
+# build_image: as the build's account, make the image as mk/gnu-image.mk's
+# rule for a Linux host makes it, with the KRFFS stager built for this host.
+build_image()
+{
+    cd $TREE || exit 1
+    make --no-print-directory -C krffs MUSL_CRYPT="../$MUSL_CRYPT_SRC" ../build/krffs/stageimage.krffs ||
+        exit 1
+    [ -z "$RACH2_PATH_MAP" ] || export RACH2_PATH_MAP
+    RACH2_ARCH=$RACH2_ARCH GNU_AGENTS="$GNU_AGENTS" exec sh tools/image/mkext2.sh \
+        --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest "$MNT/out/$IMAGE" "$SIZE"
+}
+
+WORK=$(pwd)
+[ -f job.env ] || fail 'the job has no job.env'
+. ./job.env
+SUFFIX=
+[ "$RACH2_ARCH" != x86_64 ] || SUFFIX=/x86_64
+[ -z "$DRY_RUN" ] || DRY_RUN=-n
+case ${1:-} in
+    --tree) sync_tree; exit ;;
+    --layer) build_layer ;;
+    --image) build_image ;;
+esac
+
+: > digest
+DISK=${ETUDE_DISK1:?the job has no build disk}
+[ -n "$DRY_RUN" ] || [ -b "${ETUDE_DISK2:-}" ] || fail 'the job has no disk for the image'
+mount_disk
+getent passwd $BUILDER > /dev/null ||
+    useradd -u $BUILDER_ID -U -M -d $MNT/home -s /bin/sh $BUILDER || fail 'useradd failed'
+mkdir -p $MNT/home $TREE $MNT/log $MNT/tmp $MNT/out || fail 'the directories of the build disk'
+chown $BUILDER_ID:$BUILDER_ID $MNT/home $TREE $MNT/log $MNT/tmp $MNT/out || fail 'chown failed'
+find $MNT/tmp $MNT/out -mindepth 1 -delete
+LOG=$MNT/log/$(date -u +%Y%m%dT%H%M%SZ)-$RACH2_ARCH.log
+find $MNT/log -name "*.log" | sort -r | tail -n +20 | xargs rm -f
+echo "gnu: job: $RACH2_ARCH, agents: ${GNU_AGENTS:-none}, link: ${GNU_LINK:-shared}, jobs: $JOBS${DRY_RUN:+, dry run}" |
+    tee "$LOG" | sed -u 's/^/gnu-vm: /' > "$CHAN"
+
+status=0
+logged sh "$0" --tree && logged sh "$0" --layer || status=$?
+if [ $status -eq 0 ] && [ -z "$DRY_RUN" ]; then
+    logged sh "$0" --image || status=$?
+fi
+if [ $status -eq 0 ] && [ -z "$DRY_RUN" ]; then
+    img=$MNT/out/$IMAGE
+    if [ "$(stat -c %s "$img")" != "$(blockdev --getsize64 "$ETUDE_DISK2")" ]; then
+        echo "gnu: job: the image's disk is not the image's size" >&2
+        status=1
+    elif ! sha256sum "$img" | cut -d ' ' -f 1 > digest ||
+        ! dd if="$img" of="$ETUDE_DISK2" bs=4096 conv=sparse,fsync status=none; then
+        echo "gnu: job: the image cannot be copied to its disk" >&2
+        status=1
+    else
+        echo "gnu: job: made $IMAGE, sha256 $(cat digest)"
+    fi
+    rm -f "$img"
+fi
+if [ $status -ne 0 ]; then
+    echo "gnu: job: failed with status $status; the end of $LOG on the build disk:" >&2
+    tail -n 40 "$LOG" >&2
+fi
+find $MNT/tmp -mindepth 1 -delete
+sync
+fstrim $MNT > /dev/null 2>&1
+umount $MNT || { echo "gnu: job: the build disk does not unmount" >&2; status=1; }
+exit $status

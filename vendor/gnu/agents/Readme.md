@@ -102,7 +102,7 @@ Each session sends Google usage events and asks a server for feature flags. Meas
 
 ## Building
 
-The layer builds where the rest of the GNU layer does, on an x86-64 Linux host, with access to each vendor's download site. Besides the tools the [GNU layer](../Readme.md#building) lists it needs `sha512sum`, or `shasum`, for a package pinned by SHA-512, and `gpgv` and `base64` for Claude Code's signature. The check of Codex's signature also needs access to Sigstore's repository of its trusted root, `tuf-repo-cdn.sigstore.dev`, from which `cosign` fetches the root into a scratch home. Codex's downloads are 300 MB, its stage 440 MB.
+The layer builds where the rest of the GNU layer does ([its Readme](../Readme.md#building)), on an x86-64 Linux host or in etude's tooling machine, with access to each vendor's download site. Besides the tools the [GNU layer](../Readme.md#building) lists it needs `sha512sum`, or `shasum`, for a package pinned by SHA-512, and `gpgv` and `base64` for Claude Code's signature. The check of Codex's signature also needs access to Sigstore's repository of its trusted root, `tuf-repo-cdn.sigstore.dev`, from which `cosign` fetches the root into a scratch home. Codex's downloads are 300 MB, its stage 440 MB.
 
 ## Updating
 

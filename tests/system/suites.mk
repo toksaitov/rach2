@@ -826,9 +826,9 @@ $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(M
 # doing its main job, and tmux at the console. Each case boots an overlay of
 # this disk: the GNU system's volume at LBA 2048 behind a table of one
 # partition, copied sparse, since the volume is 4 GiB with most of it free. The
-# image is made from the GNU layer, on a Linux host only (mk/gnu-image.mk),
-# which a set without this suite must not need, so only the cases' preparation
-# asks for it.
+# image is made from the GNU layer, on an x86-64 Linux host or in etude's
+# tooling machine (mk/gnu-image.mk), which a set without this suite must not
+# need, so only the cases' preparation asks for it.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
 $(GNU_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
