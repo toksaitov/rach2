@@ -59,7 +59,7 @@ static unsigned order_len;
 static int serial_wedged;       /* the port never becomes ready */
 static int net_on;              /* netconsole has a device to send through */
 static int reenter_from_screen; /* raise a record from inside delivery */
-static int reenter_times;       /* how many more to raise, one per byte */
+static int reenter_times;       /* how many to raise at the next byte */
 static int reenter_after;       /* raise one at this many bytes from now */
 static unsigned serial_offered; /* bytes handed to a port that took none */
 static unsigned ring_at_screen; /* the ring's size when the screen was written */
@@ -98,7 +98,7 @@ void k_putc(char c)
         reenter_from_screen = 0;
         klog(KLOG_ERR, "irq", "landed: in the middle of another record");
     }
-    if (reenter_times > 0) {
+    while (reenter_times > 0) {
         reenter_times--;
         klog(KLOG_ERR, "irq", "landed: one of a burst");
     }
@@ -645,17 +645,17 @@ int main(void)
 
     /* More records raised from inside one delivery than the queue holds. */
     reset();
-    reenter_times = 9;
+    reenter_times = KLOG_PENDING_MAX + 1;
     klog(KLOG_INFO, "outer", "began: before the burst");
     CHECK("the burst is spent", reenter_times == 0);
     ring_text(text, sizeof(text));
-    CHECK("the ring has the record, the nine raised inside it, and the count",
-          count_lines(text) == 11);
+    CHECK("the ring has the record, the burst raised inside it, and the count",
+          count_lines(text) == KLOG_PENDING_MAX + 3);
     CHECK("and the count says how many were dropped",
           has(text, "<4>[0.00] klog: dropped: 1 record(s) the queue could not hold\n"));
     screen[screen_len] = '\0';
-    CHECK("the screen has the record, eight of the burst, and the count",
-          count_lines(screen) == 10);
+    CHECK("the screen has the record, all of the burst the queue holds, and the count",
+          count_lines(screen) == KLOG_PENDING_MAX + 2);
     CHECK("the screen begins with the record that was interrupted",
           has(screen, "outer: began: before the burst\n"
                       "irq: landed: one of a burst\n"));

@@ -487,11 +487,14 @@ static int console_writing;
  * says on its port is what its ring has, an event that happens while the
  * machine is printing included.
  *
- * Eight is a burst of interrupts across one record. A ninth is counted and
- * dropped, and the count is reported once the queue is empty, because a log
- * that quietly loses records is worse than one that says how many.
+ * The largest burst is a USB hub pulled with the device table full behind
+ * it: one pass of the USB stack, which runs in an interrupt, says each of
+ * sixteen devices is gone and gives back its slot, and a disk says more.
+ * Sixty-four records hold four for each. One more is counted and dropped,
+ * and the count is reported once the queue is empty, because a log that
+ * quietly loses records is worse than one that says how many.
  */
-#define KLOG_PENDING_MAX 8
+#define KLOG_PENDING_MAX 64
 
 static struct klog_record pending[KLOG_PENDING_MAX];
 static int pending_head;

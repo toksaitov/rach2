@@ -54,7 +54,7 @@
  * Any context may call it, an interrupt handler included: the record is built
  * and put in the ring with interrupts off, and neither step sleeps. A record
  * raised while another is being written out, or inside a console write
- * (`console_write_begin`), waits in a queue of eight for the rest of its
+ * (`console_write_begin`), waits in a queue of sixty-four for the rest of its
  * destinations and goes out when that write ends; one raised when the queue
  * is full is dropped, and a later record says how many were.
  */
