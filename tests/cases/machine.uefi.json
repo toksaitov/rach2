@@ -1,0 +1,606 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.uefi",
+  "summary": "The machine booted by UEFI firmware, OVMF, from its installed GPT disk, that disk's recovery entry, the disk with its menu deleted, the install stick and the recovery CD, each reached over SSH; the disk's BIOS core replaced and booted by either firmware; an install onto a 4 TiB NVMe disk whose root grows past 2 TiB, booted again and by its kernel given to QEMU; and a damaged primary GUID table written again from recovery; the program is tests/cases/machine/uefi_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.uefi.installed",
+      "behavior": "OVMF boots the installed GPT disk from its EFI system partition; the kernel finds its root by the disk's GUID, makes the framebuffer write-combining and shows the login prompt on the framebuffer in its own font; root logs in over SSH and bootctl names the candidate as booted; Doom draws its picture on the framebuffer, and the console has the screen back once the game is killed",
+      "units": ["uefi", "fbcon", "doom"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "the GPT disk mkdisk_grub.sh makes with the installer's ext2 root of 64 MiB, which stages the Doom WAD", "least_picture_colors": 65, "most_console_colors": 16}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and the game's ssh and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key and the screen dumps after a pass"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "uefi",
+         "does": "boot the disk by OVMF until init starts the SSH server and the server answers, and read the firmware's and the kernel's records, and the uid, bootctl status and the game's WAD over SSH"},
+        {"step_id": "screen", "stage": "execute", "machine": "uefi",
+         "does": "dump the screen through QMP and read the console's cells off the dump with screentext"},
+        {"step_id": "doom", "stage": "execute", "machine": "uefi",
+         "does": "run the game over SSH until it reports its first frame, count the screen's colors, stop the ssh, kill the game, wait until it has gone, count the colors again and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [
+        {"service_id": "doom", "program": "ssh", "ready": "doom: 1 frames in ",
+         "does": "run the game as root over SSH with its output on the connection, until the case stops the ssh"}
+      ],
+      "assertions": [
+        {"assertion_id": "booted-disk", "checks": "the firmware's BdsDxe says on the serial line that it starts the boot option of the IDE disk, UEFI QEMU HARDDISK", "source": "scenario"},
+        {"assertion_id": "root-by-guid", "checks": "the kernel names its root GPTID=GUID,3, /dev/disk0p3, ext2", "source": "scenario"},
+        {"assertion_id": "write-combining", "checks": "the kernel reads the page attribute table back as 0x0007040600070106 and says the framebuffer is mapped write-combining", "source": "scenario"},
+        {"assertion_id": "login", "checks": "root logs in over SSH with the demonstration key, and id -u prints 0", "source": "scenario"},
+        {"assertion_id": "candidate", "checks": "bootctl status on the running machine says booted: candidate", "source": "scenario"},
+        {"assertion_id": "wad", "checks": "the disk has /demo/doom1.wad, which its root stages from ports/doom/doom1.wad", "source": "scenario"},
+        {"assertion_id": "screen-login", "checks": "a line of the framebuffer console's text, as screentext reads the dump against the kernel's font, begins rach2 login:", "source": "scenario"},
+        {"assertion_id": "doom-drew", "checks": "the game started over SSH reports its first frame drawn", "source": "scenario"},
+        {"assertion_id": "doom-picture", "checks": "the screen dumped once the game has reported its first frame has more than 64 colors, those of the game's palette", "source": "scenario"},
+        {"assertion_id": "doom-gone", "checks": "killall doom leaves no doom process", "source": "scenario"},
+        {"assertion_id": "console-back", "checks": "the screen dumped once the game has gone has at most the console's 16 colors", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "screentext", "node": "tests/system/screentext", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case reads which boot option the firmware started and dumps the screen through QMP, which only QEMU's firmware and monitor give"}
+    },
+    {
+      "case_id": "machine.uefi.recovery",
+      "behavior": "the installed disk's recovery entry, armed on the host for one boot as grub-editenv arms it, boots by OVMF from partition 2 and answers SSH, and its boot consumed the trial",
+      "units": ["uefi", "recovery"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed", "next_entry": "recovery"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
+      },
+      "steps": [
+        {"step_id": "arm", "stage": "execute",
+         "does": "find GRUB's environment block in the copy with binfind and set next_entry=recovery in it, keeping every other line"},
+        {"step_id": "boot", "stage": "boot", "machine": "uefi",
+         "does": "boot the copy by OVMF until init starts the SSH server and the server answers, read the command line and bootctl status of the boot partition over SSH, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "env-block", "checks": "the copy has a sector that begins # GRUB Environment Block, and next_entry=recovery is written into it", "source": "scenario"},
+        {"assertion_id": "recovery-up", "checks": "the boot's /proc/cmdline has rach2.slot=recovery, and root's SSH login runs", "source": "scenario"},
+        {"assertion_id": "trial-consumed", "checks": "bootctl --target /dev/disk0p1 status says next_entry: empty, so the boot consumed the trial", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "binfind", "node": "tools/inspect/binfind", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case arms the recovery entry by writing GRUB's environment block in a copy of the disk from the host"}
+    },
+    {
+      "case_id": "machine.uefi.nomenu",
+      "behavior": "with the menu deleted from the EFI system partition, the file GRUB's EFI image opens first, the image finds the recovery partition by its label and opens the menu there, and the recovery system comes up by OVMF and answers SSH",
+      "units": ["uefi", "recovery"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed", "deleted": "::/boot/grub/grub.cfg of partition 1"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh", "mdel"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
+      },
+      "steps": [
+        {"step_id": "delete", "stage": "execute",
+         "does": "read partition 1's offset off the copy's GUID table and delete /boot/grub/grub.cfg from its FAT with mdel"},
+        {"step_id": "boot", "stage": "boot", "machine": "uefi",
+         "does": "boot the copy by OVMF until init starts the SSH server and the server answers, read the command line over SSH, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "menu-deleted", "checks": "mdel deletes /boot/grub/grub.cfg from the FAT of the copy's partition 1", "source": "scenario"},
+        {"assertion_id": "nomenu-recovery", "checks": "the boot's /proc/cmdline has rach2.slot=recovery, and root's SSH login runs, so the recovery partition's own menu booted it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case deletes the menu from the EFI system partition of a copy of the disk from the host"}
+    },
+    {
+      "case_id": "machine.uefi.stick",
+      "behavior": "OVMF boots the install stick's image, on a USB stick that boots first, from its EFI boot image, an MBR partition of type 0xEF, and the stick's recovery system answers SSH",
+      "units": ["uefi", "stick"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "install-test-stick.img, which mkinstallstick.sh makes"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copy of the stick, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "uefi",
+         "does": "boot the stick by OVMF until init starts the SSH server and the server answers, read the partitions over SSH, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "qemu-xhci", "id": "xhci"},
+                              {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "booted-stick", "checks": "the firmware's BdsDxe says on the serial line that it starts the boot option of the stick, a USB HARDDRIVE", "source": "scenario"},
+        {"assertion_id": "stick-login", "checks": "root's SSH login to the stick's recovery system runs and reads /proc/disk", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 268435456,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case reads which boot option QEMU's firmware started, which only the emulated firmware's serial line gives"}
+    },
+    {
+      "case_id": "machine.uefi.cd",
+      "behavior": "OVMF boots the recovery ISO, a CD, from its EFI El Torito entry, and the recovery system answers SSH",
+      "units": ["uefi", "iso"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"cd": "the recovery ISO, with the recovery key"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine; the CD is the artifact, read-only; the scenario removes its copy of the demo key after a pass"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "uefi",
+         "does": "boot the CD by OVMF until init starts the SSH server and the server answers, log in over SSH, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "recovery-iso", "bus": "ide", "media": "cdrom"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "booted-cd", "checks": "the firmware's BdsDxe says on the serial line that it starts the boot option of the CD, a DVD-ROM", "source": "scenario"},
+        {"assertion_id": "cd-login", "checks": "root's SSH login to the CD's recovery system runs", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 671088640, "disk_bytes": 16777216,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "recovery-iso", "node": "images/rach2-recovery-with-key.iso", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case reads which boot option QEMU's firmware started, which only the emulated firmware's serial line gives"}
+    },
+    {
+      "case_id": "machine.uefi.core",
+      "behavior": "the installed GPT disk booted by SeaBIOS through its BIOS core: bootctl grub writes GRUB's GPT core into the BIOS boot partition's tail not in use and points the entry sector at it, leaving the table's sectors as they were; with the other tail zeroed on the host the disk boots by SeaBIOS through the new tail; a second install goes back to the first tail and is shown the same way; and the disk still boots by OVMF, whose path does not use the core",
+      "units": ["uefi", "grubcore", "bootctl"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed, built with its core in tail A", "core": "vendor/grub/gpt-core.img, checked against the GRUB manifest"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh", "sh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
+      },
+      "steps": [
+        {"step_id": "bios-boot", "stage": "boot", "machine": "bios",
+         "does": "read the BIOS boot partition and the entry sector's blocklist off the copy's GUID table, keep the table's sectors, and boot the copy by SeaBIOS until init starts the SSH server and the server answers"},
+        {"step_id": "swap-b", "stage": "execute", "machine": "bios",
+         "does": "send the core over SSH and install it with bootctl grub, end the machine with QMP's quit, read the entry sector and the table's sectors, zero tail A, and boot by SeaBIOS until the server answers"},
+        {"step_id": "swap-a", "stage": "execute", "machine": "bios",
+         "does": "install the core again, end the machine, read the entry sector and the table's sectors, zero tail B, boot by SeaBIOS until the server answers, and end the machine"},
+        {"step_id": "uefi-boot", "stage": "execute", "machine": "uefi",
+         "does": "boot the copy by OVMF until the login prompt and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "bios",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "seabios",
+                  "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "uefi",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "built-tail-a", "checks": "the copy's GUID table has a BIOS boot partition, and its entry sector's blocklist names tail A, the sector after it", "source": "scenario"},
+        {"assertion_id": "bios-firmware", "checks": "the first boot by SeaBIOS has no BdsDxe on its console, so no UEFI firmware made it", "source": "scenario"},
+        {"assertion_id": "grubcore-node", "checks": "the kernel publishes the BIOS boot partition as /dev/grubcore: partition 4, of the table's sectors, at its first LBA", "source": "scenario"},
+        {"assertion_id": "install-b", "checks": "bootctl grub says it wrote the core in the tail at LBA B and that the entry sector at the partition's first LBA now points there", "source": "scenario"},
+        {"assertion_id": "select-b", "checks": "with the machine ended, the entry sector's blocklist names tail B", "source": "scenario"},
+        {"assertion_id": "table-b", "checks": "the protective MBR, the primary header and array and the backup array and header are the bytes they were before the install", "source": "scenario"},
+        {"assertion_id": "boots-b", "checks": "with tail A zeroed, the disk boots by SeaBIOS until the SSH server answers", "source": "scenario"},
+        {"assertion_id": "install-a", "checks": "a second bootctl grub writes the core in the tail at LBA A and points the entry sector there", "source": "scenario"},
+        {"assertion_id": "select-a", "checks": "with the machine ended, the entry sector's blocklist names tail A", "source": "scenario"},
+        {"assertion_id": "table-a", "checks": "the table's sectors are still the bytes they were before the first install", "source": "scenario"},
+        {"assertion_id": "boots-a", "checks": "with tail B zeroed, the disk boots by SeaBIOS until the SSH server answers", "source": "scenario"},
+        {"assertion_id": "uefi-after", "checks": "after both installs OVMF boots the disk to the login prompt, and its BdsDxe says it started the IDE disk's boot option", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 1800000000, "ceiling_us": 5400000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 939524096, "disk_bytes": 268435456,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
+        {"name": "gpt-core", "node": "tests/cases/machine/sealed/gpt-core.img", "per_architecture": false},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "bootctl grub writes GRUB's core into the BIOS boot partition of the booted disk, which on the Lenovo is the accepted system's boot loader, and the case zeroes the other tail from the host"}
+    },
+    {
+      "case_id": "machine.uefi.wide",
+      "behavior": "the install stick, booted by OVMF beside a sparse 4 TiB NVMe disk, installs onto that disk and grows its root into the whole of it; OVMF then boots the NVMe disk alone, the first account logs in with the key the install took and finds the root on the NVMe disk larger than 2 TiB; and the kernel given on QEMU's command line with rach2.root=ext2 finds that root, whose entry runs past 2 TiB, by its scan of the table's first four entries",
+      "units": ["uefi", "nvme", "install", "gpt"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk_bytes": 4398046511104, "stick": "install-test-stick.img", "answers": "the NVMe disk, root's password twice, the account owner and its password twice, the demonstration key as its authorized key, no recovery key, the grow, and the disk again"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh", "sh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copies of the stick and the sparse disk, which it keeps after a failure; the scenario removes its copy of the demo key and the answers after a pass"
+      },
+      "steps": [
+        {"step_id": "install", "stage": "boot", "machine": "install",
+         "does": "boot the stick by OVMF beside the empty NVMe disk until the server answers, answer rach2-install over SSH, sync, and end the machine with QMP's quit"},
+        {"step_id": "boot", "stage": "execute", "machine": "installed",
+         "does": "boot the NVMe disk alone by OVMF until init starts the SSH server and the server answers, read df of the root as the first account, and end the machine with QMP's quit"},
+        {"step_id": "scan", "stage": "execute", "machine": "scan",
+         "does": "boot the kernel given to QEMU with rach2.root=ext2 and the NVMe disk until the kernel names its root, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "install",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "qemu-xhci", "id": "xhci"},
+                              {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "ovmf",
+                  "devices": [{"model": "vga"},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "scan",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "installed", "checks": "rach2-install, answered over SSH, says it grows the root into the rest of the disk and exits 0", "source": "scenario"},
+        {"assertion_id": "booted-nvme", "checks": "the firmware's BdsDxe says on the serial line that it starts the NVMe disk's boot option", "source": "scenario"},
+        {"assertion_id": "root-wide", "checks": "df -k / as the first account, logged in by the demonstration key, names /dev/diskNp3 with more than 2147483648 KiB", "source": "scenario"},
+        {"assertion_id": "scan-root", "checks": "the kernel given to QEMU with rach2.root=ext2 says ext2: root: /dev/disk0p3", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000},
+        "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 3600000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 3600000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1610612736, "disk_bytes": 4294967296,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case installs onto and grows a 4 TiB disk, which only a sparse file under QEMU gives"}
+    },
+    {
+      "case_id": "machine.uefi.wide-bios",
+      "behavior": "on i686, whose kernel does not reach the NVMe controller's BAR that OVMF places above 4 GiB, the same install by SeaBIOS: the stick installs onto a sparse 4 TiB NVMe disk and grows its root into the whole of it; SeaBIOS then boots the NVMe disk alone through its BIOS core, the first account finds the root on it larger than 2 TiB; and rach2.root=ext2 finds that root by the scan of the table's first four entries",
+      "units": ["nvme", "install", "gpt"],
+      "domain": "machine",
+      "architectures": ["i686"],
+      "workload": {"arguments": [], "inputs": {"disk_bytes": 4398046511104, "stick": "install-test-stick.img", "answers": "the NVMe disk, root's password twice, the account owner and its password twice, the demonstration key as its authorized key, no recovery key, the grow, and the disk again"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh", "sh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copies of the stick and the sparse disk, which it keeps after a failure; the scenario removes its copy of the demo key and the answers after a pass"
+      },
+      "steps": [
+        {"step_id": "install", "stage": "boot", "machine": "install",
+         "does": "boot the stick by SeaBIOS beside the empty NVMe disk until the server answers, answer rach2-install over SSH, sync, and end the machine with QMP's quit"},
+        {"step_id": "boot", "stage": "execute", "machine": "installed",
+         "does": "boot the NVMe disk alone by SeaBIOS until init starts the SSH server and the server answers, read df of the root as the first account, and end the machine with QMP's quit"},
+        {"step_id": "scan", "stage": "execute", "machine": "scan",
+         "does": "boot the kernel given to QEMU with rach2.root=ext2 and the NVMe disk until the kernel names its root, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "install",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "seabios",
+                  "devices": [{"model": "qemu-xhci", "id": "xhci"},
+                              {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "seabios",
+                  "devices": [{"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "scan",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "wide", "bus": "nvme", "serial": "rach2big", "discard": true, "size_bytes": 4398046511104}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"]},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "installed", "checks": "rach2-install, answered over SSH, says it grows the root into the rest of the disk and exits 0", "source": "scenario"},
+        {"assertion_id": "booted-bios", "checks": "SeaBIOS boots the NVMe disk alone until the SSH server answers, and no BdsDxe of UEFI firmware is on its console", "source": "scenario"},
+        {"assertion_id": "root-wide", "checks": "df -k / as the first account, logged in by the demonstration key, names /dev/diskNp3 with more than 2147483648 KiB", "source": "scenario"},
+        {"assertion_id": "scan-root", "checks": "the kernel given to QEMU with rach2.root=ext2 says ext2: root: /dev/disk0p3", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000},
+        "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 3600000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 3600000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 1610612736, "disk_bytes": 4294967296,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case installs onto and grows a 4 TiB disk, which only a sparse file under QEMU gives"}
+    },
+    {
+      "case_id": "machine.uefi.damaged",
+      "behavior": "a GPT disk whose primary header does not check, beside the install stick booted by SeaBIOS: the recovery system names the disk as read from its backup table, diskctl relocate writes the primary again, whose header then checks, and the disk boots by SeaBIOS with its kernel reading the primary table",
+      "units": ["gpt", "diskctl", "recovery"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed with RACH over four bytes of its primary header's checksum", "stick": "install-test-stick.img"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "posix", "tools": ["ssh"], "features": {}},
+      "execution": {
+        "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "uefi-disk"]}],
+        "children": "reaped",
+        "cleanup": "libetude-case ends the machine and removes the copies of the stick and the disk, which it keeps after a failure; the scenario removes its copy of the demo key after a pass"
+      },
+      "steps": [
+        {"step_id": "relocate", "stage": "boot", "machine": "rescue",
+         "does": "write RACH over the primary header's checksum in the copy, boot the stick by SeaBIOS beside the disk until the server answers, run diskctl relocate /dev/disk0 and sync over SSH, end the machine with QMP's quit, and check the copy's primary header"},
+        {"step_id": "repaired", "stage": "execute", "machine": "repaired",
+         "does": "boot the disk alone by SeaBIOS until the login prompt and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "rescue",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 536870912, "firmware": "seabios",
+                  "devices": [{"model": "qemu-xhci", "id": "xhci"},
+                              {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}},
+                              {"model": "rtl8139", "forwards": [{"protocol": "tcp", "port": 0, "guest_port": 22}]}],
+                  "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "repaired",
+         "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "uefi-disk", "bus": "ide"}], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "damaged-named", "checks": "the recovery system's init says /dev/disk0: its primary GUID table does not check and was read from the backup", "source": "scenario"},
+        {"assertion_id": "relocated", "checks": "diskctl relocate /dev/disk0 says the primary table was written again from the backup", "source": "scenario"},
+        {"assertion_id": "primary-checks", "checks": "with the machine ended, the copy's primary header at LBA 1 has its signature and the CRC-32 of its bytes", "source": "scenario"},
+        {"assertion_id": "repaired-boots", "checks": "the disk alone then boots by SeaBIOS through its BIOS core to the login prompt, and its kernel does not say the primary GPT is damaged, since GRUB boots a disk from its backup table as well", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2700000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "stages": {
+          "boot": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 939524096, "disk_bytes": 536870912,
+                    "locks": [], "ports": 1, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "uefi-disk", "node": "tests/cases/machine/uefi/disk.img", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "demo-key", "node": "tests/cases/credentials/rach2_demo_ed25519", "per_architecture": false},
+        {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
+        {"name": "uefi_scenario", "node": "tests/cases/machine/uefi_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case damages the GUID table of a copy of the disk from the host and lets the recovery system write it again"}
+    }
+  ]
+}

@@ -1112,8 +1112,18 @@ build/tests/cases/grow/grow_tool.sh build/tests/cases/grow/grow_measure.awk:
 # device and from the recovery ISO as a CD, each answering SSH, installed from
 # the stick onto a 4 TiB NVMe disk whose root grows past 2 TiB, and booted by
 # SeaBIOS after recovery writes a damaged primary GUID table again.
-# The disk is a GPT disk as the disk builder makes one for a machine, with the
+# It is the cases of tests/cases/machine.uefi.json, which etude runs. Their
+# disk is a GPT disk as the disk builder makes one for a machine, with the
 # installer's root, the metal system whose init starts the SSH server.
+$(ARCH_CASE_DIR)/uefi/disk.img: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(INSTALLER_EXT2) \
+                                tools/image/mkdisk_grub.sh $(DISK_TOOLS) $(GRUB_FILES) | rach2
+	@mkdir -p $(@D)
+	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_EXT2_MB=64 \
+	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
+	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
+	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
+	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
 UEFI_DIR = $(IMAGES_DIR)/uefi
 UEFI_TEST_DISK = $(IMAGES_DIR)/uefi-test.disk
 UEFI_PORT := $(call port,2331)

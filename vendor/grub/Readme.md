@@ -57,4 +57,4 @@ A new set of images is chosen on purpose and reviewed as a vendored source updat
 * `tests/run menu`, `install` and `drill` boot MBR disks through `disk-core.img`.
 * `tests/run sealed` boots the sealed GPT disk, and installs `gpt-core.img` from the running machine with `bootctl grub` and boots through it.
 * `tests/run installer` converts an MBR disk to boot by UEFI as well and requires its `BOOTX64.EFI` to equal `bootx64.efi`.
-* `tests/run uefi` runs an x86-64 machine for either kernel. It boots through `bootx64.efi` with OVMF the installed GPT disk, the install stick and the recovery ISO as a CD, and it installs `gpt-core.img` with `bootctl grub` and boots through it by SeaBIOS.
+* `tests/run uefi` boots through `bootx64.efi` with OVMF, on an x86-64 machine for either kernel, the installed GPT disk, the install stick and the recovery ISO as a CD, and it installs `gpt-core.img` with `bootctl grub` and boots through it by SeaBIOS.

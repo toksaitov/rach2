@@ -741,7 +741,8 @@ NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine
                 build/tests/cases/machine/install_scenario \
                 build/tests/cases/machine/sealed_scenario \
                 build/tests/cases/machine/grub_scenario \
-                build/tests/cases/machine/agents_scenario
+                build/tests/cases/machine/agents_scenario \
+                build/tests/cases/machine/uefi_scenario
 $(NET_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                   tests/cases/machine/netcase.c tests/cases/machine/netcase.h \
                   $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
