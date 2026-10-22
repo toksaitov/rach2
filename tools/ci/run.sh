@@ -6,14 +6,16 @@
 #   tools/ci/run.sh core DIR    the build, style, host and the core tier
 #   tools/ci/run.sh full DIR    the build from clean and every suite of ARCH
 #
-# DIR receives `log`, the whole output; `failed`, one line for each step
-# that failed: `build`, a suite's name, the set's own name when the runner
-# failed without naming a suite of the registry, or `runner` when its
+# DIR receives `log`, the whole output; `err`, the standard error of each
+# run of tests/run in turn, which has the lines of the runner's own results
+# and none from the runs that the runner suite starts; `failed`, one line for
+# each step that failed: `build`, a suite's name, the set's own name when the
+# runner failed without naming a suite of the registry, or `runner` when its
 # history cannot show what ran; `kept/`, the serial logs that tests/run kept
 # for the failed suites; and `done`, written last, without which a reader
-# takes the run as unfinished. A full run first runs
-# `make clean`, which removes ARCH's in-house objects and images but keeps
-# the vendored builds, then `make`; a failure of either is `build`. It then
+# takes the run as unfinished. A full run first runs `make clean`, which
+# removes ARCH's in-house objects and images but keeps the vendored builds,
+# then `make`; a failure of either is `build`. It then
 # runs every suite of the registry that runs on ARCH, `style` and `host`
 # among them, as one set, and after it `bigmem`, which runs only on x86_64
 # and needs the host alone, as a run of its own. When SUITES is set, as
@@ -63,6 +65,7 @@ results=lines
 mkdir -p "$out/kept"
 : > "$out/failed"
 : > "$out/log"
+: > "$out/err"
 : > "$out/start"
 
 # The shell runs this trap only after the pipeline it waits for has ended.
@@ -86,17 +89,18 @@ step() {
 }
 
 # Run tests/run with ARGS as one run, its history going to DIR/history and
-# DIR/store, and append to DIR/failed the names of casecheck's verdict on
-# that history, with `runner` when the verdict gave no result or tests/run's
-# status disagrees with it, each name once; return 0 when both passed and 1
-# otherwise. The suites asked for are ARGS, with `core` standing for the core
-# tier's suites of ARCH, as tests/run takes it.
+# DIR/store and its standard error to DIR/err as well, and append to
+# DIR/failed the names of casecheck's verdict on that history, with `runner`
+# when the verdict gave no result or tests/run's status disagrees with it,
+# each name once; return 0 when both passed and 1 otherwise. The suites
+# asked for are ARGS, with `core` standing for the core tier's suites of
+# ARCH, as tests/run takes it.
 run_history() { # run_history NAME ARGS...
     name=$1; shift
     rm -rf "$out/history" "$out/store"
     mkdir -p "$out/history" "$out/store"
-    { RACH2_RESULTS=$out tests/run "$@" 2>&1; echo "$?" > "$out/rc"; } |
-        copy "$out/set.log" | copy -a "$out/log"
+    { { RACH2_RESULTS=$out tests/run "$@" 2>&1 1>&3 3>&-; echo "$?" > "$out/rc"; } |
+        copy -a "$out/err"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
     rc=$(cat "$out/rc")
     suites=$(for s in "$@"; do
         if [ "$s" = core ]; then
@@ -136,8 +140,8 @@ run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
     : > "$out/set.err"
-    { { tests/run "$@" 2>&1 1>&3 3>&-; echo "$?" > "$out/rc"; } | copy "$out/set.err"; } 3>&1 |
-        copy "$out/set.log" | copy -a "$out/log"
+    { { tests/run "$@" 2>&1 1>&3 3>&-; echo "$?" > "$out/rc"; } | copy "$out/set.err" |
+        copy -a "$out/err"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
     rc=$(cat "$out/rc")
     [ "$rc" = 0 ] && return 0
     failed=$(grep '^run: ' "$out/set.err" | tail -n 1 |

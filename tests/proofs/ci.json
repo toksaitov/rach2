@@ -818,6 +818,40 @@
           "ci-test: failed: scoped: the row fails"
         ]
       }
+    },
+    {
+      "name": "wholelog",
+      "summary": "the failure lines quoted from the whole log, where the runner suite's runs come first",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "        lines=$(grep -E \"$failing\" \"$result/err\" | head -n 8)\n",
+          "replace": "        lines=$(grep -E \"$failing\" \"$result/log\" | head -n 8)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: quoted: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "forms",
+      "summary": "the incomplete items and suites left out of the quoted failure lines",
+      "edits": [
+        {
+          "file": "tools/ci/report.sh",
+          "find": "failing='^run: (result: (failed|incomplete|refused|interrupted)|voided: )|: (FAIL|INCOMPLETE|CANCELLED) in |: (failure|incomplete|cancelled): '\n",
+          "replace": "failing=': FAIL|: result: fail'\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: quoted: the row fails"
+        ]
+      }
     }
   ]
 }

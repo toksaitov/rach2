@@ -182,8 +182,8 @@
       "edits": [
         {
           "file": "tools/ci/run.sh",
-          "find": "    { RACH2_RESULTS=$out tests/run \"$@\" 2>&1;",
-          "replace": "    { RACH2_RESULTS=$out/results tests/run \"$@\" 2>&1;"
+          "find": "    { { RACH2_RESULTS=$out tests/run \"$@\" 2>&1 1>&3 3>&-;",
+          "replace": "    { { RACH2_RESULTS=$out/results tests/run \"$@\" 2>&1 1>&3 3>&-;"
         }
       ],
       "fails": {
@@ -208,6 +208,42 @@
         "status": 1,
         "lines": [
           "ci-run-test: history: style, host and the core tier as one run: failed ",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "seterr",
+      "summary": "a set's standard error left out of DIR/err",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    { { tests/run \"$@\" 2>&1 1>&3 3>&-; echo \"$?\" > \"$out/rc\"; } | copy \"$out/set.err\" |\n        copy -a \"$out/err\"; } 3>&1 | copy \"$out/set.log\" | copy -a \"$out/log\"\n",
+          "replace": "    { { tests/run \"$@\" 2>&1 1>&3 3>&-; echo \"$?\" > \"$out/rc\"; } | copy \"$out/set.err\"; } 3>&1 |\n        copy \"$out/set.log\" | copy -a \"$out/log\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "is not the standard error of tests/run",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "merged",
+      "summary": "the standard output of a run of etude's history kept in DIR/err with its standard error",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    { { RACH2_RESULTS=$out tests/run \"$@\" 2>&1 1>&3 3>&-; echo \"$?\" > \"$out/rc\"; } |\n        copy -a \"$out/err\"; } 3>&1 | copy \"$out/set.log\" | copy -a \"$out/log\"\n",
+          "replace": "    { RACH2_RESULTS=$out tests/run \"$@\" 2>&1; echo \"$?\" > \"$out/rc\"; } |\n        copy -a \"$out/err\" | copy \"$out/set.log\" | copy -a \"$out/log\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "is not the standard error of tests/run",
           "ci-run-test: result: fail: ci reading of results"
         ]
       }

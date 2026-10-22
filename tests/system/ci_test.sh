@@ -9,9 +9,10 @@
 # issue has been closed, verdict errors, the statuses of a full run of chosen
 # suites, the attempts that etude's history of a run lists in its issue, an
 # intermittent issue that a passing run leaves open, bisection on a machine
-# where etude admits tests, bisection that reads etude's history with the
-# tree's casecheck, a fault of the runner in its lines, and a result that
-# comes before the lines of the suites that failed.
+# where etude admits tests, the run's own lines quoted from its standard
+# error, bisection that reads etude's history with the tree's casecheck, a
+# fault of the runner in its lines, and a result that comes before the lines
+# of the suites that failed.
 # The scripts run in a private tree with stand-ins for git, gh, make,
 # timeout, the clock and etude's history_failures; casecheck is the tree's,
 # over etude's verdict fixtures. Each row runs in a subshell of its own, and
@@ -908,6 +909,45 @@ $assertion
     esac
 )
 
+# quoted: report a core run whose i686 half failed `default`, its log
+# having a run that the runner suite started, with that run's deliberate
+# failure, before the run's own lines, and require the issue and the summary
+# to quote the run's own lines from `err`, the incomplete forms among them,
+# and none of the inner run's.
+quoted()
+(
+    clear
+    rm -rf "$work/results"
+    for arch in i686 x86_64; do
+        mkdir -p "$work/results/core-$arch"
+        : > "$work/results/core-$arch/done"
+        : > "$work/results/core-$arch/failed"
+    done
+    result=$work/results/core-i686
+    echo default > "$result/failed"
+    inner='run: failing: FAIL in 1s
+run: result: failed: failing'
+    own='run: default: guest.default.loginmusl on i686: incomplete: it ran past its stage bound of 60000 ms: root is missing: nothing reported it
+run: default: INCOMPLETE in 119s
+run: result: failed: default'
+    printf '%s\n' 'run: starting: default runner' 'run: starting: failing' "$inner" \
+        'run: runner: PASS in 9s' "$own" > "$result/log"
+    printf '%s\n' "$own" > "$result/err"
+    : > "$work/gh.log"
+    : > "$work/summary"
+    GITHUB_STEP_SUMMARY=$work/summary sh "$work/report.sh" core bad "$work/results" > "$work/report.log" 2>&1 ||
+        return 1
+    grep -q '^issue create --repo test/rach2 --title Core tests fail on i686: default ' "$work/gh.log" ||
+        return 1
+    # shellcheck disable=SC2016 # the fence is Markdown's
+    issue=$(awk '/^The first lines of tests\/run.s standard error that name a failure:$/ { on = 1; next }
+        on && /^```$/ { if (++fence == 2) exit; next }
+        fence == 1' "$work/gh.log")
+    # shellcheck disable=SC2016 # the fence is Markdown's
+    summary=$(awk '/^```$/ { if (++fence == 2) exit; next } fence == 1' "$work/summary")
+    [ "$issue" = "$own" ] && [ "$summary" = "$own" ]
+)
+
 # rows: check both unfinished kinds, the filed issue and the hold issue,
 # start core again after a job that no runner took, preserve an actual
 # runner failure, take a nightly pass as a full run's last pass, bisect a
@@ -919,11 +959,12 @@ $assertion
 # reported failure of the runner suite as one, set the statuses of a run of
 # chosen suites apart from a full run's, call no history reader for a result
 # without etude's history, report the attempts that a history lists,
-# bisect on a machine where etude admits tests, bisect commits whose run.sh
-# reads etude's history, leave a range unresolved for a fault of the runner
-# in its lines or a suite's result from another run, and judge a run by its
-# result when the lines of the suites that failed come after it. Each row
-# that fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
+# quote the run's own lines and none of the runner suite's runs, bisect on a
+# machine where etude admits tests, bisect commits whose run.sh reads
+# etude's history, leave a range unresolved for a fault of the runner in its
+# lines or a suite's result from another run, and judge a run by its result
+# when the lines of the suites that failed come after it. Each row that
+# fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
 rows()
 {
     rm -f "$work/reader.log"
@@ -966,6 +1007,7 @@ rows()
     for case in flaky repeated hidden unread unbuilt kept; do
         row attempts "$case"
     done
+    row quoted
     for case in bigmem refused unbridged ports; do
         row admits "$case"
     done
@@ -995,4 +1037,4 @@ if ! rows; then
     echo 'ci-test: result: fail: ci report, hold or bisection' >&2
     exit 1
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open, bisection where etude admits tests, bisection from etude history, faults of the runner in bisection and a result before the failed suites'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open, the quoted failure lines, bisection where etude admits tests, bisection from etude history, faults of the runner in bisection and a result before the failed suites'

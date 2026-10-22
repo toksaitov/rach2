@@ -38,12 +38,15 @@
 # ITEMS being what failed, sorted and joined by commas, or `Core tests did
 # not finish on ARCH` or `Release tests did not finish on ARCH` for an
 # unfinished run. The issue says in a sentence what failed, where and at
-# which commit, and gives the first lines of the log that name a failure, the
-# command that fetches the kept logs, the run, its attempt, the commit, the
-# end of the log, and last the commits since the last pass: the newest
-# first-parent ancestor of SHA, within 50 for core and 500 for full, whose
-# status `ci/core/ARCH` is success, or for full `ci/full/ARCH` or
-# `ci/night/ARCH`, which the nightly runs before full runs set. An issue
+# which commit, and gives the first lines that name a failure in `err`, the
+# standard error of the run's own tests/run: its items and suites that did
+# not pass, the incomplete ones among them, and its result, and none of the
+# lines of the runs that the runner suite starts. It then gives the command
+# that fetches the kept logs, the run, its attempt, the commit, the end of
+# the log, and last the commits since the last pass: the newest first-parent
+# ancestor of SHA, within 50 for core and 500 for full, whose status
+# `ci/core/ARCH` is success, or for full `ci/full/ARCH` or `ci/night/ARCH`,
+# which the nightly runs before full runs set. An issue
 # already open under that title gets a comment instead; when it has the label
 # `intermittent`, the label is removed. The labels are read again after the
 # comment, since a bisection that ends meanwhile may add the label after the
@@ -94,6 +97,9 @@ run_url="$GITHUB_SERVER_URL/$repo/actions/runs/$GITHUB_RUN_ID"
 attempt=${GITHUB_RUN_ATTEMPT:-1}
 short=$(git rev-parse --short "$sha")
 hold_title="Pushes are held: master does not build, pass style or boot"
+# The lines of tests/run's results that name an item or a suite that did not
+# pass, a change that voided the run, or the run's result when it failed.
+failing='^run: (result: (failed|incomplete|refused|interrupted)|voided: )|: (FAIL|INCOMPLETE|CANCELLED) in |: (failure|incomplete|cancelled): '
 statuses=
 trap 'rm -f ${statuses:+"$statuses"}' EXIT
 trap 'exit 129' HUP
@@ -298,8 +304,8 @@ $(git log --format='* %h %s' "$good..$sha")"
     fi
     summarize "$arch failed: $items." ""
     lines=
-    if [ -f "$result/log" ]; then
-        lines=$(grep -E ': FAIL|: result: fail' "$result/log" | head -n 8)
+    if [ -f "$result/err" ]; then
+        lines=$(grep -E "$failing" "$result/err" | head -n 8)
         [ -z "$lines" ] || summarize '```' "$lines" '```' ""
     fi
     case $hstatus in
@@ -311,7 +317,7 @@ $(git log --format='* %h %s' "$good..$sha")"
     body=$first
     [ -z "$lines" ] || body="$body
 
-The first lines of the log that name a failure:
+The first lines of tests/run's standard error that name a failure:
 
 \`\`\`
 $lines

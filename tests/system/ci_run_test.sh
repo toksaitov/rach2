@@ -10,11 +10,13 @@
 # suites the verdict fails, a failure or an unfinished attempt before a retry
 # that passed among them; and `runner`, once, for a history that is missing,
 # cut off or inconsistent, a verdict that gave no result, and a status that
-# disagrees with the verdict. run.sh runs in a private tree with stand-ins
-# for git, make and tests/run, and with the built casecheck over the history
-# fixtures of tools/etude/fixtures/verdict. CI_RUN_SH names the run.sh that
-# is copied into the tree, tools/ci/run.sh of this tree by default, so that
-# the catalogue tests/proofs/ci-run.json can test a copy with a fault in it.
+# disagrees with the verdict. In both, DIR/err has tests/run's standard
+# error and none of its standard output. run.sh runs in a private tree with
+# stand-ins for git, make and tests/run, and with the built casecheck over
+# the history fixtures of tools/etude/fixtures/verdict. CI_RUN_SH names the
+# run.sh that is copied into the tree, tools/ci/run.sh of this tree by
+# default, so that the catalogue tests/proofs/ci-run.json can test a copy
+# with a fault in it.
 #
 # Usage: sh tests/system/ci_run_test.sh
 
@@ -151,6 +153,18 @@ row()
     return 1
 }
 
+# kept ERR: require DIR/err of the last row to be ERR, the lines that the
+# stand-in tests/run printed on its standard error, with `\n` for a newline,
+# and none of those it printed on its standard output.
+kept()
+{
+    printf '%b' "$1" > "$work/err"
+    cmp -s "$work/err" "$out/err" && return 0
+    sed 's/^/ci-run-test: err: /' "$out/err" >&2
+    echo "ci-run-test: DIR/err of row $rows is not the standard error of tests/run" >&2
+    return 1
+}
+
 # The runner's lines, as run.sh reads them today.
 lines_rows()
 {
@@ -168,8 +182,10 @@ lines_rows()
     errs='run: default: INCOMPLETE in 121s\nrun: shutdown: INCOMPLETE in 301s\n'
     errs="${errs}run: result: failed: default shutdown\n"
     late='run: runner: PASS in 9s\nrun: result: incomplete\n'
+    own=$errs
     row 'lines: the standard error before the standard output' lines core core 1 \
         'default shutdown' || return 1
+    kept "$own" || return 1
     make_status=1
     row 'lines: the build' lines core core 0 build || return 1
 }
@@ -204,8 +220,12 @@ history_rows()
     row 'history: a pass with a failed status' history full default 1 runner || return 1
     row 'history: no history' history full default 0 runner || return 1
     streams=$failure
+    print='run: failing: FAIL in 1s\nrun: result: failed: failing\n'
+    errs='run: default: FAIL in 3s\nrun: result: failed: default\n'
+    own=$errs
     row 'history: a failed item' history full default 1 default || return 1
     agrees 1 || return 1
+    kept "$own" || return 1
     streams=$failure
     row 'history: a failed item with a passed status' history full default 0 'runner default' ||
         return 1
@@ -241,4 +261,4 @@ if ! { lines_rows && history_rows; }; then
     echo 'ci-run-test: result: fail: ci reading of results' >&2
     exit 1
 fi
-echo "ci-run-test: result: pass: $rows rows: the runner's lines, the build, a passing and a failing history, a failure or an unfinished attempt before a retry that passed, a status that disagrees, a missing or cut-off history, a suite left out, a missing verdict and the core set as one run"
+echo "ci-run-test: result: pass: $rows rows: the runner's lines, the build, a passing and a failing history, a failure or an unfinished attempt before a retry that passed, a status that disagrees, a missing or cut-off history, a suite left out, a missing verdict, the core set as one run and the standard error kept apart"
