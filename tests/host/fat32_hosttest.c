@@ -199,13 +199,20 @@ static int streq(const char *a, const char *b)
 }
 
 static int builder_built;
+/* The image the builder made last and the option it was made with: the
+   matrix loads one fixture again at every stop, and the builder makes the
+   same bytes each time. */
+static unsigned char built[IMG_BYTES];
+static char built_opt[200];
+static int built_kept;
 
 /**
  * Build the fixture the builder's option `opt` names and load it into the
  * image and the model. The builder is compiled once a run, so that an edited
- * builder is the one that runs. What the cache still holds of the previous
- * image is written into that image before it is replaced, so that the cache
- * empties, and a stop is over. Exits the test when a step fails.
+ * builder is the one that runs, and the option built last is loaded again
+ * from the copy kept of its image. What the cache still holds of the
+ * previous image is written into that image before it is replaced, so that
+ * the cache empties, and a stop is over. Exits the test when a step fails.
  */
 static void load(const char *opt)
 {
@@ -221,20 +228,25 @@ static void load(const char *opt)
         }
         builder_built = 1;
     }
-    fix_format(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", fix_dir(), fix_dir(), opt);
-    if (system(cmd) != 0) {
-        printf("fat32_hosttest: fixture builder failed for %s\n", opt);
-        exit(1);
+    if (!built_kept || !streq(opt, built_opt)) {
+        fix_format(cmd, sizeof(cmd), "%s/mkfatfixture %s/fat32_case.img %s", fix_dir(), fix_dir(),
+                   opt);
+        if (system(cmd) != 0) {
+            printf("fat32_hosttest: fixture builder failed for %s\n", opt);
+            exit(1);
+        }
+        f = fopen(fix_path("fat32_case.img"), "rb");
+        if (!f || fread(built, 1, IMG_BYTES, f) != IMG_BYTES) {
+            printf("fat32_hosttest: fixture did not load\n");
+            exit(1);
+        }
+        fclose(f);
+        built_kept = snprintf(built_opt, sizeof(built_opt), "%s", opt) < (int)sizeof(built_opt);
     }
     stop_after = -1;
     model.stopped = 0;
     bcache_sync(&dev);
-    f = fopen(fix_path("fat32_case.img"), "rb");
-    if (!f || fread(image, 1, IMG_BYTES, f) != IMG_BYTES) {
-        printf("fat32_hosttest: fixture did not load\n");
-        exit(1);
-    }
-    fclose(f);
+    devmodel_copy(image, built, IMG_BYTES);
     if (bcache_invalidate(&dev) != 0) {
         printf("fat32_hosttest: the cache did not empty for a new fixture\n");
         exit(1);

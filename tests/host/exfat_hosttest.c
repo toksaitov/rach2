@@ -50,6 +50,7 @@ extern void *memcpy(void *dst, const void *src, unsigned long n);
 extern void *memset(void *dst, int c, unsigned long n);
 extern long atol(const char *s);
 extern int strncmp(const char *a, const char *b, unsigned long n);
+extern int strcmp(const char *a, const char *b);
 extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
 extern void *popen(const char *cmd, const char *mode);
 extern int pclose(void *f);
@@ -235,6 +236,25 @@ static void check(int ok, const char *what)
 }
 
 static int builder_built;
+/* The image the builder made last and the option it was made with: the
+   matrix loads one fixture again at every stop, and the builder makes the
+   same bytes each time. */
+static unsigned char built[IMG_BYTES];
+static unsigned long built_bytes;
+static char built_opt[200];
+
+/** Make the first `n` bytes of `image` the device and the model's medium,
+ *  with nothing cached and nothing pending. */
+static void take_image(unsigned long n)
+{
+    image_sectors = n / 512;
+    dev.sector_count = image_sectors;
+    if (bcache_invalidate(&dev) != 0) {
+        printf("exfat_hosttest: the cache did not empty for a new image\n");
+        exit(1);
+    }
+    devmodel_load(&model);
+}
 
 /** Load the image file `path` into the device, whose size becomes the
  *  file's. A stop in force ends first, and the cache drains into the old
@@ -256,18 +276,13 @@ static int load_file(const char *path)
     if (n < 512 || n % 512 != 0) {
         return -1;
     }
-    image_sectors = n / 512;
-    dev.sector_count = image_sectors;
-    if (bcache_invalidate(&dev) != 0) {
-        printf("exfat_hosttest: the cache did not empty for a new image\n");
-        exit(1);
-    }
-    devmodel_load(&model);
+    take_image(n);
     return 0;
 }
 
 /** Build the fixture with the builder's option `opt` and load it into the
- *  device; the builder is compiled at the first call. */
+ *  device, as `load_file` does; the builder is compiled at the first call.
+ *  The option built last is loaded again from the copy kept of its image. */
 static void load(const char *opt)
 {
     char cmd[2048];
@@ -281,6 +296,14 @@ static void load(const char *opt)
         }
         builder_built = 1;
     }
+    if (built_bytes != 0 && strcmp(opt, built_opt) == 0) {
+        stop_after = -1;
+        model.stopped = 0;
+        bcache_sync(&dev);
+        devmodel_copy(image, built, built_bytes);
+        take_image(built_bytes);
+        return;
+    }
     fix_format(cmd, sizeof(cmd), "%s %s %s", fix_path("mkexfatfixture"), fix_path("exfat_case.img"),
                opt);
     if (system(cmd) != 0) {
@@ -291,6 +314,10 @@ static void load(const char *opt)
         printf("exfat_hosttest: fixture did not load\n");
         exit(1);
     }
+    built_bytes = snprintf(built_opt, sizeof(built_opt), "%s", opt) < (int)sizeof(built_opt)
+                      ? (unsigned long)image_sectors * 512
+                      : 0;
+    devmodel_copy(built, image, built_bytes);
 }
 
 static struct vfs_mount mnt;
