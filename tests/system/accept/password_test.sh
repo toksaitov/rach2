@@ -2,7 +2,8 @@
 # password_test.sh: check that su_command.sh answers the password prompt
 # without the password reaching any transcript, against fixtures/pty_secret.c
 # in place of ssh, with a dummy password, real pseudo-terminals and a private
-# build of runner/ptydrive.c, in seven cases of prompt and echo.
+# build of runner/ptydrive.c, in seven cases of prompt and echo and two of a
+# connection the machine reset or refused before the session.
 #
 # PTYDRIVE names a driver built elsewhere to use in place of the private
 # build.
@@ -126,6 +127,17 @@ check()
         prefix)
             grep -Fq '[redacted]' "$PTY_SECRET_AUDIT/raw" || return 1
             ;;
+        refused)
+            if [ "$(wc -l < "$PTY_SECRET_AUDIT/tries")" -ne 4 ]; then
+                echo "accept-password: $phase/refused: not tried exactly four times" >&2
+                return 1
+            fi
+            if ! grep -q '^accept-su: session: .*Connection refused$' "$PTY_SECRET_AUDIT/errors"; then
+                echo "accept-password: $phase/refused: the session's end was not printed" >&2
+                return 1
+            fi
+            [ ! -s "$PTY_SECRET_AUDIT/returned" ] || return 1
+            ;;
         *)
             grep -qx 'one answer' "$PTY_SECRET_AUDIT/first" || return 1
             grep -qx 'PROMPTED=1' "$PTY_SECRET_AUDIT/raw" || return 1
@@ -139,7 +151,7 @@ check()
     esac
 }
 
-# Run the seven cases.
+# Run the nine cases.
 cases()
 {
     check good 7 "printf '%s' \"a 'quote' and a dollar \\\$\"; exit 7" \
@@ -154,7 +166,9 @@ cases()
     check joined 1 'printf safe' || return 1
     check long 0 'printf safe' safe || return 1
     check prefix 1 'printf safe' || return 1
-    echo "accept-password: $phase: 7 checks passed"
+    check reset 0 'printf safe' safe || return 1
+    check refused 1 'printf safe' || return 1
+    echo "accept-password: $phase: 9 checks passed"
 }
 
 phase=fixed

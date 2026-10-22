@@ -8,7 +8,12 @@
 # transcript. COMMAND's output is printed from between two markers, so that
 # su's prompt and the session's other output are left out. The status is 1
 # when the session fails, the prompt was not answered exactly once, or the
-# markers are missing.
+# markers are missing, and the end of the session's transcript, with the
+# password redacted, is then printed on standard error.
+#
+# A session the machine reset or refused before su prompted is tried again,
+# three times a second apart, as metal_accept.sh tries the account's own
+# sessions: su never received the password, so the command did not run.
 set -eu
 
 if [ "$#" -ne 6 ] || [ -z "${RACH2_ACCEPT_PASSWORD:-}" ]; then
@@ -54,33 +59,55 @@ quote()
 
 token="RACH2_ACCEPT_$(basename "$work")"
 command="{ printf '\\n%s\\n' '$token-begin'; /bin/sh -c $(quote "$6") 2>/dev/null; accept_status=\$?; printf '\\n%s %s\\n' '$token-end' \"\$accept_status\"; } | cat"
-# The driver filters credential bytes before either transcript is written.
-"$runner" watch accept-su 100 \
-    "$driver" --rows 40 --cols 120 --timeout 90 \
-    --password-env RACH2_ACCEPT_PASSWORD ssh -tt -i "$1" -p "$3" \
-    -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$5" \
-    -o ConnectTimeout=10 -o BatchMode=yes "$4@$2" \
-    "su -c $(quote "$command")" > "$work/raw" 2>&1 &
-child=$!
-rc=0
-wait "$child" || rc=$?
-child=
-if [ "$rc" -ne 0 ]; then
-    echo 'accept-su: the terminal command could not run' >&2
-    exit 1
-fi
-tr -d '\r' < "$work/raw" > "$work/text"
+# Print the last lines of the session's transcript on standard error.
+show_session()
+{
+    tail -n 20 "$work/text" | sed 's/^/accept-su: session: /' >&2
+}
+
+tries=0
+while :; do
+    # The driver filters credential bytes before either transcript is written.
+    "$runner" watch accept-su 100 \
+        "$driver" --rows 40 --cols 120 --timeout 90 \
+        --password-env RACH2_ACCEPT_PASSWORD ssh -tt -i "$1" -p "$3" \
+        -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$5" \
+        -o ConnectTimeout=10 -o BatchMode=yes "$4@$2" \
+        "su -c $(quote "$command")" > "$work/raw" 2>&1 &
+    child=$!
+    rc=0
+    wait "$child" || rc=$?
+    child=
+    if [ "$rc" -ne 0 ]; then
+        echo 'accept-su: the terminal command could not run' >&2
+        exit 1
+    fi
+    tr -d '\r' < "$work/raw" > "$work/text"
+    if [ "$tries" -ge 3 ] || ! grep -qx 'PROMPTED=0' "$work/text" ||
+        grep -qx TIMEDOUT "$work/text" ||
+        ! grep -q 'kex_exchange_identification\|ssh_exchange_identification\|Connection reset by\|Connection refused\|Connection timed out' "$work/text"; then
+        break
+    fi
+    tries=$((tries + 1))
+    # interval: a reset before the session is tried again after a second
+    sleep 1
+done
 if ! awk '
     /^PROMPTED=/ { prompts++; if ($0 != "PROMPTED=1") bad = 1 }
     /^ANSWERED=/ { answers++; if ($0 != "ANSWERED=1") bad = 1 }
     END { exit bad || prompts != 1 || answers != 1 }
 ' "$work/text" || grep -qx TIMEDOUT "$work/text"; then
     echo 'accept-su: password authentication did not complete' >&2
+    show_session
     exit 1
 fi
 status=$(awk -v token="$token-end" '$1 == token { print $2 }' "$work/text")
 case "$status" in
-    ''|*[!0-9]*) echo 'accept-su: the command did not report its status' >&2; exit 1 ;;
+    ''|*[!0-9]*)
+        echo 'accept-su: the command did not report its status' >&2
+        show_session
+        exit 1
+        ;;
 esac
 [ "$status" -le 255 ] || exit 1
 awk -v begin="$token-begin" -v end="$token-end" '

@@ -5,7 +5,8 @@
  *
  * It writes that it received one answer to $PTY_SECRET_AUDIT/first, never
  * the answer itself, and runs the command through the test's su, which
- * needs no privilege.
+ * needs no privilege. In two cases it ends as ssh does when the machine
+ * resets or refuses the connection before the session begins.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +79,49 @@ static void prompt(const char *mode, const char *reads)
 }
 
 /**
+ * End as ssh does when the connection fails before the session, for the
+ * cases `reset` and `refused`, and return in any other case.
+ *
+ * `reset` fails so the first time, which it records as the file `reset` in
+ * the directory `audit`, and returns on the next run. `refused` fails every
+ * time and adds a line to the file `tries` for each. The message is written
+ * and read by the driver, as a new line in the file `reads` shows, before
+ * the program exits with ssh's status 255.
+ */
+static void unreachable(const char *mode, const char *audit, const char *reads)
+{
+    char path[1024];
+    const char *message;
+    FILE *record;
+    long before;
+
+    if (strcmp(mode, "reset") == 0) {
+        message = "kex_exchange_identification: read: Connection reset by peer\r\n";
+        if (snprintf(path, sizeof(path), "%s/reset", audit) >= (int)sizeof(path))
+            fail();
+        if (access(path, F_OK) == 0)
+            return;
+    } else if (strcmp(mode, "refused") == 0) {
+        message = "ssh: connect to host fixture port 22: Connection refused\r\n";
+        if (snprintf(path, sizeof(path), "%s/tries", audit) >= (int)sizeof(path))
+            fail();
+    } else {
+        return;
+    }
+    record = fopen(path, "a");
+    if (record == NULL)
+        fail();
+    fputs("try\n", record);
+    if (fclose(record) != 0)
+        fail();
+    before = reads_seen(reads);
+    emit(message, strlen(message));
+    while (reads_seen(reads) == before)
+        usleep(1000);
+    exit(255);
+}
+
+/**
  * Prompt for a password as the case in $PTY_SECRET_CASE says, read one line
  * as the answer, and run the last argument with `sh -c`.
  *
@@ -88,7 +132,8 @@ static void prompt(const char *mode, const char *reads)
  * answer, its first half and its second half in $PTY_DUMMY_RECEIVED,
  * $PTY_DUMMY_FIRST and $PTY_DUMMY_LAST for the command to print. The
  * password's own variable, RACH2_ACCEPT_PASSWORD, must not reach this
- * program, and an empty or overlong answer fails.
+ * program, and an empty or overlong answer fails. `unreachable` ends the
+ * cases of a failed connection first.
  */
 int main(int argc, char **argv)
 {
@@ -104,6 +149,7 @@ int main(int argc, char **argv)
     if (argc < 2 || mode == NULL || audit == NULL || reads == NULL ||
         getenv("RACH2_ACCEPT_PASSWORD") != NULL || tcgetattr(0, &terminal) != 0)
         fail();
+    unreachable(mode, audit, reads);
     if (strcmp(mode, "echo") != 0)
         terminal.c_lflag &= (tcflag_t)~ECHO;
     if (tcsetattr(0, TCSANOW, &terminal) != 0)

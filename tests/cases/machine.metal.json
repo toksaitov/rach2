@@ -68,7 +68,7 @@
       "assertions": [
         {
           "assertion_id": "password",
-          "checks": "tests/system/accept/password_test.sh exits 0 in each of its cases of prompt and echo",
+          "checks": "tests/system/accept/password_test.sh exits 0 in each of its cases of prompt and echo, and of a connection reset or refused before the session",
           "source": "program"
         }
       ],
