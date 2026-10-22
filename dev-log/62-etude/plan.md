@@ -15,7 +15,7 @@ These were made on 2026-10-19.
 * The whole collection works in every environment. A case is not bound to an environment and is not required to run in several. A test that cannot pass everywhere for reasons of timing, or of the differences between emulation, virtualization and native execution, is redesigned.
 * Routine testing (the check before a push, ci and the release's full run) runs on one machine, the fastest, which this phase finds. The comparison of environments is work of this phase only.
 * A full run on that machine aims at one hour, keeps a second hour for the tests of future subsystems, and never takes more than four. The ci limit of ten minutes and the push check's five stay. The first runs of this phase are measured and not held to the budget.
-* The first run of etude covers the full collection on all four environments: the Mac under TCG, native Windows under WHPX, Ubuntu in WSL under KVM, and the Lenovo natively for every case that can run on real hardware.
+* The first run of etude covers the full collection on all four environments: the Mac under TCG, native Windows under WHPX, Ubuntu in WSL under TCG, and the Lenovo natively for every case that can run on real hardware.
 * The rule for intermittent failures stays as it is: an `intermittent` issue stays open and does not block the release.
 * Protection from stuck tests is part of the design, since a stuck test costs every worker time.
 * Timing is recorded per case and per run in a structured history, for profiling and for finding a slowdown on the same machine.
@@ -79,7 +79,7 @@ The phase shows the collection to be portable by running it whole in each enviro
 | --- | --- | --- |
 | Mac mini, Apple M4, macOS 27.0.1 | `cc` | in QEMU under TCG |
 | Testing PC, Windows 11 | MinGW-w64 | in QEMU for Windows under WHPX |
-| Testing PC, Ubuntu 26.04 in WSL | `cc` | in QEMU under KVM |
+| Testing PC, Ubuntu 26.04 in WSL | `cc` | in QEMU under TCG |
 | Lenovo running Rach2 | TinyCC | natively, every case the hardware and kernel allow |
 
 TCG on the testing PC is measured where it could change which machine wins. A TCG configuration wins only with a complete passing run measured over the whole collection, not from a few favorable cases.
@@ -381,7 +381,7 @@ Removal, the four environments and the move:
 
 * T88. Remove the temporary suite adapter. Waits for T26 to T30, T59 to T62 and T64 to T87. Files: the adapter, the old run targets, the registry and references. Done when the whole inventory of assertions runs under etude, and old checkouts keep their wrapper.
 * T89. Remove the obsolete runner programs. Waits for T26 to T30, T47 to T49 and T88. Files: the old harnesses and helpers, and the `runner` and `drive` tests. Done when the reference and coverage audits pass. It may overlap the environment runs, which use checkouts of their own.
-* T90. Run the whole collection on Ubuntu. Waits for T24, T47, T58 and T88. Run both architectures under KVM, with the TCG measurements on the testing PC that bear on the choice. Done when every assertion, cost, width, failure and cleanup is recorded on the fixed candidate. Runs: [the whole collection on Ubuntu](ubuntu-run.md).
+* T90. Run the whole collection on Ubuntu. Waits for T24, T47, T58 and T88. Run both architectures under TCG. The owner dropped the run under KVM on 22 October 2026: Windows' October update keeps nested virtualization from WSL on the testing PC's AMD processor (#878). Done when every assertion, cost, width, failure and cleanup is recorded on the fixed candidate. Runs: [the whole collection on Ubuntu](ubuntu-run.md).
 * T91. Run the whole collection on the Mac. Owner-only. Waits for T24, T48, T58 and T88. Run both architectures under TCG. Done when local tools and the large-memory backing keep every assertion, with no work skipped or sent elsewhere.
 * T92. Run the whole collection on Windows. Owner-only. Waits for T24, T49, T58 and T88. Run both architectures under WHPX, with the TCG measurements that bear on the choice. Done when native execution and the whole run's costs are recorded without load from WSL.
 * T93. Run every eligible case on the Lenovo. Owner-only. Waits for T24, T50 and T88, and, when the Lenovo needs the candidate installed, for the first complete pass of T90, T91 or T92. Done when complete results and cleanup are recorded on the exact candidate kernel, and the accepted system is restored and checked.
