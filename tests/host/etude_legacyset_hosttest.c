@@ -1172,11 +1172,13 @@ static void make_tree(void)
                                        "cases/boundary"};
     static char source[1 << 20], newpath[8192], rules[8192];
     const char *oldpath = getenv("PATH");
-    char path[PATH_LEN], owner[64];
+    char path[PATH_LEN], owner[64], dir[PATH_MAX] = "";
     size_t i;
     int bad = 0;
 
-    fix_format(tree, sizeof(tree), "%s/tree", fix_dir());
+    /* The driver reports the tree by its real path: /private/tmp on macOS. */
+    bad |= realpath(fix_dir(), dir) == NULL;
+    fix_format(tree, sizeof(tree), "%s/tree", dir);
     fix_format(ledger, sizeof(ledger), "%s/ledger", fix_dir());
     fix_format(locks, sizeof(locks), "%s/locks", fix_dir());
     fix_format(path, sizeof(path), "%s/tmp", fix_dir());
@@ -2505,7 +2507,7 @@ static void test_guest(void)
     static char text[OUT_LEN];
     const char *dir = strcmp(guest_arch, "x86_64") == 0 ? "build/x86_64" : "build";
     char path[PATH_LEN * 2], goal[PATH_LEN], other[PATH_LEN], hex[65] = "", hex2[65] = "";
-    int before = fails, named, own;
+    int before = fails, named, own, all;
 
     r.name = "guest";
     r.members = m;
@@ -2542,8 +2544,10 @@ static void test_guest(void)
     named = record_digest(&r, goal, hex) == 0 ? lines_with(text, hex) : -1;
     own =
         record_digest(&r, other, hex2) == 0 && strcmp(hex, hex2) != 0 ? lines_with(text, hex2) : -1;
+    all = lines_with(text, "-kernel ");
     CHECK(named == 1, "kernel: one machine booted rach2-fixture/kernel under -n");
-    CHECK(own == 3, "kernel: the cases of another node booted it under -n");
+    /* The boot past its 200 ms bound may be stopped before its QEMU starts. */
+    CHECK(own >= 2 && named + own == all, "kernel: the cases of another node booted it under -n");
     CHECK(results_has(&r, "fixture.guest.rng.r0", "\"placement\":\"qemu\"") &&
               results_has(&r, "fixture.guest.rng.r0",
                           "\"termination\":{\"end\":\"exited\",\"value\":0,\"observed_by\":"
