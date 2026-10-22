@@ -75,8 +75,8 @@ extern char **environ;
 #define DISK_BYTES (UINT64_C(1) << 30)
 
 /* The first local port of the machine cases, before the offset of the port
- * block: their ports end in 400 to 499 of the block's first thousand, which
- * no port of the table in tests/system/suites.mk does in any block. */
+ * block: with LEGACY_PORTS after it, their ports end in 400 to 999, which no
+ * port of the table in tests/system/suites.mk does in any block. */
 #define PORT_BASE 2400u
 
 /* The bytes of history one run may write. */

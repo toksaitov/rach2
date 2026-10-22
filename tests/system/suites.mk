@@ -73,8 +73,8 @@ together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 # exports RACH2_PORT_OFFSET as N * 1000 while it holds the lock. Every port
 # below is the table's number plus that offset. Within a block the table's
 # numbers are 2225 and 2296 to 2304, and etude's set driver gives the machine
-# cases of tests/cases 2400 to 2499 (tools/etude/Readme.md, The set driver),
-# so no port of one block is a port of another, and the highest, 2499 + 9000,
+# cases of tests/cases 2400 to 2999 (tools/etude/Readme.md, The set driver),
+# so no port of one block is a port of another, and the highest, 2999 + 9000,
 # is below the ephemeral ports. A make run without tests/run has no offset
 # and forwards the table's numbers.
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)

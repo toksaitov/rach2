@@ -16,7 +16,7 @@
 #define LEGACY_JUDGE_S 60u
 
 /* The most local ports that the machine cases of one set are given. */
-#define LEGACY_PORTS 100u
+#define LEGACY_PORTS 600u
 
 /* One case of a manifest that runs on the run's architecture. Its texts
  * point into the manifest's document. */
