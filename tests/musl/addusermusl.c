@@ -73,7 +73,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
-#include <poll.h>
 #include <pwd.h>
 #include <shadow.h>
 #include <signal.h>
@@ -534,49 +533,35 @@ static void restore_databases(void)
 /**
  * Read from `fd`, appending to the terminated string in `buffer` of `size`
  * bytes, until `needle` appears in it. Returns 1 on a match, and 0 at end of
- * file, on a read error, when the buffer is full, or once `ms` milliseconds
- * of polls have passed with nothing to read.
+ * file, on a read error, or when the buffer is full.
  *
  * The waiting case uses this in place of a sleep: the needle is a line the
  * other process could print only after doing what is waited for.
  */
-static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
+static int read_until(int fd, const char *needle, char *buffer, size_t size)
 {
     size_t held = strlen(buffer);
-    long waited = 0;
+    ssize_t got;
 
-    while (waited < ms) {
-        struct pollfd waiting;
-        ssize_t got;
-
-        waiting.fd = fd;
-        waiting.events = POLLIN;
-        waiting.revents = 0;
-        if (poll(&waiting, 1, 200) == 1) {
-            got = read(fd, buffer + held, size - held - 1);
-            if (got <= 0) {
-                return 0;
-            }
-            held += (size_t)got;
-            buffer[held] = '\0';
-            if (strstr(buffer, needle) != NULL) {
-                return 1;
-            }
-            if (held + 1 >= size) {
-                return 0;
-            }
-            continue;
+    for (;;) {
+        got = read(fd, buffer + held, size - held - 1);
+        if (got <= 0) {
+            return 0;
         }
-        waited += 200;
+        held += (size_t)got;
+        buffer[held] = '\0';
+        if (strstr(buffer, needle) != NULL) {
+            return 1;
+        }
+        if (held + 1 >= size) {
+            return 0;
+        }
     }
-
-    return 0;
 }
 
 /**
  * Read from `fd` to end of file, appending to the terminated string in
- * `buffer` of `size` bytes, until the buffer is full or `ms` milliseconds of
- * polls have passed with nothing to read.
+ * `buffer` of `size` bytes, until the buffer is full.
  *
  * It reads all that a child writes: a reader that stopped at the first chunk
  * would leave the pipe to be closed under a child still writing, which would
@@ -584,31 +569,14 @@ static int read_until(int fd, const char *needle, char *buffer, size_t size, lon
  * comes when the child exits, so this is also how the parent knows the child
  * has finished writing.
  */
-static void drain(int fd, char *buffer, size_t size, long ms)
+static void drain(int fd, char *buffer, size_t size)
 {
     size_t held = strlen(buffer);
-    long waited = 0;
+    ssize_t got;
 
-    while (waited < ms) {
-        struct pollfd waiting;
-        ssize_t got;
-
-        waiting.fd = fd;
-        waiting.events = POLLIN;
-        waiting.revents = 0;
-        if (poll(&waiting, 1, 200) == 1) {
-            got = read(fd, buffer + held, size - held - 1);
-            if (got <= 0) {
-                return;
-            }
-            held += (size_t)got;
-            buffer[held] = '\0';
-            if (held + 1 >= size) {
-                return;
-            }
-            continue;
-        }
-        waited += 200;
+    while (held + 1 < size && (got = read(fd, buffer + held, size - held - 1)) > 0) {
+        held += (size_t)got;
+        buffer[held] = '\0';
     }
 }
 
@@ -661,7 +629,7 @@ static int run_with(const char *path, char *const argv[], const char *script, ch
         (void)write(in[1], script, strlen(script));
     }
     close(in[1]);
-    drain(err[0], report, report_size, 30000);
+    drain(err[0], report, report_size);
     close(err[0]);
     if (waitpid(child, &status, 0) != child || !WIFEXITED(status)) {
         return -1;
@@ -1158,7 +1126,7 @@ static int check_waits(void)
         return fail(R_WAIT_FORK, "could not fork the waiting maker");
     }
     report[0] = '\0';
-    if (!read_until(a_err[0], "busy, waiting", report, sizeof(report), 20000)) {
+    if (!read_until(a_err[0], "busy, waiting", report, sizeof(report))) {
         kill(maker, SIGKILL);
         (void)waitpid(maker, &status, 0);
 
@@ -1242,7 +1210,7 @@ static int run_two_makers(void)
     row_loop = R_MAKERS_EXIT;
     for (which = 0; which < 2; which++) {
         report[0] = '\0';
-        drain(errs[which][0], report, sizeof(report), 30000);
+        drain(errs[which][0], report, sizeof(report));
         close(errs[which][0]);
         if (waitpid(makers[which], &status, 0) != makers[which] || !WIFEXITED(status)) {
             return fail_said(R_MAKERS_EXIT, "one of two concurrent makers did not exit normally",
@@ -1382,9 +1350,9 @@ static int check_concurrent(void)
     (void)write(a_in[1], NEW_PASS "\n" NEW_PASS "\n", 2 * strlen(NEW_PASS) + 2);
     close(a_in[1]);
     waiting[0] = '\0';
-    drain(p_err[0], waiting, sizeof(waiting), 30000);
+    drain(p_err[0], waiting, sizeof(waiting));
     report[0] = '\0';
-    drain(a_err[0], report, sizeof(report), 30000);
+    drain(a_err[0], report, sizeof(report));
     close(p_err[0]);
     close(a_err[0]);
     if (waitpid(writer, &status, 0) != writer || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
