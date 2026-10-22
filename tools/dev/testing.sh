@@ -201,7 +201,7 @@ EOF
 # say why not and fail. A sync rewrites the sources under whatever works
 # there, and a build that reads half of the old tree and half of the new one
 # fails in ways that look like faults of the code. The copy is busy while a
-# run or a fault script holds its run lock and the holder lives, or while
+# run or a script holds its run lock and the holder lives, or while
 # any process other than a shell has its working directory in it: a make, a
 # compiler, QEMU, or a script between two runs. The owner file records WHAT,
 # `sync` or `run`, and this tree's path. The holder's input is its script

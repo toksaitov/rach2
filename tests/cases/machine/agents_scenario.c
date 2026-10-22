@@ -30,7 +30,7 @@ static void setting(struct agent_case *s, const char *name, const char *value)
 }
 
 /** Run an SSH workload action and report its assertion, if one is given.
- * The scripts' output stays in the evidence and is printed for proofs. */
+ * The scripts' output stays in the evidence and is printed. */
 static void action(struct agent_case *s, const char *verb, const char *assertion)
 {
     struct net_run r;

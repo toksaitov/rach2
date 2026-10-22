@@ -605,7 +605,7 @@ case "$1" in
         case "$work" in
             "$store"/machine-grow.*) ;;
             *)
-                # The work fault puts the directory in /tmp, outside the proof.
+                # A copy that makes the work directory in /tmp leaves it there.
                 case "$work" in /tmp/machine-grow.?*) rm -rf "$work" ;; esac
                 fail 'work is outside the store'
                 ;;
