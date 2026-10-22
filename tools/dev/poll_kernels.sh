@@ -3,30 +3,25 @@
 # poll_kernels.sh: build, in one private copy of the tree, the kernel as it is
 # and one whose poll removes its waiters before the halt, for measurement.
 #
-# Usage: poll_kernels.sh [--texts]
+# Usage: poll_kernels.sh
 #
 # Each kernel's path is printed as RACH2_MEASURE_KERNEL, the name
 # machine_identity.sh takes, so that a measurement driver checks that the
 # machine runs that artifact before it times anything. The kernels are built
 # for the architecture ARCH names. The private tree, with the kernels and the
 # build's records, stays at the path the artifacts line prints, unless a
-# signal stops the run. --texts only checks that the text the second order
-# changes is once in rach2/sys/io/poll.c, and builds nothing.
+# signal stops the run.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# apply_fault PATH: move the removal of poll's waiters before the halt in
-# PATH, a poll.c; with RACH2_FAULT_TEXTS set, only check the text and write
-# nothing. The status is 1 when the text is not there once.
-apply_fault()
+# reorder_poll PATH: move the removal of poll's waiters before the halt in
+# PATH, a poll.c. The status is 1 when the text is not there once.
+reorder_poll()
 {
     python3 - "$1" <<'PY'
 import pathlib
 import sys
-import os
-if os.environ.get('RACH2_FAULT_TEXTS'):
-    pathlib.Path.write_text = lambda self, *args, **kwargs: 0
 
 path = pathlib.Path(sys.argv[1])
 source = path.read_text()
@@ -49,15 +44,6 @@ if source.count(before) != 1:
 path.write_text(source.replace(before, after))
 PY
 }
-
-if [ "${1:-}" = --texts ]; then
-    RACH2_FAULT_TEXTS=1
-    export RACH2_FAULT_TEXTS
-    apply_fault rach2/sys/io/poll.c >/dev/null
-    echo 'poll-kernels: texts: every fault is once in its source'
-    exit 0
-fi
-
 
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" poll-kernels "$repo/tools/dev/poll_kernels.sh" "$@"
@@ -135,7 +121,7 @@ keep=1
 git rev-parse HEAD > "$work/base.commit"
 git diff --binary > "$work/working.diff"
 build poll-after-halt
-apply_fault "$poll"
+reorder_poll "$poll"
 touch "$poll"
 cp "$poll" "$work/poll.before-halt.c"
 diff -u "$work/poll.saved" "$poll" > "$work/poll-order.diff" || [ "$?" -eq 1 ]

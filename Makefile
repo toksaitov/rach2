@@ -622,19 +622,6 @@ $(ETUDELOAD): $(ETUDE_LOAD_SRC) tools/etude/include/etude/repeat.h
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
-# etude's driver of mutation proofs (tools/etude/posix/proof.c), built here
-# so that `make` compiles it under the host flags and the fault texts of its
-# catalogues can be checked.
-ETUDEPROOF = build/tools/etude/etude-proof
-$(ETUDEPROOF): $(ETUDE_PROOF_SRC) tools/etude/include/etude/proof.h \
-               tools/etude/include/etude/artifact.h tools/etude/include/etude/exec.h \
-               tools/etude/posix/posix.h tools/etude/posix/store.h tools/etude/proof_file.h \
-               tools/etude/capture.h tools/etude/json.h tools/etude/macho.h tools/etude/schema.h \
-               utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
-	    -Itools/etude/posix -Iutils
-
 # etude-host (tools/etude/posix/etude_host.c), which runs the host checks of
 # `tests/run host` several at once.
 ETUDEHOST = build/tools/etude/etude-host
@@ -1097,7 +1084,7 @@ IMAGE_TOOLS = krffs/mkimage.sh krffs/programs.sh $(SETIDCHECK) tools/inspect/set
 
 -include $(TEST_IMAGE).d $(OS_SIMPLE_IMAGE).d $(OS_REAL_IMAGE).d
 # An image's `exec-dir` directories are judged by the programs in them, which
-# IMAGE.programs records, and not by their own times, which a proof's work
+# IMAGE.programs records, and not by their own times, which a suite's work
 # directory made beside the programs moves (krffs/programs.sh). The record is
 # written again here, before make compares times, when the set has changed.
 _ := $(shell sh krffs/programs.sh check $(wildcard $(IMAGES_DIR)/*.programs))
@@ -1563,7 +1550,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
-             $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) \
+             $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEHOST) \
              $(ETUDEBRIDGE) $(ETUDELEDGER) $(ETUDEHOLD) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \

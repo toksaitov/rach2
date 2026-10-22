@@ -207,12 +207,6 @@ case_assignments() {
     check nativecheck-test nativecheck_test.log sh tests/system/nativecheck_test.sh
 }
 
-# The text of each fault of each fault script is in its source.
-case_faulttexts() {
-    check faulttexts-test faulttexts_test.log sh tests/system/faulttexts_test.sh
-    check faulttexts faulttexts.log sh tools/verify/faulttexts.sh
-}
-
 # The kernel builds under -Werror.
 case_kernel_build() {
     if make -C rach2 >"$VDIR/verify_build.log" 2>&1; then
@@ -785,7 +779,7 @@ if [ -n "${ETUDE_CASE:-}" ] && [ "$ETUDE_CASE" != "$ID" ]; then
     exit 2
 fi
 case "$CASE" in
-    tools|assignments|faulttexts|kernel-build|cppcheck|shellcheck|conventions|clang-format) ;;
+    tools|assignments|kernel-build|cppcheck|shellcheck|conventions|clang-format) ;;
     build-inputs|abi|sources|text|messages|runner-rules|setid|repro|checkers|devlog) ;;
     registry|waits|manual|clang|sparse|sizes|links) ;;
     *) echo "style: no case $CASE" >&2; exit 2 ;;

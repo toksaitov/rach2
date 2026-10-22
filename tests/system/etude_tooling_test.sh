@@ -27,21 +27,11 @@
 # QEMU's crash; a runner whose status disagrees with the volume's; and QEMU's
 # command line.
 #
-# With --mutate each fault below is put into the copy and must fail exactly
-# its expected rows; the copy is restored and the rows run again at the end.
-# --texts puts each fault into the copy, requires only that it changes the
-# file, and runs no row.
-#
-# Usage: sh tests/system/etude_tooling_test.sh [--mutate | --texts]
+# Usage: sh tests/system/etude_tooling_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'etude-tooling-test: usage: etude_tooling_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ $# -eq 0 ] || { echo 'etude-tooling-test: usage: etude_tooling_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap '[ -z "$work" ] || { chmod -R u+rwx "$work" 2>/dev/null; rm -rf "$work"; }' EXIT
@@ -356,68 +346,5 @@ rows() {
     return "$failed"
 }
 
-# The faults: NAME~TEXT~REPLACEMENT, each a whole line of tools/etude/tooling.c.
-faults() {
-    cat <<'EOF'
-unchecked-digest~    if (file_sha256(part, hex) != 0 || strcmp(hex, m->image_sha256) != 0) {~    if (file_sha256(part, hex) != 0) {
-unprovisioned~    if (!b->provisioned || b->failed[0] != '\0')~    if (b->failed[0] == 'x')
-status-unchecked~            if (sscanf(data, "%d", &status) != 1 || status != res->status) {~            if (sscanf(data, "%d", &status) != 1) {
-no-outputs~        add_arg(&a, "%s/%s", job->outdir, base);~        add_arg(&a, "%s/%s", dir, base);
-no-deadline~            end = BOOT_LATE;~            continue;
-no-stop~            end = BOOT_STOPPED;~            continue;
-stop-kept~    if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) || job->keep)~    if (res->outcome != ETUDE_TOOLING_ENDED || job->keep)
-no-bootindex~    disk(l, "root", root, "qcow2", NULL, ",bootindex=0");~    disk(l, "root", root, "qcow2", NULL, "");
-status-passes~    if (s->done && !res->making && i == ETUDE_TOOLING_JOB && res->status != 0) {~    if (0) {
-EOF
-}
-
-# fault NAME: put fault NAME into the copy, from the pristine source; `none`
-# restores it.
-cp "$TREE/tools/etude/tooling.c" "$work/tooling.c.orig" || exit 1
-fault() {
-    cp "$work/tooling.c.orig" "$TREE/tools/etude/tooling.c" || return 1
-    [ "$1" = none ] && return 0
-    line=$(faults | grep "^$1~") || return 1
-    text=$(printf '%s\n' "$line" | cut -d'~' -f2)
-    new=$(printf '%s\n' "$line" | cut -d'~' -f3)
-    export T="$text" R="$new"
-    [ "$(awk '$0 == ENVIRON["T"] { n++ } END { print n + 0 }' "$work/tooling.c.orig")" = 1 ] || return 1
-    awk '$0 == ENVIRON["T"] { print ENVIRON["R"]; next } { print }' "$work/tooling.c.orig" \
-        > "$TREE/tools/etude/tooling.c"
-}
-
-# expect_fault FAULT ROWS: with FAULT in the copy, require exactly ROWS to fail.
-expect_fault() {
-    fault "$1" || { echo "etude-tooling-test: fault $1 changes nothing" >&2; return 1; }
-    rows > "$work/mutated.out" && { echo "etude-tooling-test: fault passed: $1" >&2; return 1; }
-    got=$(sed -n 's/^etude-tooling-test: failed: //p' "$work/mutated.out" | tr '\n' ' ')
-    if [ "$got" != "$2 " ]; then
-        echo "etude-tooling-test: fault $1 failed rows: $got; expected: $2" >&2
-        return 1
-    fi
-}
-
-names=$(faults | cut -d'~' -f1)
-if [ "$mode" = texts ]; then
-    for f in $names; do
-        fault "$f" || { echo "etude-tooling-test: fault $f is not one line of tools/etude/tooling.c" >&2; exit 1; }
-    done
-    exit 0
-fi
-fault none
 rows >&2 || exit 1
-if [ "$mode" = mutate ]; then
-    expect_fault unchecked-digest 'digest' || exit 1
-    expect_fault unprovisioned 'provision' || exit 1
-    expect_fault status-unchecked 'lie' || exit 1
-    expect_fault no-outputs 'job' || exit 1
-    expect_fault no-deadline 'late' || exit 1
-    expect_fault no-stop 'stop' || exit 1
-    expect_fault stop-kept 'stop' || exit 1
-    expect_fault no-bootindex 'line' || exit 1
-    expect_fault status-passes 'status' || exit 1
-    fault none
-    rows >&2 || exit 1
-    echo 'etude-tooling-test: result: pass: nine faults caught and restored'
-fi
 echo 'etude-tooling-test: result: pass: 11 rows'

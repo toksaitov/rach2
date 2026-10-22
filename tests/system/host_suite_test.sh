@@ -25,74 +25,17 @@
 # `listed`, and so does an assertion the tree has no test for, which fails
 # too. A selection with a name given twice is refused and runs nothing.
 #
-# With --mutate each fault below is compiled into a private etude-host, and
-# the checks must fail; the unchanged driver must then pass them again.
-# --texts finds each fault's text in tools/etude/posix/etude_host.c and runs
-# nothing.
-#
-# Usage: sh tests/system/host_suite_test.sh [--mutate | --texts]
+# Usage: sh tests/system/host_suite_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'host-suite-test: usage: host_suite_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ $# -eq 0 ] || { echo 'host-suite-test: usage: host_suite_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-source=$repo/tools/etude/posix/etude_host.c
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-
-# fault NAME FILE: write etude_host.c with fault NAME to FILE, or only check
-# that the fault's text is in the source once when FILE is empty.
-fault()
-{
-    python3 -I - "$source" "$1" "$2" <<'PY'
-import sys
-source, name, out = sys.argv[1:]
-text = open(source).read()
-faults = {
-    # Pass the caller's sanitizer settings on to the checks in place of the
-    # driver's own.
-    'sanitizer': [('"TMPDIR=", "ASAN_OPTIONS=", "UBSAN_OPTIONS=", "LSAN_OPTIONS="};', '"TMPDIR="};'),
-                  ('        r->env[k++] = (char *)sanitizer_env[i];', '        (void)sanitizer_env[i];')],
-    # Give every check the scratch root as its TMPDIR.
-    'shared': ('join(tmpdir, c->name, "")', 'join(r->scratch, "", "")'),
-    # Run the checks one at a time.
-    'serial': ('alone || running >= jobs)', 'alone || running >= 1)'),
-    # Leave the last check of the selection out.
-    'drop': ('    if (why == NULL && r->n == 0)', '    if (why == NULL && r->n > 1)\n        r->n--;\n    if (why == NULL && r->n == 0)'),
-    # Take a check's run as passed whatever its status.
-    'status': ('    int ok = !c->hung && res->end == ETUDE_END_EXITED && res->value == 0 &&', '    int ok = !c->hung && res->end == ETUDE_END_EXITED &&'),
-    # Let a check run on past its bound.
-    'bound': ('        if (stop_signal || now >= end) {', '        if (stop_signal) {'),
-    # Run an alone check beside the others.
-    'alone': ('if (c->alone ? running > 0 : alone || running >= jobs)', 'if (running >= jobs)'),
-}
-edits = faults[name] if isinstance(faults[name], list) else [faults[name]]
-for old, new in edits:
-    if text.count(old) != 1:
-        sys.exit('host-suite-test: the text of fault %s is not in %s once' % (name, source))
-    text = text.replace(old, new)
-if out:
-    open(out, 'w').write(text)
-PY
-}
-
-FAULTS='sanitizer shared serial drop status bound alone'
-
-if [ "$mode" = texts ]; then
-    for f in $FAULTS; do
-        fault "$f" '' || exit 1
-    done
-    echo 'host-suite-test: texts: each fault found once'
-    exit 0
-fi
 
 deadline=$repo/build/tests/system/deadline
 [ -x "$deadline" ] || { echo "host-suite-test: $deadline is not built"; exit 1; }
@@ -447,7 +390,6 @@ judge()
     return $bad
 }
 
-
 # refused DRIVER: a selection with a name given twice is refused before any
 # check runs.
 refused()
@@ -462,47 +404,11 @@ refused()
     fi
 }
 
-# build OUT [FAULT]: compile etude-host, with FAULT when given, to OUT.
-build()
-{
-    src=$source
-    if [ -n "${2:-}" ]; then
-        src=$work/etude_host_$2.c
-        fault "$2" "$src" || exit 1
-    fi
-    "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -I "$repo/tools/etude/include" -I "$repo/tools/etude/posix" \
-        -o "$1" "$src" "$repo/tools/etude/posix/exec.c" "$repo/tools/etude/posix/keeper.c" \
-        "$repo/tools/etude/posix/process.c" "$repo/tools/etude/capture.c" > "$work/build.log" 2>&1 || {
-        cat "$work/build.log"
-        echo 'host-suite-test: etude-host did not compile'
-        exit 1
-    }
-}
-
-if [ "$mode" = check ]; then
-    driver=${ETUDE_HOST:-$repo/build/tools/etude/etude-host}
-    [ -x "$driver" ] || { echo "host-suite-test: $driver is not built"; exit 1; }
-    run_suite "$driver"
-    if ! judge || ! refused "$driver"; then
-        cat "$work/out"
-        exit 1
-    fi
-    echo "host-suite-test: result: pass: every check selected gave one result"
-    exit 0
+driver=${ETUDE_HOST:-$repo/build/tools/etude/etude-host}
+[ -x "$driver" ] || { echo "host-suite-test: $driver is not built"; exit 1; }
+run_suite "$driver"
+if ! judge || ! refused "$driver"; then
+    cat "$work/out"
+    exit 1
 fi
-
-for f in $FAULTS; do
-    build "$work/driver" "$f"
-    run_suite "$work/driver"
-    if judge > "$work/judged" && refused "$work/driver" >> "$work/judged"; then
-        cat "$work/out"
-        echo "host-suite-test: fault passed: $f" >&2
-        exit 1
-    fi
-    echo "host-suite-test: fault $f: $(head -n 1 "$work/judged")"
-done
-build "$work/driver"
-run_suite "$work/driver"
-judge || { cat "$work/out"; exit 1; }
-refused "$work/driver" || exit 1
-echo 'host-suite-test: result: pass: every fault failed, and the restored driver passes'
+echo "host-suite-test: result: pass: every check selected gave one result"

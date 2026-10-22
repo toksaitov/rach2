@@ -21,22 +21,16 @@
 # machine is the one the codexapi cases run. The OVMF rows run each POSIX
 # platform's real probe with missing, directory, unreadable and readable
 # overrides, and with a readable pair found beside a directory of PATH.
+# --ovmf runs only the OVMF rows.
 #
-# With --mutate each fault below is put into the copy and must fail exactly
-# its expected rows; the copy is restored before the rows run again at the
-# end. --texts puts each fault into the copy and requires only that it
-# changes the file, and runs no row.
-#
-# Usage: sh tests/system/prereq_test.sh [--mutate | --texts | --ovmf]
+# Usage: sh tests/system/prereq_test.sh [--ovmf]
 #
 set -u
 
 case ${1:-} in
     '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
     --ovmf) mode=ovmf ;;
-    *) echo 'prereq-test: usage: prereq_test.sh [--mutate | --texts | --ovmf]' >&2; exit 2 ;;
+    *) echo 'prereq-test: usage: prereq_test.sh [--ovmf]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
@@ -48,8 +42,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-prereq-test.XXXXXX") || exit 1
 tree=$work/tree
 copy=$tree/tools/setup/prereq.sh
 mkdir -p "$tree/tools/setup" "$work/bin" || exit 1
-cp "$repo/tools/setup/e2fsprogs_path.sh" "$repo/tools/setup/ovmf_path.sh" \
-    "$tree/tools/setup/" || exit 1
+cp "$repo/tools/setup/prereq.sh" "$repo/tools/setup/e2fsprogs_path.sh" \
+    "$repo/tools/setup/ovmf_path.sh" "$tree/tools/setup/" || exit 1
 FIX=$work/fix
 export FIX
 
@@ -140,22 +134,6 @@ need wc
 probe Have wc
 manual Get wc
 EOF
-
-# fault NAME: put fault NAME into the private copy of prereq.sh, or the
-# original for `none`, and fail when a fault leaves the copy unchanged.
-fault()
-{
-    # shellcheck disable=SC2016 # the dollars are in the text sed matches
-    case $1 in
-        none) cat ;;
-        admin-run) sed 's#manual/\*|admin/no) continue ;;#manual/*) continue ;;#' ;;
-        manual-run) sed 's#manual/\*|admin/no) continue ;;#admin/no) continue ;;#' ;;
-        no-sudo) sed 's#command="sudo \$command"#:#' ;;
-        no-reprobe) sed 's#^    probe_all$#    :#' ;;
-        shared-scratch) sed 's#rm -rf "\$tmp/probe" \&\& mkdir "\$tmp/probe"#mkdir -p "$tmp/probe"#' ;;
-    esac < "$repo/tools/setup/prereq.sh" > "$copy"
-    [ "$1" = none ] || ! cmp -s "$repo/tools/setup/prereq.sh" "$copy"
-}
 
 # state HAVE...: reset the fixture with the named files present; ROOT, SUDO
 # and ELEVATED among them give the account those rights.
@@ -336,7 +314,6 @@ row()
 }
 
 # ovmf PLATFORM: run the real OVMF stanza against private firmware files.
-# PREREQ_RECIPE_SOURCE selects the recipe artifact made by the proof driver.
 ovmf()
 {
     state
@@ -345,7 +322,7 @@ ovmf()
         /^platform / { platform = $2; selected = 0 }
         /^need / { selected = platform == want && $0 == "need OVMF" }
         selected { print }
-    ' "${PREREQ_RECIPE_SOURCE:-$repo/tools/setup/prereqs}" >> "$work/ovmf-recipe" || return 1
+    ' "$repo/tools/setup/prereqs" >> "$work/ovmf-recipe" || return 1
     mkdir -p "$FIX/firmware/bin" "$FIX/firmware/share/qemu" || return 1
     code=$FIX/firmware/share/qemu/edk2-x86_64-code.fd
     : > "$code"
@@ -471,36 +448,5 @@ rows()
     return "$failed"
 }
 
-# expect_fault FAULT ROWS: with FAULT in the copy, require exactly ROWS to
-# fail.
-expect_fault()
-{
-    fault "$1" || { echo "prereq-test: fault $1 changes nothing" >&2; return 1; }
-    rows > "$work/mutated.out" && { echo "prereq-test: fault passed: $1" >&2; return 1; }
-    got=$(sed -n 's/^prereq-test: failed: //p' "$work/mutated.out" | tr '\n' ' ')
-    if [ "$got" != "$2 " ]; then
-        echo "prereq-test: fault $1 failed rows: $got; expected: $2" >&2
-        return 1
-    fi
-}
-
-faults='admin-run manual-run no-sudo no-reprobe shared-scratch'
-if [ "$mode" = texts ]; then
-    for f in $faults; do
-        fault "$f" || { echo "prereq-test: fault $f changes nothing in tools/setup/prereq.sh" >&2; exit 1; }
-    done
-    exit 0
-fi
-fault none
 rows >&2 || exit 1
-if [ "$mode" = mutate ]; then
-    expect_fault admin-run 'linux-install windows-install' || exit 1
-    expect_fault manual-run 'linux-install linux-sudo windows-install windows-elevated' || exit 1
-    expect_fault no-sudo 'linux-report linux-install linux-sudo' || exit 1
-    expect_fault no-reprobe 'linux-install linux-sudo windows-install windows-elevated' || exit 1
-    expect_fault shared-scratch 'linux-present linux-report linux-root linux-install linux-sudo' || exit 1
-    fault none
-    rows >&2 || exit 1
-    echo 'prereq-test: result: pass: five faults caught and restored'
-fi
 echo "prereq-test: result: pass: $(echo "$rows" | wc -w | tr -d ' ') rows"

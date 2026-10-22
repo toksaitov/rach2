@@ -236,10 +236,6 @@ unusedStructMember:*tools/etude/serial.h
 # are read in repeat.c, posix/repeat.c, posix/load.c and their host test.
 unusedStructMember:*tools/etude/include/etude/repeat.h
 
-# The proof driver's structures: cppcheck checks proof.h alone, and its members
-# are read in proof.c, posix/proof.c, posix/etude_proof.c and their host test.
-unusedStructMember:*tools/etude/include/etude/proof.h
-
 # The options of the preparation adapter and the set driver: cppcheck checks
 # legacy.h alone, and its members are read in posix/legacy.c,
 # posix/legacy_set.c, posix/etude_legacy.c and their host tests.

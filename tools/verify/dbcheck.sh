@@ -14,10 +14,9 @@
 # that another source includes by name, as `ish/ish_syscalls.c` includes
 # `ish_syscalls.i386.c`, is compiled as part of that source's entry. A
 # fixture under tests/system/fixtures or tests/host/fixtures is compiled by
-# the test script or the proof catalogue under tests/proofs that names it,
-# against a work copy of the source it tests and with the flags the script or
-# the catalogue's build sets, so no fixed command describes it; such a source
-# passes when a script under that same tree, or a catalogue, names it.
+# the test script that names it, with the flags the script sets, so no fixed
+# command describes it; such a source passes when a script under that same
+# tree names it.
 #
 # A Windows program's source under tools/etude/win is compiled by
 # tools/etude/wincheck.sh with MinGW-w64, which the host's databases cannot
@@ -60,16 +59,14 @@ included() {
     grep -rqF --include='*.c' "#include \"${1##*/}\"" "$(dirname "$1")"
 }
 # fixture FILE: true when FILE is under tests/system/fixtures or
-# tests/host/fixtures and a script under tests/system or tests/host, or a
-# catalogue under tests/proofs, names it.
+# tests/host/fixtures and a script under tests/system or tests/host names it.
 fixture() {
     case $1 in
         tests/system/fixtures/*) tree=tests/system ;;
         tests/host/fixtures/*) tree=tests/host ;;
         *) return 1 ;;
     esac
-    grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree" ||
-        grep -qF "fixtures/${1##*/}" tests/proofs/*.json
+    grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree"
 }
 # windows FILE: true when FILE is under tools/etude/win and
 # tools/etude/wincheck.sh names it.

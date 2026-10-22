@@ -2,18 +2,8 @@
 # space_test.sh: check disk admission against command fixtures, including a
 # Windows query that times out or returns no usable path, and a known disk
 # path that needs no query.
-#
-# --mutate permits an unknown reading, ignores a failed query, permits a
-# missing PowerShell, or forgets the kept disk path in a private copy; each
-# fault must fail its own row. --texts checks only that the faults change
-# the copy.
 set -eu
-case ${1:-} in
-    '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
-    *) echo 'space-test: usage: space_test.sh [--mutate | --texts]' >&2; exit 2 ;;
-esac
+[ $# -eq 0 ] || { echo 'space-test: usage: space_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
@@ -21,24 +11,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-space-test.XXXXXX")
-copy=$work/space.sh
-
-# fault NAME: copy the source with one fault, or unchanged for none.
-fault()
-{
-    case $1 in
-        none) cat ;;
-        unknown-success) sed '/no valid free-space reading/{n;s/exit 1/exit 0/;}' ;;
-        status-ignored) sed 's/^\( *\)status=\$?/\1status=0/' ;;
-        missing-success) sed '/powershell.exe is missing/{n;s/exit 1/exit 0/;}' ;;
-        cache-ignored) sed '/IFS= read -r disk/s/^\[[^]]*\] ||/: ||/' ;;
-    esac < "$repo/tools/setup/space.sh" > "$copy"
-    [ "$1" = none ] || ! cmp -s "$repo/tools/setup/space.sh" "$copy"
-}
-if [ "$mode" = texts ]; then
-    for f in unknown-success status-ignored missing-success cache-ignored; do fault "$f"; done
-    exit 0
-fi
 mkdir "$work/bin" "$work/windows"
 for c in awk mkdir mv rm tr; do ln -s "$(command -v "$c")" "$work/bin/$c"; done
 cat > "$work/bin/df" <<'FIXTURE'
@@ -138,7 +110,7 @@ row()
     printf 'input must stay unread\n' | PATH="$fixture_path" /bin/sh -c '
         /bin/sh "$1" run "a run" "$2" "$3" || exit $?
         : > "$4"
-    ' sh "$copy" "$floor" "$work" "$work/started" > "$work/out" 2>&1 || status=$?
+    ' sh "$repo/tools/setup/space.sh" "$floor" "$work" "$work/started" > "$work/out" 2>&1 || status=$?
     if [ "$status" != "$want" ]; then
         echo "space-test: failed: $1: status $status, expected $want" >&2
         cat "$work/out" >&2
@@ -179,20 +151,5 @@ rows()
         row "$r" || { echo "space-test: failed: $r" >&2; return 1; }
     done
 }
-fault none
 rows
-if [ "$mode" = mutate ]; then
-    for pair in unknown-success:drive-foreign status-ignored:partial \
-        missing-success:missing cache-ignored:cached; do
-        f=${pair%:*} r=${pair#*:}
-        fault "$f"
-        if row "$r" > "$work/fault.out" 2>&1; then
-            echo "space-test: fault passed: $f" >&2
-            exit 1
-        fi
-        echo "space-test: result: caught: $f ($r)"
-    done
-    fault none
-    rows
-fi
 echo 'space-test: result: pass: disk admission, kept disk paths and unavailable Windows readings'

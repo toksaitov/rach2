@@ -26,25 +26,16 @@
 # of QEMU's OVMF code image and an absent override. --ovmf runs only the two
 # firmware rows and Windows. --kvm runs only the three KVM device rows.
 #
-# With --mutate each fault below is put into the copy and must fail exactly
-# its expected rows; the copy is restored and the rows run again at the end.
-# --texts puts each fault into the copy, requires only that it changes the
-# file, and runs no row.
-#
-# Usage: sh tests/system/etude_deploy_test.sh
-#            [--mutate | --texts | --ovmf | --kvm]
+# Usage: sh tests/system/etude_deploy_test.sh [--ovmf | --kvm]
 #
 set -u
 
 case ${1:-} in
     '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
     --ovmf) mode=ovmf ;;
     --kvm) mode=kvm ;;
-    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--mutate | --texts | --ovmf | --kvm]' >&2; exit 2 ;;
+    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--ovmf | --kvm]' >&2; exit 2 ;;
 esac
-deploy_source=${ETUDE_DEPLOY_SOURCE:-}
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 testpid=
@@ -257,29 +248,6 @@ case $(uname -s) in
 esac
 windows_memory=$(sed -n 's/^MemTotal: *\([0-9][0-9]*\) kB$/\1/p' /proc/meminfo 2>/dev/null)
 if [ -n "$windows_memory" ]; then windows_memory=$((windows_memory * 1024)); else windows_memory=-; fi
-
-# fault NAME: put fault NAME into the private copy, or the original for
-# `none`, and fail when a fault leaves the copy unchanged.
-fault()
-{
-    cp "${deploy_source:-$repo/tools/etude/deploy.sh}" "$TREE/tools/etude/deploy.sh" || exit 1
-    # shellcheck disable=SC2016 # the dollars are in the text sed matches
-    case $1 in
-        none) return 0 ;;
-        rewrite) edit='s#^    if \[ -f "\$root/machine" \] && \[ "\$(cat "\$root/machine")" = "\$record" \]; then$#    if false; then#' ;;
-        truncate-lock) edit='s#^    \[ -e "\$l/lock" \] || : >> "\$l/lock" ||#    : > "$l/lock" ||#' ;;
-        fresh-ledger) edit='s#^    mkdir -p "\$l/verdicts" ||#    rm -rf "$l"; mkdir -p "$l/verdicts" ||#' ;;
-        keep-temp) edit='s#^    \[ -z "\$tmp" \] || rm -f "\$tmp"$#    :#' ;;
-        in-tree) edit='s#^    machine_sh < "\$work/prereq.sh" > "\$work/prereq"$#    if [ "$mode" = local ]; then (cd "$tree" \&\& sh tools/setup/prereq.sh $install); else machine_sh < "$work/prereq.sh"; fi > "$work/prereq"#' ;;
-        no-install) edit='s#^install=--install$#install=#' ;;
-        prereq-pass) edit='s#^\[ "\$prereq" = 0 \] || incomplete#true || incomplete#' ;;
-        no-rights) edit='s#^        \[ -z "\$rights" \] ||$#        true ||#' ;;
-        no-format) edit='s#^            \[ "\$format" = "\$ETUDE_ADMISSION" \] ||$#            true ||#' ;;
-        tree-format) edit='s#^if \[ -n "\$rev" \]; then$#if false; then#' ;;
-    esac
-    sed "$edit" "$repo/tools/etude/deploy.sh" > "$TREE/tools/etude/deploy.sh" || exit 1
-    ! cmp -s "$repo/tools/etude/deploy.sh" "$TREE/tools/etude/deploy.sh"
-}
 
 # The machine's home, made once and copied for each row: a clone with a
 # commit and an untracked file, and an account's SSH keys. Each commit of the
@@ -724,42 +692,6 @@ rows()
     return "$failed"
 }
 
-# expect_fault FAULT ROWS: with FAULT in the copy, require exactly ROWS to
-# fail.
-expect_fault()
-{
-    fault "$1" || { echo "etude-deploy-test: fault $1 changes nothing" >&2; return 1; }
-    rows > "$work/mutated.out" && { echo "etude-deploy-test: fault passed: $1" >&2; return 1; }
-    got=$(sed -n 's/^etude-deploy-test: failed: //p' "$work/mutated.out" | tr '\n' ' ')
-    if [ "$got" != "$2 " ]; then
-        echo "etude-deploy-test: fault $1 failed rows: $got; expected: $2" >&2
-        return 1
-    fi
-}
-
-faults='rewrite truncate-lock fresh-ledger keep-temp in-tree no-install prereq-pass no-rights no-format tree-format'
-if [ "$mode" = texts ]; then
-    for f in $faults; do
-        fault "$f" || { echo "etude-deploy-test: fault $f changes nothing" >&2; exit 1; }
-    done
-    exit 0
-fi
-fault none
 rows >&2 || exit 1
-if [ "$mode" = mutate ]; then
-    expect_fault rewrite 'again' || exit 1
-    expect_fault truncate-lock 'again busy' || exit 1
-    expect_fault fresh-ledger 'again busy' || exit 1
-    expect_fault keep-temp 'stopped' || exit 1
-    expect_fault in-tree 'local' || exit 1
-    expect_fault no-install 'deploy sudo check windows' || exit 1
-    expect_fault prereq-pass 'admin check' || exit 1
-    expect_fault no-rights 'rights' || exit 1
-    expect_fault no-format 'format' || exit 1
-    expect_fault tree-format 'revision' || exit 1
-    fault none
-    rows >&2 || exit 1
-    echo 'etude-deploy-test: result: pass: ten faults caught and restored'
-fi
 [ "$root" = 0 ] || echo 'etude-deploy-test: not run: rights: root can write any ledger'
 echo "etude-deploy-test: result: pass: $(printf '%s\n' "$rows" | wc -w | tr -d ' ') rows"

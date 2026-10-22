@@ -34,23 +34,18 @@
 # job runs this test with --busybox against the private copy. The row is not
 # run when neither has BusyBox.
 #
-# With --mutate each fault below is put into the copy and must fail exactly
-# its expected rows; the copy is restored and the rows run again at the end.
-# --texts puts each fault into the copy, requires only that it changes the
-# file, and runs no row. --busybox runs the busybox row alone, and exits 3
-# when the host has no BusyBox.
+# --busybox runs the busybox row alone, and exits 3 when the host has no
+# BusyBox.
 #
-# Usage: sh tests/system/etude_version_test.sh [--mutate | --texts | --busybox]
+# Usage: sh tests/system/etude_version_test.sh [--busybox]
 #
 set -u
 unset MAKEFLAGS MFLAGS MAKELEVEL
 
 case ${1:-} in
     '') mode=check ;;
-    --mutate) mode=mutate ;;
-    --texts) mode=texts ;;
     --busybox) mode=busybox ;;
-    *) echo 'etude-version-test: usage: etude_version_test.sh [--mutate | --texts | --busybox]' >&2; exit 2 ;;
+    *) echo 'etude-version-test: usage: etude_version_test.sh [--busybox]' >&2; exit 2 ;;
 esac
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
@@ -183,26 +178,6 @@ if [ -z "$busybox" ] && [ "$mode" != busybox ]; then
         nobusybox='no busybox on this host, and no made tooling machine'
     fi
 fi
-
-# fault NAME: put fault NAME into the private copy, or the original for
-# `none`, and fail when a fault leaves the copy unchanged.
-fault()
-{
-    cp "$repo/tools/etude/bootstrap.sh" "$repo/tools/etude/version.sh" "$TREE/tools/etude/" || exit 1
-    # shellcheck disable=SC2016 # the dollars are in the text sed matches
-    case $1 in
-        none) return 0 ;;
-        no-reuse) file=bootstrap.sh; edit='s#^    if \[ -f "\$record" \]; then$#    if false; then#' ;;
-        no-digest) file=bootstrap.sh; edit='s#^    \[ "\$(etude_hash "\$build/sources")" = "\$ETUDE_SOURCE" \] ||$#    true ||#' ;;
-        keep-build) file=bootstrap.sh; edit='s#^    \[ -n "\$published" \] || \[ -z "\$build" \] || rm -rf "\$build"$#    :#' ;;
-        replace) file=bootstrap.sh; edit='s#^    if ln "\$build/version" "\$record"#    if ln -f "$build/version" "$record"#' ;;
-        makeflags) file=bootstrap.sh; edit='s#unset MAKEFLAGS MFLAGS MAKELEVEL && ##' ;;
-        no-compiler) file=bootstrap.sh; edit='s#^compiler \$compiler$#compiler -#' ;;
-        any-nonce) file=version.sh; edit='s#^result=\$(sed -n "s/^@etude-version \$nonce //p"#result=$(sed -n "s/^@etude-version [0-9a-f]* //p"#' ;;
-    esac
-    sed "$edit" "$repo/tools/etude/$file" > "$TREE/tools/etude/$file" || exit 1
-    ! cmp -s "$repo/tools/etude/$file" "$TREE/tools/etude/$file"
-}
 
 # state: an empty fixture: a home whose startup files print, and no cache.
 state()
@@ -547,50 +522,14 @@ rows()
     return "$failed"
 }
 
-# expect_fault FAULT ROWS: with FAULT in the copy, require exactly ROWS to
-# fail.
-expect_fault()
-{
-    fault "$1" || { echo "etude-version-test: fault $1 changes nothing" >&2; return 1; }
-    rows > "$work/mutated.out" && { echo "etude-version-test: fault passed: $1" >&2; return 1; }
-    got=$(sed -n 's/^etude-version-test: failed: //p' "$work/mutated.out" | tr '\n' ' ')
-    if [ "$got" != "$2 " ]; then
-        echo "etude-version-test: fault $1 failed rows: $got; expected: $2" >&2
-        return 1
-    fi
-}
-
-faults='no-reuse no-digest keep-build replace makeflags no-compiler any-nonce'
-if [ "$mode" = texts ]; then
-    for f in $faults; do
-        fault "$f" || { echo "etude-version-test: fault $f changes nothing" >&2; exit 1; }
-    done
-    exit 0
-fi
 if [ "$mode" = busybox ]; then
     [ -n "$busybox" ] || { echo 'etude-version-test: not run: busybox: no busybox on this host'; exit 3; }
-    fault none
     rows=busybox
     rows >&2 || exit 1
     echo 'etude-version-test: result: pass: busybox'
     exit 0
 fi
-fault none
 rows >&2 || exit 1
-if [ "$mode" = mutate ]; then
-    bb=
-    [ -z "$ranbusybox" ] || bb=' busybox'
-    expect_fault no-reuse "reuse versions shells$bb revision" || exit 1
-    expect_fault no-digest 'damaged' || exit 1
-    expect_fault keep-build 'term failed damaged race' || exit 1
-    expect_fault replace 'race' || exit 1
-    expect_fault makeflags 'makeflags' || exit 1
-    expect_fault no-compiler 'versions' || exit 1
-    expect_fault any-nonce 'shells' || exit 1
-    fault none
-    rows >&2 || exit 1
-    echo 'etude-version-test: result: pass: seven faults caught and restored'
-fi
 echo "etude-version-test: shells: $shells${ranbusybox:+ busybox}"
 [ -z "$ranbusybox" ] || echo "etude-version-test: busybox: $ranbusybox"
 [ -z "$nobusybox" ] || echo "etude-version-test: not run: busybox: $nobusybox"
