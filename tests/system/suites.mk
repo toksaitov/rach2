@@ -764,9 +764,9 @@ $(LOAD_DISK): $(MKMBR)
 # tests/cases/machine.fatwrite.json, which etude runs, and have no target
 # here. Each case boots a private copy of this disk: the test disk with an
 # empty FAT32 volume of 14 MiB in its second partition, at sector 100352.
-$(IMAGES_DIR)/fatwrite-test.disk: krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) \
-                                  $(MKDISK) build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
-                                  $(MKMBR) | preflight krffs tests
+$(IMAGES_DIR)/fatwrite-volume.disk: krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) \
+                                    $(MKDISK) build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
+                                    $(MKMBR) | preflight krffs tests
 	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp"' EXIT; \
 	    $(MKDISK) krffs/manifests/disk-test.manifest "$$temp" 64 48; \
 	    $(MKMBR) --lba "$$temp" 2048:98304:7f 100352:28672:0c; \
@@ -933,9 +933,9 @@ run-agentsaccept: $(DEMO_CREDS) rach2 os-real-gnu-agents-ext2 $(RUNUTIL) $(MKMBR
 # tests/cases/machine.exfat.json, which etude runs, and have no target here.
 # Each case boots a private copy of this disk: the test disk with an empty
 # exFAT volume of 16 MiB in its second partition, at sector 100352.
-$(IMAGES_DIR)/exfat-test.disk: krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) \
-                               $(MKDISK) build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
-                               $(MKMBR) $(MKEXFATFIXTURE) | preflight krffs tests
+$(IMAGES_DIR)/exfat-volume.disk: krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) \
+                                 $(MKDISK) build/krffs/mkfs.krffs build/krffs/stageimage.krffs \
+                                 $(MKMBR) $(MKEXFATFIXTURE) | preflight krffs tests
 	@set -e; temp=$@.new.$$$$; trap 'rm -f "$$temp" "$$temp.vol"' EXIT; \
 	    $(MKDISK) krffs/manifests/disk-test.manifest "$$temp" 80 48; \
 	    $(MKMBR) --lba "$$temp" 2048:98304:7f 100352:32768:07; \

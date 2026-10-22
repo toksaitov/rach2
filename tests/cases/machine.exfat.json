@@ -225,7 +225,7 @@
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
-        {"name": "exfat-disk", "node": "images/exfat-test.disk", "per_architecture": true},
+        {"name": "exfat-disk", "node": "images/exfat-volume.disk", "per_architecture": true},
         {
           "name": "demo-password",
           "node": "tests/cases/credentials/rach2_demo_password",
@@ -346,7 +346,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "exfat-disk", "node": "images/exfat-test.disk", "per_architecture": true},
+        {"name": "exfat-disk", "node": "images/exfat-volume.disk", "per_architecture": true},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
         {"name": "fstool", "node": "tests/cases/host/fstool", "per_architecture": false},
         {
@@ -465,7 +465,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "exfat-disk", "node": "images/exfat-test.disk", "per_architecture": true},
+        {"name": "exfat-disk", "node": "images/exfat-volume.disk", "per_architecture": true},
         {
           "name": "fswrite_scenario",
           "node": "tests/cases/machine/fswrite_scenario",

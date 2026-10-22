@@ -235,7 +235,7 @@
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
         {"name": "os-real", "node": "images/os-real.krffs", "per_architecture": true},
-        {"name": "fatwrite-disk", "node": "images/fatwrite-test.disk", "per_architecture": true},
+        {"name": "fatwrite-disk", "node": "images/fatwrite-volume.disk", "per_architecture": true},
         {
           "name": "demo-password",
           "node": "tests/cases/credentials/rach2_demo_password",
@@ -338,7 +338,7 @@
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "fatwrite-disk", "node": "images/fatwrite-test.disk", "per_architecture": true},
+        {"name": "fatwrite-disk", "node": "images/fatwrite-volume.disk", "per_architecture": true},
         {"name": "mkfatfixture", "node": "tests/host/mkfatfixture", "per_architecture": false},
         {
           "name": "fswrite_scenario",
