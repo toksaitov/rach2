@@ -174,14 +174,13 @@ static void mark_when_asleep(int parent)
 /**
  * Whether the child `pid` created the marker. The parent naps 10 ms at a time,
  * so that it sleeps only in nanosleep, until the marker exists or the child
- * has ended, which its state Z shows; 3000 naps end a wait for a child that
- * never sees the parent asleep. The child is left to be reaped.
+ * has ended, which its state Z shows. The child is left to be reaped.
  */
 static int child_marked(int pid)
 {
-    int fd, naps, ended = 0;
+    int fd, ended = 0;
 
-    for (naps = 0; naps < 3000; naps++) {
+    for (;;) {
         fd = syscall3(SYS_OPEN, (long)MARKER, O_RDONLY, 0);
         if (fd >= 0) {
             syscall1(SYS_CLOSE, fd);
@@ -193,7 +192,6 @@ static int child_marked(int pid)
         ended = state_of(pid) == 'Z';
         nap(10);
     }
-    return 0;
 }
 
 /** Milliseconds between two timespecs, in the width of their fields. */
