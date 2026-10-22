@@ -95,7 +95,7 @@ RUNUTIL         = build/tests/system/runutil
 # The driver of etude-guest over the serial console (its rule below).
 ETUDESERIAL     = build/tests/system/etudeserial
 # The reader of a framebuffer console's text off QEMU's screen dump, which
-# the uefi suite runs (tests/system/runner/screentext.c), with the kernel's
+# the uefi cases run (tests/system/runner/screentext.c), with the kernel's
 # own font compiled beside it.
 SCREENTEXT      = build/tests/system/screentext
 # The test-side disk tool, named here because a prerequisite list expands
@@ -1124,20 +1124,6 @@ $(ARCH_CASE_DIR)/uefi/disk.img: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
 	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
-UEFI_DIR = $(IMAGES_DIR)/uefi
-UEFI_TEST_DISK = $(IMAGES_DIR)/uefi-test.disk
-UEFI_PORT := $(call port,2331)
-run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INSTALLER_EXT2) \
-          $(INSTALL_TEST_STICK) $(RECOVERY_ISO) $(RUNUTIL) $(SCREENTEXT) $(DISK_TOOLS) $(MKGPT)
-	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_RECOVERY_MB=8 \
-	RACH2_DISK_EXT2_MB=64 \
-	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
-	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
-	RACH2_DISK_RECOVERY_IMAGE=$(RECOVERY_IMAGE) \
-	    sh tools/image/mkdisk_grub.sh $(ARCH_BUILD)/rach2/kernel $(UEFI_TEST_DISK)
-	sh tests/system/suites/uefi.sh $(UEFI_TEST_DISK) $(INSTALL_TEST_STICK) $(RECOVERY_ISO) \
-	    $(UEFI_DIR) $(UEFI_PORT) krffs/rach2_demo_ed25519
 # `tests/run usbdisk`: a flash drive as a disk, the cases of
 # tests/cases/machine.usbdisk.json: sticks with an MBR, a GUID table and no
 # table; the nodes, the mounts, a write, the pull from under a mount and the
