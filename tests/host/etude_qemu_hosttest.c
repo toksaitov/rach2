@@ -810,17 +810,10 @@ static void boundary_result(const struct row *r)
            (unsigned long long)res->qemu->peak_bytes.value);
 }
 
-/**
- * Give the path of `name` on PATH in `out`, or NULL when it is not there.
- *
- * tests/run puts its QEMU wrappers first on PATH, in the directory
- * RACH2_QEMU_SHIMS names, and each adds an `-accel` of its own. That
- * directory is skipped, so that QEMU is given the one accelerator the
- * launcher asks for.
- */
+/** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
 static const char *on_path(const char *name, char *out, size_t size)
 {
-    const char *path = getenv("PATH"), *shims = getenv("RACH2_QEMU_SHIMS"), *end;
+    const char *path = getenv("PATH"), *end;
     size_t len;
 
     for (; path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
@@ -828,7 +821,7 @@ static const char *on_path(const char *name, char *out, size_t size)
         if (end == NULL)
             end = path + strlen(path);
         len = (size_t)(end - path);
-        if (len == 0 || (shims != NULL && len == strlen(shims) && strncmp(path, shims, len) == 0))
+        if (len == 0)
             continue;
         snprintf(out, size, "%.*s/%s", (int)len, path, name);
         if (access(out, X_OK) == 0)
