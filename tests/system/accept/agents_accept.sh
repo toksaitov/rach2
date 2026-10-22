@@ -58,6 +58,8 @@
 # Etude calls the internal `etude ACTION AGENT` mode on private GNU roots.
 # Its scenario boots the machine and starts and stops each API script; these
 # actions run the same SSH, session and credential assertions as on Lenovo.
+# Waits end on session state, with no completion deadline in this script.
+# Etude supervises each action with its existing watchdog and case bounds.
 #
 # It prints a line for each step, `agents-accept: PASS` and exits 0, or
 # `agents-accept: FAIL (N)` and exits 1; a usage error exits 2.
@@ -66,8 +68,6 @@
 set -u
 
 REPO="$(cd "$(dirname "$0")/../../.." && pwd)"
-# shellcheck source=tests/system/deadline.sh
-. "$REPO/tests/system/deadline.sh"
 
 MODE=${1:-}
 case $MODE in
@@ -143,8 +143,8 @@ mi() {
     fi
     # shellcheck disable=SC2086 # fixed SSH options, without paths
     ssh -p "$PORT" ${KEY:+-i "$KEY"} -o BatchMode=yes -o StrictHostKeyChecking=no \
-        -o "UserKnownHostsFile=$work/known" -o "ConnectTimeout=$(scaled 30)" \
-        -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR \
+        -o "UserKnownHostsFile=$work/known" \
+        -o LogLevel=ERROR \
         $ssh_mode_options -o "ControlPath=$ssh_control" "$USERNAME@$HOST" "$@"
 }
 
@@ -154,8 +154,8 @@ root() {
     [ "$MODE" != etude ] || ssh_root_options='-F /dev/null -o IdentitiesOnly=yes'
     # shellcheck disable=SC2086 # fixed SSH options, without paths
     ssh -n -p "$PORT" -i "$ROOT_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
-        -o "UserKnownHostsFile=$work/known" -o "ConnectTimeout=$(scaled 30)" \
-        -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR \
+        -o "UserKnownHostsFile=$work/known" \
+        -o LogLevel=ERROR \
         $ssh_root_options "root@$HOST" "$@"
 }
 
@@ -290,17 +290,16 @@ shows() {
 }
 
 # settle KEY TEXT [QUESTION]: press KEY until the screen shows TEXT on two
-# reads in a row, reading it every two seconds for at most 120 s; return 0
-# then, 2 at once when the screen no longer shows QUESTION, and 1 at the end,
-# with the screen in the log. KEY is pressed on a screen without TEXT that is
-# the same on two reads in a row and that the agent has drawn since KEY was
-# last pressed. A question can refuse keys for a moment after it opens and
-# then be drawn again, or take a key and draw its first answer again; either
-# way the agent settles on a new screen without TEXT, and is given KEY again.
+# reads in a row, reading it every two seconds; return 0 then, or 2 when
+# the screen no longer shows QUESTION. KEY is pressed on a screen without
+# TEXT that is the same on two reads in a row and that the agent has drawn
+# since KEY was last pressed. A question can refuse keys for a moment after
+# it opens and then be drawn again, or take a key and draw its first answer
+# again; either way the agent settles on a new screen without TEXT, and is
+# given KEY again.
 # A key whose effect a slow agent has yet to draw leaves the screen as it
 # was, and is not pressed twice.
 settle() {
-    keys_end=$(($(date +%s) + $(scaled 120)))
     last=""
     pressed=""
     drawn=1
@@ -321,10 +320,6 @@ settle() {
             fi
         fi
         last=$SCREEN
-        if [ "$(date +%s)" -ge "$keys_end" ]; then
-            record "$agent: the screen" "$SCREEN"
-            return 1
-        fi
         # interval: the screen is read every two seconds
         sleep 2
     done
@@ -334,14 +329,9 @@ settle() {
 # `settle` does, then Enter. A question answered a moment before can still
 # be on the screen; once ANSWER has gone from it, there is nothing to choose.
 choose() {
-    settle "$2" "$MARK $1" "$1"
-    case $? in
-        0) keys Enter ;;
-        1)
-            bad "$agent: the answer [$1] was not selected"
-            return 1
-            ;;
-    esac
+    if settle "$2" "$MARK $1" "$1"; then
+        keys Enter
+    fi
     return 0
 }
 
@@ -351,11 +341,10 @@ press() {
 }
 
 # leave TEXT: press Enter until the screen no longer shows TEXT, reading it
-# every two seconds for at most 120 s. Enter is pressed on a screen that is
-# the same on two reads in a row and that the agent has drawn since Enter was
-# last pressed, as `settle` presses its key.
+# every two seconds. Enter is pressed on a screen that is the same on two
+# reads in a row and that the agent has drawn since Enter was last pressed,
+# as `settle` presses its key.
 leave() {
-    keys_end=$(($(date +%s) + $(scaled 120)))
     last=""
     pressed=""
     drawn=1
@@ -369,11 +358,6 @@ leave() {
             drawn=""
         fi
         last=$SCREEN
-        if [ "$(date +%s)" -ge "$keys_end" ]; then
-            record "$agent: the screen" "$SCREEN"
-            bad "$agent: Enter did not take the screen past [$1]"
-            return 1
-        fi
         # interval: the screen is read every two seconds
         sleep 2
     done
@@ -405,12 +389,10 @@ question() {
     esac
 }
 
-# idle WHAT SECONDS: answer the agent's questions until it waits for a
-# request, its prompt on two screens read in a row with no sign of work or
-# of its start, for at most SECONDS; otherwise fail WHAT. A sign-in menu
-# fails at once.
+# idle WHAT: answer the agent's questions until it waits for a request,
+# its prompt on two screens read in a row with no sign of work or of its
+# start. A sign-in menu fails WHAT at once.
 idle() {
-    end=$(($(date +%s) + $2))
     calm=0
     while :; do
         SCREEN=$(screen)
@@ -421,7 +403,6 @@ idle() {
         fi
         if question; then
             calm=0
-            end=$(($(date +%s) + $2))
             continue
         fi
         if [ -n "$MODEL_SELECTED" ] && shows "$READY" && ! shows "$BUSY" &&
@@ -431,11 +412,6 @@ idle() {
         else
             calm=0
         fi
-        if [ "$(date +%s)" -ge "$end" ]; then
-            record "$agent: the screen" "$SCREEN"
-            bad "$agent: $1: no prompt in $2 s"
-            return 1
-        fi
         # interval: the screen is read every two seconds
         sleep 2
     done
@@ -443,21 +419,16 @@ idle() {
 
 # send WHAT TEXT TAIL CHECK: type TEXT in the agent's window and, while the
 # screen shows TAIL, press Enter, and again every 20 s until the function
-# CHECK succeeds, for at most 300 s; otherwise fail WHAT. A program that is
+# CHECK succeeds. WHAT describes the request in the log. A program that is
 # still starting can lose an Enter, or ask a question after it has drawn its
 # prompt. Such a question is answered when it shows, and TEXT is typed again
 # when the screen no longer has it once the question has gone.
 send() {
+    say "$agent: sending $1"
     keys -l "$2" || return 1
-    end=$(($(date +%s) + $(scaled 300)))
     asked=""
     while :; do
         SCREEN=$(screen)
-        if [ "$(date +%s)" -ge "$end" ]; then
-            record "$agent: the screen" "$SCREEN"
-            bad "$agent: $1: not started in $(scaled 300) s"
-            return 1
-        fi
         if question; then
             asked=1
         elif shows "$3"; then
@@ -507,20 +478,16 @@ guest() {
     m "bash ~/rach2-accept/guest.sh $*"
 }
 
-# until_guest WHAT SECONDS WANT COMMAND...: run guest.sh COMMAND every two
-# seconds until it prints WANT, for at most SECONDS; otherwise fail WHAT.
+# until_guest WHAT WANT COMMAND...: wait for guest.sh COMMAND to print
+# WANT, describing the wait as WHAT in the log.
 until_guest() {
     what=$1
-    end=$(($(date +%s) + $2))
-    want=$3
-    shift 3
+    want=$2
+    shift 2
+    say "$agent: waiting: $what"
     while :; do
         OUT=$(guest "$@")
         [ "$OUT" != "$want" ] || return 0
-        if [ "$(date +%s)" -ge "$end" ]; then
-            bad "$agent: $what: got [$OUT], want [$want]"
-            return 1
-        fi
         # interval: the machine is asked every two seconds
         sleep 2
     done
@@ -533,7 +500,7 @@ attach() {
     client="exec ssh -tt -p $PORT ${KEY:+-i '$KEY'} -o BatchMode=yes -o StrictHostKeyChecking=no"
     [ "$MODE" != etude ] || client="$client -F /dev/null -o IdentitiesOnly=yes"
     client="$client -o 'UserKnownHostsFile=$work/known' -o ControlPath=none"
-    client="$client -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o LogLevel=ERROR"
+    client="$client -o LogLevel=ERROR"
     client="$client $USERNAME@$HOST tmux -u -L rach2-accept new-session -A -s rach2-accept-$agent"
     if h list-windows -F '#{window_name}' | grep -qx "$agent"; then
         h respawn-pane -k -t "accept:$agent" "$client"
@@ -547,9 +514,9 @@ attach() {
 step_session() {
     guest prepare "$agent" > /dev/null || { bad "$agent: the repository"; return 1; }
     attach
-    until_guest "the client attached" "$(scaled 60)" "120x39 120x39 1" pane "$agent" || return 1
+    until_guest "the client attached" "120x39 120x39 1" pane "$agent" || return 1
     keys -l "bash ~/rach2-accept/guest.sh run $agent start" && keys Enter
-    idle "the first prompt" "$(scaled 600)" || return 1
+    idle "the first prompt" || return 1
     record "$agent: the first prompt" "$SCREEN"
     say "$agent: the screen waits for a request: OK"
     OUT=$(guest exe "$agent")
@@ -557,17 +524,11 @@ step_session() {
         bad "$agent: the process runs [$OUT], not /opt/$agent/bin/$agent"
 
     send "the request" "$WORK_PROMPT" "then commit it." working || return 1
-    end=$(($(date +%s) + $(scaled 900)))
     while :; do
         OUT=$(guest work "$agent")
         case $OUT in
-            "commits 2"*) idle "the end of the turn" "$(scaled 300)" && break ;;
+            "commits 2"*) idle "the end of the turn" && break ;;
         esac
-        if [ "$(date +%s)" -ge "$end" ]; then
-            record "$agent: the screen" "$(screen)"
-            bad "$agent: no commit in $(scaled 900) s: $(printf '%s' "$OUT" | tr '\n' ' ')"
-            return 1
-        fi
         # interval: the repository is read every five seconds
         sleep 5
     done
@@ -579,38 +540,37 @@ step_session() {
     say "$agent: read, changed, tested and committed: $(printf '%s\n' "$OUT" | sed -n 's/^subject //p')"
 
     send "the request" "$CANCEL" "to finish." sleeping || return 1
-    until_guest_some "the command" "$(scaled 300)" sleeps "$agent" || return 1
+    until_guest_some "the command" sleeps "$agent" || return 1
     keys Escape
-    idle "the cancelled turn" "$(scaled 120)" || return 1
+    idle "the cancelled turn" || return 1
     if [ -n "$AFTER_CANCEL" ]; then
         send "$AFTER_CANCEL" "$AFTER_CANCEL" "$AFTER_CANCEL" stopped || return 1
-        idle "$AFTER_CANCEL" "$(scaled 120)" || return 1
+        idle "$AFTER_CANCEL" || return 1
     fi
-    until_guest "the command after the cancel" "$(scaled 60)" "" sleeps "$agent" || return 1
+    until_guest "the command after the cancel" "" sleeps "$agent" || return 1
     [ -n "$(guest pid "$agent")" ] || bad "$agent: the agent ended with its cancelled turn"
     say "$agent: cancelled: OK"
 
     h resize-window -t "accept:$agent" -x 100 -y 30
-    until_guest "the resized terminal" "$(scaled 60)" "100x29 100x29 1" pane "$agent" &&
-        idle "the resized screen" "$(scaled 60)" && say "$agent: resized to 100x30: OK"
+    until_guest "the resized terminal" "100x29 100x29 1" pane "$agent" &&
+        idle "the resized screen" && say "$agent: resized to 100x30: OK"
     h resize-window -t "accept:$agent" -x 120 -y 40
-    until_guest "the terminal's size again" "$(scaled 60)" "120x39 120x39 1" pane "$agent" ||
+    until_guest "the terminal's size again" "120x39 120x39 1" pane "$agent" ||
         return 1
 
     pid=$(h display-message -p -t "accept:$agent" '#{pane_pid}')
     kill -9 "$pid"
-    until_guest "the session without its client" "$(scaled 60)" "120x39 120x39 0" pane "$agent" ||
+    until_guest "the session without its client" "120x39 120x39 0" pane "$agent" ||
         return 1
     [ -n "$(guest pid "$agent")" ] || bad "$agent: the agent ended with its SSH connection"
     attach
-    until_guest "the client attached again" "$(scaled 60)" "120x39 120x39 1" pane "$agent" &&
-        idle "the screen after the new connection" "$(scaled 60)" &&
+    until_guest "the client attached again" "120x39 120x39 1" pane "$agent" &&
+        idle "the screen after the new connection" &&
         say "$agent: reconnected: OK"
 
     quit || return 1
     keys -l "bash ~/rach2-accept/guest.sh run $agent resume" && keys Enter
-    idle "the reopened conversation" "$(scaled 300)" || return 1
-    end=$(($(date +%s) + $(scaled 300)))
+    idle "the reopened conversation" || return 1
     while :; do
         SCREEN=$(screen)
         if question; then
@@ -621,11 +581,6 @@ step_session() {
         case $OUT in
             *"sleep 600"*) say "$agent: reopened the conversation: OK"; break ;;
         esac
-        if [ "$(date +%s)" -ge "$end" ]; then
-            record "$agent: the screen" "$OUT"
-            bad "$agent: the reopened screen has no [sleep 600] of the cancelled request"
-            return 1
-        fi
         # interval: the reopened conversation is read every two seconds
         sleep 2
     done
@@ -641,32 +596,24 @@ quit() {
         bad "$agent: $QUIT ended it with [$(printf '%s\n' "$ends" | tail -n 1)]"
 }
 
-# until_guest_some WHAT SECONDS COMMAND...: run guest.sh COMMAND every two
-# seconds until it prints something, for at most SECONDS; otherwise fail WHAT.
+# until_guest_some WHAT COMMAND...: wait for guest.sh COMMAND to print
+# something, describing the wait as WHAT in the log.
 until_guest_some() {
     what=$1
-    end=$(($(date +%s) + $2))
-    shift 2
+    shift
+    say "$agent: waiting: $what"
     while :; do
         OUT=$(guest "$@")
         [ -z "$OUT" ] || return 0
-        if [ "$(date +%s)" -ge "$end" ]; then
-            record "$agent: the screen" "$(screen)"
-            bad "$agent: $what did not start in $2 s"
-            return 1
-        fi
         # interval: the machine is asked every two seconds
         sleep 2
     done
 }
 
-# answer SECONDS: wait until the account logs in over SSH, for at most
-# SECONDS, through a new master connection.
+# answer: wait until the account logs in over a new master SSH connection.
 answer() {
     ssh -o "ControlPath=$work/ssh" -O exit "$USERNAME@$HOST" 2> /dev/null
-    end=$(($(date +%s) + $1))
     until m true 2> /dev/null; do
-        [ "$(date +%s)" -lt "$end" ] || return 1
         # interval: a try of SSH every two seconds until the server answers
         sleep 2
     done
@@ -813,7 +760,7 @@ m 'rm -rf ~/rach2-accept' || bad "$HOME_M/rach2-accept was not removed"
 fi
 
 say "accepting the agents $AGENTS on $USERNAME@$HOST, in the mode $MODE"
-answer 30 || give_up "no SSH answer from $USERNAME@$HOST"
+answer
 acceptance_setup
 
 h new-session -d -s accept -x 120 -y 40 -n script
@@ -836,15 +783,12 @@ fi
 up=$(m 'cut -d . -f 1 /proc/uptime')
 root 'setsid sh -c "sleep 2; reboot" > /dev/null 2>&1 < /dev/null &' ||
     give_up "the reboot was not started"
-end=$(($(date +%s) + $(scaled 900)))
 while :; do
     # interval: the machine is asked every ten seconds whether it is up again
     sleep 10
-    if answer "$(scaled 60)"; then
-        now=$(m 'cut -d . -f 1 /proc/uptime' 2> /dev/null)
-        [ -z "$now" ] || [ "$now" -ge "$up" ] || break
-    fi
-    [ "$(date +%s)" -lt "$end" ] || give_up "the machine did not come back from its reboot"
+    answer
+    now=$(m 'cut -d . -f 1 /proc/uptime' 2> /dev/null)
+    [ -z "$now" ] || [ "$now" -ge "$up" ] || break
 done
 say "the machine rebooted: OK"
 

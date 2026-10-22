@@ -3,7 +3,6 @@
 # fakeapi case.
 set -u
 REPO=${ETUDE_TREE:?}
-. "$REPO/tests/system/deadline.sh"
 work=${AGENT_WORK:?}
 PORT=${AGENT_PORT:?}
 ROOT_KEY=${AGENT_ROOT_KEY:?}
@@ -16,10 +15,10 @@ fail() {
     echo "fakeapi-test: FAIL: $*" >&2
     exit 1
 }
-# Run COMMAND as USER by KEY, within the scenario step that owns it.
+# Run COMMAND as USER by KEY; etude supervises its progress.
 ssh_as() {
     ssh -F /dev/null -i "$2" -p "$PORT" -o StrictHostKeyChecking=no \
-        -o "UserKnownHostsFile=$KNOWN" -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes \
+        -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes \
         -o IdentitiesOnly=yes -o PreferredAuthentications=publickey "$1@127.0.0.1" "$3"
 }
 # guest COMMAND: run COMMAND as the test account, an ordinary user, as an
@@ -51,7 +50,7 @@ ssh_as root "$ROOT_KEY" 'chmod 644 /tmp/fakeapi/*' ||
 client)
 CURL="curl -sS --cacert /tmp/fakeapi/ca.pem"
 
-OUT=$(guest 'curl -sS --connect-timeout 20 -o /dev/null http://1.1.1.1/; echo "rc=$?"')
+OUT=$(guest 'curl -sS -o /dev/null http://1.1.1.1/; echo "rc=$?"')
 case "$OUT" in
     *rc=0) fail "the machine reached an outside address: $OUT" ;;
     *rc=*) ;;

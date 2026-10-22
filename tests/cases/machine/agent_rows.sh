@@ -3,7 +3,6 @@
 # Etude supplies the machine, keys, workspace and fake API service.
 set -u
 REPO=${ETUDE_TREE:?}
-. "$REPO/tests/system/deadline.sh"
 action=$1
 name=$2
 work=${AGENT_WORK:?}
@@ -35,10 +34,10 @@ fail() {
     echo "agents-test: $name: FAIL: $*" >&2
     exit 1
 }
-# Run COMMAND as USER by KEY, within the scenario step that owns it.
+# Run COMMAND as USER by KEY; etude supervises its progress.
 ssh_as() {
     ssh -F /dev/null -i "$2" -p "$PORT" -o StrictHostKeyChecking=no \
-        -o "UserKnownHostsFile=$KNOWN" -o "ConnectTimeout=$(scaled 30)" -o BatchMode=yes \
+        -o "UserKnownHostsFile=$KNOWN" -o BatchMode=yes \
         -o IdentitiesOnly=yes -o PreferredAuthentications=publickey "$1@127.0.0.1" "$3"
 }
 
