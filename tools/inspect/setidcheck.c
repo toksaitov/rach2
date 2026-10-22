@@ -32,12 +32,13 @@
  *
  * `setidcheck --applets [TABLE]` reads the staged busybox applet tables
  * and configs and the two init binaries. `setidcheck --free --image FILE
- * --offset N --size N` prints the free bytes of a region, for the
- * self-build suite's space preflight; `--nodes --image FILE` prints each
- * root or reserved node in ring order with its path and timestamps, for
- * the reproducibility check, and `--nodes --ext2 FILE` prints each node
- * reached with its mode, owner, size and inode. `--selftest` runs every
- * part over fixtures built in memory and in a temporary directory.
+ * --offset N --size N` prints the free bytes of a region, for the self-build
+ * cases' check of the root's space; `--nodes --image FILE` prints each root
+ * or reserved node in ring order with its path and timestamps, for the
+ * reproducibility check, and `--nodes --ext2 FILE` prints each node reached
+ * with its mode, owner, size and inode. Neither reads the declarations, so
+ * either runs from a copy of the binary outside the tree. `--selftest` runs
+ * every part over fixtures built in memory and in a temporary directory.
  *
  * Exits 0 with no finding, 1 on a finding, and 2 on a usage error or a
  * declaration file that does not read.
@@ -3781,13 +3782,30 @@ static int run(int argc, char **argv, struct allow *allow)
     return 0;
 }
 
-/** Read the declarations beside the binary and run. */
+/**
+ * Say whether the run that `argv` asks for reads the declarations: every
+ * mode but `--free` and `--nodes`, which read an image alone and so run from
+ * a copy of the binary that has no tree around it.
+ */
+static int reads_allow(int argc, char **argv)
+{
+    int i;
+
+    for (i = 1; i < argc; i++)
+        if (strcmp(argv[i], "--free") == 0 || strcmp(argv[i], "--nodes") == 0)
+            return 0;
+    return 1;
+}
+
+/** Read the declarations beside the binary, when the run needs them, and
+ * run. */
 int main(int argc, char **argv)
 {
-    struct allow *allow = read_allow(allow_path_beside(argv[0]));
+    struct allow *allow = reads_allow(argc, argv) ? read_allow(allow_path_beside(argv[0])) : NULL;
     int rc = run(argc, argv, allow);
 
-    allow_free(allow);
+    if (allow != NULL)
+        allow_free(allow);
     return rc;
 }
 
