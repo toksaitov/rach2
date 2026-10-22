@@ -8,7 +8,7 @@
       "behavior": "each host test of tests/host but etude's own compiles natively with the kernel, utility, KRFFS, e2fsprogs and Doom sources it names and runs under AddressSanitizer and UndefinedBehaviorSanitizer, every report fatal, and exits 0 within its bound",
       "units": ["host", "the host tests of the inventory, each `tests/host/NAME_hosttest.c` but etude's, compiled and run under the sanitizers"],
       "domain": "host",
-      "architectures": "none",
+      "architectures": ["i686", "x86_64"],
       "workload": {"arguments": ["tests"], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
       "execution": {"program": "host", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its binaries, its logs and the checks' scratch directories under its scratch directory, which the program removes after a pass"},

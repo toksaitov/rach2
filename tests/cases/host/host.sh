@@ -34,7 +34,8 @@
 #
 # etude runs it in the case's workspace, with ETUDE_TREE naming the root of
 # the tree, to which it changes first, ARCH naming the architecture of the
-# boots case, and TMPDIR the workspace, which etude keeps after a failure.
+# tests and boots cases, and TMPDIR the workspace, which etude keeps after a
+# failure.
 # Several scripted checks hold the tree, as a script that puts faults into
 # sources must, so the program holds it too, unless an ancestor such as
 # tests/run holds it already (tests/system/runlock.sh).
@@ -83,6 +84,16 @@ FREESTANDING="-ffreestanding"
 # does have them these declarations are the ones used; they are musl's, so the
 # interface is the same either way. See tests/host/compat/crypt.h.
 INC="-I rach2/sys -I rach2/sys/arch/x86 -I rach2/sys/arch/i686 -I rach2/sys/lib -I rach2/sys/proc -I utils -I krffs -I tests/host/compat"
+# A test names a source of a vendored port's extracted tree, on a
+# `host-deps:` or `host-cflags:` line, by its i686 path under vendor/. The
+# tree is read from the architecture ARCH names, which etude gives the tests
+# case, i686 when it is unset: x86-64 extracts its own under
+# build/x86_64/vendor-work/ (mk/arch.mk), and the source is the same in
+# either.
+case "${ARCH:-i686}" in
+    x86_64) VENDOR_TREE=build/x86_64/vendor-work ;;
+    *) VENDOR_TREE=vendor ;;
+esac
 # A test's bound when it gives none on a `host-seconds:` line. It only ends a
 # hung test: one of these tests drives a device that reports an error on
 # every transmit, and the first fault it found was an unbounded loop.
@@ -265,8 +276,8 @@ hosttests()
         [ -f "$t" ] || continue
         [ -z "$1" ] || [ "$(group_of "$t")" = "$1" ] || continue
         base="$(basename "$t" .c)"
-        deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed 's/host-deps://' | tr '\n' ' ')"
-        extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed 's/host-cflags://' | tr '\n' ' ')"
+        deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed "s/host-deps://; s# vendor/# $VENDOR_TREE/#g" | tr '\n' ' ')"
+        extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed "s/host-cflags://; s# vendor/# $VENDOR_TREE/#g" | tr '\n' ' ')"
         secs="$(grep -oE 'host-seconds: *[0-9]+' "$t" | grep -oE '[0-9]+' | head -1)"
         [ -n "$secs" ] || secs=$WATCHDOG_SECS
         mode=shared
@@ -279,7 +290,7 @@ hosttests()
             [ -f "$d" ] && continue
             missing="$missing $d"
             case "$d" in
-                vendor/musl/*) hint="; echo 'host: the vendored musl source is not extracted; rm vendor/musl/.stamp and rebuild (make)'" ;;
+                "$VENDOR_TREE"/musl/*) hint="; echo 'host: the vendored musl source is not extracted; rm $VENDOR_TREE/musl/.stamp and rebuild (make)'" ;;
             esac
         done
         if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then

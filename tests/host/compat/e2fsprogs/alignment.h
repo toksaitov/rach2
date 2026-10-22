@@ -35,7 +35,7 @@ static ssize_t model_write(int fd, const void *buf, size_t size);
 #define pwrite64 model_pwrite64
 #define read     model_read
 #define write    model_write
-#include "../../../../vendor/e2fsprogs/e2fsprogs-1.47.4/lib/ext2fs/unix_io.c"
+#include "ext2fs/unix_io.c"
 #undef pread
 #undef pread64
 #undef pwrite
