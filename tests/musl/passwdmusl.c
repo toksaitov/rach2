@@ -62,7 +62,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
 #include <signal.h>
 #include <crypt.h>
 #include <sys/random.h>
@@ -300,45 +299,31 @@ static void restore_databases(void)
 /**
  * Read from `fd`, appending to the terminated string in `buffer` of `size`
  * bytes, until `needle` appears in it. Returns 1 on a match, and 0 at end of
- * file, on a read error, when the buffer is full, or once `ms` milliseconds
- * of polls have passed with nothing to read.
+ * file, on a read error, or when the buffer is full.
  *
  * The concurrent cases use this in place of a sleep: the needle is a line the
- * other process could print only after doing what is waited for. The time
- * limit ends a failure and never decides a pass, since the pass condition is
- * the needle, and a build that printed another line fails at the limit.
+ * other process could print only after doing what is waited for. A build that
+ * printed another line fails at the end of file its exit gives.
  */
-static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
+static int read_until(int fd, const char *needle, char *buffer, size_t size)
 {
     size_t held = strlen(buffer);
-    long waited = 0;
+    ssize_t got;
 
-    while (waited < ms) {
-        struct pollfd waiting;
-        ssize_t got;
-
-        waiting.fd = fd;
-        waiting.events = POLLIN;
-        waiting.revents = 0;
-        if (poll(&waiting, 1, 200) == 1) {
-            got = read(fd, buffer + held, size - held - 1);
-            if (got <= 0) {
-                return 0;
-            }
-            held += (size_t)got;
-            buffer[held] = '\0';
-            if (strstr(buffer, needle) != NULL) {
-                return 1;
-            }
-            if (held + 1 >= size) {
-                return 0;
-            }
-            continue;
+    for (;;) {
+        got = read(fd, buffer + held, size - held - 1);
+        if (got <= 0) {
+            return 0;
         }
-        waited += 200;
+        held += (size_t)got;
+        buffer[held] = '\0';
+        if (strstr(buffer, needle) != NULL) {
+            return 1;
+        }
+        if (held + 1 >= size) {
+            return 0;
+        }
     }
-
-    return 0;
 }
 
 static int run_passwd_raw(uid_t uid, const char *user, const char *script, size_t script_len,
@@ -691,7 +676,7 @@ static int check_concurrent(void)
     }
     (void)write(b_in, PROBE2_PASS "\n", strlen(PROBE2_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting))) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -751,7 +736,7 @@ static int check_concurrent(void)
     }
     (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting))) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -768,7 +753,7 @@ static int check_concurrent(void)
     (void)write(b_in, "stale-new-pw\nstale-new-pw\n", 26);
     close(b_in);
     waiting[0] = '\0';
-    (void)read_until(b_err, "changed while", waiting, sizeof(waiting), 20000);
+    (void)read_until(b_err, "changed while", waiting, sizeof(waiting));
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
         return fail("the writer that must be refused did not exit normally");
     }
@@ -797,7 +782,7 @@ static int check_concurrent(void)
     }
     (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting))) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -834,7 +819,7 @@ static int check_concurrent(void)
     (void)write(b_in, "revoked-new-pw\nrevoked-new-pw\n", 30);
     close(b_in);
     waiting[0] = '\0';
-    (void)read_until(b_err, "no longer names", waiting, sizeof(waiting), 20000);
+    (void)read_until(b_err, "no longer names", waiting, sizeof(waiting));
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
         return fail("the writer whose claim is revoked did not exit normally");
     }
@@ -863,7 +848,7 @@ static int check_concurrent(void)
     }
     (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
     waiting[0] = '\0';
-    if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
+    if (!read_until(b_err, "New password:", waiting, sizeof(waiting))) {
         kill(b, SIGKILL);
         (void)waitpid(b, &status, 0);
 
@@ -896,7 +881,7 @@ static int check_concurrent(void)
     (void)write(b_in, "reassigned-pw\nreassigned-pw\n", 28);
     close(b_in);
     waiting[0] = '\0';
-    (void)read_until(b_err, "no longer names", waiting, sizeof(waiting), 20000);
+    (void)read_until(b_err, "no longer names", waiting, sizeof(waiting));
     if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
         return fail("the writer whose login is reassigned did not exit normally");
     }
@@ -930,7 +915,7 @@ static int check_concurrent(void)
             }
             (void)write(b_in, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
             waiting[0] = '\0';
-            if (!read_until(b_err, "New password:", waiting, sizeof(waiting), 20000)) {
+            if (!read_until(b_err, "New password:", waiting, sizeof(waiting))) {
                 kill(b, SIGKILL);
                 (void)waitpid(b, &status, 0);
 
@@ -989,7 +974,7 @@ static int check_concurrent(void)
             (void)write(b_in, "reshaped-pw\nreshaped-pw\n", 24);
             close(b_in);
             waiting[0] = '\0';
-            (void)read_until(b_err, "changed shape", waiting, sizeof(waiting), 20000);
+            (void)read_until(b_err, "changed shape", waiting, sizeof(waiting));
             if (waitpid(b, &status, 0) != b || !WIFEXITED(status)) {
                 return fail("the writer whose record changes shape did not exit normally");
             }
