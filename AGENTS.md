@@ -3,7 +3,7 @@
 The project policy for Rach2, for every coding agent. Codex reads this file directly; Claude Code reads it through the `@AGENTS.md` import in `CLAUDE.md`, which adds the rules Claude Code alone needs. Procedures needed only for some tasks are skills in `.agents/skills/`, which Codex runs as `$name` and Claude Code as `/name` through `.claude/skills/`:
 
 * `milestone`: working through a milestone of `dev-log/` and closing it.
-* `testing`: running suites on the testing host, and writing suites and mutation tests.
+* `testing`: running suites on the testing host, and writing suites.
 * `machine`: writing the flash drive or a Lenovo disk, and updating the installed Lenovo.
 
 This file states the rules in force; their history is in commit messages and `dev-log/`. When a rule changes, replace the old text. When a failure repeats in a new form, write the general rule here or in the skill it belongs to, and record the incident in `dev-log/`.
@@ -78,8 +78,7 @@ This file states the rules in force; their history is in commit messages and `de
 * Check a change by what it touches, as Work says; ci then checks `master`, and each phase's full run runs every suite.
 * Builds and suites run on the testing host: each person's in a clone in their own account there, and the owner's in the copy `tools/dev/testing.sh` syncs from the owner's computer, which itself runs only a compile or one host test. The `testing` skill describes the host.
 * Whoever stops a run on the testing host, a ci job among them, confirms that its claim has left the admission ledger, `/var/lib/rach2-etude/ledger/claims`, before going on, since a claim whose processes are gone without a confirmed cleanup makes the ledger refuse every launch that cannot fit beside it.
-* A new test is trusted only after it has been made to fail: the unmodified test passes; a mutation, a deliberate fault compiled into what it runs, makes it fail; with the source restored and the artifact rebuilt, it passes again. A changed test needs no new proof. The `testing` skill has the mechanics.
-* A suite judges what the kernel counts, never the clock; seconds in a suite are completion bounds.
+* A suite judges what the kernel counts, never the clock, and sets no time limit of its own: etude stops a case only when it has made no progress for longer than the case's history on that machine allows.
 * A test removes the files and directories it makes on every exit path, success, failure and a signal, from an exit trap installed before it makes them. It may keep a directory after a failure only when its output names that directory as the evidence. Scratch under `/tmp` honours `TMPDIR`, and a disk image goes under the tree's `build/tests`, since the testing host's `/tmp` is its memory.
 
 ## Resources

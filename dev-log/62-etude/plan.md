@@ -258,7 +258,7 @@ The release runs the whole collection from clean on the selected machine, keepin
 ## Rules for the work
 
 * Every task takes the check that `AGENTS.md` gives for what it touches.
-* A new test is proven by a mutation. A redesigned test gets a focused check; the full runs in the four environments show the collection portable. No case has an obligation per accelerator.
+* A new or redesigned test gets a focused check; the full runs in the four environments show the collection portable. No case has an obligation per accelerator.
 * Etude is hosted C99; kernel code stays C89 and is checked on both architectures.
 * Nothing creates an account or a key, changes a clone, deletes data, writes a raw disk or restarts a machine, except the owner-only tasks on the Lenovo, which follow the `machine` skill.
 * A fault found along the way that the task does not fix becomes a `bug` issue, made a member of this phase with `sh tools/flow/board.sh link N`.
