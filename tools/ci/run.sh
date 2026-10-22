@@ -27,7 +27,14 @@
 # nothing failed. A TERM to the run's process group, which timeout(1) sends
 # at the workflow's time limit, ends the run without `done` once the step it
 # interrupts has stopped, so that tests/run stops its machines before the
-# next run starts; the status is then 143.
+# next run starts; the status is then 143. A step whose command a signal
+# ended, or that wrote no status because the shell that ran it was killed,
+# ends the run the same way. GitHub's cleanup of a cancelled job kills the
+# job's processes one at a time, in the order of their process IDs, so the
+# run's shell may outlive the step it is in, or be killed just after it has
+# forked the next step. Each step therefore checks, just before it starts its
+# command, that the run's shell is alive under the parent it started with,
+# and starts nothing otherwise.
 #
 # `results` below says how this tree's tests/run gives its results. With
 # `lines`, the runner's last `run: result: failed:` line on its standard
@@ -62,14 +69,22 @@ export ARCH RACH2_MIN_FREE_GIB
 # How this tree's tests/run gives its results, `lines` or `history`, as the
 # header says.
 results=lines
+top=$$
+parent=$PPID
 mkdir -p "$out/kept"
 : > "$out/failed"
 : > "$out/log"
 : > "$out/err"
 : > "$out/start"
 
+# End the run without `done`, as stopped.
+stop() {
+    echo "ci: $kind: stopped on $ARCH" | tee -a "$out/log"
+    exit 143
+}
+
 # The shell runs this trap only after the pipeline it waits for has ended.
-trap 'echo "ci: $kind: stopped on $ARCH" | tee -a "$out/log"; exit 143' TERM
+trap stop TERM
 
 # Copy standard input to standard output and to FILE..., as tee does, but
 # ignore TERM, so that what a stopping tests/run prints reaches the log and
@@ -81,11 +96,40 @@ copy() { # copy [-a] FILE...
     exec tee "$@"
 }
 
+# Succeed while the run's shell is alive and its parent is the one it
+# started under.
+live() {
+    # shellcheck disable=SC2046 # ps prints the two words read here
+    set -- $(ps -o ppid=,stat= -p "$top" 2> /dev/null) Z
+    [ "$1" = "$parent" ] && case $2 in Z*) false ;; esac
+}
+
+# Run COMMAND, as an element of a step's pipeline, and write its status to
+# DIR/rc; start nothing when live fails. The shell removes DIR/rc before
+# the step.
+started() { # started COMMAND...
+    live || return
+    "$@"
+    echo "$?" > "$out/rc"
+}
+
+# Set rc to the status the step wrote to DIR/rc. A step that wrote none, or
+# whose command a signal ended, stops the run.
+ended() {
+    rc=$(cat "$out/rc" 2> /dev/null) || stop
+    case $rc in
+        '' | *[!0-9]*) stop ;;
+    esac
+    [ "$rc" -le 128 ] || stop
+}
+
 # Run a command with its output on the job's log and in DIR/log, and return
 # the command's own status, which a pipe into tee would lose.
 step() {
-    { "$@" 2>&1; echo "$?" > "$out/rc"; } | copy -a "$out/log"
-    return "$(cat "$out/rc")"
+    rm -f "$out/rc"
+    started "$@" 2>&1 | copy -a "$out/log"
+    ended
+    return "$rc"
 }
 
 # Run tests/run with ARGS as one run, its history going to DIR/history and
@@ -99,9 +143,11 @@ run_history() { # run_history NAME ARGS...
     name=$1; shift
     rm -rf "$out/history" "$out/store"
     mkdir -p "$out/history" "$out/store"
-    { { RACH2_RESULTS=$out tests/run "$@" 2>&1 1>&3 3>&-; echo "$?" > "$out/rc"; } |
+    rm -f "$out/rc"
+    { started env RACH2_RESULTS="$out" tests/run "$@" 2>&1 1>&3 3>&- |
         copy -a "$out/err"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
-    rc=$(cat "$out/rc")
+    ended
+    ran=$rc
     suites=$(for s in "$@"; do
         if [ "$s" = core ]; then
             awk -F'|' -v a="$ARCH" '
@@ -111,10 +157,12 @@ run_history() { # run_history NAME ARGS...
             echo "$s"
         fi
     done | awk '!seen[$0]++' | tr '\n' , | sed 's/,$//')
-    { build/tools/etude/casecheck verdict -b "$out/store" -c "$(git rev-parse HEAD)" \
-        "$ARCH" "$name" "$suites" "$out/history" 2>&1; echo "$?" > "$out/rc"; } |
-        copy "$out/verdict" | copy -a "$out/log"
-    verdict=$(cat "$out/rc")
+    rm -f "$out/rc"
+    started build/tools/etude/casecheck verdict -b "$out/store" -c "$(git rev-parse HEAD)" \
+        "$ARCH" "$name" "$suites" "$out/history" 2>&1 | copy "$out/verdict" | copy -a "$out/log"
+    ended
+    verdict=$rc
+    rc=$ran
     failed=$(sed -n 's/^casecheck: result: failed: //p' "$out/verdict")
     if [ "$verdict" = 0 ] && grep -qx 'casecheck: result: passed' "$out/verdict"; then
         [ "$rc" != 0 ] || return 0
@@ -140,9 +188,10 @@ run_set() { # run_set NAME ARGS...
     name=$1; shift
     : > "$out/set.log"
     : > "$out/set.err"
-    { { tests/run "$@" 2>&1 1>&3 3>&-; echo "$?" > "$out/rc"; } | copy "$out/set.err" |
+    rm -f "$out/rc"
+    { started tests/run "$@" 2>&1 1>&3 3>&- | copy "$out/set.err" |
         copy -a "$out/err"; } 3>&1 | copy "$out/set.log" | copy -a "$out/log"
-    rc=$(cat "$out/rc")
+    ended
     [ "$rc" = 0 ] && return 0
     failed=$(grep '^run: ' "$out/set.err" | tail -n 1 |
         sed -n 's/^run: result: failed: *//p' | tr ' ' '\n' | sed '/^$/d')

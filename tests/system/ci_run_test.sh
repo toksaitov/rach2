@@ -11,7 +11,9 @@
 # that passed among them; and `runner`, once, for a history that is missing,
 # cut off or inconsistent, a verdict that gave no result, and a status that
 # disagrees with the verdict. In both, DIR/err has tests/run's standard
-# error and none of its standard output. run.sh runs in a private tree with
+# error and none of its standard output. When a step is killed as GitHub's
+# cleanup of a cancelled job kills it, or the run's parent is, run.sh starts
+# no further step and ends without `done`. run.sh runs in a private tree with
 # stand-ins for git, make and tests/run, and with the built casecheck over
 # the history fixtures of tools/etude/fixtures/verdict. CI_RUN_SH names the
 # run.sh that is copied into the tree, tools/ci/run.sh of this tree by
@@ -75,7 +77,32 @@ esac
 EOF
 cat > "$work/bin/make" <<'EOF'
 #!/bin/sh
+[ "$#" -ne 0 ] || "$CI_RUN_TEST_CUTTER" make $$
 exit "${CI_RUN_TEST_MAKE:-0}"
+EOF
+# The cutter, which a stand-in runs as `cut WHERE PID`, PID being its own:
+# when CI_RUN_TEST_CUT is `WHERE HOW`, it kills with KILL, as GitHub's
+# cleanup of a cancelled job does, for `step` the shells of run.sh between
+# PID and the run's shell, and PID; for `self` PID alone; and for `parent`
+# the parent of the run's shell. The run's shell is the outermost ancestor
+# of PID that runs `sh tools/ci/run.sh`.
+cat > "$work/cut" <<'EOF'
+#!/bin/sh
+[ "${CI_RUN_TEST_CUT%% *}" = "$1" ] || exit 0
+chain=
+top=
+pid=$(ps -o ppid= -p "$2" | tr -d ' ')
+while ps -o args= -p "$pid" | grep -q '^sh tools/ci/run\.sh '; do
+    chain="$chain $top"
+    top=$pid
+    pid=$(ps -o ppid= -p "$pid" | tr -d ' ')
+done
+[ -n "$top" ] || { echo "cut: no shell of run.sh above $2" >&2; exit 1; }
+case ${CI_RUN_TEST_CUT#* } in
+    step) kill -KILL $chain "$2" ;;
+    self) kill -KILL "$2" ;;
+    parent) kill -KILL "$pid" ;;
+esac
 EOF
 # The stand-in tests/run: a set whose first suite is not CI_RUN_TEST_SET
 # passes and writes no history; that set prints CI_RUN_TEST_PRINT, then
@@ -86,6 +113,7 @@ EOF
 cat > "$tree/tests/run" <<'EOF'
 #!/bin/sh
 echo "tests/run $* with ${RACH2_RESULTS:-no results}" >> "$CI_RUN_TEST_CALLS"
+"$CI_RUN_TEST_CUTTER" "$1" $$
 if [ "$1" != "$CI_RUN_TEST_SET" ]; then
     echo "run: $1: PASS in 1s"
     echo 'run: result: passed'
@@ -100,7 +128,7 @@ done
 [ -z "$CI_RUN_TEST_STREAMS" ] || cp "$CI_RUN_TEST_FIXTURES"/store/* "$RACH2_RESULTS/store/" || exit 3
 exit "$CI_RUN_TEST_STATUS"
 EOF
-chmod +x "$work/bin/git" "$work/bin/make" "$tree/tests/run"
+chmod +x "$work/bin/git" "$work/bin/make" "$work/cut" "$tree/tests/run"
 
 pass='pass/plan.jsonl pass/item-d0.jsonl pass/item-d1.jsonl pass/item-h.jsonl pass/run.jsonl'
 failure='pass/plan.jsonl item-d0-failure.jsonl pass/item-d1.jsonl pass/item-h.jsonl run-failure.jsonl'
@@ -134,7 +162,8 @@ row()
                 CI_RUN_TEST_STATUS=$5 CI_RUN_TEST_PRINT=$print CI_RUN_TEST_ERR=$errs \
                 CI_RUN_TEST_LATE=$late CI_RUN_TEST_STREAMS=$streams \
                 CI_RUN_TEST_MAKE=$make_status CI_RUN_TEST_FIXTURES=$fixtures \
-                CI_RUN_TEST_CALLS=$work/calls sh tools/ci/run.sh "$3" "$out"
+                CI_RUN_TEST_CALLS=$work/calls CI_RUN_TEST_CUTTER=$work/cut CI_RUN_TEST_CUT='' \
+                sh tools/ci/run.sh "$3" "$out"
     ) > "$work/row.log" 2>&1
     status=$?
     print=
@@ -256,9 +285,57 @@ history_rows()
         { echo 'ci-run-test: core did not run as one run of style, host and core' >&2; return 1; }
 }
 
+# cut NAME MODE KIND CUT SETS STATUS: run run.sh KIND, reading results as
+# MODE says, under a parent shell of its own, with CI_RUN_TEST_CUT set to
+# CUT, and once the run and every process it started have ended, require
+# the sets that tests/run was asked for to be the words SETS, no `done`, the
+# line that says the run stopped, and run.sh's status STATUS, or `none` for
+# a run whose parent was killed.
+cut()
+{
+    rows=$((rows + 1))
+    out=$work/out.$rows
+    install "$2" || { echo "ci-run-test: $1: tools/ci/run.sh has no line results=lines" >&2; return 1; }
+    : > "$work/calls"
+    rm -f "$work/status"
+    # The pipe ends only when every process that holds its end has ended,
+    # and the shell's note of a killed parent goes to the null device.
+    { (
+        cd "$tree" &&
+            PATH="$work/bin:$PATH" ARCH=i686 SUITES=$suites CI_RUN_TEST_SET=none \
+                CI_RUN_TEST_STATUS=0 CI_RUN_TEST_PRINT='' CI_RUN_TEST_ERR='' CI_RUN_TEST_LATE='' \
+                CI_RUN_TEST_STREAMS='' CI_RUN_TEST_MAKE=0 CI_RUN_TEST_FIXTURES=$fixtures \
+                CI_RUN_TEST_CALLS=$work/calls CI_RUN_TEST_CUTTER=$work/cut CI_RUN_TEST_CUT=$4 \
+                sh -c 'sh tools/ci/run.sh "$1" "$2"; echo "$?" > "$3"' sh "$3" "$out" "$work/status"
+    ) 2>&1 | cat > "$work/row.log"; } 2> /dev/null
+    got=$(sed 's/^tests\/run \([^ ]*\) .*/\1/' "$work/calls" | tr '\n' ' ' | sed 's/ $//')
+    status=none
+    [ ! -f "$work/status" ] || status=$(cat "$work/status")
+    if [ "$got" = "$5" ] && [ ! -f "$out/done" ] && [ "$status" = "$6" ] &&
+        grep -qx "ci: $3: stopped on i686" "$out/log"; then
+        return 0
+    fi
+    sed 's/^/ci-run-test: log: /' "$work/row.log" "$work/calls" >&2
+    echo "ci-run-test: $1: sets '$got', status $status; expected '$5', status $6, stopped without done" >&2
+    return 1
+}
+
+# Steps killed as the runner kills a cancelled job's processes.
+cut_rows()
+{
+    suites=
+    cut "cut: a set's shells killed" lines core 'host step' 'style host' 143 || return 1
+    cut "cut: a set killed alone" lines core 'host self' 'style host' 143 || return 1
+    cut "cut: the run's parent killed" lines core 'host parent' 'style host' none || return 1
+    suites='i686:default i686:host'
+    cut "cut: the build's shell killed after make clean" history full 'make step' '' 143 ||
+        return 1
+    suites=
+}
+
 cp "$run_sh" "$work/run.sh"
-if ! { lines_rows && history_rows; }; then
+if ! { lines_rows && history_rows && cut_rows; }; then
     echo 'ci-run-test: result: fail: ci reading of results' >&2
     exit 1
 fi
-echo "ci-run-test: result: pass: $rows rows: the runner's lines, the build, a passing and a failing history, a failure or an unfinished attempt before a retry that passed, a status that disagrees, a missing or cut-off history, a suite left out, a missing verdict, the core set as one run and the standard error kept apart"
+echo "ci-run-test: result: pass: $rows rows: the runner's lines, the build, a passing and a failing history, a failure or an unfinished attempt before a retry that passed, a status that disagrees, a missing or cut-off history, a suite left out, a missing verdict, the core set as one run, the standard error kept apart, and no step after a killed one or a killed parent"

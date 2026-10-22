@@ -16,7 +16,7 @@ krffs_tools|600|krffs host tools' refusals, replace and edits|build/tools/etude/
 run_scripts|600|run scripts' command lines|sh tests/system/run_scripts_test.sh
 commit_msg|600|commit-msg hook's refusals|sh tests/system/commit_msg_test.sh
 ci|600|ci reports and bisection|sh tests/system/ci_test.sh
-ci_run|600|ci's reading of the runner's lines and of etude's history|sh tests/system/ci_run_test.sh
+ci_run|600|ci's reading of the runner's lines and of etude's history, and its stop after a killed step|sh tests/system/ci_run_test.sh
 board|600|board groups, take and the phase in progress|sh tests/system/board_test.sh
 limited|600|the loops' reading of a usage limit|sh tests/system/limited_test.sh
 worker_park|600|the worker loop's parking during a hold and rest of a handed-back intermittent issue|sh tests/system/worker_park_test.sh

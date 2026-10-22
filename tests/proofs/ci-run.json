@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "ci-run",
-  "summary": "ci_run_test.sh against a private copy of tools/ci/run.sh, each fault failing a row of the runner's lines or of etude's history",
+  "summary": "ci_run_test.sh against a private copy of tools/ci/run.sh, each fault failing a row of the runner's lines, of etude's history or of a killed step",
   "tree": "private",
   "sources": [
     "tools/ci/run.sh"
@@ -105,8 +105,8 @@
       "edits": [
         {
           "file": "tools/ci/run.sh",
-          "find": "    { { tests/run \"$@\" 2>&1 1>&3 3>&-; echo",
-          "replace": "    { { tests/run \"$@\" 2>&1 3>&-; echo"
+          "find": "    { started tests/run \"$@\" 2>&1 1>&3 3>&- |",
+          "replace": "    { started tests/run \"$@\" 2>&1 3>&- |"
         }
       ],
       "fails": {
@@ -182,8 +182,8 @@
       "edits": [
         {
           "file": "tools/ci/run.sh",
-          "find": "    { { RACH2_RESULTS=$out tests/run \"$@\" 2>&1 1>&3 3>&-;",
-          "replace": "    { { RACH2_RESULTS=$out/results tests/run \"$@\" 2>&1 1>&3 3>&-;"
+          "find": "    { started env RACH2_RESULTS=\"$out\" tests/run",
+          "replace": "    { started env RACH2_RESULTS=\"$out/results\" tests/run"
         }
       ],
       "fails": {
@@ -218,8 +218,8 @@
       "edits": [
         {
           "file": "tools/ci/run.sh",
-          "find": "    { { tests/run \"$@\" 2>&1 1>&3 3>&-; echo \"$?\" > \"$out/rc\"; } | copy \"$out/set.err\" |\n        copy -a \"$out/err\"; } 3>&1 | copy \"$out/set.log\" | copy -a \"$out/log\"\n",
-          "replace": "    { { tests/run \"$@\" 2>&1 1>&3 3>&-; echo \"$?\" > \"$out/rc\"; } | copy \"$out/set.err\"; } 3>&1 |\n        copy \"$out/set.log\" | copy -a \"$out/log\"\n"
+          "find": "    { started tests/run \"$@\" 2>&1 1>&3 3>&- | copy \"$out/set.err\" |\n        copy -a \"$out/err\"; } 3>&1 | copy \"$out/set.log\" | copy -a \"$out/log\"\n",
+          "replace": "    { started tests/run \"$@\" 2>&1 1>&3 3>&- | copy \"$out/set.err\"; } 3>&1 |\n        copy \"$out/set.log\" | copy -a \"$out/log\"\n"
         }
       ],
       "fails": {
@@ -236,14 +236,104 @@
       "edits": [
         {
           "file": "tools/ci/run.sh",
-          "find": "    { { RACH2_RESULTS=$out tests/run \"$@\" 2>&1 1>&3 3>&-; echo \"$?\" > \"$out/rc\"; } |\n        copy -a \"$out/err\"; } 3>&1 | copy \"$out/set.log\" | copy -a \"$out/log\"\n",
-          "replace": "    { RACH2_RESULTS=$out tests/run \"$@\" 2>&1; echo \"$?\" > \"$out/rc\"; } |\n        copy -a \"$out/err\" | copy \"$out/set.log\" | copy -a \"$out/log\"\n"
+          "find": "    { started env RACH2_RESULTS=\"$out\" tests/run \"$@\" 2>&1 1>&3 3>&- |\n        copy -a \"$out/err\"; } 3>&1 | copy \"$out/set.log\" | copy -a \"$out/log\"\n",
+          "replace": "    started env RACH2_RESULTS=\"$out\" tests/run \"$@\" 2>&1 |\n        copy -a \"$out/err\" | copy \"$out/set.log\" | copy -a \"$out/log\"\n"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           "is not the standard error of tests/run",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "missing",
+      "summary": "a step that wrote no status taken as a pass",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    rc=$(cat \"$out/rc\" 2> /dev/null) || stop\n",
+          "replace": "    rc=$(cat \"$out/rc\" 2> /dev/null) || rc=0\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-run-test: cut: a set's shells killed: sets 'style host core'",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "stale",
+      "summary": "a set's status left from the step before it",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    : > \"$out/set.err\"\n    rm -f \"$out/rc\"\n",
+          "replace": "    : > \"$out/set.err\"\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-run-test: cut: a set's shells killed: sets 'style host core'",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "signal",
+      "summary": "a set that a signal ended taken as a failed set",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    [ \"$rc\" -le 128 ] || stop\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-run-test: cut: a set killed alone: sets 'style host core'",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "live",
+      "summary": "a step started after the run's parent was killed",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    live || return\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-run-test: cut: the run's parent killed: sets 'style host core'",
+          "ci-run-test: result: fail: ci reading of results"
+        ]
+      }
+    },
+    {
+      "name": "build",
+      "summary": "the build's status left from make clean",
+      "edits": [
+        {
+          "file": "tools/ci/run.sh",
+          "find": "    rm -f \"$out/rc\"\n    started \"$@\" 2>&1",
+          "replace": "    started \"$@\" 2>&1"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-run-test: cut: the build's shell killed after make clean: sets 'default'",
           "ci-run-test: result: fail: ci reading of results"
         ]
       }
