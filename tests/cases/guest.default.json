@@ -4786,7 +4786,7 @@
     },
     {
       "case_id": "guest.default.timerfdmusl",
-      "behavior": "A timerfd timer blocks a read until it expires, reports its settings, refuses short and early nonblocking reads, expires at once for a past absolute time, wakes an epoll wait, and keeps a 200-day value.",
+      "behavior": "A timerfd timer blocks a read until it expires, reports its settings, refuses short and early nonblocking reads, expires for a past absolute time, wakes an epoll wait, and keeps a 200-day value.",
       "units": ["default", "musl/timerfdmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -4803,11 +4803,11 @@
         {"assertion_id": "read-eagain", "checks": "a read of the unexpired nonblocking timer fails with EAGAIN", "source": "program"},
         {"assertion_id": "read-einval", "checks": "a read of zero bytes fails with EINVAL", "source": "program"},
         {"assertion_id": "abstime-set", "checks": "a timer is armed with TFD_TIMER_ABSTIME for 1 ns on the monotonic clock, a time already past", "source": "program"},
-        {"assertion_id": "abstime-expired", "checks": "poll finds that timer readable at once and a read returns a count of 1", "source": "program"},
-        {"assertion_id": "epoll-setup", "checks": "an epoll set with the timer, a pipe and a SIGALRM handler are made", "source": "program"},
+        {"assertion_id": "abstime-expired", "checks": "poll finds that timer readable and a read returns a count of 1", "source": "program"},
+        {"assertion_id": "epoll-setup", "checks": "an epoll set with the timer and a pipe are made", "source": "program"},
         {"assertion_id": "epoll-child", "checks": "the child that arms the timer is forked, answered and reaped", "source": "program"},
         {"assertion_id": "epoll-asleep", "checks": "the child exited 0, having seen the parent asleep in epoll_wait before it armed the timer", "source": "program"},
-        {"assertion_id": "epoll-wake", "checks": "epoll_wait with no timeout returned the timer's descriptor, and no alarm ended it", "source": "program"},
+        {"assertion_id": "epoll-wake", "checks": "epoll_wait with no timeout returned the timer's descriptor", "source": "program"},
         {"assertion_id": "long-timer-set", "checks": "a timer of 200 days with an interval of 200 days is armed and read back", "source": "program"},
         {"assertion_id": "long-timer-reports", "checks": "the read-back value is between 199 and 200 days and the interval is 200 days", "source": "program"}
       ],

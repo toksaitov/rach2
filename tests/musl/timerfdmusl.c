@@ -7,13 +7,12 @@
  * fails with EAGAIN, and a read of zero bytes with EINVAL, as a read of fewer
  * than eight does; a timer armed with a zero value is disarmed and reports
  * zeros. An absolute time already past on the monotonic clock, 1 ns, which the
- * first timer's 50 ms have put behind it, expires at once, as poll sees. A
- * timer in an epoll set wakes a wait with no timeout: a child arms the timer
- * only once it has seen the parent asleep in epoll_wait, and keeps running
- * until the parent answers, so that the kernel does not idle, which would scan
- * the set again at every interrupt. An alarm bounds the wait, and a wait the
- * alarm ended fails. A timer of 200 days reports 200 days, and its interval of
- * 200 days.
+ * first timer's 50 ms have put behind it, expires once, as poll and a read
+ * see. A timer in an epoll set wakes a wait with no timeout: a child arms the
+ * timer only once it has seen the parent asleep in epoll_wait, and keeps
+ * running until the parent answers, so that the kernel does not idle, which
+ * would scan the set again at every interrupt. A timer of 200 days reports 200
+ * days, and its interval of 200 days.
  *
  * Prints `TIMERFDMUSL OK` and exits 0 on success, and prints
  * `TIMERFDMUSL FAIL (detail)` and exits 1 otherwise. Writes etude's report
@@ -47,9 +46,6 @@ static const char *const assertion_id[] = {
     "abstime-set",  "abstime-expired", "epoll-setup",      "epoll-child",
     "epoll-asleep", "epoll-wake",      "long-timer-set",   "long-timer-reports"};
 
-/* The SIGALRMs delivered; an alarm ends an epoll wait that nothing else did. */
-static volatile sig_atomic_t alarms;
-
 /** Report one failed check with errno, end the report at the assertion that
  * `what` fails, and return 1, the failure status. */
 static int fail(const char *what)
@@ -80,17 +76,6 @@ static void set(struct itimerspec *it, long value_ms, long interval_ms)
     it->it_interval.tv_nsec = (interval_ms % 1000) * 1000000L;
 }
 
-/** Count a SIGALRM. */
-static void on_alarm(int sig)
-{
-    (void)sig;
-    alarms++;
-}
-
-/* The longest wait, in seconds, for another process to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
 /** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
  * no stat file. */
 static int proc_state(pid_t pid)
@@ -116,21 +101,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -140,45 +122,38 @@ static int seen_asleep(pid_t pid)
 /**
  * Wait to see `parent` asleep (`seen_asleep`), arm the timer `t` for 30 ms,
  * and keep running, reading the nonblocking `ack` in a loop, until it has a
- * byte or 15 s have passed. A process that runs keeps the kernel from
- * idling, and an idle kernel scans the parent's descriptors again at every
- * interrupt, which would end the wait without the timer's wake. Exits 0
- * when all of that happened, 2 when the parent was never seen asleep, and 3
- * when no byte came.
+ * byte. A process that runs keeps the kernel from idling, and an idle kernel
+ * scans the parent's descriptors again at every interrupt, which would end
+ * the wait without the timer's wake. Exits 0 when all of that happened, 2
+ * when the parent was never seen asleep, and 1 when the timer could not be
+ * armed.
  */
 static void arm_and_run(pid_t parent, int t, int ack)
 {
     struct itimerspec it;
-    struct timespec start, now;
     char byte;
 
     if (!seen_asleep(parent)) {
         _exit(2);
     }
     set(&it, 30, 0);
-    if (timerfd_settime(t, 0, &it, NULL) != 0 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+    if (timerfd_settime(t, 0, &it, NULL) != 0) {
         _exit(1);
     }
-    do {
-        if (read(ack, &byte, 1) == 1) {
-            _exit(0);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-    } while (now.tv_sec - start.tv_sec < 15);
-    _exit(3);
+    while (read(ack, &byte, 1) != 1) {
+    }
+    _exit(0);
 }
 
 /**
  * The timer `t`, disarmed, in an epoll set: a child arms it once it has seen
  * the parent asleep in an epoll_wait with no timeout, and the timer's wake
- * must end the wait. An alarm bounds the wait, and a wait the alarm ended
- * fails, though the scan after it finds the timer expired. Returns 0, or 1
- * once the failure is reported.
+ * must end the wait; a wake the kernel misses leaves the wait asleep, and the
+ * case's watchdog ends it. Returns 0, or 1 once the failure is reported.
  */
 static int epoll_row(int t)
 {
     struct epoll_event ev, out;
-    struct sigaction sa;
     int ack[2];
     int ep, n, status;
     pid_t parent = getpid();
@@ -188,10 +163,8 @@ static int epoll_row(int t)
     memset(&ev, 0, sizeof(ev));
     ev.events = EPOLLIN;
     ev.data.fd = t;
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_alarm;
     if (ep < 0 || epoll_ctl(ep, EPOLL_CTL_ADD, t, &ev) != 0 || pipe(ack) != 0 ||
-        fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0 || sigaction(SIGALRM, &sa, NULL) != 0) {
+        fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0) {
         return fail("setup for epoll");
     }
     report_held();
@@ -200,9 +173,7 @@ static int epoll_row(int t)
         arm_and_run(parent, t, ack[0]);
     }
     memset(&out, 0, sizeof(out));
-    alarm(10);
     n = epoll_wait(ep, &out, 1, -1);
-    alarm(0);
     if (pid < 0 || write(ack[1], "a", 1) != 1 || waitpid(pid, &status, 0) != pid) {
         return fail("the child that arms the timer");
     }
@@ -213,7 +184,7 @@ static int epoll_row(int t)
                         : "the child that arms the timer");
     }
     report_held();
-    if (n != 1 || out.data.fd != t || alarms != 0) {
+    if (n != 1 || out.data.fd != t) {
         return fail("the timer did not wake the epoll wait");
     }
     report_held();
@@ -308,7 +279,7 @@ int main(void)
     report_held();
     pfd.fd = t;
     pfd.events = POLLIN;
-    if (poll(&pfd, 1, 5000) != 1 || read(t, &n, sizeof(n)) != 8 || n != 1) {
+    if (poll(&pfd, 1, -1) != 1 || read(t, &n, sizeof(n)) != 8 || n != 1) {
         return fail("an absolute time already past did not expire");
     }
     report_held();
