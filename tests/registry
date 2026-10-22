@@ -28,7 +28,9 @@
 # runs on both. Among the runtime tools, `qemu` is the emulator of that
 # architecture, qemu-system-i386 or qemu-system-x86_64, which `tests/run`
 # looks for in its place, and an x86-64 run writes under build/x86_64/images
-# what an i686 run writes under build/images.
+# what an i686 run writes under build/images. `tooling` is etude's tooling
+# machine, which a host that is not Linux has when it has
+# qemu-system-x86_64, qemu-img, mtools and tar; Linux never has it.
 #
 # Host isolation is optional: `serial` makes the installed launcher reserve
 # the host alone. An empty field permits shared admission. The pool's serial

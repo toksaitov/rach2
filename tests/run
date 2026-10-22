@@ -298,11 +298,13 @@ suite_proves() {
             print text
         }' "$REPO/tests/system/suites.mk"
 }
-# A tools field in words: `a,b+c/d+e` is "a, either b and c or d and e".
+# A tools field in words: `a,b+c/d+e` is "a, either b and c or d and e", and
+# `tooling` is etude's tooling machine.
 tools_prose() {
     echo "$1" | awk -F, '{
         for (i = 1; i <= NF; i++) {
-            e = $i; gsub(/\+/, " and ", e)
+            e = "/" $i "/"; gsub(/\/tooling\//, "/etude\047s tooling machine/", e)
+            e = substr(e, 2, length(e) - 2); gsub(/\+/, " and ", e)
             if (index(e, "/")) { gsub(/\//, " or ", e); e = "either " e }
             printf "%s%s", (i > 1 ? ", " : ""), e
         }
@@ -434,9 +436,19 @@ check_space() {
     sh "$REPO/tools/setup/space.sh" run 'a run' "${RACH2_MIN_FREE_GIB:-40}" "$REPO"
 }
 
+# tooling_host: succeed on a host that is not Linux and has the commands that
+# etude's tooling machine runs on (tools/etude/Readme.md, The tooling machine).
+tooling_host() {
+    [ "$(uname -s)" != Linux ] || return 1
+    for tool in qemu-system-x86_64 qemu-img mformat mmd mcopy tar; do
+        command -v "$tool" >/dev/null 2>&1 || return 1
+    done
+}
+
 # Every external command a suite needs, before anything is built for it. An
 # entry with alternatives, `a+b/c+d`, is met when every command of one of
-# them is installed.
+# them is installed. `qemu` is the emulator of ARCH, and `tooling` is met
+# where tooling_host succeeds.
 check_tools() { # check_tools NAME
     tools=$(suite_tools "$1")
     [ "$tools" = "-" ] && return 0
@@ -445,7 +457,10 @@ check_tools() { # check_tools NAME
         for choice in $(echo "$entry" | tr '/' ' '); do
             has=1
             for tool in $(echo "$choice" | tr '+' ' '); do
-                [ "$tool" = qemu ] && tool=$RACH2_QEMU
+                case "$tool" in
+                    qemu) tool=$RACH2_QEMU ;;
+                    tooling) tooling_host && continue; has=""; break ;;
+                esac
                 command -v "$tool" >/dev/null 2>&1 || { has=""; break; }
             done
             [ -n "$has" ] && { met=1; break; }
