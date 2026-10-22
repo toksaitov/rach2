@@ -188,16 +188,6 @@ static int fails;
 /* The room for what a set printed, and for a status record. */
 #define OUT_LEN 131072
 
-/* The bound of a wait for a case to start, and for the status record to
- * name an attempt, in milliseconds. */
-#define START_BOUND  60000
-#define STATUS_BOUND 30000
-
-/* The seconds a set may take before it is ended as hung, and a set of guest
- * cases, whose machines boot under TCG on the testing host. */
-#define SET_BOUND   120
-#define GUEST_BOUND 300
-
 /* The memory of the fixture machine's ledger, in MiB. */
 #define MEMORY_MIB 8192u
 
@@ -249,13 +239,12 @@ static const char makefile[] =
 /* The program of the fixture's host cases. Its first argument says what it
  * does before its report ends: `pass`; `fail`, a failed assertion; `cut`, a
  * report with no end; `tick`, progress for 4.5 s; `slow`, progress for
- * 11.7 s; `plain`, a line of output; `long`, eight seconds of nothing;
- * `meet SELF OTHER`, a wait of three seconds at most for the other case to
- * be present, and a note in the tree of whether it met it; `mark NAME
- * SECONDS`, notes in the tree of its start and its end; or `hold`, a word
- * through the tree's FIFO that it has started and a wait of fifteen seconds
- * at most. It prints how it was run and where, and leaves a file in
- * $TMPDIR. */
+ * 11.7 s; `plain`, a line of output; `long`, nothing until it is stopped;
+ * `meet SELF OTHER`, a wait for the other case to be present, and a note in
+ * the tree that it met it; `mark NAME SECONDS`, notes in the tree of its
+ * start and its end; or `hold`, a word through the tree's FIFO that it has
+ * started and a wait until it is stopped. It prints how it was run and
+ * where, and leaves a file in $TMPDIR. */
 static const char probe[] =
     "#!/bin/sh\n"
     "echo \"program: $0 $*\"\n"
@@ -280,19 +269,14 @@ static const char probe[] =
     "    done\n"
     "    echo \"@etude 1 assert ran pass\" ;;\n"
     "plain) echo 'plain ran'; echo \"@etude 1 assert ran pass\" ;;\n"
-    "long) echo 'long running'; sleep 8; echo \"@etude 1 assert ran pass\" ;;\n"
+    "long) echo 'long running'; while :; do sleep 1; done ;;\n"
     "meet)\n"
     "    m=$ETUDE_TREE/meet\n"
     "    touch \"$m/$2.here\"\n"
-    "    i=0\n"
-    "    until [ -e \"$m/$3.here\" ] || [ $i -ge 30 ]; do\n"
+    "    until [ -e \"$m/$3.here\" ]; do\n"
     "        sleep 0.1\n"
-    "        i=$((i + 1))\n"
     "    done\n"
-    "    if [ -e \"$m/$3.here\" ]; then w=met; else w=alone; fi\n"
-    "    sleep 0.3\n"
-    "    rm -f \"$m/$2.here\"\n"
-    "    echo \"$2 $w\" >> \"$m/log\"\n"
+    "    echo \"$2 met\" >> \"$m/log\"\n"
     "    echo \"@etude 1 assert ran pass\" ;;\n"
     "mark)\n"
     "    echo \"start $2\" >> \"$ETUDE_TREE/marks\"\n"
@@ -304,12 +288,7 @@ static const char probe[] =
     "hold)\n"
     "    echo holding\n"
     "    echo started > \"$ETUDE_TREE/started.fifo\"\n"
-    "    i=0\n"
-    "    until [ -e \"$ETUDE_TREE/release\" ] || [ $i -ge 150 ]; do\n"
-    "        sleep 0.1\n"
-    "        i=$((i + 1))\n"
-    "    done\n"
-    "    echo \"@etude 1 assert ran pass\" ;;\n"
+    "    while :; do sleep 1; done ;;\n"
     "*) echo \"@etude 1 assert ran pass\" ;;\n"
     "esac\n"
     "echo \"@etude 1 end 1\"\n";
@@ -684,7 +663,7 @@ struct run {
     int guest;          /* it runs guest cases, on the real QEMU */
     enum put_fault put; /* the fault of the driver's copies */
     pid_t pid;
-    int status;  /* the driver's, or -1 when it did not end by itself */
+    int status;  /* the driver's, or -1 when a signal ended it */
     long claims; /* the claims the ledger kept after it, or -1 */
     int leaks;   /* LeakSanitizer found a leak of the driver */
     char results[PATH_LEN], evidence[PATH_LEN], status_file[PATH_LEN];
@@ -1427,29 +1406,28 @@ static void set_start(struct run *r)
         printf("etude-legacyset-test: fail: %s: no child: %s\n", r->name, strerror(errno));
 }
 
-/** Wait for the set of `r` to end within its bound, SET_BOUND or
- * GUEST_BOUND seconds, or end it, and take what it gave. */
+/** Say whether the driver `pid` is still running, without reaping it. */
+static int running(pid_t pid)
+{
+    siginfo_t si;
+
+    memset(&si, 0, sizeof(si));
+    return pid > 0 && waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 &&
+           si.si_pid == 0;
+}
+
+/** Wait for the set of `r` to end, and take what it gave. */
 static void set_finish(struct run *r)
 {
-    int bound = r->guest ? GUEST_BOUND : SET_BOUND;
     char side[64];
-    int status, i;
-    pid_t got = 0;
+    int status;
+    pid_t got = -1;
 
-    for (i = 0; r->pid > 0 && i < bound * 20; i++) {
-        if ((got = waitpid(r->pid, &status, WNOHANG)) != 0)
-            break;
-        /* interval: a set is looked at again every 50 ms */
-        usleep(50000);
-    }
-    if (r->pid > 0 && got == 0) {
-        printf("etude-legacyset-test: fail: %s: the set did not end in %d s\n", r->name, bound);
-        fails++;
-        kill(r->pid, SIGKILL);
-        got = waitpid(r->pid, &status, 0);
-    } else if (got == r->pid && WIFEXITED(status)) {
+    if (r->pid > 0)
+        while ((got = waitpid(r->pid, &status, 0)) < 0 && errno == EINTR) {
+        }
+    if (got == r->pid && WIFEXITED(status))
         r->status = WEXITSTATUS(status);
-    }
     read_text(r->out_file, r->out, sizeof(r->out));
     if (read_text(r->side, side, sizeof(side)) > 0 &&
         sscanf(side, "%ld %d", &r->claims, &r->leaks) != 2)
@@ -1648,15 +1626,30 @@ static int both(char *log, size_t size, const char *a, const char *b)
     return has_start(log, a) && has_start(log, b);
 }
 
+/** Say whether the marks `marks` have the end of the case `name` on the line
+ * after its start, so that no other case started or ended while it ran. */
+static int apart(const char *marks, const char *name)
+{
+    char start[64], end[64];
+    int at;
+
+    fix_format(start, sizeof(start), "start %s", name);
+    fix_format(end, sizeof(end), "end %s", name);
+    at = line_no(marks, start);
+    return at > 0 && line_no(marks, end) == at + 1;
+}
+
 /** A width of two lets the cases of two suites meet, with `locks` and
- * without, and a width of one keeps them apart. */
+ * without, and a width of one runs them one after the other. */
 static void test_width(void)
 {
-    static const struct etude_legacy_member m[] = {{"meet-a", 0, 0, ONE("meet-a")},
-                                                   {"meet-b", 0, 0, ONE("meet-b")}};
+    static const struct etude_legacy_member meet[] = {{"meet-a", 0, 0, ONE("meet-a")},
+                                                      {"meet-b", 0, 0, ONE("meet-b")}};
+    static const struct etude_legacy_member side[] = {{"side-x", 0, 0, ONE("side-x")},
+                                                      {"side-y", 0, 0, ONE("side-y")}};
     static const char *const names[] = {"meet", "meetlocks", "width"};
     static struct run r[3];
-    char log[1024];
+    char path[PATH_LEN], log[1024];
     size_t i;
     int before;
 
@@ -1664,18 +1657,20 @@ static void test_width(void)
         before = fails;
         clear_marks();
         r[i].name = names[i];
-        r[i].members = m;
+        r[i].members = i < 2 ? meet : side;
         r[i].n = 2;
         r[i].width = i < 2 ? 2 : 1;
         r[i].locks = i == 1;
         set_run(&r[i]);
         CHECK(r[i].status == 0, "width: passed");
-        if (i < 2)
+        if (i < 2) {
             CHECK(both(log, sizeof(log), "meet-a met", "meet-b met"),
                   "width: two at once with width 2");
-        else
-            CHECK(both(log, sizeof(log), "meet-a alone", "meet-b alone"),
+        } else {
+            read_text(in(path, sizeof(path), "marks"), log, sizeof(log));
+            CHECK(apart(log, "side-x") && apart(log, "side-y"),
                   "width: one at a time with width 1");
+        }
         CHECK(r[i].claims == 0, "width: the ledger has no claim");
         if (fails != before)
             printf("etude-legacyset-test: %s: the notes:\n%s", names[i], log);
@@ -1780,7 +1775,7 @@ static void test_signal(void)
     char path[PATH_LEN], got[16], want[512];
     const char *at;
     struct pollfd pfd;
-    int fd, i, named = 0, before = fails;
+    int fd, began = 0, named = 0, before = fails;
 
     fd = open(in(path, sizeof(path), "started.fifo"), O_RDWR | O_CLOEXEC);
     r.name = "signal";
@@ -1789,9 +1784,12 @@ static void test_signal(void)
     set_start(&r);
     pfd.fd = fd;
     pfd.events = POLLIN;
-    CHECK(fd >= 0 && r.pid > 0 && poll(&pfd, 1, START_BOUND) == 1 && read(fd, got, sizeof(got)) > 0,
+    while (fd >= 0 && !began && running(r.pid))
+        /* interval: the driver is looked at again every 50 ms */
+        began = poll(&pfd, 1, 50) == 1;
+    CHECK((began || (fd >= 0 && poll(&pfd, 1, 0) == 1)) && read(fd, got, sizeof(got)) > 0,
           "signal: the case started");
-    for (i = 0; i < STATUS_BOUND / 50 && !named; i++) {
+    while (!named && running(r.pid)) {
         read_text(r.status_file, status, sizeof(status));
         named = (at = line_start(status, "attempt ")) != NULL &&
                 strstr(at, ":fixture.hold.one:i686:r0:a0 fixture.hold.one i686 ") != NULL;

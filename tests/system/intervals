@@ -10,7 +10,6 @@ tests/host/etude_sched_hosttest.c: a job holds its claims so the workers' claims
 tests/timeprobe.c: naps between looks; the parent's are the sleep tested
 tests/pipeprobe.c: a try that changed the heap is followed by a pause
 tests/host/etude_native_hosttest.c: a process or a group is looked at again every 20 ms
-tests/host/etude_legacyset_hosttest.c: a set is looked at again every 50 ms
 tests/host/etude_legacyset_hosttest.c: the record is read again every 50 ms
 tests/host/etude_exec_hosttest.c: the child is checked every 1 ms
 tests/host/etude_ports_hosttest.c: a run is looked at again, or watched while it must wait
