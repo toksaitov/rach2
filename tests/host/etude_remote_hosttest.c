@@ -66,7 +66,7 @@ static int fails;
 #define BOOT       "0123456789abcdef"
 #define OTHER_BOOT "ffffffffffffffff"
 
-/* The bound of a connection and of each answer. */
+/* The controller's bound of a connection and of each answer. */
 #define STAGE_US 10000000u
 
 /* This program, by an absolute path. */
@@ -219,7 +219,8 @@ static int peer_start(struct peer *p, const char *state, const char *boot)
     return 0;
 }
 
-/** Read the next frame within the stage's bound; 0 on success. */
+/** Read the next frame; 0 on success, or -1 at the end of the connection or
+ * a line that is not a frame. */
 static int peer_recv(struct peer *p)
 {
     struct pollfd pfd;
@@ -246,7 +247,7 @@ static int peer_recv(struct peer *p)
         }
         pfd.fd = p->from;
         pfd.events = POLLIN;
-        if (poll(&pfd, 1, (int)(STAGE_US / 1000)) <= 0)
+        if (poll(&pfd, 1, -1) <= 0)
             return -1;
         n = read(p->from, p->buf + p->len, sizeof(p->buf) - p->len - 1);
         if (n <= 0)
