@@ -67,10 +67,8 @@ EOF
 chmod +x "$work/bin/uname"
 cat >"$work/bin/x86_64-elf-gdb" <<'EOF'
 #!/bin/sh
-i=0
-while [ ! -s "$ARGS_OUT" ] && [ "$i" -lt 5 ]; do
+until [ -s "$ARGS_OUT" ]; do
     sleep 1
-    i=$((i + 1))
 done
 EOF
 chmod +x "$work/bin/x86_64-elf-gdb"

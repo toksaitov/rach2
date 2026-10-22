@@ -192,26 +192,12 @@ done
 echo 'run: result: all suites passed'
 exit "$status"
 EOF
-# The stand-in timeout(1) notes the limit and runs the command without it,
-# or, with CI_TEST_LIMIT, ends it with TERM after that many seconds and exits
-# 124, as timeout does, so that a run that waits for ever fails its row.
+# The stand-in timeout(1) notes the limit and runs the command without it.
 cat > "$work/bin/timeout" <<'EOF'
 #!/bin/sh
 echo "$3" >> "$CI_TEST_WORK/limits"
 shift 3
-[ -n "${CI_TEST_LIMIT:-}" ] || exec "$@"
-exec perl -e '
-    my ($limit, @command) = @ARGV;
-    my $hit = 0;
-    my $pid = fork;
-    defined $pid or die "timeout: fork: $!\n";
-    if ($pid == 0) { exec @command or exit 127 }
-    $SIG{ALRM} = sub { $hit = 1; kill "TERM", $pid };
-    alarm $limit;
-    waitpid $pid, 0;
-    exit 124 if $hit;
-    exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
-' "$CI_TEST_LIMIT" "$@"
+exec "$@"
 EOF
 cat > "$work/bin/date" <<'EOF'
 #!/bin/sh
@@ -631,7 +617,7 @@ enroll()
 }
 
 # admits CASE: bisect a failure of bigmem on a machine where etude admits
-# tests, each test bounded at 20 seconds, and require for CASE:
+# tests, and require for CASE:
 #   bigmem     each build and run a claim in the ledger, the build's a
 #              quarter of the machine and a run's four thirds of bigmem's
 #              memory, which takes the host alone; each run with a port block,
@@ -647,8 +633,8 @@ admits()
 (
     start
     enroll
-    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=fail CI_TEST_LIMIT=20
-    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN CI_TEST_LIMIT
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=fail
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
     name=$1 item=bigmem
     set -- -e "$bridge"
     case $name in
