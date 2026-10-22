@@ -799,6 +799,7 @@ static int wide(struct etude_case *c, int uefi)
     net_step(&s.u, "scan");
     power_on(&s, "scan");
     net_wait(&s.b, "ext2: root: ");
+    net_wait(&s.b, "\n");
     net_assert(&s.u, "scan-root", console_has(&s, "ext2: root: /dev/disk0p3"),
                "rach2.root=ext2 did not find the 4 TiB disk's root");
     quit(&s);
