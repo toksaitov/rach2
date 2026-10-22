@@ -124,6 +124,14 @@
  * policy, or a ledger whose memory limit is less than 4 GiB, it ends
  * incomplete before its scenario starts, with the reason and no invocation;
  * a policy that cannot be read is refused.
+ *
+ * A host case that declares `tooling_memory_bytes`, the memory it takes on
+ * a host where it runs its work in etude's tooling machine, claims its
+ * `memory_bytes` on Linux and its tooling memory on any other host, as the
+ * ledger's claim, which the case prints, shows. Its manifest read, the case
+ * claims its tooling memory on such a host and its `memory_bytes` on Linux,
+ * and a case without tooling memory its `memory_bytes` on both; tooling
+ * memory of no bytes is refused.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -146,6 +154,7 @@
 #include "etude/history.h"
 #include "etude/ledger.h"
 #include "etude/legacy.h"
+#include "legacy_cases.h"
 
 /* The set driver's copy of a file to its store, which a host test build of
  * legacy_set.c lets the test replace. */
@@ -286,6 +295,8 @@ static const char probe[] =
     "    echo \"start $2\" >> \"$ETUDE_TREE/marks\"\n"
     "    sleep \"$3\"\n"
     "    echo \"end $2\" >> \"$ETUDE_TREE/marks\"\n"
+    "    echo \"@etude 1 assert ran pass\" ;;\n"
+    "claim) sed -n 's/^resource memory_bytes /ledger: &/p' \"$FIXTURE_LEDGER/claims\"\n"
     "    echo \"@etude 1 assert ran pass\" ;;\n"
     "hold)\n"
     "    echo holding\n"
@@ -514,6 +525,13 @@ static const struct {
             {"serial", "\"mark\", \"serial\", \"1\""},
             {"side-x", "\"mark\", \"side-x\", \"0.2\""},
             {"side-y", "\"mark\", \"side-y\", \"0.2\""}};
+
+/* The resources of the case of the family `tooling`, which claims 16 MiB on
+ * Linux and 3200 MiB on a host where it runs its work in the tooling
+ * machine, and of its manifest `none.json`, whose tooling memory is none. */
+#define TOOLING_FROM "\"memory_bytes\": 16777216,"
+#define TOOLING_TO   "\"memory_bytes\": 16777216, \"tooling_memory_bytes\": 3355443200,"
+#define TOOLING_NONE "\"memory_bytes\": 16777216, \"tooling_memory_bytes\": 0,"
 
 /* The case of `bad` that runs on x86_64 alone. */
 static const struct fcase other_cases[] = {
@@ -1068,7 +1086,8 @@ static int replaced(char *out, size_t size, const char *text, const char *from, 
 /** Write the program of the fixture's cases and their manifests under
  * cases/: `good`, `mixed` and `guest` in directories of their own, as
  * casecheck's verdict reads them, the families of one case in cases/one,
- * and the refused ones of `bad` and `badguest`; 0, or -1. */
+ * the family `tooling` of one case with tooling memory, and the refused ones
+ * of `bad` and `badguest`; 0, or -1. */
 static int make_cases(void)
 {
     static char text[32768], changed[32768];
@@ -1096,6 +1115,13 @@ static int make_cases(void)
         bad |= manifest_text(text, sizeof(text), family, &one, 1) != 0 ||
                write_text(in(path, sizeof(path), name), text, 0644) != 0;
     }
+    one.id = "fixture.tooling.one";
+    one.args = "\"claim\"";
+    bad |= manifest_text(text, sizeof(text), "fixture.tooling", &one, 1) != 0 ||
+           replaced(changed, sizeof(changed), text, TOOLING_FROM, TOOLING_TO) != 0 ||
+           write_text(in(path, sizeof(path), "cases/tooling/tooling.json"), changed, 0644) != 0 ||
+           replaced(text, sizeof(text), changed, TOOLING_TO, TOOLING_NONE) != 0 ||
+           write_text(in(path, sizeof(path), "cases/tooling/none.json"), text, 0644) != 0;
     bad |= manifest_text(text, sizeof(text), "fixture.bad", bad_cases, 1);
     for (i = 0; i < sizeof(refusals) / sizeof(refusals[0]); i++) {
         if (refusals[i].from != NULL)
@@ -1169,7 +1195,8 @@ static void make_tree(void)
                                        "cases/guest",
                                        "cases/badguest",
                                        "cases/machine",
-                                       "cases/boundary"};
+                                       "cases/boundary",
+                                       "cases/tooling"};
     static char source[1 << 20], newpath[8192], rules[8192];
     const char *oldpath = getenv("PATH");
     char path[PATH_LEN], owner[64], dir[PATH_MAX] = "";
@@ -2426,6 +2453,69 @@ static void test_boundary(void)
             "the site's policy ");
 }
 
+/** Read the manifest `name` of the fixture tree for the suite `suite` on
+ * i686; the memory its first case claims on a host whose cases run in the
+ * tooling machine when `tooling` is set, and on Linux otherwise, or 0 with
+ * the reason in `why`. */
+static uint64_t tooling_claim(const char *suite, const char *name, int tooling, char *why,
+                              size_t size)
+{
+    struct legacy_manifest m;
+    uint64_t bytes = 0;
+
+    why[0] = '\0';
+    if (legacy_manifest_read(&m, tree, name, suite, "i686", NULL) == 0)
+        bytes = legacy_case_memory(&m.cases[0], tooling);
+    else
+        fix_format(why, size, "%s", m.why);
+    legacy_manifest_free(&m);
+    return bytes;
+}
+
+/** A host case with tooling memory claims its `memory_bytes` on Linux and
+ * its tooling memory on another host, where its work runs in the tooling
+ * machine; a case without tooling memory claims its `memory_bytes` on both,
+ * and tooling memory of no bytes is refused. */
+static void test_tooling(void)
+{
+    static const struct etude_legacy_member m[] = {{"tooling", 0, 0, "cases/tooling/tooling.json"}};
+    static struct run r;
+    static char var[PATH_LEN + 32];
+    char why[400];
+    int before = fails;
+
+    fix_format(var, sizeof(var), "FIXTURE_LEDGER=%s", ledger);
+    r.name = "tooling";
+    r.members = m;
+    r.n = 1;
+    r.var = var;
+    set_run(&r);
+    CHECK(r.status == 0, "tooling: the case passed");
+#ifdef __linux__
+    CHECK(output_has(&r, "fixture.tooling.one.r0", "ledger: resource memory_bytes 16777216"),
+          "tooling: the claim on Linux is the case's memory");
+#else
+    CHECK(output_has(&r, "fixture.tooling.one.r0", "ledger: resource memory_bytes 3355443200"),
+          "tooling: the claim on this host is the case's tooling memory");
+#endif
+    CHECK(r.claims == 0, "tooling: the ledger has no claim");
+    CHECK(!r.leaks, "tooling: the driver leaks nothing");
+    show(&r, before);
+
+    CHECK(tooling_claim("tooling", "cases/tooling/tooling.json", 1, why, sizeof(why)) ==
+              UINT64_C(3355443200),
+          "tooling: on a host of the tooling machine, the case claims its tooling memory");
+    CHECK(tooling_claim("tooling", "cases/tooling/tooling.json", 0, why, sizeof(why)) ==
+              UINT64_C(16777216),
+          "tooling: on Linux, the case claims its memory");
+    CHECK(tooling_claim("plain", ONE("plain"), 1, why, sizeof(why)) == UINT64_C(16777216),
+          "tooling: a case without tooling memory claims its memory");
+    CHECK(tooling_claim("tooling", "cases/tooling/none.json", 1, why, sizeof(why)) == 0 &&
+              strstr(why, "fixture.tooling.one: the case's tooling memory is not a host case's "
+                          "count of bytes") != NULL,
+          "tooling: tooling memory of no bytes is refused");
+}
+
 /** Give the store of guest artifacts that run `r` left under its evidence,
  * `RUN.store`, in `out`. */
 static const char *guest_store(const struct run *r, char *out, size_t size)
@@ -2758,6 +2848,7 @@ int main(int argc, char **argv)
     test_machine();
     test_publish();
     test_boundary();
+    test_tooling();
     test_cases_refused();
     test_machine_locks();
     test_guest();

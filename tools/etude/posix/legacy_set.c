@@ -95,6 +95,14 @@ extern char **environ;
 #define BOUNDARY_PROFILE "bigmem-boundary-v1"
 #define BOUNDARY_PERMIT  "boundary_lazy " BOUNDARY_PROFILE
 
+/* Whether a host case runs its work in etude's tooling machine here, as on
+ * every host that is not Linux. */
+#ifdef __linux__
+#define TOOLING_HOST 0
+#else
+#define TOOLING_HOST 1
+#endif
+
 static const char *const resource_names[] = {"cpu_millis", "memory_bytes", "disk_bytes"};
 static const char *const outcome_names[] = {"pass", "failure", "incomplete", "cancelled"};
 
@@ -2754,7 +2762,7 @@ static int case_command(struct set *x, struct member *m)
     c->cwd = m->work;
     m->arch = k->arch;
     want[ETUDE_LEGACY_CPU] = k->cpu_millis;
-    want[ETUDE_LEGACY_MEMORY] = k->memory_bytes;
+    want[ETUDE_LEGACY_MEMORY] = legacy_case_memory(k, TOOLING_HOST);
     want[ETUDE_LEGACY_DISK] = k->disk_bytes;
     for (i = 0; i < 3; i++) {
         if (want[i] == 0)

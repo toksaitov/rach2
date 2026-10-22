@@ -51,6 +51,9 @@ struct legacy_case {
     /* The claim: the case's processor and disk, and its memory, which for a
      * guest case is what etude_qemu_memory reserves for its machine. */
     uint64_t cpu_millis, memory_bytes, disk_bytes;
+    /* A host case's memory on a host where it runs its work in etude's
+     * tooling machine, its `tooling_memory_bytes`, or 0 when it has none. */
+    uint64_t tooling_bytes;
     struct jbuf workload, inventory, profile; /* the canonical documents */
 };
 
@@ -78,9 +81,10 @@ struct legacy_manifest {
  * `ordinary` or `boot`, end as `exited` or `signaled`, and have a QEMU
  * profile of direct firmware or SeaBIOS, reserved memory, and a kernel, a
  * RAM image and disks that are artifacts of its `prepare`, each disk a CD,
- * an empty disk or one of a `disk` fixture. The schema's other rules are the
- * caller's to check. The caller frees `m` with legacy_manifest_free whether
- * or not the manifest was taken.
+ * an empty disk or one of a `disk` fixture. A host case's tooling memory, if
+ * it has any, must be a count above 0, and a guest or machine case has none.
+ * The schema's other rules are the caller's to check. The caller frees `m`
+ * with legacy_manifest_free whether or not the manifest was taken.
  *
  * With `kernel`, the NAME of `-n NAME`, a guest case whose QEMU profile
  * boots the node `rach2/kernel` is given the goal of `rach2-NAME/kernel` for
@@ -94,6 +98,14 @@ int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char
 
 /** Free what `m` holds. */
 void legacy_manifest_free(struct legacy_manifest *m);
+
+/**
+ * Give the memory that case `k` claims: its tooling memory where `tooling`
+ * is nonzero, on a host where a host case runs its work in etude's tooling
+ * machine, one that is not Linux, when it has any, and its `memory_bytes`
+ * otherwise.
+ */
+uint64_t legacy_case_memory(const struct legacy_case *k, int tooling);
 
 /* The outcomes of a judgement, as casecheck's exit status gives them. */
 enum legacy_judged {

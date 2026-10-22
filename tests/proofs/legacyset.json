@@ -1169,6 +1169,57 @@
           ": publish-failed: the next case copies the disk again, and the others reuse its copy: "
         ]
       }
+    },
+    {
+      "name": "tooling-ignored",
+      "summary": "a host case read for a host whose cases run in the tooling machine claims its memory, not its tooling memory",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    return tooling && k->tooling_bytes > 0 ? k->tooling_bytes : k->memory_bytes;\n",
+          "replace": "    return tooling && 0 ? k->tooling_bytes : k->memory_bytes;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": tooling: on a host of the tooling machine, the case claims its tooling memory: "
+        ]
+      }
+    },
+    {
+      "name": "tooling-host",
+      "summary": "the set driver takes the tooling memory on Linux, and the memory on a host that is not Linux",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "legacy_case_memory(k, TOOLING_HOST);",
+          "replace": "legacy_case_memory(k, !TOOLING_HOST);"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": tooling: the claim on "
+        ]
+      }
+    },
+    {
+      "name": "tooling-unchecked",
+      "summary": "a host case's tooling memory of no bytes is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (k->guest || k->machine || count_of(r, \"tooling_memory_bytes\") < 1)\n",
+          "replace": "    if (k->guest || k->machine)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": tooling: tooling memory of no bytes is refused: "
+        ]
+      }
     }
   ]
 }

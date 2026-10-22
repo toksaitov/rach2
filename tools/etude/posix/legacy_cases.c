@@ -225,6 +225,19 @@ static int ports_of(struct legacy_manifest *m, struct legacy_case *k, const stru
     return 0;
 }
 
+/** Take the tooling memory of host case `k` from its resources `r`, when it
+ * has any; 0, or -1 after a refusal. */
+static int tooling_of(struct legacy_manifest *m, struct legacy_case *k, const struct json *r)
+{
+    if (json_member(r, "tooling_memory_bytes") == NULL)
+        return 0;
+    if (k->guest || k->machine || count_of(r, "tooling_memory_bytes") < 1)
+        return refuse(m, "%s: the case's tooling memory is not a host case's count of bytes",
+                      k->case_id);
+    k->tooling_bytes = (uint64_t)count_of(r, "tooling_memory_bytes");
+    return 0;
+}
+
 /** Check what case `k` needs of the driver, and take its claim; 0, or -1
  * after a refusal. */
 static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
@@ -274,7 +287,7 @@ static int needs_of(struct legacy_manifest *m, struct legacy_case *k)
     if (count_of(r, "cpu_millis") < 1 || count_of(r, "memory_bytes") < 1 ||
         count_of(r, "disk_bytes") < 0)
         return refuse(m, "%s: the case's resources lack a processor, memory or disk", k->case_id);
-    return 0;
+    return tooling_of(m, k, r);
 }
 
 /** Say whether `name` is in a `disk` fixture of case `k`'s isolation. */
@@ -589,6 +602,11 @@ int legacy_manifest_read(struct legacy_manifest *m, const char *tree, const char
     if (m->ncases == 0)
         return refuse(m, "no case of it runs on %s", arch);
     return 0;
+}
+
+uint64_t legacy_case_memory(const struct legacy_case *k, int tooling)
+{
+    return tooling && k->tooling_bytes > 0 ? k->tooling_bytes : k->memory_bytes;
 }
 
 void legacy_manifest_free(struct legacy_manifest *m)

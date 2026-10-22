@@ -58,7 +58,8 @@
          "else": {"not": {"anyOf": [{"required": ["steps"]}, {"required": ["machines"]}, {"required": ["services"]}]}}},
         {"if": {"properties": {"domain": {"const": "host"}}},
          "then": {"properties": {"native": {"properties": {"plan": {"const": "host"}}}}},
-         "else": {"properties": {"native": {"properties": {"plan": {"enum": ["native", "none"]}}}, "architectures": {"type": "array"}}}},
+         "else": {"properties": {"native": {"properties": {"plan": {"enum": ["native", "none"]}}}, "architectures": {"type": "array"},
+                                 "resources": {"not": {"required": ["tooling_memory_bytes"]}}}}},
         {"if": {"properties": {"domain": {"const": "guest"}}},
          "then": {"properties": {"requirements": {"required": ["qemu"]}}},
          "else": {"properties": {"execution": {"properties": {"role": {"const": "ordinary"}, "stdin": {"type": "null"}}}, "requirements": {"not": {"required": ["qemu"]}}}}}
@@ -370,6 +371,7 @@
         "cpu_millis": {"$ref": "#/$defs/positive"},
         "cpu_ceiling_millis": {"$ref": "#/$defs/positive"},
         "memory_bytes": {"$ref": "#/$defs/positive"},
+        "tooling_memory_bytes": {"$ref": "#/$defs/positive"},
         "disk_bytes": {"$ref": "#/$defs/count"},
         "guest_memory": {
           "type": "object", "additionalProperties": false,
