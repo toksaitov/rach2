@@ -141,7 +141,7 @@ account() {
     while :; do
         if ssh -i "$KEY" -p "$PORT" \
             -o StrictHostKeyChecking=no -o UserKnownHostsFile="$KNOWN" \
-            -o ConnectTimeout=10 -o BatchMode=yes \
+            -o BatchMode=yes \
             "$USER_NAME@$HOST" "$1" 2>"$LOCAL_TMP/ssh.err"; then
             status=0
         else

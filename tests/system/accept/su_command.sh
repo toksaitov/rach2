@@ -71,7 +71,7 @@ while :; do
     "$driver" --rows 40 --cols 120 --password-env RACH2_ACCEPT_PASSWORD \
         ssh -tt -i "$1" -p "$3" \
         -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$5" \
-        -o ConnectTimeout=10 -o BatchMode=yes "$4@$2" \
+        -o BatchMode=yes "$4@$2" \
         "su -c $(quote "$command")" > "$work/raw" 2>&1 &
     child=$!
     rc=0
