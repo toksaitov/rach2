@@ -660,48 +660,6 @@ case_registry() {
     fi
 }
 
-# Every product a `run-` target names is built by `prepare-all`, so that a
-# set never has two suites building one at once. Both sides come from make's
-# own database, prerequisites expanded, and the closure is transitive, so a
-# product reached through an image counts as prepared. `prepare-all` builds
-# its halves from its recipe, so the recipe is read for the targets it
-# names; a half dropped from it is found. The database comes from one serial
-# make, whatever MAKEFLAGS the caller gives: sub-makes run in parallel would
-# print their databases into one file at once, and their lines would mix.
-case_prepared() {
-    if ! MAKEFLAGS='' make -j1 -C "$REPO" -pn prepare-all >"$VDIR/_db.txt" 2>/dev/null; then
-        fail products "make -pn prepare-all failed"
-        return
-    fi
-    found products "a run- target names a product prepare-all does not build" "$(awk '
-        /^#/ || /^$/ { next }
-        /^[^ \t:=]+:[^=]/ {
-            t = $1; sub(/:$/, "", t)
-            n = split($0, f, /[ \t]+/)
-            for (i = 2; i <= n; i++) if (f[i] != "" && f[i] != "|") deps[t] = deps[t] " " f[i]
-            if (t ~ /^run-/) runs[t] = 1
-            cur = t; next
-        }
-        /^\t/ && cur == "prepare-all" {
-            n = split($0, f, /[ \t]+/)
-            for (i = 1; i <= n; i++) if (f[i] ~ /^prepare-/) deps[cur] = deps[cur] " " f[i]
-            next
-        }
-        /^\t/ { next }
-        END {
-            queue[1] = "prepare-all"; head = 1; tail = 1; seen["prepare-all"] = 1
-            while (head <= tail) {
-                t = queue[head++]
-                m = split(deps[t], d, " ")
-                for (i = 1; i <= m; i++) if (d[i] != "" && !(d[i] in seen)) { seen[d[i]] = 1; queue[++tail] = d[i] }
-            }
-            for (r in runs) {
-                m = split(deps[r], d, " ")
-                for (i = 1; i <= m; i++) if (d[i] ~ /^build\// && !(d[i] in seen)) print r ": " d[i]
-            }
-        }' "$VDIR/_db.txt" | sort)"
-}
-
 # The tests wait for events, assert on counts and report what they leave
 # out. A sleep for a fixed time, a `wait=N` harness step and an upper bound on
 # a duration are guesses at a machine's speed, and a skip printed in a
@@ -829,7 +787,7 @@ fi
 case "$CASE" in
     tools|assignments|faulttexts|kernel-build|cppcheck|shellcheck|conventions|clang-format) ;;
     build-inputs|abi|sources|text|messages|runner-rules|setid|repro|checkers|devlog) ;;
-    registry|prepared|waits|manual|clang|sparse|sizes|links) ;;
+    registry|waits|manual|clang|sparse|sizes|links) ;;
     *) echo "style: no case $CASE" >&2; exit 2 ;;
 esac
 record "begin $ID"

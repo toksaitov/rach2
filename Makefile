@@ -140,7 +140,7 @@ GUESTCHECK      = build/tools/verify/guestcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
-.PHONY: all clean distclean images musl-programs test preflight check-sources prepare-all \
+.PHONY: all clean distclean images musl-programs test preflight check-sources \
         test-image os-simple-image os-real-image os-real-disk \
         rach2-metal rach2-metal-image \
         rach2-sealed-disk rach2-recovery rach2-recovery-image \
@@ -1532,9 +1532,9 @@ check-libc: $(LIBC_STAMP) $(MUSL_OUTPUTS)
 	@test -f $(MUSL_CRYPT_SRC) || { echo "libc: $(MUSL_CRYPT_SRC) missing; rm $(LIBC_STAMP) and rebuild (make)" >&2; exit 1; }
 
 # The host compile rule, the disk and stick products, the GNU layer, and the
-# test suites: every `run-NAME` target, the fixtures the suites write, the
-# test tools, and `prepare-all`. The suites are included so that one
-# dependency graph covers the product and the variants only a suite needs.
+# test suites: the fixtures the suites write and the test tools. The suites
+# are included so that one dependency graph covers the product and the
+# variants only a suite needs.
 include mk/host.mk
 include mk/images.mk
 include mk/gnu.mk

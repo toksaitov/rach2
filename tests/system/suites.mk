@@ -1,23 +1,20 @@
-# tests/system/suites.mk: how each test suite is built and run.
+# tests/system/suites.mk: the artifacts of the test suites.
 #
 # The root Makefile includes this file. That keeps one dependency graph, which
 # is what lets `tests/run authority` build the recovery kernel and the metal
 # image on a clean tree: those variants exist for suites alone, and a separate
 # make would have to rebuild every one of them or silently use a stale one.
 #
-# What belongs here: the `run-NAME` target of every suite in tests/registry,
-# the disks, captures, logs and ports those suites write, the ten test tools
-# under build/tests/system/, and `prepare-all`, which is the union the pooled
-# runner builds once before it starts any suite.
+# What belongs here: the disks, fixtures, captures and ports of the suites in
+# tests/registry, which are the cases of tests/cases and which etude's
+# preparation builds from the nodes their manifests name, the test tools under
+# build/tests/system/, and the sentence `tests/run inventory` prints for each
+# suite.
 #
 # What does not: anything the machine itself ships. The kernel, the userland,
 # the three bootable images, the guest probe programs staged into them, and the
 # validators that judge a published artifact all stay in the root, because they
 # are the product rather than the means of checking it.
-#
-# A suite target may assume the product is built: `tests/run` builds it and
-# `prepare-all` names it. A suite target names only its own fixtures and the
-# tools it invokes.
 
 # The architecture the suites boot, ARCH (mk/arch.mk): its build tree and its
 # emulator, which the recipes name and which the shell suites and the runners
@@ -51,12 +48,7 @@ ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
 # rule reads the files of another, they are explicit prerequisites of its own.
 together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 
-# No file is named `run-<suite>`, so every suite target is phony. The names are
-# read from the registry rather than written out again: `tests/run style`
-# already requires the registry and the targets in this file to name the same
-# suites, so a list derived from one cannot fall behind the other.
-.PHONY: prepare-all prepare-images prepare-tools components harness-kernel \
-        $(addprefix run-,$(shell awk -F'|' '!/^#/ && NF > 1 { print $$1 }' tests/registry))
+.PHONY: components harness-kernel
 
 # The card that the boots of the targets below attach, which the runner and
 # the harness both take as --device: the RTL8139 unless NIC names another.
@@ -196,40 +188,15 @@ $(ETUDEEXEC_ARCHIVE): $(ETUDEEXEC_FILES)
 	(cd $@.d && tar -cf - -T $(CURDIR)/$@.list) > $@.tmp
 	rm -rf $@.d $@.list
 	mv $@.tmp $@
-# Everything every suite needs, in one target, so `tests/run all` can build once
-# through one Make and then run the suites at the same time. Two suites each
-# invoking their own build would be two Makes against one `build/` tree; with
-# this built first, each suite's own target finds its work done and only boots
-# machines. The list is the union of what the `run-*` targets depend on, and
-# `tests/run` checks that it stays the union.
-#
-# The components, the builds that turn sources into programs, are a target of
-# their own, built in a Make of their own before the one that builds images
-# and disks: `prepare-all` builds them and then runs a second Make for the
-# rest, and `tests/run` builds them before a lone suite's own target. An
-# image rule also orders each staged component file after its builder, so a
-# single make restages a rebuilt program. The runner keeps preparation in two
-# invocations so every component finishes before suite products are built.
+# The components, the builds that turn sources into programs, in one target,
+# which etude's preparation builds in a make of its own before the artifacts
+# of the cases, so that every component finishes before an image or a disk
+# that stages it is made. An image rule also orders each staged component
+# file after its builder, so a single make restages a rebuilt program.
 components: harness-kernel busybox check-busybox check-dropbearmulti check-libc \
             check-pdpmake check-setid check-tcc ish krffs musl-programs \
             ports/doom rach2 rach2-metal rach2-recovery tests tools/etude/guest utils
 
-prepare-images: $(DEMO_CREDS) $(BINFIND) $(CASECHECK) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDELEGACY) \
-                $(ETUDELINES) $(HARNESS) \
-                $(HOSTPEER) $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
-                $(RUNUTIL) $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image \
-                os-simple-image rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \
-                $(INSTALL_STICK) $(INSTALL_TEST_STICK) $(INSTALLER_MBR_DISK) $(GROW_GPT_DISK)
-prepare-all: components
-	$(MAKE) --no-print-directory prepare-images prepare-products
-# The commands beyond the build's that the preparation runs, in the registry's
-# form: xorriso for the ISOs and the sticks, and mtools for the GRUB disks.
-# `tests/run` reads them from this target and refuses a set on a host that
-# lacks one before it builds anything, since a set prepares every suite's
-# products whichever suites it names.
-PREPARE_TOOLS = xorriso,mformat,mmd,mcopy
-prepare-tools:
-	@echo $(PREPARE_TOOLS)
 # `tests/run addressed`: the address named on the boot line, and the proof that
 # it is the one in force. Its case is in tests/cases/machine.addressed.json,
 # which etude runs, and has no target here.
@@ -997,8 +964,7 @@ $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) 
 # recovery partitions at the notebook's offsets, and the boot partition at eight
 # sectors to a cluster, which UEFI firmware does not read. installer-repair's
 # conversion row updates it, and the grow suite takes its first 130 MiB for the
-# notebook's fixture. Its name is set with the test sticks', since
-# prepare-images lists it.
+# notebook's fixture.
 $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
                        tools/image/mkdisk_grub.sh $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
@@ -1014,8 +980,7 @@ $(INSTALLER_MBR_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EX
 # The same layout on a GUID table, the one a machine installed from the
 # sealed disk has, at one sector to a cluster in the boot partition as on
 # every GUID table; the grow suite takes its first 130 MiB for the machine's
-# fixture. Its name is set with the test sticks', since prepare-images lists
-# it.
+# fixture.
 $(GROW_GPT_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
                   tools/image/mkdisk_grub.sh $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
@@ -1660,14 +1625,6 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 # tests/cases/machine.ssh-e1000.json.
 
 
-# The other products a `run-` target names, built with `prepare-images` before
-# a set's pool starts, so that no two pooled suites build one at once; they
-# are named here, after their definitions, since a prerequisite named before
-# its variable is defined expands to nothing. The style check holds every
-# `run-` target's file prerequisites to `prepare-all`'s closure.
-prepare-products: $(MKEXFATFIXTURE) $(MKFATFIXTURE) $(OS_SIMPLE_EXT2) $(OS_REAL_SMALL_EXT2) \
-                  $(GRUB_TEST_EXT2) $(FD_HOSTTEST) \
-                  $(STICK_IMAGE) $(SELFBUILD_EXT2_VOL) $(IMAGE_TOOLS)
 
 # `tests/run textbusy`: executable files exclude writers until the last image
 # ends, and bind mounts retain removed KRFFS boot-root files until last close.

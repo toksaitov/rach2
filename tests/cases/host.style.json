@@ -505,29 +505,6 @@
       "native": {"plan": "host"}
     },
     {
-      "case_id": "host.style.prepared",
-      "behavior": "every build/ product a run- target names is reached from prepare-all in make's database",
-      "units": ["style", "`check.sh` step 16, products against `prepare-all`"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["prepared"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["make", "awk"], "features": {}},
-      "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
-      "assertions": [
-        {"assertion_id": "products", "checks": "prepare-all reaches every product of every run- target", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "style", "node": "tests/cases/host/style", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
-    },
-    {
       "case_id": "host.style.waits",
       "behavior": "the tests wait for events, assert on counts and report what they leave out, and the case manifests are valid, by tools/verify/suitecheck.sh",
       "units": ["style", "`tools/verify/suitecheck.sh`"],
