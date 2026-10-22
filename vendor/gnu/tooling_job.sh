@@ -27,6 +27,12 @@
 # is made. The volume is mounted without delayed allocation, so a stamp that
 # a stopped machine left on the disk follows the files its step wrote.
 #
+# The build disk also has a swap file of 8 GiB, which the job takes while it
+# runs. Each of gcc's largest files takes nearly 2 GiB to compile, and make
+# runs JOBS of them at once beside the layer's other steps, more than the
+# machine's memory holds; without swap the kernel kills a compiler and the
+# build fails.
+#
 # make's output and the scripts' go to a log of the job's own in /gnu/log,
 # which keeps the last 20, and to the machine's second serial port, ttyS1 on
 # amd64 and ttyAMA1 on arm64, each line after the prefix `gnu-vm: `. That
@@ -48,6 +54,7 @@ CHAN=/dev/ttyS1
 BUILDER=rach2
 BUILDER_ID=1000
 LABEL=rach2-gnu
+SWAP=$MNT/swap
 
 fail()
 {
@@ -167,6 +174,11 @@ getent passwd $BUILDER > /dev/null ||
 mkdir -p $MNT/home $TREE $MNT/log $MNT/tmp $MNT/out || fail 'the directories of the build disk'
 chown $BUILDER_ID:$BUILDER_ID $MNT/home $TREE $MNT/log $MNT/tmp $MNT/out || fail 'chown failed'
 find $MNT/tmp $MNT/out -mindepth 1 -delete
+if [ ! -f $SWAP ]; then
+    { fallocate -l 8G $SWAP.new && chmod 600 $SWAP.new && mkswap $SWAP.new > /dev/null &&
+        mv $SWAP.new $SWAP; } || fail 'the swap file cannot be made'
+fi
+swapon $SWAP || fail 'the swap file cannot be taken'
 LOG=$MNT/log/$(date -u +%Y%m%dT%H%M%SZ)-$RACH2_ARCH.log
 find $MNT/log -name "*.log" | sort -r | tail -n +20 | xargs rm -f
 echo "gnu: job: $RACH2_ARCH, agents: ${GNU_AGENTS:-none}, link: ${GNU_LINK:-shared}, jobs: $JOBS${DRY_RUN:+, dry run}" |
@@ -196,6 +208,7 @@ if [ $status -ne 0 ]; then
     tail -n 40 "$LOG" >&2
 fi
 find $MNT/tmp -mindepth 1 -delete
+swapoff $SWAP
 sync
 fstrim $MNT > /dev/null 2>&1
 umount $MNT || { echo "gnu: job: the build disk does not unmount" >&2; status=1; }
