@@ -130,7 +130,7 @@ On Linux, `python3 -B tests/system/fakeapi/agy_test.py TARBALL` runs the script 
 
 ### The SNTP server
 
-`sntpserver.py` is the time server of the `gnu` suite's ntpd row. It answers SNTP requests on a UDP port of the host's loopback with a time that begins at the epoch it is given and advances at the host's rate, so that a clock the machine's ntpd set to it differs from the host's by years. The guest reaches it at `10.0.2.2`, which QEMU's user network delivers to the loopback. It exits when its parent does.
+`sntpserver.py` is the time server of the `gnu` family's ntpd case, which starts it as the case's service on the case's second port. It answers SNTP requests on that UDP port of the host's loopback with a time that begins at the epoch it is given and advances at the host's rate, so that a clock the machine's ntpd set to it differs from the host's by years. The guest reaches it at `10.0.2.2`, which QEMU's user network delivers to the loopback. It exits when its parent does.
 
 ### Fault proofs
 
@@ -187,8 +187,6 @@ Most fault proofs are catalogues of etude's proof driver, `tests/proofs/NAME.jso
 * `fatwrite-cases.json`: the `fatwrite` cases, against a FAT32 driver that never sets the dirty flag, one that writes each FAT entry through on its own, and one that leaves a removed file's clusters allocated.
 * `exfat-cases.json`: the `exfat` cases, against an exFAT driver that never sets VolumeDirty, one that leaves a removed file's clusters allocated, and one that records a large file's valid length one byte short.
 * `agents-accept.json`: the `agentsaccept` case of Claude Code and its resized terminal, against a kernel whose pseudo-terminal master sends no `SIGWINCH` when the window size is set.
-* `ntpd.json`: the `gnu` suite's ntpd row, against a configuration that names no server and an SNTP server that answers with the host's own time.
-* `exe.json`: the `gnu` suite's bash row, against an `execve` that names the program by the path it was given, links and all, in `/proc/PID/exe`.
 * `rows-default.json`: the `default` suite's `devprobe`, `sigprobe` and `procprobe` rows, each against a kernel fault that fails its own row.
 * `rows-runner.json`: the runner's self-test, against a copy of `tests/run` whose check of the run's own products is taken out.
 * `rows-sealed.json`: the `sealed` fault case's `update` and `mke2fs` assertions, against a sealed root without `update` and one without `mke2fs`.

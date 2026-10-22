@@ -72,14 +72,13 @@ together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 # every account can lock, the lowest free block of ten is taken, and the run
 # exports RACH2_PORT_OFFSET as N * 1000 while it holds the lock. Every port
 # below is the table's number plus that offset. Within a block the table's
-# numbers are 2225 and 2296 to 2304, and etude's set driver gives the machine
+# numbers are 2327, 2329 and 2331, and etude's set driver gives the machine
 # cases of tests/cases 2400 to 2999 (tools/etude/Readme.md, The set driver),
 # so no port of one block is a port of another, and the highest, 2999 + 9000,
 # is below the ephemeral ports. A make run without tests/run has no offset
 # and forwards the table's numbers.
 PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
 port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
-GNU_PORT        := $(call port,2296)
 NIC             ?= rtl8139
 NIC_DEV          = --device $(NIC),netdev=net0
 # The suites' wall-clock limit tool (see its rule below).
@@ -859,20 +858,37 @@ $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(M
 	$(MKMBR) --lba $@.tmp 2048:196608:83 198656:65536:83 > /dev/null
 	mv $@.tmp $@
 
-# `tests/run gnu`: the GNU system on its ext2 root, driven over OpenSSH with
-# nobody at the console, logged in to by key and by password, and each port,
-# GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell
-# doing its main job on the machine. The image is not among the products
-# `prepare-all` builds: it is made from the GNU layer, on a Linux host only
-# (mk/gnu-image.mk), which a set without this suite must not need, so the
-# suite's own target asks for it through `os-real-gnu-ext2`. `tests/run`
-# builds this target's products after `prepare-all` in a set that has the
-# suite, as it does for a suite run alone, and hashes them with the rest, so
-# a change to the image while the set runs voids the run.
+# `tests/run gnu`: the GNU system on its ext2 root, a boot for each case of
+# tests/cases/machine.gnu.json: logins by key and by password over OpenSSH, each
+# port, GCC, GNU make, GDB, the SpiderMonkey shell and chromium-headless-shell
+# doing its main job, and tmux at the console. Each case boots an overlay of
+# this disk: the GNU system's volume at LBA 2048 behind a table of one
+# partition, copied sparse, since the volume is 4 GiB with most of it free. The
+# image is not among the products `prepare-all` builds: it is made from the GNU
+# layer, on a Linux host only (mk/gnu-image.mk), which a set without this suite
+# must not need, so only the cases' preparation asks for it.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
-run-gnu: $(DEMO_CREDS) musl-programs rach2 os-real-gnu-ext2 $(DEADLINE) $(PTYDRIVE) $(RUNUTIL) $(MKMBR)
-	sh tests/system/suites/gnu.sh $(BOOT_KERNEL) $(OS_REAL_GNU_EXT2) $(GNU_TEST_DISK) \
-	    $(GNU_PORT) "`cat krffs/rach2_demo_password`" "`cat krffs/rach2_test_password`"
+$(GNU_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	mib=$$(($$(wc -c < $(OS_REAL_GNU_EXT2)) / 1048576)) && \
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
+	dd if=$(OS_REAL_GNU_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
+	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
+	mv $@.tmp $@
+
+# The files the gnu cases put on the machine or serve beside it: the rows'
+# script, GNU sed's tarball, which the autotools row builds, and the ntpd
+# row's SNTP server.
+build/tests/cases/gnu/rows.sh: tests/system/gnu_rows.sh
+	@mkdir -p $(@D)
+	cp $< $@
+build/tests/cases/gnu/sntpserver.py: tests/system/sntpserver.py
+	@mkdir -p $(@D)
+	cp $< $@
+build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
+	@mkdir -p $(@D)
+	cp "`sh vendor/gnu/fetch.sh --path sed`" $@
 
 # `tests/run codexapi`: OpenAI's Responses protocol in the fake API server,
 # proved against the host's Codex at the pinned version, in a fresh home and

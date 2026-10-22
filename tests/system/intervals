@@ -2,7 +2,6 @@
 # in the words of the `interval:` mark on the line; tools/verify/suitecheck.sh
 # refuses a sleep without one. A person reads this list.
 tests/system/agents/codex.sh: the pane is read every second until the screen is drawn
-tests/system/suites/gnu.sh: a try of SSH every two seconds until the server answers
 tests/system/accept/metal_accept.sh: a reset before the session is tried again after a second
 tests/host/etude_watchdog_hosttest.c: a heartbeat every 20 ms, which is no progress
 tests/host/etude_watchdog_hosttest.c: progress every 20 ms, which the case's bound must end

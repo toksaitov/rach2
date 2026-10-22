@@ -5,25 +5,26 @@
 #
 # Usage: gnu_rows.sh NAME [ARCH] [ARGUMENT...]
 #
-# The gnu suite puts this script on the machine it boots, the GNU system's
-# ext2 root, and runs it there as root under /bin/bash, once for each row,
-# each run bounded on the host and in a directory of the row's own. A row
-# has a port, or a tool built beside the ports, do its main job as a person
-# would ask for it, and compares what it printed or wrote with what it must
-# be. A program a row runs as its job, and whose output a crash could follow,
-# must also end with status 0: the programs built by make and by GCC, GDB,
-# the SpiderMonkey shell and the browser. It prints `GNUROW OK NAME` when
-# every comparison holds, and otherwise `GNUROW FAIL NAME: ` with the first
-# that did not. The path has /usr/bin first, so each name finds the GNU
-# program, and bash runs no BusyBox applet for a name. ARCH is the
-# architecture the suite booted, i686 unless it is given, which `uname -m`
-# must name and which decides what a row expects of glibc's loader, of the
-# class `file` names a program by and of the triple config.guess names.
+# Each case of tests/cases/machine.gnu.json that is a row puts this script on
+# a machine of its own, booted on the GNU system's ext2 root, and runs the
+# row there as root under /bin/bash, bounded on the host and in a directory
+# of the row's own (tests/cases/machine/gnu_scenario.c). A row has a port,
+# or a tool built beside the ports, do its main job as a person would ask
+# for it, and compares what it printed or wrote with what it must be. A
+# program a row runs as its job, and whose output a crash could follow, must
+# also end with status 0: the programs built by make and by GCC, GDB, the
+# SpiderMonkey shell and the browser. It prints `GNUROW OK NAME` when every
+# comparison holds, and otherwise `GNUROW FAIL NAME: ` with the first that
+# did not. The path has /usr/bin first, so each name finds the GNU program,
+# and bash runs no BusyBox applet for a name. ARCH is the architecture the
+# case booted, i686 unless it is given, which `uname -m` must name and which
+# decides what a row expects of glibc's loader, of the class `file` names a
+# program by and of the triple config.guess names.
 #
 # A native run, on a Rach2 that is already up, gives ARGUMENTs of the form
 # NAME=VALUE, as tests/native/Readme.md says: `work=DIR` and `home=DIR`,
 # relative to the starting directory, in place of /tmp/gnu/NAME and /root;
-# `stage=DIR` for the files the suite stages in /tmp/gnu; `ports=OLD:NEW,...`
+# `stage=DIR` for the files the case stages in /tmp/gnu; `ports=OLD:NEW,...`
 # for the ports a row listens on; `ifname=`, `addr=` and `gateway=` for the
 # machine's interface, its ADDRESS/PREFIX and its gateway in place of QEMU's
 # eth0, 10.0.2.15/24 and 10.0.2.2; and `machine=native`, under which a row
@@ -526,12 +527,15 @@ row_procps() {
 
 # util-linux's programs: the disks and mounts from /sys and /proc and the root
 # /etc/fstab names, a lock taken and waited for, the limits and the I/O class of
-# a process, the login history and the record of the boot that init writes, the
-# formatting and terminal tools jq's tests and scripts use, uuidgen, dmesg,
-# newgrp's set-user-ID mode, and the namespaces unshare makes, nsenter enters
-# and lsns lists.
+# a process, the login history, with a session on a terminal of the machine's
+# own server, and the record of the boot that init writes, the formatting and
+# terminal tools jq's tests and scripts use, uuidgen, dmesg, newgrp's
+# set-user-ID mode, and the namespaces unshare makes, nsenter enters and lsns
+# lists.
 row_utillinux() {
     local pid line
+    local opts=(-i "$WORK/id" -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR
+                -o "UserKnownHostsFile=$WORK/known" -o ConnectTimeout=120)
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
     same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
     has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "Success, no errors or warnings detected"
@@ -548,6 +552,11 @@ row_utillinux() {
     runs "flock on a free lock" flock -w 1 "$WORK/lock" true
     has "prlimit" "$(prlimit --pid $$ --nofile)" "NOFILE"
     same "ionice" "$(ionice -c 2 -n 5 ionice)" "best-effort: prio 5"
+    if [ -z "$NATIVE" ]; then
+        runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
+        cat "$WORK/id.pub" >> /root/.ssh/authorized_keys
+        runs "a session with a terminal" ssh -tt "${opts[@]}" root@127.0.0.1 true
+    fi
     has "last" "$(last -n 1 root)" "root"
     has "the boot's record in utmp" "$(utmpdump /var/run/utmp 2>/dev/null)" "[reboot"
     has "last -x" "$(last -x reboot)" "system boot"
@@ -931,7 +940,7 @@ print(mmap.mmap(f.fileno(), 0, flags=mmap.MAP_PRIVATE, prot=mmap.PROT_READ)[:5].
 
 # The system's name as uname gives it: Linux, whose interface the kernel
 # follows and whose name config.guess and scripts match, with Rach2 in the
-# release and the version, and the machine the architecture the suite booted.
+# release and the version, and the machine the architecture the case booted.
 row_uname() {
     same "the system" "$(uname -s)" "Linux"
     same "the machine" "$(uname -m)" "$MACHINE"
@@ -1213,7 +1222,7 @@ row_ntpd() {
     trap - EXIT TERM INT HUP
     rm -f "$WORK/ntp-log"
     [ -n "$stepped" ] || fail "ntpd did not report setting the clock"
-    runs "the server's clock reference" /tmp/gnu/clockmusl "$RACH2_NTP_PORT"
+    runs "the server's clock reference" "$STAGE/clockmusl" "$RACH2_NTP_PORT"
     same "the daemon started again" "$(pgrep -fc '^ntpd -n$')" "1"
 }
 

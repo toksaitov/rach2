@@ -735,7 +735,7 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 NET_SCENARIOS = build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
                 build/tests/cases/machine/metal_scenario build/tests/cases/machine/netconsole_scenario \
                 build/tests/cases/machine/devtools_scenario \
-                build/tests/cases/machine/dhcp_scenario \
+                build/tests/cases/machine/dhcp_scenario build/tests/cases/machine/gnu_scenario \
                 build/tests/cases/machine/menu_scenario \
                 build/tests/cases/machine/drill_scenario \
                 build/tests/cases/machine/install_scenario \
