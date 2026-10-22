@@ -28,6 +28,12 @@
 # make writes is printed here as it comes, and at its end etude-tooling's
 # account of the boot, its `etude-tooling: cost:` line.
 #
+# SIGHUP, SIGINT or SIGTERM, whether it reaches the script's process group or
+# the script alone, stops the job: etude-tooling is given SIGTERM, and once
+# it has ended the script removes its stage directory beside the disk and the
+# lock, and exits with 128 plus the signal's number. A script killed outright
+# leaves both, and the next one removes them.
+#
 # The environment sets the machine's shape:
 #
 #   GNU_TOOLING_CPUS     processors, and make's jobs in the machine; 8
@@ -86,27 +92,40 @@ cd "$REPO"
 mkdir -p "$GNU_OUT" "$(dirname "$OUT")"
 STAGE=
 FOLLOWER=
+JOB=
 LOCKED=
 
-# cleanup: stop the follower, remove the stage and the lock. etude-tooling
-# removes its job's directory when a signal stops it, but not when it is
-# killed outright, so the directory of a job that has not ended is removed
-# here.
+# cleanup: stop the follower and the job, then remove the stage and the lock.
+# A signal that reached this script alone, as make sends one, is passed on to
+# etude-tooling, and the lock is kept until etude-tooling has ended, since
+# its machine writes the build disk until then. etude-tooling removes its
+# job's directory when a signal stops it, but not when it is killed
+# outright, so the directory of a job that had not ended is removed here.
+# Each step is taken even when one before it failed.
 cleanup()
 {
-    [ -z "$FOLLOWER" ] || kill "$FOLLOWER" 2>/dev/null || :
-    if [ -n "$STAGE" ]; then
-        if [ -s "$STAGE/pid" ] && [ ! -e "$STAGE/ended" ]; then
-            rm -rf "$CACHE/job-$(cat "$STAGE/pid")-"*
-        fi
-        rm -rf "$STAGE"
+    set +e
+    [ -z "$FOLLOWER" ] || kill "$FOLLOWER" 2>/dev/null
+    if [ -n "$JOB" ]; then
+        kill "$JOB" 2>/dev/null
+        wait "$JOB"
+        rm -rf "$CACHE/job-$JOB-"*
     fi
+    [ -z "$STAGE" ] || rm -rf "$STAGE"
     [ -z "$LOCKED" ] || rm -f "$LOCK"
 }
+
+# stop STATUS: exit with STATUS for a signal, and ignore any later one, which
+# would otherwise end cleanup part of the way through.
+stop()
+{
+    trap '' HUP INT TERM
+    exit "$1"
+}
 trap cleanup EXIT
-trap 'exit 129' HUP
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'stop 129' HUP
+trap 'stop 130' INT
+trap 'stop 143' TERM
 
 # tooling ARG...: run etude-tooling with the tree's recipe and cache.
 tooling()
@@ -133,6 +152,21 @@ take_lock()
         sleep 30
     done
     LOCKED=1
+}
+
+# sweep: remove the stages that jobs killed outright left, with the job
+# directories they name whose etude-tooling has gone. Only the lock's holder
+# has a stage, so once the lock is taken every stage here is such a one.
+sweep()
+{
+    for old in "$GNU_OUT"/.tooling.*; do
+        [ -d "$old" ] || continue
+        if [ -s "$old/pid" ]; then
+            pid=$(cat "$old/pid")
+            kill -0 "$pid" 2>/dev/null || rm -rf "$CACHE/job-$pid-"*
+        fi
+        rm -rf "$old"
+    done
 }
 
 # stage_tree: write STAGE/tree.tar.gz, the files git tracks or would track
@@ -224,6 +258,7 @@ follow()
 }
 
 take_lock
+sweep
 STAGE=$(mktemp -d "$GNU_OUT/.tooling.XXXXXX")
 tooling check > /dev/null 2>&1 || tooling prepare -c "$CPUS"
 stage_tree
@@ -238,11 +273,14 @@ volume=$(($(wc -c < "$STAGE/tree.tar.gz") / 1048576 + 64))
 echo "gnu: tooling: $RACH2_ARCH: the job runs in the tooling machine with $CPUS processors and $MIB MiB, on $DISK"
 follow &
 FOLLOWER=$!
-status=0
-sh -c 'echo $$ > "$1"; shift; exec "$@"' sh "$STAGE/pid" \
-    "$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -a "$RACH2_QEMU_ACCEL" run -n \
+"$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -a "$RACH2_QEMU_ACCEL" run -n \
     -c "$CPUS" -m "$MIB" -s "$volume" -t "$DEADLINE" -i "$STAGE/tree.tar.gz" -i "$STAGE/job.env" \
-    "$@" -O "$STAGE" "$DIR/tooling_job.sh" || status=$?
+    "$@" -O "$STAGE" "$DIR/tooling_job.sh" &
+JOB=$!
+echo "$JOB" > "$STAGE/pid"
+status=0
+wait "$JOB" || status=$?
+JOB=
 touch "$STAGE/ended"
 wait "$FOLLOWER" || :
 FOLLOWER=

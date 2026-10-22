@@ -42,3 +42,4 @@ check_ldscript|600|TinyCC's linker script reader against GNU ld|sh vendor/tcc/ch
 together|600|the makers of several fixture files run once for a parallel request of their files|sh tests/system/together_test.sh
 host_suite|300|the host cases run their checks at once, each in its own scratch, with one result and one assertion each|sh tests/system/host_suite_test.sh
 case_select|120|tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds|python3 -B tests/system/case_select_test.py
+tooling_image|600|the GNU root's tooling job leaves no stage and no lock when a signal stops it|sh tests/system/tooling_image_test.sh
