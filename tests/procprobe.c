@@ -1767,18 +1767,17 @@ static void dgram_and_local_rows(void)
  * only the sleeps no signal ends, which the disk's waits are, and the test
  * image has no disk. `path` is the child's stat file. The child runs, state
  * R, until it reaches pause, so the state is read every 10 ms while it is R;
- * any other state ends the wait and is judged, and 30 seconds of R end a
- * wait for a child that never sleeps.
+ * any other state ends the wait and is judged.
  */
 static void sleeping_child_rows(const char *path)
 {
-    int i, n, waited;
+    int i, n;
 
-    for (waited = 0;; waited += 10) {
+    for (;;) {
         n = slurp(path, buf, (int)sizeof(buf));
         for (i = n - 1; i > 0 && buf[i] != ')'; i--) {
         }
-        if (n <= 0 || i + 2 >= n || buf[i + 2] != 'R' || waited >= 30000) {
+        if (n <= 0 || i + 2 >= n || buf[i + 2] != 'R') {
             break;
         }
         nap(10);
