@@ -131,7 +131,7 @@ audio|qemu|core
 netconsole|qemu|core
 crash|qemu|core
 pools|qemu|core
-runner|python3|core
+runner|-|core
 diskfull|qemu|core
 fault|qemu|core
 imagerace|-|full

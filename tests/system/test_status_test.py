@@ -39,6 +39,14 @@ def until(predicate):
     raise AssertionError("fixture did not publish its state")
 
 
+def ident(pid):
+    """Give a process's identity as tests/run records it on Linux: its pid,
+    its group, its start time in ticks since boot, and a fraction of 0."""
+    text = Path(f"/proc/{pid}/stat").read_text()
+    words = text[text.rindex(")") + 2:].split()
+    return f"{pid} {words[2]} {words[19]} 0"
+
+
 def load(path):
     """Load a private status reader, including a deliberately faulty copy."""
     spec = importlib.util.spec_from_file_location("test_status", path)
@@ -60,7 +68,7 @@ def rows(reader, helper, root):
     env.pop("RACH2_RUN_STATUS", None)
     env.pop("RACH2_HOST_LOCK", None)
     status = build / ".run.status.fixture"
-    identity = subprocess.check_output([helper, "identity", str(os.getpid())], text=True).strip()
+    identity = ident(os.getpid())
     status.write_text(f"identity {identity}\nwork {work}\nargs fixture\n")
 
     def report():
@@ -80,7 +88,7 @@ def rows(reader, helper, root):
     path = ports / "rach2-ports.0"
     with command([sys.executable, "-c", lock_script, str(path), "write"]) as holder:
         assert holder.stdout.readline() == b"ready\n"
-        with command([helper, "ports", str(ports), "1", "true"], env) as waiter:
+        with command([helper, str(ports), "1", "true"], env) as waiter:
             until(claim.exists)
             before = claim.read_text()
             output = report()
@@ -98,7 +106,7 @@ def rows(reader, helper, root):
         with command([sys.executable, "-c", lock_script, str(path), kind]) as holder:
             assert holder.stdout.readline() == b"ready\n"
             host_env = dict(env, RACH2_HOST_LOCK=mode)
-            with command([helper, "ports", str(ports), "1", "true"], host_env) as waiter:
+            with command([helper, str(ports), "1", "true"], host_env) as waiter:
                 until(claim.exists)
                 output = report()
                 assert "waits for host since " in output and str(path) in output, output
@@ -113,7 +121,7 @@ def rows(reader, helper, root):
         assert a.stdout.readline() == b"ready\n"
         with command([sys.executable, "-c", lock_script, str(path), "read"]) as b:
             assert b.stdout.readline() == b"ready\n"
-            with command([helper, "ports", str(ports), "1", "true"],
+            with command([helper, str(ports), "1", "true"],
                          dict(env, RACH2_HOST_LOCK="alone")):
                 until(claim.exists)
                 output = report()
@@ -122,10 +130,9 @@ def rows(reader, helper, root):
     claim.unlink(missing_ok=True)
     work.mkdir(exist_ok=True)
     with command(["sleep", "30"]) as holder:
-        ident = subprocess.check_output([helper, "identity", str(holder.pid)], text=True).strip()
         (work / "pool.wait").write_text(
             f"reason memory\nsince 1\nbudget 4000\npending hungry2 3000\n"
-            f"holder hungry1 3000 {ident}\n")
+            f"holder hungry1 3000 {ident(holder.pid)}\n")
         assert f"holder hungry1 pid {holder.pid} alive" in report()
         holder.terminate()
         holder.wait(timeout=5)
@@ -140,10 +147,10 @@ def rows(reader, helper, root):
     owner.write_text(f"pid {holder.pid}\npgid 1\nsince old\nargs fixture\n")
     assert "fault: inspect the work and clear the stale tree lock" in report()
     with command(["sleep", "30"]) as holder:
-        ident = subprocess.check_output([helper, "identity", str(holder.pid)], text=True).strip()
-        owner.write_text(f"pid {holder.pid}\npgid 1\nidentity {ident}\nsince now\nargs held\n")
+        held = ident(holder.pid)
+        owner.write_text(f"pid {holder.pid}\npgid 1\nidentity {held}\nsince now\nargs held\n")
         assert f"tree lock: holder {holder.pid} alive" in report(), report()
-        words = ident.split()
+        words = held.split()
         words[2] = str(int(words[2]) + 1)
         owner.write_text(f"pid {holder.pid}\nidentity {' '.join(words)}\nsince now\nargs held\n")
         assert "dead (pid reused)" in report() and "stale tree lock" in report(), report()
@@ -167,7 +174,7 @@ def stop(signum, frame):
 def main():
     """Run the rows against a private copy of the reader that
     TEST_STATUS_READER names, by default the tree's; usage:
-    test_status_test.py HELPER, HELPER being the built runutil."""
+    test_status_test.py HELPER, HELPER being the built etude-ports."""
     if len(sys.argv) != 2:
         sys.exit("test-status-test: usage: test_status_test.py HELPER")
     default = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"

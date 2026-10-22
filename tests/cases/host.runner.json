@@ -72,29 +72,6 @@
       ],
       "timing": [],
       "native": {"plan": "host"}
-    },
-    {
-      "case_id": "host.runner.status",
-      "behavior": "the test status reader tools/flow/test_status.py reports a run waiting for admission, a live claim of the tree and a stale one, on a Linux host, which is etude's tooling machine on a host that is not Linux",
-      "units": ["runner", "`tests/system/test_status_test.py`"],
-      "domain": "host",
-      "architectures": "none",
-      "workload": {"arguments": ["status"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cc", "python3"], "features": {}},
-      "execution": {"program": "runner", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "runutil, built under its scratch directory, and the reader's copy and fixtures, which test_status_test.py removes"},
-      "assertions": [
-        {"assertion_id": "reader", "checks": "tests/system/test_status_test.py passes against the tree's reader", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 600000000}, "stages": {}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 2000, "memory_bytes": 268435456, "tooling_memory_bytes": 3355443200, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "runner", "node": "tests/cases/host/runner", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "host"}
     }
   ]
 }

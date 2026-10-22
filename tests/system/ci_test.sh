@@ -18,8 +18,8 @@
 # over etude's verdict fixtures. Each row runs in a subshell of its own, and
 # every row runs whatever an earlier one gave. The rows of an admitting
 # machine use the tree's etude-bridge and casecheck, which the test builds, a
-# ledger and lock files of their own, and runutil, whose host lock the
-# stand-in tests/run takes as the real one does.
+# ledger and lock files of their own, and etude-ports, through which the
+# stand-in tests/run takes the host lock as the real one does.
 # CI_SCRIPTS names the directory report.sh and bisect.sh are copied from, by
 # default the tree's tools/ci.
 
@@ -38,10 +38,10 @@ cp "${CI_SCRIPTS:-$repo/tools/ci}/report.sh" "$work/report.sh"
 # host suite. Shared admission of the real entries has its own fixture.
 sed "s|/etc/rach2/etude-site|$work/no-installed-site|g" \
     "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" > "$work/bisect.sh"
-make -s -C "$repo" build/tools/etude/etude-bridge build/tools/etude/casecheck >&2 ||
-    { echo 'ci-test: etude-bridge and casecheck could not be built' >&2; exit 1; }
-cc -O2 -o "$work/runutil" "$repo/tests/system/runner/runutil.c" ||
-    { echo 'ci-test: runutil could not be built' >&2; exit 1; }
+make -s -C "$repo" build/tools/etude/etude-bridge build/tools/etude/casecheck \
+    build/tools/etude/etude-ports >&2 ||
+    { echo 'ci-test: etude-bridge, casecheck and etude-ports could not be built' >&2; exit 1; }
+cp "$repo/build/tools/etude/etude-ports" "$work/etude-ports"
 bridge=$repo/build/tools/etude/etude-bridge
 printf '%s\n' 'default|qemu|core' 'style|-|core' 'host|-|core' 'runner|-|full' \
     'bigmem|qemu|full||6144|' > "$work/tree/tests/registry"
@@ -144,7 +144,7 @@ done
 exit "${CI_TEST_HISTORY_STATUS:-0}"
 EOF
 # The stand-in tests/run takes the host lock and a port block as the real one
-# does, through runutil, unless RACH2_PORT_OFFSET names a block: alone for
+# does, through etude-ports, unless RACH2_PORT_OFFSET names a block: alone for
 # bigmem and shared otherwise. It prints a result for each suite, a set's
 # from the registry, or for `silent` none, and for `partial` none for
 # `default` in the core set. For `late-failed` and `late-incomplete` it
@@ -160,7 +160,7 @@ if [ -z "${RACH2_PORT_OFFSET:-}" ]; then
     RACH2_HOST_LOCK=shared
     [ "$1" != bigmem ] || RACH2_HOST_LOCK=alone
     export RACH2_HOST_LOCK
-    exec "$CI_TEST_WORK/runutil" ports "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
+    exec "$CI_TEST_WORK/etude-ports" "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
 fi
 current=$(cat "$CI_TEST_WORK/current")
 echo "tests $* $current" >> "$CI_TEST_WORK/events"

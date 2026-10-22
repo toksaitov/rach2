@@ -1558,10 +1558,10 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 	mv $@.tmp $@
 
 # `tests/run runner`: the self-tests of the old runner's programs that
-# tests/run and the old drivers still use: the harness's, runutil's process
-# groups and processor time, and the test status reader's. No machine is
-# booted. They are the cases of tests/cases/host.runner.json, which etude
-# runs, and have no target here.
+# tests/run and the old drivers still use: the harness's, and runutil's
+# process groups and processor time. No machine is booted. They are the
+# cases of tests/cases/host.runner.json, which etude runs, and have no target
+# here.
 
 # `tests/run drive`: the drivers' waits, drive.sh and the harness against fake
 # machines that choose when they are ready, booting nothing. They are the

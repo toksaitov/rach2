@@ -360,6 +360,7 @@
         {"assertion_id": "etude_version", "checks": "etude's versions built once, reused and kept side by side: `sh tests/system/etude_version_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "etude_deploy", "checks": "etude deployed again and after a cut, changing no clone, key or running test: `sh tests/system/etude_deploy_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "etude_launch", "checks": "installed admission before builds, worker checks, owner commands and CI: `python3 -B tests/system/etude_launch_test.py` exits 0 within 600 seconds", "source": "program"},
+        {"assertion_id": "test_status", "checks": "the status reader against waits for the host and ports and live and stale claims: `sh tests/system/test_status_check.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "etude_tooling", "checks": "etude's tooling machine made once, its jobs run and their boots recorded: `sh tests/system/etude_tooling_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "agents_credentials", "checks": "the agents' credential files and log scan: `python3 -B tests/system/agents_credentials_test.py` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "anthropic", "checks": "Messages tool results and streamed replies: `python3 -B tests/system/fakeapi/anthropic_test.py` exits 0 within 600 seconds", "source": "program"},
