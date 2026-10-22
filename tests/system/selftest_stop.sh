@@ -95,7 +95,7 @@ cp "$repo/tests/system/runlock.sh" "$repo/tests/system/runlock_exec.sh" "$tree/t
 restore
 printf '%s\n' 'failing|-|full' 'slow1|-|full' 'slow2|-|full' > "$tree/tests/registry"
 printf '%s\n' 'int main(void) { return 0; }' > "$tree/tools/setup/hostcheck.c"
-cp "$repo/tools/setup/space.sh" "$tree/tools/setup/space.sh"
+cp "$repo/tools/setup/space.sh" "$repo/tools/setup/ovmf_path.sh" "$tree/tools/setup/"
 cat > "$tree/Makefile" <<'MK'
 components:
 	@mkdir -p build/rach2; : > build/rach2/kernel

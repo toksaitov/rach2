@@ -97,7 +97,7 @@ now() { "$SELFTEST_UTIL" now; }
 sleep() { "$SELFTEST_UTIL" sleep "$1"; }
 cp "$REPO/tests/system/deadline.sh" "$WORK/tests/system/deadline.sh"
 cp "$REPO/tools/setup/hostcheck.c" "$WORK/tools/setup/hostcheck.c"
-cp "$REPO/tools/setup/space.sh" "$WORK/tools/setup/space.sh"
+cp "$REPO/tools/setup/space.sh" "$REPO/tools/setup/ovmf_path.sh" "$WORK/tools/setup/"
 # The fixture's tree has no etude of its own: its runs take the set driver
 # and the formatter the tree built, and the tree's schemas.
 RACH2_ETUDE_BIN=$REPO/build/tools/etude
