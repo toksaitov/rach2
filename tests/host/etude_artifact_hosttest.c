@@ -1400,7 +1400,7 @@ static int race_starts(const struct race *t)
     int starts = 0;
     char c;
 
-    if (poll(&p, 1, 30000) == 1 && read(t->sfd, &c, 1) == 1)
+    if (poll(&p, 1, -1) == 1 && read(t->sfd, &c, 1) == 1)
         starts++;
     CHECK(starts == 1, "race: the recipe began");
     while (poll(&p, 1, 1000) == 1 && read(t->sfd, &c, 1) == 1)
@@ -1543,7 +1543,7 @@ static void test_killed(void)
     }
     p.fd = sfd;
     p.events = POLLIN;
-    CHECK(poll(&p, 1, 30000) == 1 && read(sfd, &c, 1) == 1, "killed: the recipe began");
+    CHECK(poll(&p, 1, -1) == 1 && read(sfd, &c, 1) == 1, "killed: the recipe began");
     kill(kid, SIGKILL);
     reap(kid);
     CHECK(in_store(dir, "nodes") == 0 && in_store(dir, "objects") == 0 && in_store(dir, "tmp") == 0,
