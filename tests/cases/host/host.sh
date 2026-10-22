@@ -38,7 +38,7 @@
 # failure.
 # Several scripted checks hold the tree, as a script that puts faults into
 # sources must, so the program holds it too, unless an ancestor such as
-# tests/run holds it already (tests/system/runlock.sh).
+# tests/run holds it already (tools/etude/hold.sh).
 #
 # Usage, in the root of the tree, or anywhere with ETUDE_TREE set to it:
 #     sh tests/cases/host/host.sh CASE
@@ -114,9 +114,9 @@ else
         echo "host: ETUDE_CASE is $ETUDE_CASE, and the argument names $ID" >&2
         exit 2
     fi
-    # shellcheck source=tests/system/runlock.sh
-    . "$REPO/tests/system/runlock.sh"
-    runlock_hold "$REPO" host "$REPO/tests/cases/host/host.sh" "$@"
+    # shellcheck source=tools/etude/hold.sh
+    . "$REPO/tools/etude/hold.sh"
+    etude_hold "$REPO" host "$REPO/tests/cases/host/host.sh" "$@"
     # The exit trap keeps the private directory only after a failure.
     unset W
     status=0

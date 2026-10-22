@@ -11,8 +11,8 @@
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" etude-legacy "$repo/tools/etude/legacy.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" etude-legacy "$repo/tools/etude/legacy.sh" "$@"
 make -s build/tools/etude/etude-legacy >&2
 if [ "${1:-}" = prepare ]; then
     shift

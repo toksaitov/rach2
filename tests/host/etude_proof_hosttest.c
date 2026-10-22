@@ -862,7 +862,8 @@ static void test_relative(void)
           "relative: a relative work directory gives the commands an absolute TMPDIR");
 }
 
-/** Hold the run lock of `tree` for this process, as runlock_exec.sh does. */
+/** Hold the run lock of `tree` for this process, as etude-hold holds it for a
+ * fault script. */
 static void hold(const char *tree)
 {
     char path[1100], text[64];

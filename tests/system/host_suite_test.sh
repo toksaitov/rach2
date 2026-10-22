@@ -103,7 +103,7 @@ mkdir -p "$tree/tests/host" "$tree/tests/cases/host" "$tree/build/.run.lock" \
     "$tree/build/tools/etude" "$tree/tools/inspect" "$tree/tools/verify" \
     "$tree/tools/etude/win" "$tree/tests/system/runner" "$work/meet" "$work/tmp" || exit 1
 cp "$repo/tests/cases/host/host.sh" "$tree/tests/cases/host/" || exit 1
-cp "$repo/tests/system/runlock.sh" "$tree/tests/system/" || exit 1
+cp "$repo/tools/etude/hold.sh" "$tree/tools/etude/" || exit 1
 # The tree is held for this script, as tests/run holds it for the cases.
 echo "pid $$" > "$tree/build/.run.lock/owner"
 

@@ -13,8 +13,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 if [ "${1:-}" != --texts ]; then
-    . "$repo/tests/system/runlock.sh"
-    runlock_hold "$repo" etude-proof "$repo/tools/etude/proof.sh" "$@"
+    . "$repo/tools/etude/hold.sh"
+    etude_hold "$repo" etude-proof "$repo/tools/etude/proof.sh" "$@"
     make -s build/tools/etude/etude-proof >&2
     mkdir -p "$repo/build/tests"
     TMPDIR=$repo/build/tests

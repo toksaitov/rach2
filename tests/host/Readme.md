@@ -4,7 +4,7 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 
 ## Running
 
-`tests/run host` runs the suite, the cases of etude's family `host.host`, [`tests/cases/host.host.json`](../cases/host.host.json), as [the cases' Readme](../cases/Readme.md) says. Each case is one run of [`tests/cases/host/host.sh`](../cases/host/host.sh), which writes the selection of the case's checks, has [`etude-host`](../../tools/etude/Readme.md#the-host-checks) run them, `RACH2_WORKERS` at once, or as many as the host has processors, and reports an assertion for each check. The program holds the tree, as [`tests/system/runlock.sh`](../system/runlock.sh) says, unless `tests/run` holds it already, since several of its checks put faults into private copies of the sources. The cases are:
+`tests/run host` runs the suite, the cases of etude's family `host.host`, [`tests/cases/host.host.json`](../cases/host.host.json), as [the cases' Readme](../cases/Readme.md) says. Each case is one run of [`tests/cases/host/host.sh`](../cases/host/host.sh), which writes the selection of the case's checks, has [`etude-host`](../../tools/etude/Readme.md#the-host-checks) run them, `RACH2_WORKERS` at once, or as many as the host has processors, and reports an assertion for each check. The program holds the tree through [`tools/etude/hold.sh`](../../tools/etude/hold.sh), unless `tests/run` holds it already, since several of its checks put faults into private copies of the sources. The cases are:
 
 1. `tests`: each `tests/host/*_hosttest.c` but etude's own, compiled and run, with the vendored sources of the architecture `ARCH` names.
 2. `etude`: each `tests/host/etude_*_hosttest.c` that boots nothing.
