@@ -76,10 +76,13 @@ SCHEMAS="$SELF/tools/etude/schemas"
 # scan FILE KIND DECLARED: print the findings of one file, KIND `suite` for
 # a script or `probe` for C code, on stdout as `FILE:LINE: RULE: WHAT`, RULE
 # `sleep`, `bound` or `skip` for a finding tests/system/unconverted may count,
-# and `fixed` for one it may not. DECLARED is the output of `casecheck timing`.
+# and `fixed` for one it may not. DECLARED is the output of `casecheck timing`,
+# which reaches awk through the environment, since BSD awk refuses a newline
+# in the value of -v.
 scan() {
-    awk -v file="${1#"$REPO/"}" -v kind="$2" -v reasons="$REASONS" -v declared="$3" '
+    SUITECHECK_DECLARED=$3 awk -v file="${1#"$REPO/"}" -v kind="$2" -v reasons="$REASONS" '
     BEGIN {
+        declared = ENVIRON["SUITECHECK_DECLARED"]
         while ((getline line < reasons) > 0) {
             known[line] = 1
         }
