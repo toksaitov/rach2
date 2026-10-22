@@ -2,8 +2,8 @@
  * The end of every other user process before an init that ran under the
  * debug shell hands the machine back to it (`proc_end_others`).
  *
- * tests/host/endothers_check.sh extracts `proc_end_others` unchanged from a
- * copy of rach2/sys/syscall_proc.c into endothers.inc. The records here have
+ * tests/host/endothers_check.sh extracts `proc_end_others` unchanged from
+ * rach2/sys/syscall_proc.c into endothers.inc. The records here have
  * the fields it reads, and the signal, the scheduler and the reap are
  * models. A switch lets the others run: a process sent SIGKILL ends, and so
  * does one asleep in the call that ends it, as one asleep in a file's release
@@ -58,7 +58,7 @@ static int fails, switches;
 static void check(int ok, const char *what)
 {
     if (!ok) {
-        printf("endothers-proof: fail: %s\n", what);
+        printf("endothers: fail: %s\n", what);
         fails++;
     }
 }
@@ -91,7 +91,7 @@ static void schedule(void)
     process_t *p;
 
     if (++switches == 16) {
-        printf("endothers-proof: fail: the walk waits for a record that never ends\n");
+        printf("endothers: fail: the walk waits for a record that never ends\n");
         exit(1);
     }
     for (p = proc_list; p; p = p->next) {
@@ -190,7 +190,7 @@ int main(void)
     kept();
 
     if (!fails) {
-        printf("endothers-proof: result: pass: every other user process ended and reaped\n");
+        printf("endothers: result: pass: every other user process ended and reaped\n");
     }
     return fails != 0;
 }

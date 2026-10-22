@@ -12,9 +12,9 @@
  * only a dirty page, and a dirty page evicted and read again must come back
  * with its bytes. The writer can sleep while another cache operation runs.
  *
- * Compiled with PAGECACHE_SYNC_HOSTTEST as well, as the build of
- * tests/proofs/pagecache.json compiles it, the test also runs `sys_sync`,
- * which that build extracts from rach2/sys/syscall_fs.c into
+ * Compiled with PAGECACHE_SYNC_HOSTTEST as well, as
+ * tests/host/extract_check.sh compiles it, the test also runs `sys_sync`,
+ * which that script extracts from rach2/sys/syscall_fs.c into
  * syscall_sync.inc, with the clock tick and the scheduler replaced, for the
  * rows of its bounded wait and its failures.
  */

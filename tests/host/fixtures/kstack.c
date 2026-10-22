@@ -3,9 +3,9 @@
  * code, with a guard page below it.
  *
  * tests/host/kstack_check.sh extracts `kstack_alloc`, `kstack_free` and
- * `kstack_overrun_pid` unchanged from a copy of rach2/sys/syscall_proc.c
- * into kstack.inc, with the two sizes they use. The heap here fills every
- * page it hands out with 0xC3, an x86 `ret`, which stands for the code a
+ * `kstack_overrun_pid` unchanged from rach2/sys/syscall_proc.c into
+ * kstack.inc, with the two sizes they use. The heap here fills every page it
+ * hands out with 0xC3, an x86 `ret`, which stands for the code a
  * frame last held. Fork writes only the top of a new stack, so a byte left
  * below it stays there for the life of the process; under QEMU a frame that
  * holds code bytes takes the emulator's slow store path. The stack must come
@@ -66,7 +66,7 @@ static void check(int ok, const char *what)
 {
     if (!ok) {
         fails++;
-        printf("kstack-proof: fail: %s\n", what);
+        printf("kstack: fail: %s\n", what);
     }
 }
 
@@ -191,9 +191,9 @@ int main(void)
     check(kstack_alloc() == 0, "a heap with no pages gives no stack");
     overrun_rows();
     if (fails) {
-        printf("kstack-proof: result: fail: %d rows\n", fails);
+        printf("kstack: result: fail: %d rows\n", fails);
         return 1;
     }
-    printf("kstack-proof: result: pass: a new kernel stack is cleared and guarded\n");
+    printf("kstack: result: pass: a new kernel stack is cleared and guarded\n");
     return 0;
 }

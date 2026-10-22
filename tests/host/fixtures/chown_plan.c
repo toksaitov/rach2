@@ -1,7 +1,7 @@
 /**
  * The set-id rules of a chown on a mounted file system.
  *
- * chown_plan.sh, which tests/proofs/chown.json runs, extracts
+ * chown_plan.sh, which tests/host/extract_check.sh runs, extracts
  * `vfs_chown_plan` and the three credential helpers it calls unchanged
  * from a copy of rach2/sys/syscall_fs.c into chown_plan.inc, with the
  * `proc_privileged` macro from rach2/sys/proc/process.h, `struct vfs_stat`
@@ -51,7 +51,7 @@ static void check(int ok, const char *what)
 {
     if (!ok) {
         fails++;
-        printf("chown-proof: fail: %s\n", what);
+        printf("chown-plan: fail: %s\n", what);
     }
 }
 
@@ -183,9 +183,9 @@ int main(void)
     owner_rows();
     stranger_rows();
     if (fails) {
-        printf("chown-proof: result: fail: %d rows\n", fails);
+        printf("chown-plan: result: fail: %d rows\n", fails);
         return 1;
     }
-    printf("chown-proof: result: pass: the set-id rules of a mounted chown\n");
+    printf("chown-plan: result: pass: the set-id rules of a mounted chown\n");
     return 0;
 }

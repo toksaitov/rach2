@@ -1,8 +1,8 @@
 /**
  * Open mounted KRFFS at the flush that publishes a relocated node.
  *
- * The build of tests/proofs/krffs-open.json extracts complete resolver and
- * open functions unchanged.
+ * tests/host/extract_check.sh extracts complete resolver and open functions
+ * unchanged.
  * The block model and allocator are shared with krffsmount_hosttest.c.
  * Host threads switch only at the publication flush and namespace-lock wait.
  */

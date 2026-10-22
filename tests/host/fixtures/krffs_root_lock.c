@@ -2,11 +2,11 @@
  * The KRFFS root's data operations under the mount's lock, and the order the
  * lock is taken in.
  *
- * The build of `tests/proofs/krffs-root-lock.json` extracts from
- * `rach2/sys/fs/vfs.c`, unchanged, the root adapter's five data operations,
- * `kfs_read`, `kfs_write`, `kfs_truncate`, `kfs_fsync` and `kfs_readdir`, the
- * bodies they call, and the namespace lock they take, and compiles them here
- * over the real KRFFS core, with the thread glue of `krffs_open_threads.c`.
+ * `tests/host/extract_check.sh` extracts from `rach2/sys/fs/vfs.c`,
+ * unchanged, the root adapter's five data operations, `kfs_read`,
+ * `kfs_write`, `kfs_truncate`, `kfs_fsync` and `kfs_readdir`, the bodies they
+ * call, and the namespace lock they take, and compiles them here over the
+ * real KRFFS core, with the thread glue of `krffs_open_threads.c`.
  * In the kernel each body reaches the image through the page cache's window,
  * where a copy can fault and the fill sleeps in the disk driver. Without the
  * lock, a second process can enter the ring during that sleep and grow a file

@@ -4,23 +4,20 @@
 # no address space since the end gives it up, and waits for no kernel thread
 # and no record another reaper has. `proc_end_others` is extracted unchanged
 # from rach2/sys/syscall_proc.c and compiled under ASan and UBSan in
-# tests/host/fixtures/endothers.c. The host suite runs the check, and
-# tests/proofs/endothers.json builds its faults with it.
+# tests/host/fixtures/endothers.c. The host suite runs the check.
 #
-# Usage: sh tests/host/endothers_check.sh [SRC DIR]
-# With no operand it builds from the tree in a scratch directory, runs the
-# fixture for at most 20 seconds and exits with its status. With SRC and DIR
-# it reads SRC/rach2/sys/syscall_proc.c, writes DIR/endothers.inc and the
-# fixture DIR/endothers, and runs nothing.
+# Usage: sh tests/host/endothers_check.sh
+# The script builds from the tree in a scratch directory under build/tests,
+# runs the fixture for at most 20 seconds and exits with its status.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# build SRC DIR: extract proc_end_others into DIR/endothers.inc and compile
+# build DIR: extract proc_end_others into DIR/endothers.inc and compile
 # the fixture over it as DIR/endothers.
 build()
 {
-    python3 - "$1/rach2/sys/syscall_proc.c" "$2/endothers.inc" <<'PY'
+    python3 - rach2/sys/syscall_proc.c "$1/endothers.inc" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -48,20 +45,13 @@ Path(sys.argv[2]).write_text(function(source, 'proc_end_others') + '\n')
 PY
     "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$2" tests/host/fixtures/endothers.c -o "$2/endothers"
+        -I "$1" tests/host/fixtures/endothers.c -o "$1/endothers"
 }
 
-case $# in
-    2)
-        build "$1" "$2"
-        exit 0
-        ;;
-    0) ;;
-    *)
-        echo 'endothers-check: usage: endothers_check.sh [SRC DIR]' >&2
-        exit 2
-        ;;
-esac
+[ "$#" -eq 0 ] || {
+    echo 'endothers-check: usage: endothers_check.sh' >&2
+    exit 2
+}
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
@@ -69,5 +59,5 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/endothers-check.XXXXXX")
-build "$repo" "$work"
+build "$work"
 perl -e 'alarm 20; exec @ARGV or die "endothers-check: exec: $!\n"' "$work/endothers"

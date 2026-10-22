@@ -3,12 +3,13 @@
  * wide stat calls, through the stat functions of rach2/sys/syscall_fs.c and
  * vfs.c's kfs_getattr, over krffs_hosttest.c's core and image.
  *
- * The build extracts the functions unchanged with extract.py:
- * krffs_stat_types.inc has the stat structures of arch/i686/uabi.h, fs/vfs.h
- * and syscall_fs.c, and krffs_stat_funcs.inc the stat functions of
- * syscall_fs.c and kfs_getattr. This file supplies the user copies, a
- * resolver backed by the KRFFS walk, and the root mount the old stat asks
- * for. It runs krffs_hosttest.c's rows first, and passes only when they pass.
+ * tests/host/extract_check.sh extracts the functions unchanged with
+ * extract.py: krffs_stat_types.inc has the stat structures of
+ * arch/i686/uabi.h, fs/vfs.h and syscall_fs.c, and krffs_stat_funcs.inc the
+ * stat functions of syscall_fs.c and kfs_getattr. This file supplies the user
+ * copies, a resolver backed by the KRFFS walk, and the root mount the old
+ * stat asks for. It runs krffs_hosttest.c's rows first, and passes only when
+ * they pass.
  */
 #define main core_main
 #include "../krffs_hosttest.c"
@@ -187,6 +188,6 @@ int main(void)
     if (fails) {
         return 1;
     }
-    printf("inode-proof: root stat paths pass\n");
+    printf("krffs-stat: root stat paths pass\n");
     return 0;
 }

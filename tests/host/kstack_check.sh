@@ -5,23 +5,20 @@
 # extracted unchanged from rach2/sys/syscall_proc.c, with KERNEL_STACK_SIZE
 # from rach2/sys/proc/process.h and PAGE_SIZE from rach2/sys/arch/i686/cpu.h,
 # and compiled under ASan and UBSan in tests/host/fixtures/kstack.c, whose
-# heap hands out pages full of code bytes. The host suite runs the check, and
-# tests/proofs/kstack.json builds its faults with it.
+# heap hands out pages full of code bytes. The host suite runs the check.
 #
-# Usage: sh tests/host/kstack_check.sh [SRC DIR]
-# With no operand it builds from the tree in a scratch directory, runs the
-# fixture for at most 20 seconds and exits with its status. With SRC and DIR
-# it reads SRC/rach2/sys/syscall_proc.c, writes DIR/kstack.inc and the fixture
-# DIR/kstack, and runs nothing.
+# Usage: sh tests/host/kstack_check.sh
+# The script builds from the tree in a scratch directory under build/tests,
+# runs the fixture for at most 20 seconds and exits with its status.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
 
-# build SRC DIR: extract the definitions and functions into DIR/kstack.inc
+# build DIR: extract the definitions and functions into DIR/kstack.inc
 # and compile the fixture over it as DIR/kstack.
 build()
 {
-    python3 - "$1/rach2/sys/syscall_proc.c" "$2/kstack.inc" <<'PY'
+    python3 - rach2/sys/syscall_proc.c "$1/kstack.inc" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -61,20 +58,13 @@ Path(sys.argv[2]).write_text('\n\n'.join(parts) + '\n')
 PY
     "${CC:-cc}" -std=c99 -g -O1 -Wall -Wextra -Werror \
         -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I "$2" tests/host/fixtures/kstack.c -o "$2/kstack"
+        -I "$1" tests/host/fixtures/kstack.c -o "$1/kstack"
 }
 
-case $# in
-    2)
-        build "$1" "$2"
-        exit 0
-        ;;
-    0) ;;
-    *)
-        echo 'kstack-check: usage: kstack_check.sh [SRC DIR]' >&2
-        exit 2
-        ;;
-esac
+[ "$#" -eq 0 ] || {
+    echo 'kstack-check: usage: kstack_check.sh' >&2
+    exit 2
+}
 mkdir -p build/tests
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
@@ -82,5 +72,5 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/kstack-check.XXXXXX")
-build "$repo" "$work"
+build "$work"
 perl -e 'alarm 20; exec @ARGV or die "kstack-check: exec: $!\n"' "$work/kstack"

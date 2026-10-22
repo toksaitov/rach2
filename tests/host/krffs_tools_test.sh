@@ -12,48 +12,17 @@
 # directory already has, named in a `dir` line or made for a file's path.
 # Every row makes its own small image with mkfs.krffs.
 #
-# `--build TREE OUT` compiles the six tools from TREE/krffs, with the flags
-# krffs/Makefile gives them, into OUT/bin, and lays out OUT/tree, where the
-# image builder finds them under its own ../build/krffs. `OUT` alone runs
-# every row on the tools there; tests/proofs/krffs-tools.json builds them
-# from private copies of the sources and proves the rows against faults in
-# them, and the host suite runs its base phase.
+# The script compiles the six tools from the tree's krffs/, with the flags
+# krffs/Makefile gives them, into a scratch directory under build/tests, and
+# lays out beside them a copy of krffs/mkimage.sh, which finds them under its
+# own ../build/krffs. It runs every row on those tools and removes the
+# directory on every exit.
 #
-# Usage: sh tests/host/krffs_tools_test.sh --build TREE OUT
-#        sh tests/host/krffs_tools_test.sh OUT
+# Usage: sh tests/host/krffs_tools_test.sh
 set -eu
-
-case $# in
-    3) [ "$1" = --build ] || { echo 'usage: krffs_tools_test.sh [--build TREE] OUT' >&2; exit 2; } ;;
-    1) ;;
-    *) echo 'usage: krffs_tools_test.sh [--build TREE] OUT' >&2; exit 2 ;;
-esac
-if [ "$1" = --build ]; then
-    out=$(mkdir -p "$3" && CDPATH='' cd -- "$3" && pwd)
-    cd "$2"
-    rm -rf "${out:?}/bin" "${out:?}/tree"
-    mkdir -p "$out/bin" "$out/tree/krffs" "$out/tree/build/krffs"
-    # The flags krffs/Makefile gives the tools, fsviz's exception among them.
-    flags='-O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 -I krffs'
-    core='krffs/krffs_file_system.c krffs/krffs_node.c krffs/krffs_utilities.c'
-    core="$core krffs/krffs_platform.c"
-    # shellcheck disable=SC2086 # the flags and the core are lists of words
-    {
-        "${CC:-cc}" $flags -o "$out/bin/mkfs.krffs" $core krffs/mkfs.krffs.c
-        "${CC:-cc}" $flags -o "$out/bin/fsck.krffs" $core krffs/krffs_allocator.c \
-            krffs/fsck.krffs.c
-        "${CC:-cc}" $flags -o "$out/bin/stageimage.krffs" $core krffs/krffs_allocator.c \
-            krffs/stageimage.krffs.c
-        "${CC:-cc}" $flags -Wno-error=unused-result -o "$out/bin/fsviz.krffs" $core \
-            krffs/fsviz.krffs.c
-        "${CC:-cc}" $flags -o "$out/bin/defrag.krffs" $core krffs/defrag.krffs.c
-        "${CC:-cc}" $flags -o "$out/bin/edfs.krffs" $core krffs/edfs.krffs.c
-    }
-    cp krffs/mkimage.sh "$out/tree/krffs/mkimage.sh"
-    cp "$out/bin/mkfs.krffs" "$out/bin/stageimage.krffs" "$out/tree/build/krffs/"
-    exit 0
-fi
-tools=$(CDPATH='' cd -- "$1" && pwd)
+[ "$#" -eq 0 ] || { echo 'krffs-tools: usage: krffs_tools_test.sh' >&2; exit 2; }
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
+cd "$repo"
 child=
 work=
 # cleanup: stop the running command and remove the scratch directory.
@@ -70,8 +39,29 @@ trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-krffs-tools.XXXXXX")
+mkdir -p build/tests
+work=$(mktemp -d "$repo/build/tests/krffs-tools.XXXXXX")
 dir=$work
+tools=$work/tools
+mkdir -p "$tools/bin" "$tools/tree/krffs" "$tools/tree/build/krffs"
+# The flags krffs/Makefile gives the tools, fsviz's exception among them.
+flags='-O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 -I krffs'
+core='krffs/krffs_file_system.c krffs/krffs_node.c krffs/krffs_utilities.c'
+core="$core krffs/krffs_platform.c"
+# shellcheck disable=SC2086 # the flags and the core are lists of words
+{
+    "${CC:-cc}" $flags -o "$tools/bin/mkfs.krffs" $core krffs/mkfs.krffs.c
+    "${CC:-cc}" $flags -o "$tools/bin/fsck.krffs" $core krffs/krffs_allocator.c \
+        krffs/fsck.krffs.c
+    "${CC:-cc}" $flags -o "$tools/bin/stageimage.krffs" $core krffs/krffs_allocator.c \
+        krffs/stageimage.krffs.c
+    "${CC:-cc}" $flags -Wno-error=unused-result -o "$tools/bin/fsviz.krffs" $core \
+        krffs/fsviz.krffs.c
+    "${CC:-cc}" $flags -o "$tools/bin/defrag.krffs" $core krffs/defrag.krffs.c
+    "${CC:-cc}" $flags -o "$tools/bin/edfs.krffs" $core krffs/edfs.krffs.c
+}
+cp krffs/mkimage.sh "$tools/tree/krffs/mkimage.sh"
+cp "$tools/bin/mkfs.krffs" "$tools/bin/stageimage.krffs" "$tools/tree/build/krffs/"
 
 # Run one command with a time limit: its output in the file named first, its
 # status in $rc.

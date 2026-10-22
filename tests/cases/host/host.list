@@ -5,14 +5,15 @@
 # LABEL is what its result line says it checked, and COMMAND runs it from the
 # root of the tree; its exit status 0 is a pass.
 machine_measure|600|the measurement drivers of tools/dev against fake commands|sh tests/system/machine_measure_test.sh
-krffs_open|600|krffs publication open|build/tools/etude/etude-proof --base tests/proofs/krffs-open.json
-krffs_root_lock|600|krffs root data operations under the mount's lock|build/tools/etude/etude-proof --base tests/proofs/krffs-root-lock.json
+krffs_open|600|krffs publication open|sh tests/host/extract_check.sh krffs_open
+krffs_root_lock|600|krffs root data operations under the mount's lock|sh tests/host/extract_check.sh krffs_root_lock
+krffs_stat|600|the inode number of the krffs root in the stat calls|sh tests/host/extract_check.sh krffs_stat
 kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_check.sh
 endothers|600|an init's end waits for the processes still ending|sh tests/host/endothers_check.sh
-chown|600|the set-id rules of a mounted chown|build/tools/etude/etude-proof --base tests/proofs/chown.json
-pagecache|600|the page cache with sys_sync's bounded wait|build/tools/etude/etude-proof --base tests/proofs/pagecache.json
+chown|600|the set-id rules of a mounted chown|sh tests/host/extract_check.sh chown
+pagecache|600|the page cache with sys_sync's bounded wait|sh tests/host/extract_check.sh pagecache
 doom_libc|600|Doom C library on both architectures|sh tests/host/doom_libc_check.sh
-krffs_tools|600|krffs host tools' refusals, replace and edits|build/tools/etude/etude-proof --base tests/proofs/krffs-tools.json
+krffs_tools|600|krffs host tools' refusals, replace and edits|sh tests/host/krffs_tools_test.sh
 run_scripts|600|run scripts' command lines|sh tests/system/run_scripts_test.sh
 commit_msg|600|commit-msg hook's refusals|sh tests/system/commit_msg_test.sh
 ci|600|ci reports and bisection|sh tests/system/ci_test.sh
