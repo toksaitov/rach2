@@ -1,16 +1,13 @@
 #!/bin/sh
 # legacy.sh: prepare suites of tests/registry with etude's preparation
-# adapter, check a preparation's record, or run a prepared suite with the
-# suite adapter, with this tree held so that no run builds or boots it
-# meanwhile. The adapter is built first, under the hold. ARCH and
-# RACH2_KERNEL choose the architecture and the kernel of a preparation, as
-# they do for tests/run; a run takes both from its record.
+# adapter, or check a preparation's record, with this tree held so that no
+# run builds or boots it meanwhile. The adapter is built first, under the
+# hold. ARCH and RACH2_KERNEL choose the architecture and the kernel of a
+# preparation, as they do for tests/run.
 #
 # Usage: sh tools/etude/legacy.sh prepare [-w WORK] [-o RECORD] [-s SECONDS]
 #                                    [-b GOAL]... SUITE...
 #        sh tools/etude/legacy.sh check [-d] RECORD
-#        sh tools/etude/legacy.sh run [-w WORK] [-i IDLE] [-s SECONDS] RECORD
-#                                    SUITE
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"

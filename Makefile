@@ -635,9 +635,8 @@ $(ETUDEHOST): $(ETUDE_HOST_SRC) tools/etude/include/etude/exec.h tools/etude/pos
 # etude-legacy (tools/etude/posix/etude_legacy.c), the preparation adapter
 # that builds what the suites of tests/registry read before one starts, as
 # tests/run builds it: `components`, `prepare-all` and the artifacts it finds
-# in make's database; the suite adapter, which runs one prepared suite; and
-# the set driver, which tests/run runs, over the supervisor, the ledger, the
-# old runner's locks and the history.
+# in make's database; and the set driver, which tests/run runs, over the
+# supervisor, the ledger, the old runner's locks and the history.
 ETUDELEGACY = build/tools/etude/etude-legacy
 $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
                 tools/etude/include/etude/exec.h tools/etude/posix/posix.h \

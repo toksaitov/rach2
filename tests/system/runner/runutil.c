@@ -15,9 +15,6 @@
  *                                  supervise a command
  *   suite NAME IDLE LEDGER COMMAND ...
  *                                  supervise a suite
- *   record NAME IDLE LEDGER FILE COMMAND ...
- *                                  supervise a suite for etude, and
- *                                  record its end in FILE
  *   machine LEDGER COMMAND ...     record a machine and exec it
  *   state WHO LEDGER PID           print what a stalled machine is doing
  *   machines NAME LEDGER           stop the machines a suite left
@@ -73,14 +70,6 @@
 
 /* The stop signal this process has received, or 0; the waits end on it. */
 static volatile sig_atomic_t interrupted;
-
-/* The bound, in seconds before the deadline factor, on the wait of the
- * `record` mode for a suite's machines to end once the suite has. */
-#define SETTLE_SECONDS 5.0
-
-/* The lowest descriptor the `record` mode gives its command for etude's
- * records, above those a shell script redirects. */
-#define CHILDREN_FD 60
 
 /* The seconds a console relay goes on copying its machine's output after
  * INT, TERM or HUP, so that a machine stopped with it ends with its console
@@ -726,236 +715,6 @@ static int check_machines(const char *name, const char *ledger)
         fprintf(stderr, "run: %s: machine identity inspection incomplete\n", name);
     free(path);
     return failed;
-}
-
-/**
- * The machines and relays of `ledger` still running: each pid of the file
- * that is still the process `LEDGER.identity` records, and no zombie.
- * Returns their count, with the pids in `*pids` from malloc, or -1 when
- * memory ran out.
- */
-static int live_machines(const char *ledger, pid_t **pids)
-{
-    FILE *fp = fopen(ledger, "r");
-    struct identity id;
-    pid_t *more;
-    long pid;
-    int n = 0, cap = 0;
-
-    *pids = NULL;
-    if (!fp)
-        return 0;
-    while (fscanf(fp, "%ld", &pid) == 1) {
-        if (pid <= 1 || !registered_machine(ledger, (pid_t)pid) ||
-            process_identity((pid_t)pid, &id) != 1 || id.zombie)
-            continue;
-        if (n == cap) {
-            cap = cap * 2 + 8;
-            more = realloc(*pids, (size_t)cap * sizeof(*more));
-            if (!more) {
-                fclose(fp);
-                free(*pids);
-                *pids = NULL;
-                return -1;
-            }
-            *pids = more;
-        }
-        (*pids)[n++] = (pid_t)pid;
-    }
-    fclose(fp);
-    return n;
-}
-
-/**
- * Wait up to `seconds` for the machines and relays of `ledger` to end, and
- * give those still running as `live_machines` does. A machine that its suite
- * signalled and did not wait for has this long to end by itself.
- */
-static int settle(const char *ledger, double seconds, pid_t **pids)
-{
-    double until = now() + seconds;
-    int n;
-
-    while ((n = live_machines(ledger, pids)) > 0 && now() < until && !interrupted) {
-        free(*pids);
-        pause_for(0.05);
-    }
-    return n;
-}
-
-/** Whether `pid` is one of the `n` of `pids`. */
-static int among(long pid, const pid_t *pids, int n)
-{
-    int i;
-
-    for (i = 0; i < n; i++)
-        if (pids[i] == pid)
-            return 1;
-    return 0;
-}
-
-/** Whether `LEDGER.closed` names `relay`, whose transcript then has the
- * whole of its machine's output. */
-static int relay_closed(const char *ledger, long relay)
-{
-    char *path = malloc(strlen(ledger) + 16);
-    FILE *fp;
-    long pid;
-    int found = 0;
-
-    if (!path)
-        return 0;
-    sprintf(path, "%s.closed", ledger);
-    fp = fopen(path, "r");
-    free(path);
-    if (!fp)
-        return 0;
-    while (!found && fscanf(fp, "%ld", &pid) == 1)
-        found = pid == relay;
-    fclose(fp);
-    return found;
-}
-
-/**
- * Write to `fp` the lines of the `record` mode's record that `ledger` gives
- * once the suite has ended and its machines have settled: `left PID GROUP
- * COMMAND` for each of the `n` machines and relays of `left`, which still
- * run, and `cut MACHINE RELAY` for each other machine whose relay did not
- * copy the whole of its output to the transcript. The ledger has each
- * machine and its relay on two lines together. Returns the count of lines.
- */
-static int end_lines(FILE *fp, const char *ledger, const pid_t *left, int n)
-{
-    FILE *in = fopen(ledger, "r");
-    struct identity id;
-    long machine, relay;
-    char *c;
-    int i, cut = 0;
-
-    for (i = 0; i < n; i++) {
-        if (process_identity(left[i], &id) != 1) {
-            id.group = 0;
-            strcpy(id.command, "?");
-        }
-        for (c = id.command; *c; c++)
-            if (*c <= ' ' || *c > '~')
-                *c = '?';
-        fprintf(fp, "left %ld %ld %s\n", (long)left[i], (long)id.group, id.command);
-    }
-    if (!in)
-        return n;
-    while (fscanf(in, "%ld %ld", &machine, &relay) == 2)
-        if (!among(machine, left, n) && !among(relay, left, n) && !relay_closed(ledger, relay)) {
-            fprintf(fp, "cut %ld %ld\n", machine, relay);
-            cut++;
-        }
-    fclose(in);
-    return n + cut;
-}
-
-/**
- * Write etude's `child` record of process `pid` to the descriptor that
- * `RACH2_ETUDE_CHILDREN` names, when it names a pipe. The `record` mode
- * gives its command that descriptor, a copy of its own standard output,
- * which etude's executor reads, so that the executor knows each machine and
- * relay and ends them with the suite.
- */
-static void report_child(pid_t pid)
-{
-    const char *text = getenv("RACH2_ETUDE_CHILDREN");
-    struct stat st;
-    char line[64];
-    int fd, n;
-
-    if (!text)
-        return;
-    fd = (int)strtol(text, NULL, 10);
-    if (fd < CHILDREN_FD || fstat(fd, &st) != 0 || !S_ISFIFO(st.st_mode))
-        return;
-    n = snprintf(line, sizeof(line), "@etude 1 child %ld\n", (long)pid);
-    write_all(fd, line, (size_t)n);
-}
-
-/** In the `record` mode's command, keep standard output, which etude's
- * executor reads, open at a descriptor of CHILDREN_FD or more, and name it
- * in `RACH2_ETUDE_CHILDREN` for `report_child`. */
-static void keep_children_fd(void)
-{
-    char text[16];
-    int fd = fcntl(STDOUT_FILENO, F_DUPFD, CHILDREN_FD);
-
-    if (fd < 0) {
-        unsetenv("RACH2_ETUDE_CHILDREN");
-        return;
-    }
-    snprintf(text, sizeof(text), "%d", fd);
-    setenv("RACH2_ETUDE_CHILDREN", text, 1);
-}
-
-/**
- * Begin the `record` mode's record, the file `record` with `.new` after it,
- * once the command has ended, and return it open, or NULL when it cannot be
- * written. When the command ended by itself, with `stopped` clear, the
- * machines of `ledger` have SETTLE_SECONDS to end, and the lines of
- * `end_lines` follow the first; `*ended` is set when there is one.
- * `finish_record` writes the rest.
- */
-static FILE *start_record(const char *record, const char *ledger, int stopped, int *ended)
-{
-    char *tmp = malloc(strlen(record) + 8);
-    FILE *fp = NULL;
-    pid_t *left;
-    int n;
-
-    if (tmp) {
-        sprintf(tmp, "%s.new", record);
-        fp = fopen(tmp, "w");
-        free(tmp);
-    }
-    if (!fp || fprintf(fp, "runutil-record 1\n") < 0)
-        perror("runutil: record");
-    if (!fp || stopped)
-        return fp;
-    n = settle(ledger, bound(SETTLE_SECONDS), &left);
-    if (n < 0) {
-        fclose(fp);
-        return NULL;
-    }
-    *ended = end_lines(fp, ledger, left, n) > 0;
-    free(left);
-    return fp;
-}
-
-/**
- * Finish the `record` mode's record in `fp`, the file `record` with `.new`
- * after it, and rename it to `record` once it is whole, so that a reader
- * finds the record whole or not at all. Its first line is `runutil-record
- * 1`, and the lines after `end_lines` are the command's `status`, its exit
- * status or 128 plus the signal that ended it; `idle`, 1 when it was
- * stopped as hung; `stopped`, the signal this process received, or 0;
- * `leaked`, 1 when the liveness check failed; `survivor`, 1 when a machine
- * outlived its TERM; and `end`. Returns 0, or -1 when the record could not
- * be written.
- */
-static int finish_record(FILE *fp, const char *record, int status, int idle, int leaked,
-                         int survivor)
-{
-    char *tmp = malloc(strlen(record) + 8);
-    int bad;
-
-    if (!tmp) {
-        fclose(fp);
-        return -1;
-    }
-    sprintf(tmp, "%s.new", record);
-    fprintf(fp, "status %d\nidle %d\nstopped %d\nleaked %d\nsurvivor %d\nend\n", status, idle,
-            (int)interrupted, leaked, survivor);
-    bad = fflush(fp) != 0 || fsync(fileno(fp)) != 0;
-    bad = fclose(fp) != 0 || bad || rename(tmp, record) != 0;
-    if (bad)
-        perror("runutil: record");
-    free(tmp);
-    return bad ? -1 : 0;
 }
 
 /** Send `sig` to the group `root`, to each owned process of the `n` of
@@ -1676,25 +1435,11 @@ static int note_group(const char *groups, pid_t child)
  * reads when the command has ended. Both the parent and the child call
  * `setpgid`, so the group exists before any cleanup can need it, whichever
  * runs first; `execute` checks the child's call.
- *
- * With `record`, the `record` mode, `suite` is set too. The command's output
- * goes to standard error, and its processes keep standard output, which
- * etude's executor reads, for the `child` records of their machines
- * (`report_child`). When the command has ended by itself, the machines of
- * `ledger` have SETTLE_SECONDS to end, and those still running, and each
- * console a relay did not copy whole, go into the record (`start_record`).
- * The liveness check and `check_machines` then stop what is left, and the
- * record is finished (`finish_record`). The mode returns as `suite` does,
- * and 1 also when a machine was left running, outlived its TERM or had its
- * console cut; a record that cannot be written leaves none.
  */
-static int supervise(char **cmd, const char *name, double idle, const char *ledger, int suite,
-                     const char *record)
+static int supervise(char **cmd, const char *name, double idle, const char *ledger, int suite)
 {
     int pipes[2], status = 0, done = 0, eof = 0, timedout = 0;
-    int life[2] = {-1, -1}, leaked = 0, survivor = 0, ended = 0;
-    int outfd = record ? STDERR_FILENO : STDOUT_FILENO;
-    FILE *end = NULL;
+    int life[2] = {-1, -1}, leaked = 0;
     struct stat token;
     int progressfd = STDERR_FILENO;
     const char *progress = getenv("RACH2_PROGRESS_FD");
@@ -1745,8 +1490,6 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         if (suite)
             close(life[0]);
         close(pipes[0]);
-        if (record)
-            keep_children_fd();
         dup2(pipes[1], STDOUT_FILENO);
         dup2(pipes[1], STDERR_FILENO);
         close(pipes[1]);
@@ -1773,7 +1516,7 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
         if (n > 0) {
             active = now();
             keep_recent(&recent, buf, (size_t)n);
-            if (write_all(outfd, buf, (size_t)n) != 0)
+            if (write_all(STDOUT_FILENO, buf, (size_t)n) != 0)
                 interrupted = SIGTERM;
         } else if (n == 0) {
             eof = 1;
@@ -1814,52 +1557,27 @@ static int supervise(char **cmd, const char *name, double idle, const char *ledg
             break;
         }
         if (done) {
-            drain_output(pipes[0], outfd);
+            drain_output(pipes[0], STDOUT_FILENO);
             break;
         }
     }
     if (!done)
         while (waitpid(child, &status, 0) < 0 && errno == EINTR)
             ;
-    if (record)
-        end = start_record(record, ledger, interrupted || timedout, &ended);
     if (suite) {
         leaked = check_token(life[0], &token, child, ledger, name, interrupted || timedout);
         close(life[0]);
     }
-    if (record)
-        survivor = check_machines(name, ledger);
     close(pipes[0]);
     free(console);
     status = exit_code(status);
-    if (end)
-        finish_record(end, record, status, timedout, leaked, survivor);
     if (timedout)
         return 124;
     if (interrupted)
         return 128 + interrupted;
-    if (leaked || survivor || ended)
+    if (leaked)
         return 1;
     return status;
-}
-
-/** Add this process's pid to `LEDGER.closed`: the relay's transcript has the
- * whole of its machine's output. */
-static void note_closed(const char *ledger)
-{
-    char *path = malloc(strlen(ledger) + 16), line[32];
-    int fd, n;
-
-    if (!path)
-        return;
-    sprintf(path, "%s.closed", ledger);
-    fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0600);
-    free(path);
-    if (fd < 0)
-        return;
-    n = snprintf(line, sizeof(line), "%ld\n", (long)getpid());
-    write_all(fd, line, (size_t)n);
-    close(fd);
 }
 
 /**
@@ -1871,16 +1589,12 @@ static void note_closed(const char *ledger)
  * rest, and end the copy at once when they interrupt a write to standard
  * output that cannot finish. The relay waits for output in `poll`, a second
  * at a time, so that a signal that comes just before a read cannot leave it
- * waiting past that bound. Once the transcript has the whole of the
- * machine's output, at its end or when the suite stops reading it, the
- * relay notes it in `LEDGER.closed` (`note_closed`); a relay that ends
- * otherwise has cut the console.
+ * waiting past that bound.
  */
-static void relay_console(int in, int logfd, pid_t machine, const char *ledger)
+static void relay_console(int in, int logfd, pid_t machine)
 {
     char buf[8192];
-    ssize_t n = -1;
-    int whole = 0;
+    ssize_t n;
     double t, until = 0;
     struct pollfd pfd;
     struct sigaction sa;
@@ -1918,14 +1632,11 @@ static void relay_console(int in, int logfd, pid_t machine, const char *ledger)
         }
         if (relay_write(STDOUT_FILENO, buf, (size_t)n) != 0) {
             kill(machine, SIGTERM);
-            whole = 1;
             break;
         }
     }
     close(in);
     close(logfd);
-    if (n == 0 || whole)
-        note_closed(ledger);
     _exit(0);
 }
 
@@ -1935,13 +1646,11 @@ static void relay_console(int in, int logfd, pid_t machine, const char *ledger)
  * (`relay_console`) to standard output and to `LEDGER.console`. The machine
  * keeps this process's pid, so a suite that signals the pid it started
  * signals the machine, SIGKILL too. Both pids go in the ledger, and their
- * identities in `LEDGER.identity`, for the cleanup at the suite's end, and
- * each goes as a `child` record to etude's executor under the `record` mode
- * (`report_child`). A QEMU, a command whose name begins `qemu-system`, is
- * given a monitor on the socket `monitor_path` names as well, which
- * `machine_state` reads when the machine stalls. Returns 2 when the pipe,
- * the transcript, the relay or the ledger cannot be made; an exec that fails
- * exits with status 127.
+ * identities in `LEDGER.identity`, for the cleanup at the suite's end. A
+ * QEMU, a command whose name begins `qemu-system`, is given a monitor on the
+ * socket `monitor_path` names as well, which `machine_state` reads when the
+ * machine stalls. Returns 2 when the pipe, the transcript, the relay or the
+ * ledger cannot be made; an exec that fails exits with status 127.
  */
 static int machine_exec(const char *ledger, char **cmd)
 {
@@ -1971,7 +1680,7 @@ static int machine_exec(const char *ledger, char **cmd)
     }
     if (relay == 0) {
         close(pipes[1]);
-        relay_console(pipes[0], logfd, machine, ledger);
+        relay_console(pipes[0], logfd, machine);
     }
     close(pipes[0]);
     close(logfd);
@@ -1987,8 +1696,6 @@ static int machine_exec(const char *ledger, char **cmd)
     }
     fprintf(fp, "%ld\n%ld\n", (long)machine, (long)relay);
     fclose(fp);
-    report_child(machine);
-    report_child(relay);
     dup2(pipes[1], STDOUT_FILENO);
     dup2(pipes[1], STDERR_FILENO);
     close(pipes[1]);
@@ -2455,9 +2162,7 @@ int main(int argc, char **argv)
         return !is_young(argv[2], strtod(argv[3], NULL));
     if (argc >= 6 && (!strcmp(argv[1], "watch") || !strcmp(argv[1], "suite")))
         return supervise(argv + 5, argv[2], strtod(argv[3], NULL), argv[4],
-                         !strcmp(argv[1], "suite"), NULL);
-    if (argc >= 7 && !strcmp(argv[1], "record"))
-        return supervise(argv + 6, argv[2], strtod(argv[3], NULL), argv[4], 1, argv[5]);
+                         !strcmp(argv[1], "suite"));
     if (argc == 3 && !strcmp(argv[1], "registered")) {
         registered_pids(argv[2]);
         return 0;

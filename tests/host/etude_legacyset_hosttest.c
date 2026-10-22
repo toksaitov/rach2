@@ -2660,7 +2660,7 @@ static int guest_site(void)
 {
     static const char *const needed[] = {"rach2/kernel", "images/test.krffs",
                                          "tools/etude/guest/etude-guest", "tests/rngprobe"};
-    const char *arch = getenv("ARCH"), *path = getenv("PATH"), *shims = getenv("RACH2_QEMU_SHIMS");
+    const char *arch = getenv("ARCH"), *path = getenv("PATH");
     const char *qemu, *end;
     char file[PATH_MAX], real_qemu[PATH_MAX];
     size_t i, len;
@@ -2673,7 +2673,7 @@ static int guest_site(void)
         if (end == NULL)
             end = path + strlen(path);
         len = (size_t)(end - path);
-        if (len == 0 || (shims != NULL && len == strlen(shims) && strncmp(path, shims, len) == 0))
+        if (len == 0)
             continue;
         snprintf(file, sizeof(file), "%.*s/%s", (int)len, path, qemu);
         found = access(file, X_OK) == 0;

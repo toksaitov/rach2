@@ -319,15 +319,10 @@ static int make_profile(struct legacy_guest *g)
     return 0;
 }
 
-/**
- * Give the path of `name` on PATH in `out`, or NULL when it is not there.
- * The directory RACH2_QEMU_SHIMS names, where tests/run puts its QEMU
- * wrappers, each of which adds an `-accel` of its own, is passed by, so that
- * QEMU is given the one accelerator the launcher asks for.
- */
+/** Give the path of `name` on PATH in `out`, or NULL when it is not there. */
 static const char *on_path(const char *name, char *out, size_t size)
 {
-    const char *path = getenv("PATH"), *shims = getenv("RACH2_QEMU_SHIMS"), *end;
+    const char *path = getenv("PATH"), *end;
     size_t len;
 
     for (; path != NULL && *path != '\0'; path = *end == ':' ? end + 1 : end) {
@@ -335,7 +330,7 @@ static const char *on_path(const char *name, char *out, size_t size)
         if (end == NULL)
             end = path + strlen(path);
         len = (size_t)(end - path);
-        if (len == 0 || (shims != NULL && len == strlen(shims) && strncmp(path, shims, len) == 0))
+        if (len == 0)
             continue;
         snprintf(out, size, "%.*s/%s", (int)len, path, name);
         if (access(out, X_OK) == 0)
