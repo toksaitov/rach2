@@ -1028,21 +1028,21 @@ struct rusage32 {
 static int usage_pipe[2], go_pipe[2];
 
 /**
- * Spend user time until the kernel has charged `ticks` of it to the process,
- * or for a thousand ticks. Returns the sum the loop computed, so that the
- * compiler keeps the loop.
+ * Spend user time until the kernel has charged `ticks` of it to the process.
+ * Returns the sum the loop computed, so that the compiler keeps the loop.
  */
 static unsigned int spin_ticks(long ticks)
 {
     volatile unsigned int x = 0;
     struct tms tm;
-    clock_t start = times(&tm);
     unsigned int i;
 
-    while ((long)tm.tms_utime < ticks && (long)(times(&tm) - start) < 1000) {
+    times(&tm);
+    while ((long)tm.tms_utime < ticks) {
         for (i = 0; i < 200000u; i++) {
             x += i;
         }
+        times(&tm);
     }
     return x;
 }
