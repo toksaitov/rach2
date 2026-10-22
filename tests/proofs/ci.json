@@ -764,6 +764,45 @@
       }
     },
     {
+      "name": "lastline",
+      "summary": "a run judged by its last result line, which may name the suites that failed after its result",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    case $rc/$(printf '%s\\n' \"$lines\" | grep -v '^run: result: failed: ' | tail -n 1) in\n",
+          "replace": "    case $rc/$(printf '%s\\n' \"$lines\" | tail -n 1) in\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: late failed: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "lastnames",
+      "summary": "a run whose result is not a failure taken for one when the suites' names come last",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "    case $rc/$(printf '%s\\n' \"$lines\" | grep -v '^run: result: failed: ' | tail -n 1) in\n",
+          "replace": "    case $rc/$(printf '%s\\n' \"$lines\" | tail -n 1) in\n"
+        },
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        '1/run: result: failed')\n",
+          "replace": "        '1/run: result: failed'|'1/run: result: failed: '*)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: late incomplete: the row fails"
+        ]
+      }
+    },
+    {
       "name": "scope",
       "summary": "a suite's result from an earlier run of the test taken for the set's",
       "edits": [

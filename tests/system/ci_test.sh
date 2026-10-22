@@ -10,7 +10,8 @@
 # suites, the attempts that etude's history of a run lists in its issue, an
 # intermittent issue that a passing run leaves open, bisection on a machine
 # where etude admits tests, bisection that reads etude's history with the
-# tree's casecheck, and a fault of the runner in its lines.
+# tree's casecheck, a fault of the runner in its lines, and a result that
+# comes before the lines of the suites that failed.
 # The scripts run in a private tree with stand-ins for git, gh, make,
 # timeout, the clock and etude's history_failures; casecheck is the tree's,
 # over etude's verdict fixtures. Each row runs in a subshell of its own, and
@@ -142,7 +143,10 @@ EOF
 # does, through runutil, unless RACH2_PORT_OFFSET names a block: alone for
 # bigmem and shared otherwise. It prints a result for each suite, a set's
 # from the registry, or for `silent` none, and for `partial` none for
-# `default` in the core set. Given RACH2_RESULTS, it also copies into it
+# `default` in the core set. For `late-failed` and `late-incomplete` it
+# prints the run's result on standard output before the failed suite's lines
+# on standard error, as a launcher that passes the two through pipes of
+# their own may. Given RACH2_RESULTS, it also copies into it
 # etude's history of a run: on BAD the verdict fixtures' streams that
 # CI_TEST_STREAMS names, exiting CI_TEST_STATUS, and elsewhere those of a
 # pass, exiting 0.
@@ -164,6 +168,10 @@ case $CI_TEST_RUN/$current in
     lost/bad) printf '%s\n' "run: $1: FAIL in 1s" 'run: runner: the run record is missing' \
                   'run: runner: FAIL in 9s' "run: result: failed: $1 runner" 'run: result: failed'
               exit 1 ;;
+    late-failed/bad) echo 'run: result: failed'
+                     printf '%s\n' "run: $1: FAIL in 1s" "run: result: failed: $1" >&2; exit 1 ;;
+    late-incomplete/bad) echo 'run: result: incomplete'
+                         printf '%s\n' "run: $1: INCOMPLETE in ?s" "run: result: failed: $1" >&2; exit 1 ;;
 esac
 status=0
 if [ -n "${RACH2_RESULTS:-}" ]; then
@@ -761,6 +769,30 @@ faulted()
     fi
 )
 
+# late RESULT: bisect `default` where tests/run on BAD exits 1 with the
+# result RESULT, `failed` or `incomplete`, and then the lines of standard
+# error, `run: result: failed: default` last; require the commit named for
+# `failed`, and the range unresolved for `incomplete`, since a suite that did
+# not finish is not a failure of the commit.
+late()
+(
+    start
+    CI_TEST_FAIL=1 CI_TEST_GH_FAIL='' CI_TEST_RUN=late-$1
+    export CI_TEST_FAIL CI_TEST_GH_FAIL CI_TEST_RUN
+    status=0
+    sh "$work/bisect.sh" core i686 good bad 7 default > "$work/bisect.log" 2>&1 || status=$?
+    if [ "$1" = failed ]; then
+        printf 'make\ntests default bad\nmake\ntests default bad\nmake\ntests default good\n' > "$work/expected"
+        verdict='is the first commit that fails .*; its parent, good, passes' want=0
+    else
+        printf 'make\ntests default bad\n' > "$work/expected"
+        verdict='unresolved: bad could not be tested again' want=1
+    fi
+    [ "$status" = "$want" ] || return 1
+    cmp -s "$work/expected" "$work/events" || return 1
+    grep -q -- "$verdict" "$work/gh.log"
+)
+
 # scoped: bisect `default` and the core set where tests/run on BAD gives
 # `default` its result in the first run and none in the core set's, and
 # require the range unresolved, since a result of the first run does not
@@ -888,9 +920,10 @@ $assertion
 # chosen suites apart from a full run's, call no history reader for a result
 # without etude's history, report the attempts that a history lists,
 # bisect on a machine where etude admits tests, bisect commits whose run.sh
-# reads etude's history, and leave a range unresolved for a fault of the
-# runner in its lines or a suite's result from another run. Each row that
-# fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
+# reads etude's history, leave a range unresolved for a fault of the runner
+# in its lines or a suite's result from another run, and judge a run by its
+# result when the lines of the suites that failed come after it. Each row
+# that fails is printed as `ci-test: failed: ROW ARGS: the row fails`.
 rows()
 {
     rm -f "$work/reader.log"
@@ -941,6 +974,8 @@ rows()
     done
     row faulted default
     row faulted runner
+    row late failed
+    row late incomplete
     row scoped
     return "$failed"
 }
@@ -960,4 +995,4 @@ if ! rows; then
     echo 'ci-test: result: fail: ci report, hold or bisection' >&2
     exit 1
 fi
-echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open, bisection where etude admits tests, bisection from etude history and faults of the runner in bisection'
+echo 'ci-test: result: pass: unfinished runs, lost uploads, lost jobs, issue labels, the last pass, repeated failures, the hold issue, the runner suite, core items, time limits, continuation, the newest run, overlapping reports, older run scripts, a refused run, a run without a result, a closed issue, verdict errors, a run of chosen suites, the attempts in etude history, an intermittent issue kept open, bisection where etude admits tests, bisection from etude history, faults of the runner in bisection and a result before the failed suites'
