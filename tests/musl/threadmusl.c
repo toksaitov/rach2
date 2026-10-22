@@ -72,9 +72,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
-#include <sys/times.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
@@ -89,16 +87,6 @@
 
 /* The framebuffer's requests, as the kernel numbers them. */
 #define FB_SETPALETTE 0x4603
-
-/* The longest wait, in seconds, for a thread to be seen asleep: a bound that
- * ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
-/* The longest wait, in seconds, for the child of `handler_mask_row`: past the
- * child's own wait of ASLEEP_BOUND, and well inside the 60 s that the default
- * suite's runner allows a probe, so that a child that never ends fails the row
- * and is not taken for a hung probe. */
-#define CHILD_BOUND 30
 
 /* The counting threads' mutex and count, the condition row's value, each
  * counting thread's thread-local value and thread id, the thread that ran
@@ -145,8 +133,6 @@ enum {
     READER_ASLEEP,
     CLOSED_READ,
     NUMBER_FREE,
-    MASK_WAKE,
-    MASK_ASLEEP,
     MASK_TAKEN,
     STATUS_PAGE,
     WAIT_CREATE,
@@ -228,8 +214,6 @@ static const struct {
     {"reader-asleep", "the reader was never seen asleep in its read"},
     {"closed-read", "a read on a descriptor another thread closed"},
     {"number-free", "the number of a descriptor closed under a read"},
-    {"mask-wake", "a signal a handler's mask blocked did not wake the other thread"},
-    {"mask-asleep", "the two threads were not seen asleep in sigsuspend"},
     {"mask-taken", "the two signals were not taken by the two threads"},
     {"status-page", "the status page and the pipe"},
     {"wait-create", "pthread_create for the wait"},
@@ -598,28 +582,24 @@ static long spun_from, spun_to;
 
 /**
  * Run as the spinning thread: spin until this thread's own time, read from
- * its stat under the task directory, counts five ticks more, or for a
- * thousand ticks since boot. Stores the times in `spun_from` and `spun_to`.
+ * its stat under the task directory, counts five ticks more, or until the
+ * stat cannot be read. Stores the times in `spun_from` and `spun_to`.
  */
 static void *spin_main(void *arg)
 {
     char own_stat[64];
-    struct tms tms;
-    long deadline;
     volatile unsigned long spin = 0;
     int i;
 
     (void)arg;
     snprintf(own_stat, sizeof(own_stat), "/proc/self/task/%d/stat", (int)tid());
     spun_from = stat_ticks(own_stat);
-    deadline = (long)times(&tms) + 1000;
     do {
         for (i = 0; i < 1000000; i++) {
             spin++;
         }
         spun_to = stat_ticks(own_stat);
-    } while (spun_from >= 0 && spun_to >= 0 && spun_to < spun_from + 5 &&
-             (long)times(&tms) < deadline);
+    } while (spun_from >= 0 && spun_to >= 0 && spun_to < spun_from + 5);
     return NULL;
 }
 
@@ -742,34 +722,22 @@ static int task_state(pid_t t)
     return state && state[1] == ' ' ? state[2] : 0;
 }
 
-/** The seconds since `start` on the monotonic clock. */
-static long seconds_since(const struct timespec *start)
-{
-    struct timespec now;
-
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (long)(now.tv_sec - start->tv_sec);
-}
-
 /**
  * Wait for thread `*t` of this process to be asleep, state S in
  * /proc/self/task/<t>/stat, looking every 10 ms; `*t` may still be 0, for a
  * thread that has yet to store its id. Returns 1 once it is asleep, and 0
- * when it ends first, as a zombie or gone from /proc, or when ASLEEP_BOUND
- * seconds pass.
+ * when it ends first, as a zombie or gone from /proc.
  */
 static int thread_asleep(const volatile pid_t *t)
 {
-    struct timespec start;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = *t != 0 ? task_state(*t) : -1;
         if (state == 'S') {
             return 1;
         }
-        if (state == 0 || state == 'Z' || seconds_since(&start) >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -868,8 +836,8 @@ static volatile pid_t usr1_by, usr2_by;
 /**
  * Handle SIGUSR1 for `handler_mask`: record the thread in `usr1_by` and wait
  * for SIGUSR2's handler to run in another thread, looking every 10 ms. The
- * handler's mask blocks SIGUSR2. A wait that never ends is ended by
- * `handler_mask_row`, which kills the child.
+ * handler's mask blocks SIGUSR2. A wait that never ends is ended by the
+ * case's watchdog.
  */
 static void on_usr1_waits(int sig)
 {
@@ -955,13 +923,11 @@ static int takers_suspended(void)
  * sleeper must be woken to run. The signals are sent only once both threads
  * are seen in sigsuspend (`asleep_unblocked`), so a thread that comes late
  * cannot pass for one that was not woken. Returns 0 when each thread ran one
- * handler, 2 when the two were not both seen in sigsuspend within
- * ASLEEP_BOUND seconds and no signal was sent, and 1 otherwise.
+ * handler, and 1 otherwise.
  */
 static int handler_mask(void)
 {
     struct sigaction sa;
-    struct timespec start;
     sigset_t both;
     pthread_t a, b;
 
@@ -981,11 +947,7 @@ static int handler_mask(void)
         pthread_create(&b, NULL, take_signals, &slots[1]) != 0) {
         return 1;
     }
-    clock_gettime(CLOCK_MONOTONIC, &start);
     while (!takers_suspended()) {
-        if (seconds_since(&start) >= ASLEEP_BOUND) {
-            return 2;
-        }
         usleep(10000);
     }
     kill(getpid(), SIGUSR1);
@@ -997,78 +959,20 @@ static int handler_mask(void)
 }
 
 /**
- * Print each thread of the process `pid` as /proc gives it: its state, the
- * signals pending for it and for its process, and its blocked mask, so that
- * a failed row says where a signal waits.
- */
-static void say_threads(pid_t pid)
-{
-    char path[64], line[128];
-    struct dirent *d;
-    DIR *dir;
-    FILE *f;
-
-    snprintf(path, sizeof(path), "/proc/%d/task", (int)pid);
-    dir = opendir(path);
-    if (!dir) {
-        return;
-    }
-    while ((d = readdir(dir)) != NULL) {
-        if (d->d_name[0] == '.') {
-            continue;
-        }
-        if (snprintf(path, sizeof(path), "/proc/%d/task/%s/status", (int)pid, d->d_name) >=
-            (int)sizeof(path)) {
-            continue;
-        }
-        f = fopen(path, "r");
-        if (!f) {
-            continue;
-        }
-        printf("THREADMUSL THREAD %s:", d->d_name);
-        while (fgets(line, sizeof(line), f)) {
-            if (!strncmp(line, "State:", 6) || !strncmp(line, "SigPnd:", 7) ||
-                !strncmp(line, "ShdPnd:", 7) || !strncmp(line, "SigBlk:", 7)) {
-                line[strcspn(line, "\n")] = '\0';
-                printf(" %s", line);
-            }
-        }
-        printf("\n");
-        fclose(f);
-    }
-    closedir(dir);
-}
-
-/**
  * Run `handler_mask` in a child, where no other thread of the probe can take
- * the two signals, and judge it by the child's status; a child that does not
- * end in CHILD_BOUND seconds on the monotonic clock has its threads printed
- * (`say_threads`) before it is killed. Returns 0, or 1 after the failure is
- * printed.
+ * the two signals, and judge it by the child's status. Returns 0, or 1 after
+ * the failure is printed.
  */
 static int handler_mask_row(void)
 {
-    struct timespec start;
     int status = 0;
     pid_t pid = fork();
 
     if (pid == 0) {
         _exit(handler_mask());
     }
-    clock_gettime(CLOCK_MONOTONIC, &start);
-    while (waitpid(pid, &status, WNOHANG) == 0) {
-        if (seconds_since(&start) >= CHILD_BOUND) {
-            say_threads(pid);
-            kill(pid, SIGKILL);
-            waitpid(pid, &status, 0);
-            return fail(MASK_WAKE);
-        }
-        usleep(10000);
-    }
-    if (WIFEXITED(status) && WEXITSTATUS(status) == 2) {
-        return fail(MASK_ASLEEP);
-    }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
         return fail(MASK_TAKEN);
     }
     return 0;
@@ -1469,15 +1373,6 @@ static void *exec_second(void *arg)
     _exit(3);
 }
 
-/**
- * Do nothing, so that SIGALRM interrupts a blocked call and does not end the
- * process.
- */
-static void on_alarm(int sig)
-{
-    (void)sig;
-}
-
 /* The process-shared robust mutex of the robust row, in shared memory. */
 static pthread_mutex_t *robust;
 
@@ -1500,13 +1395,12 @@ static void *lock_and_exec(void *arg)
  * calls execve is released under the id the thread locked it with, before the
  * thread takes the process id, so the probe's lock after the child's end gets
  * EOWNERDEAD and the mutex. A release that looked for the process id would
- * leave the mutex held for good; a time limit bounds the lock. Returns 0, or 1
- * after the failure is printed.
+ * leave the mutex held for good, and the lock asleep. Returns 0, or 1 after
+ * the failure is printed.
  */
 static int robust_exec(void)
 {
     pthread_mutexattr_t attr;
-    struct timespec deadline;
     int status, rc;
     pid_t pid;
 
@@ -1529,9 +1423,7 @@ static int robust_exec(void)
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 7) {
         return fail(ROBUST_CHILD);
     }
-    clock_gettime(CLOCK_REALTIME, &deadline);
-    deadline.tv_sec += 5;
-    rc = pthread_mutex_timedlock(robust, &deadline);
+    rc = pthread_mutex_lock(robust);
     if (rc != EOWNERDEAD) {
         errno = rc;
         return fail(ROBUST_OWNERDEAD);
@@ -1547,13 +1439,12 @@ static int robust_exec(void)
  * execve under the probe's PTRACE_SYSCALL, and only then does the first
  * thread call execve, which sends it SIGKILL and waits for it to end. The
  * SIGKILL ends the stop, and the second call does not run, as on Linux: its
- * thread ends, and the child runs the first one's program. An alarm bounds
- * the waits, since a second call that ran and waited for the first would
- * never end. Returns 0, or 1 after the failure is printed.
+ * thread ends, and the child runs the first one's program. A second call that
+ * ran and waited for the first would never end, and would leave the probe's
+ * wait asleep. Returns 0, or 1 after the failure is printed.
  */
 static int two_execs(void)
 {
-    struct sigaction sa;
     int go[2], status, ok;
     pid_t pid, second;
     char c;
@@ -1573,10 +1464,6 @@ static int two_execs(void)
         _exit(5);
     }
     close(go[0]);
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_alarm;
-    sigaction(SIGALRM, &sa, NULL);
-    alarm(20);
     ok = read(tid_pipe[0], &second, sizeof(second)) == sizeof(second) &&
          waitpid(second, &status, __WALL) == second && WIFSTOPPED(status) &&
          WSTOPSIG(status) == SIGSTOP && ptrace(PTRACE_SYSCALL, second, NULL, NULL) == 0 &&
@@ -1585,7 +1472,6 @@ static int two_execs(void)
          waitpid(second, &status, __WALL) == second && WIFSIGNALED(status) &&
          WTERMSIG(status) == SIGKILL && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
          WEXITSTATUS(status) == 9;
-    alarm(0);
     close(go[1]);
     close(tid_pipe[0]);
     close(tid_pipe[1]);
