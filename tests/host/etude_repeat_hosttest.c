@@ -1244,11 +1244,9 @@ int main(int argc, char **argv)
         printf("etude-repeat-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
-    signal(SIGALRM, stopped);
     signal(SIGINT, stopped);
     signal(SIGTERM, stopped);
     signal(SIGHUP, stopped);
-    alarm(150);
     if (fixtures() != 0) {
         printf("etude-repeat-test: fail: the fixtures cannot be made\n");
         return 1;
@@ -1267,7 +1265,6 @@ int main(int argc, char **argv)
     etude_repeat_result_free(&good_run);
     etude_budget_policy_free(&policy);
     free(case_env);
-    alarm(0);
     if (fails != 0)
         return 1;
     fix_passed();

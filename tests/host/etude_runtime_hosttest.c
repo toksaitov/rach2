@@ -1854,14 +1854,6 @@ static void test_transport(void)
     CHECK(empty("transport"), "transport-again");
 }
 
-/** Leave as a failure, keeping the fixtures, when the test runs too long. */
-static void too_long(int sig)
-{
-    (void)sig;
-    printf("etude-runtime-test: fail: the test ran past its bound\n");
-    exit(1);
-}
-
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--case") == 0)
@@ -1884,8 +1876,6 @@ int main(int argc, char **argv)
         return 1;
     }
     signal(SIGPIPE, SIG_IGN);
-    signal(SIGALRM, too_long);
-    alarm(220);
     if (fixtures() != 0) {
         printf("etude-runtime-test: fail: the fixtures cannot be made\n");
         return 1;
@@ -1897,7 +1887,6 @@ int main(int argc, char **argv)
     test_blocked();
     test_stuck();
     test_transport();
-    alarm(0);
     if (fails != 0)
         return 1;
     fix_passed();

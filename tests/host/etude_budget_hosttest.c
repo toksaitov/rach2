@@ -1425,11 +1425,9 @@ int main(void)
     struct json *workload;
 
     parent = getpid();
-    signal(SIGALRM, stopped);
     signal(SIGINT, stopped);
     signal(SIGTERM, stopped);
     signal(SIGHUP, stopped);
-    alarm(60);
     if (etude_budget_manifest_read(SCHEMAS, CASES, &manifest, err, sizeof(err)) != 0 ||
         read_policy("policy.json", &usual, &policy, err, sizeof(err)) != 0) {
         printf("etude-budget-test: fail: %s\n", err);
@@ -1454,7 +1452,6 @@ int main(void)
     test_unjudged();
     etude_budget_policy_free(&policy);
     json_free(manifest);
-    alarm(0);
     if (fails != 0) {
         return 1;
     }

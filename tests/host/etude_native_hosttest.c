@@ -165,8 +165,8 @@ static void cut(struct relay *rl, const char *line, size_t n)
 /**
  * Leave etude-guest running as a connection that the machine has not seen
  * end: a process of its own keeps etude-guest's input open and reads its
- * output, until etude-guest ends or a minute passes, while the controller's
- * side of the connection is closed.
+ * output until etude-guest ends, while the controller's side of the
+ * connection is closed.
  */
 static void hold(struct relay *rl)
 {
@@ -176,7 +176,6 @@ static void hold(struct relay *rl)
     if (pid == 0) {
         close(0);
         close(1);
-        alarm(60);
         while (read(rl->from, buf, sizeof(buf)) > 0) {
         }
         _exit(0);

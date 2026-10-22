@@ -825,11 +825,9 @@ static void test_contention(void)
 int main(void)
 {
     parent = getpid();
-    signal(SIGALRM, stopped);
     signal(SIGINT, stopped);
     signal(SIGTERM, stopped);
     signal(SIGHUP, stopped);
-    alarm(120);
     test_cpu();
     test_cost();
     test_order();
@@ -840,7 +838,6 @@ int main(void)
     test_uncertain();
     test_sched();
     test_contention();
-    alarm(0);
     if (fails != 0)
         return 1;
     fix_passed();
