@@ -34,7 +34,7 @@ A suite's cases and [the cases' Readme](../cases/Readme.md) say what each of its
 
 1. It checks every name, refuses one that is unknown, has no family of cases, is named twice or is not registered for `ARCH`, and looks for every tool the suites name.
 2. It tries what the host must allow: `tools/setup/hostcheck.c` binds a TCP, a UDP and a Unix socket, unless the run is only `style` and `host`, and, on a Mac, attaches a disk image when a suite names `hdiutil`, as `large` does among its choices. A run of any suite besides those two also needs `RACH2_MIN_FREE_GIB` free under the tree and, under WSL, on the Windows drive where the distribution's disk is, which fills before Linux sees it.
-3. It refuses a glob two suites declare, checks the timeout factor and `RACH2_CPUS`, and chooses the accelerator: KVM where `/dev/kvm` can be read and written, HVF on an x86 Mac that reports it, the emulator otherwise. A `/dev/kvm` this user cannot open is refused rather than run under the emulator, whose speed the completion bounds were not written for; `RACH2_QEMU_ACCEL=tcg` asks for the emulator.
+3. It refuses a glob two suites declare, checks `RACH2_CPUS`, and chooses the accelerator: KVM where `/dev/kvm` can be read and written, HVF on an x86 Mac that reports it, the emulator otherwise. A `/dev/kvm` this user cannot open is refused rather than run under the emulator, whose speed the completion bounds were not written for; `RACH2_QEMU_ACCEL=tcg` asks for the emulator.
 4. It takes the tree, then, when a suite boots a machine, the host lock and a block of ports, as described below.
 5. It prints its start line, makes the recovery system's key if the tree has none, and hashes the scripts that decide a result.
 6. It builds `etude-legacy`, `history_lines` and `casecheck` and copies them into its scratch, so that no build a case starts replaces them while they run, and checks every manifest of `tests/cases` with `casecheck families`, which refuses the run when one is at fault.
@@ -71,7 +71,7 @@ A case that does not pass keeps its workspace as `build/tests/failed/RUN.CASE.rR
 
 ### Completion bounds
 
-A suite waits for a token and judges what the kernel counts, never the clock; a number of seconds in a suite is a completion bound. `RACH2_TIMEOUT_FACTOR=F` multiplies every bound, for a single suite or a set: the runner passes it on as `RACH2_DEADLINES=scaled` and `RACH2_DEADLINE_FACTOR=F`, which the harness, `runtests`, `ptydrive` and `hostpeer` read, and a shell suite writes a bound as `$(scaled N)` from `deadline.sh`. A bound that asserts a rate, the time a row applies a load for, a guest's own deadline and the idleness limit are not multiplied. The runner measures nothing about the host.
+A suite waits for a token and judges what the kernel counts, never the clock. Etude stops a case only when it has made no progress for longer than the case's history on that machine allows, as [etude's Readme](../../tools/etude/Readme.md#progress-and-bounds) says. The harness, `runtests`, `drive.sh` and `ptydrive` bound each wait by the seconds their caller gives, and `hostpeer echo`, as the socket cases run it, serves until it is stopped. The runner measures nothing about the host and scales no bound.
 
 The `clock` suite is the one exception, since the clock is what it tests: it compares the guest's clocks with the host's across thirty stops of the machine, within 250 ms, which its case declares as a clock reference (see [`machine.clock.json`](../cases/machine.clock.json)).
 
@@ -85,7 +85,7 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 
 * `harness.c` boots one machine, headless, and drives its serial console with steps: wait for a pattern, type a line or raw bytes, press a key or move the mouse through QEMU's monitor, plug or pull a device, connect to a forwarded port, run a probe. It decides a run by the exit status the kernel prints for the probe; with a kernel built with `HARNESS=1`, QEMU stops through its `isa-debug-exit` device when that process exits. `--ok TOKEN` decides the run by a serial token instead, and `--never TEXT` fails it if a text appears. The header comment lists the options, steps and exit statuses. `--selftest` checks the matcher, the waits and the writes without QEMU.
 * `runtests.c` runs every program of the `default` suite's `PROBES` list in turn in one boot of the test image, when a person runs it by hand, as [the tests' Readme](../Readme.md) describes; the suite itself runs them as etude's cases.
-* `hostpeer.c` is the host end of a connection: `hold` keeps a TCP connection open while the machine reads `/proc/net/tcp`, `echo` sends back what arrives over TCP and UDP, for a time or until it is stopped, and `send` sends one UDP datagram. Etude's socket and dgram cases run `echo` and `send`.
+* `hostpeer.c` is the host end of a connection: `hold` keeps a TCP connection open for a number of seconds, `echo` sends back what arrives over TCP and UDP, for a time or until it is stopped, and `send` sends one UDP datagram. Etude's socket and dgram cases run `echo` and `send`.
 * `ptydrive.c` runs a command, such as `ssh`, on a pseudo-terminal of a given size and answers one password prompt from an environment variable, which it removes from the command's environment and from the output it passes on.
 * `deadline.c` runs a command in a process group of its own and kills the group when a time limit passes, with status 124.
 * `screentext.c` prints the text a framebuffer console shows in a QEMU screen dump, matching each cell against the kernel's own font, `rach2/sys/display/vga_font.c`; `--colors` prints how many colours the dump has.
@@ -153,7 +153,7 @@ A suite waits for what the machine prints and bounds each wait; a shell suite wr
 
 * The runner checks image files by name. It cannot tell which suite wrote a file, so a suite that writes a file another suite owns passes the check.
 * Equal hashes before and after a run show that the files the run used are the files there now, not that they did not change in between.
-* A suite's completion bounds are written for an idle host under KVM. On a loaded host or under the emulator, `RACH2_TIMEOUT_FACTOR` is the remedy; the runner does not adjust them.
+* The drivers' bounds, the seconds a script gives the harness, `runtests`, `drive.sh` or `ptydrive`, are written for an idle host under KVM, and the runner does not adjust them: on a loaded host or under the emulator such a wait can run out before the machine is done.
 
 ## Tests
 

@@ -7,12 +7,9 @@
  * process, in one of three jobs.
  *
  *   hostpeer hold PORT SECONDS
- *       Connect to 127.0.0.1:PORT and keep the connection open for SECONDS.
- *       The procfiles suite keeps one open, through a forward to the
- *       guest's SSH server, while the machine's netstat reads its
- *       `/proc/net/tcp`, so the table has a live connection from outside
- *       to show, and kills it once the tables are read, so that SECONDS
- *       only ends a peer the suite left behind.
+ *       Connect to 127.0.0.1:PORT and keep the connection open for SECONDS,
+ *       so that a guest's tables have a live connection from outside to
+ *       show.
  *
  *   hostpeer echo PORT SECONDS
  *       Listen on 127.0.0.1:PORT for both TCP and UDP for SECONDS and send
@@ -29,10 +26,9 @@
  *       send it to the port QEMU forwards to the guest's 7502, once the
  *       guest's probe says it waits for it.
  *
- * SECONDS is a completion bound and is multiplied by the set's deadline
- * factor. The exit status is 0 when the job was done, 1 when it could not
- * be, and 2 for a usage error; the caller decides whether a failure is
- * fatal. The end of an echo server's time is a success.
+ * The exit status is 0 when the job was done, 1 when it could not be, and 2
+ * for a usage error; the caller decides whether a failure is fatal. The end
+ * of an echo server's time is a success.
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -87,34 +83,6 @@ static double now(void)
 
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec / 1e6;
-}
-
-/* The set's deadline factor, which multiplies every completion bound. */
-static double deadline_factor = 1.0;
-
-/**
- * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
- * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
- * process told nothing, told the mode without a factor, or given a factor
- * outside 1 to 64 keeps the factor 1.
- */
-static void deadline_factor_read(void)
-{
-    const char *mode = getenv("RACH2_DEADLINES");
-    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
-    double f;
-
-    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
-        return;
-    f = atof(factor);
-    if (f >= 1.0 && f <= 64.0)
-        deadline_factor = f;
-}
-
-/** A completion bound of `seconds` multiplied by the deadline factor. */
-static double scaled(double seconds)
-{
-    return seconds * deadline_factor;
 }
 
 /**
@@ -299,11 +267,7 @@ static int whole_number(const char *text, long *out)
     return *end == '\0';
 }
 
-/**
- * Check the arguments and run the job they name for its lifetime, which is
- * scaled as a completion bound is, since it covers the work of the machine
- * that uses the peer, and rounded up to a whole second.
- */
+/** Check the arguments and run the job they name. */
 int main(int argc, char **argv)
 {
     long port, seconds;
@@ -326,8 +290,6 @@ int main(int argc, char **argv)
                         "number of seconds\n");
         return 2;
     }
-    deadline_factor_read();
-    seconds = (long)(scaled((double)seconds) + 0.999);
     if (strcmp(argv[1], "hold") == 0)
         return hold(port, seconds);
     if (strcmp(argv[1], "echo") == 0)

@@ -24,9 +24,6 @@
 #     sh tests/system/drivetest.sh
 #
 set -u
-# The checks time the harness's and drive.sh's bounds as written, so a
-# deadline factor, which scales them, is unset here.
-unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 # The harness's fake machine is named qemu-system-i386, the emulator the
 # harness runs when RACH2_QEMU is unset, so an architecture's is dropped.
 unset RACH2_QEMU

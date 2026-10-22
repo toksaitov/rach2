@@ -4,11 +4,12 @@
 # A suite that boots QEMU itself, `-serial stdio < FIFO > LOG`, sources this
 # file and drives the machine with `drive_expect` and `drive_type`: a line is
 # typed once the output it answers has arrived, and a step that waits does so
-# under a bound and fails with the log's tail when the bound passes. Every
-# wait is for fresh output: a cursor, the byte position in the log of the
-# last match or of the first line typed after it, is where the next search
-# starts, so a token the machine printed earlier never satisfies a later
-# step, and the answer to each of two lines typed back to back is found.
+# under a bound, in elapsed seconds, and fails with the log's tail when the
+# bound passes. Every wait is for fresh output: a cursor, the byte position
+# in the log of the last match or of the first line typed after it, is where
+# the next search starts, so a token the machine printed earlier never
+# satisfies a later step, and the answer to each of two lines typed back to
+# back is found.
 #
 # The feeder holds the fifo open while the machine lives and types the lines
 # dropped into spool files, one per line and numbered, taken in order and
@@ -38,10 +39,6 @@ DRIVE_SEQ=0
 # 1 when a line has been typed since the last wait began.
 DRIVE_TYPED=0
 DRIVE_POLL=${DRIVE_POLL:-0.2}
-# Every bound is elapsed seconds. Callers apply `scaled` once, if wanted;
-# the driver never applies a factor, including in its compatibility aliases.
-# shellcheck source=tests/system/deadline.sh
-. "$REPO/tests/system/deadline.sh"
 
 # The time in seconds: runutil's monotonic clock when RACH2_RUN_UTIL names
 # runutil, and otherwise `date +%s`, which BSD and GNU date both print.

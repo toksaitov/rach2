@@ -130,9 +130,6 @@ workers_default() {
     [ "$n" -lt 4 ] && n=4
     echo "$n"
 }
-# Internal deadline variables belong to this run. Only the explicit public
-# override is inherited; it applies equally to single suites and sets.
-unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 WORKERS="${RACH2_WORKERS:-$(workers_default)}"
 # How much guest memory the pool may have booted at once, in MiB: three
 # quarters of the host's, so the memory matrix's 4 GiB machine and the
@@ -600,8 +597,7 @@ check_hashes() { # 0 when no script and no product differs or is gone
     [ -z "$voided" ]
 }
 
-# Completion bounds keep their written values unless the caller supplies a
-# factor. The runner never measures host speed or changes the pool width.
+# The runner never measures host speed or changes the pool width.
 #
 # A host with a KVM device this user cannot open is refused rather than run
 # under the emulator: the bounds were set under KVM, and a run that fell back
@@ -643,24 +639,6 @@ set_cpus() {
     esac
     [ "$RACH2_CPUS" -le 64 ] || { echo "run: result: refused: RACH2_CPUS must be a whole number from 1 to 64" >&2; return 1; }
     export RACH2_CPUS
-}
-
-set_factor() {
-    CAL_FACTOR=${RACH2_TIMEOUT_FACTOR:-1}
-    case "$CAL_FACTOR" in
-        *[!0-9.]*|.*|*.|*.*.*|'')
-            echo "run: result: refused: RACH2_TIMEOUT_FACTOR must be a positive decimal" >&2
-            return 1 ;;
-    esac
-    CAL_FACTOR=$(awk -v f="$CAL_FACTOR" 'BEGIN {
-        if (f < 1 || f > 64) exit 1
-        printf "%.1f\n", int(f * 10 + 0.999) / 10
-    }') || {
-        echo "run: result: refused: RACH2_TIMEOUT_FACTOR must be between 1 and 64" >&2
-        return 1
-    }
-    RACH2_DEADLINES=scaled; RACH2_DEADLINE_FACTOR=$CAL_FACTOR
-    export RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 }
 
 case "${1-}" in
@@ -749,7 +727,6 @@ if [ "${RACH2_TREE_HELD:-}" != "$$" ]; then
     check_declarations || exit 1
 fi
 
-set_factor || exit 2
 set_accel || exit 2
 set_cpus || exit 2
 lock_take "$@" || { echo "run: result: refused: the tree is not free" >&2; exit 1; }
@@ -814,7 +791,7 @@ export RACH2_QEMU_ACCEL
 
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
-echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS$selection)"
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS$selection)"
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is

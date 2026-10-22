@@ -74,7 +74,6 @@ PATH="$work/bin:$PATH"
 TMPDIR="$work/tmp"
 RACH2_ACCEPT_PASSWORD=Q7pL9xZ2mK4vT8sN
 export PATH TMPDIR RACH2_ACCEPT_PASSWORD
-unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 
 if [ -n "${PTYDRIVE:-}" ]; then
     cp "$PTYDRIVE" "$work/build/tests/system/ptydrive"

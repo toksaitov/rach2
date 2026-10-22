@@ -2849,7 +2849,6 @@ int main(int argc, char **argv)
     setenv("RACH2_CPUS", "1", 1);
     setenv("ARCH", "i686", 1);
     setenv("ETUDE_SEED", "99", 1);
-    unsetenv("RACH2_DEADLINES");
     unsetenv("RACH2_OVMF_CODE");
     unsetenv("FIXTURE_BREAK");
     make_tree();

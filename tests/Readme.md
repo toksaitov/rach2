@@ -26,7 +26,6 @@ These variables change a run:
 | `RACH2_WORKERS` | twice the host's processors divided by `RACH2_CPUS`, at least 4 | suites run at once |
 | `RACH2_MEMORY_MIB` | three quarters of the host's memory | guest memory the running suites may declare together |
 | `RACH2_CPUS` | 2 | processors of every machine, 1 to 64; a suite that names its own count keeps it |
-| `RACH2_TIMEOUT_FACTOR` | 1 | multiplies every completion bound, 1 to 64, rounded up to a tenth |
 | `RACH2_STOP_ON_FAIL` | unset | when set, the first failure stops the set |
 | `RACH2_CASES` | unset | case identities separated by blanks, such as `guest.default.vforkmusl machine.ext2.cost`: each suite of the run runs only the cases listed of its own, in its manifest's order, and the start line says the run is a selection; an identity that is no case of a suite of the run, or of the architecture, one given twice and a suite left with no case are refused before anything is built |
 | `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel` |
@@ -67,7 +66,7 @@ On an installed machine that is already up, such as the Lenovo, `etude-native` r
 
 ## Results
 
-The runner prints one line when a run starts, with its architecture, worker count, memory budget, timeout factor, accelerator and processor count. Each case of a suite prints `run: NAME: CASE: starting` when it starts and its output whole when it ends, so the output of cases that run at once is not mixed, and a case that did not pass names the workspace it kept in `run: NAME: CASE: evidence: DIR`. When every case has ended, each suite prints its items that did not pass and `run: NAME: PASS in Ns`, or `FAIL`, `INCOMPLETE` or `CANCELLED` in place of `PASS`.
+The runner prints one line when a run starts, with its architecture, worker count, memory budget, accelerator and processor count. Each case of a suite prints `run: NAME: CASE: starting` when it starts and its output whole when it ends, so the output of cases that run at once is not mixed, and a case that did not pass names the workspace it kept in `run: NAME: CASE: evidence: DIR`. When every case has ended, each suite prints its items that did not pass and `run: NAME: PASS in Ns`, or `FAIL`, `INCOMPLETE` or `CANCELLED` in place of `PASS`.
 
 The last line is the run's verdict:
 

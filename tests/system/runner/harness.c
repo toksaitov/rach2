@@ -28,12 +28,12 @@
  *   given up to 128 times. --bootwait S is accepted and ignored.
  *
  *   --timeout bounds the run, 60 seconds unless given, and --steptmo each
- *   step that waits for output, 15 unless given; both are multiplied by the
- *   set's deadline factor. --grace is how long the output is read after the
- *   last step, 3 seconds unless given. --ok TOKEN decides the run by that
- *   serial token instead of the guest's exit status. --log keeps the console
- *   in FILE, and --no-debug-exit leaves the isa-debug-exit device out. --net
- *   and --device default to QEMU's user network on an rtl8139.
+ *   step that waits for output, 15 unless given. --grace is how long the
+ *   output is read after the last step, 3 seconds unless given. --ok TOKEN
+ *   decides the run by that serial token instead of the guest's exit status.
+ *   --log keeps the console in FILE, and --no-debug-exit leaves the
+ *   isa-debug-exit device out. --net and --device default to QEMU's user
+ *   network on an rtl8139.
  *
  *   --must-exit fails the run unless QEMU ended by itself, by exiting,
  *   before the deadline. It is what tells a machine that restarted or halted
@@ -90,8 +90,8 @@
  *                    `hostfwd=tcp::PORT-:GUESTPORT` in --net forwards to
  *                    a server inside the guest, read the first bytes the
  *                    server sends, an SSH banner, and close. The step
- *                    fails when nothing arrives within thirty seconds,
- *                    scaled as a deadline is: QEMU's user network accepts
+ *                    fails when nothing arrives within thirty seconds:
+ *                    QEMU's user network accepts
  *                    the host side of a connection before it knows
  *                    whether anything is there, so only bytes from the
  *                    guest prove it answered, and they are on the wire by
@@ -233,11 +233,9 @@ static char monitor_reply[512];
 static int monitor_refused;
 
 static double now(void);
-static double scaled(double seconds);
 
 /**
- * Read from the monitor until its prompt arrives, or `seconds`, scaled as a
- * deadline is, have passed.
+ * Read from the monitor until its prompt arrives, or `seconds` have passed.
  *
  * The prompt is what says the monitor has finished with what it was given.
  * Sleeping a fixed time instead is a race: under load a command sent before
@@ -249,7 +247,7 @@ static double scaled(double seconds);
  */
 static int monitor_wait_prompt(int seconds)
 {
-    double until = now() + scaled((double)seconds);
+    double until = now() + (double)seconds;
     char chunk[512];
 
     monitor_reply[0] = '\0';
@@ -284,9 +282,9 @@ static int monitor_wait_prompt(int seconds)
  * Connect to the monitor, once, and read past its greeting.
  *
  * QEMU may not have made the socket yet, so the connection is tried a
- * hundred times, scaled as a deadline is, 50 ms apart. The greeting ends in
- * a prompt, and until that arrives the monitor is not listening. Returns 0,
- * or -1 with the reason printed.
+ * hundred times, 50 ms apart. The greeting ends in a prompt, and until that
+ * arrives the monitor is not listening. Returns 0, or -1 with the reason
+ * printed.
  */
 static int monitor_open(void)
 {
@@ -300,7 +298,7 @@ static int monitor_open(void)
         printf("HARNESS: monitor path too long: %s\n", monitor_path);
         return -1;
     }
-    for (tries = 0; tries < (int)scaled(100.0); tries++) {
+    for (tries = 0; tries < 100; tries++) {
         monitor_fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (monitor_fd < 0) {
             return -1;
@@ -454,36 +452,6 @@ static double now(void)
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
-}
-
-/* ---- the deadline factor ---- */
-
-/* The set's deadline factor, which multiplies every completion bound. */
-static double deadline_factor = 1.0;
-
-/**
- * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
- * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
- * process told nothing, told the mode without a factor, or given a factor
- * outside 1 to 64 keeps the factor 1.
- */
-static void deadline_factor_read(void)
-{
-    const char *mode = getenv("RACH2_DEADLINES");
-    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
-    double f;
-
-    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
-        return;
-    f = atof(factor);
-    if (f >= 1.0 && f <= 64.0)
-        deadline_factor = f;
-}
-
-/** A completion bound of `seconds` multiplied by the deadline factor. */
-static double scaled(double seconds)
-{
-    return seconds * deadline_factor;
 }
 
 /* ---- the trace ---- */
@@ -909,8 +877,7 @@ static void begin_input(void)
     exchange = buf_len;
 }
 
-/* The limit of a step that waits for output, in seconds, scaled once the
-   options are read. */
+/* The limit of a step that waits for output, in seconds. */
 static double steptmo = 15.0;
 
 /* The number of the current step, counted from 1, for the report of a
@@ -2001,9 +1968,9 @@ static int too_many(const char *what, int limit)
  * before the guest's side exists, so a connection proves nothing; bytes
  * from the guest, an SSH server's banner, prove its server answered. A
  * server slow to listen under load, or one whose connection the guest
- * resets, is connected to again until thirty seconds, scaled as a deadline
- * is, have passed, and never past the run's deadline. Returns 1 when the
- * guest answered, 0 when nothing did.
+ * resets, is connected to again until thirty seconds have passed, and never
+ * past the run's deadline. Returns 1 when the guest answered, 0 when nothing
+ * did.
  */
 static int step_tcp(int port)
 {
@@ -2020,7 +1987,7 @@ static int step_tcp(int port)
     tv.tv_sec = 15;
     tv.tv_usec = 0;
     setsockopt(sk, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    knock_until = now() + scaled(30.0);
+    knock_until = now() + 30.0;
     if (knock_until > deadline)
         knock_until = deadline;
     connected = sk >= 0 && connect(sk, (struct sockaddr *)&addr, sizeof(addr)) == 0;
@@ -2081,10 +2048,9 @@ static int step_tcp(int port)
  * and a second is the program's output or the shell's answer. Under `ok`,
  * the run's token, the step ends when the token has arrived since the line
  * was typed: a machine that stays at its prompt afterwards is not waited for
- * to the limit, which a set's factor can put past the runner's idle limit. A
- * `--never` text ends the step too, with or without `ok`, since the run fails
- * on it afterwards and a probe that failed at once is not waited for to the
- * step's limit.
+ * to the limit. A `--never` text ends the step too, with or without `ok`,
+ * since the run fails on it afterwards and a probe that failed at once is not
+ * waited for to the step's limit.
  */
 static void step_execq(const char *name, const char *ok)
 {
@@ -2342,9 +2308,6 @@ int main(int argc, char **argv)
         tracef = fopen(trace_path, "w");
     if (log != NULL)
         logf = fopen(log, "wb");
-    deadline_factor_read();
-    timeout = scaled(timeout);
-    steptmo = scaled(steptmo);
     deadline = now() + timeout;
     buf_add((const unsigned char *)"", 0);
 
@@ -2475,7 +2438,7 @@ int main(int argc, char **argv)
             if (access(step + 8, F_OK) != 0)
                 step_fail(step);
         } else if (strncmp(step, "until=", 6) == 0) {
-            double until = now() + scaled(atof(step + 6));
+            double until = now() + atof(step + 6);
             size_t from = consumed;
 
             drain_ready();

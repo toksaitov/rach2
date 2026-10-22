@@ -27,15 +27,14 @@
  * Besides the probes, the run scores the kernel's `timing:` record and
  * requires clockmusl to compare its date with a host UDP reference. --timeout
  * bounds the run, 180 seconds unless given, --steptmo each probe, 20, and
- * --boottmo the wait for the shell, 60, each multiplied by the set's
- * deadline factor. A probe that does not return within its limit ends the
- * run, and each probe after it counts as a failure. --log keeps the console
- * in FILE. Each --probe runs only the probes it names, in the order of
- * `PROBES`; the clock check then counts only when musl/clockmusl is named.
- * The exit status is 0 when every probe and both checks pass, 1
- * otherwise, 2 for a usage error or a run that could not start, and 3 when
- * the kernel shell never appeared. `--selftest` checks the scoring on fixed
- * text.
+ * --boottmo the wait for the shell, 60. A probe that does not return within
+ * its limit ends the run, and each probe after it counts as a failure. --log
+ * keeps the console in FILE. Each --probe runs only the probes it names, in
+ * the order of `PROBES`; the clock check then counts only when
+ * musl/clockmusl is named. The exit status is 0 when every probe and both
+ * checks pass, 1 otherwise, 2 for a usage error or a run that could not
+ * start, and 3 when the kernel shell never appeared. `--selftest` checks the
+ * scoring on fixed text.
  *
  * Every probe that reports its result as an exit status runs here; the rest
  * have a suite of their own, since each needs something this shared boot
@@ -733,34 +732,6 @@ static double now(void)
     return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
-/* The set's deadline factor, which multiplies every completion bound. */
-static double deadline_factor = 1.0;
-
-/**
- * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
- * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
- * process told nothing, told the mode without a factor, or given a factor
- * outside 1 to 64 keeps the factor 1.
- */
-static void deadline_factor_read(void)
-{
-    const char *mode = getenv("RACH2_DEADLINES");
-    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
-    double f;
-
-    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
-        return;
-    f = atof(factor);
-    if (f >= 1.0 && f <= 64.0)
-        deadline_factor = f;
-}
-
-/** A completion bound of `seconds` multiplied by the deadline factor. */
-static double scaled(double seconds)
-{
-    return seconds * deadline_factor;
-}
-
 /** Append `n` bytes to `buf`, keeping it NUL-terminated; exits with status
  * 2 when there is no memory. */
 static void buf_add(const unsigned char *data, size_t n)
@@ -1120,10 +1091,6 @@ int main(int argc, char **argv)
                     "continues without a transcript\n",
                     log, strerror(errno));
     }
-    deadline_factor_read();
-    timeout = scaled(timeout);
-    steptmo = scaled(steptmo);
-    boottmo = scaled(boottmo);
     deadline = now() + timeout;
     buf_add((const unsigned char *)"", 0);
 

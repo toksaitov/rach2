@@ -22,12 +22,12 @@
  * `[redacted]` too.
  *
  * The run ends when the command closes the terminal, or after S seconds, 60
- * unless given and multiplied by the set's deadline factor, which prints
- * `TIMEDOUT`. `PROMPTED=N` then counts the prompts seen and `ANSWERED=N`
- * the answers sent. The exit status is 0, after a timeout too, 1 after a
- * second prompt or an answer that could not be written, and 2 for a usage
- * error or a failure to set up. The command's own status is not reported;
- * the suites judge its output and the two counts.
+ * unless given, which prints `TIMEDOUT`. `PROMPTED=N` then counts the
+ * prompts seen and `ANSWERED=N` the answers sent. The exit status is 0,
+ * after a timeout too, 1 after a second prompt or an answer that could not
+ * be written, and 2 for a usage error or a failure to set up. The command's
+ * own status is not reported; the suites judge its output and the two
+ * counts.
  *
  * With PTYDRIVE_READS naming a file, each read of the command's output adds
  * a line with its count of bytes to that file once the bytes are handled,
@@ -328,34 +328,6 @@ static double now(void)
     return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
-/* The set's deadline factor, which multiplies every completion bound. */
-static double deadline_factor = 1.0;
-
-/**
- * Read the deadline factor. tests/run passes its `RACH2_TIMEOUT_FACTOR` to
- * every suite as `RACH2_DEADLINES=scaled` with `RACH2_DEADLINE_FACTOR=F`. A
- * process told nothing, told the mode without a factor, or given a factor
- * outside 1 to 64 keeps the factor 1.
- */
-static void deadline_factor_read(void)
-{
-    const char *mode = getenv("RACH2_DEADLINES");
-    const char *factor = getenv("RACH2_DEADLINE_FACTOR");
-    double f;
-
-    if (mode == NULL || strcmp(mode, "scaled") != 0 || factor == NULL)
-        return;
-    f = atof(factor);
-    if (f >= 1.0 && f <= 64.0)
-        deadline_factor = f;
-}
-
-/** A completion bound of `seconds` multiplied by the deadline factor. */
-static double scaled(double seconds)
-{
-    return seconds * deadline_factor;
-}
-
 /* The file PTYDRIVE_READS names, or NULL when the variable is unset. */
 static FILE *reads;
 
@@ -375,16 +347,6 @@ static void reads_open(void)
         exit(2);
     }
     fcntl(fileno(reads), F_SETFD, FD_CLOEXEC);
-}
-
-/**
- * Read what the environment sets beside the options: the deadline factor,
- * and the reads file, which is opened.
- */
-static void environment_read(void)
-{
-    deadline_factor_read();
-    reads_open();
 }
 
 /**
@@ -474,7 +436,7 @@ int main(int argc, char **argv)
         return 2;
     }
     compile_prompt(prompt_re);
-    environment_read();
+    reads_open();
 
     ws.ws_row = (unsigned short)rows;
     ws.ws_col = (unsigned short)cols;
@@ -493,7 +455,7 @@ int main(int argc, char **argv)
         _exit(127);
     }
 
-    deadline = now() + scaled(timeout);
+    deadline = now() + timeout;
     for (;;) {
         double remaining = deadline - now();
         fd_set r;
