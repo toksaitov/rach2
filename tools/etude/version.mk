@@ -5,7 +5,8 @@
 # executable, and CC and CFLAGS the compiler and its flags, which bootstrap.sh
 # chooses for the platform. `all` builds the programs of every platform,
 # `remote` etude-remote and `bridge` etude-bridge, which bootstrap.sh asks for
-# on Linux and macOS.
+# on Linux and macOS, and `hold` etude-hold, which it asks for on every
+# platform but Rach2.
 
 include tools/etude/sources.mk
 
@@ -27,3 +28,13 @@ bridge: $(OUT)/etude-bridge$(EXE)
 
 $(OUT)/etude-bridge$(EXE): $(ETUDE_BRIDGE_SRC)
 	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Itools/etude/include -Iutils -o $@ $(ETUDE_BRIDGE_SRC)
+
+# The holder of a tree's run lock. HOLD_SRC and HOLD_FLAGS give the sources
+# and flags of Linux and macOS, and bootstrap.sh gives those of Windows.
+HOLD_SRC = $(ETUDE_HOLD_SRC)
+HOLD_FLAGS = -D_DEFAULT_SOURCE
+
+hold: $(OUT)/etude-hold$(EXE)
+
+$(OUT)/etude-hold$(EXE): $(HOLD_SRC)
+	$(CC) $(CFLAGS) $(HOLD_FLAGS) -o $@ $(HOLD_SRC)

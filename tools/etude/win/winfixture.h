@@ -101,4 +101,16 @@ int fx_tooling_lie(void);
 int fx_tooling_line(void);
 int fx_tooling_sample(void);
 
+/*
+ * The fixtures of etude-hold, beside winfixture.exe, each on a tree of its
+ * own: a command run under the hold and its record; a second helper on a
+ * held tree; locks that were left, refused or taken over; the hold of an
+ * ancestor; and a helper killed under its command.
+ */
+int fx_hold_run(void);
+int fx_hold_busy(void);
+int fx_hold_left(void);
+int fx_hold_ancestor(void);
+int fx_hold_killed(void);
+
 #endif

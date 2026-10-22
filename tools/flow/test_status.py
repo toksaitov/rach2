@@ -396,8 +396,11 @@ def report(repo):
             print("    no recorded admission wait")
     owner = fields(build / ".run.lock" / "owner")
     if owner:
-        pid = value(owner, "pid")
-        state = process(pid, value(owner, "pgid"))
+        if value(owner, "identity", None) is not None:
+            pid, state = identity(value(owner, "identity").split())
+        else:
+            pid = value(owner, "pid")
+            state = process(pid, value(owner, "pgid"))
         fault = "; fault: inspect the work and clear the stale tree lock" if state.startswith("dead") else ""
         print(f"  tree lock: holder {pid} {state}, since {value(owner, 'since')}, "
               f"{value(owner, 'args')}{fault}")

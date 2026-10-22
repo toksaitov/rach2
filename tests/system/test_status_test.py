@@ -139,6 +139,14 @@ def rows(reader, helper, root):
     owner.parent.mkdir(exist_ok=True)
     owner.write_text(f"pid {holder.pid}\npgid 1\nsince old\nargs fixture\n")
     assert "fault: inspect the work and clear the stale tree lock" in report()
+    with command(["sleep", "30"]) as holder:
+        ident = subprocess.check_output([helper, "identity", str(holder.pid)], text=True).strip()
+        owner.write_text(f"pid {holder.pid}\npgid 1\nidentity {ident}\nsince now\nargs held\n")
+        assert f"tree lock: holder {holder.pid} alive" in report(), report()
+        words = ident.split()
+        words[2] = str(int(words[2]) + 1)
+        owner.write_text(f"pid {holder.pid}\nidentity {' '.join(words)}\nsince now\nargs held\n")
+        assert "dead (pid reused)" in report() and "stale tree lock" in report(), report()
     with command(["true"]) as zombie:
         until(lambda: reader.process(zombie.pid) == "dead")
         assert reader.process(zombie.pid) == "dead"

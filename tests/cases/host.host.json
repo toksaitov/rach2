@@ -198,6 +198,7 @@
         {"assertion_id": "etude_failures", "checks": "tests/host/etude_failures_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_guest", "checks": "tests/host/etude_guest_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_history", "checks": "tests/host/etude_history_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
+        {"assertion_id": "etude_hold", "checks": "tests/host/etude_hold_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_ledger", "checks": "tests/host/etude_ledger_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_ledgercmd", "checks": "tests/host/etude_ledgercmd_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_legacy", "checks": "tests/host/etude_legacy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},

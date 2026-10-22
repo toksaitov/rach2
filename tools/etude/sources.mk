@@ -109,6 +109,11 @@ ETUDE_BRIDGE_SRC = tools/etude/posix/etude_bridge.c tools/etude/posix/bridge.c \
                    tools/etude/posix/keeper.c tools/etude/posix/process.c \
                    tools/etude/capture.c utils/sha256.c
 
+# etude-hold, which holds a tree's run lock while one command runs, on Linux
+# and macOS, and on Windows.
+ETUDE_HOLD_SRC = tools/etude/etude_hold.c tools/etude/posix/hold.c
+ETUDE_HOLD_WIN_SRC = tools/etude/etude_hold.c tools/etude/win/hold.c tools/etude/win/winfmt.c
+
 # etude-ledger, which lists a ledger's claims and drops one whose processes a
 # person has found ended.
 ETUDE_LEDGER_SRC = tools/etude/posix/etude_ledger.c tools/etude/ledger.c \

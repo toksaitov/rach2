@@ -291,3 +291,7 @@ unusedStructMember:*tools/etude/include/etude/tooling.h
 # The status record's structures: cppcheck checks status.h alone, and its
 # members are read in posix/status.c and its host test.
 unusedStructMember:*tools/etude/include/etude/status.h
+
+# The hold's process identity: cppcheck checks hold.h alone, and its members
+# are read in etude_hold.c, posix/hold.c and win/hold.c.
+unusedStructMember:*tools/etude/hold.h

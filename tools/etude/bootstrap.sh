@@ -133,13 +133,20 @@ etude_main()
     exe=
     flags='-std=c99 -O2'
     targets=all
+    # shellcheck disable=SC2016 # make expands the variable
+    hold='HOLD_SRC=$(ETUDE_HOLD_SRC)'
+    hold_flags=-D_DEFAULT_SOURCE
     root=${ETUDE_CACHE:-}
     case $platform in
         linux*|macos*)
-            targets='all remote bridge' ;;
+            targets='all remote bridge hold' ;;
         windows*)
             cc=${ETUDE_CC:-/ucrt64/bin/gcc}
             exe=.exe
+            targets='all hold'
+            # shellcheck disable=SC2016 # make expands the variable
+            hold='HOLD_SRC=$(ETUDE_HOLD_WIN_SRC)'
+            hold_flags=-D_WIN32_WINNT=0x0A00
             if [ -z "$root" ]; then
                 [ -n "${LOCALAPPDATA:-}" ] || etude_fail 'LOCALAPPDATA is not set'
                 root=$(cygpath -u "$LOCALAPPDATA") || etude_fail "cygpath cannot read $LOCALAPPDATA"
@@ -185,7 +192,7 @@ flags $flags"
         etude_fail "the source arrived damaged: its digest is not $ETUDE_SOURCE"
     # shellcheck disable=SC2086 # CC is a command line
     # shellcheck disable=SC2086 # TARGETS is a list of targets
-    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" $targets) >&2 ||
+    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" "$hold" HOLD_FLAGS="$hold_flags" $targets) >&2 ||
         etude_fail "the build of $key failed"
     {
         printf '%s\n' "$identity"

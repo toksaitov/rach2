@@ -3,7 +3,7 @@
  * first argument chooses what it does: exit, crash, report its arguments,
  * directory, environment or job, use processor time or memory, start a tree
  * of its own copies, leave children and grandchildren behind, try to leave
- * its job, or connect to a socket.
+ * its job, connect to a socket, or wait for a file.
  *
  * It writes its reports with WriteFile, so that the C library's text mode does
  * not turn a newline into two bytes, and it parses its arguments with the
@@ -485,6 +485,36 @@ static int do_big(int argc, wchar_t **argv)
     return 0;
 }
 
+/**
+ * gate READY GO: start a copy that hangs, write `PID CHILD HELD` to the file
+ * READY, where HELD is RACH2_TREE_HELD or `unset`, and exit once the file GO
+ * is there. READY appears whole, by rename.
+ */
+static int do_gate(int argc, wchar_t **argv)
+{
+    wchar_t held[64], part[1024];
+    char line[160];
+    HANDLE h, f;
+    DWORD n;
+
+    (void)argc;
+    if ((h = spawn(L"hang", 0)) == NULL)
+        return 3;
+    n = GetEnvironmentVariableW(L"RACH2_TREE_HELD", held, sizeof held / sizeof held[0]);
+    if (n == 0 || n >= sizeof held / sizeof held[0])
+        wcscpy(held, L"unset");
+    n = (DWORD)snprintf(line, sizeof line, "%lu %lu %s\n", (unsigned long)GetCurrentProcessId(),
+                        (unsigned long)GetProcessId(h), utf8(held));
+    swprintf(part, sizeof part / sizeof part[0], L"%ls.part", argv[2]);
+    f = CreateFileW(part, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE || !WriteFile(f, line, n, &n, NULL) || !CloseHandle(f) ||
+        !MoveFileExW(part, argv[2], MOVEFILE_REPLACE_EXISTING))
+        return 3;
+    while (GetFileAttributesW(argv[3]) == INVALID_FILE_ATTRIBUTES)
+        Sleep(10);
+    return 0;
+}
+
 /* The modes: the first argument, the count of arguments after it at least,
  * and what it does. */
 static const struct {
@@ -514,6 +544,7 @@ static const struct {
     {L"cat", 0, do_cat},
     {L"big", 1, do_big},
     {L"hold", 2, do_hold},
+    {L"gate", 2, do_gate},
 };
 
 int wmain(int argc, wchar_t **argv)

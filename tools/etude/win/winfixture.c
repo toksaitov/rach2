@@ -6,8 +6,8 @@
  * processes, the end of a tree by its job and by the death of its
  * controller, output, arguments, paths, the environment, sockets and clocks.
  * Others run the executor of etude/exec.h, the ledger, the supervisor with
- * both, and etude-tooling, which must also be beside this program, with
- * winstand.exe.
+ * both, etude-tooling, which must also be beside this program, with
+ * winstand.exe, and etude-hold, beside it too.
  *
  * Usage: winfixture [NAME...] runs the fixtures named, or all of them, and
  * prints `winfixture: result: pass: NAME` or `winfixture: result: fail: NAME:
@@ -1157,6 +1157,11 @@ static const struct {
     {"tooling-lie", fx_tooling_lie},
     {"tooling-line", fx_tooling_line},
     {"tooling-sample", fx_tooling_sample},
+    {"hold-run", fx_hold_run},
+    {"hold-busy", fx_hold_busy},
+    {"hold-left", fx_hold_left},
+    {"hold-ancestor", fx_hold_ancestor},
+    {"hold-killed", fx_hold_killed},
 };
 
 /** Find this program's path and directory, and the target's path beside it. */

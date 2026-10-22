@@ -592,6 +592,13 @@ $(ETUDELEDGER): $(ETUDE_LEDGER_SRC) tools/etude/include/etude/ledger.h \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
 
+# etude-hold (tools/etude/etude_hold.c), which holds a tree's run lock while
+# one command runs.
+ETUDEHOLD = build/tools/etude/etude-hold
+$(ETUDEHOLD): $(ETUDE_HOLD_SRC) tools/etude/hold.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE
+
 # etude's tooling machine (tools/etude/tooling.c), which runs on a host the
 # commands it lacks, built here so that `make` compiles it under the host
 # flags, with etude-volume beside it, which makes and reads its volumes.
@@ -1557,7 +1564,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) \
-             $(ETUDEBRIDGE) $(ETUDELEDGER) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
+             $(ETUDEBRIDGE) $(ETUDELEDGER) $(ETUDEHOLD) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer
