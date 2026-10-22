@@ -55,9 +55,6 @@ static int fails;
  * characters (fixdir_host.h). */
 #define PATH_LEN 1024
 
-/* The bound of a wait for a recipe to start, in milliseconds. */
-#define START_BOUND 60000
-
 /* This program, by an absolute path. */
 static char self[PATH_LEN];
 
@@ -549,6 +546,27 @@ static pid_t start_child(struct etude_legacy_opts *o, const char *out)
     _exit(status & 0xff);
 }
 
+/**
+ * Wait for a byte on `fd` while the child `pid` runs, and read what came into
+ * `buf`; 1, or 0 when the child ended first with nothing written.
+ */
+static int await_start(int fd, pid_t pid, char *buf, size_t size)
+{
+    struct pollfd pfd;
+    siginfo_t si;
+
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    for (;;) {
+        /* interval: the child is looked at again every 50 ms */
+        if (poll(&pfd, 1, 50) == 1)
+            return read(fd, buf, size) > 0;
+        memset(&si, 0, sizeof(si));
+        if (waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) != 0 || si.si_pid != 0)
+            return poll(&pfd, 1, 0) == 1 && read(fd, buf, size) > 0;
+    }
+}
+
 /** A stop signal ends the step that runs and removes the work. */
 static void test_stop(void)
 {
@@ -557,7 +575,6 @@ static void test_stop(void)
     const char *out = fix_path("stop.out");
     struct etude_legacy_opts o;
     struct outcome r;
-    struct pollfd pfd;
     int status = -1, fd, before = fails;
     pid_t pid;
 
@@ -567,10 +584,7 @@ static void test_stop(void)
     fd = open(in(path, sizeof(path), tree, "started.fifo"), O_RDWR);
     fflush(stdout);
     pid = start_child(&o, out);
-    pfd.fd = fd;
-    pfd.events = POLLIN;
-    CHECK(fd >= 0 && pid > 0 && poll(&pfd, 1, START_BOUND) == 1 && read(fd, got, sizeof(got)) > 0,
-          "stop: the step started");
+    CHECK(fd >= 0 && pid > 0 && await_start(fd, pid, got, sizeof(got)), "stop: the step started");
     if (pid > 0) {
         kill(pid, SIGTERM);
         waitpid(pid, &status, 0);
