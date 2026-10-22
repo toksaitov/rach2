@@ -53,7 +53,8 @@ LIBGCC="$($CC -print-libgcc-file-name)"
 # Out of tree, mirroring the source path tests/musl/ (mk/build.mk).
 OUT="$ARCH_BUILD/tests/musl"
 
-if [ ! -f "$PREFIX/lib/libc.a" ]; then
+# Printing the commands reads no file of musl's, so it needs no build of it.
+if [ -z "${MUSL_PRINT_COMMANDS:-}" ] && [ ! -f "$PREFIX/lib/libc.a" ]; then
     echo "musl-programs: $PREFIX/lib/libc.a not found; run make musl in the top directory first" >&2
     exit 1
 fi

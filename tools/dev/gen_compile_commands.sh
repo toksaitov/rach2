@@ -301,17 +301,29 @@ unit() {
     cat "$unit_tmp" >>"$entries"
 }
 
+# The tests, the utilities and krffs list files of the i686 musl as
+# prerequisites: the installed library and start files, and the crypt source
+# mkhash compiles. A tree that has built only x86-64 has none of them, and a
+# dry run reads no file, so make takes each as an existing file it need not
+# make (-o), and prints the commands of a tree that has them.
+musl=../vendor/musl
+MUSL_FILES="-o $musl/install/lib/crt1.o -o $musl/install/lib/crti.o -o $musl/install/lib/crtn.o"
+MUSL_FILES="$MUSL_FILES -o $musl/install/lib/libc.a -o $musl/musl-1.2.5/src/crypt/crypt_sha512.c"
+
 unit rach2 "$REPO/rach2" cross make -Bn
 unit rach2-recovery "$REPO/rach2" cross make -Bn COMPONENT=rach2-recovery KEXTRA=-DRACH2_RECOVERY
 unit rach2-metal "$REPO/rach2" cross make -Bn COMPONENT=rach2-metal KEXTRA=-DRACH2_DISK_READONLY
 unit rach2-harness "$REPO/rach2" cross make -Bn COMPONENT=rach2-harness HARNESS=1
 unit rach2-x86_64 "$REPO/rach2" cross make -Bn ARCH=x86_64
-unit tests "$REPO/tests" cross make -Bn
+# shellcheck disable=SC2086 # MUSL_FILES is a list of options
+unit tests "$REPO/tests" cross make -Bn $MUSL_FILES
 unit ish "$REPO/ish" cross make -Bn
-unit utils "$REPO/utils" cross make -Bn
+# shellcheck disable=SC2086 # MUSL_FILES is a list of options
+unit utils "$REPO/utils" cross make -Bn $MUSL_FILES
 unit doom "$REPO/ports/doom" cross make -Bn
 unit musl-programs "$REPO/tests/musl" cross env MUSL_PRINT_COMMANDS=1 sh build.sh
-unit krffs "$REPO/krffs" host make -Bn all mount
+# shellcheck disable=SC2086 # MUSL_FILES is a list of options
+unit krffs "$REPO/krffs" host make -Bn $MUSL_FILES all mount
 host_tools=$(make -s -C "$REPO" print-host-tools)
 # shellcheck disable=SC2086
 unit tools "$REPO" host make -Bn $host_tools
