@@ -19,14 +19,19 @@
 # of its own, and `all` runs alone since it covers every suite. Each test
 # has the time limit of KIND's run step in ci.yml or full.yml, 170 or 340
 # minutes, so that a run too slow for ci is too slow here; timeout(1) stops
-# it as it stops ci's. A test passes, fails, or cannot be made: a commit
-# that cannot be checked out, that does not build when the failure is a
-# suite's, or whose tests/run refuses, stops before its final
-# `run: result: failed`, or passes without a `run: NAME: PASS in` line for
-# each suite asked for, a set's as the commit's tests/registry lists them,
-# is untestable, and an untestable commit ends the search with the range
-# unresolved. A `run: result: failed:` line that names `runner` where no
-# suite of that name was asked for is a fault of the runner, and the commit
+# it as it stops ci's. A test passes, fails, or cannot be made. tests/run
+# fails a commit when it exits 1 with the result `run: result: failed`, its
+# last line that begins `run: result: ` apart from the
+# `run: result: failed: NAMES` line, which names the suites that failed. The
+# result is on standard output and the names on standard error, and a
+# launcher that passes the two through pipes of their own may put either
+# last in the log. A commit that cannot be checked out, that does not build
+# when the failure is a suite's, or whose tests/run refuses, stops before its
+# result, gives another result, or passes without a `run: NAME: PASS in` line
+# for each suite asked for, a set's as the commit's tests/registry lists
+# them, is untestable, and an untestable commit ends the search with the
+# range unresolved. A `run: result: failed:` line that names `runner` where
+# no suite of that name was asked for is a fault of the runner, and the commit
 # untestable as well. A commit whose tools/ci/run.sh has `results=history`
 # reads etude's history: each run of tests/run writes it under the test's
 # log through RACH2_RESULTS, and the commit's `casecheck verdict` judges it
@@ -322,17 +327,23 @@ historic() {
     grep -qx 'results=history' tools/ci/run.sh 2> /dev/null
 }
 
-# Run tests/run with ARGS, its output on the log: 0 when it passes with a
-# result line for each suite of ARGS, 1 when it ran its suites and failed, 2
-# when it refused, stopped before its result, left a suite without one, or
-# named a fault of the runner. A commit that reads etude's history is judged
-# by judged() instead.
+# Run tests/run with ARGS, its output on the log, and judge it by its status
+# and its result: the last line of the run that begins `run: result: `, apart
+# from the `run: result: failed: ` lines, which name the suites that failed
+# and may come before the result or after it, as the header says. Return 0
+# when tests/run passes with a result line for each suite of ARGS; 1 when it
+# exits 1 with the result `run: result: failed`, unless a line of failed
+# suites names `runner` and ARGS do not ask for that suite; and 2 when it
+# refused, stopped before its result, gave another result, left a suite
+# without one, or named a fault of the runner. A commit that reads etude's
+# history is judged by judged() instead.
 suites() { # suites ARGS...
     historic && { judged "$@"; return; }
     before=$(wc -l < "$log.log")
     admitted run tests/run "$@" >> "$log.log" 2>&1
     rc=$?
-    case $rc/$(tail -n +"$((before + 1))" "$log.log" | grep '^run: result: ' | tail -n 1) in
+    lines=$(tail -n +"$((before + 1))" "$log.log" | grep '^run: result: ')
+    case $rc/$(printf '%s\n' "$lines" | grep -v '^run: result: failed: ' | tail -n 1) in
         0/*) asked=$(members "$@") || return 2
              for s in $asked; do
                  tail -n +"$((before + 1))" "$log.log" | grep -q "^run: $s: PASS in " || {
@@ -342,7 +353,7 @@ suites() { # suites ARGS...
              done
              return 0 ;;
         '1/run: result: failed')
-            case " $(tail -n +"$((before + 1))" "$log.log" | sed -n 's/^run: result: failed: //p' | tail -n 1) " in
+            case " $(printf '%s\n' "$lines" | sed -n 's/^run: result: failed: //p' | tr '\n' ' ') " in
                 *' runner '*)
                     members "$@" | grep -qx runner || {
                         echo "ci: bisect: untestable: tests/run reports a fault of the runner" >> "$log.log"
