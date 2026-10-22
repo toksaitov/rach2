@@ -466,7 +466,7 @@ row()
             old="$key $dir"
             printf 'etude-ledger 1\nclaim run-1.case-1.1\nsystem linux\nstate running\nend\n' > "$home_state/ledger/claims"
             echo confirmed > "$home_state/ledger/verdicts/run-1.case-1.1"
-            sleep 600 &
+            while :; do sleep 1; done &
             testpid=$!
             snapshot "$home_state/ledger" "$FIX/cache/versions/$key" "$dir" > "$work/before"
             change
