@@ -10,8 +10,7 @@
 # that a TERM sent to the group while `secrets` waits for its log, or while
 # `work` runs its check, ends the command with status 143 and leaves TMPDIR
 # empty; and that `secrets` whose reader has gone ends with status 141 and
-# leaves TMPDIR empty. AGENTS_GUEST names the script to copy, by default the
-# tree's.
+# leaves TMPDIR empty.
 #
 # Usage: sh tests/system/agents_guest_test.sh
 #
@@ -27,7 +26,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-agents-guest-test.XXXXXX") || exit 1
-source=${AGENTS_GUEST:-$repo/tests/system/accept/agents_guest.sh}
+source=$repo/tests/system/accept/agents_guest.sh
 guest=$work/guest.sh
 home=$work/home
 scratch=$work/tmp

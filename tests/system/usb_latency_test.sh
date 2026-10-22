@@ -9,8 +9,7 @@
 # records put together, it must accept a timer and a spin record as two keys,
 # and refuse two timer records, a spin and a pump record, and a spin record
 # given as two keys. It must refuse a record with a malformed field, one with
-# a field twice, one with a field missing, and an empty one. USBSTAMP_TEST
-# names a host test built elsewhere to run in place of the private build.
+# a field twice, one with a field missing, and an empty one.
 set -eu
 [ "$#" -eq 0 ] || { echo 'usb-latency-test: usage: usb_latency_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -65,16 +64,12 @@ verdict()
     }
 }
 
-if [ -n "${USBSTAMP_TEST:-}" ]; then
-    cp "$USBSTAMP_TEST" "$work/test"
-else
-    "${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
-        -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all \
-        -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
-        tests/host/usbstamp_hosttest.c -o "$work/test" >"$work/build.log" 2>&1 || {
-            cat "$work/build.log" >&2; exit 1;
-        }
-fi
+"${CC:-cc}" -std=c99 -DRACH2_HOSTTEST -g -O1 -ffreestanding \
+    -Wall -Wextra -Werror -fsanitize=address,undefined -fno-sanitize-recover=all \
+    -I rach2/sys -I rach2/sys/lib -I rach2/sys/proc \
+    tests/host/usbstamp_hosttest.c -o "$work/test" >"$work/build.log" 2>&1 || {
+        cat "$work/build.log" >&2; exit 1;
+    }
 
 echo "usb-latency-test: logs: $work"
 keep=1

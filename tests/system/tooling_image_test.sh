@@ -23,7 +23,7 @@
 # next run must pass. After each, the tree must have no stage, no lock and no
 # job directory, and the lock must have outlived the job. Every
 # row runs under sh and, where the host has it, bash, which is the sh of
-# macOS. TOOLING_IMAGE names the script to copy, by default the tree's.
+# macOS.
 #
 # Usage: sh tests/system/tooling_image_test.sh
 #
@@ -39,7 +39,7 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-tooling-image-test.XXXXXX") || exit 1
-source=${TOOLING_IMAGE:-$repo/vendor/gnu/tooling_image.sh}
+source=$repo/vendor/gnu/tooling_image.sh
 tree=$work/tree
 FIX=$work/fix
 TEST_LOCK=$tree/build/vendor/gnu/tooling.disk.lock

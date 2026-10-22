@@ -9,8 +9,7 @@
 # The image stages conloadprobe alone. After one make it must have the
 # probe's bytes; after an edit a second later, one make must rebuild the
 # probe and restage it; a third make and a dry run must not rebuild the
-# image. IMAGERACE_MAKEFILE, when set, names the root Makefile to copy in
-# place of the tree's.
+# image.
 set -eu
 unset ARCH RACH2_ARCH RACH2_PATH_MAP MAKEFLAGS MFLAGS
 
@@ -19,7 +18,7 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 runlock_hold "$repo" imagerace-probe "$repo/tests/system/imagerace_probe.sh" "$@"
 cd "$repo"
 [ "$#" = 0 ] || { echo 'imagerace-probe: usage: imagerace_probe.sh' >&2; exit 2; }
-makefile=${IMAGERACE_MAKEFILE:-$repo/Makefile}
+makefile=$repo/Makefile
 
 mkdir -p build/tests/system
 work=

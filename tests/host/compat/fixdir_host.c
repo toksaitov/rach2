@@ -15,7 +15,6 @@
 #define FIX_PATH_MAX 1024
 #define FIX_NAMES    64 /* the names fix_path keeps a path for */
 
-#ifndef FIXDIR
 /* The characters a shell passes through unchanged, which a directory the
  * tests put in their commands unquoted may have. */
 #define FIX_PLAIN "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._+-"
@@ -62,13 +61,9 @@ static void fix_remove(void)
         printf("fixtures: %s could not be removed\n", own);
     }
 }
-#endif
 
 const char *fix_dir(void)
 {
-#ifdef FIXDIR
-    return FIXDIR;
-#else
     const char *tmp;
     size_t len;
 
@@ -90,7 +85,6 @@ const char *fix_dir(void)
     }
     atexit(fix_remove);
     return own;
-#endif
 }
 
 const char *fix_path(const char *name)
@@ -115,9 +109,7 @@ const char *fix_path(const char *name)
 
 void fix_passed(void)
 {
-#ifndef FIXDIR
     passed = 1;
-#endif
 }
 
 void fix_format(char *buf, unsigned long size, const char *format, ...)

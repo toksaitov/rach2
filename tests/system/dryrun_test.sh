@@ -8,8 +8,7 @@
 # The rows run a recipe of the vendor stamps' shape, in a private tree, over
 # the real mk/dryrun.mk: with no flags and with --no-print-directory the build
 # must run, and with -n, with --dry-run, and with -n beside
-# --no-print-directory it must not. DRYRUN_MK names the rule to copy, by
-# default the tree's.
+# --no-print-directory it must not.
 #
 # Usage:
 #     sh tests/system/dryrun_test.sh
@@ -36,7 +35,7 @@ say() { echo "dryrun-test: $1"; }
 bad() { echo "dryrun-test: FAIL: $1" >&2; fails=$((fails + 1)); }
 
 mkdir -p "$WORK/mk"
-cp "${DRYRUN_MK:-mk/dryrun.mk}" "$WORK/mk/dryrun.mk"
+cp mk/dryrun.mk "$WORK/mk/dryrun.mk"
 cat > "$WORK/build.sh" <<'EOB'
 #!/bin/sh
 echo built > "$(dirname "$0")/marker"

@@ -47,9 +47,7 @@
 #     runs the ISH sub-make and does not link the object with the host cc.
 #
 # The trees hold copies of the real files, and marker directories stand for
-# build/, so a clean there cannot reach the real one. BUILD_RULES_OVERLAY
-# names a directory whose files, at their paths in the tree, replace the
-# tree's in both private trees.
+# build/, so a clean there cannot reach the real one.
 #
 # Usage:
 #     sh tests/system/build_rules_test.sh
@@ -129,13 +127,6 @@ cp -R mk "$C/mk"
 mkdir -p "$C/krffs/manifests"
 cp krffs/manifests/*.manifest "$C/krffs/manifests/"
 rm -f "$C/krffs/recovery_authorized_keys"
-if [ -n "${BUILD_RULES_OVERLAY:-}" ]; then
-    (cd "$BUILD_RULES_OVERLAY" && find . -type f) | while IFS= read -r f; do
-        for t in "$S" "$C"; do
-            [ ! -f "$t/$f" ] || cp "$BUILD_RULES_OVERLAY/$f" "$t/$f"
-        done
-    done
-fi
 
 # The PATH with each directory that holds a cross compiler replaced by one of
 # links to everything else in it: make, the shell and the utilities are still

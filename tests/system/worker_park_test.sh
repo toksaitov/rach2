@@ -23,7 +23,6 @@
 # ci last reported on 80 before any hand-back, after an earlier one, or not at
 # all since a hand-back two days old. The row plain hands back a `ci` issue
 # that is not intermittent a minute before, and the loop takes it.
-# WORKER_SH names the worker.sh to copy, by default the tree's.
 #
 # Usage: sh tests/system/worker_park_test.sh
 #
@@ -39,7 +38,7 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-worker-test.XXXXXX") || exit 1
 mkdir -p "$work/bin" "$work/flow" "$work/home"
 
-cp "${WORKER_SH:-$repo/tools/flow/worker.sh}" "$work/flow/worker.sh" || exit 1
+cp "$repo/tools/flow/worker.sh" "$work/flow/worker.sh" || exit 1
 
 # The stand-ins read the issues from WORKER_TEST_DATA, one a line, as
 # `N|STATE|ASSIGNED|LABELS|TITLE|BODY`, with `-` for an empty field and `\n`

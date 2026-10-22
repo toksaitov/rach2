@@ -20,9 +20,6 @@
 # stand-in uname names the host system as UNAME_S says, Linux by default, and
 # a stand-in x86_64-elf-gdb waits for those arguments and exits.
 #
-# RUN_SCRIPTS names the directory the scripts are copied from, by default the
-# tree's rach2/.
-#
 # Usage: sh tests/system/run_scripts_test.sh
 #
 set -eu
@@ -44,7 +41,7 @@ work=$(CDPATH='' cd -- "$work" && pwd)
 mkdir -p "$work/rach2" "$work/build/rach2" "$work/build/images" "$work/bin" \
     "$work/build/x86_64/rach2" "$work/build/x86_64/images"
 for f in run.sh run_from_disk.sh run_from_iso.sh debug.sh qemu_devices.sh; do
-    cp "${RUN_SCRIPTS:-$repo/rach2}/$f" "$work/rach2/$f"
+    cp "$repo/rach2/$f" "$work/rach2/$f"
 done
 : >"$work/build/rach2/kernel"
 : >"$work/build/x86_64/rach2/kernel"

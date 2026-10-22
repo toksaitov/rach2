@@ -20,8 +20,6 @@
 # machine use the tree's etude-bridge and casecheck, which the test builds, a
 # ledger and lock files of their own, and etude-ports, through which the
 # stand-in tests/run takes the host lock as the real one does.
-# CI_SCRIPTS names the directory report.sh and bisect.sh are copied from, by
-# default the tree's tools/ci.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'ci-test: usage: ci_test.sh' >&2; exit 2; }
@@ -33,11 +31,11 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-test.XXXXXX")
 mkdir -p "$work/bin" "$work/tree/tools/ci" "$work/tree/tests/system" "$work/state" "$work/locks"
-cp "${CI_SCRIPTS:-$repo/tools/ci}/report.sh" "$work/report.sh"
+cp "$repo/tools/ci/report.sh" "$work/report.sh"
 # These command fixtures model a private endpoint, even inside an admitted
 # host suite. Shared admission of the real entries has its own fixture.
 sed "s|/etc/rach2/etude-site|$work/no-installed-site|g" \
-    "${CI_SCRIPTS:-$repo/tools/ci}/bisect.sh" > "$work/bisect.sh"
+    "$repo/tools/ci/bisect.sh" > "$work/bisect.sh"
 make -s -C "$repo" build/tools/etude/etude-bridge build/tools/etude/casecheck \
     build/tools/etude/etude-ports >&2 ||
     { echo 'ci-test: etude-bridge, casecheck and etude-ports could not be built' >&2; exit 1; }

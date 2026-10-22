@@ -17,10 +17,9 @@
 #   memory   growroot built for the host with a requirement no machine
 #            meets, which must refuse the grow by name.
 #
-# check, boot and space take as a second argument a copy of machine_grow.sh
-# to test in place of the tree's. Each copies the functions it tests out of
-# the script and replaces only the guest's paths and the disk's reads and
-# writes, so the decisions tested are the script's own.
+# check, boot and space each copy the functions they test out of
+# tools/dev/machine_grow.sh and replace only the guest's paths and the disk's
+# reads and writes, so the decisions tested are the script's own.
 #
 # It writes the case's report records on its standard output, an assertion
 # for each check (tools/etude/Readme.md, Report records), with the lines a
@@ -34,7 +33,7 @@
 # build/tests, since the seeds and disks take some hundreds of mebibytes.
 #
 # Usage, in the root of a built tree, or anywhere with ETUDE_TREE set to it:
-#     sh tests/cases/host/grow.sh CASE [SCRIPT]
+#     sh tests/cases/host/grow.sh CASE
 #
 # The private directory, whose path the first line prints, is removed by a
 # run that passes or is stopped by a signal, and kept by one that fails.
@@ -44,15 +43,10 @@
 set -u
 
 CASE=${1-}
-SCRIPT=${2-}
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] && [ -n "$CASE" ] || {
-    echo "grow: usage: grow.sh CASE [SCRIPT]" >&2
+[ "$#" -eq 1 ] && [ -n "$CASE" ] || {
+    echo "grow: usage: grow.sh CASE" >&2
     exit 2
 }
-case "$SCRIPT" in
-    '' | /*) ;;
-    *) SCRIPT=$(pwd)/$SCRIPT ;;
-esac
 if [ -n "${ETUDE_TREE-}" ]; then
     cd "$ETUDE_TREE" || exit 2
 fi
@@ -61,7 +55,7 @@ fi
     exit 2
 }
 TREE=$(pwd -P)
-SCRIPT=${SCRIPT:-$TREE/tools/dev/machine_grow.sh}
+SCRIPT=$TREE/tools/dev/machine_grow.sh
 
 unset W
 status=0

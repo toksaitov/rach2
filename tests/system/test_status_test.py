@@ -172,13 +172,11 @@ def stop(signum, frame):
 
 
 def main():
-    """Run the rows against a private copy of the reader that
-    TEST_STATUS_READER names, by default the tree's; usage:
+    """Run the rows against a private copy of the tree's reader; usage:
     test_status_test.py HELPER, HELPER being the built etude-ports."""
     if len(sys.argv) != 2:
         sys.exit("test-status-test: usage: test_status_test.py HELPER")
-    default = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"
-    source = Path(os.environ.get("TEST_STATUS_READER", default))
+    source = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"
     if not Path("/proc/locks").exists():
         print("test-status-test: result: skipped: Linux testing host required")
         return

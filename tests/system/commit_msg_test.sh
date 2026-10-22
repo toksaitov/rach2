@@ -9,8 +9,7 @@
 # lines quote attribution after +, - and a space, and 1, with the refusal on
 # stderr, for a message with it, the emoji footer Claude Code writes among
 # them. The copy is run as git runs it, through its own #! line, so a hook
-# that has lost its executable bit fails every row. COMMIT_MSG_HOOK names the
-# hook to copy, by default the tree's.
+# that has lost its executable bit fails every row.
 #
 # Usage: sh tests/system/commit_msg_test.sh
 #
@@ -28,7 +27,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-commit-msg.XXXXXX") || exit 1
 hook=$work/commit-msg
-cp "${COMMIT_MSG_HOOK:-$repo/tools/git-hooks/commit-msg}" "$hook" || exit 1
+cp "$repo/tools/git-hooks/commit-msg" "$hook" || exit 1
 
 # row NAME STATUS FORMAT: run the copy on the message printf makes of FORMAT.
 row() {

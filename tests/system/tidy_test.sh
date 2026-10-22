@@ -27,9 +27,6 @@
 # gives, a symbolic link, and, where /proc exists, a directory a process works
 # in and one that holds a running program.
 #
-# LIB_SH and SCRATCH_PL name the lib.sh and scratch.pl to copy, by default
-# the tree's.
-#
 # Usage: sh tests/system/tidy_test.sh
 #
 set -u
@@ -49,8 +46,8 @@ case $real in /?*) work=$real ;; *) exit 1 ;; esac
 lib=$work/lib.sh
 sweep=$work/scratch.pl
 
-cp "${LIB_SH:-$repo/tools/flow/lib.sh}" "$lib" || exit 1
-cp "${SCRATCH_PL:-$repo/tools/flow/scratch.pl}" "$sweep" || exit 1
+cp "$repo/tools/flow/lib.sh" "$lib" || exit 1
+cp "$repo/tools/flow/scratch.pl" "$sweep" || exit 1
 
 # age DAYS PATH...: set the times of each PATH to DAYS days ago.
 age()

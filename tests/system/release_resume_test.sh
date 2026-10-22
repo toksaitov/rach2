@@ -32,8 +32,7 @@
 # issue as it is; that a new candidate's run tests every suite, and its build
 # for the Lenovo starts with `make clean`; and that metal_accept.sh passing on
 # the trial boot leads to `bootctl commit` and a report that names the machine
-# of the tests, while its failure ends the release with no commit. RELEASE_SH
-# names the release.sh to copy, by default the tree's.
+# of the tests, while its failure ends the release with no commit.
 #
 # Usage: sh tests/system/release_resume_test.sh
 #
@@ -52,7 +51,7 @@ mkdir -p "$work/bin" "$tree/tools/flow" "$tree/tools/ci" "$tree/krffs"
 : > "$tree/krffs/rach2_demo_ed25519"
 cp "$repo/tools/ci/site.sh" "$tree/tools/ci/site.sh" || exit 1
 
-cp "${RELEASE_SH:-$repo/tools/flow/release.sh}" "$tree/tools/flow/release.sh" || exit 1
+cp "$repo/tools/flow/release.sh" "$tree/tools/flow/release.sh" || exit 1
 
 # board.sh prints RELEASE_TEST_BOARD for `phase` and succeeds otherwise.
 cat > "$tree/tools/flow/board.sh" <<'EOF'

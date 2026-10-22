@@ -10,9 +10,7 @@
 # while kernel.debug keeps them. The fixture is for the architecture ARCH
 # names, i686 when it is unset, which tests/run gives each case: its compiler,
 # linker script and musl (mk/arch.sh). Each make below is given that
-# architecture, and no flags of a make above. BUILD_INPUTS_ROOT, when set, is
-# a directory whose utils/Makefile, tests/Makefile and rach2/Makefile are read
-# in place of this tree's, each run in this tree's directory of the same name.
+# architecture, and no flags of a make above.
 set -eu
 RACH2_ARCH=${ARCH:-i686}
 unset ARCH MAKEFLAGS MFLAGS
@@ -23,7 +21,6 @@ case "$RACH2_ARCH" in
     i686) class=ELF32 emulation=elf_i386 ;;
     *) class=ELF64 emulation=elf_x86_64 ;;
 esac
-ROOT=${BUILD_INPUTS_ROOT:-$REPO}
 mkdir -p build
 WORK=
 trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0
@@ -71,10 +68,10 @@ done
 marker_flags=-Wl,-u,build_libc_a,-u,build_libgcc_a
 # Make the two utilities and dnstest against the private inputs.
 link_programs() {
-    make --no-print-directory -C utils -f "$ROOT/utils/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/utils" \
+    make --no-print-directory -C utils -f "$REPO/utils/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/utils" \
         "PREFIX=$WORK/musl" "LIBGCC=$WORK/libgcc.a" "EXTRA=$marker_flags" \
         "$WORK/utils/echo" "$WORK/utils/sbin/init-login"
-    make --no-print-directory -C tests -f "$ROOT/tests/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/tests" \
+    make --no-print-directory -C tests -f "$REPO/tests/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/tests" \
         "MUSL_PREFIX=$WORK/musl" "MUSL_LIBGCC=$WORK/libgcc.a" \
         "MUSL_POST=$WORK/musl/lib/libc.a $WORK/libgcc.a $WORK/musl/lib/crtn.o -Wl,-z,noexecstack $ARCH_LDFLAGS $marker_flags" \
         "$WORK/tests/dnstest"
@@ -110,12 +107,12 @@ if [ "${1:-all}" != kernel ]; then
 fi
 if [ "${1:-all}" != libraries ]; then
     cp "rach2/sys/arch/$RACH2_ARCH/link.ld" "$WORK/link.ld"
-    make --no-print-directory -C rach2 -f "$ROOT/rach2/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/kernel" \
+    make --no-print-directory -C rach2 -f "$REPO/rach2/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/kernel" \
         "LINKER_SCRIPT=$WORK/link"
     printf '\nreview_link_marker = 0x1234;\n' >> "$WORK/link.ld"
     touch -t "${future}01010000" "$WORK/kernel/kernel"
     touch -t "${future}01010001" "$WORK/link.ld"
-    make --no-print-directory -C rach2 -f "$ROOT/rach2/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/kernel" \
+    make --no-print-directory -C rach2 -f "$REPO/rach2/Makefile" "ARCH=$RACH2_ARCH" "BUILD=$WORK/kernel" \
         "LINKER_SCRIPT=$WORK/link"
     "${CROSS}nm" "$WORK/kernel/kernel" | grep -Eq '^0+1234 A review_link_marker$' ||
         fail "linker script edit did not reach the kernel"

@@ -21,8 +21,7 @@ def issue(number, age, blocks=0, labels=(), assigned=True):
 
 def main():
     """Exercise time boundaries, membership, ordering, hand-back and failed reads."""
-    path = sys.argv[1] if len(sys.argv) > 1 else "tools/flow/progress.py"
-    spec = importlib.util.spec_from_file_location("progress", path)
+    spec = importlib.util.spec_from_file_location("progress", "tools/flow/progress.py")
     reader = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(reader)
     now = reader.stamp("2026-10-21T12:00:00Z")

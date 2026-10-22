@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Check the acceptance's credential enumeration and log scan in a fresh home.
-
-AGENTS_GUEST names the guest script to run, by default the tree's
-accept/agents_guest.sh.
-"""
+"""Check the acceptance's credential enumeration and log scan in a fresh home."""
 
 import hashlib
 import os
@@ -14,8 +10,7 @@ import time
 import unittest
 
 
-GUEST = Path(os.environ.get("AGENTS_GUEST") or
-             Path(__file__).with_name("accept") / "agents_guest.sh")
+GUEST = Path(__file__).with_name("accept") / "agents_guest.sh"
 TOKEN = ".gemini/antigravity-cli/antigravity-oauth-token"
 DUMMY = "rach2-dummy-antigravity-token-00000000"
 FILES = {"claude": ".claude/.credentials.json", "codex": ".codex/auth.json",

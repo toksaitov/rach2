@@ -30,18 +30,16 @@
 # with status 1. mkext2.sh must fail, write its own message and the line,
 # and leave no image under the target's name.
 #
-# MKEXT2 is the mkext2.sh the rows run, the tree's by default.
-#
-# Usage: sh tests/system/mkext2_overlay_test.sh [MKEXT2]
+# Usage: sh tests/system/mkext2_overlay_test.sh
 #
 set -u
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-[ "$#" -le 1 ] || {
-    echo 'mkext2-overlay-test: usage: mkext2_overlay_test.sh [MKEXT2]' >&2
+[ "$#" -eq 0 ] || {
+    echo 'mkext2-overlay-test: usage: mkext2_overlay_test.sh' >&2
     exit 2
 }
-mkext2=${1:-$repo/tools/image/mkext2.sh}
+mkext2=$repo/tools/image/mkext2.sh
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" mkext2-overlay-test "$repo/tests/system/mkext2_overlay_test.sh" "$@"
 work=

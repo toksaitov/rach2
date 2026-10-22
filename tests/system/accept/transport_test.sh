@@ -7,15 +7,14 @@
 # A case fails a command, a transfer, a hash or a check of the stick, or
 # boots an ext2 root whose check found a fault, and the script must then
 # exit 1 and never print PASS; RACH2_ACCEPT_DD and RACH2_ACCEPT_BOOTLOG,
-# which the script refuses, must exit 2. SCRIPT is the metal_accept.sh the
-# cases run, the tree's by default.
+# which the script refuses, must exit 2.
 #
-# Usage: sh tests/system/accept/transport_test.sh [SCRIPT]
+# Usage: sh tests/system/accept/transport_test.sh
 set -eu
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
-[ "$#" -le 1 ] || { echo 'accept-transport: usage: transport_test.sh [SCRIPT]' >&2; exit 2; }
-script=${1:-$repo/tests/system/accept/metal_accept.sh}
+[ "$#" -eq 0 ] || { echo 'accept-transport: usage: transport_test.sh' >&2; exit 2; }
+script=$repo/tests/system/accept/metal_accept.sh
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
 work=

@@ -21,8 +21,7 @@
 # image's system group that no new account comes with, as the GNU root's
 # `crontab` comes, must be added alone; and a system account the machine has
 # by the image's name and id, with no shadow line, `nobody`'s of id 65534
-# among them, must get the image's. RACH2_INSTALL names the installer the
-# functions are taken from, by default the tree's.
+# among them, must get the image's.
 #
 # Usage: sh tests/system/install_accounts_test.sh
 #
@@ -40,7 +39,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-install-accounts.XXXXXX") || exit 1
 
-installer=${RACH2_INSTALL:-$repo/utils/rach2-install}
+installer=$repo/utils/rach2-install
 for function in add_lines keep_image_accounts; do
     awk -v f="$function" '$0 == f "() {" { copy = 1 } copy { print } copy && /^\}$/ { exit }' \
         "$installer" > "$work/$function.sh"

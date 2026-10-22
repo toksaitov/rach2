@@ -27,8 +27,7 @@
 #
 # In the copy each maker is a script that records its run, waits a second,
 # so that a second run of it would overlap the first, and writes empty files
-# in place of its own. TOGETHER_SUITES_MK names the fragment to copy, by
-# default the tree's.
+# in place of its own.
 #
 # Usage:
 #     sh tests/system/together_test.sh [MAKE...]
@@ -93,7 +92,7 @@ for f in Makefile tests/registry tests/Makefile krffs/Makefile krffs/manifest_de
 done
 cp -R mk "$T/mk"
 mkdir -p "$T/tests/system"
-cp "${TOGETHER_SUITES_MK:-tests/system/suites.mk}" "$T/tests/system/suites.mk"
+cp tests/system/suites.mk "$T/tests/system/suites.mk"
 printf 'together-noop: ; @:\n' >"$WORK/noop.mk"
 
 # The private tree's make, outside any admission of the tree that runs this

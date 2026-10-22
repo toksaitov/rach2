@@ -2,7 +2,6 @@
 # testing_run_test.sh: check that `testing.sh run` delivers its command intact,
 # that a copy synced from a git worktree is a repository of its own, and that
 # `testing.sh wait` reports a run as it is on the host.
-# TESTING_SH names the testing.sh to copy, by default the tree's.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'testing-run-test: usage: testing_run_test.sh' >&2; exit 2; }
@@ -15,7 +14,7 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-testing-run-test.XXXXXX")
 mkdir -p "$work/bin" "$work/home" "$work/copy" "$work/tree/tools/dev"
 script=$work/tree/tools/dev/testing.sh
-cp "${TESTING_SH:-$repo/tools/dev/testing.sh}" "$script"
+cp "$repo/tools/dev/testing.sh" "$script"
 
 # The ssh fixture stands for the host's sshd and its default shell, a batch
 # file that starts MSYS's bash: it answers the holder's script at once and

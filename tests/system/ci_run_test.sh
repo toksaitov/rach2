@@ -15,16 +15,14 @@
 # cleanup of a cancelled job kills it, or the run's parent is, run.sh starts
 # no further step and ends without `done`. run.sh runs in a private tree with
 # stand-ins for git, make and tests/run, and with the built casecheck over
-# the history fixtures of tools/etude/fixtures/verdict. CI_RUN_SH names the
-# run.sh that is copied into the tree, tools/ci/run.sh of this tree by
-# default.
+# the history fixtures of tools/etude/fixtures/verdict.
 #
 # Usage: sh tests/system/ci_run_test.sh
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'ci-run-test: usage: ci_run_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-run_sh=${CI_RUN_SH:-$repo/tools/ci/run.sh}
+run_sh=$repo/tools/ci/run.sh
 fixtures=$repo/tools/etude/fixtures/verdict
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT

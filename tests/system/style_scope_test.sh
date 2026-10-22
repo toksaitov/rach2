@@ -17,9 +17,6 @@
 # milestone's directory. A vendored Readme with a heading out of the list must
 # not be read.
 #
-# STYLE_CHECKERS names the directory the two checkers are copied from, by
-# default the tree's tools/verify.
-#
 # Usage: sh tests/system/style_scope_test.sh
 #
 set -eu
@@ -42,7 +39,7 @@ for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host t
     mkdir -p "$tree/$d"
 done
 for f in scripts.sh textcheck.sh; do
-    cp "${STYLE_CHECKERS:-$repo/tools/verify}/$f" "$tree/tools/verify/$f"
+    cp "$repo/tools/verify/$f" "$tree/tools/verify/$f"
 done
 # The byte scanner the text check runs, compiled into the private tree; with no
 # makefile there, the check's own make finds it present and does nothing.

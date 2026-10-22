@@ -7,8 +7,7 @@
 # The rows check the identity check of the booted slot and kernel before any
 # timing, the load window and its late completions, the second between the
 # starts of the load sessions, and the removal of the inbound driver's
-# known-hosts file. MEASURE_DRIVERS names the directory the drivers are
-# copied from, by default the tree's tools/dev.
+# known-hosts file.
 set -eu
 [ "$#" -eq 0 ] || { echo 'machine-measure-test: usage: machine_measure_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
@@ -26,7 +25,7 @@ import tempfile
 import time
 
 repo = pathlib.Path(sys.argv[1])
-drivers = pathlib.Path(os.environ.get('MEASURE_DRIVERS') or repo / 'tools/dev')
+drivers = repo / 'tools/dev'
 # Each scratch directory's path is printed when it is made, and a failure
 # keeps them all as evidence; a pass or a signal removes them.
 scratch = []

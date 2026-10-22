@@ -26,12 +26,8 @@ import sys
 import tempfile
 import threading
 
-# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
-# and the protocol modules, so that copies there are tested in place of these.
-if os.environ.get("FAKEAPI_MODULES"):
-    sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
-import fakeapi  # noqa: E402
-import proto_anthropic  # noqa: E402
+import fakeapi
+import proto_anthropic
 
 HERE = Path(__file__).resolve().parent
 DIGEST = "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de"

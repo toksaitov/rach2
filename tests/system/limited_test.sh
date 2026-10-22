@@ -10,7 +10,7 @@
 # synthetic message or before a trailing line, and Codex's message in its
 # errors or in a turn.failed event; the others end normally with the limit's
 # text in the final message, in a failed tool's output, or earlier in the
-# output. LIB_SH names the lib.sh to copy, by default the tree's.
+# output.
 #
 # Usage: sh tests/system/limited_test.sh
 #
@@ -26,7 +26,7 @@ trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-limited-test.XXXXXX") || exit 1
 lib=$work/lib.sh
 
-cp "${LIB_SH:-$repo/tools/flow/lib.sh}" "$lib" || exit 1
+cp "$repo/tools/flow/lib.sh" "$lib" || exit 1
 
 dot=$(printf '\302\267')
 msg="You've hit your session limit $dot resets 9:20am (Asia/Almaty)"

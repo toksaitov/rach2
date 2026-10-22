@@ -1,19 +1,19 @@
 #!/bin/sh
-# style_cases_test.sh [STYLE [MANIFEST]]: check that a deliberate fault
-# stays fatal in the style cases, which etude judges by `casecheck attempt`.
-# A private tree with a fault in its sources must fail the conventions case,
-# and a manifest with a fault must fail the judgment of a report that passes,
-# or be refused by `casecheck families`, which tests/run reads before any
-# suite runs. STYLE names the case program, tests/cases/host/style.sh unless
-# given, and MANIFEST its manifest, tests/cases/host.style.json unless given;
-# the build's casecheck and asciiscan must be built.
+# style_cases_test.sh: check that a deliberate fault stays fatal in the style
+# cases, which etude judges by `casecheck attempt`. A private tree with a fault
+# in its sources must fail the conventions case, and a manifest with a fault
+# must fail the judgment of a report that passes, or be refused by
+# `casecheck families`, which tests/run reads before any suite runs. The case
+# program is tests/cases/host/style.sh and its manifest
+# tests/cases/host.style.json; the build's casecheck and asciiscan must be
+# built.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-STYLE=${1:-$REPO/tests/cases/host/style.sh}
+STYLE=$REPO/tests/cases/host/style.sh
 CASECHECK=$REPO/build/tools/etude/casecheck
 ASCIISCAN=$REPO/build/tools/verify/asciiscan
 SCHEMAS=$REPO/tools/etude/schemas
-MANIFEST=${2:-$REPO/tests/cases/host.style.json}
+MANIFEST=$REPO/tests/cases/host.style.json
 CASE=host.style.conventions
 WORK=
 trap 'rm -rf ${WORK:+"$WORK"}' 0

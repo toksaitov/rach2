@@ -7,17 +7,12 @@
 # place, add the keys of RECOVERY_EXTRA_KEYS so that the image trusts both
 # the builder's key and the operator's, leave an unchanged file alone on a
 # second run, and refuse a private key, a missing, an empty, a malformed or
-# a mixed extra file without changing the keys. RECOVERY_KEY_SCRIPT, when
-# set, names the gen_recovery_key.sh the recipe runs, and
-# RECOVERY_KEY_STAGER a stageimage.krffs to stage with in place of one
-# compiled from the tree's source.
+# a mixed extra file without changing the keys.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 . "$REPO/tests/system/runlock.sh"
 runlock_hold "$REPO" recovery-key-test "$REPO/tests/system/recovery_key_test.sh" "$@"
 [ "$#" = 0 ] || { echo "recovery-key-test: usage: recovery_key_test.sh" >&2; exit 2; }
-key_script=${RECOVERY_KEY_SCRIPT:-$REPO/krffs/gen_recovery_key.sh}
-stager=${RECOVERY_KEY_STAGER:-}
 mkdir -p "$REPO/build"
 WORK=
 keep=
@@ -38,7 +33,7 @@ WORK=$(mktemp -d "$REPO/build/recovery-key-test.XXXXXX")
 echo "recovery-key-test: logs: $WORK"
 keep=1
 mkdir "$WORK/krffs" "$WORK/bin"
-cp "$key_script" "$WORK/krffs/gen_recovery_key.sh"
+cp "$REPO/krffs/gen_recovery_key.sh" "$WORK/krffs/gen_recovery_key.sh"
 
 # Report $* with the logs' directory and exit 1.
 fail() {
@@ -75,15 +70,11 @@ for tool in mkfs readfile; do
         $extra > "$tool.build.log" 2>&1
 done
 
-if [ -n "$stager" ]; then
-    cp "$stager" bin/stageimage.krffs
-else
-    "${CC:-cc}" -O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 \
-        -I "$REPO/krffs" -o bin/stageimage.krffs "$REPO/krffs/stageimage.krffs.c" \
-        "$REPO/krffs/krffs_file_system.c" "$REPO/krffs/krffs_node.c" \
-        "$REPO/krffs/krffs_platform.c" "$REPO/krffs/krffs_utilities.c" \
-        "$REPO/krffs/krffs_allocator.c" > stager.build.log 2>&1
-fi
+"${CC:-cc}" -O2 -Wall -Wextra -Werror -std=gnu99 -D_FILE_OFFSET_BITS=64 \
+    -I "$REPO/krffs" -o bin/stageimage.krffs "$REPO/krffs/stageimage.krffs.c" \
+    "$REPO/krffs/krffs_file_system.c" "$REPO/krffs/krffs_node.c" \
+    "$REPO/krffs/krffs_platform.c" "$REPO/krffs/krffs_utilities.c" \
+    "$REPO/krffs/krffs_allocator.c" > stager.build.log 2>&1
 
 # check_pair PHASE: compose the keys with the operator's through the recipe,
 # stage them into PHASE.krffs through the manifest's directive, and require

@@ -6,16 +6,11 @@ Each test that fails is named on a line of its own.
 
 import copy
 import json
-import os
 import sys
 import unittest
 
-# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
-# and the protocol modules, so that copies there are tested in place of these.
-if os.environ.get("FAKEAPI_MODULES"):
-    sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
-import fakeapi  # noqa: E402
-import proto_anthropic as protocol  # noqa: E402
+import fakeapi
+import proto_anthropic as protocol
 
 
 class MessagesTest(unittest.TestCase):

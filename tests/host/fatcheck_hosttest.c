@@ -18,12 +18,6 @@
 
 #include "fixdir_host.h"
 
-/* The source of the builder the test compiles, unless BUILDER_SOURCE names
- * another. */
-#ifndef BUILDER_SOURCE
-#define BUILDER_SOURCE "tests/host/mkfatfixture.c"
-#endif
-
 static int fails;
 
 /** The builder's command, run with leak detection off. */
@@ -162,7 +156,7 @@ int main(void)
 
     fix_format(cmd, sizeof(cmd),
                "%s -std=c99 -g -O1 -Wall -Wextra -Werror -fsanitize=address,undefined "
-               "-fno-sanitize-recover=all -o %s " BUILDER_SOURCE,
+               "-fno-sanitize-recover=all -o %s tests/host/mkfatfixture.c",
                cc ? cc : "cc", fix_path("mkfatfixture"));
     if (system(cmd) != 0) {
         printf("fatcheck_hosttest: cannot build the fixture builder\n");

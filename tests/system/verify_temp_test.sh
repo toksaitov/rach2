@@ -1,12 +1,11 @@
 #!/bin/sh
-# verify_temp_test.sh [CHECK]: check that tests/cases/host/style.sh, the
-# program of the style cases, or the copy of it that CHECK names, makes a
-# private log directory of its own for each run, fails when it cannot make
-# one, and writes its ABI check's source there without following a symbolic
-# link planted in the fixed directory /tmp/rach2_verify.
+# verify_temp_test.sh: check that tests/cases/host/style.sh, the program of the
+# style cases, makes a private log directory of its own for each run, fails when
+# it cannot make one, and writes its ABI check's source there without following
+# a symbolic link planted in the fixed directory /tmp/rach2_verify.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-CHECK=${1:-$REPO/tests/cases/host/style.sh}
+CHECK=$REPO/tests/cases/host/style.sh
 WORK=
 trap 'rm -rf ${WORK:+"$WORK"}' 0
 trap 'exit 130' INT

@@ -5,8 +5,7 @@
 # not built, a case named for another program, a case named twice, a fixture
 # that fits no form, an id, a port or an image that maps lacks, a volume of
 # another type than its image, a staged file that is missing, a port mapped
-# twice and more volumes than loop devices fail. NATIVECHECK, when set, is
-# the checker to run in place of tools/verify/nativecheck.sh.
+# twice and more volumes than loop devices fail.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=
@@ -36,7 +35,7 @@ cases() {
 # check STATUS NAME: run nativecheck.sh over the tree and require STATUS.
 check() {
     result=0
-    NATIVECHECK_ROOT="$WORK" sh "${NATIVECHECK:-$REPO/tools/verify/nativecheck.sh}" > "$WORK/log" 2>&1 ||
+    NATIVECHECK_ROOT="$WORK" sh "$REPO/tools/verify/nativecheck.sh" > "$WORK/log" 2>&1 ||
         result=$?
     if [ "$result" -ne "$1" ]; then
         cat "$WORK/log" >&2

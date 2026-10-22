@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """case_select_test.py: the cases tests/run chooses, and the choices it refuses.
 
-Usage: python3 -B tests/system/case_select_test.py [SELECTOR [RUNNER]]
+Usage: python3 -B tests/system/case_select_test.py
 
-The rows of `choose` run SELECTOR, tests/system/case_select.py by default,
-on manifests of its own: RACH2_CASES's identities run in the manifest's
-order, the agents' rows in the order given, and a refused choice exits 2,
-says why and writes nothing. The rows of `run` run RUNNER, tests/run by
-default, with SELECTOR in a private tree of two suites whose make records
-each call and fails: a refused RACH2_CASES exits 2 before anything is made
-or the tree's build directory exists, and an accepted one says on the start
-line that the run is a selection, and goes on to make. Each row prints
+The rows of `choose` run the selector, tests/system/case_select.py, on
+manifests of its own: RACH2_CASES's identities run in the manifest's order,
+the agents' rows in the order given, and a refused choice exits 2, says why
+and writes nothing. The rows of `run` run tests/run with the selector in a
+private tree of two suites whose make records each call and fails: a refused
+RACH2_CASES exits 2 before anything is made or the tree's build directory
+exists, and an accepted one says on the start line that the run is a
+selection, and goes on to make. Each row prints
 `case-select-test: result: pass: ROW` or `fail: ROW`, and the test exits 1
 when one fails.
 """
@@ -161,8 +161,8 @@ def main():
     """Run every row; exit 1 when one fails."""
     for number, status in [(signal.SIGHUP, 129), (signal.SIGINT, 130), (signal.SIGTERM, 143)]:
         signal.signal(number, lambda *_, status=status: sys.exit(status))
-    selector = Path(sys.argv[1] if len(sys.argv) > 1 else REPO / "tests/system/case_select.py").resolve()
-    runner = Path(sys.argv[2] if len(sys.argv) > 2 else REPO / "tests/run").resolve()
+    selector = REPO / "tests/system/case_select.py"
+    runner = REPO / "tests/run"
     with tempfile.TemporaryDirectory(prefix="rach2-case-select.") as scratch:
         (Path(scratch) / "choose").mkdir()
         (Path(scratch) / "run").mkdir()

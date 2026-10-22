@@ -53,7 +53,7 @@ def until(predicate):
     raise AssertionError("fixture did not publish its state")
 
 
-def rows(root, repo, sources):
+def rows(root, repo):
     """Observe durable claims and actual compatibility locks at each entry."""
     global stage
     env = dict(os.environ)
@@ -75,9 +75,9 @@ def rows(root, repo, sources):
     for directory in (ledger, locks, tree, bin):
         directory.mkdir()
     write(ledger / "claims", "etude-ledger 1\n")
-    shutil.copyfile(sources / "tools/etude/launch.sh", launcher)
+    shutil.copyfile(repo / "tools/etude/launch.sh", launcher)
     launcher.chmod(0o755)
-    write(root / "etude-bin/make", (sources / "tools/etude/make.sh").read_text(), executable=True)
+    write(root / "etude-bin/make", (repo / "tools/etude/make.sh").read_text(), executable=True)
     policy = (f"etude-site 1\nendpoint {'macos' if sys.platform == 'darwin' else 'linux'}\n"
               f"launcher {launcher}\nledger {ledger}\nlocks {locks}\nbridge {bridge}\n"
               "capacity 24000,103079215104,171798691840\nwait 3\nseconds 30\n")
@@ -131,7 +131,7 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
 
     write(tree / "tests/system/suites.mk", "# RACH2_PORT_OFFSET\n")
     write(tree / "tests/registry", "style|-|full\nhost|-|full\ndefault|qemu|core\n")
-    prefix = (sources / "Makefile").read_text().split("# The architecture (mk/arch.mk):")[0]
+    prefix = (repo / "Makefile").read_text().split("# The architecture (mk/arch.mk):")[0]
     write(tree / "Makefile", prefix + f"all:\n\t@{observe}\n\t@test '$(ARG)' = 'two words'\nendif\n")
     (tree / "tools/etude").mkdir(parents=True)
     shutil.copyfile(launcher, tree / "tools/etude/launch.sh")
@@ -175,7 +175,7 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
 
     # The real worker entry must claim before even its helper compilation.
     stage = "worker"
-    shutil.copyfile(sources / "tests/run", tree / "tests/run")
+    shutil.copyfile(repo / "tests/run", tree / "tests/run")
     write(bin / "cc", f"#!/bin/sh\n{observe}\nexit 19\n", executable=True)
     run(["sh", "tests/run", "style"], env, tree, status=1)
     saw()
@@ -195,7 +195,7 @@ for name do
 done
 ''', executable=True)
     write(tree / "build/tests/failed/.keep", "")
-    run(["sh", str(sources / "tools/ci/run.sh"), "core", str(root / "ci")], env, tree)
+    run(["sh", str(repo / "tools/ci/run.sh"), "core", str(root / "ci")], env, tree)
     saw(4, same=False)
     clear()
 
@@ -205,7 +205,7 @@ done
     env.update(EXPECT_MEMORY="5368709120")
     testing = root / "owner/tools/dev/testing.sh"
     testing.parent.mkdir(parents=True)
-    shutil.copyfile(sources / "tools/dev/testing.sh", testing)
+    shutil.copyfile(repo / "tools/dev/testing.sh", testing)
     write(bin / "ssh", '''#!/bin/sh
 case $4 in *'bash -s '*) echo held; exec cat >/dev/null ;; esac
 exec bash -c "$4"
@@ -270,7 +270,7 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     write(tree / "tools/ci/core.env", "# The settings of a core run.\nRACH2_WORKERS=2\n")
     core_env = dict(env)
     core_env.pop("RACH2_WORKERS")
-    run(["sh", str(sources / "tools/ci/bisect.sh"), "-e", str(bridge),
+    run(["sh", str(repo / "tools/ci/bisect.sh"), "-e", str(bridge),
          "core", "i686", "good", "bad", "1", "default"],
         core_env, tree)
     saw(2, same=False)
@@ -459,11 +459,10 @@ def main():
     for signum in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(signum, stopped)
     repo = Path(__file__).resolve().parents[2]
-    sources = Path(os.environ.get("ETUDE_LAUNCH_SOURCES", repo))
     root = None
     try:
         root = Path(tempfile.mkdtemp(prefix="rach2-etude-launch."))
-        rows(root, repo, sources)
+        rows(root, repo)
     except (AssertionError, OSError, subprocess.SubprocessError) as error:
         print(f"etude-launch-test: failed: {stage}: {error}", file=sys.stderr)
         return 1

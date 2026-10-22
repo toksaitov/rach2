@@ -6,7 +6,6 @@
 # start, the checks take and group make of the phase and of an issue labelled
 # owner-only, archive and phase, with issues that GitHub's list of the
 # board's items lacks.
-# BOARD_SH names the board.sh to test, by default the tree's.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'board-test: usage: board_test.sh' >&2; exit 2; }
@@ -18,7 +17,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-board-test.XXXXXX")
 mkdir -p "$work/bin" "$work/state"
-cp "${BOARD_SH:-$repo/tools/flow/board.sh}" "$work/board.sh"
+cp "$repo/tools/flow/board.sh" "$work/board.sh"
 
 # The stand-in keeps its issues in BOARD_TEST_DATA, one a line, as
 # `N|STATE|STATUS|LABELS|ASSIGNEES|PARENT|BLOCKED|BODY|TITLE|COMMENTS|ARCHIVED`

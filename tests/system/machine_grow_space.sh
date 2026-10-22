@@ -11,10 +11,8 @@
 # target must have every original byte and boot. A save that fails must leave
 # the target as it was, and the console is printed. The full-log round trip
 # also fills the store while the restore log grows, which must fail the
-# restore with a message, and the retry must finish. GROW_SPACE_SCRIPT, when
-# set, names the helper the guest runs in place of the tree's, and
-# GROW_SPACE_DIR the directory the fixture is made in in place of the
-# suite's. The host and the guest open only disposable image files.
+# restore with a message, and the retry must finish. The host and the guest
+# open only disposable image files.
 # shellcheck disable=SC2016
 set -eu
 
@@ -29,7 +27,7 @@ if [ -z "${ARCH_BUILD:-}" ]; then
     export RACH2_QEMU
 fi
 QEMU=${RACH2_QEMU:-qemu-system-i386}
-helper=${GROW_SPACE_SCRIPT:-$repo/tools/dev/machine_grow.sh}
+helper=$repo/tools/dev/machine_grow.sh
 . "$repo/tests/system/runlock.sh"
 runlock_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
 cd "$repo"
@@ -38,10 +36,10 @@ if [ "$#" = 0 ]; then
     # The images are not built here: `tests/run grow` builds them, and a
     # direct run uses the same ones, the MBR disk among them, whose boot
     # partition the grow saves as the suite's run does. The fixture's
-    # directory is the suite's unless GROW_SPACE_DIR names one, and a tree
-    # that has not run the suite lacks it.
+    # directory is the suite's, and a tree that has not run the suite lacks
+    # it.
     if [ -f krffs/recovery_authorized_keys ]; then tag=-with-key; else tag=; fi
-    grow=${GROW_SPACE_DIR:-$ARCH_BUILD/images/grow}
+    grow=$ARCH_BUILD/images/grow
     mkdir -p "$grow"
     exec sh tests/system/grow_machine.sh build/tests/system/harness \
         "$ARCH_BUILD/images/rach2-recovery$tag.iso" "$ARCH_BUILD"/images/installer-test.disk \
