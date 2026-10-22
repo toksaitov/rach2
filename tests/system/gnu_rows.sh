@@ -237,22 +237,30 @@ row_perl() {
 }
 
 # A file URL, and HTTPS from openssl's test server on this machine, whose
-# certificate curl is given; curl tries again while the server starts.
+# certificate curl is given. The server prints ACCEPT once it listens, and
+# curl asks it once after that; the row keeps the FIFO of the server's output
+# open until the server has ended, so that a later line cannot end it.
 row_curl() {
-    local server name=rach2 https
+    local server name=rach2 https line accept
     https=$(port 4433)
 
     [ -z "$NATIVE" ] || name=$(cat /etc/hostname)
     same "a file URL" "$(curl -sS file:///etc/hostname)" "$name"
     runs "a certificate" openssl req -x509 -newkey ed25519 -keyout "$WORK/key.pem" \
         -out "$WORK/cert.pem" -days 1 -nodes -subj /CN=localhost -addext subjectAltName=DNS:localhost
-    openssl s_server -quiet -accept "127.0.0.1:$https" -key "$WORK/key.pem" -cert "$WORK/cert.pem" \
-        -www > "$WORK/server.log" 2>&1 &
+    mkfifo "$WORK/accept"
+    openssl s_server -accept "127.0.0.1:$https" -key "$WORK/key.pem" -cert "$WORK/cert.pem" \
+        -www > "$WORK/accept" 2> "$WORK/server.log" &
     server=$!
-    has "HTTPS" "$(curl -sS --retry 120 --retry-connrefused --retry-delay 1 \
-        --cacert "$WORK/cert.pem" "https://localhost:$https/" 2>&1)" "TLSv1.3"
+    exec {accept}< "$WORK/accept"
+    while IFS= read -r line <&"$accept" && [ "$line" != ACCEPT ]; do
+        :
+    done
+    same "the server listening" "$line" "ACCEPT"
+    has "HTTPS" "$(curl -sS --cacert "$WORK/cert.pem" "https://localhost:$https/" 2>&1)" "TLSv1.3"
     kill "$server"
     wait "$server" 2> /dev/null
+    exec {accept}<&-
 }
 
 # git makes a repository with one commit, clones it, and finds a Perl
@@ -624,17 +632,19 @@ row_strace() {
 
 # lsof lists a process's open file, the process that has a file open, in a
 # scan of every process, epoll descriptors among them, and the server's
-# listening socket.
+# listening socket. The holder, Perl, says that it has the file open before
+# lsof looks.
 row_lsof() {
-    local pid
+    local pid line
     : > "$WORK/held"
-    sleep infinity 3< "$WORK/held" &
+    mkfifo "$WORK/holding"
+    perl -e 'open(my $f, "<", $ARGV[0]) or die; $| = 1; print "held\n"; sleep' "$WORK/held" \
+        > "$WORK/holding" &
     pid=$!
-    until [ "$(cat "/proc/$pid/comm" 2>/dev/null)" = sleep ]; do
-        sleep 0.1
-    done
+    read -r line < "$WORK/holding"
+    same "the holder" "$line" "held"
     has "lsof -p" "$(lsof -p "$pid" 2>&1)" "$WORK/held"
-    has "lsof FILE" "$(lsof "$WORK/held" 2>&1)" "sleep"
+    has "lsof FILE" "$(lsof "$WORK/held" 2>&1)" "perl"
     has "lsof -i" "$(lsof -nP -i TCP:22 -s TCP:LISTEN 2>&1)" "sshd"
     kill "$pid"
 }
@@ -825,18 +835,18 @@ row_cmake() {
 }
 
 # dig and host ask a name server, here a responder in Python on 127.0.0.1
-# that answers every question with 192.0.2.1. The questions wait until its
-# port, 5353 or the one a native run maps it to, is in /proc/net/udp: one
-# sent before it is bound is refused at once, and dig's five tries can all
-# be spent before Python has started.
+# that answers every question with 192.0.2.1. The responder says that it has
+# bound its port, 5353 or the one a native run maps it to, before either asks,
+# since a question sent before then is refused at once; each then asks once.
 row_dig() {
-    local server i=0 dns
+    local server line dns
     dns=$(port 5353)
 
     cat > "$WORK/dns.py" << 'EOF'
 import socket, struct, sys
 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 s.bind(("127.0.0.1", int(sys.argv[2])))
+print("bound", flush=True)
 for _ in range(int(sys.argv[1])):
     q, peer = s.recvfrom(512)
     end = 12
@@ -847,14 +857,13 @@ for _ in range(int(sys.argv[1])):
     answer = struct.pack(">HHHIH", 0xC00C, 1, 1, 60, 4) + socket.inet_aton("192.0.2.1")
     s.sendto(head + question + answer, peer)
 EOF
-    python3 "$WORK/dns.py" 20 "$dns" &
+    mkfifo "$WORK/bound"
+    python3 "$WORK/dns.py" 20 "$dns" > "$WORK/bound" &
     server=$!
-    until grep -q "$(printf ':%04X ' "$dns")" /proc/net/udp || [ $i -ge 600 ]; do
-        sleep 0.1
-        i=$((i + 1))
-    done
-    same "dig" "$(dig +short +tries=5 +time=2 -p "$dns" @127.0.0.1 row.example A)" "192.0.2.1"
-    has "host" "$(host -W 2 -p "$dns" -t A row.example 127.0.0.1)" "has address 192.0.2.1"
+    read -r line < "$WORK/bound"
+    same "the responder" "$line" "bound"
+    same "dig" "$(dig +short +tries=1 +time=30 -p "$dns" @127.0.0.1 row.example A)" "192.0.2.1"
+    has "host" "$(host -W 30 -p "$dns" -t A row.example 127.0.0.1)" "has address 192.0.2.1"
     kill "$server" 2> /dev/null
     wait "$server" 2> /dev/null
 }
