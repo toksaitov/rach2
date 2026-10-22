@@ -3,7 +3,9 @@
 # the libraries its release carries, curl among them over the root's
 # OpenSSL. CMake is built with CMake: the recipe bootstraps one for the build
 # host into host/ of the layer's build tree, which the ports built with CMake
-# also run, and that one builds the root's for the target.
+# also run, and that one builds the root's for the target. The bootstrap is
+# given no --parallel, so the make it runs takes its jobs from MAKEFLAGS, as
+# every other make of the recipe does.
 VERSION=4.3.4
 DEPENDS="openssl ncurses"
 
@@ -12,7 +14,7 @@ port_build()
     mkdir -p host
     (
         cd host || exit 1
-        "$SRC/bootstrap" --prefix="$OUT/host" --parallel="$(getconf _NPROCESSORS_ONLN)" \
+        "$SRC/bootstrap" --prefix="$OUT/host" \
             -- -DCMAKE_USE_OPENSSL=OFF -DBUILD_TESTING=OFF >/dev/null
         make >/dev/null
         make install >/dev/null
