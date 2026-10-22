@@ -4,7 +4,8 @@
 # list read before another account's change would undo, take and release of a
 # closed issue, and the phase subcommands, which are current, members, next,
 # start, the checks take and group make of the phase and of an issue labelled
-# owner-only, archive and phase.
+# owner-only, archive and phase, with issues that GitHub's list of the
+# board's items lacks.
 # BOARD_SH names the board.sh to test, by default the tree's;
 # tests/proofs/board.json runs the rows against copies with faults in them.
 
@@ -21,10 +22,12 @@ mkdir -p "$work/bin" "$work/state"
 cp "${BOARD_SH:-$repo/tools/flow/board.sh}" "$work/board.sh"
 
 # The stand-in keeps its issues in BOARD_TEST_DATA, one a line, as
-# `N|STATE|STATUS|LABELS|ASSIGNEES|PARENT|BLOCKED|BODY|TITLE|COMMENTS|ARCHIVED`,
-# BLOCKED being the number of open blockers, with `-` for an empty field, `_`
-# for a space in STATUS, `;` between comments and for a newline in one, and
-# `\n` for a newline in BODY.
+# `N|STATE|STATUS|LABELS|ASSIGNEES|PARENT|BLOCKED|BODY|TITLE|COMMENTS|ARCHIVED`
+# and `|UNLISTED`, BLOCKED being the number of open blockers and UNLISTED
+# `unlisted` for an issue whose item the list of the board's items lacks,
+# though the issue's own `projectItems` gives it, with `-` for an empty field,
+# `_` for a space in STATUS, `;` between comments and for a newline in one,
+# and `\n` for a newline in BODY.
 # It answers each query with the lines that the query's --jq filter in
 # board.sh prints, paginated two lines a page. It keeps the accounts assigned
 # in the file `assignees`, which starts as BOARD_TEST_NOW. The REST calls add
@@ -52,8 +55,9 @@ for a; do
     prev=$a
 done
 
-# lines FORM: print the issues as board.sh's items, for FORM `board`, or
-# issues, for `all` and `open`, read them from GitHub.
+# lines FORM: print the issues as board.sh's items reads them from the list of
+# the board's items, for FORM `board`, or from the repository's issues, for
+# `repo` and `repo-open`, or as its issues reads them, for `all` and `open`.
 lines()
 {
     awk -F '|' -v form="$1" '
@@ -66,12 +70,14 @@ lines()
             return out
         }
         {
-            for (i = 1; i <= 11; i++)
+            for (i = 1; i <= 12; i++)
                 f[i] = $i == "-" ? "" : $i
             status = f[3]
             gsub("_", " ", status)
         }
-        form == "board" && f[11] != "archived" {
+        form == "board" && f[11] != "archived" && f[12] != "unlisted" ||
+        form == "repo" && f[11] != "archived" ||
+        form == "repo-open" && f[11] != "archived" && f[2] == "OPEN" {
             print "I" f[1] "\t" status "\t" f[1] "\t" f[2] "\t" f[4] "\t" \
                 (f[5] == "" ? 0 : split(f[5], a, ",")) "\t" f[7] "\t" f[6] "\t" \
                 named(f[8]) "\t" f[9]
@@ -151,6 +157,8 @@ case "$1 $2" in
                     project|remove|close) exit 0 ;;
                 esac
                 echo "I$n" ;;
+            *'states: [OPEN]'*'includeArchived: false'*) lines repo-open | pages repo ;;
+            *'includeArchived: false'*) lines repo | pages repo ;;
             *'items(first: 100'*) lines board | pages board ;;
             *'states: [OPEN]'*) lines open | pages issues ;;
             *'issues(first: 100'*) lines all | pages issues ;;
@@ -581,6 +589,20 @@ $only"
             BOARD_TEST_LOST=board
             run next
             [ "$result" -ne 0 ] && [ ! -s "$work/out" ] && [ -s "$work/err" ] ;;
+        next-unlisted)
+            use "$main" 's/^1[04]|.*/&|-|-|unlisted/'
+            run next
+            [ "$result" -eq 0 ] && [ "$(words)" = '22 14 11 10 15' ] ;;
+        next-unlisted-lost)
+            use "$main" 's/^1[04]|.*/&|-|-|unlisted/'
+            BOARD_TEST_LOST=repo
+            run next
+            [ "$result" -ne 0 ] && [ ! -s "$work/out" ] && [ -s "$work/err" ] ;;
+        take-unlisted)
+            use "$main" 's/^10|.*/&|-|-|unlisted/'
+            BOARD_TEST_ME=alpha BOARD_TEST_NOW=alpha BOARD_TEST_TIMELINE=alpha
+            run take 10
+            [ "$result" -eq 0 ] && [ "$(field 10 3)" = In_progress ] ;;
         take-member|take-ci|take-owner-only)
             use "$main
 $only"
@@ -644,6 +666,16 @@ $only"
             run archive 7
             [ "$result" -ne 0 ] && [ "$(words)" = 21 ] &&
                 grep -q '^board: #19: cannot archive its card$' "$work/err" ;;
+        archive-unlisted)
+            use "$main" 's/^21|.*/&|-|-|unlisted/'
+            run archive 7
+            [ "$result" -eq 0 ] && [ "$(words)" = '19 21' ] &&
+                [ "$(field 21 11)" = archived ] ;;
+        done-unlisted)
+            use "$main" 's/^19|CLOSED|Done|\(.*\)/19|CLOSED|Ready|\1|-|-|unlisted/'
+            run 'done'
+            [ "$result" -eq 0 ] && [ "$(words)" = 19 ] &&
+                [ "$(field 19 3)" = Done ] ;;
         start-first)
             use "$begin"
             run start
@@ -756,7 +788,7 @@ ready: yes $H" ] ;;
 # step and failed cleanup, which of two accounts assigned in the same second
 # keeps an issue, that a refused take leaves another account unassigned,
 # what take and release do to a closed issue, what `release N owner-only`
-# leaves, and the rows of the phase subcommands.
+# leaves, and the rows of the phase subcommands and of `done`.
 rows()
 {
     failed=
@@ -789,9 +821,11 @@ ROWS
     for test in current-none current-one current-two \
         members-all members-open members-lost \
         next-tiers next-only next-owner next-idle next-done next-lost \
+        next-unlisted next-unlisted-lost take-unlisted \
         take-member take-ci take-owner-only take-stranger take-blocked \
         take-owner take-only take-phase take-backlog \
         group-stranger group-only group-ci archive-other archive-closed archive-fail \
+        archive-unlisted done-unlisted \
         start-first start-again start-retry start-full start-other \
         start-idle \
         phase-ready phase-none phase-work phase-flaky phase-hold \
@@ -806,4 +840,4 @@ ROWS
 }
 
 rows || exit 1
-echo 'board-test: result: pass: 65 rows'
+echo 'board-test: result: pass: 70 rows'

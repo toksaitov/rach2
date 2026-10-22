@@ -251,15 +251,33 @@ move()
     fi
 }
 
-# items: print the issues on the board in the board's order, one a line, as
-# ten fields separated by tabs: the item's id, the Status or nothing, the
-# number, the state, the labels joined by commas, the number of assignees,
-# the number of open blockers, the parent's number or nothing, the numbers
-# that `Part of #N` gives in the body joined by commas, and the title. Fail
-# when any page of the answer is lost.
+# FIELDS is the jq filter that prints the ten fields of `items` from an
+# object with the item's id and Status as `id` and `status` and the issue as
+# `issue`.
+FIELDS='[.id, .status, (.issue.number | tostring), .issue.state,
+    ([.issue.labels.nodes[].name] | join(",")),
+    (.issue.assignees.totalCount | tostring),
+    (.issue.issueDependenciesSummary.blockedBy | tostring),
+    (.issue.parent.number // "" | tostring),
+    ([.issue.body // "" | scan("Part of #([0-9]+)") | .[0]] |
+     unique | join(",")),
+    (.issue.title | gsub("\t"; " "))] | join("\t")'
+
+# items [all]: print the issues on the board in the board's order, one a
+# line, as ten fields separated by tabs: the item's id, the Status or nothing,
+# the number, the state, the labels joined by commas, the number of
+# assignees, the number of open blockers, the parent's number or nothing, the
+# numbers that `Part of #N` gives in the body joined by commas, and the title.
+# GitHub's list of the board's items can lack an item that the issue's own
+# `projectItems` gives, so the repository's open issues, or with `all` every
+# issue, are read as well, and an issue whose item the list lacks follows the
+# others, in the order the issues were opened. Fail when any page of either
+# answer is lost.
 items()
 {
-    gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
+    states=OPEN
+    [ "$1" != all ] || states='OPEN, CLOSED'
+    listed=$(gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
         query($o: String!, $n: Int!, $endCursor: String) {
             user(login: $o) { projectV2(number: $n) {
                 items(first: 100, after: $endCursor,
@@ -275,15 +293,32 @@ items()
                             issueDependenciesSummary { blockedBy } } } } } } } }' \
         --jq '.data.user.projectV2.items.nodes[] |
             select(.content.number != null and (.isArchived | not)) |
-            [.id, (.fieldValueByName.name // ""),
-             (.content.number | tostring), .content.state,
-             ([.content.labels.nodes[].name] | join(",")),
-             (.content.assignees.totalCount | tostring),
-             (.content.issueDependenciesSummary.blockedBy | tostring),
-             (.content.parent.number // "" | tostring),
-             ([.content.body // "" | scan("Part of #([0-9]+)") | .[0]] |
-              unique | join(",")),
-             (.content.title | gsub("\t"; " "))] | join("\t")'
+            {id, status: (.fieldValueByName.name // ""), issue: .content} |
+            '"$FIELDS") || return 1
+    found=$(gh api graphql --paginate -f o="${REPO%/*}" -f r="${REPO#*/}" -f query='
+        query($o: String!, $r: String!, $endCursor: String) {
+            repository(owner: $o, name: $r) {
+                issues(first: 100, after: $endCursor, states: ['"$states"'],
+                       orderBy: {field: CREATED_AT, direction: ASC}) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes { number title state body
+                        assignees(first: 1) { totalCount }
+                        labels(first: 20) { nodes { name } }
+                        parent { number }
+                        issueDependenciesSummary { blockedBy }
+                        projectItems(first: 10, includeArchived: false) {
+                            nodes { id project { number
+                                    owner { ... on User { login } } }
+                                fieldValueByName(name: "Status") {
+                                    ... on ProjectV2ItemFieldSingleSelectValue {
+                                        name } } } } } } } }' \
+        --jq '.data.repository.issues.nodes[] | . as $issue |
+            .projectItems.nodes[] |
+            select(.project.number == '"$BOARD"' and
+                   .project.owner.login == "'"$OWNER"'") |
+            {id, status: (.fieldValueByName.name // ""), issue: $issue} |
+            '"$FIELDS") || return 1
+    printf '%s\n' "$listed" "$found" | awk -F '\t' 'NF > 0 && !seen[$1]++'
 }
 
 # issues [open]: print the repository's issues, or only the open ones, one a
@@ -312,10 +347,11 @@ issues()
              (.title | gsub("\t"; " "))] | join("\t")'
 }
 
-# read_board: read the board into `board`, or say that it cannot and exit 1.
+# read_board [all]: read the board into `board`, as `items` prints it, or say
+# that it cannot and exit 1.
 read_board()
 {
-    board=$(items) || {
+    board=$(items "$1") || {
         echo "board: cannot read the board" >&2
         exit 1
     }
@@ -674,17 +710,9 @@ Part of #$p."
 
 done_()
 {
-    closed=$(gh api graphql --paginate -F n="$BOARD" -f o="$OWNER" -f query='
-        query($o: String!, $n: Int!, $endCursor: String) {
-            user(login: $o) { projectV2(number: $n) {
-                items(first: 100, after: $endCursor) {
-                    pageInfo { hasNextPage endCursor }
-                    nodes { fieldValueByName(name: "Status") {
-                            ... on ProjectV2ItemFieldSingleSelectValue { name } }
-                        content { ... on Issue { number state } } } } } } }' \
-        --jq '.data.user.projectV2.items.nodes[] |
-            select(.content.state == "CLOSED" and
-                   (.fieldValueByName.name // "") != "Done") | .content.number')
+    read_board all
+    closed=$(printf '%s\n' "$board" | awk -F '\t' '
+        $4 == "CLOSED" && $2 != "Done" { print $3 }')
     for n in $closed; do
         set_status "$n" Done
         printf '%s ' "$n"
@@ -842,7 +870,7 @@ phase: started at $head" > /dev/null || {
 
 archive()
 {
-    read_board
+    read_board all
     cards=$(printf '%s\n' "$board" | awk -F '\t' -v p="$1" "$LIB"'
         { line[NR] = $0 }
         $4 == "OPEN" && has($5, "phase") && $3 != p { open[$3] = 1 }

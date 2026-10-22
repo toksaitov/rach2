@@ -299,6 +299,22 @@
           "board-test: failed: take-only"
         ]
       }
+    },
+    {
+      "name": "unlisted",
+      "summary": "items keeps only the issues that GitHub's list of the board's items gives",
+      "edits": [
+        {
+          "file": "tools/flow/board.sh",
+          "find": "    printf '%s\\n' \"$listed\" \"$found\" | awk -F '\\t' 'NF > 0 && !seen[$1]++'\n",
+          "replace": "    printf '%s\\n' \"$listed\" | awk -F '\\t' 'NF > 0 && !seen[$1]++'\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "board-test: failed: next-unlisted"
+        ]
+      }
     }
   ]
 }
