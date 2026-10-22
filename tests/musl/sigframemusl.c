@@ -45,7 +45,6 @@
 #include <sys/mman.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_report.h"
@@ -274,10 +273,6 @@ static int install(int sig, void (*fn)(int, siginfo_t *, void *), int flags)
     return sigaction(sig, &sa, NULL);
 }
 
-/* The longest wait, in seconds, for another process to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
 /** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
  * no stat file. */
 static int proc_state(pid_t pid)
@@ -303,21 +298,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -326,11 +318,12 @@ static int seen_asleep(pid_t pid)
 
 /**
  * Fork a child that waits to see this process asleep (`seen_asleep`), sends
- * it SIGUSR1, waits up to 3 s for the handler's byte on `answer`, and only
- * then writes one byte to `fd`, the pipe the parent reads. The child exits 0
- * when all of that happened, 2 when the parent was never seen asleep and 3
- * when the handler's byte did not come; it writes the byte in every case, so
- * the read ends.
+ * it SIGUSR1, waits for the handler's byte on `answer`, and only then writes
+ * one byte to `fd`, the pipe the parent reads. The child exits 0 when all of
+ * that happened, 2 when the parent was never seen asleep and 3 when the
+ * signal or the read of the handler's byte failed; it writes the byte in
+ * every case, so the read ends. A handler that never runs leaves the child
+ * and the read asleep, and the case's watchdog ends them.
  */
 static pid_t signal_then_write(int fd, int answer)
 {
@@ -347,8 +340,7 @@ static pid_t signal_then_write(int fd, int answer)
         } else {
             pfd.fd = answer;
             pfd.events = POLLIN;
-            if (kill(parent, SIGUSR1) != 0 || poll(&pfd, 1, 3000) != 1 ||
-                read(answer, &c, 1) != 1) {
+            if (kill(parent, SIGUSR1) != 0 || poll(&pfd, 1, -1) != 1 || read(answer, &c, 1) != 1) {
                 code = 3;
             }
         }
