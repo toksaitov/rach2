@@ -712,13 +712,6 @@ if [ "${RACH2_TREE_HELD:-}" != "$$" ]; then
     check_declarations || exit 1
 fi
 
-IDLE_SECONDS=${RACH2_IDLE_TIMEOUT:-300}
-case "$IDLE_SECONDS" in
-    ''|*[!0-9]*) echo "run: result: refused: RACH2_IDLE_TIMEOUT must be a positive whole number" >&2; exit 2 ;;
-esac
-IDLE_SECONDS=$(awk -v n="$IDLE_SECONDS" 'BEGIN {if (n < 1 || n > 86400) exit 1; printf "%.0f\n", n}') || {
-    echo "run: result: refused: RACH2_IDLE_TIMEOUT must be between 1 and 86400 seconds" >&2; exit 2;
-}
 set_factor || exit 2
 set_accel || exit 2
 set_cpus || exit 2
@@ -838,11 +831,10 @@ FAILED=$(cd "$FAILED" && pwd) || exit 1
 family_of() { # family_of SUITE: the line of the suite's family, or nothing
     awk -v s="$1" '{ n = split($1, part, "."); if (part[n] == s) { print; exit } }' "$WORK/families"
 }
-# The suites the driver runs, one a line with the guest memory the registry
-# declares, and the manifest of a suite's cases; `style` and `host` run first,
-# one at a time, and a failure of `style` stops the set, since the fix of a
-# style fault is an edit, which changes the GNU root's sources. The map gives
-# each suite its family of cases.
+# The suites the driver runs, one a line with the manifest of the suite's
+# cases; `style` and `host` run first, one at a time, and a failure of `style`
+# stops the set, since the fix of a style fault is an edit, which changes the
+# GNU root's sources. The map gives each suite its family of cases.
 : > "$WORK/map"
 for suite in "$@"; do
     case "$suite" in
@@ -864,7 +856,7 @@ for suite in "$@"; do
         python3 "$REPO/tests/cases/machine/agent_select.py" "${family#* }" "$rows" "$selected" || exit 2
         family="${family%% *} $selected"
     fi
-    echo "$suite $(suite_memory "$suite")$flags cases=${family#* }"
+    echo "$suite$flags cases=${family#* }"
     echo "$suite ${family%% *}" >> "$WORK/map"
 done > "$WORK/selection"
 # The driver's ledger is the run's own: the machine's admission is the claim
@@ -895,7 +887,7 @@ trap 'forward INT' INT; trap 'forward TERM' TERM; trap 'forward HUP' HUP
 # shellcheck disable=SC2086 # the options are one word each or none
 "$ETUDE_LEGACY" set -t "$REPO" -a "$ARCH" ${RACH2_KERNEL:+-n "$RACH2_KERNEL"} \
     -l "$WORK/ledger" -c "$capacity" -j "$WORKERS" -o "$RESULTS" -e "$FAILED" \
-    -S "$SCHEMAS" ${MANIFESTS:+-K "$WORK/etude/casecheck"} -p "$RECORD" -i "$IDLE_SECONDS" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
+    -S "$SCHEMAS" -K "$WORK/etude/casecheck" -p "$RECORD" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
     ${commit:+-g "$commit"} ${RACH2_STOP_ON_FAIL:+-k} ${admitted:+-P "$admitted"} -q "$*" "$WORK/selection" &
 DRIVER=$!
 watch_scripts &

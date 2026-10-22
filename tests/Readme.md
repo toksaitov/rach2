@@ -27,7 +27,6 @@ These variables change a run:
 | `RACH2_MEMORY_MIB` | three quarters of the host's memory | guest memory the running suites may declare together |
 | `RACH2_CPUS` | 2 | processors of every machine, 1 to 64; a suite that names its own count keeps it |
 | `RACH2_TIMEOUT_FACTOR` | 1 | multiplies every completion bound, 1 to 64, rounded up to a tenth |
-| `RACH2_IDLE_TIMEOUT` | 300 | seconds a suite may be silent and idle before it is stopped as hung |
 | `RACH2_STOP_ON_FAIL` | unset | when set, the first failure stops the set |
 | `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel` |
 | `RACH2_QEMU_ACCEL` | `kvm` where `/dev/kvm` opens, `hvf` on an x86 Mac that supports it, `tcg` where neither exists; a `/dev/kvm` the user cannot open is refused | the accelerator every machine uses: `kvm`, `hvf` or `tcg` |
@@ -69,7 +68,7 @@ Ten probes also run on an installed root, as `tests/run ext2` and `tests/run sel
 
 ## Results
 
-The runner prints one line when a run starts, with its architecture, worker count, memory budget, timeout factor, accelerator and processor count. Each suite prints `run: NAME: starting (idle limit N s)`, a progress line every minute while it runs, and its output, ending with `run: NAME: PASS in Ns` or `run: NAME: FAIL in Ns`. A suite in the pool keeps its output and prints it whole when it ends, so the output of suites that run at once is not mixed; only the start and progress lines appear between them.
+The runner prints one line when a run starts, with its architecture, worker count, memory budget, timeout factor, accelerator and processor count. Each case of a suite prints `run: NAME: CASE: starting` when it starts and its output whole when it ends, so the output of cases that run at once is not mixed, and a case that did not pass names the workspace it kept in `run: NAME: CASE: evidence: DIR`. When every case has ended, each suite prints its items that did not pass and `run: NAME: PASS in Ns`, or `FAIL`, `INCOMPLETE` or `CANCELLED` in place of `PASS`.
 
 The last line is the run's verdict:
 
