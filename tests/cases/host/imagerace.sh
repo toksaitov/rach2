@@ -394,10 +394,12 @@ case_prerequisites() {
     REALIMG=$BUILD/images/os-real.krffs
 
     # The paths as the root Makefile reads them, through its MANIFEST_DEPS,
-    # which gives the architecture's path map.
+    # which gives the architecture's path map. The rule is a makefile of its
+    # own, since the make of macOS, 3.81, has no --eval.
     # shellcheck disable=SC2016 # the dollars are make's and its shell's
-    if MAKEFLAGS='' make -s --no-print-directory \
-        --eval 'imagerace-deps: ; @for m in krffs/manifests/*.manifest; do echo "== $$m"; $(MANIFEST_DEPS) "$$m"; done' \
+    echo 'imagerace-deps: ; @for m in krffs/manifests/*.manifest; do echo "== $$m"; $(MANIFEST_DEPS) "$$m"; done' \
+        > "$W/deps.mk"
+    if MAKEFLAGS='' make -s --no-print-directory -f Makefile -f "$W/deps.mk" \
         imagerace-deps > "$W/deps.log" 2>&1; then
         dirs=$(awk '/^== / { m = $2; next } m != "" { print m " " $0 }' "$W/deps.log" |
                while read -r m p; do [ ! -d "$p" ] || printf ' %s:%s' "${m##*/}" "$p"; done)
