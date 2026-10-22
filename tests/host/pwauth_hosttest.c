@@ -703,50 +703,31 @@ static void nap(long ms)
     nanosleep(&ts, NULL);
 }
 
-/**
- * Wait up to `ms` milliseconds for `pid`, filling `*status`. Returns 1 when it
- * was reaped, 0 on a timeout, having killed it.
- *
- * The cases below hand a child a descriptor it is meant to block on, so a
- * blocking wait would turn a regression into a hung run, not a failed case.
- */
-static int wait_bounded(pid_t pid, int *status, long ms)
+/** Wait for `pid` to end, filling `*status`. Returns 1 when it was reaped, or
+ * 0 when it cannot be. */
+static int reap(pid_t pid, int *status)
 {
-    long waited = 0;
+    pid_t got;
 
-    while (waited < ms) {
-        pid_t got = waitpid(pid, status, WNOHANG);
-
-        if (got == pid) {
-            return 1;
-        }
-        if (got < 0) {
-            return 0;
-        }
-        nap(50);
-        waited += 50;
+    while ((got = waitpid(pid, status, 0)) < 0 && errno == EINTR) {
     }
-    kill(pid, SIGKILL);
-    waitpid(pid, status, 0);
 
-    return 0;
+    return got == pid;
 }
 
 /**
- * Read from `fd` until what has arrived has `needle` or `ms` milliseconds
- * pass. Returns 1 when the text arrived.
- *
- * `fd` must be non-blocking: a prompt that never comes has to fail the case,
- * not stop the run.
+ * Read from the non-blocking `fd` until what has arrived has `needle`.
+ * Returns 1 when the text arrived, or 0 when `fd` ended or failed first, or
+ * the buffer filled without it.
  */
-static int read_until(int fd, const char *needle, long ms)
+static int read_until(int fd, const char *needle)
 {
     char buffer[512];
     size_t filled = 0;
-    long waited = 0;
+    struct pollfd waiting;
 
     buffer[0] = '\0';
-    while (waited < ms) {
+    for (;;) {
         ssize_t n = read(fd, buffer + filled, sizeof(buffer) - 1 - filled);
 
         if (n > 0) {
@@ -760,17 +741,20 @@ static int read_until(int fd, const char *needle, long ms)
             }
             continue;
         }
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+        if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
             return 0;
         }
-        nap(50);
-        waited += 50;
+        waiting.fd = fd;
+        waiting.events = POLLIN;
+        waiting.revents = 0;
+        if (poll(&waiting, 1, -1) < 0 && errno != EINTR) {
+            return 0;
+        }
     }
-
-    return 0;
 }
 
-/** Return 1 when the child announces its operation within 20 seconds. */
+/** Return 1 when the child announces its operation, or 0 when its end of
+ * `fd` closes first. */
 static int read_ready(int fd)
 {
     struct pollfd waiting;
@@ -780,7 +764,7 @@ static int read_ready(int fd)
     waiting.events = POLLIN;
     waiting.revents = 0;
 
-    return poll(&waiting, 1, 20000) == 1 && read(fd, &token, 1) == 1 && token == 'r';
+    return poll(&waiting, 1, -1) == 1 && read(fd, &token, 1) == 1 && token == 'r';
 }
 
 /**
@@ -1514,10 +1498,8 @@ static void check_death_set_installed(void)
         }
     }
     close(fds[0]);
-    if (!wait_bounded(child, &status, 20000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
-        fail("the writer the installed-set case inspects never finished");
+    if (!reap(child, &status)) {
+        fail("could not reap the writer the installed-set case inspects");
     } else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         fail("the writer the installed-set case inspects could not take its transaction");
     }
@@ -1592,17 +1574,15 @@ static void check_background_prompt(void)
         waiting.fd = fds[0];
         waiting.events = POLLIN;
         waiting.revents = 0;
-        if (poll(&waiting, 1, 20000) != 1 ||
+        if (poll(&waiting, 1, -1) != 1 ||
             read(fds[0], answer, sizeof(answer)) != (ssize_t)sizeof(answer)) {
             answer[0] = '\0';
             answer[1] = '\0';
         }
     }
     close(fds[0]);
-    if (!wait_bounded(child, &status, 20000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
-        fail("the session the background-prompt case watches never finished");
+    if (!reap(child, &status)) {
+        fail("could not reap the session the background-prompt case watches");
     } else if (WIFEXITED(status) && WEXITSTATUS(status) >= 90) {
         fail("the session the background-prompt case watches could not set itself up");
     }
@@ -1690,10 +1670,10 @@ static void check_restore_reentry(const char *inject)
 
         return;
     }
-    if (!read_until(master, "Password: ", 20000)) {
+    if (!read_until(master, "Password: ")) {
         fail("the reader the restore-reentry case interrupts never prompted");
         kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
+        (void)reap(child, &status);
         close(fds[0]);
         close(master);
         unlink(Lock);
@@ -1707,15 +1687,13 @@ static void check_restore_reentry(const char *inject)
         waiting.fd = fds[0];
         waiting.events = POLLIN;
         waiting.revents = 0;
-        if (poll(&waiting, 1, 20000) != 1 || read(fds[0], &answer, 1) != 1) {
+        if (poll(&waiting, 1, -1) != 1 || read(fds[0], &answer, 1) != 1) {
             answer = '\0';
         }
     }
     close(fds[0]);
-    if (!wait_bounded(child, &status, 20000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
-        fail("the reader the restore-reentry case interrupts never finished");
+    if (!reap(child, &status)) {
+        fail("could not reap the reader the restore-reentry case interrupts");
     } else if (WIFEXITED(status) && WEXITSTATUS(status) >= 90) {
         char said[96];
 
@@ -1821,17 +1799,15 @@ static void check_unlisted_death(void)
         if (read(ready[0], &token, 1) != 1 || token != 'r') {
             fail("the writer the unlisted-death case signals never took its transaction");
             kill(child, SIGKILL);
-            (void)wait_bounded(child, &status, 20000);
+            (void)reap(child, &status);
             close(ready[0]);
             unlink(Lock);
             continue;
         }
         close(ready[0]);
         kill(child, sent[i]);
-        if (!wait_bounded(child, &status, 20000)) {
-            kill(child, SIGKILL);
-            (void)wait_bounded(child, &status, 20000);
-            fail("a writer sent a signal outside the usual four did not die of it");
+        if (!reap(child, &status)) {
+            fail("could not reap the writer sent a signal outside the usual four");
         } else if (WIFSIGNALED(status)) {
             fail("a writer sent a signal outside the usual four took the default action");
         } else if (!WIFEXITED(status)) {
@@ -1880,7 +1856,7 @@ static void check_pipe_during_acquire(void)
         }
         _exit(cred_txn_end() == 0 ? 0 : 71);
     }
-    if (child < 0 || !wait_bounded(child, &status, 20000)) {
+    if (child < 0 || !reap(child, &status)) {
         fail("could not run the writer the acquire-signal case watches");
     } else if (WIFSIGNALED(status)) {
         fail("a SIGPIPE inside the acquire killed the writer");
@@ -2000,7 +1976,7 @@ static void check_report_blocks(void)
     if (!read_ready(ready[0])) {
         fail("the writer never reached the failed pid-write report");
         kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
+        (void)reap(child, &status);
         close(stuck[0]);
         close(ready[0]);
 
@@ -2017,10 +1993,8 @@ static void check_report_blocks(void)
         fail("an acquire still reporting its refusal has not yet removed its lock");
     }
     kill(child, SIGTERM);
-    if (!wait_bounded(child, &status, 10000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 10000);
-        fail("a writer blocked reporting its refusal could not be killed by SIGTERM");
+    if (!reap(child, &status)) {
+        fail("could not reap the writer blocked reporting its refusal");
     } else if (WIFEXITED(status) && WEXITSTATUS(status) >= 80 && WEXITSTATUS(status) <= 82) {
         fail("the writer the blocked-report case watches could not set itself up");
     } else if (WIFEXITED(status) && WEXITSTATUS(status) == 83) {
@@ -2113,8 +2087,7 @@ static void check_retry_release(void)
         sigaction(SIGPIPE, &ignored, &saved);
         (void)write(go[1], "g", 1);
         sigaction(SIGPIPE, &saved, NULL);
-        if (!wait_bounded(child, &status, 10000) || !WIFEXITED(status) ||
-            WEXITSTATUS(status) != 0) {
+        if (!reap(child, &status) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
             fail("a retry did not acquire and release the previous holder's lock");
         }
     }
@@ -2279,7 +2252,7 @@ static void check_sigpipe(void)
         _exit(strcmp(password, "secret") == 0 ? 0 : 72);
     }
     close(feed[0]);
-    if (child < 0 || !wait_bounded(child, &status, 10000)) {
+    if (child < 0 || !reap(child, &status)) {
         fail("could not run the prompt whose standard error nobody reads");
     } else if (!WIFEXITED(status)) {
         fail("a prompt written into a pipe with no reader killed the reader");
@@ -2298,7 +2271,7 @@ static void check_sigpipe(void)
         cred_rewrite(NULL, NULL, 0); /* one line, into a pipe with no reader */
         exit(0);                     /* the release registered with atexit must still run */
     }
-    if (child < 0 || !wait_bounded(child, &status, 10000)) {
+    if (child < 0 || !reap(child, &status)) {
         fail("could not run the writer whose standard error nobody reads");
     } else if (!WIFEXITED(status)) {
         fail("a writer reporting into a pipe with no reader was killed holding its lock");
@@ -2373,7 +2346,7 @@ static void check_release(void)
         }
         _exit(wrong);
     }
-    if (child < 0 || !wait_bounded(child, &status, 20000) || !WIFEXITED(status)) {
+    if (child < 0 || !reap(child, &status) || !WIFEXITED(status)) {
         fail("could not run the release under a full descriptor table");
     } else if (WEXITSTATUS(status) >= 80) {
         fail("the child that fills its descriptor table could not set the case up");
@@ -2473,7 +2446,7 @@ static void check_sigpipe_exec(void)
         execl(Self, Self, HELPER_PIPE, (char *)NULL);
         _exit(90);
     }
-    if (child < 0 || !wait_bounded(child, &status, 20000) || !WIFEXITED(status)) {
+    if (child < 0 || !reap(child, &status) || !WIFEXITED(status)) {
         fail("could not run the program a writer's child execs");
     } else if (WEXITSTATUS(status) == 90) {
         fail("the program a writer's child execs could not be run");
@@ -2642,16 +2615,14 @@ static void check_exit_mask(void)
         waiting.fd = fds[0];
         waiting.events = POLLIN;
         waiting.revents = 0;
-        if (poll(&waiting, 1, 20000) == 1 &&
+        if (poll(&waiting, 1, -1) == 1 &&
             read(fds[0], answer, sizeof(answer)) != (ssize_t)sizeof(answer)) {
             answer[0] = '?';
         }
     }
     close(fds[0]);
-    if (!wait_bounded(child, &status, 20000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
-        fail("the writer the exit-mask case watches never finished");
+    if (!reap(child, &status)) {
+        fail("could not reap the writer the exit-mask case watches");
     } else if (!WIFEXITED(status)) {
         fail("the writer the exit-mask case watches did not exit normally");
     } else if (WEXITSTATUS(status) >= 90) {
@@ -2735,16 +2706,14 @@ static void check_heir(void)
         waiting.fd = fds[0];
         waiting.events = POLLIN;
         waiting.revents = 0;
-        if (poll(&waiting, 1, 20000) != 1 ||
+        if (poll(&waiting, 1, -1) != 1 ||
             read(fds[0], answer, sizeof(answer)) != (ssize_t)sizeof(answer)) {
             answer[0] = '?';
         }
     }
     close(fds[0]);
-    if (!wait_bounded(child, &status, 20000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
-        fail("the writer the heir case watches never finished");
+    if (!reap(child, &status)) {
+        fail("could not reap the writer the heir case watches");
     } else if (!WIFEXITED(status)) {
         fail("the writer the heir case watches did not exit normally");
     } else if (WEXITSTATUS(status) >= 90) {
@@ -2818,15 +2787,13 @@ static void check_pipe_kept(void)
         waiting.fd = fds[0];
         waiting.events = POLLIN;
         waiting.revents = 0;
-        if (poll(&waiting, 1, 20000) != 1 || read(fds[0], &answer, 1) != 1) {
+        if (poll(&waiting, 1, -1) != 1 || read(fds[0], &answer, 1) != 1) {
             answer = '?';
         }
     }
     close(fds[0]);
-    if (!wait_bounded(child, &status, 20000)) {
-        kill(child, SIGKILL);
-        (void)wait_bounded(child, &status, 20000);
-        fail("the writer the kept-disposition case watches never finished");
+    if (!reap(child, &status)) {
+        fail("could not reap the writer the kept-disposition case watches");
     } else if (!WIFEXITED(status)) {
         fail("the writer the kept-disposition case watches did not exit normally");
     } else if (WEXITSTATUS(status) >= 90) {
@@ -3160,7 +3127,6 @@ static void check_teardown(void)
     char filler[1024];
     char name[128];
     pid_t child;
-    long waited;
     int report[2];
     int ready[2];
     int master;
@@ -3205,7 +3171,7 @@ static void check_teardown(void)
         return;
     }
     fcntl(report[0], F_SETFL, O_NONBLOCK);
-    if (!read_until(report[0], "Password: ", 10000)) {
+    if (!read_until(report[0], "Password: ")) {
         fail("the prompt never reached the pipe the teardown case reads");
         kill(child, SIGKILL);
         waitpid(child, &status, 0);
@@ -3238,7 +3204,7 @@ static void check_teardown(void)
     }
     close(ready[0]);
 
-    for (waited = 0; waited < 10000; waited += 50) {
+    for (;;) {
         char sink[512];
         pid_t got;
 
@@ -3253,12 +3219,11 @@ static void check_teardown(void)
         if (got < 0) {
             break;
         }
+        /* interval: the pipe is drained and the reader checked every 50 ms */
         nap(50);
     }
     if (!reaped) {
-        kill(child, SIGKILL);
-        waitpid(child, &status, 0);
-        fail("the reader never came out of its teardown");
+        fail("could not reap the reader the teardown case interrupts");
     } else if (!WIFEXITED(status)) {
         fail("the reader interrupted in its teardown died of a signal");
     } else if (WEXITSTATUS(status) == 94) {

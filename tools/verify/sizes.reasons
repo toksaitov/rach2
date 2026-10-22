@@ -456,7 +456,6 @@ tests/host/pwauth_hosttest.c:check_masked lines 114 a test's rows, each a case, 
 tests/host/pwauth_hosttest.c:check_release complexity 27 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_release lines 101 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_report_blocks complexity 29 a test's rows, each a case, read as one table
-tests/host/pwauth_hosttest.c:check_report_blocks lines 114 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_restore_reentry lines 110 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_rewrite complexity 48 a test's rows, each a case, read as one table
 tests/host/pwauth_hosttest.c:check_rewrite lines 163 a test's rows, each a case, read as one table
