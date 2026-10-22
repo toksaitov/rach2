@@ -21,6 +21,9 @@ GNU_PORTS_STAMP = $(GNU_OUT)/ports.stamp
 GNU_PORTS_LINK = $(GNU_OUT)/ports.link
 GNU_CC = $(GNU_OUT)/cross/bin/$(GNU_TARGET)-gcc
 GNU_RECIPES = $(wildcard vendor/gnu/ports/*.sh)
+# The sources of each stamp, which mk/gnu-image.mk also reads.
+GNU_TOOLCHAIN_SOURCES = vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/gnu/fetch.sh
+GNU_PORTS_SOURCES = vendor/gnu/build_port.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt $(GNU_RECIPES)
 
 .PHONY: gnu-toolchain gnu-ports
 gnu-toolchain: $(GNU_TOOLCHAIN_STAMP)
@@ -35,7 +38,7 @@ $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 	@t=$@.$$$$; awk '$$1 ~ /^(binutils|gcc|gmp|mpfr|mpc|glibc|linux|libxcrypt)$$/' vendor/gnu/sources.txt >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_TOOLCHAIN_STAMP): vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/gnu/fetch.sh $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL)
+$(GNU_TOOLCHAIN_STAMP): $(GNU_TOOLCHAIN_SOURCES) $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL)
 	@rm -f $@
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/build_toolchain.sh; fi
 	@test -x $(GNU_CC) || { echo "gnu: toolchain: the build produced no $(GNU_CC)" >&2; exit 1; }
@@ -49,7 +52,7 @@ $(GNU_PORTS_LINK): gnu-link-check
 	@t=$@.$$$$; echo "$(or $(GNU_LINK),shared)" >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) vendor/gnu/build_port.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt $(GNU_RECIPES) $(GNU_PORTS_LINK)
+$(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) $(GNU_PORTS_SOURCES) $(GNU_PORTS_LINK)
 	@rm -f $@
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/build_port.sh --all; fi
 	@touch $@

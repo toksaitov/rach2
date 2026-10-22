@@ -17,6 +17,8 @@ GNU_AGENTS_LIST = $(GNU_OUT)/agents.list
 GNU_AGENTS_ALL_LIST = $(GNU_OUT)/agents-all.list
 GNU_AGENTS_STAMPS = $(patsubst %,$(GNU_OUT)/agents/%.stamp,$(filter $(GNU_AGENTS_ALL),$(GNU_AGENTS_ON)))
 GNU_AGENTS_ALL_STAMPS = $(patsubst %,$(GNU_OUT)/agents/%.stamp,$(GNU_AGENTS_ALL))
+# The sources of every package's stamp, besides the package's own recipe.
+GNU_AGENTS_SOURCES = vendor/gnu/agents/fetch_agents.sh vendor/gnu/arch.sh
 
 .PHONY: gnu-agents gnu-agents-check
 gnu-agents: $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS)
@@ -37,7 +39,7 @@ $(GNU_AGENTS_ALL_LIST): gnu-agents-check
 	@t=$@.$$$$; echo "$(GNU_AGENTS_ALL)" >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh vendor/gnu/agents/fetch_agents.sh vendor/gnu/arch.sh | $(SHA256TOOL)
+$(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES) | $(SHA256TOOL)
 	@rm -f $@
 	@RACH2_ARCH=$(ARCH) ./vendor/gnu/agents/fetch_agents.sh $*
 	@touch $@
