@@ -57,7 +57,7 @@ struct etude_tooling_job {
     unsigned memory_mib;        /* 0 gives 2048 */
     unsigned volume_mib;        /* the job volume; 0 gives 64 */
     int network;                /* nonzero gives QEMU's user network */
-    uint64_t deadline_us;       /* from QEMU's start to its end; 0 gives 1800 s */
+    uint64_t deadline_us;       /* from QEMU's start to its end; 0 for none */
     int keep;                   /* keep the job's directory after a pass */
 };
 

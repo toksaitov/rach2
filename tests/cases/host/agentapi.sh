@@ -257,7 +257,6 @@ EOF
         echo "agentapi: the logs of the job are under $LOGS/scratch"
     ! grep -q '^@etude 1 end ' "$LOGS/job.out" || exit "$status"
     case $status in
-        124) unrun "the tooling machine's job ran past etude-tooling's deadline" ;;
         125) unrun "the tooling machine failed; etude-tooling's lines say why" ;;
         126) unrun "the tooling machine is not made; etude-tooling prepare makes it" ;;
         *) unrun "the tooling machine's job ended with status $status before its report did" ;;

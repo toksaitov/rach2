@@ -714,7 +714,8 @@ enum { BOOT_ENDED, BOOT_LATE, BOOT_STOPPED };
 
 /**
  * Boot QEMU with `argv` and serve it until it ends: read its channel, sample
- * it, and stop it when `deadline_us` passes or a signal asks it to stop.
+ * it, and stop it when `deadline_us` passes, unless it is 0, or a signal
+ * asks it to stop.
  *
  * @return BOOT_ENDED, BOOT_LATE or BOOT_STOPPED, or -1 when it did not
  *         start.
@@ -757,7 +758,8 @@ static int boot_run(struct boot *b, const struct etude_tooling_site *site, char 
             continue;
         if (stopped(site))
             end = BOOT_STOPPED;
-        else if (etude_history_now(&now) == 0 && now.monotonic_us - begin > deadline_us)
+        else if (deadline_us != 0 && etude_history_now(&now) == 0 &&
+                 now.monotonic_us - begin > deadline_us)
             end = BOOT_LATE;
         else
             continue;
@@ -1286,8 +1288,7 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
         return failure(res->why, sizeof(res->why), "a directory in %s cannot be made: %s",
                        site->cache, strerror(errno));
     if (job_line(site, job, &w, res->why, sizeof(res->why)) == 0) {
-        end = boot_run(&w.b, site, w.l.argv, job->deadline_us > 0 ? job->deadline_us : 1800000000u,
-                       res->why, sizeof(res->why));
+        end = boot_run(&w.b, site, w.l.argv, job->deadline_us, res->why, sizeof(res->why));
         if (end == BOOT_ENDED || end == BOOT_LATE)
             job_judge(site, job, &w, end == BOOT_LATE, res);
     }
