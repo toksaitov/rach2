@@ -366,8 +366,8 @@ main() {
             dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-secrets.XXXXXX") || exit 1
             cat > "$dir/log"
             credential_strings "${@:2}" > "$dir/strings"
-            printf '%s of %s strings\n' "$(grep -oFf "$dir/strings" "$dir/log" | sort -u | wc -l)" \
-                "$(wc -l < "$dir/strings")"
+            printf '%d of %d strings\n' "$(($(grep -oFf "$dir/strings" "$dir/log" | sort -u | wc -l)))" \
+                "$(($(wc -l < "$dir/strings")))"
             rm -rf "$dir"
             ;;
         redact)
