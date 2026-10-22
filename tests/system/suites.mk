@@ -42,6 +42,15 @@ BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel
 CASE_DIR = build/tests/cases/machine
 ARCH_CASE_DIR = $(ARCH_BUILD)/tests/cases/machine
 
+# The targets of the pattern rule of a maker that writes several files under
+# build/ at once: the files, each with its leading `build` as the stem `%`.
+# Make runs a pattern rule's recipe once for all the targets it has with one
+# stem, where GNU Make 3.81, the make of macOS, has no grouped targets (`&:`).
+# Under 3.81 a file that a pattern rule makes is intermediate when no rule
+# names it explicitly, and make removes it when it ends; so where one such
+# rule reads the files of another, they are explicit prerequisites of its own.
+together = $(addprefix %/,$(patsubst build/%,%,$(1)))
+
 # No file is named `run-<suite>`, so every suite target is phony. The names are
 # read from the registry rather than written out again: `tests/run style`
 # already requires the registry and the targets in this file to name the same
@@ -792,8 +801,8 @@ $(IMAGES_DIR)/fatwrite-test.disk: krffs/manifests/disk-test.manifest $(MANIFEST_
 # hold data alone, so one set serves both architectures.
 LOOPDEV_ARTIFACTS = $(addprefix build/tests/system/loopdev/,fat.img ext2.img krffs.img) \
                     $(addprefix $(CASE_DIR)/loopdev/,disk.img ext2back.img stick.img)
-$(LOOPDEV_ARTIFACTS) &: tests/system/loopdev_disks.sh krffs/manifests/loopimg-test.manifest \
-                        $(MKMBR) $(IMAGE_TOOLS)
+$(call together,$(LOOPDEV_ARTIFACTS)): tests/system/loopdev_disks.sh \
+    krffs/manifests/loopimg-test.manifest $(MKMBR) $(IMAGE_TOOLS)
 	sh tests/system/loopdev_disks.sh build/tests/system/loopdev $(CASE_DIR)/loopdev
 
 # `tests/run krffsmount`: a KRFFS volume mounted by mount(2) from a program,
@@ -809,12 +818,13 @@ $(LOOPDEV_ARTIFACTS) &: tests/system/loopdev_disks.sh krffs/manifests/loopimg-te
 # the architecture.
 KRFFSVOL_DIR = build/tests/system/krffsvol
 KRFFSVOLS = $(addprefix $(KRFFSVOL_DIR)/,volume.krffs broken.krffs badmagic.krffs badchain.krffs)
-$(KRFFSVOLS) &: tests/system/krffsvol.sh krffs/manifests/krffsvol-test.manifest krffs/mkimage.sh \
-                build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs
+$(call together,$(KRFFSVOLS)): tests/system/krffsvol.sh krffs/manifests/krffsvol-test.manifest \
+    krffs/mkimage.sh build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs
 	sh tests/system/krffsvol.sh volumes
 KRFFSMOUNT_DISKS = $(addprefix $(CASE_DIR)/krffsmount/,volume.disk broken.disk badmagic.disk \
                    badchain.disk region.disk three.disk stick.img)
-$(KRFFSMOUNT_DISKS) &: tests/system/krffsvol.sh $(KRFFSVOLS) $(MKMBR)
+$(KRFFSMOUNT_DISKS): $(KRFFSVOLS)
+$(call together,$(KRFFSMOUNT_DISKS)): tests/system/krffsvol.sh $(MKMBR)
 	sh tests/system/krffsvol.sh disks $(CASE_DIR)/krffsmount
 
 # `tests/run ext2`: the ext2 driver booted: the probes as init on an ext2
@@ -1106,7 +1116,8 @@ run-uefi: $(DEMO_CREDS) rach2 utils krffs rach2-recovery $(RECOVERY_IMAGE) $(INS
 # name, whether or not it has the development key.
 USB_CASE_STICKS = $(addprefix $(CASE_DIR)/usbdisk/,stick-mbr.img stick-gpt.img stick-super.img \
                   stick-hub.img far.vol)
-$(USB_CASE_STICKS) &: tests/system/usbdisk_sticks.sh $(MKEXFATFIXTURE) $(MKMBR) $(MKGPT)
+$(call together,$(USB_CASE_STICKS)): tests/system/usbdisk_sticks.sh $(MKEXFATFIXTURE) \
+    $(MKMBR) $(MKGPT)
 	sh tests/system/usbdisk_sticks.sh $(CASE_DIR)/usbdisk $(MKEXFATFIXTURE)
 $(CASE_DIR)/usblatency.awk: tests/system/checkers/usblatency.awk
 	@mkdir -p $(@D)
@@ -1129,14 +1140,14 @@ $(IMAGES_DIR)/usbdisk-recovery.krffs: $(RECOVERY_IMAGE)
 # metal_installed_disks.sh makes from the kernel, BusyBox and bootctl of the
 # architecture's build and the rows of metal_accept.sh.
 METAL_STICKS = $(addprefix $(CASE_DIR)/metal/,stick.img rstick1.img rstick2.img)
-$(METAL_STICKS) &: tests/system/metal_sticks.sh $(MKMBR) build/krffs/mkfs.krffs \
-                   build/krffs/stageimage.krffs
+$(call together,$(METAL_STICKS)): tests/system/metal_sticks.sh $(MKMBR) build/krffs/mkfs.krffs \
+    build/krffs/stageimage.krffs
 	sh tests/system/metal_sticks.sh $(CASE_DIR)/metal
 METAL_INSTALLED = $(addprefix $(ARCH_CASE_DIR)/metal-installed/, \
                   candidate.disk gpt.disk wrong-partition.disk readonly.disk fallback.disk)
-$(METAL_INSTALLED) &: tests/system/metal_installed_disks.sh tests/system/accept/metal_accept.sh \
-                      tools/image/mkdisk_grub.sh $(KERNEL) $(DISK_TOOLS) $(GRUB_FILES) \
-                      | rach2 utils check-busybox
+$(call together,$(METAL_INSTALLED)): tests/system/metal_installed_disks.sh \
+    tests/system/accept/metal_accept.sh tools/image/mkdisk_grub.sh $(KERNEL) $(DISK_TOOLS) \
+    $(GRUB_FILES) | rach2 utils check-busybox
 	sh tests/system/metal_installed_disks.sh $(ARCH_BUILD) $(ARCH_CASE_DIR)/metal-installed
 # `tests/run account`: accounts created, authenticated, changed and deleted on
 # both images, since both have account tools and they are different code.
@@ -1368,14 +1379,13 @@ $(DISKS_ONE): $(MKMBR)
 # write` hold data alone, so one set of them serves both architectures. The
 # blank disk and the 5 TiB one are empty disks of the cases' own.
 PARTS_ARCH_DISKS = $(addprefix $(ARCH_CASE_DIR)/parts/,a.disk b.disk b.gpt)
-$(PARTS_ARCH_DISKS) &: tests/system/parts_disks.sh krffs/manifests/disk-test.manifest \
-                       $(MANIFEST_DEPS_disk_test) $(MKDISK) build/krffs/mkfs.krffs \
-                       build/krffs/stageimage.krffs $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) \
-                       | preflight krffs tests
+$(call together,$(PARTS_ARCH_DISKS)): tests/system/parts_disks.sh \
+    krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) build/krffs/mkfs.krffs \
+    build/krffs/stageimage.krffs $(MKMBR) $(MKGPT) $(OS_SIMPLE_EXT2) | preflight krffs tests
 	sh tests/system/parts_disks.sh arch $(ARCH_CASE_DIR)/parts $(OS_SIMPLE_EXT2)
 PARTS_DATA_DISKS = $(addprefix $(CASE_DIR)/parts/,c.disk gpt.disk gpt-nombr.disk \
                      gpt-nombr-noprimary.disk gpt-noprimary.disk mbr-full.disk mbr-scratch.disk)
-$(PARTS_DATA_DISKS) &: tests/system/parts_disks.sh $(MKMBR) $(MKGPT)
+$(call together,$(PARTS_DATA_DISKS)): tests/system/parts_disks.sh $(MKMBR) $(MKGPT)
 	sh tests/system/parts_disks.sh shared $(CASE_DIR)/parts
 # `tests/run bus`: four IDE drives on both channels, an AHCI and an IDE disk
 # together with the root on each in turn, and a disk past 128 GiB. They are
