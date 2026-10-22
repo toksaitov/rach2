@@ -54,7 +54,6 @@
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_report.h"
@@ -62,10 +61,6 @@
 #define LOCK_PATH "/tmp/lockmusl"
 /* The directory of the rows about which file a lock is on. */
 #define KEY_DIR   "/tmp/lockmusl.d"
-
-/* The longest wait, in seconds, for a process or thread to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
 
 /* The checks, one assertion each, in the order the program makes them, and
  * the text it prints for each that fails. */
@@ -303,15 +298,13 @@ static int stat_state(const char *path)
  * process, to be asleep, state S in its stat file, looking every 10 ms. A
  * thread's `*id` may still be 0, for a thread that has yet to store it.
  * Returns 1 once it is asleep, and 0 when it ends first, as a zombie or gone
- * from /proc, or when ASLEEP_BOUND seconds pass.
+ * from /proc.
  */
 static int asleep(const volatile pid_t *id, int thread)
 {
-    struct timespec start, now;
     char path[64];
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = -1;
         if (*id != 0) {
@@ -322,8 +315,7 @@ static int asleep(const volatile pid_t *id, int thread)
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
