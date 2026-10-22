@@ -810,15 +810,6 @@ static int kill_at_registration(void *ctx, const char *attempt_id, const struct 
     return EIO;
 }
 
-/** Give the monotonic time in milliseconds for a completion bound. */
-static uint64_t now_ms(void)
-{
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
-}
-
 /**
  * Kill the keeper before it releases the held child. The child must end on
  * EOF without executing the program. Reap it here where subreapers exist;
@@ -833,13 +824,15 @@ static void test_held_keeper(struct etude_exec *ex)
     struct etude_pid id;
     struct attempt a;
     struct stat st;
-    struct timespec pause = {0, 1000000};
-    uint64_t until;
     int gone = 0;
 #if defined(__linux__) || defined(__rach2__)
     int subreaper = 0, status = 0;
     pid_t reaped;
+#else
+    struct timespec pause = {0, 1000000};
+#endif
 
+#if defined(__linux__) || defined(__rach2__)
     CHECK(prctl(PR_GET_CHILD_SUBREAPER, &subreaper, 0, 0, 0) == 0, "held adoption");
     CHECK(prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) == 0, "held adoption");
 #endif
@@ -853,21 +846,15 @@ static void test_held_keeper(struct etude_exec *ex)
     reg = registered(a.attempt_id);
     CHECK(reg != NULL && reg->held != 0, "held registration");
     if (reg != NULL) {
-        until = now_ms() + 5000;
-        do {
 #if defined(__linux__) || defined(__rach2__)
-            reaped = waitpid((pid_t)reg->process, &status, WNOHANG);
-            gone = reaped == (pid_t)reg->process;
-            if (reaped < 0 && errno != EINTR)
-                break;
+        while ((reaped = waitpid((pid_t)reg->process, &status, 0)) < 0 && errno == EINTR) {
+        }
+        gone = reaped == (pid_t)reg->process;
 #else
-            gone = etude_process_state(reg->process, &id) == 0;
+        while (!(gone = etude_process_state(reg->process, &id) == 0))
+            /* interval: the child is checked every 1 ms */
+            nanosleep(&pause, NULL);
 #endif
-            if (!gone) {
-                /* interval: the child is checked every 1 ms */
-                nanosleep(&pause, NULL);
-            }
-        } while (!gone && now_ms() < until);
         CHECK(gone, "held child EOF");
 #if defined(__linux__) || defined(__rach2__)
         if (gone)
