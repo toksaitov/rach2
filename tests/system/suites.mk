@@ -157,8 +157,9 @@ $(RUNUTIL): tests/system/runner/runutil.c
 # casecheck and history_check to pass, and every row of the executor's test,
 # the subreaper's among them, to run and pass. The archive's files are copied
 # with one fixed time and archived in the order of their names, so that the
-# same sources make the same bytes. COPYFILE_DISABLE keeps macOS's tar from
-# adding a `._NAME` file of each file's extended attributes.
+# same sources make the same bytes. COPYFILE_DISABLE and the ustar format
+# keep macOS's tar from adding a `._NAME` file or a header of each file's
+# extended attributes.
 ETUDEEXEC_DISK = $(IMAGES_DIR)/etudeexec-test.disk
 ETUDEEXEC_ARCHIVE = $(CASE_DIR)/etudeexec/etude.tar
 ETUDEEXEC_FILES = $(shell find tools/etude -type f) utils/sha256.c utils/sha256.h \
@@ -175,7 +176,7 @@ $(ETUDEEXEC_ARCHIVE): $(ETUDEEXEC_FILES)
 	COPYFILE_DISABLE=1 tar -cf - $(ETUDEEXEC_FILES) | (cd $@.d && tar -xf -)
 	find $@.d -exec touch -t 200001010000 {} +
 	(cd $@.d && find . -type f | LC_ALL=C sort) > $@.list
-	(cd $@.d && COPYFILE_DISABLE=1 tar -cf - -T $(CURDIR)/$@.list) > $@.tmp
+	(cd $@.d && COPYFILE_DISABLE=1 tar --format ustar -cf - -T $(CURDIR)/$@.list) > $@.tmp
 	rm -rf $@.d $@.list
 	mv $@.tmp $@
 # The components, the builds that turn sources into programs, in one target,
