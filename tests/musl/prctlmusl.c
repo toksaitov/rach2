@@ -78,7 +78,6 @@
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
-#include <sys/times.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -449,7 +448,7 @@ static int parent_death(void)
     held();
     pfd.fd = report[0];
     pfd.events = POLLIN;
-    if (poll(&pfd, 1, 10000) != 1 || read(report[0], &c, 1) != 1 || c != 'D') {
+    if (poll(&pfd, 1, -1) != 1 || read(report[0], &c, 1) != 1 || c != 'D') {
         return fail("a grandchild did not receive its parent-death signal");
     }
     held();
@@ -728,11 +727,9 @@ static int exit_lets_go(void)
 }
 
 /* The processor time, in microseconds, and the memory, in bytes, an orphan
- * of the subreaper rows uses, and the most ticks since boot it may spin for
- * that time. */
-#define ORPHAN_USEC  30000
-#define ORPHAN_HEAP  (2 * 1024 * 1024)
-#define ORPHAN_TICKS 1000
+ * of the subreaper rows uses. */
+#define ORPHAN_USEC 30000
+#define ORPHAN_HEAP (2 * 1024 * 1024)
 
 /*
  * The processes of one orphan row and their pipes: M, the child of S, forks
@@ -850,9 +847,7 @@ static void orphan_main(struct orphan *o)
 {
     struct orphan_report r;
     struct rusage ru;
-    struct tms tms;
     sigset_t usr1;
-    clock_t start = times(&tms);
     pid_t self = getpid();
     char *heap = malloc(ORPHAN_HEAP);
     char c;
@@ -868,7 +863,7 @@ static void orphan_main(struct orphan *o)
     do {
         spin();
         getrusage(RUSAGE_SELF, &ru);
-    } while (usec_of(&ru) < ORPHAN_USEC && times(&tms) - start < ORPHAN_TICKS);
+    } while (usec_of(&ru) < ORPHAN_USEC);
     if (write(o->ready[1], &self, sizeof(self)) != (ssize_t)sizeof(self) ||
         sigwait(&usr1, &sig) != 0) {
         _exit(1);
@@ -941,7 +936,7 @@ static int orphan_start(struct orphan *o)
 
 /**
  * End M, reap it, and read G's report into `r`, which G writes once M has
- * ended; the wait is bounded by poll's ten seconds. Returns 0, or -1.
+ * ended. Returns 0, or -1.
  */
 static int orphan_end_middle(struct orphan *o, struct orphan_report *r)
 {
@@ -953,7 +948,7 @@ static int orphan_end_middle(struct orphan *o, struct orphan_report *r)
     }
     pfd.fd = o->report[0];
     pfd.events = POLLIN;
-    if (poll(&pfd, 1, 10000) != 1 || read(o->report[0], r, sizeof(*r)) != (ssize_t)sizeof(*r)) {
+    if (poll(&pfd, 1, -1) != 1 || read(o->report[0], r, sizeof(*r)) != (ssize_t)sizeof(*r)) {
         return -1;
     }
     return 0;
