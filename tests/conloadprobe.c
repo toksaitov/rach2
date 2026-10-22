@@ -43,15 +43,14 @@
 
 #include "probe.h"
 
-#define O_RDONLY      0
-#define O_WRONLY      1
-#define O_CREAT       0100
-#define O_TRUNC       01000
-#define SIGINT        2
-#define SIGKILL       9
-#define TIOCSPGRP     0x5410
-#define POLLIN        0x001
-#define READ_LIMIT_MS 5000
+#define O_RDONLY  0
+#define O_WRONLY  1
+#define O_CREAT   0100
+#define O_TRUNC   01000
+#define SIGINT    2
+#define SIGKILL   9
+#define TIOCSPGRP 0x5410
+#define POLLIN    0x001
 
 struct pollfd {
     int fd;
@@ -283,17 +282,13 @@ static int bad_sum;
 /* The number of the first bad line, or -1 while none has been bad. */
 static int first_bad = -1;
 
-static void print_counters(void);
-
 /**
  * Read one line from the console into `line`, without its newline: 1, or 0
  * at end of file. A line longer than `line` is cut short.
  *
- * Before each byte the reader waits in poll, so that the port's interrupt
- * has a waiter on the console to wake. The poll's five seconds are a bound
- * on a run that has stopped: when no byte arrives in that time it prints
- * what arrived and the counters, stops the load and exits 1, since a read
- * that blocked would print nothing.
+ * Before each byte the reader waits in poll, with no timeout, so that the
+ * port's interrupt has a waiter on the console to wake. A byte that never
+ * comes leaves the reader waiting, and the case's watchdog ends the run.
  */
 static int read_line(void)
 {
@@ -306,11 +301,10 @@ static int read_line(void)
         pfd.fd = 0;
         pfd.events = POLLIN;
         pfd.revents = 0;
-        if (syscall3(SYS_POLL, (long)&pfd, 1, READ_LIMIT_MS) <= 0) {
+        if (syscall3(SYS_POLL, (long)&pfd, 1, -1) <= 0) {
             line[line_len] = 0;
-            print("CONLOAD FAIL: no byte for five seconds; so far: ");
+            print("CONLOAD FAIL: the poll of the console failed; so far: ");
             puts(line);
-            print_counters();
             stop_load();
             sys_exit(1);
         }
