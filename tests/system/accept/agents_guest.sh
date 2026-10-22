@@ -296,11 +296,7 @@ main() {
             if [ -d "$DIR/$2" ]; then
                 cd "$DIR/$2" || exit 1
             fi
-            if [ "$3" = once ]; then
-                eval "timeout 600 $line"
-            else
-                eval "$line"
-            fi
+            eval "$line"
             echo "rach2-accept: ended with status $?"
             ;;
         version)

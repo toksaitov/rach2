@@ -4,9 +4,10 @@
 # scratch directories of its `secrets` and `work` commands on every exit path.
 #
 # A private copy of the script runs with a home and a TMPDIR of the test's
-# own, in a process group of its own, as a terminal's interrupt or timeout(1)
-# would end it. Rows check that `secrets` counts the strings of a log and
-# `filtered` none, and `work` prints its check, each leaving TMPDIR empty;
+# own, in a process group of its own, as a terminal's interrupt or a signal
+# to the whole group would end it. Rows check that `secrets` counts the
+# strings of a log and `filtered` none, and `work` prints its check, each
+# leaving TMPDIR empty;
 # that a TERM sent to the group while `secrets` waits for its log, or while
 # `work` runs its check, ends the command with status 143 and leaves TMPDIR
 # empty; and that `secrets` whose reader has gone ends with status 141 and
@@ -44,31 +45,28 @@ guest()
 }
 
 # appear DIR PATTERN: wait until a path in DIR that PATTERN matches exists,
-# for at most 30 seconds.
+# and fail when the guest ends first.
 appear()
 {
-    tries=0
     while :; do
         for path in "$1"/$2; do
             [ ! -e "$path" ] || return 0
         done
-        [ "$tries" -lt 300 ] || return 1
+        case $(ps -o stat= -p "$pid" 2> /dev/null) in
+            '' | Z*) return 1 ;;
+        esac
         sleep 0.1
-        tries=$((tries + 1))
     done
 }
 
 # finish: wait for the guest, set $status to its exit status, and wait until
-# no process of its group is left, for at most 30 seconds.
+# no process of its group is left.
 finish()
 {
     status=0
     wait "$pid" 2> /dev/null || status=$?
-    tries=0
     while kill -0 "-$pid" 2> /dev/null; do
-        [ "$tries" -lt 300 ] || return 1
         sleep 0.1
-        tries=$((tries + 1))
     done
     pid=
 }
@@ -147,7 +145,7 @@ cp "$source" "$guest" || exit 1
 mkdir -p "$home/rach2-accept/fixture" || exit 1
 printf 'hello\n' > "$home/rach2-accept/fixture/greeting.txt"
 cat > "$home/rach2-accept/fixture/check.sh" <<'EOF'
-[ -z "${GUEST_TEST_MARK:-}" ] || { : > "$GUEST_TEST_MARK"; sleep 30; }
+[ -z "${GUEST_TEST_MARK:-}" ] || { : > "$GUEST_TEST_MARK"; while :; do sleep 1; done; }
 echo checked
 EOF
 mkdir "$scratch" || exit 1
