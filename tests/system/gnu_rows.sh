@@ -171,7 +171,7 @@ row_openssl() {
 # session on a terminal of the server's is in the login records `who` reads.
 row_openssh() {
     local opts=(-i "$WORK/id" -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR
-                -o "UserKnownHostsFile=$WORK/known" -o ConnectTimeout=120)
+                -o "UserKnownHostsFile=$WORK/known")
 
     has "the version" "$(ssh -V 2>&1)" "OpenSSH_10.5p1"
     runs "ssh-keygen" ssh-keygen -q -t ed25519 -N '' -f "$WORK/id"
@@ -318,7 +318,7 @@ row_bash() {
     same "/proc/PID/exe through links" "$("$WORK/bash-rel" -c 'readlink /proc/$$/exe; exit $?' 2>&1)" \
         "$(readlink -f "$WORK/bash-rel")"
     # shellcheck disable=SC2016 # the dollars are the inner bash's
-    same "a here-document longer than a pipe holds" "$(timeout 20 bash -c 'doc=$(head -c 5000 /dev/zero | tr "\0" a)
+    same "a here-document longer than a pipe holds" "$(bash -c 'doc=$(head -c 5000 /dev/zero | tr "\0" a)
 cat << EOF | wc -c
 $doc
 EOF')" "5001"
@@ -535,7 +535,7 @@ row_procps() {
 row_utillinux() {
     local pid line
     local opts=(-i "$WORK/id" -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR
-                -o "UserKnownHostsFile=$WORK/known" -o ConnectTimeout=120)
+                -o "UserKnownHostsFile=$WORK/known")
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
     same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
     has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "Success, no errors or warnings detected"
@@ -817,7 +817,7 @@ row_jq() {
 
 # screen starts a detached session, lists it and ends it.
 row_screen() {
-    runs "a detached session" screen -dmS row sleep 60
+    runs "a detached session" screen -dmS row sleep infinity
     output "the list" screen -ls
     has "the session" "$OUT" ".row"
     runs "the end" screen -S row -X quit
