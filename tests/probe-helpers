@@ -1,6 +1,5 @@
 # The built programs that no suite runs as a probe, each with its caller or its
 # use. tools/verify/probecheck.sh reads this file.
-calibprobe optional tests/system/calibrate.sh diagnostic
 idreport identity and environment fixture for account probes
 musl/budgetmusl manual resource budget diagnostic
 musl/catfile manual file reader

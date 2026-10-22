@@ -125,7 +125,7 @@ if os.environ.get('RACH2_FAULT_TEXTS'):
 
 path = Path(sys.argv[1])
 source = path.read_text()
-old = "    if (!got)\n        step_fail(step);\n    else\n        stamp(\"MATCH\");\n"
+old = "    if (!got)\n        step_fail(step);\n"
 if source.count(old) != 1:
     raise SystemExit("harness-input-mutation: source pattern is not unique: report")
 path.write_text(source.replace(old, old.replace("step_fail(step);", "step_failures++;")))

@@ -14,7 +14,7 @@
  *   harness --kernel K [--initrd I] [--append LINE] [--net NETVAL]
  *           [--device DEV] [--drive SPEC ...] [--qemu-arg ARG ...]
  *           [--timeout S] [--steptmo S] [--grace S] [--ok TOKEN]
- *           [--never TEXT ...] [--must-exit] [--log FILE] [--stamp FILE]
+ *           [--never TEXT ...] [--must-exit] [--log FILE]
  *           [--no-debug-exit] [STEP ...]
  *   harness --bios [OPTION ...] [STEP ...]
  *   harness --selftest
@@ -32,9 +32,8 @@
  *   set's deadline factor. --grace is how long the output is read after the
  *   last step, 3 seconds unless given. --ok TOKEN decides the run by that
  *   serial token instead of the guest's exit status. --log keeps the console
- *   in FILE, --stamp appends the times the runner calibrates with, and
- *   --no-debug-exit leaves the isa-debug-exit device out. --net and --device
- *   default to QEMU's user network on an rtl8139.
+ *   in FILE, and --no-debug-exit leaves the isa-debug-exit device out. --net
+ *   and --device default to QEMU's user network on an rtl8139.
  *
  *   --must-exit fails the run unless QEMU ended by itself, by exiting,
  *   before the deadline. It is what tells a machine that restarted or halted
@@ -117,9 +116,9 @@
  * Exit status: 0 when the run passed; 1 when it failed, which is a step
  * that failed, a --never text seen, a --must-exit machine that did not end
  * itself, an --ok token not seen, or a guest status other than 0; 2 for a
- * usage error, a pattern the matcher refuses, a stamp file that cannot be
- * opened, or pipes or a fork for QEMU that could not be made; 3 when, with
- * no --ok, QEMU never exited by itself, which is a hang.
+ * usage error, a pattern the matcher refuses, or pipes or a fork for QEMU
+ * that could not be made; 3 when, with no --ok, QEMU never exited by
+ * itself, which is a hang.
  *
  * With no --ok token the status is read off the last of the kernel's
  * "process: exited with status N" records, which `sys_exit` emits only where
@@ -956,21 +955,9 @@ static void begin_input(void)
    options are read. */
 static double steptmo = 15.0;
 
-/* The stamp file: `MATCH N SECONDS` for each `expect=` matched and
-   `SEND N SECONDS` for each `send=`, N the step's number and SECONDS the
-   host's monotonic clock, for the runner's calibration. */
-static FILE *stampf;
+/* The number of the current step, counted from 1, for the report of a
+   failed step. */
 static int step_number;
-
-/** Write the line `WHAT N SECONDS` for the current step to the stamp file,
- * if there is one. */
-static void stamp(const char *what)
-{
-    if (stampf != NULL) {
-        fprintf(stampf, "%s %d %.3f\n", what, step_number, now());
-        fflush(stampf);
-    }
-}
 
 /* The failed steps so far, when the current step began, and the file
    `step_fail` reports on in place of standard error, or NULL. */
@@ -1125,8 +1112,8 @@ static int seen_pattern(const char *pattern)
 }
 
 /**
- * Run an `expect=`, `boot=` or `seen=` step, and stamp it when it matched or
- * report it when it did not.
+ * Run an `expect=`, `boot=` or `seen=` step, and report it when it did not
+ * match.
  */
 static void wait_step(const char *step)
 {
@@ -1134,8 +1121,6 @@ static void wait_step(const char *step)
 
     if (!got)
         step_fail(step);
-    else
-        stamp("MATCH");
     trace("step %s %s consumed=%lu", step, got ? "ok" : "fail", (unsigned long)consumed);
 }
 
@@ -2230,7 +2215,6 @@ int main(int argc, char **argv)
     int n_drives = 0, n_qemu = 0, n_steps = 0;
     double timeout = 60.0, grace = 3.0;
     int no_debug_exit = 0, must_exit = 0;
-    const char *stamp_path = NULL;
     /* Each --drive takes two words of QEMU's command line. */
     char *qemu[MAX_ARGS * 4];
     int nq = 0, i;
@@ -2261,7 +2245,6 @@ int main(int argc, char **argv)
         OPT("--device", device)
         OPT("--log", log)
         OPT("--ok", ok)
-        OPT("--stamp", stamp_path)
 #undef OPT
         if (strcmp(arg, "--never") == 0 && i + 1 < argc) {
             if (n_never >= MAX_ARGS)
@@ -2401,14 +2384,6 @@ int main(int argc, char **argv)
         tracef = fopen(trace_path, "w");
     if (log != NULL)
         logf = fopen(log, "wb");
-    if (stamp_path != NULL) {
-        stampf = fopen(stamp_path, "a");
-        if (stampf == NULL) {
-            fprintf(stderr, "HARNESS: cannot write the stamp file %s: %s\n", stamp_path,
-                    strerror(errno));
-            return 2;
-        }
-    }
     deadline_factor_read();
     timeout = scaled(timeout);
     steptmo = scaled(steptmo);
@@ -2454,7 +2429,6 @@ int main(int argc, char **argv)
         if (is_expect_step(step) || strncmp(step, "seen=", 5) == 0) {
             wait_step(step);
         } else if (strncmp(step, "send=", 5) == 0) {
-            stamp("SEND");
             if (!send_line(step + 5)) {
                 fprintf(stderr, "HARNESS: step '%s' did not reach the guest\n", step);
                 step_fail(step);
