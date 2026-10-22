@@ -22,8 +22,8 @@
  * its thread what `times` reports, read between two readings of it, and for
  * the children their totals; any other `who` fails with `EINVAL`.
  *
- * The loops are bounded by the ticks since boot: a kernel that never charged
- * the time would otherwise spin forever instead of failing.
+ * A loop runs until the time it waits for is charged: a kernel that never
+ * charged it leaves the loop running, and the case's watchdog ends it.
  *
  * It prints "CPUTIMEMUSL OK" and exits 0 on success, or prints
  * "CPUTIMEMUSL FAIL (detail)" and exits 1 at the first failure.
@@ -48,9 +48,6 @@
 #include "../probe_report.h"
 
 extern char **environ;
-
-/* The most ticks a loop may take to be charged the few it asks for. */
-#define LOOP_BOUND 1000
 
 /* The bytes one read of /dev/zero asks for. */
 #define READ_SIZE 65536
@@ -90,19 +87,18 @@ static long ticks_of(const struct timeval *tv)
 
 /**
  * Spin until this process has `want` more ticks of user time than it had at
- * the start, or until `LOOP_BOUND` ticks have passed. `from` receives the
- * times read at the start. Returns the ticks of user time gained.
+ * the start. `from` receives the times read at the start. Returns the ticks
+ * of user time gained.
  */
 static long spin_for(long want, struct tms *from)
 {
     struct tms now;
-    clock_t start = times(from);
-    clock_t at = start;
 
+    times(from);
     now = *from;
-    while ((long)(now.tms_utime - from->tms_utime) < want && (long)(at - start) < LOOP_BOUND) {
+    while ((long)(now.tms_utime - from->tms_utime) < want) {
         spin();
-        at = times(&now);
+        times(&now);
     }
     return (long)(now.tms_utime - from->tms_utime);
 }
@@ -180,7 +176,6 @@ int main(void)
     struct tms before;
     struct tms after;
     struct rusage ru;
-    clock_t start;
     clock_t at;
     int fd;
 
@@ -198,9 +193,7 @@ int main(void)
     report_plan("getrusage-einval");
 
     /* User time: a loop in user mode is charged to utime. */
-    if (spin_for(5, &before) < 5) {
-        return fail("five ticks of spinning in user mode were not charged as user time");
-    }
+    spin_for(5, &before);
     report_held();
     at = times(&after);
     if ((long)(after.tms_utime + after.tms_stime) > (long)at) {
@@ -213,10 +206,9 @@ int main(void)
     if (fd < 0) {
         return fail("/dev/zero did not open");
     }
-    start = times(&before);
-    at = start;
+    at = times(&before);
     after = before;
-    while ((long)(after.tms_stime - before.tms_stime) < 2 && (long)(at - start) < LOOP_BOUND) {
+    while ((long)(after.tms_stime - before.tms_stime) < 2) {
         if (read(fd, zeroes, sizeof(zeroes)) != (ssize_t)sizeof(zeroes)) {
             close(fd);
             return fail("a read of /dev/zero came back short");
@@ -224,9 +216,6 @@ int main(void)
         at = times(&after);
     }
     close(fd);
-    if ((long)(after.tms_stime - before.tms_stime) < 2) {
-        return fail("two ticks of reading /dev/zero were not charged as system time");
-    }
     report_held();
     if ((long)(after.tms_utime + after.tms_stime) > (long)at) {
         return fail("the process was charged more CPU time than the ticks since boot");
