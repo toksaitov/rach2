@@ -264,7 +264,7 @@ static void stop(struct sealed *s)
 }
 
 /** Reset the machine from inside, after a sync, which ends the boot. */
-static void reboot(struct sealed *s)
+static void restart(struct sealed *s)
 {
     stop_with(s, "sync; reboot -f");
 }
@@ -528,7 +528,7 @@ static void update(struct sealed *s)
                "the refused commit disarmed the trial: %s",
                line_of(&r, "next_entry:", line, sizeof(line)));
     net_run_free(&r);
-    reboot(s);
+    restart(s);
 
     up(s);
     net_assert(&s->u, "trial-marked", console_has(s, MARK),
@@ -553,7 +553,7 @@ static void update(struct sealed *s)
     net_assert(&s->u, "fallback-armed", printed(&r, "armed: the next boot tries fallback"),
                "the fallback trial was not armed: %s", said(&r, line, sizeof(line)));
     net_run_free(&r);
-    reboot(s);
+    restart(s);
 
     up(s);
     ask(s, "bootctl status", "status", &r);
@@ -604,7 +604,7 @@ static void destroyed(struct sealed *s, long cand)
     net_assert(&s->u, "repair-installed", printed(&r, "installed:*candidate slot"),
                "the repair install did not report success: %s", said(&r, line, sizeof(line)));
     net_run_free(&r);
-    reboot(s);
+    restart(s);
 
     up(s);
     ask(s, "bootctl status", "status", &r);
@@ -845,7 +845,7 @@ static void menu(struct sealed *s)
     net_assert(&s->u, "menu-staged", printed(&r, "staged:*menu in a"), "the menu did not stage: %s",
                said(&r, line, sizeof(line)));
     net_run_free(&r);
-    reboot(s);
+    restart(s);
     up(s);
     net_assert(&s->u, "menu-shown", console_has(s, "sealedone"),
                "the staged entry never reached the menu");
