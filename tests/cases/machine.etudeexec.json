@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.etudeexec",
+  "summary": "Rach2 builds etude by its TinyCC recipe, and the POSIX executor, built the same way, passes its test there; the scenario is machine/etudeexec_scenario.c and the script it runs on Rach2 machine/etudeexec_guest.sh",
+  "cases": [
+    {
+      "case_id": "machine.etudeexec.build",
+      "behavior": "os-real, booted with a second disk that is a tar archive of etude's source, the executor's test and the files they need, unpacks it into a tmpfs as root, and there etude's version.sh builds a version by the TinyCC recipe and then reuses it, the version's record names the platform rach2 and the recipe's -D__rach2__, the built casecheck --selftest and history_check pass, and the executor's test, compiled with the version's compiler and flags, passes with every row run, the subreaper's among them, while no etude program asks for a system call the kernel lacks",
+      "units": ["etudeexec"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"archive": "tools/etude, utils/sha256.c and .h, tests/host/etude_exec_hosttest.c, its compat files, tests/auxvprobe.c and tests/cases/machine/etudeexec_guest.sh", "unpacked": "/tmp/etudeexec, a tmpfs", "script": "sh /tmp/etudeexec/tests/cases/machine/etudeexec_guest.sh /tmp/etudeexec"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "etudeexec_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["etudeexec-disk", "etude-archive"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copies and the evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "rach2", "does": "boot a copy of the os-real disk, with the archive as the second disk, to the console's login prompt"},
+        {"step_id": "login", "stage": "execute", "machine": "rach2", "does": "log in at the console as root with the demo password"},
+        {"step_id": "unpack", "stage": "execute", "machine": "rach2", "does": "mount a tmpfs at /tmp/etudeexec and unpack the archive there from /dev/disk1 with tar"},
+        {"step_id": "build", "stage": "execute", "machine": "rach2", "does": "run etudeexec_guest.sh from the archive, read its results and the boot's trace of missing system calls, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "rach2", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["etudeexec-disk", "etude-archive"], "cpu": "max", "processors": 1, "memory_bytes": 536870912, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk", "rach2.trace=enosys"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "login", "checks": "root logs in at the console with the demo password and its shell prompts", "source": "scenario"},
+        {"assertion_id": "unpacked", "checks": "tar unpacks the archive from the raw second disk into a tmpfs", "source": "scenario"},
+        {"assertion_id": "built", "checks": "version.sh -l builds a version of the unpacked source with the TinyCC recipe", "source": "scenario"},
+        {"assertion_id": "reused", "checks": "a second version.sh -l reuses the version it built, with the same key", "source": "scenario"},
+        {"assertion_id": "platform", "checks": "the version's record names the platform rach2 and the machine's architecture", "source": "scenario"},
+        {"assertion_id": "recipe", "checks": "the version's record gives the recipe's flags with -D__rach2__", "source": "scenario"},
+        {"assertion_id": "casecheck", "checks": "the version's casecheck --selftest passes on etude's fixtures", "source": "scenario"},
+        {"assertion_id": "history", "checks": "the version's history_check accepts the whole example history", "source": "scenario"},
+        {"assertion_id": "history-lost", "checks": "history_check exits 2 for the example history with its last record cut", "source": "scenario"},
+        {"assertion_id": "compile", "checks": "the version's compiler and flags, with the test's own host-deps and host-cflags, build the executor's test", "source": "scenario"},
+        {"assertion_id": "executor", "checks": "the executor's test exits 0, says that it passed, and names no row it did not run, the subreaper's among them", "source": "scenario"},
+        {"assertion_id": "enosys", "checks": "the boot's trace names no system call the kernel lacks that execcheck, casecheck or history_check asked for", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4},
+        {"witness_id": "guest", "kind": "quiet", "means": "etudeexec_guest.sh has built etude and run the executor's test on Rach2", "limit": 1, "bound": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 7200000000}, "gap": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 805306368, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etudeexec-disk", "node": "images/etudeexec-test.disk", "per_architecture": true},
+        {"name": "etude-archive", "node": "tests/cases/machine/etudeexec/etude.tar", "per_architecture": false},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "etudeexec_scenario", "node": "tests/cases/machine/etudeexec_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case reads the archive of etude's source from a raw second disk of the machine, which an installed machine does not have"}
+    }
+  ]
+}

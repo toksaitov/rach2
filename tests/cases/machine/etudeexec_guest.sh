@@ -5,11 +5,11 @@
 #
 # Usage: sh etudeexec_guest.sh DIR
 #
-# The etudeexec suite unpacks the files the build and the test need into DIR,
-# laid out as the repository is, and runs this script there as root. Each
-# result is a line `etudeexec: NAME: ok` or `etudeexec: NAME: fail: WHY`, and
-# the last line is `etudeexec: end`. The version's cache and the test's
-# scratch are under DIR.
+# The scenario of the etudeexec case (etudeexec_scenario.c) unpacks the files
+# the build and the test need into DIR, laid out as the repository is, and
+# runs this script there as root. Each result is a line `etudeexec: NAME: ok`
+# or `etudeexec: NAME: fail: WHY`, and the last line is `etudeexec: end`. The
+# version's cache and the test's scratch are under DIR.
 set -u
 
 dir=$1

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "proof": "etudeexec",
+  "summary": "the case machine.etudeexec.build on i686, through tests/run etudeexec, against an archive whose POSIX adapter does not choose its Linux interfaces on Rach2, whose keeper is never made a subreaper there, and whose recipe's flags lack -D__rach2__; each fault changes only what Rach2 builds",
+  "tree": "shared",
+  "sources": [
+    "tools/etude/posix/process.c",
+    "tools/etude/bootstrap.sh"
+  ],
+  "artifacts": [
+    "${WORK}/etude.tar"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 sh tests/proofs/guest.sh make build/tests/cases/machine/etudeexec/etude.tar && cp build/tests/cases/machine/etudeexec/etude.tar ${WORK}/etude.tar"
+    ],
+    "bound_s": 600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "ARCH=i686 exec sh tests/proofs/guest.sh run etudeexec 'run: etudeexec: PASS'"
+    ],
+    "bound_s": 7200
+  },
+  "faults": [
+    {
+      "name": "adapter",
+      "summary": "the POSIX adapter's Linux interfaces not chosen on Rach2, so that a process has no known start there",
+      "edits": [
+        {
+          "file": "tools/etude/posix/process.c",
+          "find": "#if defined(__linux__) || defined(__rach2__)\n#define ETUDE_PROC_LINUX 1",
+          "replace": "#if defined(__linux__)\n#define ETUDE_PROC_LINUX 1"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: etudeexec: FAIL",
+          "assert executor fail"
+        ]
+      }
+    },
+    {
+      "name": "subreaper",
+      "summary": "the keeper never made a subreaper on Rach2, while the host's executor keeps its own",
+      "edits": [
+        {
+          "file": "tools/etude/posix/process.c",
+          "find": "    return prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);",
+          "replace": "#if defined(__rach2__)\n    return -1;\n#else\n    return prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);\n#endif"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: etudeexec: FAIL",
+          "assert executor fail"
+        ]
+      }
+    },
+    {
+      "name": "recipe",
+      "summary": "the recipe's flags for Rach2 lack -D__rach2__",
+      "edits": [
+        {
+          "file": "tools/etude/bootstrap.sh",
+          "find": "            flags='-std=c99 -static -D__rach2__' ;;",
+          "replace": "            flags='-std=c99 -static' ;;"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: etudeexec: FAIL",
+          "assert recipe fail",
+          "assert executor fail"
+        ]
+      }
+    }
+  ]
+}

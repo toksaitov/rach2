@@ -91,8 +91,6 @@ HARNESS         = build/tests/system/harness
 RUNTESTS        = build/tests/system/runtests
 PTYDRIVE        = build/tests/system/ptydrive
 RUNUTIL         = build/tests/system/runutil
-# The driver of etude-guest over the serial console (its rule below).
-ETUDESERIAL     = build/tests/system/etudeserial
 # The reader of a framebuffer console's text off QEMU's screen dump, which
 # the uefi cases run (tests/system/runner/screentext.c), with the kernel's
 # own font compiled beside it.
@@ -155,12 +153,6 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 $(RUNUTIL): tests/system/runner/runutil.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
-# The driver of etude-guest (tests/system/runner/etudeserial.c), with the
-# frame codec that etude-guest itself is built with.
-$(ETUDESERIAL): tests/system/runner/etudeserial.c tools/etude/guest/wire.c utils/sha256.c \
-                tools/etude/guest/wire.h tools/etude/include/etude/frame.h utils/sha256.h
-	@mkdir -p $(dir $@)
-	$(HOST_LINK) -I tools/etude/guest -I tools/etude/include -I utils
 # `tests/run default`: every guest probe, each in a boot of its own on the
 # test image. They are the cases of tests/cases/guest.default.json, which
 # etude runs, and have no target here: guest cases that run under etude-guest,
@@ -169,29 +161,41 @@ $(ETUDESERIAL): tests/system/runner/etudeserial.c tools/etude/guest/wire.c utils
 # tests/system/runner/runtests.c, which boots the probes in one machine, is
 # kept for the proofs of tests/system/default_probe.sh.
 # `tests/run etudeguest`: etude-guest on the test image's serial console, as
-# the debug shell's designated init, without the debug-exit port. The driver
-# stores the image's /hello and /ish without a transfer and utils' `yes` with
-# one, and requires a pass, an intended failure, a repeated command answered
-# by the same events, a cancellation that leaves no process, and an exec
-# whose exit the kernel records as the designated init's.
-run-etudeguest: rach2 test-image utils $(ETUDESERIAL)
-	$(ETUDESERIAL) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --hello $(ARCH_BUILD)/tests/hello --ish $(ARCH_BUILD)/ish/ish \
-	    --yes $(ARCH_BUILD)/utils/yes --log $(IMAGES_DIR)/etudeguest-test.log
+# the debug shell's designated init, without the debug-exit port. It is the
+# case of tests/cases/machine.etudeguest.json, which etude runs, and has no
+# target here: its scenario speaks etude's frames to etude-guest one at a
+# time, stores the image's /hello and /ish without a transfer and utils' `yes`
+# with one, and requires a pass, an intended failure, a repeated command
+# answered by the same events, a cancellation that leaves no process, and an
+# exec whose exit the kernel records as the designated init's.
 # `tests/run etudeexec`: Rach2 builds etude by its TinyCC recipe, and the POSIX
-# executor, built the same way, passes its test there. Boots os-real from a
-# disk with a second disk that is a tar archive of etude's source and the
-# executor's test, and requires a built and then a reused version, the built
+# executor, built the same way, passes its test there. It is the case of
+# tests/cases/machine.etudeexec.json, which etude runs, and has no target
+# here: it boots os-real from ETUDEEXEC_DISK with ETUDEEXEC_ARCHIVE as its
+# second disk, a tar archive of etude's source, the executor's test and the
+# files they need, and requires a built and then a reused version, the built
 # casecheck and history_check to pass, and every row of the executor's test,
-# the subreaper's among them, to run and pass. ETUDEEXEC_TREE, empty but in
-# tests/system/etudeexec_mutate.sh, names a copy of the files to archive.
-ETUDEEXEC_TEST_DISK = $(IMAGES_DIR)/etudeexec-test.disk
-ETUDEEXEC_TREE =
-run-etudeexec: $(DEMO_CREDS) rach2 krffs $(MANIFEST_PARTS_os_real)
-	@mkdir -p $(IMAGES_DIR)
-	$(MKDISK) krffs/manifests/os-real.manifest $(ETUDEEXEC_TEST_DISK) 64 48
-	sh tests/system/suites/etudeexec.sh $(BOOT_KERNEL) $(ETUDEEXEC_TEST_DISK) \
-	    "`cat krffs/rach2_demo_password`" "$(ETUDEEXEC_TREE)"
+# the subreaper's among them, to run and pass. The archive's files are copied
+# with one fixed time and archived in the order of their names, so that the
+# same sources make the same bytes.
+ETUDEEXEC_DISK = $(IMAGES_DIR)/etudeexec-test.disk
+ETUDEEXEC_ARCHIVE = $(CASE_DIR)/etudeexec/etude.tar
+ETUDEEXEC_FILES = $(shell find tools/etude -type f) utils/sha256.c utils/sha256.h \
+                  tests/host/etude_exec_hosttest.c tests/host/compat/fixdir_host.c \
+                  tests/host/compat/fixdir_host.h tests/host/compat/pathmax_host.h \
+                  tests/auxvprobe.c tests/cases/machine/etudeexec_guest.sh
+$(ETUDEEXEC_DISK): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
+                   $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+$(ETUDEEXEC_ARCHIVE): $(ETUDEEXEC_FILES)
+	@mkdir -p $(@D)
+	rm -rf $@.d $@.list && mkdir $@.d
+	tar -cf - $(ETUDEEXEC_FILES) | (cd $@.d && tar -xf -)
+	find $@.d -exec touch -t 200001010000 {} +
+	(cd $@.d && find . -type f | LC_ALL=C sort) > $@.list
+	(cd $@.d && tar -cf - -T $(CURDIR)/$@.list) > $@.tmp
+	rm -rf $@.d $@.list
+	mv $@.tmp $@
 # Everything every suite needs, in one target, so `tests/run all` can build once
 # through one Make and then run the suites at the same time. Two suites each
 # invoking their own build would be two Makes against one `build/` tree; with
@@ -211,7 +215,7 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
             ports/doom rach2 rach2-metal rach2-recovery tests tools/etude/guest utils
 
 prepare-images: $(DEMO_CREDS) $(BINFIND) $(CASECHECK) $(DEADLINE) $(ELFCHECK) $(ETUDEHOST) $(ETUDELEGACY) \
-                $(ETUDELINES) $(ETUDESERIAL) $(HARNESS) \
+                $(ETUDELINES) $(HARNESS) \
                 $(HOSTPEER) $(MKFIXTURE) $(MKGPT) $(MKMBR) $(PCAPCHECK) $(PTYDRIVE) $(RUNTESTS) \
                 $(RUNUTIL) $(SCREENTEXT) $(SHA256TOOL) $(WAVCHECK) $(GROWSET) os-real-image \
                 os-simple-image rach2-metal-image rach2-recovery-image $(SEALED_DISK) test-image \

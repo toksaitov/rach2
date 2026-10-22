@@ -659,7 +659,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
 # programs, the same for both architectures, which a case's `prepare` names
 # as tests/cases/machine/NAME. The lifecycle scenarios, and those of the
 # audio, Doom, krffsmount, loop device, mount, partition, disk arrangement,
-# console, boot line and selfbuild cases, also link
+# console, boot line, selfbuild and etude cases, also link
 # tests/cases/machine/lifecycle.c, which they share.
 LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/bootline_scenario \
@@ -672,6 +672,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/default_scenario \
                       build/tests/cases/machine/disks_scenario \
                       build/tests/cases/machine/doom_scenario \
+                      build/tests/cases/machine/etudeexec_scenario \
                       build/tests/cases/machine/exitline_scenario \
                       build/tests/cases/machine/ext2_scenario \
                       build/tests/cases/machine/fswrite_scenario \
@@ -690,7 +691,10 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
                  build/tests/cases/machine/diskdiag_scenario \
                  build/tests/cases/machine/diskrate_scenario
-MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS)
+# The etudeguest case's scenario also reads and writes etude-guest's frames
+# with the codec of tools/etude/guest/wire.c, which libetude-case has.
+ETUDEGUEST_SCENARIO = build/tests/cases/machine/etudeguest_scenario
+MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS) $(ETUDEGUEST_SCENARIO)
 # A file of tests/native that the native run of a case stages, which the
 # case's prepare names as tests/native/NAME.
 build/tests/native/%: tests/native/%
@@ -707,6 +711,13 @@ $(LIFECYCLE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
 	    -Itools/etude/posix -Iutils
+$(ETUDEGUEST_SCENARIO): build/tests/cases/machine/%: tests/cases/machine/%.c \
+                        tests/cases/machine/lifecycle.c tests/cases/machine/lifecycle.h \
+                        tools/etude/guest/wire.h tools/etude/include/etude/frame.h \
+                        $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Itools/etude/guest -Iutils
 $(DISK_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
                    $(ETUDE_CASE_LIB_SRC) $(ETUDE_CASE_LIB_HDRS)
 	@mkdir -p $(@D)
@@ -1543,7 +1554,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
-             $(ETUDELEDGER) $(PECHECK) $(ETUDESERIAL) $(ETUDELEGACY) $(ETUDENATIVE) \
+             $(ETUDELEDGER) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer

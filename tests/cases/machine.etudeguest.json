@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.etudeguest",
+  "summary": "etude-guest on the test image's serial console, as the debug shell's designated init, without the debug-exit port; the scenario is machine/etudeguest_scenario.c, which speaks etude's frames to it one at a time",
+  "cases": [
+    {
+      "case_id": "machine.etudeguest.serial",
+      "behavior": "etude-guest started from the debug shell answers hello over the serial console within its frame bound, stores the image's /hello and /ish without a transfer and utils' yes with one, runs a pass, answers the same run command again with the same events and refuses its number with other fields, runs an intended failure, stops a cancelled program and leaves no process of it, reads its end again for status, and execs a program in its own place, whose exit the kernel records as the designated init's",
+      "units": ["etudeguest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /etude-guest --stage / --resend-ms 1000", "session": "e7de5e5510000001", "stored": "/hello and /ish from the stage, yes in data frames of 72 bytes", "pass": "hello", "failure": "ish -c 'exit 3'", "cancelled": "yes", "init": "ish -c 'exit 5'"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "etudeguest_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell"},
+        {"step_id": "session", "stage": "execute", "machine": "guest", "does": "exec etude-guest at the debug shell, wait for its alive frame and open the session with hello"},
+        {"step_id": "files", "stage": "execute", "machine": "guest", "does": "store /hello and /ish from etude-guest's stage with put and seal, and yes with put, data frames and seal"},
+        {"step_id": "runs", "stage": "execute", "machine": "guest", "does": "run hello, send its run command again, and again with another attempt; run ish -c 'exit 3'; run yes, cancel it after its first output and ask status of it"},
+        {"step_id": "init", "stage": "execute", "machine": "guest", "does": "exec ish -c 'exit 5' in etude-guest's place, wait for the kernel's record that hands the shell back and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "alive", "checks": "etude-guest, started at the debug shell, writes its alive frame on the console", "source": "scenario"},
+        {"assertion_id": "ready", "checks": "hello is answered by ready, which gives the serial frame bound of 255 bytes and the PID that alive gave", "source": "scenario"},
+        {"assertion_id": "staged-hello", "checks": "the image's /hello is stored from the stage without a transfer, and stored gives the SHA-256 of the host's copy", "source": "scenario"},
+        {"assertion_id": "staged-ish", "checks": "the image's /ish is stored from the stage without a transfer, and stored gives the SHA-256 of the host's copy", "source": "scenario"},
+        {"assertion_id": "transfer", "checks": "yes, which the image lacks, is sent in data frames and stored with the SHA-256 of the host's copy, checked on Rach2", "source": "scenario"},
+        {"assertion_id": "pass", "checks": "hello run as an attempt prints Hello from ELF!, exits with status 0, and every process of it is confirmed gone", "source": "scenario"},
+        {"assertion_id": "stream", "checks": "the pass's stream for descriptor 1 gives the size and SHA-256 of the output that came", "source": "scenario"},
+        {"assertion_id": "usage", "checks": "the pass's usage gives the processor time and the peak size, each a number or -, each with its method", "source": "scenario"},
+        {"assertion_id": "repeat", "checks": "the same run command sent again is answered by the same events: the same PID and start, output and end", "source": "scenario"},
+        {"assertion_id": "conflict", "checks": "the run's command number sent with another attempt is refused with error conflict", "source": "scenario"},
+        {"assertion_id": "failure", "checks": "ish -c 'exit 3' exits with status 3, and every process of it is confirmed gone", "source": "scenario"},
+        {"assertion_id": "cancel", "checks": "yes, cancelled while it writes, is running when the cancel arrives, ends as stopped, and every process of it is confirmed gone", "source": "scenario"},
+        {"assertion_id": "status", "checks": "status of the cancelled attempt gives it cleaned, and then its exit as stopped, its two streams, its usage and its cleaned again", "source": "scenario"},
+        {"assertion_id": "exec-pid", "checks": "exec starts ish -c 'exit 5' in etude-guest's own process: started gives etude-guest's PID", "source": "scenario"},
+        {"assertion_id": "init-exit", "checks": "the kernel's record that hands the shell back says that the init process, etude-guest's PID, exited with status 5", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "hello", "node": "tests/hello", "per_architecture": true},
+        {"name": "ish", "node": "ish/ish", "per_architecture": true},
+        {"name": "yes", "node": "utils/yes", "per_architecture": true},
+        {"name": "etudeguest_scenario", "node": "tests/cases/machine/etudeguest_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "input", "reason": "the case types etude's frames at the console of a fresh boot, whose designated init etude-guest becomes, which a native run cannot"}
+    }
+  ]
+}
