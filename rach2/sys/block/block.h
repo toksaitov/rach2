@@ -303,9 +303,9 @@ struct block_request {
 /* The most any device may take in one request: 1 MiB, 256 pages of a heap
  * buffer described page by page to the controller. Each driver declares
  * its own limit within this one, and `block_max_sectors` caps it here: the
- * AHCI disk's limit is the whole 2048, an NVMe namespace's 8 times 2 to the
- * power of its controller's MDTS, at most 2048, the USB stick's 1024, and
- * the ATA disk's 64, since it moves a sector at a time through a port. */
+ * AHCI and ATA disks' limit is the whole 2048, which ATA moves in commands
+ * of 64, an NVMe namespace's 8 times 2 to the power of its controller's
+ * MDTS, at most 2048, and the USB stick's 1024. */
 #define BLOCK_REQ_MAX_SECTORS 2048u
 
 /** The most one request to `device` may move, in sectors: the

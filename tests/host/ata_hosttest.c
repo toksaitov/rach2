@@ -819,9 +819,13 @@ static void wait_bound_rows(struct ata_drive *d)
           "a DMA read still running after thirty seconds fails with a record");
 }
 
+static int bytes_equal(const uint8_t *a, const uint8_t *b, uint32_t count);
+
 /**
- * Check DMA writes of 512 bytes, 4 KiB, 32 KiB and across the bounce
- * buffer's end, in both address forms, LBA28 and LBA48.
+ * Check DMA writes of 512 bytes, 4 KiB, 32 KiB, across the bounce buffer's
+ * end and of four commands, in both address forms, LBA28 and LBA48: a data
+ * command per 32 KiB, and one cache flush for the whole write, after its
+ * last command.
  *
  * A DMA completes only while the caller sleeps, and a busy phase, a PIO
  * sector or a flush, after 512 status reads: a delayed completion modelled
@@ -830,8 +834,8 @@ static void wait_bound_rows(struct ata_drive *d)
  */
 static void write_rate_rows(struct ata_drive *d)
 {
-    static const uint32_t sizes[] = {1, 8, 64, 72};
-    static uint8_t data[72 * SECTOR];
+    static const uint32_t sizes[] = {1, 8, 64, 72, 200};
+    static uint8_t data[200 * SECTOR];
     uint32_t row, high, i, j, count, chunks;
     uint64_t lba;
     int rc;
@@ -858,9 +862,12 @@ static void write_rate_rows(struct ata_drive *d)
                   "a write leaves its neighbouring sectors unchanged");
             CHECK(dma_writes == chunks && pio_write_sectors == 0,
                   "a DMA write uses one data command per 32 KiB and no data-port sectors");
-            CHECK(commands == 2 * chunks && flushes == chunks,
-                  "each DMA write command has one cache flush");
-            CHECK(sleeps == (int)(2 * chunks), "a delayed write and its flush each sleep");
+            CHECK(commands == chunks + 1 && flushes == 1,
+                  "a DMA write has one cache flush, however many commands it takes");
+            CHECK(bytes_equal(durable[32], data, count * SECTOR),
+                  "a returned write is durable, its last command's sectors among them");
+            CHECK(sleeps == (int)(chunks + 1),
+                  "each command of a delayed write and its flush sleep");
             CHECK(status_reads <= 32 * chunks,
                   "a delayed write and flush use at most 32 status reads per 32 KiB");
             CHECK(refused == 0 && garbage_writes == 0 && channels[0].owner == 0,
@@ -1055,7 +1062,7 @@ int main(void)
     d->dev.sector_size = SECTOR;
     d->dev.sector_count = SECTORS;
     d->dev.flags = BLOCK_FAULT_SAFE;
-    d->dev.max_sectors = ATA_REQ_SECTORS;
+    d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
     d->dev.read = ata_read;
     d->dev.write = ata_write;
     d->dev.drvdata = d;

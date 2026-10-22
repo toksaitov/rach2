@@ -69,7 +69,7 @@ A directory is never an orphan: `rmdir` fails with `EBUSY` on one that a descrip
 
 The boot line chooses the root and how KRFFS reaches it ([../../Readme.md](../../Readme.md), [krffs.Readme.md](krffs.Readme.md)). `fsync` writes back the file's shared mappings (`filemap_sync_file`) and then calls the type's `fsync` through `vfs_fsync`, which flushes the disk's write cache after a type on a block device has written. A descriptor with no mount, a pipe or a device, writes the page cache.
 
-A KRFFS root on a disk partition is on no mount's device, so no `fsync`, `sync` or `reboot(2)` calls `block_flush` for it. Its pages leave through the disk driver's polled `write`, which returns only when they are on the medium: ATA and AHCI follow each write command with a cache flush, and NVMe sends the write with force unit access, flushing too while the disk has writes answered unflushed ([../block/Readme.md](../block/Readme.md)).
+A KRFFS root on a disk partition is on no mount's device, so no `fsync`, `sync` or `reboot(2)` calls `block_flush` for it. Its pages leave through the disk driver's polled `write`, which returns only when they are on the medium: ATA and AHCI end each write with a cache flush, and NVMe sends the write with force unit access, flushing too while the disk has writes answered unflushed ([../block/Readme.md](../block/Readme.md)).
 
 | Where the file is | What `fsync` writes | Disk cache flushed | Survives a reboot |
 | --- | --- | --- | --- |

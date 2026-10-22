@@ -11,17 +11,20 @@
  * device and registered with the disk registry; the first found becomes
  * `block0`, unless another driver has already published one. Transfers are
  * `READ DMA` and `WRITE DMA` through the controller's bus master, one
- * command and one completion per request, where the controller has a bus
+ * command and one completion per 32 KiB, where the controller has a bus
  * master and the drive answers IDENTIFY with DMA; `READ SECTORS` and
  * `WRITE SECTORS` through the data port, a sector a time, where either is
  * missing. Both are in LBA28 when the sectors lie below 2^28 and in their
- * 48-bit forms above, on a drive that has them; a write is followed by a
- * cache flush.
+ * 48-bit forms above, on a drive that has them. A write of up to the block
+ * layer's mebibyte ends with one cache flush, after its last command: under
+ * an emulator each flush is a synchronous write of the disk's image file,
+ * which on a loaded host takes tens of milliseconds, so a write has one
+ * flush however many commands it takes.
  *
  * The bus master is the PIIX form: a physical region descriptor giving the
  * transfer's memory, its address in one register and its start bit in
  * another, and the drive's interrupt at the end. The memory is the channel's
- * own bounce buffer, one request's worth, aligned so it lies in one 64 KiB
+ * own bounce buffer, one command's worth, aligned so it lies in one 64 KiB
  * region as the bus master requires, and static, in the kernel image, so it
  * is physically contiguous and below 4 GiB. A caller's buffer is copied into
  * it before a write and out of it after a read, in the caller's own context:
@@ -76,11 +79,11 @@
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
 
-/* The most one request to the disk may move: 32 KiB, which is also the
- * bounce buffer's size, and which PIO moves a sector at a time through the
- * data port with interrupts off. A request is kept short here, where the AHCI
- * disk takes the block layer's whole limit. */
-#define ATA_REQ_SECTORS 64u
+/* The most one command moves: 32 KiB, which is also the bounce buffer's
+ * size, and which PIO moves a sector at a time through the data port with
+ * interrupts off. A request takes the block layer's whole limit, as the AHCI
+ * disk's does, and is moved in commands of this size. */
+#define ATA_CMD_SECTORS 64u
 
 /* Command-block registers, as offsets from the channel's command base. */
 #define ATA_REG_DATA     0 /* 16-bit data port */
@@ -130,7 +133,7 @@ struct ata_prd {
     uint16_t flags;
 };
 #define ATA_PRD_EOT       0x8000
-#define ATA_BOUNCE_BYTES  (ATA_REQ_SECTORS * BLOCK_SECTOR_SIZE)
+#define ATA_BOUNCE_BYTES  (ATA_CMD_SECTORS * BLOCK_SECTOR_SIZE)
 #define ATA_CMD_FLUSH     0xE7
 #define ATA_CMD_FLUSH_EXT 0xEA
 #define ATA_CMD_IDENTIFY  0xEC
@@ -150,8 +153,8 @@ void ata_set_io(const struct ata_io *ops)
     ata_io = ops ? ops : &ata_port_io;
 }
 
-/* One command moves at most 256 sectors: the legacy count register is
-   8-bit, with 0 meaning 256, and the 48-bit form is kept to the same. */
+/* The most a 28-bit command moves: the count register is 8-bit, with 0
+   meaning 256. This driver's commands are shorter (`ATA_CMD_SECTORS`). */
 #define ATA_MAX_SECTORS_PER_CMD 256
 #define ATA_WORDS_PER_SECTOR    (BLOCK_SECTOR_SIZE / 2)
 
@@ -599,7 +602,7 @@ static uint8_t ata_program(const struct ata_drive *d, uint64_t lba, uint32_t cou
  * one completion: a write's bytes from `src` copied into the bounce buffer
  * first, the descriptor written, the direction set, the command issued, the
  * engine started, the drive waited for, and a read's bytes copied out to
- * `dst` after. `count` is at most ATA_REQ_SECTORS, the bounce's size, and the
+ * `dst` after. `count` is at most ATA_CMD_SECTORS, the bounce's size, and the
  * caller owns the channel. Returns 0, `-EIO` for a transfer the drive or the
  * bus master reported failed, or for a read the disk policy does not allow,
  * and `-EPERM` for a write it does not allow.
@@ -622,7 +625,7 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
     uint8_t status;
     int rc;
 
-    if (count > ATA_REQ_SECTORS) {
+    if (count > ATA_CMD_SECTORS) {
         return -EIO;
     }
     if (write) {
@@ -661,10 +664,10 @@ static int ata_dma_transfer(struct ata_drive *d, uint64_t lba, uint32_t count, c
 }
 
 /**
- * Read `count` sectors at `lba` into `buffer`: through the bus master, a
- * bounce buffer's worth a command, when the drive does DMA and the caller
- * owns the channel (`owned`); through the data port, up to 256 sectors a
- * command, otherwise. Returns 0 or `-EIO`.
+ * Read `count` sectors at `lba` into `buffer`, in commands of at most
+ * `ATA_CMD_SECTORS`: through the bus master when the drive does DMA and the
+ * caller owns the channel (`owned`), and through the data port otherwise.
+ * Returns 0 or `-EIO`.
  *
  * The data port's sequence runs with interrupts off, whoever the caller is:
  * a command left in its data phase while another caller ran would hand that
@@ -677,16 +680,11 @@ static int ata_read_on(struct ata_drive *d, uint64_t lba, uint32_t count, void *
     uint32_t flags;
 
     while (count > 0) {
-        uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;
+        uint32_t chunk = count > ATA_CMD_SECTORS ? ATA_CMD_SECTORS : count;
         uint32_t i;
 
         if (d->dma && owned) {
-            int rc;
-
-            if (chunk > ATA_REQ_SECTORS) {
-                chunk = ATA_REQ_SECTORS;
-            }
-            rc = ata_dma_transfer(d, lba, chunk, NULL, out);
+            int rc = ata_dma_transfer(d, lba, chunk, NULL, out);
 
             if (rc != 0) {
                 return rc;
@@ -744,8 +742,10 @@ static int ata_read(block_device_t *device, uint64_t lba, uint32_t count, void *
 
 /**
  * Write `count` sectors at `lba` from `buffer` as `ata_read_on` reads them,
- * each command followed by a cache flush. Returns 0, `-EIO`, or `-EPERM`
- * when the disk policy does not allow the write or the flush.
+ * and then flush the drive's cache once, after the last command. Returns 0,
+ * `-EIO`, or `-EPERM` when the disk policy does not allow the write or the
+ * flush. A write that fails part way has had no flush, and promises nothing
+ * of the sectors it did move.
  *
  * The flush waits for the drive to be idle first, so a caller without the
  * channel flushes behind the owner's command and not into it; and it selects
@@ -759,16 +759,11 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
     uint32_t flags;
 
     while (count > 0) {
-        uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;
+        uint32_t chunk = count > ATA_CMD_SECTORS ? ATA_CMD_SECTORS : count;
         uint32_t i;
 
         if (d->dma && owned) {
-            int rc;
-
-            if (chunk > ATA_REQ_SECTORS) {
-                chunk = ATA_REQ_SECTORS;
-            }
-            rc = ata_dma_transfer(d, lba, chunk, in, NULL);
+            int rc = ata_dma_transfer(d, lba, chunk, in, NULL);
 
             if (rc != 0) {
                 return rc;
@@ -799,21 +794,21 @@ static int ata_write_on(struct ata_drive *d, uint64_t lba, uint32_t count, const
             }
             kirq_restore(flags);
         }
-        if (ata_wait_idle(ch) != 0) {
-            return -EIO;
-        }
-        ata_io->out8(ch->io + ATA_REG_DRIVE,
-                     (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
-        ata_settle(ch);
-        if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {
-            return -EPERM;
-        }
-        ata_settle(ch);
-        if (ata_wait_ready(ch) != 0) {
-            return -EIO;
-        }
         lba += chunk;
         count -= chunk;
+    }
+    if (ata_wait_idle(ch) != 0) {
+        return -EIO;
+    }
+    ata_io->out8(ch->io + ATA_REG_DRIVE,
+                 (uint8_t)(ATA_DRIVE_SELECT | (d->slave ? ATA_DRIVE_SLAVE : 0)));
+    ata_settle(ch);
+    if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {
+        return -EPERM;
+    }
+    ata_settle(ch);
+    if (ata_wait_ready(ch) != 0) {
+        return -EIO;
     }
     return 0;
 }
@@ -1004,7 +999,7 @@ int ata_init(void)
             d->dev.sector_size = BLOCK_SECTOR_SIZE;
             d->dev.sector_count = d->sectors;
             d->dev.flags = BLOCK_FAULT_SAFE;
-            d->dev.max_sectors = ATA_REQ_SECTORS;
+            d->dev.max_sectors = BLOCK_REQ_MAX_SECTORS;
             d->dev.read = ata_read;
             d->dev.write = ata_write;
             d->dev.drvdata = d;

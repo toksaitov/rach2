@@ -31,8 +31,8 @@
       "edits": [
         {
           "file": "rach2/sys/block/ata.c",
-          "find": "    uint32_t flags;\n\n    while (count > 0) {\n        uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;\n        uint32_t i;\n\n        if (d->dma && owned) {\n            int rc;\n\n            if (chunk > ATA_REQ_SECTORS) {\n                chunk = ATA_REQ_SECTORS;\n            }\n            rc = ata_dma_transfer(d, lba, chunk, in, NULL);\n",
-          "replace": "    uint32_t flags;\n\n    while (count > 0) {\n        uint32_t chunk = (count > ATA_MAX_SECTORS_PER_CMD) ? ATA_MAX_SECTORS_PER_CMD : count;\n        uint32_t i;\n\n        if (0 && d->dma && owned) {\n            int rc;\n\n            if (chunk > ATA_REQ_SECTORS) {\n                chunk = ATA_REQ_SECTORS;\n            }\n            rc = ata_dma_transfer(d, lba, chunk, in, NULL);\n"
+          "find": "    uint32_t flags;\n\n    while (count > 0) {\n        uint32_t chunk = count > ATA_CMD_SECTORS ? ATA_CMD_SECTORS : count;\n        uint32_t i;\n\n        if (d->dma && owned) {\n            int rc = ata_dma_transfer(d, lba, chunk, in, NULL);\n",
+          "replace": "    uint32_t flags;\n\n    while (count > 0) {\n        uint32_t chunk = count > ATA_CMD_SECTORS ? ATA_CMD_SECTORS : count;\n        uint32_t i;\n\n        if (0 && d->dma && owned) {\n            int rc = ata_dma_transfer(d, lba, chunk, in, NULL);\n"
         }
       ],
       "fails": {

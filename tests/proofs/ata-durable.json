@@ -31,8 +31,8 @@
       "edits": [
         {
           "file": "rach2/sys/block/ata.c",
-          "find": "        if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {\n",
-          "replace": "        if (0) {\n"
+          "find": "    if (!ata_command(ch, d->lba48 ? ATA_CMD_FLUSH_EXT : ATA_CMD_FLUSH)) {\n",
+          "replace": "    if (0) {\n"
         }
       ],
       "fails": {
@@ -48,8 +48,8 @@
       "edits": [
         {
           "file": "rach2/sys/block/ata.c",
-          "find": "        ata_settle(ch);\n        if (ata_wait_ready(ch) != 0) {\n",
-          "replace": "        ata_settle(ch);\n        if (0) {\n"
+          "find": "    ata_settle(ch);\n    if (ata_wait_ready(ch) != 0) {\n",
+          "replace": "    ata_settle(ch);\n    if (0) {\n"
         }
       ],
       "fails": {
