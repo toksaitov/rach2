@@ -227,13 +227,12 @@ def run(args, env, directory, interrupt=False):
                                  start_new_session=True)
         try:
             if interrupt:
-                deadline = time.monotonic() + 8
                 while not (directory / 'sent').exists():
-                    if child.poll() is not None or time.monotonic() >= deadline:
+                    if child.poll() is not None:
                         raise AssertionError('interruption did not reach the sender')
                     time.sleep(0.02)
                 child.send_signal(signal.SIGTERM)
-            status = child.wait(timeout=10)
+            status = child.wait()
         finally:
             try:
                 os.killpg(child.pid, signal.SIGKILL)

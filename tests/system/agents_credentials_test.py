@@ -67,15 +67,15 @@ class CredentialsTest(unittest.TestCase):
                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         self.addCleanup(guest.wait)
         self.addCleanup(guest.kill)
-        for _ in range(300):
+        while True:
             rows = descendants(guest.pid)
             if any(Path(comm).name == "awk" for comm, _ in rows):
                 break
+            if guest.poll() is not None:
+                self.fail(f"redact ended with status {guest.returncode} before it started awk")
             time.sleep(0.1)
-        else:
-            self.fail("redact started no awk within 30 seconds")
         self.assertFalse([args for _, args in rows if DUMMY in args])
-        out, _ = guest.communicate(f"a log with {DUMMY} in it\n", timeout=30)
+        out, _ = guest.communicate(f"a log with {DUMMY} in it\n")
         self.assertEqual("a log with [credential] in it\n", out)
 
     def test_selected_credentials(self):

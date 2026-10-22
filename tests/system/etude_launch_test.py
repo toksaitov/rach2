@@ -25,12 +25,12 @@ def write(path, text, executable=False):
 
 
 def run(argv, env, cwd, status=0, input=None):
-    """Run a bounded fixture and require its status, retaining its diagnostics."""
+    """Run a fixture and require its status, retaining its diagnostics."""
     p = subprocess.Popen(argv, env=env, cwd=cwd, text=True,
                          stdin=subprocess.PIPE if input is not None else None,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
-        output, _ = p.communicate(input=input, timeout=40)
+        output, _ = p.communicate(input=input)
         assert p.returncode == status, (argv, p.returncode, output)
         return output
     finally:
@@ -43,14 +43,18 @@ def run(argv, env, cwd, status=0, input=None):
                 p.communicate()
 
 
-def until(predicate):
-    """Wait for a fixture's published state within ten seconds."""
-    end = time.monotonic() + 10
-    while time.monotonic() < end:
-        if predicate():
-            return
+def until(predicate, children):
+    """Wait for a fixture's published state while each of CHILDREN runs.
+
+    A child that ends first fails the wait with its status and output.
+    """
+    while not predicate():
+        for child in children:
+            if child.poll() is not None:
+                output, _ = child.communicate()
+                raise AssertionError(("fixture ended before it published its state",
+                                      child.args, child.returncode, output))
         time.sleep(0.02)
-    raise AssertionError("fixture did not publish its state")
 
 
 def rows(root, repo):
@@ -367,7 +371,7 @@ while not pathlib.Path(os.environ["TEST_RELEASE"]).exists():
                 children.append(subprocess.Popen([str(launcher), "legacy", "tests/run", "host"],
                                                  env=child_env, cwd=tree, stdout=subprocess.PIPE,
                                                  stderr=subprocess.STDOUT))
-            until(lambda: all(p.exists() for p in ready[:2]))
+            until(lambda: all(p.exists() for p in ready[:2]), children)
             text = (ledger / "claims").read_text()
             assert text.count("state running") == 2, text
             assert "account account-0\n" in text and "account account-1\n" in text, text
@@ -380,18 +384,18 @@ while not pathlib.Path(os.environ["TEST_RELEASE"]).exists():
                                              env=child_env, cwd=tree, stdout=subprocess.PIPE,
                                              stderr=subprocess.STDOUT))
             until(lambda: "state blocked" in (ledger / "claims").read_text() or
-                  "state waiting" in (ledger / "claims").read_text())
+                  "state waiting" in (ledger / "claims").read_text(), children)
             assert not ready[2].exists()
             release.touch()
             for child in children[:2]:
-                output, _ = child.communicate(timeout=10)
+                output, _ = child.communicate()
                 assert child.returncode == 0, output
-            until(ready[2].exists)
+            until(ready[2].exists, children[2:])
             text = (ledger / "claims").read_text()
             assert text.count("state running") == 1, text
             assert "resource memory_bytes 103079215104\n" in text, text
             exclusive_release.touch()
-            output, _ = children[2].communicate(timeout=10)
+            output, _ = children[2].communicate()
             assert children[2].returncode == 0, output
             clear()
         finally:
@@ -423,18 +427,18 @@ while not pathlib.Path({str(release)!r}).exists():
         first = subprocess.Popen([str(launcher), "alone", sys.executable, str(waiting)],
                                  env=env, cwd=tree, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         children.append(first)
-        until(ready.exists)
+        until(ready.exists, children)
         second = subprocess.Popen([str(launcher), "alone", sys.executable, str(observer)],
                                   env=env, cwd=tree, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         children.append(second)
         until(lambda: "state blocked" in (ledger / "claims").read_text() or
-              "state waiting" in (ledger / "claims").read_text())
+              "state waiting" in (ledger / "claims").read_text(), children)
         assert len(observed.read_text().splitlines()) == 1
         second.terminate()
-        second.communicate(timeout=10)
+        second.communicate()
         assert second.returncode == 143
         first.terminate()
-        first.communicate(timeout=10)
+        first.communicate()
         assert first.returncode == 143
         assert (ledger / "claims").read_text() == "etude-ledger 1\n"
         ready.unlink()

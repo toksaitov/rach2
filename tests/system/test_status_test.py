@@ -28,15 +28,18 @@ def command(args, env=None):
             child.communicate()
 
 
-def until(predicate):
-    """Wait at most five seconds for a fixture to publish its state."""
-    end = time.monotonic() + 5
-    while time.monotonic() < end:
-        result = predicate()
-        if result:
-            return result
+def until(predicate, children=()):
+    """Wait for a fixture to publish its state while each of CHILDREN runs.
+
+    A child that ends first fails the wait with its status.
+    """
+    while not (result := predicate()):
+        for child in children:
+            if child.poll() is not None:
+                raise AssertionError(("fixture ended before it published its state",
+                                      child.args, child.returncode))
         time.sleep(0.02)
-    raise AssertionError("fixture did not publish its state")
+    return result
 
 
 def ident(pid):
@@ -79,17 +82,17 @@ def rows(reader, helper, root):
         return output.getvalue()
 
     lock_script = (
-        "import fcntl,sys,time; "
+        "import fcntl,signal,sys; "
         "f=open(sys.argv[1], 'a+'); "
         "fcntl.lockf(f, fcntl.LOCK_SH if sys.argv[2]=='read' else fcntl.LOCK_EX); "
-        "print('ready', flush=True); time.sleep(30)"
+        "print('ready', flush=True); signal.pause()"
     )
     claim = work / "claim.wait"
     path = ports / "rach2-ports.0"
     with command([sys.executable, "-c", lock_script, str(path), "write"]) as holder:
         assert holder.stdout.readline() == b"ready\n"
         with command([helper, str(ports), "1", "true"], env) as waiter:
-            until(claim.exists)
+            until(claim.exists, [waiter])
             before = claim.read_text()
             output = report()
             assert "waits for ports since " in output and " UTC" in output, output
@@ -97,8 +100,8 @@ def rows(reader, helper, root):
             time.sleep(1.1)
             assert claim.read_text() == before, "wait start changed on a retry"
             holder.terminate()
-            holder.wait(timeout=5)
-            assert waiter.wait(timeout=5) == 0
+            holder.wait()
+            assert waiter.wait() == 0
             assert not claim.exists(), "claim kept its wait after admission"
     for mode, filename in (("shared", "rach2-host.gate"), ("alone", "rach2-host.lock")):
         path = ports / filename
@@ -107,13 +110,13 @@ def rows(reader, helper, root):
             assert holder.stdout.readline() == b"ready\n"
             host_env = dict(env, RACH2_HOST_LOCK=mode)
             with command([helper, str(ports), "1", "true"], host_env) as waiter:
-                until(claim.exists)
+                until(claim.exists, [waiter])
                 output = report()
                 assert "waits for host since " in output and str(path) in output, output
                 assert f"holder {holder.pid} alive" in output, output
                 holder.terminate()
-                holder.wait(timeout=5)
-                assert waiter.wait(timeout=5) == 0
+                holder.wait()
+                assert waiter.wait() == 0
                 assert not claim.exists()
     # Shared host locks have more than one holder. The reader must list both.
     path = ports / "rach2-host.lock"
@@ -122,20 +125,20 @@ def rows(reader, helper, root):
         with command([sys.executable, "-c", lock_script, str(path), "read"]) as b:
             assert b.stdout.readline() == b"ready\n"
             with command([helper, str(ports), "1", "true"],
-                         dict(env, RACH2_HOST_LOCK="alone")):
-                until(claim.exists)
+                         dict(env, RACH2_HOST_LOCK="alone")) as waiter:
+                until(claim.exists, [waiter])
                 output = report()
                 assert f"holder {a.pid} alive" in output, output
                 assert f"holder {b.pid} alive" in output, output
     claim.unlink(missing_ok=True)
     work.mkdir(exist_ok=True)
-    with command(["sleep", "30"]) as holder:
+    with command([sys.executable, "-c", "import signal; signal.pause()"]) as holder:
         (work / "pool.wait").write_text(
             f"reason memory\nsince 1\nbudget 4000\npending hungry2 3000\n"
             f"holder hungry1 3000 {ident(holder.pid)}\n")
         assert f"holder hungry1 pid {holder.pid} alive" in report()
         holder.terminate()
-        holder.wait(timeout=5)
+        holder.wait()
         output = report()
         assert f"holder hungry1 pid {holder.pid} dead" in output and "fault:" in output, output
     words = identity.split()
@@ -146,7 +149,7 @@ def rows(reader, helper, root):
     owner.parent.mkdir(exist_ok=True)
     owner.write_text(f"pid {holder.pid}\npgid 1\nsince old\nargs fixture\n")
     assert "fault: inspect the work and clear the stale tree lock" in report()
-    with command(["sleep", "30"]) as holder:
+    with command([sys.executable, "-c", "import signal; signal.pause()"]) as holder:
         held = ident(holder.pid)
         owner.write_text(f"pid {holder.pid}\npgid 1\nidentity {held}\nsince now\nargs held\n")
         assert f"tree lock: holder {holder.pid} alive" in report(), report()

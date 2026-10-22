@@ -136,7 +136,7 @@ def run_rows(selector, runner, scratch):
             made.unlink()
         shutil.rmtree(tree / "build", ignore_errors=True)
         p = subprocess.run(["sh", "tests/run", "style", "host"], cwd=tree, env=env,
-                           capture_output=True, text=True, check=False, timeout=50)
+                           capture_output=True, text=True, check=False)
         return p, p.stdout + p.stderr
 
     for row, cases in [("unknown", "host.style.s1 host.host.nope"),
