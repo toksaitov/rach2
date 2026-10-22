@@ -48,6 +48,12 @@
 # BAD are halved until one fails and its parent passes, and both are tested
 # once more; the commit is named only when both results repeat.
 #
+# Every build and run of a core failure has the environment of a core run:
+# each NAME=VALUE line of tools/ci/core.env, which ci.yml's core jobs also
+# take, read from the tree the script starts in, master's in the job, before
+# it checks out a commit. Without the file the range is unresolved. A full
+# run's job sets none of it, and neither does a bisection of one.
+#
 # RUN is the ID of the ci run that started the bisection. With -r, a failure
 # that does not repeat is labelled `intermittent` only when the newest
 # `Run: .../actions/runs/ID` line in the issue's body and comments names
@@ -83,15 +89,15 @@
 # block of its own in RACH2_PORT_OFFSET, so that the commit's tests/run
 # takes neither lock and cannot wait for the host lock that its own claim
 # holds. The run is given RACH2_WORKERS, the suites the claim's processors
-# hold as tests/run counts them, and RACH2_MEMORY_MIB, three quarters of its
-# memory, or the most that a suite of the test declares in the commit's
-# tests/registry when that is more; the claim is four thirds of that bound,
-# and a claim of more than half the machine's memory takes the host alone,
-# as the bridge's own rule says. A claim that the bridge refuses or whose end
-# it cannot confirm, a run of a commit whose tests/system/suites.mk does not
-# read RACH2_PORT_OFFSET, and one of a commit without tests/registry are
-# untestable. On a machine without the record, each command runs as it is,
-# under the commit's own locks.
+# hold as tests/run counts them, in place of core's, and RACH2_MEMORY_MIB,
+# three quarters of its memory, or the most that a suite of the test declares
+# in the commit's tests/registry when that is more; the claim is four thirds
+# of that bound, and a claim of more than half the machine's memory takes the
+# host alone, as the bridge's own rule says. A claim that the bridge refuses
+# or whose end it cannot confirm, a run of a commit whose
+# tests/system/suites.mk does not read RACH2_PORT_OFFSET, and one of a commit
+# without tests/registry are untestable. On a machine without the record,
+# each command runs as it is, under the commit's own locks.
 #
 set -u
 
@@ -466,6 +472,22 @@ whole() { # whole TEXT
     case $1 in ''|*[!0-9]*) return 1 ;; esac
     [ "$1" -gt 0 ]
 }
+
+# Core's environment, as the header says, from the tree that the script
+# starts in, before it checks out a commit.
+if [ "$kind" = core ]; then
+    settings=$(grep -E '^[A-Z_][A-Z0-9_]*=' tools/ci/core.env 2> /dev/null) || {
+        say "$on is unresolved: master's tools/ci/core.env gives no environment for a core run."
+        exit 1
+    }
+    while IFS= read -r setting; do
+        # shellcheck disable=SC2163 # the setting is NAME=VALUE
+        export "$setting"
+    done <<EOF
+$settings
+EOF
+    echo "ci: bisect: each test runs in core's environment: $(echo "$settings" | tr '\n' ' ' | sed 's/ $//')"
+fi
 
 # The machine's admission, as the header says: the ledger that the record
 # names, the machine's processors, memory and disk as the bridge's capacity,

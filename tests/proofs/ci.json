@@ -594,6 +594,58 @@
       }
     },
     {
+      "name": "coreenv",
+      "summary": "a core failure bisected without the settings of a core run",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "        export \"$setting\"\n",
+          "replace": "        :\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: admits bigmem: the row fails",
+          "ci-test: failed: environ: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "fullenv",
+      "summary": "a full failure bisected with the settings of a core run",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "if [ \"$kind\" = core ]; then\n    settings=",
+          "replace": "if [ \"$kind\" != night ]; then\n    settings="
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: environ: the row fails"
+        ]
+      }
+    },
+    {
+      "name": "noenv",
+      "summary": "a core failure bisected though the tree gives no settings of a core run",
+      "edits": [
+        {
+          "file": "tools/ci/bisect.sh",
+          "find": "tools/ci/core.env 2> /dev/null) || {\n",
+          "replace": "tools/ci/core.env 2> /dev/null) || true || {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "ci-test: failed: environ: the row fails"
+        ]
+      }
+    },
+    {
       "name": "silentpass",
       "summary": "a run that passed without a suite's result taken for a pass",
       "edits": [

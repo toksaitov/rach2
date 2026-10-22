@@ -264,9 +264,13 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
 ''', executable=True)
     write(bin / "timeout", '#!/bin/sh\n[ "$1" != -k ] || shift 2\nshift\nexec "$@"\n', executable=True)
     env.update(GITHUB_REPOSITORY="test/rach2", GITHUB_RUN_ID="1", RUNNER_TEMP=str(root / "ci-temp"))
+    # The observer's workers reach the launcher from core's settings alone.
+    write(tree / "tools/ci/core.env", "# The settings of a core run.\nRACH2_WORKERS=2\n")
+    core_env = dict(env)
+    core_env.pop("RACH2_WORKERS")
     run(["sh", str(sources / "tools/ci/bisect.sh"), "-e", str(bridge),
          "core", "i686", "good", "bad", "1", "default"],
-        env, tree)
+        core_env, tree)
     saw(2, same=False)
     clear()
 

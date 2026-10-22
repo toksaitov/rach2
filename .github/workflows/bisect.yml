@@ -9,17 +9,18 @@
 # has the time limit of the run that failed, 170 or 340 minutes, so that a
 # bisection can outlast one job. The script has 700 minutes, inside the job's
 # 720, and when the time left cannot hold the next test it starts a new run
-# of this workflow on the range left, with `confirmed` set. `run` is the ID
-# of the ci run that reported the failure; the script does not label the
-# issue intermittent once a later run has reported it. `kind` also takes
-# `night`, the kind of the nightly runs that full runs replaced, which a
-# bisection started before them passes on. The job runs master's copy of the
-# script from outside the tree, since the script checks out each commit it
-# tests, and builds master's etude in the cache of etude's versions, also
-# outside the tree, so that a machine where etude admits tests runs each
-# test through that version's etude-bridge. The run's title names the
-# issue, by which the manager finds and cancels the run of an issue that has
-# been closed.
+# of this workflow on the range left, with `confirmed` set. Each test of a
+# core failure runs in the environment of master's tools/ci/core.env, which
+# ci.yml's core jobs also take. `run` is the ID of the ci run that reported
+# the failure; the script does not label the issue intermittent once a later
+# run has reported it. `kind` also takes `night`, the kind of the nightly
+# runs that full runs replaced, which a bisection started before them passes
+# on. The job runs master's copy of the script from outside the tree, since
+# the script checks out each commit it tests, and builds master's etude in
+# the cache of etude's versions, also outside the tree, so that a machine
+# where etude admits tests runs each test through that version's
+# etude-bridge. The run's title names the issue, by which the manager finds
+# and cancels the run of an issue that has been closed.
 name: Bisect a failure
 run-name: 'Bisect #${{ inputs.issue }}: ${{ inputs.items }} on ${{ inputs.arch }}'
 

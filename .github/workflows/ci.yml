@@ -13,7 +13,8 @@
 # everything; a run started by hand, `gh workflow run ci.yml`, tests the
 # commit all the same, so that a core failure that did not repeat in its
 # bisection can be tried again. tools/ci/run.sh runs the build,
-# `tests/run style`, `tests/run host` and `tests/run core`. Each
+# `tests/run style`, `tests/run host` and `tests/run core`, in the
+# environment of tools/ci/core.env, which bisect.yml also reads. Each
 # architecture's output and kept logs are uploaded for every account to
 # fetch, and its verdict, `done` followed by the steps that failed, is also
 # an output of the job, so that a run whose upload was lost is still judged.
@@ -76,13 +77,8 @@ jobs:
       fail-fast: false
       matrix:
         arch: [i686, x86_64]
-    # Each architecture takes at most 6 of the testing host's 24 processors,
-    # so that the workers' checks are admitted beside the two core runs.
     env:
       ARCH: ${{ matrix.arch }}
-      JOBS: 6
-      MAKEFLAGS: -j6
-      RACH2_WORKERS: 6
     steps:
       - name: Check out the commit
         uses: actions/checkout@v5
@@ -90,6 +86,9 @@ jobs:
           ref: ${{ needs.head.outputs.sha }}
           clean: false
           fetch-depth: 0
+
+      - name: Take the environment of a core run
+        run: grep -E '^[A-Z_][A-Z0-9_]*=' tools/ci/core.env >> "$GITHUB_ENV"
 
       - name: Build, then run style, host and core
         run: timeout -k 60 170m sh tools/ci/run.sh core "$RUNNER_TEMP/core-$ARCH"
