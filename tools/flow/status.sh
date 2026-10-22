@@ -37,14 +37,15 @@
 # line `NAME KIND: did not answer`; the verdict is then `resources: unknown`,
 # or a low or critical one that ends `; unknown: NAME KIND ... did not answer`.
 #
-# `sizes` prints the sizes of the build trees, the GNU caches, the ci
-# checkouts, the loops' state and /tmp on the testing host, and of the
-# loops' state and build trees here, largest first, for the manager to choose
-# what to remove when space is low. It then lists, through `leftovers -n` in
-# lib.sh, the failed tests' directories, loose files and copies that the
-# manager's loop would remove before its next check, and the copies and old
-# entries it keeps, with why. It reads every file of those trees, which takes
-# minutes, so the manager's check runs it only then.
+# `sizes` prints the sizes of the build trees, the GNU caches, the store of
+# step outputs that the copies share, the ci checkouts, the loops' state and
+# /tmp on the testing host, and of the loops' state and build trees here,
+# largest first, for the manager to choose what to remove when space is low.
+# It then lists, through `leftovers -n` in lib.sh, the failed tests'
+# directories, loose files and copies that the manager's loop would remove
+# before its next check, and the copies and old entries it keeps, with why. It
+# reads every file of those trees, which takes minutes, so the manager's check
+# runs it only then.
 #
 # `day DATE` prints the facts of one day, DATE as YYYY-MM-DD, counted at the
 # owner's UTC+6, for the manager's day report: the commits that reached
@@ -184,8 +185,8 @@ sizes()
 {
     echo "== sizes on the testing host, in GiB"
     printf '%s\n' 'du -sxk /home/*/rach2*/build /home/*/rach2*/build/vendor/gnu \
-        /home/*/rach2*/build/x86_64/vendor/gnu /home/ghrunner/rach2-ci-*/_work \
-        /home/*/flow /tmp 2> /dev/null | sort -rn |
+        /home/*/rach2*/build/x86_64/vendor/gnu /var/cache/rach2-store \
+        /home/ghrunner/rach2-ci-*/_work /home/*/flow /tmp 2> /dev/null | sort -rn |
         awk '"'"'{ printf "%7.1f %s\n", $1 / 1048576, $2 }'"'" |
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2>&1
     echo "== sizes here, in GiB"

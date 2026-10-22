@@ -23,18 +23,21 @@
 # refuses a word whose suite ARCH does not run; when it names none for ARCH,
 # the run builds nothing and writes `skipped` beside `done`. The build runs with
 # RACH2_MIN_FREE_GIB at 40 unless the environment gives another, so that it
-# stops, as `build`, before it fills the host's disk. The exit status is 0 when
-# nothing failed. A TERM to the run's process group, which timeout(1) sends
-# at the workflow's time limit, ends the run without `done` once the step it
-# interrupts has stopped, so that tests/run stops its machines before the
-# next run starts; the status is then 143. A step whose command a signal
-# ended, or that wrote no status because the shell that ran it was killed,
-# ends the run the same way. GitHub's cleanup of a cancelled job kills the
-# job's processes one at a time, in the order of their process IDs, so the
-# run's shell may outlive the step it is in, or be killed just after it has
-# forked the next step. Each step therefore checks, just before it starts its
-# command, that the run's shell is alive under the parent it started with,
-# and starts nothing otherwise.
+# stops, as `build`, before it fills the host's disk. A full run builds
+# without the host's store of step outputs, RACH2_STORE empty, so that the
+# store cannot change what a release passes: the root Makefile then builds
+# again in this copy each step whose outputs came from the store. The exit
+# status is 0 when nothing failed. A TERM to the run's process group, which
+# timeout(1) sends at the workflow's time limit, ends the run without `done`
+# once the step it interrupts has stopped, so that tests/run stops its
+# machines before the next run starts; the status is then 143. A step whose
+# command a signal ended, or that wrote no status because the shell that ran
+# it was killed, ends the run the same way. GitHub's cleanup of a cancelled
+# job kills the job's processes one at a time, in the order of their process
+# IDs, so the run's shell may outlive the step it is in, or be killed just
+# after it has forked the next step. Each step therefore checks, just before
+# it starts its command, that the run's shell is alive under the parent it
+# started with, and starts nothing otherwise.
 #
 # `results` below says how this tree's tests/run gives its results. With
 # `lines`, the runner's last `run: result: failed:` line on its standard
@@ -66,6 +69,10 @@ esac
 ARCH=${ARCH:-i686}
 RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
 export ARCH RACH2_MIN_FREE_GIB
+if [ "$kind" = full ]; then
+    RACH2_STORE=
+    export RACH2_STORE
+fi
 # How this tree's tests/run gives its results, `lines` or `history`, as the
 # header says.
 results=lines
