@@ -10,20 +10,70 @@
 #include "lib_installer_repair.h"
 
 /**
- * Judge the disk's layout before the update, update it twice from the stick
- * in one boot, judge the converted volume on the host, and boot it by UEFI
- * and then by BIOS.
+ * Boot the converted disk by UEFI and then by BIOS, the steps `uefi` and
+ * `bios`.
  *
  * The boot by UEFI spends the trial boot the update armed, and nothing
  * commits it, so the boot by BIOS starts the saved default, the recovery
- * system, through the same menu.
+ * system, through the same menu. When the boot by UEFI fails, the boot by
+ * BIOS would start the trial root and never print what it waits for, so it
+ * fails unbooted.
+ *
+ * @return 0, or 1 when the executor has stopped the case.
+ */
+static int convert_boots(struct etude_case *c)
+{
+    struct drive d;
+    char *text = NULL;
+    int ok;
+
+    if (etude_step(c, "uefi") != ETUDE_OK)
+        return 1;
+    drive_boot(&d, c, "uefi", NULL);
+    drive_expect(&d, "rach2 login:");
+    if (!d.failed)
+        text = drive_console(&d);
+    drive_stop(&d);
+    if (drive_halted()) {
+        free(text);
+        return 1;
+    }
+    ok = text != NULL &&
+         repair_line_has(text, (const char *const[]){"BdsDxe: starting Boot", "HARDDISK", NULL}) &&
+         strstr(text, "root: MBRID=1acef00d,3: /dev/disk0p3, ext2") != NULL;
+    repair_assert(c, "uefi-boots", ok,
+                  d.failed ? d.why
+                           : "the converted disk did not boot by UEFI from its disk to its root");
+    free(text);
+
+    if (etude_step(c, "bios") != ETUDE_OK)
+        return 1;
+    if (!ok) {
+        repair_assert(c, "bios-boots", 0,
+                      "not booted: the boot by UEFI did not spend the trial boot, so the boot by "
+                      "BIOS would start the trial root, not the recovery system");
+        return 0;
+    }
+    drive_boot(&d, c, "bios", NULL);
+    drive_expect(&d, "recovery image");
+    drive_stop(&d);
+    if (drive_halted())
+        return 1;
+    repair_assert(c, "bios-boots", !d.failed, d.why);
+    return 0;
+}
+
+/**
+ * Judge the disk's layout before the update, update it twice from the stick
+ * in one boot, judge the converted volume on the host, and boot it by UEFI
+ * and then by BIOS.
  */
 int etude_scenario(struct etude_case *c)
 {
     const char *p;
     char disk[4096] = "", efi[4096] = "", got[65] = "", want[65] = "", line[80], detail[300];
     uint64_t esp = 0, len = 0, now = 0;
-    char *before = NULL, *after = NULL, *cfg = NULL, *text = NULL;
+    char *before = NULL, *after = NULL, *cfg = NULL;
     struct drive d;
     int have, type, eight, ok;
 
@@ -97,34 +147,8 @@ int etude_scenario(struct etude_case *c)
     free(after);
     free(cfg);
 
-    if (etude_step(c, "uefi") != ETUDE_OK)
+    if (convert_boots(c) != 0)
         return 1;
-    drive_boot(&d, c, "uefi", NULL);
-    drive_expect(&d, "rach2 login:");
-    if (!d.failed)
-        text = drive_console(&d);
-    drive_stop(&d);
-    if (drive_halted()) {
-        free(text);
-        return 1;
-    }
-    repair_assert(
-        c, "uefi-boots",
-        text != NULL &&
-            repair_line_has(text,
-                            (const char *const[]){"BdsDxe: starting Boot", "HARDDISK", NULL}) &&
-            strstr(text, "root: MBRID=1acef00d,3: /dev/disk0p3, ext2") != NULL,
-        d.failed ? d.why : "the converted disk did not boot by UEFI from its disk to its root");
-    free(text);
-
-    if (etude_step(c, "bios") != ETUDE_OK)
-        return 1;
-    drive_boot(&d, c, "bios", NULL);
-    drive_expect(&d, "recovery image");
-    drive_stop(&d);
-    if (drive_halted())
-        return 1;
-    repair_assert(c, "bios-boots", !d.failed, d.why);
     repair_finish(c);
     return 0;
 }

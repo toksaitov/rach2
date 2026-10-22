@@ -270,8 +270,7 @@ tests/bootprobe.c:auth_case lines 158 a probe, one sequence of steps in the orde
 tests/cases/machine/grow_measured.c:etude_scenario complexity 52 a scenario, one session at the machines' consoles in the order of the manifest's steps
 tests/cases/machine/grow_measured.c:etude_scenario lines 210 a scenario, one session at the machines' consoles in the order of the manifest's steps
 
-tests/cases/machine/installer_repair_convert.c:etude_scenario complexity 37 a scenario, one session at the machines' consoles in the order of the manifest's steps
-tests/cases/machine/installer_repair_convert.c:etude_scenario lines 107 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/installer_repair_convert.c:etude_scenario complexity 30 a scenario, one session at the machines' consoles in the order of the manifest's steps
 
 tests/cases/machine/installer_repair_resume.c:etude_scenario complexity 34 a scenario, one session at the machines' consoles in the order of the manifest's steps
 tests/cases/machine/installer_repair_resume.c:etude_scenario lines 111 a scenario, one session at the machines' consoles in the order of the manifest's steps
