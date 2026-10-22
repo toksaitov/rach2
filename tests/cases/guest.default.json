@@ -4695,7 +4695,7 @@
         {"assertion_id": "wake-reaped", "checks": "The child that writes is answered and reaped.", "source": "program"},
         {"assertion_id": "wake-asleep", "checks": "The child sees the parent asleep in epoll_wait.", "source": "program"},
         {"assertion_id": "wake-write", "checks": "The child's write succeeds and it hears the answer.", "source": "program"},
-        {"assertion_id": "wake-woken", "checks": "The child's write, not the alarm, ends the wait with no timeout.", "source": "program"},
+        {"assertion_id": "wake-woken", "checks": "The child's write ends the wait with no timeout, which returns one event.", "source": "program"},
         {"assertion_id": "wake-event", "checks": "That wait returns the one event, with its data word 7.", "source": "program"},
         {"assertion_id": "hangup-setup", "checks": "A pipe's read end is added with no events.", "source": "program"},
         {"assertion_id": "no-events-quiet", "checks": "A registration of no events is not reported before the hangup.", "source": "program"},

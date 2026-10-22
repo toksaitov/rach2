@@ -16,7 +16,7 @@
  * write wakes a parent the child has seen asleep in an epoll_wait with no
  * timeout. The child keeps running until the parent answers, so that the
  * kernel does not idle, which would scan the set again at every interrupt,
- * and only the write can end the wait; an alarm bounds it. A registration of
+ * and only the write can end the wait. A registration of
  * no events reports a hangup. A pipe added to a set while a wait on it
  * sleeps, then written, wakes the wait. A set whose edge-triggered event was
  * reported does not poll readable, and a poll of a set is woken by a child's
@@ -77,7 +77,6 @@
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
@@ -88,13 +87,6 @@
  * 127.0.0.1 alone for a port of a native run's map. */
 #define EDGE_PORT ((uint16_t)probe_port(7470))
 #define EDGE_BIND (probe_arg("ports", NULL) != NULL ? INADDR_LOOPBACK : INADDR_ANY)
-
-/* The longest wait, in seconds, for another process to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
-/* The SIGALRMs delivered; an alarm ends a wait that nothing else did. */
-static volatile sig_atomic_t alarms;
 
 /* The checks, one assertion each, in the order the program makes them, and
  * the text it prints for each that fails. */
@@ -247,7 +239,7 @@ static const struct {
     {"wake-reaped", "the child that writes"},
     {"wake-asleep", "the parent was never seen asleep in epoll_wait"},
     {"wake-write", "the child's write"},
-    {"wake-woken", "the child's write did not wake the wait"},
+    {"wake-woken", "the wait with no timeout ended without an event"},
     {"wake-event", "the wait the child's write ended"},
     {"hangup-setup", "setup for a registration of no events"},
     {"no-events-quiet", "a registration of no events was reported"},
@@ -355,13 +347,6 @@ static int fail(int check)
     return 1;
 }
 
-/** Count a SIGALRM. */
-static void on_alarm(int sig)
-{
-    (void)sig;
-    alarms++;
-}
-
 /** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
  * no stat file. */
 static int proc_state(pid_t pid)
@@ -387,21 +372,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -410,31 +392,26 @@ static int seen_asleep(pid_t pid)
 
 /**
  * Wait to see `parent` asleep (`seen_asleep`), write a byte to `out`, and keep
- * running, reading the nonblocking `ack` in a loop, until it has a byte or
- * 15 s have passed. A process that runs keeps the kernel from idling, and an
- * idle kernel scans the parent's descriptors again at every interrupt, which
- * would end the wait without the write's wake. Runs in the forked child and
- * does not return: exits 0 when all of that happened, 2 when the parent was
- * never seen asleep, 3 when no byte came, and 1 when the write failed.
+ * running, reading the nonblocking `ack` in a loop, until it has a byte. A
+ * process that runs keeps the kernel from idling, and an idle kernel scans the
+ * parent's descriptors again at every interrupt, which would end the wait
+ * without the write's wake. Runs in the forked child and does not return:
+ * exits 0 when all of that happened, 2 when the parent was never seen asleep,
+ * and 1 when the write failed.
  */
 static void writer(pid_t parent, int out, int ack)
 {
-    struct timespec start, now;
     char byte;
 
     if (!seen_asleep(parent)) {
         _exit(2);
     }
-    if (write(out, "w", 1) != 1 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+    if (write(out, "w", 1) != 1) {
         _exit(1);
     }
-    do {
-        if (read(ack, &byte, 1) == 1) {
-            _exit(0);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-    } while (now.tv_sec - start.tv_sec < 15);
-    _exit(3);
+    while (read(ack, &byte, 1) != 1) {
+    }
+    _exit(0);
 }
 
 /* A child a row starts to write once it sees the parent asleep, and the
@@ -466,24 +443,17 @@ static void add_when_asleep(pid_t parent, int ep, int in)
 }
 
 /**
- * Start a child that runs `writer` on `out`, and arm a 10 s alarm for the
- * wait its write must end, which the caller begins next with no time limit
- * of its own. A wait the alarm ends finds the event there as it wakes, and
- * returns it, so the caller fails its row when `alarms` counts one: only
- * the write's wake may end the wait. With `ep` not -1, the child first adds
- * `in` to the set `ep` once it sees this process asleep. Returns 0, or -1.
+ * Start a child that runs `writer` on `out`, whose write must end the wait
+ * the caller begins next with no timeout. A wake the kernel misses leaves the
+ * wait asleep, and the case's watchdog ends it. With `ep` not -1, the child
+ * first adds `in` to the set `ep` once it sees this process asleep. Returns
+ * 0, or -1.
  */
 static int wake_start(struct woken *w, int out, int ep, int in)
 {
-    struct sigaction sa;
-
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_alarm;
-    if (pipe(w->ack) != 0 || fcntl(w->ack[0], F_SETFL, O_NONBLOCK) != 0 ||
-        sigaction(SIGALRM, &sa, NULL) != 0) {
+    if (pipe(w->ack) != 0 || fcntl(w->ack[0], F_SETFL, O_NONBLOCK) != 0) {
         return -1;
     }
-    alarms = 0;
     w->pid = fork();
     if (w->pid == 0) {
         if (ep != -1) {
@@ -494,22 +464,19 @@ static int wake_start(struct woken *w, int out, int ep, int in)
     if (w->pid < 0) {
         return -1;
     }
-    alarm(10);
     return 0;
 }
 
 /**
- * End the row `wake_start` began: disarm the alarm, answer the child and
- * reap it. Returns 0 when the child did its part, 2 when it never saw this
- * process asleep, 1 when it failed otherwise, and -1 when it could not be
- * answered or reaped.
+ * End the row `wake_start` began: answer the child and reap it. Returns 0
+ * when the child did its part, 2 when it never saw this process asleep, 1
+ * when it failed otherwise, and -1 when it could not be answered or reaped.
  */
 static int wake_end(struct woken *w)
 {
     int status;
     int reaped;
 
-    alarm(0);
     reaped = write(w->ack[1], "a", 1) == 1 && waitpid(w->pid, &status, 0) == w->pid;
     close(w->ack[0]);
     close(w->ack[1]);
@@ -615,7 +582,7 @@ static int sets(void)
     if (wait_one(ep, 50, &out) != 0) {
         return fail(EMPTY_PIPE);
     }
-    if (write(p[1], "ab", 2) != 2 || wait_one(ep, 1000, &out) != 1 ||
+    if (write(p[1], "ab", 2) != 2 || wait_one(ep, 0, &out) != 1 ||
         out.data.u64 != 0x1122334455667788ull || !(out.events & EPOLLIN)) {
         return fail(LEVEL_DATA);
     }
@@ -668,8 +635,11 @@ static int sets(void)
     if (rc != 0) {
         return fail(rc < 0 ? WAKE_REAPED : rc == 2 ? WAKE_ASLEEP : WAKE_WRITE);
     }
-    if (n != 1 || out.data.u32 != 7 || alarms) {
-        return fail(alarms ? WAKE_WOKEN : WAKE_EVENT);
+    if (n != 1) {
+        return fail(WAKE_WOKEN);
+    }
+    if (out.data.u32 != 7) {
+        return fail(WAKE_EVENT);
     }
     close(p[0]);
     close(p[1]);
@@ -702,7 +672,7 @@ static int added_while_waiting(void)
     if (rc != 0) {
         return fail(rc == 2 ? ADDED_ASLEEP : ADDED_CHILD);
     }
-    if (n != 1 || out.data.u32 != (uint32_t)p[0] || alarms) {
+    if (n != 1 || out.data.u32 != (uint32_t)p[0]) {
         return fail(ADDED_WOKEN);
     }
     close(p[0]);
@@ -778,7 +748,7 @@ static int nested(void)
     if (rc != 0) {
         return fail(rc == 2 ? NESTED_ASLEEP : NESTED_CHILD);
     }
-    if (n != 1 || out.data.u32 != 9 || alarms || wait_one(c, 0, &out) != 1) {
+    if (n != 1 || out.data.u32 != 9 || wait_one(c, 0, &out) != 1) {
         return fail(NESTED_WOKEN);
     }
     close(p[0]);
@@ -815,7 +785,7 @@ static int polled_set_woken(void)
     if (rc != 0) {
         return fail(rc == 2 ? POLL_ASLEEP : POLL_CHILD);
     }
-    if (n != 1 || !(pfd.revents & POLLIN) || alarms) {
+    if (n != 1 || !(pfd.revents & POLLIN)) {
         return fail(POLL_WOKEN);
     }
     close(p[0]);
@@ -1172,8 +1142,7 @@ static int udp_arrival(void)
     pfd.fd = rx;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (sendto(tx, "u", 1, 0, (struct sockaddr *)&me, sizeof(me)) != 1 ||
-        poll(&pfd, 1, 5000) != 1) {
+    if (sendto(tx, "u", 1, 0, (struct sockaddr *)&me, sizeof(me)) != 1 || poll(&pfd, 1, -1) != 1) {
         return fail(UDP_ARRIVES);
     }
     if (wait_one(ep, 0, &out) != 0) {
@@ -1221,7 +1190,7 @@ static int tcp_arrival(void)
     pfd.fd = cs;
     pfd.events = POLLIN;
     pfd.revents = 0;
-    if (write(as, "t", 1) != 1 || poll(&pfd, 1, 5000) != 1) {
+    if (write(as, "t", 1) != 1 || poll(&pfd, 1, -1) != 1) {
         return fail(TCP_ARRIVES);
     }
     if (wait_one(ep, 0, &out) != 0) {
