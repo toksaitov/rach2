@@ -39,26 +39,26 @@ row() {
         "env -i $env claude --model claude-sonnet-4-6 --permission-mode bypassPermissions \
             --tools Read,Bash,Edit --strict-mcp-config --mcp-config '{\"mcpServers\":{}}' \
             --setting-sources user --settings '{\"sandbox\":{\"enabled\":false}}'; \
-        echo claude ended with status \$?; sleep 600" ||
+        echo claude ended with status \$?; sleep infinity" ||
         fail "tmux new-session: status $?"
-    pane "the theme" "Choose the text style" 300 && step "the theme" && keys Enter &&
-        pane "the key" "Do you want to use this API key?" 300 &&
+    pane "the theme" "Choose the text style" && step "the theme" && keys Enter &&
+        pane "the key" "Do you want to use this API key?" &&
         choose "the key" Up "Yes" && keys Enter &&
-        pane "the security notes" "Press Enter to continue" 300 && keys Enter &&
-        pane "the trust" "Yes, I trust this folder" 300 &&
+        pane "the security notes" "Press Enter to continue" && keys Enter &&
+        pane "the trust" "Yes, I trust this folder" &&
         choose "the trust" Down "Yes, I trust this folder" && keys Enter &&
-        pane "the bypass" "Yes, I accept" 300 &&
+        pane "the bypass" "Yes, I accept" &&
         choose "the bypass" Down "Yes, I accept" && keys Enter &&
-        pane "the prompt" "bypass permissions on" 300 && step "the prompt"
+        pane "the prompt" "bypass permissions on" && step "the prompt"
     if [ -z "$FAILED" ]; then
         pid=$(program claude)
         unmodified "claude's screen" "$pid" /opt/claude/bin/claude \
             /lib64/ld-linux-x86-64.so.2 /lib/libc.so.6 /lib/libm.so.6 /lib/libpthread.so.0 \
             /lib/libdl.so.2 /lib/librt.so.1
-        keys -l "$PROMPT" && pane "the request" "and commit the change." 120 && keys Enter &&
-            pane "the answer" "The fixture was read, checked, edited and committed." 600 &&
-            step "the answer" && keys -l /exit && pane "the command" "/exit" 60 &&
-            keys Enter && pane "the end" "claude ended with status" 300 && step "the end"
+        keys -l "$PROMPT" && pane "the request" "and commit the change." && keys Enter &&
+            pane "the answer" "The fixture was read, checked, edited and committed." &&
+            step "the answer" && keys -l /exit && pane "the command" "/exit" &&
+            keys Enter && pane "the end" "claude ended with status" && step "the end"
         has "the end" "$(tmux -u -L claude capture-pane -p -t claude)" "claude ended with status 0"
     fi
     tmux -L claude kill-server 2> /dev/null

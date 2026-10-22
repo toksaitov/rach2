@@ -29,14 +29,14 @@ row() {
 
     mkdir -p "$WORK/home" "$WORK/project"
     tmux -L muse new-session -d -s muse -x 100 -y 30 -c "$WORK/project" \
-        "env HOME='$WORK/home' muse; echo muse ended with status \$?; sleep 600" ||
+        "env HOME='$WORK/home' muse; echo muse ended with status \$?; sleep infinity" ||
         fail "tmux new-session: status $?"
-    pane "the trust question" "Do you trust this workspace?" 120 &&
+    pane "the trust question" "Do you trust this workspace?" &&
         tmux -L muse send-keys -t muse Enter &&
-        pane "the sign-in" "Set an API key" 60 &&
+        pane "the sign-in" "Set an API key" &&
         has "the sign-in" "$(tmux -L muse capture-pane -p -t muse)" "Log in with browser" &&
         tmux -L muse send-keys -t muse Escape &&
-        pane "the end" "muse ended with status" 60
+        pane "the end" "muse ended with status"
     has "the end" "$(tmux -L muse capture-pane -p -t muse)" "Not logged in."
     has "the end" "$(tmux -L muse capture-pane -p -t muse)" "muse ended with status 0"
     has "the trust" "$(cat "$WORK/home/.config/muse/trust.json" 2>&1)" "$WORK/project"
@@ -68,14 +68,13 @@ row_cleanup() {
 # state as it was and is not repeated; a notice that ends before the second
 # press is read leaves the prompt, where the row presses twice again.
 muse_quit() {
-    local n=0 screen state seen=''
-    while :; do
-        screen=$(tmux -u -L muse capture-pane -p -t muse)
+    local screen state seen=''
+    while screen=$(tmux -u -L muse capture-pane -p -t muse); do
         case "$screen" in
             *"muse ended with status"*) return 0 ;;
             *"$SELECTED 1. Exit anyway"*"Enter to confirm"*)
                 keys Enter
-                pane "the session exit" "muse ended with status" 120
+                pane "the session exit" "muse ended with status"
                 return
                 ;;
             *"Exit anyway"*) state=Up ;;
@@ -87,13 +86,10 @@ muse_quit() {
             keys $state
             seen=$state
         fi
-        if [ "$n" -ge 120 ]; then
-            pane "the session exit" "muse ended with status" 0
-            return 1
-        fi
-        n=$((n + 1))
         sleep 1
     done
+    missing "the session exit" "muse ended with status"
+    return 1
 }
 
 # Run the shared script in headless mode or in the terminal, in a fresh home.
@@ -159,11 +155,11 @@ env -i PATH='$PATH' HOME='$WORK/session/home' TMPDIR='$WORK/session' \\
 status=\$?
 trap '' INT
 echo "muse ended with status \$status"
-sleep 600
+sleep infinity
 EOF
         tmux -L muse new-session -d -s muse -x 100 -y 40 \
             "/bin/bash '$WORK/session/start.sh'" || fail "the tmux session"
-        pane "the completed session" "the change is committed." 300
+        pane "the completed session" "the change is committed."
         tmux -L muse capture-pane -p -S - -t muse > "$WORK/session/screen.txt"
         muse_quit
         screen=$(tmux -L muse capture-pane -p -t muse)

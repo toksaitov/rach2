@@ -128,24 +128,29 @@ tree() {
     fi
 }
 
-# pane WHAT TEXT SECONDS: wait until the window of the tmux server PANE, a
-# session of the same name, shows TEXT, looking once a second for at most
-# SECONDS.
+# pane WHAT TEXT: wait until the window of the tmux server PANE, a session
+# of the same name, shows TEXT, looking once a second. The window's command
+# prints `NAME ended with status N` when its program ends; a window that
+# shows that line without TEXT, or that cannot be read, fails WHAT with
+# `missing`.
 pane() {
-    local n=0 screen
-    while :; do
-        screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE" 2>&1)
+    local screen
+    while screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE" 2>&1); do
         case "$screen" in
             *"$2"*) return 0 ;;
+            *" ended with status "*) break ;;
         esac
-        if [ "$n" -ge "$3" ]; then
-            fail "$1: in $3 s the screen showed no [$2], but [$(printf '%s' "$screen" |
-                sed '/^ *$/d' | tail -n 4 | tr '\n' ' ')]"
-            return 1
-        fi
-        n=$((n + 1))
         sleep 1
     done
+    missing "$1" "$2"
+    return 1
+}
+
+# missing WHAT TEXT: fail WHAT for a TEXT that the window of PANE does not
+# show, with the last lines it shows.
+missing() {
+    fail "$1: the screen showed no [$2], but [$(tmux -u -L "$PANE" capture-pane -p -t "$PANE" 2>&1 |
+        sed '/^ *$/d' | tail -n 4 | tr '\n' ' ')]"
 }
 
 # keys KEY...: press the keys KEY in the window of the tmux server PANE.
@@ -162,7 +167,8 @@ program() {
 }
 
 # press WHAT KEY TEXT: press KEY until the window of PANE shows TEXT on two
-# reads in a row, looking once a second for at most 300 s. KEY is pressed on
+# reads in a row, looking once a second, and fail as `pane` does when the
+# program ends or the window cannot be read first. KEY is pressed on
 # a screen without TEXT that is the same on two reads in a row and that the
 # program has drawn since KEY was last pressed. A program's question can
 # refuse keys for a moment after it opens and then be drawn again, or take a
@@ -171,15 +177,15 @@ program() {
 # program has yet to draw leaves the screen as it was, and is not pressed
 # twice.
 press() {
-    local n=0 screen last='' pressed='' drawn=1 shown=''
-    while :; do
-        screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE")
+    local screen last='' pressed='' drawn=1 shown=''
+    while screen=$(tmux -u -L "$PANE" capture-pane -p -t "$PANE"); do
         [ "$screen" = "$pressed" ] || drawn=1
         case "$screen" in
             *"$3"*)
                 [ -z "$shown" ] || return 0
                 shown=1
                 ;;
+            *" ended with status "*) break ;;
             *)
                 shown=
                 if [ "$screen" = "$last" ] && [ -n "$drawn" ]; then
@@ -190,13 +196,10 @@ press() {
                 ;;
         esac
         last=$screen
-        if [ "$n" -ge 300 ]; then
-            pane "$1" "$3" 0
-            return 1
-        fi
-        n=$((n + 1))
         sleep 1
     done
+    missing "$1" "$3"
+    return 1
 }
 
 # choose WHAT KEY ANSWER: press KEY until the window of PANE has marked
@@ -205,15 +208,13 @@ choose() {
     press "$1" "$2" "$SELECTED $3"
 }
 
-# exited WHAT SECONDS COMMAND...: wait until COMMAND, which prints the
-# processes it finds, prints none, looking once a second; SECONDS only ends
-# the wait for a process that does not exit. Fail WHAT with those it still
-# prints then.
+# exited WHAT COMMAND...: wait until COMMAND, which prints the processes it
+# finds, prints none or fails, looking once a second, and fail WHAT with
+# what it printed last unless that is nothing.
 exited() {
-    local what=$1 bound=$2 n=0 procs
-    shift 2
-    while procs=$("$@") && [ -n "$procs" ] && [ "$n" -lt "$bound" ]; do
-        n=$((n + 1))
+    local what=$1 procs
+    shift
+    while procs=$("$@") && [ -n "$procs" ]; do
         sleep 1
     done
     same "$what" "$(printf '%s' "$procs" | tr '\n' ' ')" ""

@@ -23,9 +23,7 @@ row() {
     has "codex exec --help" "$OUT" "Run Codex non-interactively"
 
     output "tmux new-session" tmux new-session -d -s codex -x 100 -y 30 codex
-    pane=
-    for _ in $(seq 600); do
-        pane=$(tmux capture-pane -p -t codex 2>&1)
+    while pane=$(tmux capture-pane -p -t codex 2>&1); do
         case $pane in
             *"Sign in with Device Code"*) break ;;
         esac

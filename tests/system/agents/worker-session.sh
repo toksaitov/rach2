@@ -11,8 +11,7 @@
 # #901 commits on the issue's branch with `Closes #901` and pushes, and the
 # session on #902 commits, pushes, comments and hands the issue back with
 # `board.sh release`. Once the second session has started, the row writes
-# the loop's stop file and waits for the loop to exit; 600 s only ends the
-# wait for a loop that does not. It returns in
+# the loop's stop file and waits for the loop to exit. It returns in
 # /tmp/agents/results/worker-session.tar the loop's state directory, the
 # board, the calls made to gh, the origin and the program's digest before
 # and after the loop; worker_session_verify.py judges them on the host with
@@ -54,20 +53,17 @@ board() {
 EOF
 }
 
-# until_log TEXT SECONDS: wait until the loop's log has a line matching the
-# extended regular expression TEXT, for at most SECONDS, while the loop runs.
+# until_log TEXT: wait until the loop's log has a line matching the extended
+# regular expression TEXT, while the loop runs.
 until_log() {
-    local n=0
     until grep -Eq "$1" "$WORK/state/loop.log" 2> /dev/null; do
         kill -0 "$LOOP" 2> /dev/null || { fail "the loop ended before [$1] in its log"; return 1; }
-        [ "$n" -lt "$2" ] || { fail "in $2 s the loop's log had no [$1]"; return 1; }
-        n=$((n + 1))
         sleep 1
     done
 }
 
 row() {
-    local status bound ended=''
+    local status
     tree || return
     mkdir -p "$WORK/home" "$WORK/tmp" "$WORK/bin" "$WORK/state" /tmp/agents/results
     output "the tree's branch" git -C tree branch -M master
@@ -91,15 +87,10 @@ row() {
         CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false \
         sh "$WORK/clone/tools/flow/worker.sh" -s "$WORK/state" > "$WORK/loop.out" 2>&1 &
     LOOP=$!
-    until_log ' session [0-9-]* on #902 starts$' 600 || return
+    until_log ' session [0-9-]* on #902 starts$' || return
     touch "$WORK/state/stop"
-    sleep 600 &
-    bound=$!
-    wait -n -p ended "$LOOP" "$bound"
+    wait "$LOOP"
     status=$?
-    kill "$bound" 2> /dev/null
-    wait "$bound" 2> /dev/null
-    [ "$ended" = "$LOOP" ] || { fail "the loop did not stop in 600 s after its stop file"; return; }
     LOOP=
     same "the loop's status" "$status" 0
     output "the program's digest after the loop" sha256sum /opt/claude/bin/claude

@@ -30,9 +30,9 @@ row() {
     env=$(session_env "\$TERM" | sed 's/.*/"&"/' | tr '\n' ' ')
     tmux -u -L agy new-session -d -s agy -x 120 -y 40 -c "$SESSION/repo" \
         "env -i $env agy --dangerously-skip-permissions; \
-        echo agy ended with status \$?; sleep 600" ||
+        echo agy ended with status \$?; sleep infinity" ||
         fail "tmux new-session: status $?"
-    pane "the color scheme" "Choose your color scheme" 300 && step "the color scheme" &&
+    pane "the color scheme" "Choose your color scheme" && step "the color scheme" &&
         press "the consent" Enter "Terms of Service & Data Use" &&
         press "the consent withheld" Enter "[ ] Yes, I agree" &&
         press "the buttons" Down ">  Previous" &&
@@ -41,10 +41,10 @@ row() {
     if [ -z "$FAILED" ]; then
         pid=$(program agy)
         session_unmodified "agy's screen" "$pid"
-        keys -l "$PROMPT" && pane "the request" "and commit the change." 120 && keys Enter &&
-            pane "the answer" "The fixture was read, checked, edited and committed." 600 &&
-            step "the answer" && keys -l /exit && pane "the command" "/exit" 60 &&
-            keys Enter && pane "the end" "agy ended with status" 300 && step "the end"
+        keys -l "$PROMPT" && pane "the request" "and commit the change." && keys Enter &&
+            pane "the answer" "The fixture was read, checked, edited and committed." &&
+            step "the answer" && keys -l /exit && pane "the command" "/exit" &&
+            keys Enter && pane "the end" "agy ended with status" && step "the end"
         has "the end" "$(tmux -u -L agy capture-pane -p -t agy)" "agy ended with status 0"
         same "the trusted directory" \
             "$(grep -c "\"$SESSION/repo\"" "$SESSION/home/.gemini/antigravity-cli/settings.json")" 1

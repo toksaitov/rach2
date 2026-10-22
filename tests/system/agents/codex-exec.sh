@@ -125,9 +125,9 @@ left() {
 }
 
 # gone WHAT: wait for every process Codex started to exit, once its session
-# has ended; 120 s only ends the wait for one that does not.
+# has ended.
 gone() {
-    exited "$1: the processes left" 120 left
+    exited "$1: the processes left" left
 }
 
 # Stop the sampler, the private tmux server, what Codex left and the

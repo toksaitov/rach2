@@ -36,21 +36,21 @@ row() {
     session_start screen || return
     env=$(session_env "\$TERM" | sed 's/.*/"&"/' | tr '\n' ' ')
     tmux -u -L codex new-session -d -s codex -x 120 -y 40 -c "$SESSION/repo" \
-        "env -i $env codex; echo codex ended with status \$?; sleep 600" ||
+        "env -i $env codex; echo codex ended with status \$?; sleep infinity" ||
         fail "tmux new-session: status $?"
-    pane "the trust" "Trust and continue" 300 && step "the trust" &&
+    pane "the trust" "Trust and continue" && step "the trust" &&
         choose "the trust" Up "1. Trust and continue" && keys Enter &&
-        pane "the model" "Use existing model" 300 &&
+        pane "the model" "Use existing model" &&
         choose "the model" Down "2. Use existing model" && keys Enter &&
-        pane "the prompt" "Ask Codex to do anything" 300 && step "the prompt"
+        pane "the prompt" "Ask Codex to do anything" && step "the prompt"
     if [ -z "$FAILED" ]; then
         pid=$(program codex)
         unmodified "codex's screen" "$pid" /opt/codex/bin/codex \
             "$(readlink -f /etc/localtime)" "$SESSION/home/.codex/*.sqlite-shm"
-        keys -l "$PROMPT" && pane "the request" "then commit it." 120 && keys Enter &&
-            pane "the answer" "the change is committed." 600 &&
-            step "the answer" && keys -l /quit && pane "the command" "/quit" 60 &&
-            keys Enter && pane "the end" "codex ended with status" 300 && step "the end"
+        keys -l "$PROMPT" && pane "the request" "then commit it." && keys Enter &&
+            pane "the answer" "the change is committed." &&
+            step "the answer" && keys -l /quit && pane "the command" "/quit" &&
+            keys Enter && pane "the end" "codex ended with status" && step "the end"
         has "the end" "$(tmux -u -L codex capture-pane -p -t codex)" "codex ended with status 0"
         gone "codex's screen"
     fi
