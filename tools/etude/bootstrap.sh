@@ -123,7 +123,9 @@ etude_abandon()
 }
 
 # etude_main: build the version of the appended source for this machine, or
-# find it built, and print `@etude-version NONCE built|reused KEY DIR`.
+# find it built, and print `@etude-version NONCE built|reused KEY DIR`. The
+# build's make runs without MAKEFLAGS, MFLAGS and MAKELEVEL, so that a make
+# that runs this script gives it neither jobs nor variables the key omits.
 etude_main()
 {
     platform=$(etude_platform) || etude_fail "unknown system $(uname -s)"
@@ -183,7 +185,7 @@ flags $flags"
         etude_fail "the source arrived damaged: its digest is not $ETUDE_SOURCE"
     # shellcheck disable=SC2086 # CC is a command line
     # shellcheck disable=SC2086 # TARGETS is a list of targets
-    (cd "$build/src" && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" $targets) >&2 ||
+    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" $targets) >&2 ||
         etude_fail "the build of $key failed"
     {
         printf '%s\n' "$identity"

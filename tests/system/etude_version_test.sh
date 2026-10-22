@@ -25,8 +25,10 @@
 # stopped by SIGTERM, which leaves nothing, and by SIGKILL, whose directory
 # the next build passes by; a failed compile; a script cut short, which
 # changes nothing; damaged source; two builds of one version at once, of
-# which one is published; Windows, whose version has neither etude-remote
-# nor etude-bridge; a commit's source; and the real build.
+# which one is published; a local build under a parallel make with a variable
+# of its own, neither of which reaches the compiles; Windows, whose version
+# has neither etude-remote nor etude-bridge; a commit's source; and the real
+# build.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored and the rows run again at the end.
@@ -36,6 +38,7 @@
 # Usage: sh tests/system/etude_version_test.sh [--mutate | --texts]
 #
 set -u
+unset MAKEFLAGS MFLAGS MAKELEVEL
 
 case ${1:-} in
     '') mode=check ;;
@@ -97,10 +100,11 @@ echo "$FIX/appdata"
 EOF
 
 # fakecc: -v prints the version FIX/ccversion gives, 1 by default. A compile
-# logs its arguments to FIX/cc.log and writes to the -o file a digest of its
-# sources. FIX/fail makes it fail; FIX/interrupt, a signal's name, makes it
-# send that signal to its process group, the machine's session; FIX/race
-# makes it first build the same version through version.sh.
+# logs its arguments to FIX/cc.log and its MAKEFLAGS to FIX/flags.log, and
+# writes to the -o file a digest of its sources. FIX/fail makes it fail;
+# FIX/interrupt, a signal's name, makes it send that signal to its process
+# group, the machine's session; FIX/race makes it first build the same
+# version through version.sh.
 cat > "$work/bin/fakecc" <<'EOF'
 #!/bin/sh
 if [ "$1" = -v ]; then
@@ -108,6 +112,7 @@ if [ "$1" = -v ]; then
     exit 0
 fi
 printf '%s\n' "$*" >> "$FIX/cc.log"
+printf '%s\n' "${MAKEFLAGS:-}" >> "$FIX/flags.log"
 [ ! -e "$FIX/fail" ] || { echo 'fakecc: error: planted failure' >&2; exit 1; }
 if [ -e "$FIX/interrupt" ]; then
     signal=$(cat "$FIX/interrupt")
@@ -170,6 +175,7 @@ fault()
         no-digest) file=bootstrap.sh; edit='s#^    \[ "\$(etude_hash "\$build/sources")" = "\$ETUDE_SOURCE" \] ||$#    true ||#' ;;
         keep-build) file=bootstrap.sh; edit='s#^    \[ -n "\$published" \] || \[ -z "\$build" \] || rm -rf "\$build"$#    :#' ;;
         replace) file=bootstrap.sh; edit='s#^    if ln "\$build/version" "\$record"#    if ln -f "$build/version" "$record"#' ;;
+        makeflags) file=bootstrap.sh; edit='s#unset MAKEFLAGS MFLAGS MAKELEVEL && ##' ;;
         no-compiler) file=bootstrap.sh; edit='s#^compiler \$compiler$#compiler -#' ;;
         any-nonce) file=version.sh; edit='s#^result=\$(sed -n "s/^@etude-version \$nonce //p"#result=$(sed -n "s/^@etude-version [0-9a-f]* //p"#' ;;
     esac
@@ -182,6 +188,7 @@ state()
 {
     rm -rf "$FIX" && mkdir -p "$FIX/home/.config/fish" || exit 1
     : > "$FIX/cc.log"
+    : > "$FIX/flags.log"
     : > "$FIX/ssh.log"
     for f in .bashrc .zshenv .cshrc .tcshrc .config/fish/config.fish; do
         { echo "echo noise from $f"
@@ -405,6 +412,13 @@ row()
             [ "$(sed 's/^etude-version: result: built //' "$FIX/race.out")" = "$key $dir" ] ||
                 { why "the other request gave $(cat "$FIX/race.out")"; return 1; }
             [ "$(count "$FIX/cache/builds")" = 1 ] || { why 'the second build stayed'; return 1; } ;;
+        makeflags)
+            state
+            MAKEFLAGS='-j4 -- ETUDE_PLANTED=1' run -l -c fakecc -C "$FIX/cache"
+            result built || return 1
+            pattern='-j([^1]|1[0-9]|$)|jobserver|ETUDE_PLANTED'
+            ! grep -qE -e "$pattern" "$FIX/flags.log" ||
+                { why "a compile saw MAKEFLAGS $(grep -m 1 -E -e "$pattern" "$FIX/flags.log")"; return 1; } ;;
         windows)
             state
             run -w -c fakecc machine
@@ -464,7 +478,7 @@ sha()
     fi | sed 's/ .*//'
 }
 
-rows='build reuse versions shells busybox term kill failed truncated damaged race windows revision real'
+rows='build reuse versions shells busybox term kill failed truncated damaged race makeflags windows revision real'
 
 # rows: run every row against the copy, print `etude-version-test: failed:
 # NAME` for each that fails, and fail when any did.
@@ -495,7 +509,7 @@ expect_fault()
     fi
 }
 
-faults='no-reuse no-digest keep-build replace no-compiler any-nonce'
+faults='no-reuse no-digest keep-build replace makeflags no-compiler any-nonce'
 if [ "$mode" = texts ]; then
     for f in $faults; do
         fault "$f" || { echo "etude-version-test: fault $f changes nothing" >&2; exit 1; }
@@ -511,12 +525,13 @@ if [ "$mode" = mutate ]; then
     expect_fault no-digest 'damaged' || exit 1
     expect_fault keep-build 'term failed damaged race' || exit 1
     expect_fault replace 'race' || exit 1
+    expect_fault makeflags 'makeflags' || exit 1
     expect_fault no-compiler 'versions' || exit 1
     expect_fault any-nonce 'shells' || exit 1
     fault none
     rows >&2 || exit 1
-    echo 'etude-version-test: result: pass: six faults caught and restored'
+    echo 'etude-version-test: result: pass: seven faults caught and restored'
 fi
 echo "etude-version-test: shells: $shells${busybox:+ busybox}"
 [ -n "$busybox" ] || echo 'etude-version-test: not run: busybox: no busybox on this host'
-echo 'etude-version-test: result: pass: 14 rows'
+echo 'etude-version-test: result: pass: 15 rows'
