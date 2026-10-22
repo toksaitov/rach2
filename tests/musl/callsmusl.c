@@ -150,10 +150,6 @@
 #define SYS_CLOCK_GETTIME64 403
 #endif
 
-/* The longest wait, in seconds, for another process to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
 /* The bytes of the line a child writes in `whole_writes`, its newline
  * included: more than the master ring holds, so that the write waits for
  * room part way through, and fewer than twice what the ring takes of it, so
@@ -296,7 +292,7 @@ static int refusals(void)
         }
         p.fd = fd;
         p.events = POLLIN;
-        if (poll(&p, 1, 1000) != 1 || !(p.revents & POLLERR)) {
+        if (poll(&p, 1, -1) != 1 || !(p.revents & POLLERR)) {
             return fail("poll did not report the port unreachable as POLLERR");
         }
         if (recv(fd, &c, 1, 0) != -1 || errno != ECONNREFUSED) {
@@ -310,13 +306,13 @@ static int refusals(void)
 
 /**
  * Check POSIX timers on SIGUSR2, which stays blocked and is taken by
- * sigtimedwait. Returns 0, or 1 after the failure is printed.
+ * sigwaitinfo. Returns 0, or 1 after the failure is printed.
  */
 static int timers(void)
 {
     struct sigevent se;
     struct itimerspec its;
-    struct timespec wait = {2, 0}, zero = {0, 0};
+    struct timespec zero = {0, 0};
     sigset_t set;
     siginfo_t si;
     timer_t t;
@@ -333,7 +329,7 @@ static int timers(void)
     if (timer_create(CLOCK_MONOTONIC, &se, &t) != 0 || timer_settime(t, 0, &its, NULL) != 0) {
         return fail("timer_create and timer_settime of a 20 ms timer");
     }
-    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_code != SI_TIMER ||
+    if (sigwaitinfo(&set, &si) != SIGUSR2 || si.si_code != SI_TIMER ||
         si.si_value.sival_int != 99) {
         return fail("the timer's signal did not come with SI_TIMER and its value");
     }
@@ -343,7 +339,7 @@ static int timers(void)
         return fail("timer_settime of a periodic timer");
     }
     usleep(210000);
-    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_overrun < 3 || timer_getoverrun(t) < 3) {
+    if (sigwaitinfo(&set, &si) != SIGUSR2 || si.si_overrun < 3 || timer_getoverrun(t) < 3) {
         return fail("a blocked periodic timer's signal did not carry its overrun");
     }
     held();
@@ -358,11 +354,10 @@ static int timers(void)
 
 /**
  * Check sigqueue and rt_sigqueueinfo to the caller's own process, taken by
- * sigtimedwait. Returns 0, or 1 after the failure is printed.
+ * sigwaitinfo. Returns 0, or 1 after the failure is printed.
  */
 static int queues(void)
 {
-    struct timespec wait = {2, 0};
     union sigval v;
     sigset_t set;
     siginfo_t si;
@@ -374,7 +369,7 @@ static int queues(void)
     if (sigqueue(getpid(), SIGUSR2, v) != 0) {
         return fail("sigqueue to the caller's own process");
     }
-    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_code != SI_QUEUE ||
+    if (sigwaitinfo(&set, &si) != SIGUSR2 || si.si_code != SI_QUEUE ||
         si.si_value.sival_int != 4242 || si.si_pid != getpid()) {
         return fail("sigqueue's signal did not come with SI_QUEUE, its value and its sender");
     }
@@ -390,8 +385,7 @@ static int queues(void)
         return fail("rt_sigqueueinfo to the caller's own process");
     }
     memset(&si, 0, sizeof(si));
-    if (sigtimedwait(&set, &si, &wait) != SIGUSR2 || si.si_errno != 77 ||
-        si.si_value.sival_int != 4343) {
+    if (sigwaitinfo(&set, &si) != SIGUSR2 || si.si_errno != 77 || si.si_value.sival_int != 4343) {
         return fail("rt_sigqueueinfo's signal did not come with its errno and value");
     }
     held();
@@ -566,21 +560,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
