@@ -7,10 +7,16 @@
 # `make gnu-js` the SpiderMonkey shell, and `make gnu-chromium` unpacks
 # Debian's chromium-headless-shell with its libraries. The three that compile
 # are rebuilt when the cross toolchain is; the fourth needs only its sysroot.
+# Each runs through etude-step as the steps of mk/gnu.mk do. Chromium's
+# outputs are its root and the lists of its packages' files under
+# work/chromium, which vendor/gnu/install_root.sh reads.
 GNU_NATIVE_STAMP = $(GNU_OUT)/native.stamp
 GNU_GDB_STAMP = $(GNU_OUT)/gdb.stamp
 GNU_JS_STAMP = $(GNU_OUT)/js.stamp
 GNU_CHROMIUM_STAMP = $(GNU_OUT)/chromium.stamp
+GNU_STEP_STAMPS += $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) $(GNU_JS_STAMP) $(GNU_CHROMIUM_STAMP)
+# The command of a step: the script, with the root etude-step gives it.
+GNU_STEP_RUN = sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./$(1)'
 GNU_NATIVE_SOURCES = vendor/gnu/native/build_native.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt
 GNU_GDB_SOURCES = vendor/gnu/native/build_gdb.sh vendor/gnu/fetch.sh vendor/gnu/sources.txt \
                   vendor/gnu/sources-extra.txt
@@ -24,26 +30,29 @@ gnu-gdb: $(GNU_GDB_STAMP)
 gnu-js: $(GNU_JS_STAMP)
 gnu-chromium: $(GNU_CHROMIUM_STAMP)
 
-$(GNU_NATIVE_STAMP): $(GNU_NATIVE_SOURCES) $(GNU_TOOLCHAIN_STAMP)
+$(GNU_NATIVE_STAMP): $(GNU_NATIVE_SOURCES) $(GNU_TOOLCHAIN_STAMP) | $(ETUDESTEP)
 	@rm -f $@
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/native/build_native.sh; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
+	    $(GNU_STEP) -n gnu-native -t $@ $(STEP_INPUTS) -u cross -u sysroot -o native \
+	        -- $(call GNU_STEP_RUN,vendor/gnu/native/build_native.sh); fi
 	@test -x $(GNU_OUT)/native/usr/bin/gcc || { echo "gnu: native: the build produced no $(GNU_OUT)/native/usr/bin/gcc" >&2; exit 1; }
-	@touch $@
 
-$(GNU_GDB_STAMP): $(GNU_GDB_SOURCES) $(GNU_TOOLCHAIN_STAMP)
+$(GNU_GDB_STAMP): $(GNU_GDB_SOURCES) $(GNU_TOOLCHAIN_STAMP) | $(ETUDESTEP)
 	@rm -f $@
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/native/build_gdb.sh; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
+	    $(GNU_STEP) -n gnu-gdb -t $@ $(STEP_INPUTS) -u cross -u sysroot -o gdb \
+	        -- $(call GNU_STEP_RUN,vendor/gnu/native/build_gdb.sh); fi
 	@test -x $(GNU_OUT)/gdb/usr/bin/gdb || { echo "gnu: gdb: the build produced no $(GNU_OUT)/gdb/usr/bin/gdb" >&2; exit 1; }
-	@touch $@
 
-$(GNU_JS_STAMP): $(GNU_JS_SOURCES) $(GNU_TOOLCHAIN_STAMP)
+$(GNU_JS_STAMP): $(GNU_JS_SOURCES) $(GNU_TOOLCHAIN_STAMP) | $(ETUDESTEP)
 	@rm -f $@
-	@RACH2_ARCH=$(ARCH) ./vendor/gnu/spidermonkey/build_js.sh
+	@$(GNU_STEP) -n gnu-js -t $@ $(STEP_INPUTS) -u cross -u sysroot -o js \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/spidermonkey/build_js.sh)
 	@test -x $(GNU_OUT)/js/usr/bin/js || { echo "gnu: js: the build produced no $(GNU_OUT)/js/usr/bin/js" >&2; exit 1; }
-	@touch $@
 
-$(GNU_CHROMIUM_STAMP): $(GNU_CHROMIUM_SOURCES) | $(GNU_TOOLCHAIN_STAMP)
+$(GNU_CHROMIUM_STAMP): $(GNU_CHROMIUM_SOURCES) | $(GNU_TOOLCHAIN_STAMP) $(ETUDESTEP)
 	@rm -f $@
-	@RACH2_ARCH=$(ARCH) ./vendor/gnu/chromium/fetch_chromium.sh
+	@$(GNU_STEP) -n gnu-chromium -t $@ $(STEP_INPUTS) -u cross -u sysroot \
+	    -o chromium -o work/chromium/files -o work/chromium/closure.txt \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/chromium/fetch_chromium.sh)
 	@test -x $(GNU_OUT)/chromium/usr/lib/chromium/chromium-headless-shell || { echo "gnu: chromium: the root has no usr/lib/chromium/chromium-headless-shell" >&2; exit 1; }
-	@touch $@

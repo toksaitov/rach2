@@ -4,9 +4,10 @@
 # on Rach2. OUT is the directory the programs go in, EXE the suffix of an
 # executable, and CC and CFLAGS the compiler and its flags, which bootstrap.sh
 # chooses for the platform. `all` builds the programs of every platform,
-# `remote` etude-remote and `bridge` etude-bridge, which bootstrap.sh asks for
-# on Linux and macOS, and `bridge` on Windows, `hold` etude-hold on every
-# platform but Rach2, and `ports` etude-ports on Linux, macOS and Windows.
+# `remote` etude-remote, `bridge` etude-bridge and `step` etude-step, which
+# bootstrap.sh asks for on Linux and macOS, and `bridge` on Windows, `hold`
+# etude-hold on every platform but Rach2, and `ports` etude-ports on Linux,
+# macOS and Windows.
 
 include tools/etude/sources.mk
 
@@ -47,6 +48,12 @@ ports: $(OUT)/etude-ports$(EXE)
 
 $(OUT)/etude-ports$(EXE): $(ETUDE_PORTS_SRC)
 	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude -o $@ $(ETUDE_PORTS_SRC)
+
+# The runner of a build's steps through the host's store of step outputs.
+step: $(OUT)/etude-step$(EXE)
+
+$(OUT)/etude-step$(EXE): $(ETUDE_STEP_SRC)
+	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Iutils -o $@ $(ETUDE_STEP_SRC)
 
 # Collection programs, with Windows sources selected by bootstrap.sh.
 LEGACY_SRC = $(ETUDE_LEGACY_SRC)

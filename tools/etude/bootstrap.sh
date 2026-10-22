@@ -147,7 +147,7 @@ etude_main()
     root=${ETUDE_CACHE:-}
     case $platform in
         linux*|macos*)
-            targets='all remote bridge hold ports' ;;
+            targets='all remote bridge hold ports step' ;;
         windows*)
             cc=${ETUDE_CC:-/ucrt64/bin/gcc}
             exe=.exe

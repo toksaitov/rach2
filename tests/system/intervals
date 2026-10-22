@@ -17,3 +17,4 @@ tests/host/etude_ports_hosttest.c: a run is looked at again, or watched while it
 tests/system/accept/agents_accept.sh: the reopened conversation is read every two seconds
 tests/host/etude_hold_hosttest.c: the path is looked at again every 10 ms
 tests/host/etude_hold_hosttest.c: a second TERM follows the first by 100 ms
+tests/host/etude_step_hosttest.c: a fixture's file is looked at again every 10 ms

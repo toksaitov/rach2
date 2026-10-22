@@ -11,6 +11,16 @@
 # ports' depends on the toolchain, build_port.sh, the recipes, fetch.sh, all
 # of sources.txt and the link GNU_LINK asks for, shared unless it says static,
 # which a file keeps.
+#
+# Each step runs through etude-step with the layer's tree as its root
+# (`-r`): with the host's store it is built in the store, at the path of its
+# entry, which the script takes as RACH2_GNU_OUT, and the tree has links to
+# its outputs, since the compilers keep the paths they were built at; without
+# the store it is built in the tree. A step names the outputs of the steps
+# before it that it reads (`-u`), and the store's entry has links to them.
+# The key counts the host's compilers, which build the cross toolchain and
+# the ports' own tools; ccache, where the store has it, also wraps the
+# target's compilers, which the toolchain's key already counts.
 GNU_OUT = build$(ARCH_SUFFIX)/vendor/gnu
 GNU_TARGET_i686 = i686-linux-gnu
 GNU_TARGET_x86_64 = x86_64-rach2-linux-gnu
@@ -20,6 +30,8 @@ GNU_TOOLCHAIN_PINS = $(GNU_OUT)/toolchain.pins
 GNU_PORTS_STAMP = $(GNU_OUT)/ports.stamp
 GNU_PORTS_LINK = $(GNU_OUT)/ports.link
 GNU_CC = $(GNU_OUT)/cross/bin/$(GNU_TARGET)-gcc
+GNU_STEP = $(STEP) -r $(GNU_OUT) -c cc -c c++ -w $(GNU_TARGET)-gcc -w $(GNU_TARGET)-g++
+GNU_STEP_STAMPS = $(GNU_TOOLCHAIN_STAMP) $(GNU_PORTS_STAMP)
 GNU_RECIPES = $(wildcard vendor/gnu/ports/*.sh)
 # The sources of each stamp, which mk/gnu-image.mk also reads.
 GNU_TOOLCHAIN_SOURCES = vendor/gnu/build_toolchain.sh vendor/gnu/arch.sh vendor/gnu/fetch.sh
@@ -38,11 +50,13 @@ $(GNU_TOOLCHAIN_PINS): vendor/gnu/sources.txt
 	@t=$@.$$$$; awk '$$1 ~ /^(binutils|gcc|gmp|mpfr|mpc|glibc|linux|libxcrypt)$$/' vendor/gnu/sources.txt >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_TOOLCHAIN_STAMP): $(GNU_TOOLCHAIN_SOURCES) $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL)
+$(GNU_TOOLCHAIN_STAMP): $(GNU_TOOLCHAIN_SOURCES) $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/build_toolchain.sh; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
+	    $(GNU_STEP) -n gnu-toolchain -t $@ $(STEP_INPUTS) -o cross -o sysroot \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/build_toolchain.sh && \
+	            test -x "$$ETUDE_STEP_ROOT/cross/bin/$(GNU_TARGET)-gcc"'; fi
 	@test -x $(GNU_CC) || { echo "gnu: toolchain: the build produced no $(GNU_CC)" >&2; exit 1; }
-	@touch $@
 
 # Rewritten only when GNU_LINK changes, so that the ports are built again
 # only then; the phony prerequisite runs the comparison at every make.
@@ -52,7 +66,9 @@ $(GNU_PORTS_LINK): gnu-link-check
 	@t=$@.$$$$; echo "$(or $(GNU_LINK),shared)" >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) $(GNU_PORTS_SOURCES) $(GNU_PORTS_LINK)
+$(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) $(GNU_PORTS_SOURCES) $(GNU_PORTS_LINK) | $(ETUDESTEP)
 	@rm -f $@
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else RACH2_ARCH=$(ARCH) ./vendor/gnu/build_port.sh --all; fi
-	@touch $@
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
+	    $(GNU_STEP) -n gnu-ports -t $@ $(STEP_INPUTS) -u cross -u sysroot \
+	        -o root -o stage -o setid -o host -o wrap \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/build_port.sh --all'; fi

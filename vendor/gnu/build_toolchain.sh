@@ -33,7 +33,7 @@ WORK="$OUT/work"
 CROSS="$OUT/cross"
 SYSROOT="$OUT/sysroot"
 TARGET="$GNU_TARGET"
-PATH="$CROSS/bin:$PATH"
+PATH="$GNU_PATH$CROSS/bin:$PATH"
 export PATH
 
 case " $MAKEFLAGS " in

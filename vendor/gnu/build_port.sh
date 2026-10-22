@@ -87,14 +87,16 @@ case "$GNU_LINK" in
         ;;
 esac
 
+# A wrapper runs its compiler through the ccache that ETUDE_STEP_CCACHE
+# names when it is set, as etude-step sets it where the host has ccache.
 mkdir -p "$WRAP"
 for tool in gcc g++ c++ cpp; do
-    # shellcheck disable=SC2016 # "$@" belongs to the wrapper
-    printf '#!/bin/sh\nexec "%s" --sysroot="%s" "$@"\n' \
+    # shellcheck disable=SC2016 # "$@" and the ccache belong to the wrapper
+    printf '#!/bin/sh\nexec ${ETUDE_STEP_CCACHE:+"$ETUDE_STEP_CCACHE"} "%s" --sysroot="%s" "$@"\n' \
         "$CROSS/bin/$TARGET-$tool" "$ROOT" >"$WRAP/$TARGET-$tool"
     chmod +x "$WRAP/$TARGET-$tool"
 done
-PATH="$WRAP:$CROSS/bin:$PATH"
+PATH="$WRAP:$GNU_PATH$CROSS/bin:$PATH"
 PKG_CONFIG_LIBDIR="$ROOT/usr/lib/pkgconfig:$ROOT/usr/share/pkgconfig"
 PKG_CONFIG_SYSROOT_DIR="$ROOT"
 PKG_CONFIG_PATH=

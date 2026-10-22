@@ -210,6 +210,7 @@
         {"assertion_id": "etude_runtime", "checks": "tests/host/etude_runtime_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_sched", "checks": "tests/host/etude_sched_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_serial", "checks": "tests/host/etude_serial_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
+        {"assertion_id": "etude_step", "checks": "tests/host/etude_step_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_volume", "checks": "tests/host/etude_volume_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_winfmt", "checks": "tests/host/etude_winfmt_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"}
       ],

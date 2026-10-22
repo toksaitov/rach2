@@ -10,7 +10,9 @@
 # agents.list records the packages GNU_AGENTS names and agents-all.list every
 # recipe, each rewritten only when the list changes, so that the root image
 # that installs them is built again then. Each rule writes a temporary named
-# by the shell's process ID, as mk/gnu.mk says.
+# by the shell's process ID, as mk/gnu.mk says. A package's stamp runs
+# through etude-step as the steps of mk/gnu.mk do, with the package's stage
+# as its output.
 GNU_AGENTS_ALL = $(sort $(patsubst vendor/gnu/agents/packages/%.sh,%,$(wildcard vendor/gnu/agents/packages/*.sh)))
 GNU_AGENTS_ON = $(if $(filter all,$(GNU_AGENTS)),$(GNU_AGENTS_ALL),$(sort $(GNU_AGENTS)))
 GNU_AGENTS_LIST = $(GNU_OUT)/agents.list
@@ -19,6 +21,7 @@ GNU_AGENTS_STAMPS = $(patsubst %,$(GNU_OUT)/agents/%.stamp,$(filter $(GNU_AGENTS
 GNU_AGENTS_ALL_STAMPS = $(patsubst %,$(GNU_OUT)/agents/%.stamp,$(GNU_AGENTS_ALL))
 # The sources of every package's stamp, besides the package's own recipe.
 GNU_AGENTS_SOURCES = vendor/gnu/agents/fetch_agents.sh vendor/gnu/arch.sh
+GNU_STEP_STAMPS += $(wildcard $(GNU_OUT)/agents/*.stamp)
 
 .PHONY: gnu-agents gnu-agents-check
 gnu-agents: $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS)
@@ -39,7 +42,7 @@ $(GNU_AGENTS_ALL_LIST): gnu-agents-check
 	@t=$@.$$$$; echo "$(GNU_AGENTS_ALL)" >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES) | $(SHA256TOOL)
+$(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@
-	@RACH2_ARCH=$(ARCH) ./vendor/gnu/agents/fetch_agents.sh $*
-	@touch $@
+	@$(STEP) -r $(GNU_OUT) -n gnu-agents-$* -t $@ $(STEP_INPUTS) -o agents/$* \
+	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/agents/fetch_agents.sh $*'

@@ -83,6 +83,9 @@ VENDOR_COMMON = vendor/musl/muslgcc mk/arch.sh
 VENDOR_STAGE = $(ARCH_BUILD)/vendor
 BUSYBOX_STAGE = $(VENDOR_STAGE)/busybox
 TCC_STAGE    = $(VENDOR_STAGE)/tcc
+DROPBEAR_STAGE = $(VENDOR_STAGE)/dropbear
+PDPMAKE_STAGE = $(VENDOR_STAGE)/pdpmake
+E2FSPROGS_STAGE = $(VENDOR_STAGE)/e2fsprogs
 BUSYBOX_BIN  = $(BUSYBOX_STAGE)/busybox
 BUSYBOX_SUID_BIN = $(BUSYBOX_STAGE)/busybox-suid
 DROPBEAR_BIN = $(VENDOR_STAGE)/dropbear/dropbearmulti
@@ -140,6 +143,18 @@ GUESTCHECK      = build/tools/verify/guestcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
 
+# The store of step outputs that every copy on the host shares
+# (tools/etude/Readme.md, The step store): /var/cache/rach2-store where that
+# directory exists, and none where it does not or where RACH2_STORE is set
+# empty, as a release's full run sets it. Each stamped step runs through
+# etude-step: the vendored projects here, and the GNU layer in mk/gnu*.mk.
+# STEP_INPUTS gives it the rule's prerequisites, a stamp of another step with
+# -d and every other file with -i; order-only prerequisites are not inputs.
+RACH2_STORE ?= $(wildcard /var/cache/rach2-store)
+ETUDESTEP       = build/tools/etude/etude-step
+STEP            = $(ETUDESTEP) -s '$(RACH2_STORE)' -a $(ARCH)
+STEP_INPUTS     = $(foreach f,$^,$(if $(filter %.stamp,$f),-d,-i) $f)
+
 .PHONY: all clean distclean images musl-programs test preflight check-sources \
         test-image os-simple-image os-real-image os-real-disk \
         rach2-metal rach2-metal-image \
@@ -180,11 +195,15 @@ e2fsprogs: $(E2FSPROGS_STAMP)
 include mk/dryrun.mk
 
 # --- The stamp rules. Each removes the stamp and the binary it expects,
-#     runs its build script, requires a binary that is not empty, and then
-#     touches the stamp. With the binary gone first, a script that exits 0
-#     without staging one cannot pass on an old one; with the stamp gone
-#     first, any failure leaves no stamp, so the next make tries again.
-#     .DELETE_ON_ERROR removes a stamp whose final touch fails. ---
+#     runs its build script through etude-step, which takes the outputs from
+#     the store instead when it has them and writes the stamp, and then
+#     requires a binary that is not empty. The command etude-step runs
+#     checks that binary too, so that the store takes no build without it.
+#     With the binary gone first, a script that exits 0 without staging one
+#     cannot pass on an old one; with the stamp gone first, any failure leaves
+#     no stamp, so the next make tries again. .DELETE_ON_ERROR removes a
+#     stamp whose last check fails. Each step's key counts the cross compiler
+#     and the host's, which builds the projects' own tools. ---
 .DELETE_ON_ERROR:
 
 # build_libc.sh applies the patches patches/series names after the extract,
@@ -195,12 +214,15 @@ include mk/dryrun.mk
 # exists.
 LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch)
 
-$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES) | $(SHA256TOOL)
+$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@ $(LIBC_A)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/musl/build_libc.sh && echo "libc: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n libc -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) \
+	        -o $(ARCH_MUSL) -o $(MUSL_CRYPT_SRC) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/musl/build_libc.sh && test -s $(LIBC_A)' && \
+	    echo "libc: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(LIBC_A) || { echo "libc: build produced no libc.a" >&2; exit 1; }
 	@{ find $(ARCH_MUSL) -type f | sort; echo $(MUSL_CRYPT_SRC); } > $(LIBC_OUTPUTS_LIST)
-	@touch $@
 
 # The patches are a prerequisite for the same reason musl's are:
 # `build_busybox.sh` applies everything under vendor/busybox/patches/ after it
@@ -213,50 +235,63 @@ BUSYBOX_PATCHES = vendor/busybox/patches $(wildcard vendor/busybox/patches/*.pat
 
 $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
                   vendor/busybox/rach2-suid.config $(VENDOR_COMMON) \
-                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP) | $(SHA256TOOL)
+                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	    $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    $(BUSYBOX_STAGE)/applet_tables-suid.h \
 	    $(BUSYBOX_STAGE)/config-main \
 	    $(BUSYBOX_STAGE)/config-suid
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/busybox/build_busybox.sh && echo "busybox: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n busybox -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(BUSYBOX_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/busybox/build_busybox.sh && test -s $(BUSYBOX_BIN)' && \
+	    echo "busybox: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
-	@touch $@
 
 $(TCC_STAMP): vendor/tcc/build_tcc.sh $(wildcard vendor/tcc/rach2-*.patch) \
-              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL)
+              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@ $(TCC_BIN) $(TCC_STAGE)/libtcc1.a \
 	    $(TCC_STAGE)/include/stdarg.h
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/tcc/build_tcc.sh && echo "tcc: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n tcc -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(TCC_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/tcc/build_tcc.sh && test -s $(TCC_BIN)' && \
+	    echo "tcc: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(TCC_BIN) || { echo "tcc: build produced no $(TCC_BIN)" >&2; exit 1; }
 	@find $(TCC_STAGE) -type f | sort > $(TCC_OUTPUTS_LIST)
-	@touch $@
 
 # pdpmake, the make that runs on Rach2. Its patches are prerequisites for
 # the reason musl's are: they are applied at extraction, so a stamp that
 # predates one would keep a make whose built-in rules name a compiler this image
 # does not have and whose default link this system's compiler refuses.
 $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
-                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ELFCHECK)
+                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ELFCHECK) $(ETUDESTEP)
 	@rm -f $@ $(PDPMAKE_BIN)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/pdpmake/build_pdpmake.sh && echo "pdpmake: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n pdpmake -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(PDPMAKE_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/pdpmake/build_pdpmake.sh && test -s $(PDPMAKE_BIN)' && \
+	    echo "pdpmake: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(PDPMAKE_BIN) || { echo "pdpmake: build produced no $(PDPMAKE_BIN)" >&2; exit 1; }
-	@touch $@
 
 # e2fsprogs, of which the images stage e2fsck, resize2fs, mke2fs, tune2fs
 # and dumpe2fs. The patch manifest is a prerequisite as Dropbear's is below,
-# and mke2fs.conf is one because mke2fs compiles it in as its defaults.
+# and mke2fs.conf is one because mke2fs compiles it in as its defaults. The
+# library sources of the extracted tree are an output as well, less the
+# objects and the makefiles, since two host tests compile its unix_io.c with
+# the configuration the build wrote (tests/host/Readme.md).
+E2FSPROGS_LIB = $(ARCH_VENDOR)/e2fsprogs/$(notdir $(E2FSPROGS_TARBALL:.tar.gz=))/lib
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
                     vendor/e2fsprogs/mke2fs.conf \
-                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL)
+                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/e2fsprogs/build_e2fsprogs.sh && echo "e2fsprogs: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n e2fsprogs -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) \
+	        -o $(E2FSPROGS_STAGE) -o $(E2FSPROGS_LIB) -x Makefile -x '*.o' -x '*.a' \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/e2fsprogs/build_e2fsprogs.sh && test -s $(E2FSCK_BIN)' && \
+	    echo "e2fsprogs: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(E2FSCK_BIN) || { echo "e2fsprogs: build produced no $(E2FSCK_BIN)" >&2; exit 1; }
 	@test -s $(RESIZE2FS_BIN) || { echo "e2fsprogs: build produced no $(RESIZE2FS_BIN)" >&2; exit 1; }
 	@test -s $(MKE2FS_BIN) || { echo "e2fsprogs: build produced no $(MKE2FS_BIN)" >&2; exit 1; }
 	@test -s $(TUNE2FS_BIN) || { echo "e2fsprogs: build produced no $(TUNE2FS_BIN)" >&2; exit 1; }
 	@test -s $(DUMPE2FS_BIN) || { echo "e2fsprogs: build produced no $(DUMPE2FS_BIN)" >&2; exit 1; }
-	@touch $@
 
 # The patch manifest is a prerequisite for the reason musl's is: the script
 # applies what patches/series names, so a series edit or a patch edit makes
@@ -264,11 +299,13 @@ $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
 DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/patches/*.patch)
 
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h $(VENDOR_COMMON) \
-                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL)
+                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
 	@rm -f $@ $(DROPBEAR_BIN)
-	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); RACH2_ARCH=$(ARCH) ./vendor/dropbear/build_dropbear.sh && echo "dropbear: result: built in $$(($$(date +%s)-t0))s"; fi
+	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
+	    $(STEP) -n dropbear -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(DROPBEAR_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$(ARCH) ./vendor/dropbear/build_dropbear.sh && test -s $(DROPBEAR_BIN)' && \
+	    echo "dropbear: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
-	@touch $@
 
 # --- Missing vendored outputs. A stamp says its script ran; the rules use
 #     the files the script staged. When one of those files is gone, the
@@ -634,6 +671,12 @@ $(ETUDETOOLING): $(ETUDE_TOOLING_SRC) tools/etude/include/etude/tooling.h \
 $(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99
+
+# etude-step (tools/etude/step/etude_step.c), which runs each stamped step of
+# the build through the host's store of step outputs.
+$(ETUDESTEP): $(ETUDE_STEP_SRC) utils/sha256.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Iutils
 
 # etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
 # starts beside a case, built here so that `make` compiles it under the host
@@ -1561,6 +1604,17 @@ include mk/gnu-agents.mk
 include mk/gnu-image.mk
 include tests/system/suites.mk
 
+# Without the store, as in a release's full run, no output the store gave may
+# stand: the stamp of each step whose outputs came from the store, or are
+# links into it, is removed as make reads this file, so that the step is
+# built again in this copy before anything uses it.
+STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
+              $(E2FSPROGS_STAMP) $(GNU_STEP_STAMPS)
+ifeq ($(RACH2_STORE)$(DRY_RUN),)
+_ := $(shell for f in $(STEP_STAMPS); do \
+        grep -qs '^etude-step 1 [0-9a-f]* store$$' "$$f" && rm -f "$$f"; done; :)
+endif
+
 # The host programs the build itself needs, which `all` builds and the
 # compilation database generator reads by a dry run of their rules; named
 # after the includes that define them. The KRFFS programs and the host tests
@@ -1573,6 +1627,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEHOST) \
              $(ETUDEBRIDGE) $(ETUDEPORTS) $(ETUDELEDGER) $(ETUDEHOLD) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
+             $(ETUDESTEP) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer

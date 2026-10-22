@@ -5,7 +5,11 @@
 # Sourced by the GNU layer's scripts, which set REPO first. It sets:
 #
 #   GNU_OUT       the layer's build tree: build/vendor/gnu for i686 and
-#                 build/x86_64/vendor/gnu for x86-64
+#                 build/x86_64/vendor/gnu for x86-64, or RACH2_GNU_OUT, the
+#                 store's entry that etude-step builds a step in (mk/gnu.mk)
+#   GNU_PATH      what a script puts before the cross compilers on its path:
+#                 the directory of ccache's compiler names that etude-step
+#                 gives as ETUDE_STEP_SHIMS, and a colon, or nothing
 #   GNU_TARGET    the toolchain's target, `i686-linux-gnu` or
 #                 `x86_64-rach2-linux-gnu`; the build host is an x86-64
 #                 Linux, whose own compilers are named x86_64-linux-gnu-gcc
@@ -23,7 +27,8 @@
 
 . "$REPO/mk/arch.sh"
 
-GNU_OUT="$REPO/build$ARCH_SUFFIX/vendor/gnu"
+GNU_OUT="${RACH2_GNU_OUT:-$REPO/build$ARCH_SUFFIX/vendor/gnu}"
+GNU_PATH="${ETUDE_STEP_SHIMS:+$ETUDE_STEP_SHIMS:}"
 case "$RACH2_ARCH" in
     i686)
         GNU_TARGET=i686-linux-gnu

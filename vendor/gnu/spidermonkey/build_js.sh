@@ -54,7 +54,7 @@ SYSROOT="$OUT/sysroot"
 RUST="$OUT/rust"
 ROOT="$OUT/js"
 TARGET="$GNU_TARGET"
-PATH="$RUST/bin:$CROSS/bin:$PATH"
+PATH="$GNU_PATH$RUST/bin:$CROSS/bin:$PATH"
 CARGO_HOME="$RUST/cargo-home"
 CARGO_BUILD_JOBS="${GNU_JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
 export PATH CARGO_HOME CARGO_BUILD_JOBS

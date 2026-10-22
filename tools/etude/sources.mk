@@ -74,6 +74,10 @@ ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
 # volumes for etude-tooling, on every platform etude-tooling runs on.
 ETUDE_VOLUME_SRC = tools/etude/volume/etude_volume.c tools/etude/volume/volume.c
 
+# etude-step, which runs a step of the build through the host's store of step
+# outputs, on Linux and macOS.
+ETUDE_STEP_SRC = tools/etude/step/etude_step.c utils/sha256.c
+
 # etude-legacy, the preparation adapter of the suites of tests/run and their
 # set driver, on Linux and macOS.
 ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
