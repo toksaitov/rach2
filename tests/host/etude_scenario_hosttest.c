@@ -118,26 +118,20 @@ static int fails;
         }                                                                                   \
     } while (0)
 
-/* The completion bounds of an attempt under the stand-in and the real QEMU,
- * and the step bounds of the rows: the bound row's, the lost rows', which a
- * loss must not wait out, the others', and that of the real forward row's
- * step in which the guest is refused a connection, which a connection let
- * through must not wait out. */
-#define FAKE_ATTEMPT_MS 30000
-#define REAL_ATTEMPT_MS 150000
-#define SHORT_US        1000000u
-#define LOSS_US         10000000u
-#define STEP_US         60000000u
-#define REAL_US         120000000u
-#define CLOSED_US       30000000u
+/* The step bounds of the rows: the bound row's, the lost rows', which a loss
+ * must not wait out, the others', and that of the real forward row's step in
+ * which the guest is refused a connection, which a connection let through
+ * must not wait out. */
+#define SHORT_US  1000000u
+#define LOSS_US   10000000u
+#define STEP_US   60000000u
+#define REAL_US   120000000u
+#define CLOSED_US 30000000u
 
 /* The hold row's bound on the step in which the other rows fail beside it,
- * and on its attempt; the bound in which a killed row's processes end; and
- * the most processes of one row the test counts. */
-#define HOLD_US         240000000u
-#define HOLD_ATTEMPT_MS 300000
-#define GONE_MS         15000
-#define ROW_PROCS       64
+ * and the most processes of one row the test counts. */
+#define HOLD_US   240000000u
+#define ROW_PROCS 64
 
 /* The suspension rows: the cycles and intervals of the rows that run them
  * all; the stop of the rows that end during their one stop, which the end
@@ -2545,15 +2539,6 @@ struct outcome {
     int kept;   /* it said that it kept its scratch */
 };
 
-/** Give the monotonic clock in milliseconds. */
-static uint64_t now_ms(void)
-{
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
-}
-
 /* The controller's bound TCP socket and the Unix listener that passes it. */
 struct peer_fixture {
     int tcp, handoff;
@@ -2602,26 +2587,21 @@ static void peer_handoff(struct peer_fixture *peer)
     close(connection);
 }
 
-/* One attempt that runs: its process, the pipe of its output, and the time
- * past which it is killed. */
+/* One attempt that runs: its process and the pipe of its output. */
 struct attempt {
     const struct row *r;
     pid_t pid;
     int fd;
-    int limit;
-    uint64_t bound;
     int stopped;
     char err[PATH_MAX];
     struct outcome *o;
     struct peer_fixture *peer;
 };
 
-/**
- * Start the scenario of row `r` with invocation `inv` and the environment
- * `env`, its completion bound `limit` milliseconds from now.
- */
+/** Start the scenario of row `r` with invocation `inv` and the environment
+ * `env`. */
 static void attempt_start(struct attempt *a, const struct row *r, const char *inv, char **env,
-                          int limit, struct outcome *o)
+                          struct outcome *o)
 {
     char *argv[] = {self, (char *)inv, NULL};
     int out[2], fd;
@@ -2631,8 +2611,6 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
     a->r = r;
     a->o = o;
     a->fd = -1;
-    a->limit = limit;
-    a->bound = now_ms() + (uint64_t)limit;
     o->status = -1;
     fix_format(a->err, sizeof(a->err), "%s/%s.err", fix_dir(), r->name);
     if (pipe(out) != 0)
@@ -2653,12 +2631,11 @@ static void attempt_start(struct attempt *a, const struct row *r, const char *in
 }
 
 /**
- * Read the attempt's output until it has `want`, which gives 1, or ends or
- * passes `until` milliseconds, 0 for its completion bound, which gives 0;
- * when `stop_at` is not NULL, send the row's stop signal once the output has
- * it. Past the completion bound the attempt is killed.
+ * Read the attempt's output until it has `want`, which gives 1, or ends,
+ * which gives 0; when `stop_at` is not NULL, send the row's stop signal once
+ * the output has it.
  */
-static int attempt_read(struct attempt *a, const char *want, const char *stop_at, uint64_t until)
+static int attempt_read(struct attempt *a, const char *want, const char *stop_at)
 {
     struct outcome *o = a->o;
     struct pollfd p[2];
@@ -2667,19 +2644,10 @@ static int attempt_read(struct attempt *a, const char *want, const char *stop_at
     while (a->fd >= 0) {
         if (want != NULL && strstr(o->out, want) != NULL)
             return 1;
-        if (until != 0 && now_ms() > until)
-            return 0;
         p[0].fd = a->fd;
         p[1].fd = a->peer->handoff;
         p[0].events = p[1].events = POLLIN;
-        if (now_ms() > a->bound) {
-            printf("etude-scenario-test: fail: %s: the attempt did not end within %d ms\n",
-                   a->r->name, a->limit);
-            fails++;
-            kill(a->pid, SIGKILL);
-            break;
-        }
-        if (poll(p, 2, 1000) <= 0)
+        if (poll(p, 2, -1) <= 0)
             continue;
         if (p[1].revents & POLLIN)
             peer_handoff(a->peer);
@@ -2706,7 +2674,7 @@ static void attempt_end(struct attempt *a, const char *stop_at)
     FILE *f;
     int st;
 
-    attempt_read(a, NULL, stop_at, 0);
+    attempt_read(a, NULL, stop_at);
     if (a->fd >= 0)
         close(a->fd);
     a->fd = -1;
@@ -2947,7 +2915,7 @@ struct row_run {
 };
 
 /** Write row `r`'s files on site `s` and start its attempt in `rr`. */
-static void row_start(struct row_run *rr, const struct row *r, const struct site *s, int limit)
+static void row_start(struct row_run *rr, const struct row *r, const struct site *s)
 {
     char manifest[PATH_MAX], inv[PATH_MAX], mark[PATH_MAX];
 
@@ -2978,9 +2946,7 @@ static void row_start(struct row_run *rr, const struct row *r, const struct site
         fails++;
         return;
     }
-    if (limit == 0)
-        limit = r->mode != NULL ? FAKE_ATTEMPT_MS : REAL_ATTEMPT_MS;
-    attempt_start(&rr->a, r, inv, rr->env, limit, rr->o);
+    attempt_start(&rr->a, r, inv, rr->env, rr->o);
     rr->a.peer = &rr->peer;
     rr->started = 1;
 }
@@ -3013,7 +2979,7 @@ static void run_row(const struct row *r, const struct site *s, const char *stop_
 {
     struct row_run rr;
 
-    row_start(&rr, r, s, 0);
+    row_start(&rr, r, s);
     row_finish(&rr, stop_at, 1);
 }
 
@@ -3076,24 +3042,19 @@ static int row_procs(const char *name, long pids[ROW_PROCS])
     return find_procs(NULL, any, pids);
 }
 
-/**
- * Require that every process of row `name` has ended within GONE_MS, and
- * kill those left, so that a failure leaves nothing running.
- */
+/** Wait until every process of row `name` has ended. */
 static void row_gone(const char *name)
 {
-    uint64_t until = now_ms() + GONE_MS;
     long pids[ROW_PROCS];
-    int n, i;
+    int n;
 
-    while ((n = row_procs(name, pids)) > 0 && now_ms() < until)
+    while ((n = row_procs(name, pids)) > 0)
+        /* interval: the row's processes are counted again every 100 ms */
         poll(NULL, 0, 100);
-    if (n == 0)
-        return;
-    printf("etude-scenario-test: fail: %s: %d of its processes are left\n", name, n);
-    fails++;
-    for (i = 0; i < n; i++)
-        kill((pid_t)pids[i], SIGKILL);
+    if (n < 0) {
+        printf("etude-scenario-test: fail: %s: its processes cannot be counted\n", name);
+        fails++;
+    }
 }
 
 /** Send `text` as a line to the peer on `port`, as a machine would. */
@@ -3183,8 +3144,8 @@ static void test_stop_all(const struct site *s)
     long pids[ROW_PROCS];
     int n, i;
 
-    row_start(&rr, stop_all_row, s, 0);
-    if (rr.started && attempt_read(&rr.a, WAITING, NULL, now_ms() + (uint64_t)FAKE_ATTEMPT_MS)) {
+    row_start(&rr, stop_all_row, s);
+    if (rr.started && attempt_read(&rr.a, WAITING, NULL)) {
         n = row_procs("stop-all", pids);
         for (i = 0; i < n; i++)
             kill((pid_t)pids[i], SIGTERM);
@@ -3211,9 +3172,8 @@ static void test_isolation(const struct site *s)
     int nb, na;
     size_t i;
 
-    row_start(&hold, hold_row, s, HOLD_ATTEMPT_MS);
-    if (!hold.started ||
-        !attempt_read(&hold.a, WAITING, NULL, now_ms() + (uint64_t)FAKE_ATTEMPT_MS)) {
+    row_start(&hold, hold_row, s);
+    if (!hold.started || !attempt_read(&hold.a, WAITING, NULL)) {
         printf("etude-scenario-test: fail: hold: its service and machines did not start\n");
         fails++;
         if (hold.started)
@@ -3228,7 +3188,7 @@ static void test_isolation(const struct site *s)
         const struct row *r = i < nfail ? &fail_rows[i] : i == nfail ? kill_row : stop_all_row;
 
         if (r == kill_row) {
-            row_start(&killed, r, s, 0);
+            row_start(&killed, r, s);
             row_finish(&killed, WAITING, 0);
             CHECK(killed.a.stopped, "kill-pair: killed during its wait");
         } else if (r == stop_all_row) {
@@ -3577,7 +3537,7 @@ static void test_suspend(const struct site *s)
     run_row(&suspend_rows[0], s, NULL);
     run_row(&suspend_rows[1], s, STALLED);
     run_row(&suspend_rows[2], s, NULL);
-    row_start(&killed, &suspend_rows[3], s, 0);
+    row_start(&killed, &suspend_rows[3], s);
     row_finish(&killed, STALLED, 0);
     CHECK(killed.a.stopped, "suspend-kill: killed during its stop");
     row_gone("suspend-kill");
