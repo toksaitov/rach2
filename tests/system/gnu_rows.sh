@@ -1168,8 +1168,9 @@ row_dbus() {
 # refuses to start when it has no sandbox it can use, so the DOM shows that
 # its namespaces, its chroot and its seccomp filters took. A second start
 # takes its program of 200 MB and its libraries from the file page cache,
-# where the first left them: a few disk commands, not the thousands the
-# file needs.
+# where the first left them: a few reads of the root disk, which
+# /proc/diskstats counts, not the thousands the file needs. Its writes, to
+# its profile and the logs, are not counted.
 row_chromium() {
     local before after
     cat > "$WORK/page.html" << 'EOF'
@@ -1187,10 +1188,11 @@ EOF
     has "the dumped DOM" "$OUT" '<p id="out">script ran: 42</p>'
     same "the browser's complaints of D-Bus" "$(grep -c 'dbus/' "$WORK/chromium.err")" "0"
     [ -z "$NATIVE" ] || return 0
-    before=$(awk '$1 == "disk-commands" {print $2}' /proc/disk)
+    before=$(awk '$3 == "disk0" {print $4}' /proc/diskstats)
+    [ -n "$before" ] || { fail "/proc/diskstats has no line of disk0"; return; }
     su test -c "bash -lc 'chromium-headless-shell --headless --dump-dom \
         --user-data-dir=$WORK/profile file://$WORK/page.html'" > /dev/null 2>&1
-    after=$(awk '$1 == "disk-commands" {print $2}' /proc/disk)
+    after=$(awk '$3 == "disk0" {print $4}' /proc/diskstats)
     [ $((after - before)) -lt 200 ] || fail "a second start read the disk $((after - before)) times"
 }
 
