@@ -16,6 +16,29 @@ extern void *memcpy(void *d, const void *s, unsigned long n);
 
 struct devmodel *devmodel_current;
 
+/* GCC defines __SANITIZE_ADDRESS__ under the sanitizer, and Clang answers
+   __has_feature. */
+#if defined(__SANITIZE_ADDRESS__)
+#define DEVMODEL_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define DEVMODEL_ASAN 1
+#endif
+#endif
+
+#ifdef DEVMODEL_ASAN
+extern void *__asan_memcpy(void *dst, const void *src, unsigned long n);
+#endif
+
+void devmodel_copy(void *dst, const void *src, unsigned long n)
+{
+#ifdef DEVMODEL_ASAN
+    __asan_memcpy(dst, src, n);
+#else
+    memcpy(dst, src, n);
+#endif
+}
+
 void devmodel_init(struct devmodel *m, unsigned char *durable, unsigned char *visible,
                    uint64_t bytes)
 {
@@ -52,7 +75,7 @@ void devmodel_load(struct devmodel *m)
     m->failed = 0;
     m->writes = 0;
     m->stopped = 0;
-    memcpy(m->durable, m->visible, m->bytes);
+    devmodel_copy(m->durable, m->visible, m->bytes);
 }
 
 int devmodel_read(struct devmodel *m, uint64_t lba, uint32_t count, void *buf)
@@ -60,7 +83,7 @@ int devmodel_read(struct devmodel *m, uint64_t lba, uint32_t count, void *buf)
     if (lba >= m->bytes / 512 || count > m->bytes / 512 - lba) {
         return -5;
     }
-    memcpy(buf, m->visible + lba * 512, count * 512);
+    devmodel_copy(buf, m->visible + lba * 512, count * 512);
     return 0;
 }
 
@@ -87,9 +110,9 @@ int devmodel_write(struct devmodel *m, uint64_t lba, uint32_t count, const void 
     if (!w->data) {
         return -5;
     }
-    memcpy(w->data, buf, count * 512);
+    devmodel_copy(w->data, buf, count * 512);
     m->npending++;
-    memcpy(m->visible + lba * 512, buf, count * 512);
+    devmodel_copy(m->visible + lba * 512, buf, count * 512);
     return 0;
 }
 
@@ -101,7 +124,8 @@ static void settle(struct devmodel *m, int n)
     int i;
 
     for (i = 0; i < n; i++) {
-        memcpy(m->durable + m->pending[i].lba * 512, m->pending[i].data, m->pending[i].count * 512);
+        devmodel_copy(m->durable + m->pending[i].lba * 512, m->pending[i].data,
+                      m->pending[i].count * 512);
         free(m->pending[i].data);
     }
     for (i = n; i < m->npending; i++) {
@@ -134,9 +158,9 @@ void devmodel_snapshot(const struct devmodel *m, int keep, unsigned char *out)
 {
     int i, from = keep >= m->npending ? 0 : m->npending - keep;
 
-    memcpy(out, m->durable, m->bytes);
+    devmodel_copy(out, m->durable, m->bytes);
     for (i = from; i < m->npending; i++) {
-        memcpy(out + m->pending[i].lba * 512, m->pending[i].data, m->pending[i].count * 512);
+        devmodel_copy(out + m->pending[i].lba * 512, m->pending[i].data, m->pending[i].count * 512);
     }
 }
 

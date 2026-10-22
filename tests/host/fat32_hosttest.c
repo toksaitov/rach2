@@ -1379,7 +1379,7 @@ static void load_snapshot(const unsigned char *what)
         printf("fat32_hosttest: the cache did not empty for a snapshot\n");
         exit(1);
     }
-    __builtin_memcpy(image, what, IMG_BYTES);
+    devmodel_copy(image, what, IMG_BYTES);
     devmodel_load(&model);
 }
 

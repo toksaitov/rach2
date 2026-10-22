@@ -935,7 +935,7 @@ static void load_snapshot(const unsigned char *what)
         printf("exfat_hosttest: the cache did not empty for a snapshot\n");
         exit(1);
     }
-    __builtin_memcpy(image, what, (unsigned long)image_sectors * 512);
+    devmodel_copy(image, what, (unsigned long)image_sectors * 512);
     devmodel_load(&model);
 }
 

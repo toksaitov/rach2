@@ -53,6 +53,13 @@ struct devmodel {
 /* The model `block_flush` reaches. */
 extern struct devmodel *devmodel_current;
 
+/** Copy `n` bytes from `src` to `dst`, which do not overlap. A host test's
+ * `memcpy` is the kernel's byte loop of rach2/sys/lib/kstring.c, which the
+ * address sanitizer checks a byte at a time, and the model copies images of
+ * megabytes; under the sanitizer this is its `__asan_memcpy`, which checks
+ * both ranges once and copies as the C library does. */
+void devmodel_copy(void *dst, const void *src, unsigned long n);
+
 /** Make `m` the model over `bytes` of medium, both images the test's own,
  * and the one `block_flush` reaches. `m` is zeroed or was made before; the
  * writes still pending in it are freed. */
