@@ -23,8 +23,12 @@
 #
 # The program writes the case's selection, one line for each check, and
 # etude-host runs them several at once, each with a scratch directory of its
-# own as its TMPDIR, and prints a result line for every one. The program then
-# writes the case's report records on its standard output
+# own as its TMPDIR, and prints a result line for every one. No check is
+# ended for its time: as each ends, etude-host writes the report record
+# `progress checks N`, N the checks ended so far, which this program passes
+# to its standard output as it comes, so that the case's watchdog ends a run
+# only when no check has ended for longer than its gap bound. The program
+# then writes the case's other report records on its standard output
 # (tools/etude/Readme.md, Report records): an assertion for each check, which
 # passes when etude-host's line for it is a PASS, and `listed`. The manifest
 # is the list of a case's checks: an assertion that names a check the tree
@@ -93,10 +97,6 @@ case "${ARCH:-i686}" in
     x86_64) VENDOR_TREE=build/x86_64/vendor-work ;;
     *) VENDOR_TREE=vendor ;;
 esac
-# A test's bound when it gives none on a `host-seconds:` line. It only ends a
-# hung test: one of these tests drives a device that reports an error on
-# every transmit, and the first fault it found was an unbounded loop.
-WATCHDOG_SECS=60
 TAB=$(printf '\t')
 
 if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
@@ -177,27 +177,28 @@ fail() {
 
 # ---- The selection. ----
 
-# check ID NAME SECONDS MODE LABEL COMPILE RUN: add the check NAME, the
-# assertion ID, to the selection when the case names it. MODE is `shared`,
-# or `alone` for a check that runs with no other beside it. COMPILE builds
-# the check, and may be empty; RUN runs it, and its exit status 0 is a pass.
-# Both are commands of sh(1), run from the root of the tree. With
-# HOST_PRINT_COMMANDS set, print COMPILE instead.
+# check ID NAME MODE LABEL COMPILE RUN: add the check NAME, the assertion
+# ID, to the selection when the case names it. MODE is `shared`, or `alone`
+# for a check that runs with no other beside it. COMPILE builds the check,
+# and may be empty; RUN runs it, and its exit status 0 is a pass. Both are
+# commands of sh(1), run from the root of the tree. The checks of one mode
+# start in the order they are added. With HOST_PRINT_COMMANDS set, print
+# COMPILE instead.
 check()
 {
     if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
-        [ -z "$6" ] || echo "$6"
+        [ -z "$5" ] || echo "$5"
         return
     fi
-    case "$1$2$3$4$5$6$7" in
+    case "$1$2$3$4$5$6" in
         *"$TAB"*)
             echo "host: $2: a check's fields may not hold a tab" >&2
             exit 1 ;;
     esac
-    printf '%s\t%s\n' "$1" "$5" >>"$W/found"
+    printf '%s\t%s\n' "$1" "$4" >>"$W/found"
     grep -qxF -e "$1" "$W/declared" || return 0
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" "$6" "$7" >>"$SELECTION"
-    printf '%s\t%s\n' "$1" "$5" >>"$W/ids"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$2" "$3" "$4" "$5" "$6" >>"$SELECTION"
+    printf '%s\t%s\n' "$1" "$4" >>"$W/ids"
 }
 
 # wrapped_deps FILE TAG: return 1 when a TAG line of FILE is wrapped, its list
@@ -237,10 +238,12 @@ group_of()
 # columns and a test with more dependencies than fit has a second. A
 # `host-cflags:` line gives what sources outside the kernel tree need to
 # compile, their include directories and the warnings their build turns off;
-# the fixed flags cover every kernel test. A `host-seconds:` line gives a
-# bound longer than the default, as the file system interruption matrices
-# need, and a `host-alone:` line makes a test with a window of a fraction of
-# a second, which a machine busy with the other checks could miss, run alone.
+# the fixed flags cover every kernel test. A `host-first:` line starts a test
+# that runs for minutes, such as a file system interruption matrix, before
+# the other tests, so that a long test does not run alone at the end; the
+# rest start in the order of their names. A `host-alone:` line makes a test
+# with a window of a fraction of a second, which a machine busy with the
+# other checks could miss, run alone.
 #
 # -Wno-empty-body tolerates the kernel's `for(...);` idiom in linked sources.
 # -ffreestanding stops the compiler recognising the loops in k_memset,
@@ -271,39 +274,51 @@ group_of()
 # it is missing.
 hosttests()
 {
-    for t in tests/host/*_hosttest.c; do
-        [ -f "$t" ] || continue
-        [ -z "$1" ] || [ "$(group_of "$t")" = "$1" ] || continue
-        base="$(basename "$t" .c)"
-        deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed "s/host-deps://; s# vendor/# $VENDOR_TREE/#g" | tr '\n' ' ')"
-        extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed "s/host-cflags://; s# vendor/# $VENDOR_TREE/#g" | tr '\n' ' ')"
-        secs="$(grep -oE 'host-seconds: *[0-9]+' "$t" | grep -oE '[0-9]+' | head -1)"
-        [ -n "$secs" ] || secs=$WATCHDOG_SECS
-        mode=shared
-        ! grep -q 'host-alone:' "$t" || mode=alone
-        out="$W/$base"
-        cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
-        missing=""
-        hint=""
-        for d in $deps; do
-            [ -f "$d" ] && continue
-            missing="$missing $d"
-            case "$d" in
-                "$VENDOR_TREE"/musl/*) hint="; echo 'host: the vendored musl source is not extracted; rm $VENDOR_TREE/musl/.stamp and rebuild (make)'" ;;
-            esac
+    for first in yes no; do
+        for t in tests/host/*_hosttest.c; do
+            [ -f "$t" ] || continue
+            [ -z "$1" ] || [ "$(group_of "$t")" = "$1" ] || continue
+            if grep -q 'host-first:' "$t"; then
+                [ "$first" = yes ] || continue
+            else
+                [ "$first" = no ] || continue
+            fi
+            hosttest "$t"
         done
-        if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
-            check "${base%_hosttest}" "$base" "$secs" "$mode" "$base" "$cmd" "$out"
-        elif ! wrapped_deps "$t" "host-deps:"; then
-            check "${base%_hosttest}" "$base" "$WATCHDOG_SECS" "$mode" "$base" "" \
-                "echo 'host: $t: a host-deps: line is wrapped; repeat the host-deps: prefix on the next line instead'; exit 1"
-        elif [ -n "$missing" ]; then
-            check "${base%_hosttest}" "$base" "$WATCHDOG_SECS" "$mode" "$base" "" \
-                "echo 'host: $base: missing host-deps:$missing'$hint; exit 1"
-        else
-            check "${base%_hosttest}" "$base" "$secs" "$mode" "$base" "$cmd" "$out"
-        fi
     done
+}
+
+# hosttest FILE: add the host test FILE.
+hosttest()
+{
+    t=$1
+    base="$(basename "$t" .c)"
+    deps="$(grep -oE 'host-deps:[^*]*' "$t" | sed "s/host-deps://; s# vendor/# $VENDOR_TREE/#g" | tr '\n' ' ')"
+    extra="$(grep -oE 'host-cflags:[^*]*' "$t" | sed "s/host-cflags://; s# vendor/# $VENDOR_TREE/#g" | tr '\n' ' ')"
+    mode=shared
+    ! grep -q 'host-alone:' "$t" || mode=alone
+    out="$W/$base"
+    cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST $SAN -g -O1 -Wno-empty-body $FREESTANDING $INC $extra -o $out $t $deps"
+    missing=""
+    hint=""
+    for d in $deps; do
+        [ -f "$d" ] && continue
+        missing="$missing $d"
+        case "$d" in
+            "$VENDOR_TREE"/musl/*) hint="; echo 'host: the vendored musl source is not extracted; rm $VENDOR_TREE/musl/.stamp and rebuild (make)'" ;;
+        esac
+    done
+    if [ -n "${HOST_PRINT_COMMANDS:-}" ]; then
+        check "${base%_hosttest}" "$base" "$mode" "$base" "$cmd" "$out"
+    elif ! wrapped_deps "$t" "host-deps:"; then
+        check "${base%_hosttest}" "$base" "$mode" "$base" "" \
+            "echo 'host: $t: a host-deps: line is wrapped; repeat the host-deps: prefix on the next line instead'; exit 1"
+    elif [ -n "$missing" ]; then
+        check "${base%_hosttest}" "$base" "$mode" "$base" "" \
+            "echo 'host: $base: missing host-deps:$missing'$hint; exit 1"
+    else
+        check "${base%_hosttest}" "$base" "$mode" "$base" "$cmd" "$out"
+    fi
 }
 
 # The programs that decide verdicts carry their own selftests, run by the
@@ -318,7 +333,7 @@ checkers()
         base=$(basename "$t" .c)
         out="$W/${base}_selftest"
         cmd="$CC -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 $SAN -g -O1 -Wall -Wextra -Werror -o $out $t"
-        check "$base" "${base}_selftest" "$WATCHDOG_SECS" shared "$base selftest under the sanitizers" \
+        check "$base" "${base}_selftest" shared "$base selftest under the sanitizers" \
             "$cmd" "$out --selftest"
     done
 }
@@ -338,10 +353,10 @@ fuzz()
         d=tests/fuzz/corpus/$name/
         inputs=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
         if [ "$inputs" -eq 0 ]; then
-            check "$name" "fuzz_$name" "$WATCHDOG_SECS" shared "$name corpus replayed" "" \
+            check "$name" "fuzz_$name" shared "$name corpus replayed" "" \
                 "echo 'host: $name: no corpus for the harness in $d'; exit 1"
         else
-            check "$name" "fuzz_$name" "$WATCHDOG_SECS" shared "$name corpus replayed ($inputs inputs)" \
+            check "$name" "fuzz_$name" shared "$name corpus replayed ($inputs inputs)" \
                 "sh tests/fuzz/build.sh replay $name" "build/tests/fuzz/$name $d*"
         fi
     done
@@ -349,14 +364,15 @@ fuzz()
 
 # The scripted checks: the checks of tests/host over extracted kernel
 # functions and of the KRFFS host tools, the tests of the loops, ci and the
-# tools, and TinyCC's comparisons with the GNU tools.
+# tools, and TinyCC's comparisons with the GNU tools, which start in the
+# order of host.list.
 scripts()
 {
-    while IFS='|' read -r name secs label cmd; do
+    while IFS='|' read -r name label cmd; do
         case "$name" in
             ''|'#'*) continue ;;
         esac
-        check "$name" "$name" "$secs" shared "$label" "" "$cmd"
+        check "$name" "$name" shared "$label" "" "$cmd"
     done <tests/cases/host/host.list
 }
 
@@ -405,8 +421,11 @@ elif [ ! -x "$ETUDE_HOST" ]; then
     noresult="$ETUDE_HOST is not built; etude's preparation builds it"
     echo "host: $noresult" >&2
 else
-    { "$ETUDE_HOST" ${RACH2_WORKERS:+-j "$RACH2_WORKERS"} -l "$W" -s "$W/scratch" "$SELECTION"
-      echo $? >"$W/status"; } | tee "$W/out"
+    # tee ignores the stop signals, so that it passes on what etude-host
+    # prints while it ends the running checks, and the trap above removes the
+    # private directory only once etude-host has ended them.
+    { "$ETUDE_HOST" ${RACH2_WORKERS:+-j "$RACH2_WORKERS"} -p checks -l "$W" -s "$W/scratch" "$SELECTION"
+      echo $? >"$W/status"; } | (trap '' HUP INT TERM; exec tee "$W/out")
     [ "$(cat "$W/status" 2>/dev/null)" != 2 ] || noresult="etude-host refused the selection"
 fi
 

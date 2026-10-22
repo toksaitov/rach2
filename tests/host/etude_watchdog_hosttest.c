@@ -11,7 +11,7 @@
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/processor.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
- * host-seconds: 240
+ * host-first: it runs for minutes
  * host-alone: a stand-in QEMU must answer three queries within 500 ms
  * host-arch: it boots the kernel and test image of ARCH
  *

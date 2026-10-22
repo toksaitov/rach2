@@ -16,7 +16,7 @@
  * host-deps: utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror
- * host-seconds: 240
+ * host-first: it runs for minutes
  *
  * A build that passes must pass with its output whole and its workspace
  * removed; a build that fails on purpose must be a failure with the

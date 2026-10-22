@@ -32,7 +32,7 @@
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
- * host-seconds: 480
+ * host-first: it runs for minutes
  * host-arch: its guest cases boot the kernel and test image of ARCH
  *
  * A set of two suites of one case each that pass and one that fails exits 1,

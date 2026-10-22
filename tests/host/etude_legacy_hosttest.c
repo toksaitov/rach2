@@ -10,7 +10,7 @@
  * host-deps: tools/etude/posix/process.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix
  * host-cflags: -Wall -Wextra -Werror
- * host-seconds: 180
+ * host-first: it runs for minutes
  *
  * Goals have the recovery key minted, the components and then the goals
  * built, and the goals' files and the kernel's recorded with their digests, a

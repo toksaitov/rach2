@@ -1,49 +1,50 @@
 # host.list: the scripted checks of the host case host.host.scripts
-# (host.sh), one a line, as NAME|SECONDS|LABEL|COMMAND. NAME is the check's
+# (host.sh), one a line, as NAME|LABEL|COMMAND. NAME is the check's
 # assertion in tests/cases/host.host.json and names its log and scratch
-# directory, SECONDS is the bound after which the check is ended as hung,
-# LABEL is what its result line says it checked, and COMMAND runs it from the
-# root of the tree; its exit status 0 is a pass.
-machine_measure|600|the measurement drivers of tools/dev against fake commands|sh tests/system/machine_measure_test.sh
-krffs_open|600|krffs publication open|sh tests/host/extract_check.sh krffs_open
-krffs_root_lock|600|krffs root data operations under the mount's lock|sh tests/host/extract_check.sh krffs_root_lock
-krffs_stat|600|the inode number of the krffs root in the stat calls|sh tests/host/extract_check.sh krffs_stat
-kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_check.sh
-endothers|600|an init's end waits for the processes still ending|sh tests/host/endothers_check.sh
-chown|600|the set-id rules of a mounted chown|sh tests/host/extract_check.sh chown
-pagecache|600|the page cache with sys_sync's bounded wait|sh tests/host/extract_check.sh pagecache
-doom_libc|600|Doom C library on both architectures|sh tests/host/doom_libc_check.sh
-krffs_tools|600|krffs host tools' refusals, replace and edits|sh tests/host/krffs_tools_test.sh
-run_scripts|600|run scripts' command lines|sh tests/system/run_scripts_test.sh
-commit_msg|600|commit-msg hook's refusals|sh tests/system/commit_msg_test.sh
-ci|600|ci reports and bisection|sh tests/system/ci_test.sh
-ci_run|600|ci's reading of the runner's lines and of etude's history, and its stop after a killed step|sh tests/system/ci_run_test.sh
-board|600|board groups, take and the phase in progress|sh tests/system/board_test.sh
-progress|60|the manager's phase progress and delayed work|python3 -B tests/system/progress_test.py
-limited|600|the loops' reading of a usage limit|sh tests/system/limited_test.sh
-worker_park|600|the worker loop's parking during a hold and rest of a handed-back intermittent issue|sh tests/system/worker_park_test.sh
-release_resume|600|a release resumed from its record, with its runs, reruns and acceptance|sh tests/system/release_resume_test.sh
-tidy|600|the loops' cleanup of finished work|sh tests/system/tidy_test.sh
-leftovers|600|the manager's removal of failed tests, home files and landed copies|sh tests/system/leftovers_test.sh
-agents_guest|600|the agents guest's scratch removed on every exit|sh tests/system/agents_guest_test.sh
-testing_run|600|testing.sh run's quoted commands, a worktree's sync and wait's reports|sh tests/system/testing_run_test.sh
-space|600|disk admission requires a Windows reading|sh tests/system/space_test.sh
-prereq|600|prereq.sh's reports, installs and recipe|sh tests/system/prereq_test.sh
-etude_version|600|etude's versions built once, reused and kept side by side|sh tests/system/etude_version_test.sh
-etude_deploy|600|etude deployed again and after a cut, changing no clone, key or running test|sh tests/system/etude_deploy_test.sh
-etude_launch|600|installed admission before builds, worker checks, owner commands and CI|python3 -B tests/system/etude_launch_test.py
-test_status|600|the status reader against waits for the host and ports and live and stale claims|sh tests/system/test_status_check.sh
-etude_tooling|600|etude's tooling machine made once, its jobs run and their boots recorded|sh tests/system/etude_tooling_test.sh
-agents_credentials|600|the agents' credential files and log scan|python3 -B tests/system/agents_credentials_test.py
-anthropic|600|Messages tool results and streamed replies|python3 -B tests/system/fakeapi/anthropic_test.py
-gemini|600|Gemini function responses and unordered steps|python3 -B tests/system/fakeapi/gemini_test.py
-fakeapi|600|the fake API server's unordered and repeated steps|python3 -B tests/system/fakeapi/fakeapi_test.py
-install_accounts|600|the installer's kept image accounts|sh tests/system/install_accounts_test.sh
-mkext2_overlay|900|the modes an ext2 overlay adds under umask 002|sh tests/system/mkext2_overlay_test.sh
-check_asm|600|TinyCC's assemblers against GNU as|sh vendor/tcc/check_asm.sh
-check_ldscript|600|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_ldscript.sh
-together|600|the makers of several fixture files run once for a parallel request of their files|sh tests/system/together_test.sh
-host_suite|300|the host cases run their checks at once, each in its own scratch, with one result and one assertion each|sh tests/system/host_suite_test.sh
-case_select|120|tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds|python3 -B tests/system/case_select_test.py
-tooling_image|600|the GNU root's tooling job leaves no stage and no lock when a signal stops it|sh tests/system/tooling_image_test.sh
-gnu_cmake_jobs|120|the cmake port's bootstrap runs no more jobs at once than its make allows|sh tests/system/gnu_cmake_jobs_test.sh
+# directory, LABEL is what its result line says it checked, and COMMAND runs
+# it from the root of the tree; its exit status 0 is a pass. No check is
+# ended for its time. The checks start in the order of the lines, the
+# longest first, so that a long check does not run alone at the end.
+mkext2_overlay|the modes an ext2 overlay adds under umask 002|sh tests/system/mkext2_overlay_test.sh
+machine_measure|the measurement drivers of tools/dev against fake commands|sh tests/system/machine_measure_test.sh
+krffs_open|krffs publication open|sh tests/host/extract_check.sh krffs_open
+krffs_root_lock|krffs root data operations under the mount's lock|sh tests/host/extract_check.sh krffs_root_lock
+krffs_stat|the inode number of the krffs root in the stat calls|sh tests/host/extract_check.sh krffs_stat
+kstack|a new kernel stack is cleared and guarded|sh tests/host/kstack_check.sh
+endothers|an init's end waits for the processes still ending|sh tests/host/endothers_check.sh
+chown|the set-id rules of a mounted chown|sh tests/host/extract_check.sh chown
+pagecache|the page cache with sys_sync's bounded wait|sh tests/host/extract_check.sh pagecache
+doom_libc|Doom C library on both architectures|sh tests/host/doom_libc_check.sh
+krffs_tools|krffs host tools' refusals, replace and edits|sh tests/host/krffs_tools_test.sh
+run_scripts|run scripts' command lines|sh tests/system/run_scripts_test.sh
+commit_msg|commit-msg hook's refusals|sh tests/system/commit_msg_test.sh
+ci|ci reports and bisection|sh tests/system/ci_test.sh
+ci_run|ci's reading of the runner's lines and of etude's history, and its stop after a killed step|sh tests/system/ci_run_test.sh
+board|board groups, take and the phase in progress|sh tests/system/board_test.sh
+limited|the loops' reading of a usage limit|sh tests/system/limited_test.sh
+worker_park|the worker loop's parking during a hold and rest of a handed-back intermittent issue|sh tests/system/worker_park_test.sh
+release_resume|a release resumed from its record, with its runs, reruns and acceptance|sh tests/system/release_resume_test.sh
+tidy|the loops' cleanup of finished work|sh tests/system/tidy_test.sh
+leftovers|the manager's removal of failed tests, home files and landed copies|sh tests/system/leftovers_test.sh
+agents_guest|the agents guest's scratch removed on every exit|sh tests/system/agents_guest_test.sh
+testing_run|testing.sh run's quoted commands, a worktree's sync and wait's reports|sh tests/system/testing_run_test.sh
+space|disk admission requires a Windows reading|sh tests/system/space_test.sh
+prereq|prereq.sh's reports, installs and recipe|sh tests/system/prereq_test.sh
+etude_version|etude's versions built once, reused and kept side by side|sh tests/system/etude_version_test.sh
+etude_deploy|etude deployed again and after a cut, changing no clone, key or running test|sh tests/system/etude_deploy_test.sh
+etude_launch|installed admission before builds, worker checks, owner commands and CI|python3 -B tests/system/etude_launch_test.py
+test_status|the status reader against waits for the host and ports and live and stale claims|sh tests/system/test_status_check.sh
+etude_tooling|etude's tooling machine made once, its jobs run and their boots recorded|sh tests/system/etude_tooling_test.sh
+agents_credentials|the agents' credential files and log scan|python3 -B tests/system/agents_credentials_test.py
+anthropic|Messages tool results and streamed replies|python3 -B tests/system/fakeapi/anthropic_test.py
+gemini|Gemini function responses and unordered steps|python3 -B tests/system/fakeapi/gemini_test.py
+fakeapi|the fake API server's unordered and repeated steps|python3 -B tests/system/fakeapi/fakeapi_test.py
+install_accounts|the installer's kept image accounts|sh tests/system/install_accounts_test.sh
+check_asm|TinyCC's assemblers against GNU as|sh vendor/tcc/check_asm.sh
+check_ldscript|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_ldscript.sh
+together|the makers of several fixture files run once for a parallel request of their files|sh tests/system/together_test.sh
+tooling_image|the GNU root's tooling job leaves no stage and no lock when a signal stops it|sh tests/system/tooling_image_test.sh
+gnu_cmake_jobs|the cmake port's bootstrap runs no more jobs at once than its make allows|sh tests/system/gnu_cmake_jobs_test.sh
+host_suite|the host cases run their checks at once, each in its own scratch, with one result and one assertion each|sh tests/system/host_suite_test.sh
+case_select|tests/run runs the cases chosen, in their order, and refuses a wrong choice before it builds|python3 -B tests/system/case_select_test.py
+progress|the manager's phase progress and delayed work|python3 -B tests/system/progress_test.py

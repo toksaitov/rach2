@@ -21,7 +21,7 @@
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
- * host-seconds: 240
+ * host-first: it runs for minutes
  *
  * Three accounts compete for a machine of four mebibytes: four cases hold
  * memory at once while the other requests wait, no case ever finds more held

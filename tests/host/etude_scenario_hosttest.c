@@ -16,7 +16,7 @@
  * host-deps: utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -I tools/etude/guest
  * host-cflags: -I utils -Wall -Wextra -Werror
- * host-seconds: 300
+ * host-first: it runs for minutes
  * host-arch: it boots the kernel, the test image and a disk of ARCH
  *
  * Each row is one attempt of a machine case, run as the executor runs it: this

@@ -1,7 +1,8 @@
 /*
  * etude_host.c: etude-host, which runs the host checks of `tests/run host`
  * several at once on the host executor, each with a scratch directory of its
- * own, and prints one result for every check of its selection.
+ * own, and prints one result for every check of its selection, with a report
+ * record of progress as each ends.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -19,19 +20,19 @@
 #endif
 
 #include "etude/exec.h"
+#include "etude/report.h"
 #include "posix.h"
-
-/* The bound of a check's compile, in seconds; a compile declares none. */
-#define COMPILE_SECONDS 600
-
-/* The longest bound a selection may give a check, in seconds. */
-#define SECONDS_MAX 86400
 
 /* The most checks run at once. */
 #define JOBS_MAX 1024
 
 /* The time from the termination signal to the kill. */
 #define GRACE_US 2000000u
+
+/* The longest wait for a check's end before the loop looks again for a stop
+ * signal, in milliseconds, since a signal that comes just before the wait
+ * does not end it. */
+#define STOP_LOOK_MS 1000
 
 /* The lines of a failed step's log printed under its result, and the bytes
  * of the log's end read to find them. */
@@ -61,12 +62,9 @@ struct check {
     char *label;   /* what its result line says it checked */
     char *compile; /* the command that builds it, or an empty string */
     char *run;     /* the command whose exit status 0 is its pass */
-    unsigned seconds;
-    int alone; /* the check runs with no other beside it */
+    int alone;     /* the check runs with no other beside it */
     enum step step;
     struct etude_proc *proc; /* the step running, or NULL */
-    uint64_t began_us;       /* when the step started */
-    int hung;                /* the step ran past its bound and was ended */
     int stopped;             /* the step was ended by a stop signal */
     enum { WAITING, PASSED, FAILED, STOPPED } state;
 };
@@ -80,8 +78,10 @@ struct run {
     const char *scratch; /* the directory of the checks' scratch directories */
     char **env;          /* the checks' environment, with a slot for TMPDIR */
     size_t env_tmpdir;   /* the index of that slot */
+    const char *witness; /* the witness of the progress records, or NULL */
     size_t failed;
     size_t reported;
+    size_t ended; /* the checks that passed or failed */
 };
 
 /* The stop signal received, or 0. */
@@ -156,37 +156,34 @@ static unsigned long number_of(const char *s, unsigned long lo, unsigned long hi
 }
 
 /**
- * Take one line of the selection as a check: NAME, SECONDS, MODE, LABEL,
- * COMPILE and RUN, separated by tabs.
+ * Take one line of the selection as a check: NAME, MODE, LABEL, COMPILE and
+ * RUN, separated by tabs.
  *
  * @return NULL, or the reason the line is refused.
  */
 static const char *take_check(struct run *r, char *line)
 {
     struct check *c = &r->checks[r->n];
-    char *f[6];
+    char *f[5];
     size_t i;
 
-    if (split_fields(line, f, 6) != 0)
-        return "a check is six fields separated by tabs";
+    if (split_fields(line, f, 5) != 0)
+        return "a check is five fields separated by tabs";
     if (!name_ok(f[0]))
         return "a name is letters, digits, '_', '.' and '-'";
     for (i = 0; i < r->n; i++) {
         if (strcmp(r->checks[i].name, f[0]) == 0)
             return "a name is given twice";
     }
-    c->seconds = (unsigned)number_of(f[1], 1, SECONDS_MAX);
-    if (c->seconds == 0)
-        return "a bound is a whole number of seconds from 1 to 86400";
-    if (strcmp(f[2], "shared") != 0 && strcmp(f[2], "alone") != 0)
+    if (strcmp(f[1], "shared") != 0 && strcmp(f[1], "alone") != 0)
         return "a mode is shared or alone";
-    c->alone = strcmp(f[2], "alone") == 0;
-    if (*f[3] == '\0' || *f[5] == '\0')
+    c->alone = strcmp(f[1], "alone") == 0;
+    if (*f[2] == '\0' || *f[4] == '\0')
         return "a check has a label and a command that runs it";
     c->name = copy_text(f[0]);
-    c->label = copy_text(f[3]);
-    c->compile = copy_text(f[4]);
-    c->run = copy_text(f[5]);
+    c->label = copy_text(f[2]);
+    c->compile = copy_text(f[3]);
+    c->run = copy_text(f[4]);
     if (c->name == NULL || c->label == NULL || c->compile == NULL || c->run == NULL)
         return "memory ran out";
     r->n++;
@@ -384,7 +381,6 @@ static int start_step(struct run *r, struct check *c)
         spec.output_max = 4096;
         spec.grace_us = GRACE_US;
         fflush(stdout);
-        c->began_us = posix_now_us();
         if (etude_exec_start(r->ex, &spec, &c->proc) != 0)
             err = errno != 0 ? errno : EIO;
         r->env[r->env_tmpdir] = NULL;
@@ -486,11 +482,8 @@ static void describe(const struct check *c, const struct etude_exec_result *res,
                      size_t n)
 {
     const char *what = c->step == STEP_COMPILE ? "compile" : "run";
-    unsigned bound = c->step == STEP_COMPILE ? COMPILE_SECONDS : c->seconds;
 
-    if (c->hung)
-        snprintf(buf, n, "%s hung; killed after %us", what, bound);
-    else if (res == NULL)
+    if (res == NULL)
         snprintf(buf, n, "%s could not start", what);
     else if (res->end == ETUDE_END_SIGNALED)
         snprintf(buf, n, "%s, signal %d", what, res->value);
@@ -516,7 +509,11 @@ static void settle_scratch(const struct run *r, const struct check *c, int keep)
     free(dir);
 }
 
-/** Print a check's result, and free its step. */
+/**
+ * Print a check's result, and free its step. A check that passed or failed
+ * then counts toward the progress record, which is written with one write as
+ * report records must be.
+ */
 static void report(struct run *r, struct check *c, const struct etude_exec_result *res, int ok)
 {
     char *log = log_of(r, c, c->step);
@@ -539,6 +536,14 @@ static void report(struct run *r, struct check *c, const struct etude_exec_resul
     }
     settle_scratch(r, c, !ok && !c->stopped);
     fflush(stdout);
+    if (!c->stopped) {
+        r->ended++;
+        if (r->witness != NULL) {
+            printf(ETUDE_REPORT_PREFIX ETUDE_REPORT_PROGRESS " %s %lu\n", r->witness,
+                   (unsigned long)r->ended);
+            fflush(stdout);
+        }
+    }
     free(log);
     if (c->proc != NULL)
         etude_proc_free(c->proc);
@@ -575,8 +580,8 @@ static void start_check(struct run *r, struct check *c)
 static int finish(struct run *r, struct check *c)
 {
     const struct etude_exec_result *res = etude_proc_result(c->proc);
-    int ok = !c->hung && res->end == ETUDE_END_EXITED && res->value == 0 &&
-             res->cleanup == ETUDE_CLEANUP_CONFIRMED;
+    int ok =
+        res->end == ETUDE_END_EXITED && res->value == 0 && res->cleanup == ETUDE_CLEANUP_CONFIRMED;
     int err;
 
     if (!ok || c->step == STEP_RUN || c->stopped) {
@@ -607,44 +612,30 @@ static struct check *owner(struct run *r, const struct etude_proc *p)
     return NULL;
 }
 
-/**
- * End each running step that has passed its bound, and give the time until
- * the next bound, in milliseconds, between 10 and 1000.
- */
-static int expire(struct run *r)
+/** End each running step once a stop signal has come; no step is ended for
+ * its time. */
+static void stop_running(struct run *r)
 {
-    uint64_t now = posix_now_us(), next = 1000000u;
     size_t i;
 
-    for (i = 0; i < r->n; i++) {
+    for (i = 0; stop_signal && i < r->n; i++) {
         struct check *c = &r->checks[i];
-        uint64_t bound, end;
 
-        if (c->proc == NULL || c->hung || c->stopped)
-            continue;
-        bound = (uint64_t)(c->step == STEP_COMPILE ? COMPILE_SECONDS : c->seconds) * 1000000u;
-        end = c->began_us + bound;
-        if (stop_signal || now >= end) {
-            c->stopped = stop_signal != 0;
-            c->hung = !c->stopped;
+        if (c->proc != NULL && !c->stopped) {
+            c->stopped = 1;
             etude_exec_cancel(c->proc);
-        } else if (end - now < next) {
-            next = end - now;
         }
     }
-    return next < 10000u ? 10 : (int)(next / 1000u);
 }
 
 /** Whether check `a` starts before check `b`: a shared check before an alone
- * one, and of two of one mode the one with the longer bound. */
+ * one. */
 static int before(const struct check *a, const struct check *b)
 {
-    if (a->alone != b->alone)
-        return !a->alone;
-    return a->seconds > b->seconds;
+    return !a->alone && b->alone;
 }
 
-/** Order the checks as `before` says, ties as selected. */
+/** Order the checks as `before` says, those of one mode as selected. */
 static size_t *order_of(const struct run *r)
 {
     size_t *order = malloc(r->n * sizeof(*order));
@@ -680,7 +671,6 @@ static int run_all(struct run *r, unsigned jobs)
         return -1;
     while (r->reported < r->n) {
         struct etude_proc *p;
-        int wait_ms;
 
         while (!stop_signal && next < r->n) {
             struct check *c = &r->checks[order[next]];
@@ -694,8 +684,8 @@ static int run_all(struct run *r, unsigned jobs)
         }
         if (running == 0)
             break;
-        wait_ms = expire(r);
-        p = etude_exec_wait(r->ex, wait_ms);
+        stop_running(r);
+        p = etude_exec_wait(r->ex, STOP_LOOK_MS);
         if (p != NULL)
             running -= (unsigned)finish(r, owner(r, p));
         alone = alone && running > 0;
@@ -796,18 +786,22 @@ int main(int argc, char **argv)
     int opt, status;
 
     memset(&r, 0, sizeof(r));
-    while ((opt = getopt(argc, argv, "j:l:s:")) != -1) {
+    while ((opt = getopt(argc, argv, "j:l:p:s:")) != -1) {
         if (opt == 'j' && (jobs = (unsigned)number_of(optarg, 1, JOBS_MAX)) == 0)
+            opt = '?';
+        if (opt == 'p' && !name_ok(optarg))
             opt = '?';
         if (opt == 'l')
             r.logs = optarg;
+        else if (opt == 'p')
+            r.witness = optarg;
         else if (opt == 's')
             r.scratch = optarg;
         else if (opt == '?')
             break;
     }
     if (opt == '?' || optind != argc - 1 || r.logs == NULL || r.scratch == NULL) {
-        fprintf(stderr, "usage: etude-host [-j JOBS] -l LOGS -s SCRATCH SELECTION\n");
+        fprintf(stderr, "usage: etude-host [-j JOBS] [-p WITNESS] -l LOGS -s SCRATCH SELECTION\n");
         return 2;
     }
     r.logs = dir_of(r.logs);

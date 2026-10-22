@@ -12,18 +12,21 @@
 # A test with an AddressSanitizer fault and one with an undefined signed
 # overflow must fail while the caller's environment tells the sanitizers to
 # exit 0 and to go on after an error, and so must a leak where LeakSanitizer
-# runs, on Linux. A test that never ends fails as hung after its
-# `host-seconds:`; a test with a missing `host-deps:` source fails and names
+# runs, on Linux. A test with a missing `host-deps:` source fails and names
 # it; a failing test that left a file keeps its scratch directory and names
 # it; a test repeats its `not run:` line under its PASS; and a test finds
 # SIGINT and SIGQUIT at their defaults. Two `host-alone:` tests find no other
 # check's scratch directory beside theirs, though a test before them waits
 # up to ten seconds for one to start. Every check of a selection has one
-# result line, the last line of etude-host's counts them, and no scratch is
-# left but the kept directory. Each check has an assertion of its outcome in
-# the case's report; a test the manifest does not name is not run and fails
-# `listed`, and so does an assertion the tree has no test for, which fails
-# too. A selection with a name given twice is refused and runs nothing.
+# result line, each followed by the report record `progress checks N`, N
+# counting the checks ended, the last line of etude-host's counts them, and
+# no scratch is left but the kept directory. Each check has an assertion of
+# its outcome in the case's report; a test the manifest does not name is not
+# run and fails `listed`, and so does an assertion the tree has no test for,
+# which fails too. A selection with a name given twice is refused and runs
+# nothing. A script that never ends is ended only by SIGTERM sent to the
+# process group of host.sh, which then exits 143 with the script's process
+# gone and its private directory removed.
 #
 # Usage: sh tests/system/host_suite_test.sh
 #
@@ -37,8 +40,6 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-deadline=$repo/build/tests/system/deadline
-[ -x "$deadline" ] || { echo "host-suite-test: $deadline is not built"; exit 1; }
 made=$(mktemp -d "${TMPDIR:-/tmp}/rach2-host-suite-test.XXXXXX") || exit 1
 work=$(cd "$made" && pwd -P) || exit 1
 tree=$work/tree
@@ -147,15 +148,6 @@ int main(void)
 }
 EOF
 fi
-cat > "$tree/tests/host/hang_hosttest.c" <<'EOF'
-/* host-seconds: 2 */
-#include <unistd.h>
-int main(void)
-{
-    for (;;)
-        pause();
-}
-EOF
 cat > "$tree/tests/host/gone_hosttest.c" <<'EOF'
 /* host-deps: tests/host/gone.c */
 int main(void)
@@ -256,9 +248,23 @@ EOF
 printf 'int main(void)\n{\n    return 1;\n}\n' > "$tree/tests/host/unlisted_hosttest.c" || exit 1
 cat > "$tree/tests/cases/host/host.list" <<'EOF'
 # The fixture's scripted checks.
-script_pass|30|a script that passes|test -d "$TMPDIR" && echo fine
-script_fail|30|a script that fails|echo 'script: it failed'; exit 4
+script_pass|a script that passes|test -d "$TMPDIR" && echo fine
+script_fail|a script that fails|echo 'script: it failed'; exit 4
 EOF
+
+# A second tree, whose scripts case has one script, which writes its process
+# number to the meeting directory and then never ends.
+stop=$work/stop
+mkdir -p "$stop/tests/cases/host" "$stop/build/.run.lock" \
+    "$stop/build/tools/etude" "$stop/tools/etude" || exit 1
+cp "$repo/tests/cases/host/host.sh" "$stop/tests/cases/host/" || exit 1
+cp "$repo/tools/etude/hold.sh" "$stop/tools/etude/" || exit 1
+echo "pid $$" > "$stop/build/.run.lock/owner"
+cat > "$stop/tests/cases/host/host.list" <<'EOF'
+script_stuck|a script that never ends|echo $$ > "$HOST_SUITE_MEET/stuck"; exec tail -f /dev/null
+EOF
+printf '{"cases": [{"case_id": "host.host.scripts", "assertions": [{"assertion_id": "listed"}, {"assertion_id": "script_stuck"}]}]}\n' \
+    > "$stop/tests/cases/host.host.json" || exit 1
 
 # The fixture's manifest, with the members the program reads: each test but
 # unlisted_hosttest.c, and ghost, which the tree does not have.
@@ -282,20 +288,53 @@ EOF
 run_case()
 {
     rc=0
-    # The bound only ends a case whose driver lets a check run on forever.
     (unset ETUDE_CASE ARCH
      HOST_SUITE_MEET=$work/meet RACH2_TREE_HELD=$$ RACH2_WORKERS=16 TMPDIR=$work/tmp ETUDE_TREE=$tree \
          ASAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0:detect_leaks=0 \
          UBSAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0 LSAN_OPTIONS=exitcode=0 \
-         exec "$deadline" 400 sh "$tree/tests/cases/host/host.sh" "$1") > "$work/out.$1" 2>&1 < /dev/null ||
+         exec sh "$tree/tests/cases/host/host.sh" "$1") > "$work/out.$1" 2>&1 < /dev/null ||
         rc=$?
 }
 
-# run_suite DRIVER: run the three cases with DRIVER, keeping their output
-# together in $work/out.
+# run_stop: run the second tree's scripts case in a process group of its
+# own, send the group SIGTERM once the script has started, and keep the
+# output in $work/out.stop and the status in $status_stop, or 1 when the case
+# ended before its script started.
+run_stop()
+{
+    rm -f "$work/meet/stuck"
+    status_stop=0
+    (unset ETUDE_CASE ARCH
+     HOST_SUITE_MEET=$work/meet RACH2_TREE_HELD=$$ TMPDIR=$work/tmp ETUDE_TREE=$stop \
+         exec python3 -I - "$stop/tests/cases/host/host.sh" "$work/meet/stuck" <<'PY'
+import os
+import signal
+import sys
+import time
+
+host, mark = sys.argv[1:]
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os.dup2(os.open(os.devnull, os.O_RDONLY), 0)
+    os.execvp('sh', ['sh', host, 'scripts'])
+while not os.path.exists(mark):
+    if os.waitpid(pid, os.WNOHANG)[0] == pid:
+        sys.exit(1)
+    time.sleep(0.05)
+os.killpg(pid, signal.SIGTERM)
+status = os.waitpid(pid, 0)[1]
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 128 + os.WTERMSIG(status))
+PY
+    ) > "$work/out.stop" 2>&1 < /dev/null || status_stop=$?
+}
+
+# run_suite DRIVER: run the three cases and the stopped one with DRIVER,
+# keeping the output of the three together in $work/out.
 run_suite()
 {
     cp "$1" "$tree/build/tools/etude/etude-host" || exit 1
+    cp "$1" "$stop/build/tools/etude/etude-host" || exit 1
     rm -rf "$work/meet" && mkdir "$work/meet" || exit 1
     run_case tests
     status_tests=$rc
@@ -304,6 +343,7 @@ run_suite()
     run_case scripts
     status_scripts=$rc
     cat "$work/out.tests" "$work/out.checkers" "$work/out.scripts" > "$work/out"
+    run_stop
 }
 
 # line PATTERN: succeed when one line of the output matches PATTERN, an
@@ -331,6 +371,22 @@ results()
         grep -qx "@etude 1 end $(grep -c '^@etude 1 assert ' "$work/out.$1")" "$work/out.$1"
 }
 
+# progressed CASE N: succeed when each of the N result lines of the case CASE
+# is followed, before the next, by the record `progress checks K`, K counting
+# from 1 to N.
+progressed()
+{
+    awk -v want="$2" '
+        /^  (PASS|FAIL)/ { if (pending) bad = 1; pending = 1; next }
+        /^@etude 1 progress / {
+            n++
+            if (!pending || $4 != "checks" || $5 != n || NF != 5) bad = 1
+            pending = 0
+        }
+        END { exit bad || pending || n != want }
+    ' "$work/out.$1"
+}
+
 # judge: print `host-suite-test: failed: WHAT` for each expectation the last
 # run missed, and fail when any did.
 judge()
@@ -354,8 +410,6 @@ judge()
         line "@etude 1 assert $t fail run, .*" || miss "$t's assertion fails"
     done
     grep -q '^    ! .*AddressSanitizer' "$work/out" || miss 'a sanitizer report is shown'
-    line '  FAIL \(run hung; killed after 2s; see .*\): hang_hosttest' || miss 'the endless test fails as hung'
-    line '@etude 1 assert hang fail run hung.*' || miss "the endless test's assertion fails as hung"
     line '  FAIL \(run, status 1; see .*\): gone_hosttest' || miss 'a missing source fails its test'
     line '    \| host: gone_hosttest: missing host-deps: tests/host/gone.c' ||
         miss 'a missing source is named'
@@ -377,6 +431,21 @@ judge()
     results tests $((tests - 1)) || miss 'every test named has one result and one assertion'
     results checkers 7 || miss 'every checker has one result and one assertion'
     results scripts 2 || miss 'every script has one result and one assertion'
+    progressed tests $((tests - 1)) || miss 'every test that ends gives a record of progress'
+    progressed checkers 7 || miss 'every checker that ends gives a record of progress'
+    progressed scripts 2 || miss 'every script that ends gives a record of progress'
+    [ "$status_stop" -eq 143 ] || miss 'the stopped case exits 143'
+    grep -qx '  STOPPED: a script that never ends' "$work/out.stop" ||
+        miss 'the endless script is reported stopped'
+    grep -qx 'etude-host: result: stopped by signal 15: 0 of 1 checks finished' "$work/out.stop" ||
+        miss 'etude-host reports the stop'
+    ! grep -q '^@etude 1 progress ' "$work/out.stop" || miss 'a stopped check gives no record of progress'
+    stuck=$(cat "$work/meet/stuck" 2>/dev/null)
+    if [ -z "$stuck" ] || kill -0 "$stuck" 2>/dev/null; then
+        miss "the endless script's process is gone"
+    fi
+    logs=$(sed -n 's/^host: logs: //p' "$work/out.stop")
+    [ -n "$logs" ] && [ ! -e "$logs" ] || miss "the stopped case's private directory is removed"
     kept=$(sed -n 's/^    scratch kept: //p' "$work/out")
     case $kept in
         */keep_hosttest) [ -f "$kept/evidence" ] || miss 'the failed test keeps its scratch' ;;
@@ -394,7 +463,7 @@ judge()
 # check runs.
 refused()
 {
-    printf 'twice\t5\tshared\tthe first\t\ttouch %s/ran\ntwice\t5\tshared\tthe second\t\ttrue\n' \
+    printf 'twice\tshared\tthe first\t\ttouch %s/ran\ntwice\tshared\tthe second\t\ttrue\n' \
         "$work" > "$work/twice"
     rc=0
     "$1" -j 2 -l "$work" -s "$work/tmp" "$work/twice" > "$work/twice.out" 2>&1 || rc=$?
@@ -408,7 +477,7 @@ driver=${ETUDE_HOST:-$repo/build/tools/etude/etude-host}
 [ -x "$driver" ] || { echo "host-suite-test: $driver is not built"; exit 1; }
 run_suite "$driver"
 if ! judge || ! refused "$driver"; then
-    cat "$work/out"
+    cat "$work/out" "$work/out.stop"
     exit 1
 fi
 echo "host-suite-test: result: pass: every check selected gave one result"

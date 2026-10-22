@@ -18,7 +18,7 @@
  * host-deps: tools/etude/budget.c tools/etude/digest.c tools/etude/cost.c
  * host-deps: tools/etude/sched.c tools/etude/json.c tools/etude/schema.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
- * host-seconds: 180
+ * host-first: it runs for minutes
  * host-alone: the width-2 row meets two cases within a gap of 300 ms
  *
  * The generator gives splitmix64's published outputs, and a number below a
