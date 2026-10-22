@@ -75,7 +75,7 @@
     },
     {
       "case_id": "host.runner.status",
-      "behavior": "the test status reader tools/flow/test_status.py reports a run waiting for admission, a live claim of the tree and a stale one, on a Linux host",
+      "behavior": "the test status reader tools/flow/test_status.py reports a run waiting for admission, a live claim of the tree and a stale one, on a Linux host, which is etude's tooling machine on a host that is not Linux",
       "units": ["runner", "`tests/system/test_status_test.py`"],
       "domain": "host",
       "architectures": "none",
