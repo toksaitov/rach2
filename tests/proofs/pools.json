@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "pools",
-  "summary": "the cases of tests/cases/guest.pools.json, with a kernel that refuses a pty past the thirty-second and one that leaks every pipe it frees, each caught by its own case",
+  "summary": "the cases of tests/cases/guest.pools.json, with a kernel that refuses a pty past the thirty-second, one that leaks every pipe it frees and one that leaks every pipe's ring, each caught by its own case",
   "tree": "shared",
   "sources": [
     "rach2/sys/tty/pty.c",
@@ -57,6 +57,22 @@
       "fails": {
         "lines": [
           "@etude 1 assert pipe-heap fail a thousand pipes made and closed changed the heap in three tries"
+        ]
+      }
+    },
+    {
+      "name": "pipe-ring-leak",
+      "summary": "pipe.c frees a pipe and not its ring, so a thousand pipes, each written a byte, leave the heap larger or run it out",
+      "edits": [
+        {
+          "file": "rach2/sys/ipc/pipe.c",
+          "find": "    kfree(p->buf);\n    kfree(p);\n}",
+          "replace": "    kfree(p);\n}"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "@etude 1 assert pipe-heap fail a thousand pipes"
         ]
       }
     }

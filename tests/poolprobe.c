@@ -12,15 +12,19 @@
  * processes besides the parent are live at once.
  *
  * `poolprobe heap` opens and closes a pipe, a pty and a socket a thousand
- * times each. After a thousand, the heap's `HeapUsed` in `/proc/meminfo`
- * must be what it was before, and `HeapPages` within two pages of it, so
- * nothing leaked. One object of each kind is made and closed before the
- * first reading, since the first of a kind may set up state the kernel keeps
- * for every later one, which is no leak. The heap is the whole kernel's, so
- * the probe writes nothing between the first reading and the last, and each
- * kind has three tries: the process that reads the probe's output still
- * wakes on its timer, and can hold a block of the heap at one reading and
- * not at the other, while a leak of each object shows in every try.
+ * times each, and writes a byte to each pipe so that it has its ring. After
+ * a thousand, the heap's `HeapUsed` in `/proc/meminfo` must be within
+ * HEAP_SLACK bytes of what it was before, and `HeapPages` within two pages
+ * of it, so nothing leaked. One object of each kind is made and closed
+ * before the first reading, since the first of a kind may set up state the
+ * kernel keeps for every later one, which is no leak. The heap is the whole
+ * kernel's, and other work allocates from it during the thousand: the
+ * process that reads the probe's output wakes on its timer, and a frame may
+ * arrive. So the probe writes nothing between the first reading and the
+ * last, the readings may differ by less than a leak could, and each kind
+ * has three tries, while a leak of each object shows in every try. A try
+ * also reads HeapUsed after every hundred objects and stops once it has
+ * grown that much, so that a leak cannot take the heap the report needs.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names, guest.pools.live or guest.pools.heap without it, and beside them
@@ -35,6 +39,12 @@
 #define AF_INET    2
 #define SOCK_DGRAM 2
 #define O_RDWR     2
+
+#define CYCLES     1000 /* objects of a kind made and closed in one try */
+#define LOOK_EVERY 100  /* objects between two looks at HeapUsed in a try */
+/* The bytes HeapUsed may move in a try: half of what a leak of the heap's
+ * smallest block, 16 bytes, once a cycle would add. */
+#define HEAP_SLACK (CYCLES * 16 / 2)
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -221,22 +231,37 @@ static void crossed(int kind, int per_child, const char *what)
     report_held();
 }
 
-/** Make and close `count` objects of `kind` (0 a pipe, 1 a pty master, 2 a
- * socket); 0, or -1 when one could not be made. */
-static int make_close(int kind, int count)
+/**
+ * Make and close up to `count` objects of `kind` (0 a pipe, written a byte
+ * first, 1 a pty master, 2 a socket), and stop early when HeapUsed, read
+ * after every LOOK_EVERY objects, has reached `most`. A leak then ends its
+ * try before it can take the heap the report needs.
+ *
+ * @return the count made and closed, or -1 when one could not be made or a
+ * pipe not written.
+ */
+static int make_close(int kind, int count, unsigned most)
 {
     int i;
 
     for (i = 0; i < count; i++) {
+        if (i > 0 && i % LOOK_EVERY == 0 && probe_meminfo("HeapUsed:") >= most) {
+            return i;
+        }
         if (kind == 0) {
             int pair[2];
+            int wrote;
 
             pair[0] = pair[1] = -1;
             if (syscall1(SYS_PIPE, (long)pair) != 0) {
                 return -1;
             }
+            wrote = syscall3(SYS_WRITE, pair[1], (long)"x", 1);
             syscall1(SYS_CLOSE, pair[0]);
             syscall1(SYS_CLOSE, pair[1]);
+            if (wrote != 1) {
+                return -1;
+            }
         } else {
             int fd = kind == 1 ? syscall3(SYS_OPEN, (long)"/dev/ptmx", O_RDWR, 0) : open_socket();
 
@@ -246,17 +271,19 @@ static int make_close(int kind, int count)
             syscall1(SYS_CLOSE, fd);
         }
     }
-    return 0;
+    return count;
 }
 
-/* The last try of `cycle`: whether it made every object, and HeapUsed and
- * HeapPages before and after it. */
-static int made_all;
+/* The last try of `cycle`: whether every object it asked for could be made,
+ * how many it made before it stopped, and HeapUsed and HeapPages before and
+ * after it. */
+static int made_all, made;
 static unsigned used_before, used_after, pages_before, pages_after;
 
-/** Make and close a thousand objects of `kind`, up to three times; 1 when
- * after one of the tries HeapUsed is what it was before it and HeapPages is
- * within two pages, and 0 when none is or an object could not be made. */
+/** Make and close CYCLES objects of `kind`, up to three times; 1 when one
+ * of the tries makes them all and leaves HeapUsed within HEAP_SLACK bytes of
+ * what it was before it and HeapPages within two pages, and 0 when none
+ * does or an object could not be made. */
 static int cycle(int kind)
 {
     int tries;
@@ -264,13 +291,15 @@ static int cycle(int kind)
     for (tries = 0; tries < 3; tries++) {
         used_before = probe_meminfo("HeapUsed:");
         pages_before = probe_meminfo("HeapPages:");
-        made_all = make_close(kind, 1000) == 0;
+        made = make_close(kind, CYCLES, used_before + HEAP_SLACK);
+        made_all = made >= 0;
         if (!made_all) {
             return 0;
         }
         used_after = probe_meminfo("HeapUsed:");
         pages_after = probe_meminfo("HeapPages:");
-        if (used_after == used_before && pages_after + 2 >= pages_before &&
+        if (made == CYCLES && used_after < used_before + HEAP_SLACK &&
+            used_before < used_after + HEAP_SLACK && pages_after + 2 >= pages_before &&
             pages_after <= pages_before + 2) {
             return 1;
         }
@@ -302,6 +331,9 @@ static const char *changed(const char *what)
     report_put(text, &n, report_decimal(number, (int)pages_before));
     report_put(text, &n, " to ");
     report_put(text, &n, report_decimal(number, (int)pages_after));
+    report_put(text, &n, " after ");
+    report_put(text, &n, report_decimal(number, made));
+    report_put(text, &n, " of them");
     text[n] = '\0';
     return text;
 }
@@ -324,7 +356,8 @@ static void heap(const char *case_id)
 {
     static const char *const kinds[] = {"pipes", "ptys", "sockets"};
     int meminfo = probe_meminfo("HeapUsed:") != 0xFFFFFFFFu;
-    int warm = meminfo && make_close(0, 1) == 0 && make_close(1, 1) == 0 && make_close(2, 1) == 0;
+    int warm =
+        meminfo && make_close(0, 1, 0) == 1 && make_close(1, 1, 0) == 1 && make_close(2, 1, 0) == 1;
     int held = 0, kind;
 
     while (warm && held < 3 && cycle(held)) {
