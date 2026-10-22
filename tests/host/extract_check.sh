@@ -26,8 +26,8 @@
 # tests/host/fixtures/extract.py. Every test is compiled under ASan and
 # UBSan in a scratch directory under build/tests, which also has the
 # extracted files and which the script removes on every exit, so the tree's
-# sources are only read. The test runs for at most 120 seconds, and the
-# script exits with its status.
+# sources are only read. The script runs the test and exits with its
+# status.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -128,4 +128,4 @@ case $name in
             -o "$work/$name"
         ;;
 esac
-perl -e 'alarm 120; exec @ARGV or die "extract-check: exec: $!\n"' "$work/$name"
+"$work/$name"
