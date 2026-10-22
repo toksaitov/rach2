@@ -8,9 +8,8 @@
 #   tests/run all               every suite
 #   tests/run inventory         every suite with what it proves, as Markdown
 #
-# A suite is either the cases of a family in tests/cases, whose identity ends
-# in its name, which etude runs, or a `run-NAME` target of
-# tests/system/suites.mk; tests/registry lists their names, the external
+# A suite is the cases of a family in tests/cases, whose identity ends in its
+# name, which etude runs; tests/registry lists the suites' names, the external
 # commands they need, and which tier they belong to. This file decides only
 # what runs, when, and how a failure is reported.
 #
@@ -93,9 +92,8 @@ unset RACH2_RUN_GROUP RACH2_RUN_WORK RACH2_RUN_TREE_LOCK RACH2_PROGRESS_FD RACH2
 LC_ALL=C; export LC_ALL
 
 # e2fsprogs, where a package manager keeps it off the path, so that the suites
-# that name mke2fs or e2fsck find them where the build does. The tree the
-# runner's own self-test drives has no such script.
-[ -f "$REPO/tools/setup/e2fsprogs_path.sh" ] && . "$REPO/tools/setup/e2fsprogs_path.sh"
+# that name mke2fs or e2fsck find them where the build does.
+. "$REPO/tools/setup/e2fsprogs_path.sh"
 REGISTRY="$REPO/tests/registry"
 [ -f "$REGISTRY" ] || { echo "run: result: refused: missing $REGISTRY" >&2; exit 1; }
 
@@ -430,16 +428,12 @@ usage_names() {
 # What the host must let the run do, tried and not merely looked up.
 # `tools/setup/hostcheck.c` binds a TCP, a UDP and a Unix socket when a chosen
 # suite boots a machine, and attaches a disk image when one names hdiutil and
-# the host has it; a refusal stops the run before the build. `RACH2_HOSTCHECK`
-# names another checker, which is how the runner's own test drives a refusal.
+# the host has it; a refusal stops the run before the build.
 check_host() {
-    checker="${RACH2_HOSTCHECK:-}"
-    if [ -z "$checker" ]; then
-        checker="$WORK/hostcheck"
-        cc -O2 -o "$checker" "$REPO/tools/setup/hostcheck.c" || {
-            echo "run: the host check did not compile" >&2; return 1
-        }
-    fi
+    checker="$WORK/hostcheck"
+    cc -O2 -o "$checker" "$REPO/tools/setup/hostcheck.c" || {
+        echo "run: the host check did not compile" >&2; return 1
+    }
     if "$checker" "$WORK" ${1:+"$1"}; then
         return 0
     fi
@@ -458,10 +452,9 @@ check_space() {
 
 # Every external command a suite needs, before anything is built for it. An
 # entry with alternatives, `a+b/c+d`, is met when every command of one of
-# them is installed. A second argument gives the list in the registry's form
-# for what the first names, which is how the preparation's tools are checked.
-check_tools() { # check_tools NAME [TOOLS]
-    tools=${2:-$(suite_tools "$1")}
+# them is installed.
+check_tools() { # check_tools NAME
+    tools=$(suite_tools "$1")
     [ "$tools" = "-" ] && return 0
     for entry in $(echo "$tools" | tr ',' ' '); do
         met=""
@@ -600,10 +593,8 @@ check_hashes() { # 0 when no script and no product differs or is gone
 # under the emulator: the bounds were set under KVM, and a run that fell back
 # to the emulator without saying so would report its slowness as a
 # regression. `RACH2_QEMU_ACCEL=tcg` asks for the emulator outright.
-# `RACH2_KVM_DEVICE` names the device, which is how the runner's own test
-# offers one it cannot open.
 set_accel() {
-    kvm=${RACH2_KVM_DEVICE:-/dev/kvm}
+    kvm=/dev/kvm
     case "${RACH2_QEMU_ACCEL:-}" in
         '')
             if [ -r "$kvm" ] && [ -w "$kvm" ]; then
@@ -685,6 +676,9 @@ for suite in "$@"; do
     suite_known "$suite" || {
         echo "run: result: refused: unknown suite '$suite'" >&2; usage_names; exit 2
     }
+    ls "$REPO"/tests/cases/*."$suite".json > /dev/null 2>&1 || {
+        echo "run: result: refused: no family of cases in tests/cases is the suite $suite" >&2; exit 2
+    }
     # Two runs of one suite would share one ledger and one held output.
     case " $seen " in
         *" $suite "*) echo "run: result: refused: $suite is named twice" >&2; exit 2 ;;
@@ -713,16 +707,6 @@ done
 # A runner that took the tree and then claimed its ports, below, starts again
 # as the same process and has made these checks already.
 if [ "${RACH2_TREE_HELD:-}" != "$$" ]; then
-    # A set prepares every suite's products, so it needs the tools of
-    # `prepare-all` whichever suites it names; `make prepare-tools` prints them.
-    if [ "$#" -gt 1 ]; then
-        prepare_tools=$(make -s -C "$REPO" --no-print-directory "$ARCH_VAR" prepare-tools) || {
-            echo "run: result: refused: the preparation's tools could not be read" >&2; exit 1
-        }
-        check_tools "the preparation" "$prepare_tools" || {
-            echo "run: result: refused: a set prepares every suite's products, and this host cannot build them" >&2; exit 1
-        }
-    fi
     check_host $diskimage $sockets || { echo "run: result: refused: this host cannot run the set" >&2; exit 1; }
     [ -n "$sockets" ] || check_space || exit 1
     check_declarations || exit 1
@@ -778,7 +762,7 @@ host_lock() { # host_lock NAME...
 # the helper says how).
 # The variable is given to the helper alone, which unsets it before the exec.
 # RACH2_PORT_DIR names another directory for the block files and the host
-# lock's, for the runner's selftest, which holds every block of its own.
+# lock's, as it does for tools/ci/bisect.sh.
 if [ -n "$machines" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
     RACH2_RUN_GROUP=$$; RACH2_RUN_WORK=$WORK
     export RACH2_RUN_GROUP RACH2_RUN_WORK
@@ -790,8 +774,8 @@ if [ -n "$machines" ] && [ -z "${RACH2_PORT_OFFSET:-}" ]; then
     exec "$RACH2_RUN_UTIL" ports "${RACH2_PORT_DIR:-/tmp}" 10 sh "$0" "$@"
 fi
 [ -z "${RACH2_PORT_OFFSET:-}" ] || export RACH2_PORT_OFFSET
-# The accelerator the suites' machines run on, which etude-legacy's QEMU
-# shims give every machine, as set_accel chose it.
+# The accelerator the suites' machines run on, which the set driver gives
+# every machine of the cases, as set_accel chose it.
 export RACH2_QEMU_ACCEL
 # The x86-64 firmware that the machine cases booted by UEFI take, found where
 # the suites that boot by UEFI look for it (tools/setup/ovmf_path.sh).
@@ -808,10 +792,8 @@ echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARC
 # this run's, so two runners cannot mint at once, and before the first make,
 # because make decides from the key's presence what the recovery artifacts are
 # called. A plain `make` mints nothing, which is what keeps the absence
-# meaningful; the tree the runner's own selftest drives has no recovery system
-# at all, which is why the manifest is looked for and not the key alone.
-if [ -f "$REPO/krffs/manifests/rach2-recovery.manifest" ] &&
-   [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
+# meaningful.
+if [ ! -f "$REPO/krffs/recovery_authorized_keys" ]; then
     make -C "$REPO" --no-print-directory recovery-key || {
         echo "run: result: the recovery system's key could not be made" >&2
         exit 1
@@ -824,33 +806,22 @@ for key in rach2_demo_ed25519 rach2_test_ed25519; do
     [ ! -f "$REPO/krffs/$key" ] || chmod 600 "$REPO/krffs/$key"
 done
 take_scripts
-# The set driver, the formatter and the validator, built here, or taken from
-# RACH2_ETUDE_BIN, a directory that has them, for a tree with no etude of its
-# own, as the runner's selftest gives; RACH2_ETUDE_SCHEMAS names the schemas
-# of such a tree. They are copied into the scratch, so that a build a suite
-# starts cannot replace them while they run. The validator is needed only by
-# a tree with case manifests.
+# The set driver, the formatter and the validator, built here and copied into
+# the scratch, so that a build a suite starts cannot replace them while they
+# run.
 mkdir -p "$WORK/etude"
-MANIFESTS=$(ls "$REPO"/tests/cases/*.json 2>/dev/null)
-etude_programs="etude-legacy history_lines${MANIFESTS:+ casecheck}"
-if [ -n "${RACH2_ETUDE_BIN:-}" ]; then
-    for p in $etude_programs; do
-        cp "$RACH2_ETUDE_BIN/$p" "$WORK/etude/" || {
-            echo "run: result: refused: RACH2_ETUDE_BIN has no $p" >&2; exit 1
-        }
-    done
-else
-    # shellcheck disable=SC2086 # one program a word
-    targets=$(for p in $etude_programs; do printf ' build/tools/etude/%s' "$p"; done)
-    # shellcheck disable=SC2086 # one target a word
-    if ! run_make -s $targets > "$WORK/etude.log" 2>&1 ||
-        ! (cd "$REPO/build/tools/etude" && cp $etude_programs "$WORK/etude/"); then
-        cat "$WORK/etude.log" >&2
-        echo "run: result: refused: etude's set driver did not build" >&2; exit 1
-    fi
+MANIFESTS=$(ls "$REPO"/tests/cases/*.json)
+etude_programs="etude-legacy history_lines casecheck"
+# shellcheck disable=SC2086 # one program a word
+targets=$(for p in $etude_programs; do printf ' build/tools/etude/%s' "$p"; done)
+# shellcheck disable=SC2086 # one target a word
+if ! run_make -s $targets > "$WORK/etude.log" 2>&1 ||
+    ! (cd "$REPO/build/tools/etude" && cp $etude_programs "$WORK/etude/"); then
+    cat "$WORK/etude.log" >&2
+    echo "run: result: refused: etude's set driver did not build" >&2; exit 1
 fi
 ETUDE_LEGACY=$WORK/etude/etude-legacy
-SCHEMAS=${RACH2_ETUDE_SCHEMAS:-$REPO/tools/etude/schemas}
+SCHEMAS=$REPO/tools/etude/schemas
 RECORD=$WORK/prepare.record
 RESULTS=${RACH2_RESULTS:-$WORK/results}
 FAILED=${RACH2_FAILED:-$REPO/build/tests/failed}
@@ -860,13 +831,10 @@ FAILED=$(cd "$FAILED" && pwd) || exit 1
 # The families of cases, `FAMILY PATH` a line, each checked by its schema and
 # rules first, so that a manifest at fault refuses every run; a suite is run
 # by the family whose identity ends in its name.
-: > "$WORK/families"
-if [ -n "$MANIFESTS" ]; then
-    # shellcheck disable=SC2086 # one manifest a word
-    "$WORK/etude/casecheck" -s "$SCHEMAS" families $MANIFESTS > "$WORK/families" || {
-        echo "run: result: refused: a case manifest of tests/cases is at fault" >&2; exit 1
-    }
-fi
+# shellcheck disable=SC2086 # one manifest a word
+"$WORK/etude/casecheck" -s "$SCHEMAS" families $MANIFESTS > "$WORK/families" || {
+    echo "run: result: refused: a case manifest of tests/cases is at fault" >&2; exit 1
+}
 family_of() { # family_of SUITE: the line of the suite's family, or nothing
     awk -v s="$1" '{ n = split($1, part, "."); if (part[n] == s) { print; exit } }' "$WORK/families"
 }
@@ -874,7 +842,7 @@ family_of() { # family_of SUITE: the line of the suite's family, or nothing
 # declares, and the manifest of a suite's cases; `style` and `host` run first,
 # one at a time, and a failure of `style` stops the set, since the fix of a
 # style fault is an edit, which changes the GNU root's sources. The map gives
-# each suite its family of cases, or the one case of an old suite.
+# each suite its family of cases.
 : > "$WORK/map"
 for suite in "$@"; do
     case "$suite" in
@@ -883,23 +851,21 @@ for suite in "$@"; do
         *) flags="" ;;
     esac
     family=$(family_of "$suite")
-    if [ -n "$family" ]; then
-        rows=""
-        case $suite in
-            agents) rows=${RACH2_AGENTS_ROWS:-} ;;
-            agentsaccept) rows=${RACH2_ACCEPT_AGENTS:-} ;;
-        esac
-        if [ -n "$rows" ]; then
-            selected=$WORK/$suite.json
-            python3 "$REPO/tests/cases/machine/agent_select.py" "${family#* }" "$rows" "$selected" || exit 2
-            family="${family%% *} $selected"
-        fi
-        echo "$suite $(suite_memory "$suite")$flags cases=${family#* }"
-        echo "$suite ${family%% *}" >> "$WORK/map"
-    else
-        echo "$suite $(suite_memory "$suite")$flags"
-        echo "$suite legacy.$suite" >> "$WORK/map"
+    [ -n "$family" ] || {
+        echo "run: result: refused: no family of cases in tests/cases is the suite $suite" >&2; exit 2
+    }
+    rows=""
+    case $suite in
+        agents) rows=${RACH2_AGENTS_ROWS:-} ;;
+        agentsaccept) rows=${RACH2_ACCEPT_AGENTS:-} ;;
+    esac
+    if [ -n "$rows" ]; then
+        selected=$WORK/$suite.json
+        python3 "$REPO/tests/cases/machine/agent_select.py" "${family#* }" "$rows" "$selected" || exit 2
+        family="${family%% *} $selected"
     fi
+    echo "$suite $(suite_memory "$suite")$flags cases=${family#* }"
+    echo "$suite ${family%% *}" >> "$WORK/map"
 done > "$WORK/selection"
 # The driver's ledger is the run's own: the machine's admission is the claim
 # the run has already, the installed launcher's or the caller's, which counts

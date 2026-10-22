@@ -477,7 +477,7 @@
     },
     {
       "case_id": "host.style.registry",
-      "behavior": "the registry agrees with the suites: each suite named once, with a run- target or a case manifest, each target with a row, and the generated lists of suites, programs and system calls as their generators write them",
+      "behavior": "the registry agrees with the suites: each suite named once, with a family of cases, each family with a row and no run- target left, and the generated lists of suites, programs and system calls as their generators write them",
       "units": ["style", "`check.sh` step 15, the registry against the targets", "`check.sh` step 15, the generated suite inventory", "`check.sh` step 15, the generated lists of programs and calls"],
       "domain": "host",
       "architectures": "none",
@@ -486,7 +486,7 @@
       "execution": {"program": "style", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "reaped", "cleanup": "its logs under its scratch directory, and what make builds in the tree"},
       "assertions": [
         {"assertion_id": "names-once", "checks": "no suite is named twice in tests/registry", "source": "program"},
-        {"assertion_id": "targets", "checks": "every row has a run- target or a family of cases, and every target a row", "source": "program"},
+        {"assertion_id": "families", "checks": "every row has a family of cases, every family a row, and tests/system/suites.mk no run- target", "source": "program"},
         {"assertion_id": "inventory", "checks": "tests/system/suites.md is what tests/run inventory prints", "source": "program"},
         {"assertion_id": "sentences", "checks": "every suite has a sentence in tests/system/suites.mk", "source": "program"},
         {"assertion_id": "programs-md", "checks": "man/programs.md is what make programs-md writes", "source": "program"},

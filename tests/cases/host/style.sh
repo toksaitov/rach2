@@ -607,25 +607,23 @@ case_devlog() {
 
 # The test registry against the suites it names. tests/run reads the
 # registry and runs a suite by the family of cases whose identity ends in its
-# name, or else calls make with `run-` and the name, so a row with neither is
-# a suite that cannot run, and a target with no row is a suite nothing runs.
-# No other check finds either. The generated lists follow.
+# name, so a row with no family is a suite that cannot run, and a family with
+# no row is a suite nothing runs; a `run-` target in suites.mk is a suite
+# that nothing runs either. No other check finds them. The generated lists
+# follow.
 case_registry() {
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort >"$VDIR/_reg.txt"
     found names-once "a suite is named twice in tests/registry" "$(uniq -d "$VDIR/_reg.txt")"
-    grep -o '^run-[a-z0-9-]*' "$REPO/tests/system/suites.mk" | sed 's/^run-//' | sort -u >"$VDIR/_tgt.txt"
-    : >"$VDIR/_cases.txt"
-    if built targets "$CASECHECK"; then
+    if built families "$CASECHECK"; then
         if ! "$CASECHECK" -s "$REPO/tools/etude/schemas" families "$REPO"/tests/cases/*.json \
             >"$VDIR/_families.txt" 2>"$VDIR/verify_families.log"; then
-            fail targets "casecheck could not read the case manifests; see $VDIR/verify_families.log"
+            fail families "casecheck could not read the case manifests; see $VDIR/verify_families.log"
         else
             sed 's/ .*//; s/.*\.//' "$VDIR/_families.txt" | sort -u >"$VDIR/_cases.txt"
-            sort -u "$VDIR/_tgt.txt" "$VDIR/_cases.txt" >"$VDIR/_runs.txt"
-            found targets "a suite with neither a run- target nor a family of cases, or a target or a family with no row" \
-                "$(comm -23 "$VDIR/_reg.txt" "$VDIR/_runs.txt" | sed 's/^/no target or cases: /'
-                   comm -13 "$VDIR/_reg.txt" "$VDIR/_runs.txt" | sed 's/^/no row: /'
-                   comm -12 "$VDIR/_tgt.txt" "$VDIR/_cases.txt" | sed 's/^/both a target and cases: /')"
+            found families "a suite with no family of cases, a family with no row, or a run- target" \
+                "$(comm -23 "$VDIR/_reg.txt" "$VDIR/_cases.txt" | sed 's/^/no cases: /'
+                   comm -13 "$VDIR/_reg.txt" "$VDIR/_cases.txt" | sed 's/^/no row: /'
+                   grep -o '^run-[a-z0-9-]*' "$REPO/tests/system/suites.mk" | sed 's/^/a target: /')"
         fi
     fi
     # The generated inventory: tests/system/suites.md must be the output of
