@@ -282,11 +282,13 @@ fault()
 }
 
 # The machine's home, made once and copied for each row: a clone with a
-# commit and an untracked file, and an account's SSH keys.
+# commit and an untracked file, and an account's SSH keys. Each commit of the
+# test turns off git's automatic maintenance, which would pack the objects of
+# a clone in the background while a row compares it.
 mkdir -p "$work/home/clone" "$work/home/.ssh" || exit 1
 echo 'committed' > "$work/home/clone/file"
 git -C "$work/home/clone" init -q && git -C "$work/home/clone" add file &&
-    git -C "$work/home/clone" -c user.name=test -c user.email=test@example.com commit -qm clone || exit 1
+    git -C "$work/home/clone" -c user.name=test -c user.email=test@example.com -c maintenance.auto=false -c gc.auto=0 commit -qm clone || exit 1
 echo 'untracked' > "$work/home/clone/new"
 echo 'ssh-ed25519 AAAAfixture fix@machine' > "$work/home/.ssh/authorized_keys"
 echo 'fixture private key' > "$work/home/.ssh/id_ed25519"
@@ -598,7 +600,7 @@ row()
         local)
             begin
             git -C "$TREE" init -q && git -C "$TREE" add -A &&
-                git -C "$TREE" -c user.name=test -c user.email=test@example.com commit -qm source || exit 1
+                git -C "$TREE" -c user.name=test -c user.email=test@example.com -c maintenance.auto=false -c gc.auto=0 commit -qm source || exit 1
             echo untracked > "$TREE/untracked"
             snapshot "$TREE" > "$work/before"
             run -S "$FIX/state" -l
@@ -615,7 +617,7 @@ row()
         revision)
             begin
             git -C "$TREE" init -q && git -C "$TREE" add -A &&
-                git -C "$TREE" -c user.name=test -c user.email=test@example.com commit -qm source || exit 1
+                git -C "$TREE" -c user.name=test -c user.email=test@example.com -c maintenance.auto=false -c gc.auto=0 commit -qm source || exit 1
             sed 's/^#define LEDGER_MAGIC "etude-ledger 1"$/#define LEDGER_MAGIC "etude-ledger 9"/' \
                 "$repo/tools/etude/ledger.c" > "$TREE/tools/etude/ledger.c" || exit 1
             run -r HEAD machine
