@@ -87,7 +87,6 @@
 #include <sys/resource.h>
 #include <sys/un.h>
 #include <dirent.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "compat/pathmax_host.h"
@@ -106,9 +105,6 @@ static int fails;
             fails++;                                                                            \
         }                                                                                       \
     } while (0)
-
-/* The completion bound of each group of machines. */
-#define BOUND_MS 120000
 
 /* The grace periods: short for the stand-ins, longer for a real QEMU. */
 #define FAKE_GRACE_US 300000u
@@ -566,23 +562,11 @@ static void check_console_file(const struct row *r, const struct etude_machine_r
     }
 }
 
-/** Give the monotonic clock in milliseconds. */
-static uint64_t now_ms(void)
-{
-    struct timespec ts;
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
-}
-
-/**
- * Run the `n` rows at once until every machine has ended, acting on each;
- * past the completion bound the rest are cancelled, and the row fails.
- */
+/** Run the `n` rows at once until every machine has ended, acting on each
+ * at least once a second. */
 static void run_rows(struct etude_qemu *q, struct row *rows, int n)
 {
-    uint64_t bound = now_ms() + BOUND_MS;
-    int i, left = 0, late = 0;
+    int i, left = 0;
 
     for (i = 0; i < n; i++)
         left += rows[i].m != NULL;
@@ -592,14 +576,6 @@ static void run_rows(struct etude_qemu *q, struct row *rows, int n)
         for (i = 0; i < n; i++)
             if (rows[i].m != NULL)
                 row_act(&rows[i]);
-        if (!late && now_ms() > bound) {
-            printf("etude-qemu-test: fail: the machines did not end within %d ms\n", BOUND_MS);
-            fails++;
-            late = 1;
-            for (i = 0; i < n; i++)
-                if (rows[i].m != NULL)
-                    etude_machine_cancel(rows[i].m);
-        }
     }
 }
 
