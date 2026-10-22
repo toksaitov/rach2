@@ -150,11 +150,6 @@
 #define CALLER_BROKEN 127
 #define CALLER_SIGNAL 126
 
-/* The longest wait, in seconds, for another process to reach a state or
- * write a notice: a bound that ends a wait the kernel or the program never
- * satisfies, far past a correct one. */
-#define STATE_BOUND 20
-
 /* The files this probe creates, which `finish` removes. */
 static const char *Fixtures[] = {"/credtxn.txt", "/credbusy.txt", "/credmode.txt", "/credlog.txt",
                                  "/credlost.txt"};
@@ -765,27 +760,16 @@ static int ended(pid_t pid)
     return state == 0 || state == 'Z';
 }
 
-/** The seconds since `start` on the monotonic clock. */
-static long seconds_since(const struct timespec *start)
-{
-    struct timespec now;
-
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (long)(now.tv_sec - start->tv_sec);
-}
-
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, and, when
  * `fd` is not -1, for no byte to be left unread in the pipe `fd` is an end
  * of, as FIONREAD reports, looking every 10 ms. Returns 1 once both hold, and
- * 0 when the process ends first or STATE_BOUND seconds pass.
+ * 0 when the process ends first.
  */
 static int asleep_drained(pid_t pid, int fd)
 {
-    struct timespec start;
     int unread;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         unread = 0;
         if (fd != -1 && ioctl(fd, FIONREAD, &unread) != 0) {
@@ -794,7 +778,7 @@ static int asleep_drained(pid_t pid, int fd)
         if (unread == 0 && proc_state(pid) == 'S') {
             return 1;
         }
-        if (ended(pid) || seconds_since(&start) >= STATE_BOUND) {
+        if (ended(pid)) {
             return 0;
         }
         usleep(10000);
@@ -804,19 +788,17 @@ static int asleep_drained(pid_t pid, int fd)
 /**
  * Wait for the file at `path` to have the text `text`, looking every 10 ms.
  * Returns 1 once it does, and 0 when process `pid`, which writes the file,
- * ends first or STATE_BOUND seconds pass.
+ * ends first.
  */
 static int await_text(const char *path, const char *text, pid_t pid)
 {
-    struct timespec start;
     char buffer[256];
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         if (slurp(path, buffer, sizeof(buffer)) >= 0 && strstr(buffer, text) != NULL) {
             return 1;
         }
-        if (ended(pid) || seconds_since(&start) >= STATE_BOUND) {
+        if (ended(pid)) {
             return 0;
         }
         usleep(10000);
@@ -1430,26 +1412,24 @@ static int check_recovery(void)
 }
 
 /**
- * Read from `fd` until `buffer` has `count` occurrences of `needle`, or `ms`
- * milliseconds pass. Returns 1 when they arrived and 0 otherwise.
+ * Read from the nonblocking `fd` until `buffer` has `count` occurrences of
+ * `needle`, looking every 50 ms. Returns 1 when they arrived and 0 when a
+ * read fails.
  *
  * A caller that waits for a reprinted prompt needs the later copy and not the
  * first, since what it waits out is the flush that precedes the reprint, so the
  * occurrences already in the buffer are counted rather than matched.
  *
- * Every read of the master is bounded, because a probe that blocks on a
- * terminal nobody is writing to would hang the whole suite, not fail it.
  * A read of zero is waited through, not taken as the end: a master whose
  * slave is not open yet reads as end of file, and the child does its own open
  * after the fork.
  */
-static int expect_nth_on(int fd, const char *needle, int count, char *buffer, size_t size, long ms)
+static int expect_nth_on(int fd, const char *needle, int count, char *buffer, size_t size)
 {
     size_t filled = strlen(buffer);
     size_t len = strlen(needle);
-    long waited = 0;
 
-    while (waited < ms) {
+    for (;;) {
         const char *at = buffer;
         int seen = 0;
         ssize_t n;
@@ -1471,33 +1451,29 @@ static int expect_nth_on(int fd, const char *needle, int count, char *buffer, si
             return 0;
         }
         nap(50);
-        waited += 50;
     }
-
-    return 0;
 }
 
-/** Read from `fd` until `buffer` has `needle`, within `ms`. */
-static int expect_on(int fd, const char *needle, char *buffer, size_t size, long ms)
+/** Read from `fd` until `buffer` has `needle` (`expect_nth_on`). */
+static int expect_on(int fd, const char *needle, char *buffer, size_t size)
 {
-    return expect_nth_on(fd, needle, 1, buffer, size, ms);
+    return expect_nth_on(fd, needle, 1, buffer, size);
 }
 
 /**
- * Read `n` bytes of a leader's verdict from its pipe, within `ms`.
+ * Read `n` bytes of a leader's verdict from its pipe, looking every 50 ms.
  *
- * A leader that hangs, waiting on a reader that neither stops nor ends, would
- * otherwise hold this probe until the harness kills the machine and the log
- * says nothing of which case it was; past the bound the leader is killed, so
- * the caller's `waitpid` returns and its diagnostic names the case.
+ * The pipe ends early when the leader ends without its verdict; the leader is
+ * then killed, so the caller's `waitpid` returns and its diagnostic names the
+ * case. A leader that hangs leaves the read waiting, and the case's watchdog
+ * ends it.
  */
-static ssize_t read_verdict(int fd, pid_t leader, char *buffer, size_t n, long ms)
+static ssize_t read_verdict(int fd, pid_t leader, char *buffer, size_t n)
 {
     size_t filled = 0;
-    long waited = 0;
 
     fcntl(fd, F_SETFL, O_NONBLOCK);
-    while (filled < n && waited < ms) {
+    while (filled < n) {
         ssize_t got = read(fd, buffer + filled, n - filled);
 
         if (got > 0) {
@@ -1508,7 +1484,6 @@ static ssize_t read_verdict(int fd, pid_t leader, char *buffer, size_t n, long m
             break;
         }
         nap(50);
-        waited += 50;
     }
     if (filled < n) {
         kill(leader, SIGKILL);
@@ -1535,27 +1510,12 @@ static ssize_t drain(int fd, char *buffer, size_t size)
 }
 
 /**
- * Wait up to `ms` milliseconds for `pid` to stop or exit, as `flags` asks.
- * Returns 1 with `*status` filled, 0 on a timeout.
+ * Wait for `pid` to stop or exit, as `flags` asks. Returns 1 with `*status`
+ * filled, and 0 when the wait fails.
  */
-static int wait_for(pid_t pid, int *status, int flags, long ms)
+static int wait_for(pid_t pid, int *status, int flags)
 {
-    long waited = 0;
-
-    while (waited < ms) {
-        pid_t got = waitpid(pid, status, flags | WNOHANG);
-
-        if (got == pid) {
-            return 1;
-        }
-        if (got < 0) {
-            return 0;
-        }
-        nap(50);
-        waited += 50;
-    }
-
-    return 0;
+    return waitpid(pid, status, flags) == pid;
 }
 
 /**
@@ -1654,7 +1614,7 @@ static int check_prompt(void)
     fcntl(master, F_SETFL, O_NONBLOCK);
 
     buffer[0] = '\0';
-    if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
+    if (!expect_on(master, "Password: ", buffer, sizeof(buffer))) {
         close(master);
 
         return fail(PROMPT_SHOWN);
@@ -1678,7 +1638,7 @@ static int check_prompt(void)
 
         return fail(PROMPT_SUSPEND);
     }
-    if (!wait_for(child, &status, WUNTRACED, 5000) || !WIFSTOPPED(status) ||
+    if (!wait_for(child, &status, WUNTRACED) || !WIFSTOPPED(status) ||
         WSTOPSIG(status) != SIGTSTP) {
         close(master);
 
@@ -1692,7 +1652,7 @@ static int check_prompt(void)
         return fail(PROMPT_TYPE_STOPPED);
     }
     buffer[0] = '\0';
-    if (!expect_on(master, "xyz", buffer, sizeof(buffer), 3000)) {
+    if (!expect_on(master, "xyz", buffer, sizeof(buffer))) {
         close(master);
 
         return fail(PROMPT_ECHO_RESTORED);
@@ -1704,7 +1664,7 @@ static int check_prompt(void)
         return fail(PROMPT_CONTINUE);
     }
     buffer[0] = '\0';
-    if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
+    if (!expect_on(master, "Password: ", buffer, sizeof(buffer))) {
         close(master);
 
         return fail(PROMPT_REPRINT);
@@ -1729,7 +1689,7 @@ static int check_prompt(void)
             }
         }
     }
-    if (!wait_for(child, &status, 0, 5000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (!wait_for(child, &status, 0) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(master);
 
         return fail(PROMPT_PASSWORD);
@@ -1777,7 +1737,7 @@ static int check_prompt_burst(void)
     fcntl(master, F_SETFL, O_NONBLOCK);
 
     buffer[0] = '\0';
-    if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
+    if (!expect_on(master, "Password: ", buffer, sizeof(buffer))) {
         close(master);
 
         return fail(BURST_SHOWN);
@@ -1787,7 +1747,7 @@ static int check_prompt_burst(void)
 
         return fail(BURST_SEND);
     }
-    if (!wait_for(child, &status, WUNTRACED, 5000) || !WIFSTOPPED(status) ||
+    if (!wait_for(child, &status, WUNTRACED) || !WIFSTOPPED(status) ||
         WSTOPSIG(status) != SIGTSTP) {
         close(master);
 
@@ -1799,7 +1759,7 @@ static int check_prompt_burst(void)
         return fail(BURST_CONTINUE);
     }
     buffer[0] = '\0';
-    if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
+    if (!expect_on(master, "Password: ", buffer, sizeof(buffer))) {
         close(master);
 
         return fail(BURST_REPRINT);
@@ -1809,7 +1769,7 @@ static int check_prompt_burst(void)
 
         return fail(BURST_TYPE);
     }
-    if (!wait_for(child, &status, 0, 5000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (!wait_for(child, &status, 0) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(master);
 
         return fail(BURST_PASSWORD);
@@ -2088,14 +2048,14 @@ static int check_prompt_stop_before_read(void)
 
         return fail(PREREAD_FORK);
     }
-    if (read_verdict(channel[0], leader, verdict, 1, 10000) != 1 || verdict[0] != 'r') {
+    if (read_verdict(channel[0], leader, verdict, 1) != 1 || verdict[0] != 'r') {
         close(master);
         close(channel[0]);
 
         return fail(PREREAD_RESUMED);
     }
     prompts[0] = '\0';
-    if (!expect_nth_on(master, "Password: ", 2, prompts, sizeof(prompts), 10000)) {
+    if (!expect_nth_on(master, "Password: ", 2, prompts, sizeof(prompts))) {
         kill(leader, SIGKILL);
         close(master);
         close(channel[0]);
@@ -2109,7 +2069,7 @@ static int check_prompt_stop_before_read(void)
 
         return fail(PREREAD_TYPE);
     }
-    if (read_verdict(channel[0], leader, verdict, 1, 10000) != 1) {
+    if (read_verdict(channel[0], leader, verdict, 1) != 1) {
         close(master);
         close(channel[0]);
 
@@ -2238,7 +2198,7 @@ static int check_prompt_stale_owner(void)
 
         return fail(STALE_FORK);
     }
-    got = read_verdict(channel[0], leader, verdict, 2, 20000);
+    got = read_verdict(channel[0], leader, verdict, 2);
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
@@ -2471,7 +2431,7 @@ static int check_prompt_never_owned(void)
 
         return fail(NEVER_FORK);
     }
-    got = read_verdict(channel[0], leader, verdict, 2, 20000);
+    got = read_verdict(channel[0], leader, verdict, 2);
     close(channel[0]);
     close(master);
     if (waitpid(leader, &status, 0) != leader) {
@@ -2541,7 +2501,7 @@ static int check_prompt_background(void)
     fcntl(channel[0], F_SETFL, O_NONBLOCK);
 
     buffer[0] = '\0';
-    if (!expect_on(master, "Password: ", buffer, sizeof(buffer), 5000)) {
+    if (!expect_on(master, "Password: ", buffer, sizeof(buffer))) {
         close(master);
         close(channel[0]);
 
@@ -2555,14 +2515,14 @@ static int check_prompt_background(void)
     }
 
     verdict[0] = '\0';
-    if (!expect_on(channel[0], "echo=", verdict, sizeof(verdict), 10000)) {
+    if (!expect_on(channel[0], "echo=", verdict, sizeof(verdict))) {
         close(master);
         close(channel[0]);
 
         return fail(BG_REPORTED);
     }
     close(channel[0]);
-    if (!wait_for(leader, &status, 0, 10000) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (!wait_for(leader, &status, 0) || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         close(master);
 
         return fail(BG_DRIVE);
