@@ -55,12 +55,25 @@
 # the tree, to which the program changes, and TMPDIR the workspace, which
 # etude keeps after a failure.
 #
+# A host that is not Linux cannot make the namespaces, so there the program
+# runs the case in etude's tooling machine (tools/etude/Readme.md, The
+# tooling machine), whose Linux has the pinned Codex, unshare and ip, under
+# the accelerator RACH2_QEMU_ACCEL names. The job, which has no network,
+# unpacks the fake API server's directory and this program, with Muse when
+# the tree has it, makes an ordinary user, and runs the program again as
+# that user, as on Linux. The job's report becomes the case's, and its
+# status the program's. When the machine is not made, or the job ends
+# before its report does, the program reports each assertion that is
+# missing as not run, with the reason, and exits 1.
+#
 # Usage, in the root of the tree, or anywhere with ETUDE_TREE set to it:
 #     sh tests/cases/host/agentapi.sh codex|muse exchange|refusal
 #
 # The logs and the server's record go to a private directory under TMPDIR,
 # whose path the first line prints; a run that passes or is stopped by a
-# signal removes it, and one that fails keeps it.
+# signal removes it, and one that fails keeps it. From the tooling machine
+# the program's TMPDIR there, with the logs of a failure, comes back as the
+# directory `scratch` under it.
 #
 
 # shellcheck disable=SC2329 # the stop functions are called from the traps
@@ -180,6 +193,81 @@ notrun() {
     REPORTED="$REPORTED$1 "
 }
 
+# ---- The tooling machine. ----
+
+# The tooling machine's deadline for the job, in seconds, which is inside the
+# case's bound of 900.
+TOOLING_SECONDS=840
+
+# unrun REASON: complete the report of a case that the tooling machine did not
+# run to its end, and exit 1. The job's output, LOGS/job.out, has been
+# printed and may have `begin` and some assertions already: give `begin` when
+# it lacks it, each assertion it lacks as not run for REASON, and `end`.
+unrun() {
+    grep -q '^@etude 1 begin ' "$LOGS/job.out" || record "begin $ID"
+    RECORDS=$(grep -c -E '^@etude 1 (assert|notrun|branch) ' "$LOGS/job.out")
+    REPORTED=" $(awk '$1 == "@etude" && $2 == 1 && ($3 == "assert" || $3 == "notrun") {
+        printf "%s ", $4 }' "$LOGS/job.out")"
+    for a in $ASSERTIONS; do
+        case "$REPORTED" in
+            *" $a "*) ;;
+            *) notrun "$a" "$1" ;;
+        esac
+    done
+    record "end $RECORDS"
+    echo "agentapi: result: incomplete: $ID: $1"
+    exit 1
+}
+
+# in_tooling: run the case in the tooling machine, as the header says, and
+# exit with the job's status. The job's files are packed with tar, since the
+# job's volume is FAT and keeps no file's mode, and the volume is made large
+# enough for them.
+in_tooling() {
+    : > "$LOGS/job.out"
+    # shellcheck source=tests/system/tooling.sh
+    . "$REPO/tests/system/tooling.sh"
+    echo "agentapi: the case runs in etude's tooling machine"
+    tooling_made || unrun "the tooling machine is not made; etude-tooling prepare makes it"
+    COPYFILE_DISABLE=1 tar -c --format ustar -f "$LOGS/agentapi.tar" -C "$REPO" \
+        tests/system/fakeapi -C "${SELF%/*}" "${SELF##*/}" ||
+        unrun "the job's files could not be packed"
+    set -- -i "$LOGS/agentapi.tar"
+    bytes=$(wc -c < "$LOGS/agentapi.tar")
+    memory=2048
+    if [ "$AGENT" = muse ] && [ -x "$MUSE" ]; then
+        set -- "$@" -i "$MUSE"
+        bytes=$((bytes + $(wc -c < "$MUSE")))
+        memory=3072
+    fi
+    cat > "$LOGS/job.sh" <<EOF
+set -u
+cd "\$ETUDE_WORK" && mkdir scratch tree && tar -x -f agentapi.tar -C tree || exit 3
+if [ -f muse ]; then
+    mkdir -p tree/build/downloads/muse && mv muse tree/build/downloads/muse/muse &&
+        chmod 755 tree/build/downloads/muse/muse || exit 3
+fi
+useradd --create-home --user-group agentapi && chown agentapi:agentapi scratch || exit 3
+exec setpriv --reuid=agentapi --regid=agentapi --init-groups env -i PATH="\$PATH" \\
+    HOME=/home/agentapi LANG=C.UTF-8 TMPDIR="\$ETUDE_WORK/scratch" \\
+    ETUDE_TREE="\$ETUDE_WORK/tree" ETUDE_CASE=$ID \\
+    sh "\$ETUDE_WORK/tree/${SELF##*/}" $AGENT $CASE
+EOF
+    tooling run -c 2 -m "$memory" -s $((bytes / 1048576 + 64)) -t "$TOOLING_SECONDS" "$@" \
+        -o scratch -O "$LOGS" "$LOGS/job.sh" > "$LOGS/job.out"
+    status=$?
+    cat "$LOGS/job.out"
+    [ "$status" -eq 0 ] || [ ! -d "$LOGS/scratch" ] ||
+        echo "agentapi: the logs of the job are under $LOGS/scratch"
+    ! grep -q '^@etude 1 end ' "$LOGS/job.out" || exit "$status"
+    case $status in
+        124) unrun "the tooling machine's job ran past its deadline of $TOOLING_SECONDS seconds" ;;
+        125) unrun "the tooling machine failed; etude-tooling's lines say why" ;;
+        126) unrun "the tooling machine is not made; etude-tooling prepare makes it" ;;
+        *) unrun "the tooling machine's job ended with status $status before its report did" ;;
+    esac
+}
+
 # ---- The case's own namespaces. ----
 
 # Outside the namespaces, run this file again inside them, and report the
@@ -203,6 +291,7 @@ if [ -z "${RACH2_AGENTAPI_LOGS:-}" ]; then
         exit 1
     }
     printf 'agentapi: logs: %s\n' "$LOGS"
+    [ "$(uname -s)" = Linux ] || in_tooling
     record "begin $ID"
     # shellcheck disable=SC2016 # the inner shell expands its own arguments
     unshare --user --map-root-user --net --pid --fork --kill-child --mount-proc sh -c \

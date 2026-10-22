@@ -851,20 +851,20 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 	cp "`sh vendor/gnu/fetch.sh --path sed`" $@
 
 # `tests/run codexapi`: OpenAI's Responses protocol in the fake API server,
-# proved against the host's Codex at the pinned version, in a fresh home and
-# a network namespace with only a loopback interface: Codex reads a file,
-# runs a command, edits a file and commits, over a WebSocket and then over
-# the HTTPS fallback, and the server refuses a wrong tool result. They are
-# the cases of tests/cases/host.codexapi.json, which etude runs, and have no
-# target here.
+# proved against Codex at the pinned version, in a fresh home and a network
+# namespace with only a loopback interface: Codex reads a file, runs a
+# command, edits a file and commits, over a WebSocket and then over the HTTPS
+# fallback, and the server refuses a wrong tool result. They are the cases of
+# tests/cases/host.codexapi.json, which run on the host, or in etude's tooling
+# machine on a host that is not Linux, and have no target here.
 
 # `tests/run museapi`: the Responses protocol of Meta's Model API in the fake
 # API server, proved against Muse Code at the pinned version, fetched and
 # checked against Meta's digest, in a fresh home and a network namespace with
 # only a loopback interface: Muse reads a file, runs a command, edits a file
 # and commits, and the server refuses a wrong tool result. They are the cases
-# of tests/cases/host.museapi.json, which etude runs, and have no target
-# here.
+# of tests/cases/host.museapi.json, which run on the host, or in etude's
+# tooling machine on a host that is not Linux, and have no target here.
 
 # `tests/run agents`: the pinned GNU agent packages and their headless and
 # interactive sessions, each row over SSH on a private GNU disk against its
