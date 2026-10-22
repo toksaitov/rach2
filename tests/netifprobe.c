@@ -593,23 +593,19 @@ static uint32_t eth0_rx_dropped(void)
 /**
  * Print "NETIFPROBE DOWN", at which the suite sends a datagram to the socket
  * `inbound` while eth0 is down, and wait until eth0's receive drops rise, as
- * they do for the frame the interface drops; the socket must have nothing
- * then or before. 30 seconds of waiting end a wait for a frame that never
- * came. Fails the probe otherwise.
+ * they do for the frame the interface drops, looking every 50 ms; the socket
+ * must have nothing then or before. A frame that never comes leaves the wait
+ * looking, and the case's watchdog ends it. Fails the probe otherwise.
  */
 static void down_drops(int inbound)
 {
     struct pollfd_probe pfd;
     uint32_t dropped = eth0_rx_dropped();
-    int tries;
 
     say("NETIFPROBE DOWN\n");
     pfd.fd = inbound;
     pfd.events = POLLIN;
-    for (tries = 0; eth0_rx_dropped() == dropped; tries++) {
-        if (tries == 600) {
-            fail("no frame was dropped at the interface that was down in 30 seconds");
-        }
+    while (eth0_rx_dropped() == dropped) {
         pfd.revents = 0;
         if (sys_poll(&pfd, 1, 50) > 0 && (pfd.revents & POLLIN)) {
             fail("a datagram reached a machine whose interface was down");

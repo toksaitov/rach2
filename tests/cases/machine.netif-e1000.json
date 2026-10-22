@@ -55,7 +55,7 @@
         {"assertion_id": "gateway-before-down", "checks": "with 10.0.2.15/24 set again the gateway answers a ping, and a datagram socket binds port 9999", "source": "scenario"},
         {"assertion_id": "down-flags", "checks": "eth0 taken down with SIOCSIFFLAGS reads neither IFF_UP nor IFF_RUNNING", "source": "scenario"},
         {"assertion_id": "down-no-ping", "checks": "the gateway does not answer a ping while eth0 is down", "source": "scenario"},
-        {"assertion_id": "down-no-datagram", "checks": "the datagram the host sends after NETIFPROBE DOWN raises eth0's receive drops in /proc/net/dev within 30 seconds, and the socket receives nothing", "source": "scenario"},
+        {"assertion_id": "down-no-datagram", "checks": "the datagram the host sends after NETIFPROBE DOWN raises eth0's receive drops in /proc/net/dev, and the socket receives nothing", "source": "scenario"},
         {"assertion_id": "up-again", "checks": "with eth0 brought back up the gateway answers a ping", "source": "scenario"},
         {"assertion_id": "reset-nonblocking", "checks": "a nonblocking read of the second connection, open across the change back to 10.0.2.15, answers ENETRESET", "source": "scenario"},
         {"assertion_id": "up-datagram", "checks": "the datagram the host sends after NETIFPROBE UP reaches the socket", "source": "scenario"},
