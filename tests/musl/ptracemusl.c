@@ -165,10 +165,6 @@ typedef struct user_fpregs_struct fxregs_t;
 typedef struct user_fpxregs_struct fxregs_t;
 #endif
 
-/* The longest wait, in seconds, for a process to reach a state: a bound that
- * ends a wait the kernel never satisfies, far past a correct one. */
-#define STATE_BOUND 20
-
 /* The word the parent reads and changes in its traced child. */
 static volatile long target = 1234;
 
@@ -882,22 +878,6 @@ static int mem_after_end(void)
     return rc;
 }
 
-/**
- * Wait up to ten seconds for a change in the child `pid` that waitpid
- * reports, so that a stop that never comes fails its row. Returns the child's
- * id with its status in `*status`, or 0 when none came.
- */
-static pid_t wait_within(pid_t pid, int *status)
-{
-    pid_t got = 0;
-    int i;
-
-    for (i = 0; i < 1000 && (got = waitpid(pid, status, WNOHANG)) == 0; i++) {
-        usleep(10000);
-    }
-    return got;
-}
-
 /* Set to 1 by on_usr1 when the child's handler has taken a SIGUSR1. */
 static volatile sig_atomic_t usr1_taken;
 
@@ -964,22 +944,17 @@ static int sleeping(pid_t pid, pid_t t)
 /**
  * Wait for process `pid` to reach the state `want` in /proc/PID/stat,
  * looking every 10 ms. Returns the state the wait ends at: `want`; Z when the
- * process ends first; 0 when its stat file is gone; or the state it is in
- * when STATE_BOUND seconds pass.
+ * process ends first; or 0 when its stat file is gone.
  */
 static char await_state(pid_t pid, char want)
 {
-    struct timespec start, now;
     char path[64];
     char state;
 
     snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = stat_state(path);
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == want || state == 'Z' || state == 0 ||
-            now.tv_sec - start.tv_sec >= STATE_BOUND) {
+        if (state == want || state == 'Z' || state == 0) {
             return state;
         }
         usleep(10000);
@@ -997,7 +972,7 @@ static int stopped_leader(void)
 {
     pthread_t t;
     pid_t pid, sleeper = 0;
-    int p[2], status = 0, i;
+    int p[2], status = 0;
 
     if (pipe(p) != 0) {
         return fail("pipe");
@@ -1018,18 +993,15 @@ static int stopped_leader(void)
         return abandon(pid, "the child's second thread");
     }
     close(p[0]);
-    for (i = 0; i < 500 && !sleeping(pid, sleeper); i++) {
+    while (!sleeping(pid, sleeper)) {
         usleep(10000);
     }
     if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0 || !stopped_by(pid, SIGSTOP)) {
         return abandon(pid, "PTRACE_ATTACH to the child's first thread");
     }
     kill(pid, SIGUSR1);
-    for (i = 0; i < 1000 && waitpid(pid, &status, WNOHANG) == 0; i++) {
-        usleep(10000);
-    }
-    if (i == 1000) {
-        return abandon(pid, "a process signal did not wake the thread beside the stopped one");
+    if (waitpid(pid, &status, 0) != pid) {
+        return abandon(pid, "the child of a process signal beside a stopped thread");
     }
     held();
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 5) {
@@ -1188,7 +1160,7 @@ static int tracer_side(pid_t c, int to_m, int from_m)
  */
 static int tracer_first(void)
 {
-    int to_c[2], to_m[2], to_x[2], status = 0, i;
+    int to_c[2], to_m[2], to_x[2], status = 0;
     pid_t c, x, got = 0;
     char why[64];
     char ch;
@@ -1229,22 +1201,18 @@ static int tracer_first(void)
         return fail("the parent reaped a child before its tracer saw its end");
     }
     held();
-    for (i = 0; i < 1000 && (got = waitpid(c, &status, WNOHANG)) == 0; i++) {
-        usleep(10000);
-    }
+    got = waitpid(c, &status, 0);
     if (got != c || !WIFEXITED(status) || WEXITSTATUS(status) != 9) {
         kill(x, SIGKILL);
         return fail("the parent did not reap the child once its tracer saw the end");
     }
     held();
-    for (i = 0; i < 1000 && waitpid(x, &status, WNOHANG) == 0; i++) {
-        usleep(10000);
-    }
+    got = waitpid(x, &status, 0);
     close(to_c[1]);
     close(to_m[0]);
     close(to_x[1]);
-    if (i == 1000) {
-        return abandon(x, "the tracer's wait after the end did not return");
+    if (got != x) {
+        return abandon(x, "the tracer could not be reaped");
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         snprintf(why, sizeof(why), "the tracer's step %d", WEXITSTATUS(status));
@@ -1322,7 +1290,7 @@ static int attach_stopped(void)
     if (waitpid(pid, &status, WUNTRACED) != pid || !WIFSTOPPED(status)) {
         return fail("the child to be seized did not stop");
     }
-    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFSTOPPED(status) || status >> 8 != (SIGSTOP | (PTRACE_EVENT_STOP << 8))) {
         return abandon(pid, "seizing a stopped process did not stop it for the tracer");
     }
@@ -1336,7 +1304,7 @@ static int attach_stopped(void)
     }
     held();
     kill(pid, SIGCONT);
-    if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the seized process did not run on after the detach");
     }
     held();
@@ -1344,15 +1312,15 @@ static int attach_stopped(void)
 }
 
 /**
- * Wait up to ten seconds for `pid` to stop with `want` as its status shifted
- * right by 8 bits. Returns 0, or 1 after the child is killed and the failure
- * `what` is printed.
+ * Wait for `pid` to change state, and check that it stopped with `want` as
+ * its status shifted right by 8 bits. Returns 0, or 1 after the child is
+ * killed and the failure `what` is printed.
  */
 static int expect_stop(pid_t pid, int want, const char *what)
 {
     int status;
 
-    if (wait_within(pid, &status) != pid || !WIFSTOPPED(status) || status >> 8 != want) {
+    if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status) || status >> 8 != want) {
         return abandon(pid, what);
     }
     return 0;
@@ -1460,7 +1428,7 @@ static int listen_and_continue(void)
     if (listen_first(pid) != 0 || listen_second(pid) != 0) {
         return 1;
     }
-    if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the listened-to process did not run on");
     }
     held();
@@ -1475,10 +1443,8 @@ static int listen_and_continue(void)
  */
 static int interrupt_read(void)
 {
-    char path[64];
     int p[2];
     int status;
-    int i;
     char c;
     pid_t pid;
 
@@ -1491,15 +1457,11 @@ static int interrupt_read(void)
         _exit(read(p[0], &c, 1) == 1 && c == 'g' ? 0 : 1);
     }
     close(p[0]);
-    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
-    for (i = 0; i < 500 && stat_state(path) != 'S'; i++) {
-        usleep(10000);
-    }
-    if (i == 500) {
+    if (await_state(pid, 'S') != 'S') {
         return abandon(pid, "the tracee was never seen asleep in its read");
     }
     if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0 ||
-        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+        ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFSTOPPED(status) || status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
         return abandon(pid, "PTRACE_INTERRUPT did not stop a tracee blocked in a read");
     }
@@ -1507,7 +1469,7 @@ static int interrupt_read(void)
     if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || write(p[1], "g", 1) != 1) {
         return abandon(pid, "resuming the interrupted tracee");
     }
-    if (wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the interrupted read was not restarted");
     }
     held();
@@ -1542,7 +1504,7 @@ static int seized_fork(void)
         return abandon(pid, "seizing a stopped process with PTRACE_O_TRACEFORK");
     }
     for (;;) {
-        if (wait_within(pid, &status) != pid || !WIFSTOPPED(status)) {
+        if (waitpid(pid, &status, 0) != pid || !WIFSTOPPED(status)) {
             return abandon(pid, "the seized process did not stop at its fork");
         }
         if (status >> 8 == (SIGTRAP | (PTRACE_EVENT_FORK << 8))) {
@@ -1552,7 +1514,7 @@ static int seized_fork(void)
     }
     held();
     ptrace(PTRACE_GETEVENTMSG, pid, NULL, &child);
-    if (child == 0 || wait_within((pid_t)child, &status) != (pid_t)child || !WIFSTOPPED(status) ||
+    if (child == 0 || waitpid((pid_t)child, &status, 0) != (pid_t)child || !WIFSTOPPED(status) ||
         status >> 8 != (SIGTRAP | (PTRACE_EVENT_STOP << 8))) {
         return abandon(pid, "the child of a seized fork did not first stop with SIGTRAP");
     }
@@ -1561,11 +1523,11 @@ static int seized_fork(void)
         ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
         return abandon(pid, "resuming the seized process and its child");
     }
-    if (wait_within((pid_t)child, &status) != (pid_t)child || !WIFEXITED(status)) {
+    if (waitpid((pid_t)child, &status, 0) != (pid_t)child || !WIFEXITED(status)) {
         return abandon(pid, "the child of the seized process did not run to its end");
     }
     held();
-    while (wait_within(pid, &status) == pid && WIFSTOPPED(status)) {
+    while (waitpid(pid, &status, 0) == pid && WIFSTOPPED(status)) {
         ptrace(PTRACE_CONT, pid, NULL, (void *)(long)WSTOPSIG(status));
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
@@ -1585,7 +1547,6 @@ static int seized_fork(void)
 static int killed_tracee(void)
 {
     struct timespec now = {0, 0};
-    struct timespec bound = {5, 0};
     sigset_t chld;
     siginfo_t si;
     int status;
@@ -1605,7 +1566,7 @@ static int killed_tracee(void)
     }
     while (sigtimedwait(&chld, &si, &now) == SIGCHLD) {
     }
-    if (kill(pid, SIGKILL) != 0 || sigtimedwait(&chld, &si, &bound) != SIGCHLD) {
+    if (kill(pid, SIGKILL) != 0 || sigwaitinfo(&chld, &si) != SIGCHLD) {
         return fail("no SIGCHLD came of the killed tracee");
     }
     held();
@@ -1672,7 +1633,7 @@ static void finish_register_child(pid_t pid)
     int status;
 
     kill(pid, SIGKILL);
-    wait_within(pid, &status);
+    waitpid(pid, &status, 0);
 }
 
 /**
@@ -1853,7 +1814,7 @@ static int watched_copy(void)
         expect_stop(pid, SIGTRAP, "kernel copy did not trap") || passed() ||
         ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT ||
         debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "watched kernel copy lost its trap or result");
     }
     held();
@@ -1894,7 +1855,7 @@ static int watched_poll(void)
     }
     held();
     if (debug_set(pid, 7, 0) != 0 || ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        wait_within(pid, &status) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "watched poll did not return EINTR");
     }
     held();
@@ -1902,15 +1863,13 @@ static int watched_poll(void)
 }
 
 /**
- * Block SIGTRAP, stop for the tracer, then wait for the hit of the watchpoint
- * on the set at `set`. Runs in the forked child and exits 0 when the wait
- * takes SIGTRAP with TRAP_HWBKPT, and 1 otherwise. The raw rt_sigtimedwait
- * timeout has two native longs on either architecture, unlike musl's i686
- * timespec with its 64-bit seconds.
+ * Block SIGTRAP, stop for the tracer, then wait, in the raw rt_sigtimedwait
+ * with no timeout, for the hit of the watchpoint on the set at `set`. Runs in
+ * the forked child and exits 0 when the wait takes SIGTRAP with TRAP_HWBKPT,
+ * and 1 otherwise.
  */
 static void sigwait_child(sigset_t *set)
 {
-    long timeout[2] = {1, 0};
     siginfo_t info;
 
     sigemptyset(set);
@@ -1920,7 +1879,7 @@ static void sigwait_child(sigset_t *set)
         raise(SIGSTOP) != 0) {
         _exit(1);
     }
-    _exit(syscall(SYS_rt_sigtimedwait, set, &info, timeout, 8) == SIGTRAP &&
+    _exit(syscall(SYS_rt_sigtimedwait, set, &info, NULL, 8) == SIGTRAP &&
                   info.si_code == TRAP_HWBKPT
               ? 0
               : 1);
@@ -1946,7 +1905,7 @@ static int watched_sigwait(void)
         return 1;
     }
     if (debug_set(pid, 0, (unsigned long)&set) != 0 || debug_set(pid, 7, 0xf0001) != 0 ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "watched sigwait did not take SIGTRAP with TRAP_HWBKPT");
     }
@@ -2132,7 +2091,7 @@ static int thread_pointer(void)
         return abandon(pid, "a base set did not read back");
     }
     held();
-    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the tracee did not run with the bases set");
     }
@@ -2232,7 +2191,7 @@ static int thread_pointer(void)
         return abandon(pid, "a thread pointer set did not read back");
     }
     held();
-    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || wait_within(pid, &status) != pid ||
+    if (ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return abandon(pid, "the tracee did not run with the thread pointer set");
     }
