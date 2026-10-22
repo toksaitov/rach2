@@ -197,6 +197,14 @@ struct member {
     struct command c;
 };
 
+/* A file of the tree that the run has tried to publish to its store. */
+struct source {
+    char *path;
+    int published;  /* its last publication succeeded */
+    struct stat st; /* its status before that publication read it */
+    char digest[ETUDE_DIGEST_HEX + 1];
+};
+
 /* One run of the set. */
 struct set {
     const struct etude_legacy_set_opts *o;
@@ -226,6 +234,9 @@ struct set {
     struct legacy_manifest *manifests; /* by the request's members; a suite
                                           of the registry has none */
     struct etude_job *jobs;            /* beside mem */
+    struct source *sources;            /* the files of the machine cases'
+                                          artifacts, by their paths */
+    size_t nsources;
     struct command prep;
     char prep_step[300];
     char plan_record[300];
@@ -2187,6 +2198,70 @@ static int boundary_admits(const struct set *x, const struct member *m, char *wh
     return 0;
 }
 
+/** Say whether `a` and `b` are the status of one file that has not changed:
+ * the same device, inode and size, and the same times of its last
+ * modification and its last change. */
+static int unchanged(const struct stat *a, const struct stat *b)
+{
+#ifdef __APPLE__
+    const struct timespec *am = &a->st_mtimespec, *bm = &b->st_mtimespec;
+    const struct timespec *ac = &a->st_ctimespec, *bc = &b->st_ctimespec;
+#else
+    const struct timespec *am = &a->st_mtim, *bm = &b->st_mtim;
+    const struct timespec *ac = &a->st_ctim, *bc = &b->st_ctim;
+#endif
+
+    return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_size == b->st_size &&
+           am->tv_sec == bm->tv_sec && am->tv_nsec == bm->tv_nsec && ac->tv_sec == bc->tv_sec &&
+           ac->tv_nsec == bc->tv_nsec;
+}
+
+/**
+ * Publish the file at `path` to the run's store, and give its digest in
+ * `digest`.
+ *
+ * The machine cases of a set share their artifacts, and a disk of gigabytes
+ * would otherwise be copied and hashed once for each case that names it. A
+ * file that this run has published is therefore not read again while its
+ * status is what it was before that publication read it, and its digest is
+ * that publication's. A file whose status differs is published again, and so
+ * is one whose last publication failed. Since the status is taken before the
+ * file is read, a change made while it is read is seen at the next call; a
+ * file rewritten in place to the same size, so soon that its times do not
+ * change, is taken as unchanged.
+ *
+ * @return 0, or -1 with errno set.
+ */
+static int publish_file(struct set *x, const char *path, char digest[ETUDE_DIGEST_HEX + 1])
+{
+    struct source *p;
+    struct stat st;
+    size_t i;
+
+    if (stat(path, &st) != 0)
+        return -1;
+    for (i = 0; i < x->nsources && strcmp(x->sources[i].path, path) != 0; i++) {
+    }
+    if (i == x->nsources) {
+        if ((p = realloc(x->sources, (i + 1) * sizeof(*p))) == NULL)
+            return -1;
+        x->sources = p;
+        memset(&p[i], 0, sizeof(p[i]));
+        if ((p[i].path = strdup(path)) == NULL)
+            return -1;
+        x->nsources++;
+    }
+    p = &x->sources[i];
+    if (!p->published || !unchanged(&p->st, &st)) {
+        p->st = st;
+        p->published = etude_store_put(x->objects, path, NULL, p->digest, NULL) == 0;
+        if (!p->published)
+            return -1;
+    }
+    memcpy(digest, p->digest, sizeof(p->digest));
+    return 0;
+}
+
 /** Publish the artifacts of machine case member `m` to the run's store, and
  * write its invocation; 0, or -1 with the reason in `why`. */
 static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN], char *why,
@@ -2209,7 +2284,7 @@ static int publish_member(struct set *x, struct member *m, char qemu[2][PATH_LEN
     }
     for (g = 0; g < k->ngoals; g++)
         if (fit(path, sizeof(path), "%s/%s", x->tree, k->goals[g]) != 0 ||
-            etude_store_put(x->objects, path, NULL, m->digests[g], NULL) != 0) {
+            publish_file(x, path, m->digests[g]) != 0) {
             fit(why, size, "its artifact %s, %s, could not be published: %s", k->names[g],
                 k->goals[g], strerror(errno));
             return -1;
@@ -3271,6 +3346,9 @@ static void tear_down(struct set *x)
     free(x->prep.envp);
     free(x->mem);
     free(x->jobs);
+    for (i = 0; i < x->nsources; i++)
+        free(x->sources[i].path);
+    free(x->sources);
     if (x->objects != NULL) {
         etude_store_close(x->objects);
         if (legacy_remove_tree(x->objects_dir) != 0)
