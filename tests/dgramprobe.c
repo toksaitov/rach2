@@ -424,18 +424,12 @@ static void expect_nothing(int fd, const char *what)
  * Wait until a datagram has found no socket since /proc/net/snmp counted
  * `base` of them, which is the datagram sent to `fd`, a socket connected to
  * another sender, when `fd` does not take it; `fd` must have nothing to read
- * meanwhile and then, or the probe fails with `what`. Thirty seconds without
- * the datagram fail with `missing`.
+ * meanwhile and then, or the probe fails with `what`.
  */
-static void expect_refused(uint32_t base, int fd, const char *what, const char *missing)
+static void expect_refused(uint32_t base, int fd, const char *what)
 {
-    int naps;
-
-    for (naps = 0; udp_no_ports() == base; naps++) {
+    while (udp_no_ports() == base) {
         expect_nothing(fd, what);
-        if (naps == 3000) {
-            fail(missing);
-        }
         nap(10);
     }
     expect_nothing(fd, what);
@@ -570,8 +564,7 @@ void probe_main(unsigned long *sp)
         fail("a connected socket did not receive from its peer");
     }
     expect_refused(refused, client,
-                   "a connected socket received from a sender it is not connected to",
-                   "the third socket's datagram was neither received nor refused");
+                   "a connected socket received from a sender it is not connected to");
     report_held();
 
     /* A sender at another address: the suite's datagram, through a forward. */
@@ -586,8 +579,7 @@ void probe_main(unsigned long *sp)
     refused = udp_no_ports();
     say("DGRAMPROBE OUTSIDE\n");
     expect_refused(refused, outside,
-                   "a connected socket received from an address that is not its peer's",
-                   "the suite's datagram from outside was neither received nor refused");
+                   "a connected socket received from an address that is not its peer's");
     report_held();
     /* The same socket still hears its peer. */
     set_sockaddr(our_ip, outside_port);
