@@ -175,7 +175,8 @@ ETUDEEXEC_ARCHIVE = $(CASE_DIR)/etudeexec/etude.tar
 ETUDEEXEC_FILES = $(shell find tools/etude -type f) utils/sha256.c utils/sha256.h \
                   tests/host/etude_exec_hosttest.c tests/host/compat/fixdir_host.c \
                   tests/host/compat/fixdir_host.h tests/host/compat/pathmax_host.h \
-                  tests/auxvprobe.c tests/cases/machine/etudeexec_guest.sh
+                  tests/auxvprobe.c tests/cases/machine/etudeexec_guest.sh \
+                  tests/cases/guest.fpu.json tests/cases/machine.shutdown.json
 $(ETUDEEXEC_DISK): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                    $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
