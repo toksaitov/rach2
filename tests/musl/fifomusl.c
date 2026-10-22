@@ -39,7 +39,6 @@
 #include <sys/stat.h>
 #include <sys/statfs.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_report.h"
@@ -225,10 +224,6 @@ out:
     return error ? fail(error) : 0;
 }
 
-/* The longest wait, in seconds, for another process to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
 /** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
  * no stat file. */
 static int proc_state(pid_t pid)
@@ -254,21 +249,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -300,28 +292,17 @@ static void writer(pid_t parent, int told)
     _exit(w >= 0 && write(w, "child", 5) == 5 ? 0 : 1);
 }
 
-/* The SIGALRMs delivered; an alarm ends a poll that nothing else did. */
-static volatile sig_atomic_t alarms;
-
-/** Count a SIGALRM. */
-static void on_alarm(int sig)
-{
-    (void)sig;
-    alarms++;
-}
-
 /**
  * Wait to see `parent` asleep (`seen_asleep`), open the FIFO for reading and
  * read a byte of it, and keep running, reading the nonblocking `ack` in a
- * loop, until it has a byte or 15 s have passed: an idle kernel scans a
- * sleeping poll's descriptors again at every interrupt, which would end the
- * parent's wait without the read's wake. Runs in the forked child and does
- * not return: exits 0 when all of that happened, 2 when the parent was never
- * seen asleep, and 1 otherwise.
+ * loop, until it has a byte: an idle kernel scans a sleeping poll's
+ * descriptors again at every interrupt, which would end the parent's wait
+ * without the read's wake. Runs in the forked child and does not return:
+ * exits 0 when all of that happened, 2 when the parent was never seen asleep,
+ * and 1 otherwise.
  */
 static void drainer(pid_t parent, int ack)
 {
-    struct timespec start, now;
     char byte;
     int r;
 
@@ -329,30 +310,24 @@ static void drainer(pid_t parent, int ack)
         _exit(2);
     }
     r = open(FIFO_PATH, O_RDONLY | O_NONBLOCK);
-    if (r < 0 || read(r, &byte, 1) != 1 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+    if (r < 0 || read(r, &byte, 1) != 1) {
         _exit(1);
     }
-    do {
-        if (read(ack, &byte, 1) == 1) {
-            _exit(0);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-    } while (now.tv_sec - start.tv_sec < 15);
-    _exit(1);
+    while (read(ack, &byte, 1) != 1) {
+    }
+    _exit(0);
 }
 
 /**
  * Check that an open of the FIFO for reading and writing does not wait, and
  * that once full it polls writable when another open reads a byte. The
  * reader is a child that reads once it sees the poll asleep and keeps running
- * after, and the poll has no time limit of its own, only a 10 s alarm; a poll
- * the alarm ends finds the room as it wakes, so the row fails when the alarm
- * fired. Then check read-only opens with `reader_hangup`. Returns 0, or 1
- * once the failure is reported.
+ * after, and the poll has no timeout: a wake the kernel misses leaves it
+ * asleep, and the case's watchdog ends it. Then check read-only opens with
+ * `reader_hangup`. Returns 0, or 1 once the failure is reported.
  */
 static int poll_opens(void)
 {
-    struct sigaction sa;
     struct pollfd pfd;
     char buf[512];
     int rw, n, status = 0;
@@ -381,10 +356,7 @@ static int poll_opens(void)
         return fail("a full FIFO polled writable");
     }
     row_held();
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = on_alarm;
-    if (pipe(ack) != 0 || fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0 ||
-        sigaction(SIGALRM, &sa, NULL) != 0) {
+    if (pipe(ack) != 0 || fcntl(ack[0], F_SETFL, O_NONBLOCK) != 0) {
         return fail("setup for the reading child");
     }
     row_held();
@@ -392,10 +364,7 @@ static int poll_opens(void)
     if (pid == 0) {
         drainer(parent, ack[0]);
     }
-    alarms = 0;
-    alarm(10);
     n = poll(&pfd, 1, -1);
-    alarm(0);
     if (pid < 0 || write(ack[1], "a", 1) != 1 || waitpid(pid, &status, 0) != pid ||
         !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail(pid > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 2
@@ -403,7 +372,7 @@ static int poll_opens(void)
                         : "the reading child");
     }
     row_held();
-    if (n != 1 || !(pfd.revents & POLLOUT) || alarms) {
+    if (n != 1 || !(pfd.revents & POLLOUT)) {
         return fail("a read by another open did not wake a poll for output");
     }
     row_held();
