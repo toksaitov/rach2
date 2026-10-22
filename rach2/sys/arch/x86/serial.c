@@ -4,6 +4,7 @@
  * interrupt and the tick fill.
  */
 #include "portio.h"
+#include "../arch.h"
 #include "../../serial.h"
 
 /* COM1 port base address */
@@ -143,36 +144,47 @@ void serial_init(void)
 }
 
 /*
- * How many times a transmit is polled before the byte is dropped.
+ * How long a transmit waits for the UART before the byte is dropped.
  *
  * A UART that is not draining makes the wait below never end, and a kernel
  * that hangs while reporting a fault reports nothing. A UART that drains
  * slowly is no fault: QEMU's keeps a byte in its FIFO while the program that
- * reads its console socket falls behind, which on a loaded host lasts tens of
- * milliseconds or more, and a byte dropped then is lost from the record a
- * test reads. A hardware UART empties its 16-byte FIFO in 1.4 ms at 115200
- * baud, some thousand polls. So a byte waits up to SERIAL_TX_POLLS, seconds
- * of polling, and a port that misses that is taken as stuck: until it takes
- * a byte again, each byte waits only SERIAL_TX_STUCK_POLLS, so that a dead
+ * reads its console socket falls behind, and with one-byte writes the socket
+ * is full after a few hundred unread bytes. A test runner that serves many
+ * machines from one loop can fall seconds behind on a loaded host, and a byte
+ * dropped then is lost from the record a test reads. A hardware UART empties
+ * its 16-byte FIFO in 1.4 ms at 115200 baud. So a byte waits up to
+ * SERIAL_TX_WAIT_MS, and a port that misses that is taken as stuck: until it
+ * takes a byte again, each byte waits only SERIAL_TX_STUCK_MS, so that a dead
  * port costs one long wait and then a short one per byte.
+ *
+ * The waits are counted in cycles of the time-stamp counter at
+ * SERIAL_TX_CYCLES_PER_MS, faster than any processor's counter runs, so that
+ * no wait is shorter than its milliseconds. A count of polls would not do: a
+ * poll takes some 100 ns under QEMU's emulation and over 1 us on a PC.
  */
-#define SERIAL_TX_POLLS       20000000UL
-#define SERIAL_TX_STUCK_POLLS 100000UL
+#define SERIAL_TX_WAIT_MS       30000UL
+#define SERIAL_TX_STUCK_MS      2UL
+#define SERIAL_TX_CYCLES_PER_MS 5000000UL
 
 static int _serial_stuck; /* the last byte timed out; reset by one sent */
 
 void serial_out(char c)
 {
-    unsigned long limit = _serial_stuck ? SERIAL_TX_STUCK_POLLS : SERIAL_TX_POLLS;
-    unsigned long spins = 0;
+    uint64_t start, limit;
 
     if (!_serial_port_exists) {
         return;
     }
-    while (!_serial_is_transmit_empty()) {
-        if (++spins >= limit) {
-            _serial_stuck = 1;
-            return;
+    if (!_serial_is_transmit_empty()) {
+        limit = (uint64_t)(_serial_stuck ? SERIAL_TX_STUCK_MS : SERIAL_TX_WAIT_MS) *
+                SERIAL_TX_CYCLES_PER_MS;
+        start = arch_cycles();
+        while (!_serial_is_transmit_empty()) {
+            if (arch_cycles() - start >= limit) {
+                _serial_stuck = 1;
+                return;
+            }
         }
     }
     _serial_stuck = 0;

@@ -279,8 +279,9 @@ void arch_tlb_flush_page(uintptr_t va);
 /** The address whose access raised the page fault being handled. */
 uintptr_t arch_fault_address(void);
 
-/** A counter of processor cycles, for entropy: on x86 the time-stamp
- * counter, read without a check that the processor has one. */
+/** A counter of processor cycles, for entropy and the serial port's transmit
+ * wait: on x86 the time-stamp counter, read without a check that the
+ * processor has one. */
 uint64_t arch_cycles(void);
 
 /** A value from the processor's entropy source into `out`: `seed` asks for

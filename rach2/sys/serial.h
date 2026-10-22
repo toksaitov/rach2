@@ -81,11 +81,11 @@ void serial_rx_counters(struct serial_rx_counters *out);
 /**
  * Write one byte to the port.
  *
- * The transmit waits for the UART up to a bound of polls long enough for a
- * slow reader of a virtual port, and drops the byte past it. A port that
- * missed that bound is waited on for a short one until it takes a byte
- * again, so a UART that stopped draining costs a bounded delay and not the
- * machine. A machine with no UART discards the byte.
+ * The transmit waits for the UART up to 30 seconds, long enough for a slow
+ * reader of a virtual port, and drops the byte past it. A port that missed
+ * that bound is waited on for 2 ms until it takes a byte again, so a UART
+ * that stopped draining costs a bounded delay and not the machine. A machine
+ * with no UART discards the byte.
  *
  * It formats nothing and keeps no copy of what it sent. Its callers are
  * `klog`, which keeps the machine's own copy in the log's ring, and the
