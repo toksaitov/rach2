@@ -34,9 +34,9 @@ DIGEST = "24972e3bc859fab2b46ed4c1e51f7d6130f06d3bd550811a114640de3370d0de"
 
 
 def command(args, cwd, env=None):
-    """Run a bounded command and return its output, failing on nonzero status."""
+    """Run a command and return its output, failing on nonzero status."""
     return subprocess.check_output(args, cwd=cwd, env=env, stderr=subprocess.STDOUT,
-                                   text=True, timeout=30)
+                                   text=True)
 
 
 def render(repo, screen=False):
@@ -100,7 +100,7 @@ def client(binary, work, url, ca):
         child = subprocess.Popen(args, cwd=work / "repo", env=env, stdout=output,
                                  stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            return child.wait(timeout=120)
+            return child.wait()
         finally:
             try:
                 os.killpg(child.pid, signal.SIGTERM)

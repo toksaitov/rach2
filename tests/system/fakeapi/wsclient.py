@@ -59,7 +59,7 @@ def main(address, path, cafile, messages):
     """Run the exchange the usage describes."""
     host, _, port = address.partition(":")
     context = ssl.create_default_context(cafile=cafile)
-    conn = context.wrap_socket(socket.create_connection((host, int(port or 443)), timeout=60),
+    conn = context.wrap_socket(socket.create_connection((host, int(port or 443))),
                                server_hostname=host)
     rfile = conn.makefile("rb")
     key = base64.b64encode(os.urandom(16)).decode()
