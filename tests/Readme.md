@@ -64,7 +64,7 @@ Ten probes also run on an installed root, as `tests/run ext2` and `tests/run sel
 * `orphanprobe` must be the kernel's init process, which `exec /orphanprobe` at the debug shell of a boot with `rach2.rescue` makes it; a process started over SSH cannot be.
 * `modeprobe` needs `/suidhelper`, root, and a writable working directory for its `mp_*` files. An argument gives the directory whose file system it tests.
 
-`sh tests/system/manual_probes.sh KEY ADDRESS probes DIR` stages the probes on an installed ext2 root over SSH, after `tools/dev/machine_identity.sh` has found the slot and kernel that `RACH2_MEASURE_SLOT` and `RACH2_MEASURE_KERNEL` name. It refuses a root that has a name the probes use, runs the nine that do not need the init role, removes what it staged but `/orphanprobe`, and prints the console steps for that one; its `clean` mode removes it afterwards.
+On an installed machine that is already up, such as the Lenovo, `etude-native` runs a probe as a case of its own over SSH, as [etude's Readme](../tools/etude/Readme.md#use) says.
 
 ## Results
 

@@ -369,7 +369,7 @@ unflagged() {
     _sigs='([[:space:]]+[A-Z0-9]+)*[[:space:]]+(EXIT|0)([[:space:]]+[A-Z0-9]+)*[[:space:]]*$'
     # shellcheck disable=SC2016
     sh "$REPO/tools/verify/scripts.sh" \
-        | grep -E '^(tools|krffs)/|^tests/system/(manual_probes|accept/su_command)\.sh$' \
+        | grep -E '^(tools|krffs)/|^tests/system/accept/su_command\.sh$' \
         | while IFS= read -r f; do
             if grep -qE "${_opts}(-[A-Za-z]*e[A-Za-z]*|-o[[:space:]]+errexit)([[:space:];]|\$)" "$f" &&
                 grep -qE "${_opts}(-[A-Za-z]*u[A-Za-z]*|-o[[:space:]]+nounset)([[:space:];]|\$)" "$f" &&
