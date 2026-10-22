@@ -140,6 +140,7 @@
 #include <unistd.h>
 
 #include "compat/fixdir_host.c"
+#include "compat/pathmax_host.h"
 #include "sha256.h"
 #include "etude/artifact.h"
 #include "etude/history.h"
