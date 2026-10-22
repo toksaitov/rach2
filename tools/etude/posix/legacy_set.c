@@ -66,8 +66,8 @@ extern char **environ;
 #define MARGIN_S 120u
 
 /* The first local port of the machine cases, before the offset of the port
- * block: with LEGACY_PORTS after it, their ports end in 400 to 999, which no
- * port of the table in tests/system/suites.mk does in any block. */
+ * block: with LEGACY_PORTS after it, their ports are 2400 to 2999 of a block
+ * of a thousand, so that no two blocks share a port. */
 #define PORT_BASE 2400u
 
 /* The bytes of history one run may write. */

@@ -736,23 +736,22 @@ host_lock() { # host_lock NAME...
 # The block of host ports the run's machines forward, claimed last, after
 # every check that can refuse the run and after the tree is taken, and only
 # when a suite named boots a machine: one whose tools name QEMU. `inventory`,
-# a refused command and a set of suites that boot nothing, such as `style`
-# and `runner`, claim nothing. Every tree on the host, in every
-# account, claims a block from the same lock files in /tmp, so two trees
-# never forward the same port; the helper holds the lock through exec for as
-# long as this process lives and sets RACH2_PORT_OFFSET, which
-# tests/system/suites.mk adds to every port in its table. The runner starts
-# again under the lock with the names it was given, as a set expanded them,
-# and keeps the tree it took: RACH2_RUN_TREE_LOCK names the lock directory,
-# which the helper removes if the claim is interrupted, and which the run
-# owns again from its first line. A caller that set the offset itself owns
-# the ports it names. Before the block, the helper takes the host lock in the
-# same directory, of the kind RACH2_HOST_LOCK gives it: `shared`, which any
-# number of runs have at once, or, for a run with a suite that declares more
-# guest memory than half of the host's, as `bigmem` does on the testing host,
-# `alone`, which waits for the runs in progress to end and keeps every other
-# run that claims a block from starting until this one ends (`host_claim` in
-# the helper says how).
+# a refused command and a set of suites that boot nothing, such as `style` and
+# `runner`, claim nothing. Every tree on the host, in every account, claims a
+# block from the same lock files in /tmp, so two trees never forward the same
+# port; the helper holds the lock through exec for as long as this process
+# lives and sets RACH2_PORT_OFFSET, which the set driver adds to the ports of
+# the machine cases. The runner starts again under the lock with the names it
+# was given, as a set expanded them, and keeps the tree it took:
+# RACH2_RUN_TREE_LOCK names the lock directory, which the helper removes if
+# the claim is interrupted, and which the run owns again from its first line.
+# A caller that set the offset itself owns the ports it names. Before the
+# block, the helper takes the host lock in the same directory, of the kind
+# RACH2_HOST_LOCK gives it: `shared`, which any number of runs have at once,
+# or, for a run with a suite that declares more guest memory than half of the
+# host's, as `bigmem` does on the testing host, `alone`, which waits for the
+# runs in progress to end and keeps every other run that claims a block from
+# starting until this one ends (`host_claim` in the helper says how).
 # The variable is given to the helper alone, which unsets it before the exec.
 # RACH2_PORT_DIR names another directory for the block files and the host
 # lock's, as it does for tools/ci/bisect.sh.

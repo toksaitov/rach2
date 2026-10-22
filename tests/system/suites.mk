@@ -50,29 +50,17 @@ together = $(addprefix %/,$(patsubst build/%,%,$(1)))
 
 .PHONY: components harness-kernel
 
-# The card that the boots of the targets below attach, which the runner and
-# the harness both take as --device: the RTL8139 unless NIC names another.
-# The host ports the suites forward. They are named here because two suites
-# sharing one cannot both run, and a number buried in a recipe is a collision
-# nobody sees until the two are scheduled together.
-#
-# The table keeps the suites of one tree apart; PORT_OFFSET keeps the trees
-# of one host apart. The testing host runs several trees at once, the two ci
-# runners and each person's clone, and two of them running one suite would
-# forward one port. So tests/run claims a block of ports for its run before
-# it starts anything: block N is the lock file /tmp/rach2-ports.N, which
-# every account can lock, the lowest free block of ten is taken, and the run
-# exports RACH2_PORT_OFFSET as N * 1000 while it holds the lock. Every port
-# below is the table's number plus that offset. Within a block the table's
-# numbers are 2327, 2329 and 2331, and etude's set driver gives the machine
-# cases of tests/cases 2400 to 2999 (tools/etude/Readme.md, The set driver),
-# so no port of one block is a port of another, and the highest, 2999 + 9000,
-# is below the ephemeral ports. A make run without tests/run has no offset
-# and forwards the table's numbers.
-PORT_OFFSET     := $(or $(RACH2_PORT_OFFSET),0)
-port             = $(shell echo $$(($(1) + $(PORT_OFFSET))))
-NIC             ?= rtl8139
-NIC_DEV          = --device $(NIC),netdev=net0
+# The host ports of the machine cases. tests/run claims a block of ports for a
+# run that boots a machine before it starts anything: block N is the lock file
+# /tmp/rach2-ports.N, which every account can lock, the lowest free block of
+# ten is taken, and the run exports RACH2_PORT_OFFSET as N * 1000 while it
+# holds the lock. etude's set driver gives the machine cases ports 2400 to
+# 2999 of the block (tools/etude/Readme.md, The set driver), so no port of one
+# block is a port of another, and the highest, 2999 + 9000, is below the
+# ephemeral ports. The installed launcher, tools/etude/launch.sh, refuses to
+# run tests/run in a checkout whose suites.mk does not name RACH2_PORT_OFFSET,
+# the sign of a tree whose runs claim such a block.
+
 # The suites' wall-clock limit tool (see its rule below).
 DEADLINE        = build/tests/system/deadline
 PCAPCHECK       = build/tests/system/pcapcheck
@@ -836,9 +824,9 @@ $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(M
 # doing its main job, and tmux at the console. Each case boots an overlay of
 # this disk: the GNU system's volume at LBA 2048 behind a table of one
 # partition, copied sparse, since the volume is 4 GiB with most of it free. The
-# image is not among the products `prepare-all` builds: it is made from the GNU
-# layer, on a Linux host only (mk/gnu-image.mk), which a set without this suite
-# must not need, so only the cases' preparation asks for it.
+# image is made from the GNU layer, on a Linux host only (mk/gnu-image.mk),
+# which a set without this suite must not need, so only the cases' preparation
+# asks for it.
 GNU_TEST_DISK = $(IMAGES_DIR)/gnu-test.disk
 $(GNU_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
