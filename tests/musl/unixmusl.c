@@ -56,10 +56,8 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
@@ -766,20 +764,6 @@ static int listening(void)
     return 0;
 }
 
-/* The count of SIGALRM deliveries to on_alarm. */
-static volatile sig_atomic_t alarms;
-
-/** Count a SIGALRM. */
-static void on_alarm(int sig)
-{
-    (void)sig;
-    alarms++;
-}
-
-/* The longest wait, in seconds, for another process to be seen asleep: a
- * bound that ends a wait the kernel never satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
 /** The state letter /proc/<pid>/stat gives process `pid`, or 0 when it has
  * no stat file. */
 static int proc_state(pid_t pid)
@@ -805,21 +789,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -827,32 +808,28 @@ static int seen_asleep(pid_t pid)
 }
 
 /**
- * Wait for the child `pid` without sleeping, for up to 15 s, and store its
- * status in `*status`. A process that runs keeps the kernel from idling, and
- * an idle kernel looks at a sleeping wait again at every interrupt, which
- * would let the child's connect finish without its wake. Returns the child's
- * id, or 0 when it has not ended.
+ * Wait for the child `pid` without sleeping, and store its status in
+ * `*status`. A process that runs keeps the kernel from idling, and an idle
+ * kernel looks at a sleeping wait again at every interrupt, which would let
+ * the child's connect finish without its wake. Returns the child's id, or -1
+ * when the wait fails.
  */
 static pid_t reap_running(pid_t pid, int *status)
 {
-    struct timespec start, now;
     pid_t got;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     do {
         got = waitpid(pid, status, WNOHANG);
-        clock_gettime(CLOCK_MONOTONIC, &now);
-    } while (got == 0 && now.tv_sec - start.tv_sec < 15);
+    } while (got == 0);
     return got;
 }
 
 /**
  * Check that a connect waiting for room in a listener's queue finishes when
- * listen makes the backlog larger. The connect has no time limit of its own,
- * only a 10 s alarm, and listen runs once it is seen asleep; a connect the
- * alarm wakes finds the room and finishes, so the child fails when the alarm
- * fired, and only listen's wake passes the row. Returns 0, or 1 after the
- * failure is printed.
+ * listen makes the backlog larger. The connect has no timeout, and listen
+ * runs once it is seen asleep; a wake the kernel misses leaves the connect
+ * asleep, and the case's watchdog ends it. Returns 0, or 1 after the failure
+ * is printed.
  */
 static int backlog_growth(void)
 {
@@ -870,14 +847,9 @@ static int backlog_growth(void)
     row_held();
     pid = fork();
     if (pid == 0) {
-        struct sigaction sa;
         int w = socket(AF_UNIX, SOCK_STREAM, 0);
 
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = on_alarm;
-        sigaction(SIGALRM, &sa, NULL);
-        alarm(10);
-        _exit(connect(w, (struct sockaddr *)&a, alen) == 0 && !alarms ? 0 : 1);
+        _exit(connect(w, (struct sockaddr *)&a, alen) == 0 ? 0 : 1);
     }
     if (pid < 0 || !seen_asleep(pid)) {
         if (pid > 0) {
@@ -957,11 +929,10 @@ static int datagram_peers(void)
 
 /**
  * Check that a send waiting for room in a full datagram queue fails with
- * EPIPE when the receiver shuts down reading. The send has no time limit of
- * its own, only a 10 s alarm, and the shutdown comes once it is seen asleep;
- * a send the alarm wakes finds the shutdown and fails with EPIPE too, so the
- * child fails when the alarm fired, and only the shutdown's wake passes the
- * row. Returns 0, or 1 after the failure is printed.
+ * EPIPE when the receiver shuts down reading. The send has no timeout, and
+ * the shutdown comes once it is seen asleep; a wake the kernel misses leaves
+ * the send asleep, and the case's watchdog ends it. Returns 0, or 1 after the
+ * failure is printed.
  */
 static int full_receiver_shut(void)
 {
@@ -981,14 +952,7 @@ static int full_receiver_shut(void)
     row_held();
     pid = fork();
     if (pid == 0) {
-        struct sigaction sa;
-
-        memset(&sa, 0, sizeof(sa));
-        sa.sa_handler = on_alarm;
-        sigaction(SIGALRM, &sa, NULL);
-        alarms = 0;
-        alarm(10);
-        _exit(send(sv[0], "w", 1, 0) == -1 && errno == EPIPE && !alarms ? 0 : 1);
+        _exit(send(sv[0], "w", 1, 0) == -1 && errno == EPIPE ? 0 : 1);
     }
     if (pid < 0 || !seen_asleep(pid)) {
         if (pid > 0) {
@@ -1111,7 +1075,7 @@ static int waiting(void)
         return fail("an empty socket polled readable");
     }
     row_held();
-    if (write(sv[1], "p", 1) != 1 || poll(&pfd, 1, 5000) != 1 || !(pfd.revents & POLLIN)) {
+    if (write(sv[1], "p", 1) != 1 || poll(&pfd, 1, -1) != 1 || !(pfd.revents & POLLIN)) {
         return fail("poll did not report the byte");
     }
     row_held();
@@ -1148,7 +1112,7 @@ static int shut_writable(void)
         return fail("a full stream polled writable");
     }
     row_held();
-    if (shutdown(sv[0], SHUT_WR) != 0 || poll(&pfd, 1, 1000) != 1 || !(pfd.revents & POLLOUT)) {
+    if (shutdown(sv[0], SHUT_WR) != 0 || poll(&pfd, 1, -1) != 1 || !(pfd.revents & POLLOUT)) {
         return fail("a stream shut down for writing did not poll writable");
     }
     row_held();
