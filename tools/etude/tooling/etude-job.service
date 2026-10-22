@@ -1,6 +1,10 @@
 # etude-job.service: the tooling machine's job runner, started once at boot
 # when the job volume is there, which etude-tooling attaches with the virtio
-# serial number etude-job.
+# serial number etude-job. OOMPolicy=continue keeps the service running when
+# the kernel kills one of its processes for want of memory: the job sees that
+# process fail and the runner reports the job's status, where systemd's
+# default would stop the runner too and leave the machine silent until its
+# deadline.
 [Unit]
 Description=etude's job runner
 Requires=dev-disk-by\x2did-virtio\x2detude\x2djob.device
@@ -8,6 +12,7 @@ After=dev-disk-by\x2did-virtio\x2detude\x2djob.device local-fs.target
 
 [Service]
 Type=oneshot
+OOMPolicy=continue
 ExecStart=/usr/local/sbin/etude-job-runner
 StandardOutput=journal
 
