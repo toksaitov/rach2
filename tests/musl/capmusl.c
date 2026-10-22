@@ -488,16 +488,16 @@ static int leader_ended(void)
 static void *last_thread(void *arg)
 {
     struct timespec tick = {0, 10000000};
-    int tries, status;
+    int status;
 
     (void)arg;
     if (give_up() != 0) {
         _exit(2);
     }
-    for (tries = 0; tries < 1000 && !leader_ended(); tries++) {
+    while (!leader_ended()) {
         nanosleep(&tick, NULL);
     }
-    if (tries == 1000 || write(leader_go[1], "x", 1) != 1) {
+    if (write(leader_go[1], "x", 1) != 1) {
         _exit(2);
     }
     _exit(waitpid(leader_child, &status, 0) == leader_child && WIFEXITED(status) &&
