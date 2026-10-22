@@ -120,15 +120,13 @@ struct etude_legacy_run_opts {
  */
 int etude_legacy_run(const struct etude_legacy_run_opts *o);
 
-/* One suite of a set, as the caller selects it from the registry. */
+/* One suite of a set, as the caller selects it. */
 struct etude_legacy_member {
     const char *suite;
-    uint64_t memory_mib; /* the most guest memory its machines ask for at once */
-    int serial;          /* it runs before the others, with nothing beside it */
-    int stops;           /* its failure cancels the suites not yet started */
-    const char *cases;   /* the manifest whose host, guest or machine cases run
-                            the suite, from the tree's root unless absolute, or
-                            NULL for a suite of the registry */
+    int serial;        /* it runs before the others, with nothing beside it */
+    int stops;         /* its failure cancels the suites not yet started */
+    const char *cases; /* the manifest whose host, guest or machine cases run
+                          the suite, from the tree's root unless absolute */
 };
 
 /* The resources of a machine's ledger that a set's claims take. */
@@ -147,26 +145,23 @@ struct etude_legacy_set_opts {
     uint64_t cap[3];             /* the ledger's limits, by enum etude_legacy_resource */
     const char *locks;           /* the absolute directory of the old runner's host
                                     and port locks, which each claim takes; NULL
-                                    when the suites share the port block of the
-                                    caller's RACH2_PORT_OFFSET */
+                                    for none */
     unsigned wait;               /* the seconds a request may wait for admission */
-    unsigned seconds;            /* the bound of the preparation and of each suite */
-    unsigned idle;               /* each suite's idle limit, as for a run */
-    unsigned width;              /* the most suites at once; 0 for the ledger's limits alone */
+    unsigned seconds;            /* the bound of each step of the preparation */
+    unsigned width;              /* the most cases at once; 0 for the ledger's limits alone */
     unsigned cpus;               /* each machine's processors, as RACH2_CPUS gives them */
     const char *accel;           /* QEMU's accelerator, as RACH2_QEMU_ACCEL gives it */
-    int stop_on_fail;            /* the first suite that does not pass cancels the rest */
+    int stop_on_fail;            /* the first case that does not pass cancels the rest */
     const char *results;         /* the directory of the history's `history/` and
                                     `store/`, and of each command's output in
                                     `output/` */
     const char *schemas;         /* the directory of etude's schemas */
-    const char *casecheck;       /* casecheck's path, which judges a case's attempt;
-                                    needed when a member has `cases` */
+    const char *casecheck;       /* casecheck's path, which judges a case's attempt */
     const char *record;          /* the file of the preparation's record, or NULL for
                                     `prepare.record` under `results` */
-    const char *evidence;        /* the directory under which a suite that does not pass
-                                    keeps its work, and each case its workspace;
-                                    the store of the guest and machine cases'
+    const char *evidence;        /* the directory under which each case has its
+                                    workspace, kept when it does not pass; the
+                                    store of the guest and machine cases'
                                     artifacts is made in it for the run */
     const char *status;          /* the status record, rewritten as the run goes, or NULL */
     const char *stamp;           /* a file touched once the preparation has ended, or NULL */
@@ -174,62 +169,58 @@ struct etude_legacy_set_opts {
     const char *args;            /* what the run was asked, for the status record */
     const char *site;            /* the installed site policy that admitted the run,
                                     or NULL for none */
-    FILE *out;                   /* the progress, and each suite's output */
+    FILE *out;                   /* the progress, and each case's output */
     volatile sig_atomic_t *stop; /* as for a preparation */
 };
 
 /**
- * Run the suites `o->members` of the tree as one run of etude: prepare them,
- * admit each through the machine's ledger, run each prepared suite as
- * etude_legacy_run runs one, under a watchdog of the whole suite, and write
- * the run's history.
+ * Run the suites `o->members` of the tree as one run of etude, each by the
+ * host, guest and machine cases of its manifest: prepare their artifacts,
+ * admit each repetition of each case through the machine's ledger, run it
+ * under the case's own watchdog, and write the run's history.
  *
- * The preparation is a claim of every limited resource of the ledger, with
- * the old runner's host lock alone. Each suite is then a claim of its own:
- * half a processor for each of `o->cpus`, its memory and 128 MiB for QEMU,
- * and a GiB of disk, each held within the limit. With `o->locks`, its claim
- * also takes the old host lock, alone for a suite whose memory is more than
- * half the limit, and a port block, whose offset the suite is given as
- * RACH2_PORT_OFFSET. The serial members run first, one at a time; the
- * others run in the order given, as many at once as the ledger and
- * `o->width` admit. A suite that `stops` and did not pass cancels what
- * runs and what has not started, once every member of the suite has ended;
- * with `o->stop_on_fail`, the first member that does not pass does so at
- * once.
+ * The cases of a member are those of its manifest that run on `o->arch` or
+ * on none, each repetition of each a member of the run that keeps the
+ * suite's `serial`. Their artifacts are the goals of the preparation; with
+ * `o->kernel`, the kernel that a guest case boots from the node
+ * `rach2/kernel` is `rach2-KERNEL/kernel` in its place. The preparation is a
+ * claim of every limited resource of the ledger, with the old runner's host
+ * lock alone. Each case is then a claim of its own, of the case's
+ * resources, each held within the limit. With `o->locks`, its claim also
+ * takes the old host lock, shared, or alone for a guest case whose memory is
+ * more than half the limit, and a guest case's claim takes a port block as
+ * well. The serial members run first, one at a time; the others run in the
+ * order given, as many at once as the ledger and `o->width` admit. A suite
+ * that `stops` and did not pass cancels what runs and what has not started,
+ * once every member of the suite has ended; with `o->stop_on_fail`, the
+ * first member that does not pass does so at once.
  *
- * A member with `cases` is run by the host, guest and machine cases of its
- * manifest that run on `o->arch` or on none, each repetition of each a
- * member of its own that keeps the suite's `serial`. Their artifacts are
- * goals of the preparation; with `o->kernel`, the kernel that a guest case
- * boots from the node `rach2/kernel` is `rach2-KERNEL/kernel` in its place.
- * Each runs in a workspace of its own under `o->evidence`, under the case's
- * initial bounds, with a claim of the case's resources: a host case's
- * program with ETUDE_TREE naming the tree, a guest case's program on a
- * machine of its QEMU profile, through etude-guest, with the memory the
- * launcher reserves for the machine as its claim, and a machine case's
- * scenario with its invocation, after its artifacts are published to the
- * run's store. The invocation permits the lazy boundary memory profile only
- * when the policy `o->site` has the line `boundary_lazy bigmem-boundary-v1`;
- * a machine case that declares such a machine ends before its scenario
- * starts when the policy lacks it, or when the ledger's memory limit is less
- * than the case's `memory_bytes`. `o->casecheck` judges each attempt, a
- * guest's placed `qemu` with the machine's console and a machine case's with
- * the consoles its scenario kept. A manifest that cannot be read, of another
- * suite's family, with no case on the architecture, or with a case that the
- * set driver cannot run (legacy_manifest_read) is refused, and so is a
- * request whose `o->site` cannot be read.
+ * Each case runs in a workspace of its own under `o->evidence`, under the
+ * case's initial bounds: a host case's program with ETUDE_TREE naming the
+ * tree, a guest case's program on a machine of its QEMU profile, through
+ * etude-guest, with the memory the launcher reserves for the machine as its
+ * claim, and a machine case's scenario with its invocation, after its
+ * artifacts are published to the run's store. The invocation permits the
+ * lazy boundary memory profile only when the policy `o->site` has the line
+ * `boundary_lazy bigmem-boundary-v1`; a machine case that declares such a
+ * machine ends before its scenario starts when the policy lacks it, or when
+ * the ledger's memory limit is less than the case's `memory_bytes`.
+ * `o->casecheck` judges each attempt, a guest's placed `qemu` with the
+ * machine's console and a machine case's with the consoles its scenario
+ * kept. A member with no manifest is refused, and so is a manifest that
+ * cannot be read, of another suite's family, with no case on the
+ * architecture, or with a case that the set driver cannot run
+ * (legacy_manifest_read), and a request whose `o->site` cannot be read.
  *
  * The history is one stream under `o->results`, with the plan of one item
- * for each suite of the registry, the case `legacy.SUITE` of the family
- * `legacy.SUITE`, and one for each repetition of each case, a step for the
- * preparation, an attempt record for each member started, and the run
- * record; its blobs go to the store. A suite's output is printed
- * whole when it ends, or as it comes when the set has one member, and the
- * output of the suites a stop interrupted is printed with what they wrote.
- * The status record, when asked for, gives the claims that wait and the
- * attempts that run.
+ * for each repetition of each case, a step for the preparation, an attempt
+ * record for each member started, and the run record; its blobs go to the
+ * store. A case's output is printed whole when it ends, or as it comes when
+ * the set has one member, and the output of the cases a stop interrupted is
+ * printed with what they wrote. The status record, when asked for, gives the
+ * claims that wait and the attempts that run.
  *
- * @return 0 when every suite passed; 1 when one did not, or when the run
+ * @return 0 when every case passed; 1 when one did not, or when the run
  *         could not go on after its plan was written; 2 for a request
  *         refused before anything ran; 3 when the preparation failed; 128
  *         plus the signal's number after a stop.

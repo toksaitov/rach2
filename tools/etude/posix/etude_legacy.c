@@ -66,7 +66,7 @@ static int usage(void)
             "       etude-legacy run [-w WORK] [-i IDLE] [-s SECONDS] RECORD SUITE\n"
             "       etude-legacy set -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE "
             "-S SCHEMAS [-K CASECHECK] [-d LOCKS] [-t TREE] [-a ARCH] [-n KERNEL] [-p RECORD] "
-            "[-W WAIT] [-s SECONDS] [-i IDLE] [-j WIDTH] [-k] [-r STATUS] [-m STAMP] "
+            "[-W WAIT] [-s SECONDS] [-j WIDTH] [-k] [-r STATUS] [-m STAMP] "
             "[-g COMMIT] [-q ARGS] [-P SITE] SELECTION\n");
     return 2;
 }
@@ -188,17 +188,17 @@ static int limits_of(const char *s, uint64_t cap[3])
 }
 
 /**
- * Read the selection at `path`: one suite on each line, `NAME MIB` followed
- * by `serial`, `stops` or both, and last `cases=MANIFEST` for a suite run by
- * the host cases of a manifest, with `#` beginning a comment line. The
- * names go to `names` and the manifests to `cases`.
+ * Read the selection at `path`: one suite on each line, its name followed
+ * by `serial`, `stops` or both, and last `cases=MANIFEST`, the manifest of
+ * the cases that run it, with `#` beginning a comment line. The names go to
+ * `names` and the manifests to `cases`.
  *
  * @return the count of members in `*m`, or -1 after a message.
  */
 static long selection_of(const char *path, struct etude_legacy_member *m, char names[][72],
                          char cases[][LINE_MAX_SET])
 {
-    char line[LINE_MAX_SET], *w, *end;
+    char line[LINE_MAX_SET], *w;
     FILE *f = fopen(path, "r");
     long n = 0, no = 0;
 
@@ -216,11 +216,6 @@ static long selection_of(const char *path, struct etude_legacy_member *m, char n
         memset(&m[n], 0, sizeof(m[n]));
         snprintf(names[n], 72, "%s", w);
         m[n].suite = names[n];
-        if ((w = strtok(NULL, " \t")) == NULL || *w < '0' || *w > '9')
-            goto bad;
-        m[n].memory_mib = strtoull(w, &end, 10);
-        if (*end != '\0' || m[n].memory_mib > (UINT64_C(1) << 40))
-            goto bad;
         while ((w = strtok(NULL, " \t")) != NULL && m[n].cases == NULL) {
             if (strcmp(w, "serial") == 0)
                 m[n].serial = 1;
@@ -231,16 +226,14 @@ static long selection_of(const char *path, struct etude_legacy_member *m, char n
             else
                 goto bad;
         }
-        if (w != NULL)
+        if (w != NULL || m[n].cases == NULL)
             goto bad;
         n++;
     }
     fclose(f);
     return n;
 bad:
-    fprintf(stderr,
-            "etude-legacy: %s:%ld: not a suite, its memory in MiB, serial or stops, and "
-            "cases=MANIFEST\n",
+    fprintf(stderr, "etude-legacy: %s:%ld: not a suite, serial or stops, and cases=MANIFEST\n",
             path, no);
     fclose(f);
     return -1;
@@ -292,7 +285,7 @@ static int set_options(int argc, char **argv, struct etude_legacy_set_opts *o)
     const char **text;
     int opt, have_cap = 0;
 
-    while ((opt = getopt(argc, argv, "l:c:o:e:S:K:d:t:a:n:p:W:s:i:j:kr:m:g:q:P:")) != -1) {
+    while ((opt = getopt(argc, argv, "l:c:o:e:S:K:d:t:a:n:p:W:s:j:kr:m:g:q:P:")) != -1) {
         if ((text = text_option(o, opt)) != NULL)
             *text = optarg;
         else if (opt == 'c' && limits_of(optarg, o->cap) == 0)
@@ -300,8 +293,6 @@ static int set_options(int argc, char **argv, struct etude_legacy_set_opts *o)
         else if (opt == 'W' && (o->wait = number_of(optarg, WAIT_MAX)) != 0)
             continue;
         else if (opt == 's' && (o->seconds = number_of(optarg, SECONDS_MAX)) != 0)
-            continue;
-        else if (opt == 'i' && (o->idle = number_of(optarg, IDLE_MAX)) != 0)
             continue;
         else if (opt == 'j' && (o->width = number_of(optarg, MEMBERS_MAX)) != 0)
             continue;
@@ -332,7 +323,6 @@ static int set_main(int argc, char **argv, const char *self)
     o.tree = ".";
     o.arch = "i686";
     o.seconds = ETUDE_LEGACY_SECONDS;
-    o.idle = ETUDE_LEGACY_IDLE;
     o.wait = (unsigned)WAIT_MAX;
     o.out = stdout;
     o.stop = &stop_signal;

@@ -30,25 +30,8 @@
   },
   "faults": [
     {
-      "name": "ports",
-      "summary": "a suite runs with the caller's port block in place of its claim's",
-      "edits": [
-        {
-          "file": "tools/etude/posix/legacy_set.c",
-          "find": "    if (c->bridge != NULL) {\n        snprintf(offset, sizeof(offset), \"%d\", etude_bridge_offset(c->bridge));\n",
-          "replace": "    if (0) {\n        snprintf(offset, sizeof(offset), \"%d\", etude_bridge_offset(c->bridge));\n"
-        }
-      ],
-      "fails": {
-        "status": 1,
-        "lines": [
-          ": ports: blocks of their own with locks: "
-        ]
-      }
-    },
-    {
       "name": "width",
-      "summary": "the width does not limit the suites that run at once",
+      "summary": "the width does not limit the cases that run at once",
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
@@ -86,8 +69,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "    c->exclusive = m->m->serial || c->alone;\n    c->filter = 1;\n",
-          "replace": "    c->exclusive = c->alone;\n    c->filter = 1;\n"
+          "find": "    c->exclusive = m->m->serial || c->alone;\n    c->is_case = 1;\n",
+          "replace": "    c->exclusive = c->alone;\n    c->is_case = 1;\n"
         }
       ],
       "fails": {
@@ -110,7 +93,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": first: the running suite cancelled: "
+          ": first: the running case cancelled: "
         ]
       }
     },
@@ -150,7 +133,7 @@
     },
     {
       "name": "cancelled",
-      "summary": "a suite cancelled part way is recorded as a pass",
+      "summary": "a case cancelled part way is recorded as a pass",
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
@@ -161,18 +144,18 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": first: the running suite cancelled: "
+          ": first: the running case cancelled: "
         ]
       }
     },
     {
       "name": "release",
-      "summary": "the claim of a suite that ended is not released",
+      "summary": "the claim of a case that ended is not released",
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "    judge(x, c, 0);\n    release(x, c, c->cleanup);\n",
-          "replace": "    judge(x, c, 0);\n    c->claim = 0;\n"
+          "find": "    judge_case(x, m);\n    release(x, c, c->cleanup);\n",
+          "replace": "    judge_case(x, m);\n    c->claim = 0;\n"
         }
       ],
       "fails": {
@@ -184,7 +167,7 @@
     },
     {
       "name": "preparation",
-      "summary": "a failed preparation exits 1 as a failed suite does",
+      "summary": "a failed preparation exits 1 as a failed case does",
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
@@ -200,25 +183,8 @@
       }
     },
     {
-      "name": "filter",
-      "summary": "etude-legacy's lines of a suite's start and result are printed",
-      "edits": [
-        {
-          "file": "tools/etude/posix/legacy_set.c",
-          "find": "    if (!c->filter || strncmp(s, \"run: \", 5) != 0 ||",
-          "replace": "    if (1 || strncmp(s, \"run: \", 5) != 0 ||"
-        }
-      ],
-      "fails": {
-        "status": 1,
-        "lines": [
-          ": mixed: no line of etude-legacy's result: "
-        ]
-      }
-    },
-    {
       "name": "signal",
-      "summary": "a stop signal does not stop the suites that run",
+      "summary": "a stop signal does not stop the cases that run",
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
@@ -229,7 +195,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": signal: the running suite cancelled: "
+          ": signal: the running case cancelled: "
         ]
       }
     },
@@ -246,7 +212,7 @@
       "fails": {
         "status": 1,
         "lines": [
-          ": status: the running suite's attempt: "
+          ": status: the running case's attempt: "
         ]
       }
     },
@@ -264,23 +230,6 @@
         "status": 1,
         "lines": [
           ": status: removed at the end: "
-        ]
-      }
-    },
-    {
-      "name": "offset",
-      "summary": "a set with no lock directory runs with no port block of the caller's",
-      "edits": [
-        {
-          "file": "tools/etude/posix/legacy_set.c",
-          "find": "    if (o->locks == NULL && registry_suites(o) > 0 &&\n",
-          "replace": "    if (0 &&\n"
-        }
-      ],
-      "fails": {
-        "status": 1,
-        "lines": [
-          ": refused: no port block without locks: "
         ]
       }
     },
@@ -647,8 +596,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "    if (m->k != NULL)\n        scratch_end(x, m);\n",
-          "replace": "    if (m->k != NULL && m->k->scratch)\n        scratch_end(x, m);\n"
+          "find": "    drain(x, c, 1);\n    scratch_end(x, m);\n",
+          "replace": "    drain(x, c, 1);\n    if (m->k->scratch)\n        scratch_end(x, m);\n"
         }
       ],
       "fails": {
@@ -851,8 +800,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "m->k != NULL && (m->k->guest || m->k->machine) ? \"qemu\" : \"host\",",
-          "replace": "\"host\","
+          "find": "m->arch, m->k->guest || m->k->machine ? \"qemu\" : \"host\",",
+          "replace": "m->arch, \"host\","
         }
       ],
       "fails": {
@@ -971,8 +920,8 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_set.c",
-          "find": "m->k != NULL && (m->k->guest || m->k->machine) ? \"qemu\" : \"host\",",
-          "replace": "m->k != NULL && m->k->guest ? \"qemu\" : \"host\","
+          "find": "m->arch, m->k->guest || m->k->machine ? \"qemu\" : \"host\",",
+          "replace": "m->arch, m->k->guest ? \"qemu\" : \"host\","
         }
       ],
       "fails": {
