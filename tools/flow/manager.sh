@@ -26,7 +26,11 @@
 # lib.sh says, and runs `scratch.pl` on the testing host with the stems of
 # master's scratch names, which removes from its /tmp the scratch of tests
 # that were killed before their traps ran. The sweep is stopped after ten
-# minutes, and its result is one line of loop.log.
+# minutes, and its result is one line of loop.log. It then runs
+# `leftovers.pl`, through `leftovers` in lib.sh, on the testing host and
+# here, which removes the failed tests' directories, loose files in the home
+# directories and copies of the repository that finished work left; loop.log
+# has a line for each entry it removes and one for each run's total.
 
 PERIOD=1200
 TESTING=testing
@@ -82,6 +86,9 @@ main()
         swept=$(printf '%s\n' "$swept" | tail -n 1)
         [ "$swept_rc" -eq 0 ] || swept="scratch: failed on $TESTING: $swept"
         log "$swept"
+        leftovers 2>&1 | grep -v ': leftovers: keeps ' | while IFS= read -r line; do
+            log "$line"
+        done
         t=$(date -u '+%m%d-%H%M%S')
         prompt="$(cat "$state/run/manager.txt")
 

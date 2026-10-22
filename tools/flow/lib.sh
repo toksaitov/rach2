@@ -190,6 +190,50 @@ stems()
         sed -E "s/^[/\"']//; s/\.(XXXXXX|[\"'])\$//" | sort -u
 }
 
+# The home directories on the testing host whose leftovers the manager's loop
+# removes: the owner's account's, which has the copies that testing.sh makes,
+# and those of the five accounts with worker loops.
+HOMES='/home/testing /home/toksaitov-a /home/toksaitov-d /home/toksaitov-m /home/toksaitov-s /home/toksaitov-v'
+
+# leftovers [-n]: run leftovers.pl, from the directory of the script that
+# calls this, as root on the testing host for HOMES with their loose files,
+# and here for the Desktop, which has the owner's checkout and the worktrees
+# and copies made beside it. Each run gets the text of the open issues,
+# master's commit from this clone, and the copies to keep: the default copy
+# of testing.sh, the release's, each loop's that STATE/copy of a loop here
+# names, and each home's `flow`. Print the lines of each run with its
+# machine's name first; fail, and run neither, when master or the issues
+# cannot be read. -n removes nothing and lists what would go.
+leftovers()
+{
+    here=$(dirname "$0")
+    master=$(git rev-parse -q --verify origin/master) ||
+        { echo "leftovers: no origin/master in $(pwd)"; return 1; }
+    text=$(gh issue list --repo toksaitov/rach2 --state open --limit 2000 \
+        --json title,body,comments --jq '.[] | .title, .body, .comments[].body') ||
+        { echo "leftovers: the open issues cannot be read"; return 1; }
+    keep=
+    # shellcheck disable=SC2046,SC2086 # the copies and HOMES are a path a word
+    for c in /home/testing/rach2 "$(sed -n 's/^COPY=//p' "$here/release.sh")" \
+        $(cat "$HOME"/flow/*/copy 2> /dev/null) $(printf '%s/flow ' $HOMES); do
+        case $c in ''|/*[!A-Za-z0-9/._-]*|*/..*|[!/]*) continue ;; esac
+        keep="$keep -k $c"
+    done
+    out=$({ cat "$here/leftovers.pl"; echo __END__; printf '%s\n' "$text"; } |
+        perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - ${1:-} -l -m $master$keep 86400 $HOMES" 2>&1)
+    rc=$?
+    printf '%s\n' "$out" | sed "s/^/$TESTING: /"
+    [ "$rc" -eq 0 ] || echo "$TESTING: leftovers: failed with status $rc"
+    out=$({ cat "$here/leftovers.pl"; echo __END__; printf '%s\n' "$text"; } |
+        perl -e 'alarm shift; exec @ARGV' 600 perl - ${1:+"$1"} -m "$master" \
+        -r "$(git rev-parse --absolute-git-dir)" 86400 "$HOME/Desktop" 2>&1)
+    rc=$?
+    printf '%s\n' "$out" | sed "s/^/$(hostname -s): /"
+    [ "$rc" -eq 0 ] || echo "$(hostname -s): leftovers: failed with status $rc"
+    return 0
+}
+
 # prune_logs PATTERN...: remove the files of STATE that a PATTERN matches and
 # that are more than fourteen days old, then the oldest of the rest while they
 # add up to more than 1 GiB; a file written in the last day is kept whatever

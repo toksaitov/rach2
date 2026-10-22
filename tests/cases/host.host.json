@@ -353,6 +353,7 @@
         {"assertion_id": "worker_park", "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: `sh tests/system/worker_park_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "release_resume", "checks": "a release resumed from its record, with its runs, reruns and acceptance: `sh tests/system/release_resume_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "tidy", "checks": "the loops' cleanup of finished work: `sh tests/system/tidy_test.sh` exits 0 within 600 seconds", "source": "program"},
+        {"assertion_id": "leftovers", "checks": "the manager's removal of failed tests, home files and landed copies: `sh tests/system/leftovers_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "agents_guest", "checks": "the agents guest's scratch removed on every exit: `sh tests/system/agents_guest_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "testing_run", "checks": "testing.sh run's quoted commands, a worktree's sync and wait's reports: `sh tests/system/testing_run_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "space", "checks": "disk admission requires a Windows reading: `sh tests/system/space_test.sh` exits 0 within 600 seconds", "source": "program"},

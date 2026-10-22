@@ -40,8 +40,11 @@
 # `sizes` prints the sizes of the build trees, the GNU caches, the ci
 # checkouts, the loops' state and /tmp on the testing host, and of the
 # loops' state and build trees here, largest first, for the manager to choose
-# what to remove when space is low. It reads every file of those trees, which
-# takes minutes, so the manager's check runs it only then.
+# what to remove when space is low. It then lists, through `leftovers -n` in
+# lib.sh, the failed tests' directories, loose files and copies that the
+# manager's loop would remove before its next check, and the copies and old
+# entries it keeps, with why. It reads every file of those trees, which takes
+# minutes, so the manager's check runs it only then.
 #
 # `day DATE` prints the facts of one day, DATE as YYYY-MM-DD, counted at the
 # owner's UTC+6, for the manager's day report: the commits that reached
@@ -52,6 +55,8 @@
 # shellcheck disable=SC2016 # the dollars are GraphQL's, jq's and the probe's
 REPO=toksaitov/rach2
 TESTING=testing
+# shellcheck source=tools/flow/lib.sh
+. "$(dirname "$0")/lib.sh"
 
 probe='
 st=$1
@@ -187,6 +192,8 @@ sizes()
     du -sxk "$HOME"/flow/* "$HOME"/flow/*/rach2/build "$HOME"/Desktop/rach2/build \
         "$HOME"/Desktop/rach2/.claude/worktrees 2> /dev/null | sort -rn |
         awk '{ printf "%7.1f %s\n", $1 / 1048576, $2 }'
+    echo "== leftovers that the manager's loop removes, and the old ones it keeps"
+    leftovers -n
 }
 
 # day DATE: print the facts of DATE, as the header says. Print nothing and fail
