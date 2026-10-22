@@ -67,6 +67,12 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * A time given to the owner for #672 to land, 23:30, was missed, because the push stop applied to every push and its cause was not examined until an hour later.
 * Helpers waited on proofs of commits whose result was already known, and were told to stop them.
 
+## Disk
+
+* On the evening of the 22nd, during maintenance with every loop stopped, the owner found eight copies of the repository on the Mac's Desktop. The coordinating session had made one beside the checkout for each fix it made by hand from the 21st on, and left each after its fix landed, with six helper worktrees under `.claude/worktrees`. The rule had the session remove them before it ends, and the coordinating session runs for days.
+* The testing host's WSL disk had 776 GiB in use, 715 of it removable. Every copy kept the GNU build of each architecture it had built, 34 GiB for i686 and 38 for x86_64, about 440 GiB across the five workers', the owner's loop's and both ci runners' copies, though only the `gnu` suite, a release's full run and the Lenovo's build use it. The runners' copies were 128 and 125 GiB, failed-test directories from the 15th on stayed under `build/tests/failed`, eleven helper copies stayed in the testing account, and sessions had left some 300 logs, scripts and scratch directories in the accounts' home directories. #892 records what was removed; the disk went to 61 GiB in use.
+* The WSL disk's file on drive D: was then compacted from 748 to 80 GB. Docker Desktop started WSL again 14 seconds after the first `wsl --shutdown`, so the first compaction was refused; the second, with Docker Desktop stopped, finished, but left three entries of the file's block table pointing past its new end, and WSL refused the disk as corrupt. The three blocks were 3 MiB of inode tables of block groups 1136 to 1138, whose 24576 inodes were all free. The entries were set to read as zeros, `qemu-img check` and a read-only `e2fsck -f` found no errors, and WSL started at 22:26 with nothing lost. The testing skill now has the procedure, with a copy of the file before the compaction and the check after it.
+
 ## Fixes
 
 * faff8ae43: the serial console waits for a slow reader.
@@ -76,4 +82,6 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * #814: the manager, to be redesigned around the phase's progress.
 * #824: ci's core runs take at most half the testing host.
 * #829: the testing host admits claims by memory alone, and a shell command takes an ordinary run's share; an installed bridge is made readable by every account and tried as the testing account and as ci's before the site is switched to it.
+* `AGENTS.md`, Resources: a session removes a worktree or copy once its branch has landed, and writes its scratch and logs under `build/tests` or `$TMPDIR`.
+* #892: one GNU build per architecture shared by every copy on the testing host, and the manager's cleanup extended to failed-test directories and home directories, are proposed there.
 * Admission to the testing host still has no priority for the critical task or for a repair of core.
