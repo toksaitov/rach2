@@ -91,10 +91,6 @@ struct kts {
 /* One tick, the granularity of the coarse and CPU clocks, in nanoseconds. */
 #define TICK_NS 10000000L
 
-/* The most spinning a loop may take to be charged what it asks for, in
- * nanoseconds of time since boot. */
-#define SPIN_BOUND_NS 10000000000LL
-
 /* The count of SIGALRM deliveries to on_alarm. */
 static volatile sig_atomic_t alarms;
 
@@ -156,16 +152,15 @@ static unsigned int spin(void)
 }
 
 /**
- * Spin until clock `clk` has advanced by `want` ns, or for `SPIN_BOUND_NS` of
- * time since boot. Returns how far it advanced, in nanoseconds.
+ * Spin until clock `clk` has advanced by `want` ns. Returns how far it
+ * advanced, in nanoseconds.
  */
 static long long spin_until(clockid_t clk, long long want)
 {
     long long start = ns_of(clk);
-    long long began = ns_of(CLOCK_MONOTONIC);
     long long now = start;
 
-    while (now - start < want && ns_of(CLOCK_MONOTONIC) - began < SPIN_BOUND_NS) {
+    while (now - start < want) {
         spin();
         now = ns_of(clk);
     }
@@ -216,12 +211,11 @@ static void alarm_every(long usec)
  * of real time from time since boot, which the fine clocks have too: real time
  * less that offset, read between two readings of `CLOCK_MONOTONIC`, lies
  * between them. The offset is taken from coarse readings within one tick,
- * read again for at most `SPIN_BOUND_NS` of time since boot until they are.
- * Returns 0, or 1 after the failure is printed with its readings.
+ * read again until they are. Returns 0, or 1 after the failure is printed
+ * with its readings.
  */
 static int coarse_clocks(void)
 {
-    long long began = ns_of(CLOCK_MONOTONIC);
     long long before;
     long long x;
     long long after;
@@ -245,7 +239,7 @@ static int coarse_clocks(void)
         before = ns_of(CLOCK_MONOTONIC_COARSE);
         x = ns_of(CLOCK_REALTIME_COARSE);
         after = ns_of(CLOCK_MONOTONIC_COARSE);
-    } while (before != after && ns_of(CLOCK_MONOTONIC) - began < SPIN_BOUND_NS);
+    } while (before != after);
     offset = x - before;
     before = ns_of(CLOCK_MONOTONIC);
     x = ns_of(CLOCK_REALTIME) - offset;
