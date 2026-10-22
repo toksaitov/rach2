@@ -251,19 +251,19 @@ static int pending_rows(int empty[2])
 }
 
 /**
- * A signal sent while the call sleeps: a child sends SIGUSR1 once /proc
- * shows the probe asleep, and exits 1 if it never saw that, after sending it
- * anyway. The process blocks SIGUSR1 and the call's mask does not. Returns
- * 0, or 1 once the failure is reported.
+ * A signal sent while the call sleeps with no timeout: a child sends SIGUSR1
+ * once /proc shows the probe asleep, and exits 1 if the probe ended first,
+ * after sending it anyway. The process blocks SIGUSR1 and the call's mask
+ * does not. Returns 0, or 1 once the failure is reported.
  */
 static int sleep_row(int empty[2])
 {
     fd_set r;
     sigset_t mask;
-    struct timespec ts = {30, 0};
     struct timespec pause_ts = {0, 10000000};
     pid_t parent = getpid(), pid;
-    int status, tries, rc;
+    int status, rc;
+    char state;
 
     block_only(SIGUSR1);
     hits = 0;
@@ -272,16 +272,16 @@ static int sleep_row(int empty[2])
         return fail("fork");
     }
     if (pid == 0) {
-        for (tries = 0; tries < 3000 && state_of(parent) != 'S'; tries++) {
+        while ((state = state_of(parent)) != 'S' && state != 0 && state != 'Z') {
             nanosleep(&pause_ts, NULL);
         }
         kill(parent, SIGUSR1);
-        _exit(tries < 3000 ? 0 : 1);
+        _exit(state == 'S' ? 0 : 1);
     }
     FD_ZERO(&r);
     FD_SET(empty[0], &r);
     sigemptyset(&mask);
-    rc = pselect(empty[0] + 1, &r, NULL, NULL, &ts, &mask);
+    rc = pselect(empty[0] + 1, &r, NULL, NULL, NULL, &mask);
     if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         return fail("the child saw the probe asleep in pselect");
     }
