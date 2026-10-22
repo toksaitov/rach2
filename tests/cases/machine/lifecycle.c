@@ -374,20 +374,31 @@ static int score_window(const char *w, size_t len, char *why, size_t size)
     return 0;
 }
 
-char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, const char *command,
-             uint64_t *at, const char *id)
+char *lc_handback(struct lc *l, struct etude_case_machine *m, const char *machine, uint64_t from,
+                  uint64_t *at, const char *id)
 {
-    uint64_t from = *at;
     char why[WHY_LEN], *w;
 
-    if (!lc_type(l, m, command) || !lc_wait(l, m, back, at, NULL) ||
-        (w = lc_console(l, machine, from, *at)) == NULL) {
+    if (!lc_wait(l, m, back, at, NULL) || (w = lc_console(l, machine, from, *at)) == NULL) {
         if (!l->stopped)
             lc_assert(l, id, 0, l->why[0] != '\0' ? l->why : "the program did not run");
         return NULL;
     }
     lc_assert(l, id, score_window(w, strlen(w), why, sizeof(why)), why);
     return w;
+}
+
+char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, const char *command,
+             uint64_t *at, const char *id)
+{
+    uint64_t from = *at;
+
+    if (!lc_type(l, m, command)) {
+        if (!l->stopped)
+            lc_assert(l, id, 0, l->why);
+        return NULL;
+    }
+    return lc_handback(l, m, machine, from, at, id);
 }
 
 int lc_end(struct lc *l, struct etude_case_machine *m, struct etude_termination *end)

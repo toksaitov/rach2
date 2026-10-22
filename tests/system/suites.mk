@@ -280,36 +280,13 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # and no panic.
 # `tests/run console`: the two probes that read from the console, which the
 # shared probe boot cannot run because they block until something is typed.
-# stdintest reads three lines and prints what it read, so the steps assert the
-# text as well as the count: a read that returns the right number of the wrong
-# bytes passes the probe and fails here. The third read asks for five bytes of a
-# longer line, which is where a kernel that ignored the buffer size would be
-# caught. ttyprobe is driven the way a terminal drives: a line with two erases
-# in it while the console is cooked, then one byte with no newline once the
-# probe has switched the console to raw. `sendraw` is what delivers both. The
-# screen answers the probe's queries with nothing typed, and the last step
-# presses Alt with x on the machine's keyboard, which the probe reads as ESC
-# and x.
-run-console: rach2 tests krffs test-image $(HARNESS)
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 120 --ok "All stdin syscalls passed!" \
-	    "expect=Type 'help'" "send=exec /stdintest" \
-	    "expect=Test 1: read from stdin" "send=alpha" \
-	    'expect=Read 5 bytes: "alpha"' \
-	    "expect=Test 2: second read" "send=bravo line" \
-	    'expect=Read 10 bytes: "bravo line"' \
-	    "expect=Test 3: small buffer read" "send=charlie-delta" \
-	    'expect=Read 5 bytes: "charl"'
-	$(HARNESS) --kernel $(BOOT_KERNEL) --initrd $(TEST_IMAGE) \
-	    --qemu-arg=-cpu --qemu-arg=max \
-	    --timeout 120 --ok "TTYPROBE OK" --never "TTYPROBE FAIL" \
-	    "expect=Type 'help'" "send=exec /ttyprobe" \
-	    "expect=TTYPROBE START" \
-	    'sendraw=ab\x7f\x7fcd\n' \
-	    "expect=COOKED:" "expect=TTYPROBE RAW" \
-	    'sendraw=X' \
-	    "expect=RAW:" "expect=TTYPROBE ALT" "key=alt-x"
+# They are the cases of tests/cases/machine.console.json, which etude runs,
+# each in a boot of its own, and have no target here: stdintest reads three
+# lines and prints what it read, so the case judges the text as well as the
+# count, and the third read asks for five bytes of a longer line; ttyprobe
+# takes a cooked line with two erases in it, a raw byte with no newline, the
+# screen's answers to its queries, and Alt with x pressed on the machine's
+# keyboard.
 # `tests/run audio`: what the machine actually played. Its cases
 # (tests/cases/machine.audio.json) play the debug shell's scale on an Intel
 # HDA controller and on a Sound Blaster 16, and wavcheck measures the notes in
@@ -607,9 +584,6 @@ CRASH_TEST_IMAGE = $(IMAGES_DIR)/crash-test.disk
 $(CRASH_TEST_IMAGE): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
                      build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs tests
 	$(MKDISK) krffs/manifests/disk-test.manifest $@ 64 48
-# Its own disk image, so `make -j` cannot have this target and `test-disk`
-# rewriting one file while the other boots it.
-BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # `tests/run ping`: the ICMP path against the SLIRP gateway, which is why it is
 # a case of its own rather than a probe in the default suite. Its case is in
 # tests/cases/guest.ping.json, which etude runs, and has no target here.
@@ -620,24 +594,34 @@ BOOTLINE_TEST_IMAGE = $(IMAGES_DIR)/bootline-test.disk
 # skips the disk an image rooted on it needs, and the machine would fall to a
 # shell that authenticates nobody, so the kernel refuses that combination; with
 # `rach2.rescue` it is allowed, since asking for that shell is what the token is
-# for. A root that mounted and whose /sbin/init cannot be read, a symbolic link
-# to itself on an ext2 volume, is refused the same way
-# (tests/system/init_refusal.sh), and so is a processor without what the
-# kernel needs. Each refusal is asserted twice: the diagnostic, and that no
-# shell, or for a processor no kernel code, followed it. A boot line of 458
-# bytes is kept whole, and one of 668 is cut at a word and logged as cut.
-run-bootline: rach2 tests krffs $(RUNUTIL) $(HARNESS) $(MKMBR)
-	$(MKDISK) krffs/manifests/disk-test.manifest $(BOOTLINE_TEST_IMAGE) 64 48
-	sh tests/system/suites/bootline.sh $(BOOT_KERNEL) $(BOOTLINE_TEST_IMAGE) $(HARNESS) $(MKMBR)
+# for. A disk root with nothing on the disk, a root that mounted and whose
+# /sbin/init cannot be read, a symbolic link to itself on an ext2 volume, and a
+# processor without what the kernel needs are refused the same way. Each
+# refusal is asserted twice: the diagnostic, and the machine halted with no
+# shell, or for a processor no kernel code, after it. A boot line of 248 bytes
+# after the kernel's path, which QEMU's loader puts first, is kept whole, and
+# one of 668 is cut at a word and logged as cut. They are the cases of
+# tests/cases/machine.bootline.json, which etude runs, each in a boot of its
+# own, and have no target here.
+# The ext2 root of the bootline case whose /sbin/init is a link to itself.
+BOOTLINE_LOOP_DISK = $(ARCH_CASE_DIR)/bootline/loop.disk
+$(BOOTLINE_LOOP_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.sh $(MKMBR)
+	@mkdir -p $(@D)
+	sh tests/system/mkrootdisk.sh loop $@ $(MKMBR)
 # `tests/run servicelog`: the log init's services write to is bounded within a
 # boot, and a log a boot left full is removed at the next. An ext2 root with
 # init-shell as its init and BusyBox as its shell, booted twice: the first
 # fills the log past its cap and leaves orphans to init until it is emptied,
-# fills it again and powers off; the second finds it removed.
-SERVICELOG_DIR = $(IMAGES_DIR)/servicelog
-run-servicelog: rach2 utils check-busybox $(MKMBR) $(HARNESS)
-	sh tests/system/suites/servicelog.sh $(BOOT_KERNEL) $(HARNESS) $(MKMBR) \
-	    $(ARCH_BUILD)/utils/sbin/init-shell $(ARCH_BUILD)/utils/update $(BUSYBOX_BIN) $(SERVICELOG_DIR)
+# fills it again and powers off; the second finds it removed. They are the
+# cases of tests/cases/machine.servicelog.json, which etude runs, and have no
+# target here.
+SERVICELOG_ROOT_DISK = $(ARCH_CASE_DIR)/servicelog/root.disk
+$(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.sh $(MKMBR) \
+                         $(ARCH_BUILD)/utils/sbin/init-shell $(ARCH_BUILD)/utils/update \
+                         $(BUSYBOX_STAMP) | preflight utils check-busybox
+	@mkdir -p $(@D)
+	sh tests/system/mkrootdisk.sh servicelog $@ $(MKMBR) $(ARCH_BUILD)/utils/sbin/init-shell \
+	    $(ARCH_BUILD)/utils/update $(BUSYBOX_BIN)
 # `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
 # are. Its cases, each in a boot of its own, are in
 # tests/cases/machine.raw.json, which etude runs, and have no target here.
@@ -769,10 +753,9 @@ $(LOAD_DISK): $(MKMBR)
 
 # `tests/run conload`: every line typed at the console under load arrives,
 # numbered and checksummed, with the reader parked, as type-ahead, after an
-# interrupt character to a foreground child, and across an exec.
-CONLOAD_DISK = $(IMAGES_DIR)/conload-test.disk
-run-conload: rach2 tests krffs test-image $(MKMBR) $(HARNESS)
-	sh tests/system/suites/conload.sh $(BOOT_KERNEL) $(TEST_IMAGE) $(HARNESS) $(CONLOAD_DISK)
+# interrupt character to a foreground child, and across an exec. It is the
+# case of tests/cases/machine.conload.json, which etude runs on a copy of the
+# load suite's disk, and has no target here.
 
 # `tests/run fatwrite`: FAT32 written from a program, read back after a
 # reboot, judged by the host's walk, mtools and fsck.fat where the host has
@@ -1269,13 +1252,26 @@ $(SHUTDOWN_TEST_DISK): $(DEMO_CREDS) krffs/manifests/shutdown-test.manifest \
 LOGIN_TEST_STRICT = $(IMAGES_DIR)/login-test-strict.krffs
 LOGIN_TEST_SHELL  = $(IMAGES_DIR)/login-test-shell.krffs
 # `tests/run man`: the manual pages on the machine. Boots os-real, logs in and
-# reads rach2(7) through a pipe, which must be the staged page byte for byte,
-# and on the console under the pager, whose first and last lines must appear;
-# `man`'s exit status proves nothing, since it ignores its pager's.
-run-man: $(DEMO_CREDS) rach2 rach2-recovery krffs busybox os-real-image rach2-recovery-image $(HARNESS)
-	sh tests/system/suites/man.sh $(BOOT_KERNEL) $(OS_REAL_IMAGE) $(HARNESS) \
-	    "`cat krffs/rach2_demo_password`" build/man/cat7/rach2.7 $(IMAGES_DIR)/man-test.log \
-	    $(RECOVERY_KERNEL) $(RECOVERY_IMAGE)
+# reads every page through a pipe, which must be the staged page byte for
+# byte, and rach2(7) on the console under the pager, whose first and last
+# lines must appear; `man`'s exit status proves nothing, since it ignores its
+# pager's. The recovery image gives the pages it stages the same way. They are
+# the cases of tests/cases/machine.man.json, which etude runs, and have no
+# target here.
+# What the man cases count, from the rendered pages and the two tables: one
+# line each of the pages, the aliases and the recovery image's pages, and
+# rach2(7)'s first line and its last, which the case waits for under the
+# pager.
+MAN_SUMMARY = $(CASE_DIR)/man/summary
+$(MAN_SUMMARY): $(MAN_ALL) man/aliases man/recovery
+	@mkdir -p $(@D)
+	@set -e; { \
+	    printf 'pages %s\n' "`find build/man -path 'build/man/cat*' -type f | wc -l | tr -d ' '`"; \
+	    printf 'aliases %s\n' "`grep -cv '^#' man/aliases`"; \
+	    printf 'recovery %s\n' "`grep -cv '^#' man/recovery`"; \
+	    printf 'first %s\n' "`gunzip -c build/man/cat7/rach2.7 | head -n 1`"; \
+	    printf 'last %s\n' "`gunzip -c build/man/cat7/rach2.7 | tail -n 1`"; \
+	} > $@.tmp && mv $@.tmp $@
 # `tests/run procfiles`: the machine's own /proc files, on the boots that differ
 # and through the programs that read them. Three boots of the test image, one
 # per mount source, each of which must name its own; then `ps`, `df`, `free` and
@@ -1283,10 +1279,12 @@ run-man: $(DEMO_CREDS) rach2 rach2-recovery krffs busybox os-real-image rach2-re
 # missing.
 # Its cases are tests/cases/machine.procfiles.json, with no target here.
 # `tests/run exitline`: the plain process-exit line is printed under the debug
-# shell and nowhere else. Four boots: an init image that must stay quiet while a
-# forked program runs, the test image that must still print it for a child and a
-# probe, a killed probe whose dedicated marker must survive, and a harness
-# run with no token, which has only the plain line to read.
+# shell and nowhere else. Four boots: os-real, which must stay quiet while a
+# forked program runs, the test image that must still print it for a child and
+# a probe, a killed probe whose dedicated marker must survive, and the harness
+# kernel, whose status a reader with no token takes from the plain line. They
+# are the cases of tests/cases/machine.exitline.json, which etude runs, and
+# have no target here.
 HARNESS_KERNEL = $(ARCH_BUILD)/rach2-harness/kernel
 
 # The kernels a tier can be run on instead of the default one, each a component
@@ -1303,19 +1301,16 @@ ubsan-kernel:
 o2-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-o2 KEXTRA=-O2
 
-# The kernel built with the harness exit port, which two suites boot. It is a
-# prerequisite of those two and of `prepare-all`, never a step of a recipe: a
-# recipe that ran `make` in `rach2/` while the pool was running would be a
-# second build of one tree beside the first, and two builds of one tree write
-# over each other. As a prerequisite it is built once, before the pool, or by
-# the one `make` a suite run alone is.
-harness-kernel:
-	$(MAKE) -C rach2 COMPONENT=rach2-harness HARNESS=1
-
-run-exitline: $(DEMO_CREDS) rach2 tests utils krffs busybox os-real-image test-image $(HARNESS) harness-kernel $(RUNUTIL)
-	sh tests/system/suites/exitline.sh $(BOOT_KERNEL) $(TEST_IMAGE) \
-	    $(OS_REAL_IMAGE) root "`cat krffs/rach2_demo_password`" \
-	    $(HARNESS_KERNEL)
+# The kernel built with the harness exit port, which the exitline cases and
+# the usb-latency proof boot. It is a prerequisite, or a case's artifact, and
+# never a step of a recipe: a recipe that ran `make` in `rach2/` while the pool
+# was running would be a second build of one tree beside the first, and two
+# builds of one tree write over each other. As a file rule beside the
+# kernel's own it runs the sub-make once per invocation, which relinks only
+# when a source changed.
+$(HARNESS_KERNEL): ask-the-sub-make
+	@$(MAKE) --no-print-directory -C rach2 COMPONENT=rach2-harness HARNESS=1
+harness-kernel: $(HARNESS_KERNEL)
 # `tests/run stress`: an on-disk KRFFS larger than the page cache. It is the
 # case of tests/cases/guest.stress.json, which etude runs, and has no target
 # here: stressprobe writes and reads back 33 MiB through a page cache of at

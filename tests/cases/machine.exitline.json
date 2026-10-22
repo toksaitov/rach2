@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.exitline",
+  "summary": "The plain process-exit line is printed under the debug shell and nowhere else, and the records the probe runner scores are whole lines; the scenario is machine/exitline_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.exitline.quiet",
+      "behavior": "on os-real, whose init and login shell are home, a program that forks, execs and exits prints its output and the kernel prints no plain process-exit line",
+      "units": ["exitline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "/bin/busybox echo FORKED-AND-EXITED; echo REAPED-OK"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "exitline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "real", "does": "boot os-real and log in as root at the console"},
+        {"step_id": "run", "stage": "execute", "machine": "real", "does": "run BusyBox by its path and then a builtin, wait for the builtin's output and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "real", "qemu": {"kernel": "kernel", "initrd": "real", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the forked program prints its output, and the builtin after it runs once the program is reaped", "source": "scenario"},
+        {"assertion_id": "quiet", "checks": "the console never has the plain line process: exited with status", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "exitline_scenario", "node": "tests/cases/machine/exitline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots os-real, whose init the native machine's own init would replace"}
+    },
+    {
+      "case_id": "machine.exitline.fork",
+      "behavior": "under the debug shell forktest's child exits with 42 and the probe with 0, the kernel prints the plain line for each, and the record that hands the shell back is the whole line the probe runner reads",
+      "units": ["exitline", "forktest"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /forktest"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "exitline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell"},
+        {"step_id": "run", "stage": "execute", "machine": "guest", "does": "run forktest, wait for the record that hands the shell back and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "handback", "checks": "the kernel's record that hands the shell back says that forktest exited with status 0", "source": "scenario"},
+        {"assertion_id": "child", "checks": "a whole record says process: exited with status 42, the child's", "source": "scenario"},
+        {"assertion_id": "probe", "checks": "a whole record says process: exited with status 0, the probe's", "source": "scenario"},
+        {"assertion_id": "handback-whole", "checks": "the record that hands the shell back is the whole line sys_exit: init process N exited with status 0, returning to kernel shell", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "exitline_scenario", "node": "tests/cases/machine/exitline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the plain line and the hand-back record are printed only under the kernel's debug shell, which a booted native machine does not run"}
+    },
+    {
+      "case_id": "machine.exitline.signal",
+      "behavior": "under the debug shell vmfault writes through a wild pointer, and the record of its death by signal 11, which scores a killed probe, is the whole line the probe runner reads",
+      "units": ["exitline", "vmfault"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /vmfault"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "exitline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest", "does": "boot the test image to the debug shell"},
+        {"step_id": "run", "stage": "execute", "machine": "guest", "does": "run vmfault, wait for the record of its kill and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "guest", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "killed", "checks": "the kernel says that the probe was killed by signal 11 and hands the shell back", "source": "scenario"},
+        {"assertion_id": "marker", "checks": "the record is the whole line terminate: init process N killed by signal 11, returning to kernel shell", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "exitline_scenario", "node": "tests/cases/machine/exitline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the record is printed only under the kernel's debug shell, which a booted native machine does not run"}
+    },
+    {
+      "case_id": "machine.exitline.harness",
+      "behavior": "the harness kernel ends QEMU through its isa-debug-exit port when init exits, and prints the plain line from which a reader with no token takes the status",
+      "units": ["exitline", "hello"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"command": "exec /hello"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "exitline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "harness", "does": "boot the harness kernel with the test image to the debug shell"},
+        {"step_id": "run", "stage": "execute", "machine": "harness", "does": "run hello and wait for QEMU to end by the port"}
+      ],
+      "machines": [
+        {"machine_id": "harness", "qemu": {"kernel": "harness-kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [{"model": "isa-debug-exit", "properties": {"iobase": "0xf4", "iosize": "0x04"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "port", "checks": "QEMU ends by the port once hello exits: a guest's shutdown under QEMU 10, whose event has no status, or an exit with status 1, which the port gives for hello's status 0", "source": "scenario"},
+        {"assertion_id": "plain", "checks": "a whole record says process: exited with status 0, hello's", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "harness-kernel", "node": "rach2-harness/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "exitline_scenario", "node": "tests/cases/machine/exitline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case reads how QEMU ended, which the harness kernel sets through QEMU's isa-debug-exit device"}
+    }
+  ]
+}

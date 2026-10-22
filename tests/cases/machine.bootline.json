@@ -1,0 +1,387 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.bootline",
+  "summary": "Boot lines, roots and processors the kernel must refuse, each refusal followed by a halt with no shell, and those it must take; the scenario is machine/bootline_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.bootline.nodisk-fsdisk",
+      "behavior": "rach2.nodisk with rach2.fsdisk, whose root is the disk the token skips, is refused by name and the machine halts with no shell",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.nodisk rach2.fsdisk"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.nodisk", "rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-shell", "checks": "neither the debug shell's banner, a login prompt nor the kernel's fall to the debug shell is on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "disk", "node": "images/crash-test.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.nodisk-root",
+      "behavior": "rach2.nodisk with rach2.root=disk is refused by name and the machine halts with no shell",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.nodisk rach2.root=disk"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.nodisk", "rach2.root=disk"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says boot: refused: rach2.nodisk with rach2.fsdisk or rach2.root=disk", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-shell", "checks": "neither the debug shell's banner, a login prompt nor the kernel's fall to the debug shell is on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "disk", "node": "images/crash-test.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.blank",
+      "behavior": "a disk root on a disk of 48 MiB of zeros mounts nothing and is refused, and the machine halts with no shell",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.fsdisk", "disk_bytes": 50331648}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "blank", "size_bytes": 50331648}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says boot: refused: no file system mounted", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-shell", "checks": "neither the debug shell's banner, a login prompt nor the kernel's fall to the debug shell is on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.init-loop",
+      "behavior": "an ext2 root that mounts and whose /sbin/init is a symbolic link to itself is refused with ELOOP, and the machine halts with no shell",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.root=ext2", "init": "a symbolic link to itself"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["loop-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["loop-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says boot: refused: /sbin/init cannot be read (-40)", "source": "scenario"},
+        {"assertion_id": "mounted", "checks": "the kernel mounted the ext2 root from /dev/disk0p1, so the lookup was made", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-shell", "checks": "neither the debug shell's banner, a login prompt nor the kernel's fall to the debug shell is on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "loop-disk", "node": "tests/cases/machine/bootline/loop.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.cut",
+      "behavior": "a boot line of 668 bytes is cut before its last word, rach2.rescue, the cut is logged with its lengths, and the rach2.nodisk with rach2.fsdisk before it is refused",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.nodisk rach2.fsdisk, six words of 104 bytes and rach2.rescue", "bytes": 668}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.nodisk", "rach2.fsdisk", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the kernel says boot: refused: rach2.nodisk", "source": "scenario"},
+        {"assertion_id": "cut-logged", "checks": "the kernel logs boot: command line cut: kept K of 511 or more bytes", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-shell", "checks": "neither the debug shell's banner, a login prompt nor the kernel's fall to the debug shell is on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "disk", "node": "images/crash-test.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.cpu-486",
+      "behavior": "the i686 kernel on QEMU's 486, which has no time-stamp counter, refuses the processor by name before its own code runs, and the machine halts",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686"],
+      "workload": {"arguments": [], "inputs": {"processor": "486"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": [], "cpu": "486", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the loader says boot: refused: the processor has no rdtsc, and this kernel is i686", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-kernel", "checks": "the kernel's first line, boot: Rach2 Booting, is not on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"}
+    },
+    {
+      "case_id": "machine.bootline.cpu-pentium",
+      "behavior": "the i686 kernel on QEMU's Pentium, which has no cmov, refuses the processor by name before its own code runs, and the machine halts",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686"],
+      "workload": {"arguments": [], "inputs": {"processor": "pentium"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": [], "cpu": "pentium", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the loader says boot: refused: the processor has no cmov, and this kernel is i686", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-kernel", "checks": "the kernel's first line, boot: Rach2 Booting, is not on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"}
+    },
+    {
+      "case_id": "machine.bootline.cpu-qemu32",
+      "behavior": "the x86-64 kernel on QEMU's qemu32, which has no long mode, refuses the processor by name before its own code runs, and the machine halts",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"processor": "qemu32"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel, wait for the refusal's last line, record the halt, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": [], "cpu": "qemu32", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false, "fault": {"end": "halted", "records": []}}
+      ],
+      "assertions": [
+        {"assertion_id": "refused", "checks": "the loader says boot: refused: the processor has no long mode, and this kernel is x86-64", "source": "scenario"},
+        {"assertion_id": "halted", "checks": "after the refusal the processor is halted with its interrupts off, which the scenario records as the boot's end", "source": "scenario"},
+        {"assertion_id": "no-kernel", "checks": "the kernel's first line, boot: Rach2 Booting, is not on the console", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 16777216, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "feature", "reason": "the case boots a processor that lacks what the kernel needs"}
+    },
+    {
+      "case_id": "machine.bootline.kept",
+      "behavior": "a boot line of 248 bytes, which QEMU's loader gives the kernel after the kernel's path of some 150 bytes, is kept whole: its last word, rach2.rescue, exempts the rach2.nodisk with rach2.fsdisk before it, and the debug shell starts",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.nodisk rach2.fsdisk, two words of 104 bytes and rach2.rescue", "bytes": 248}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel to the debug shell, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.nodisk", "rach2.fsdisk", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.pad=0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the debug shell starts", "source": "scenario"},
+        {"assertion_id": "not-cut", "checks": "the kernel does not log the boot line as cut", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "disk", "node": "images/crash-test.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.rescue-fsdisk",
+      "behavior": "rach2.nodisk with rach2.fsdisk and rach2.rescue reaches the debug shell it asks for",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.nodisk rach2.fsdisk rach2.rescue"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel to the debug shell, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.nodisk", "rach2.fsdisk", "rach2.rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the debug shell starts", "source": "scenario"},
+        {"assertion_id": "not-refused", "checks": "the kernel does not refuse the boot line", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "disk", "node": "images/crash-test.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.bootline.rescue-init",
+      "behavior": "rach2.nodisk with rach2.root=disk and init=rescue reaches the debug shell it asks for",
+      "units": ["bootline"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"boot_line": "rach2.nodisk rach2.root=disk init=rescue"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "bootline_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the kernel to the debug shell, end the machine with QMP's quit and search its console"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.nodisk", "rach2.root=disk", "init=rescue"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "shell", "checks": "the debug shell starts", "source": "scenario"},
+        {"assertion_id": "not-refused", "checks": "the kernel does not refuse the boot line", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 180000000, "ceiling_us": 600000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 100663296, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "disk", "node": "images/crash-test.disk", "per_architecture": true},
+        {"name": "bootline_scenario", "node": "tests/cases/machine/bootline_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case needs a boot of its own with its boot line and its disk, which a native run cannot give"}
+    }
+  ]
+}

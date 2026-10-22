@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "proof": "servicelog",
-  "summary": "the service log suite, on a root whose init-shell is built with each fault in init.c",
+  "summary": "the case of tests/run servicelog under etude, on a root whose init-shell is built with each fault in init.c",
   "tree": "shared",
   "sources": [
     "utils/init.c"
@@ -13,24 +13,17 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "sh tests/proofs/guest.sh make rach2 utils check-busybox build/tests/system/harness build/tests/system/runutil build/tools/image/mkmbr && sh tests/proofs/guest.sh copy ${WORK} utils/sbin/init-shell"
+      "sh tests/proofs/guest.sh make rach2 utils && sh tests/proofs/guest.sh copy ${WORK} utils/sbin/init-shell"
     ],
     "bound_s": 3600
   },
   "test": {
     "argv": [
       "/bin/sh",
-      "tests/proofs/guest.sh",
-      "exec",
-      "${WORK}",
-      "/bin/sh",
       "-c",
-      "rm -rf \"$1/servicelog\"; exec sh tests/system/suites/servicelog.sh \"$ARCH_BUILD/rach2/kernel\" build/tests/system/harness build/tools/image/mkmbr \"$1/init-shell\" \"$ARCH_BUILD/utils/update\" \"$ARCH_BUILD/vendor/busybox/busybox\" \"$1/servicelog\"",
-      "servicelog",
-      "${WORK}"
+      "exec tests/run servicelog </dev/null"
     ],
-    "bound_s": 900,
-    "fail_prefix": "servicelog-test: FAIL: "
+    "bound_s": 3600
   },
   "faults": [
     {
@@ -45,8 +38,10 @@
       ],
       "fails": {
         "lines": [
-          "servicelog-test: FAIL: the log was not emptied within the boot"
-        ]
+          "run: servicelog: FAIL",
+          "assert emptied fail"
+        ],
+        "status": 1
       }
     },
     {
@@ -61,8 +56,10 @@
       ],
       "fails": {
         "lines": [
-          "servicelog-test: FAIL: the log the boot before left full was not removed"
-        ]
+          "run: servicelog: FAIL",
+          "assert removed fail"
+        ],
+        "status": 1
       }
     }
   ]

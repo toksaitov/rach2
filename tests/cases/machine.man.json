@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.man",
+  "summary": "The manual pages on the machine, read through a pipe and under the pager; the scenario is machine/man_scenario.c and the man program krffs/man.script",
+  "cases": [
+    {
+      "case_id": "machine.man.real",
+      "behavior": "on os-real, logged in as root, man gives every staged page and every alias's page byte for byte through a pipe, shows rach2(7)'s first line and its last under the pager, and runs a pager that -P names with its options",
+      "units": ["man"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"pages": "every file of /usr/share/man/cat*", "aliases": "every line of /usr/share/man/aliases", "page": "rach2(7)"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "man_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "real", "does": "boot os-real and log in as root at the console"},
+        {"step_id": "read", "stage": "execute", "machine": "real", "does": "compare what man gives through a pipe with each staged page and each alias's page, and count them"},
+        {"step_id": "pager", "stage": "execute", "machine": "real", "does": "show rach2(7) under the pager and send it to the end, run man -P with a pager of its own, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "real", "qemu": {"kernel": "kernel", "initrd": "real", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "count", "checks": "man reads as many pages as the build rendered and the alias table has lines", "source": "scenario"},
+        {"assertion_id": "pipe", "checks": "every page man gives through a pipe is the staged page decompressed, and not empty", "source": "scenario"},
+        {"assertion_id": "first", "checks": "the pager shows rach2(7)'s first line", "source": "scenario"},
+        {"assertion_id": "last", "checks": "sent to the end, the pager shows rach2(7)'s last line", "source": "scenario"},
+        {"assertion_id": "named-pager", "checks": "man -P runs the pager it names with its options, which shows the last line in capitals", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 2400000000}, "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "real", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "summary", "node": "tests/cases/machine/man/summary", "per_architecture": false},
+        {"name": "man_scenario", "node": "tests/cases/machine/man_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "input", "reason": "the case drives the pager at the machine's console, which a native run cannot type at"}
+    },
+    {
+      "case_id": "machine.man.recovery",
+      "behavior": "on the recovery image, whose console is a shell without a login, man gives every page the image stages byte for byte through a pipe",
+      "units": ["man"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"pages": "every file of /usr/share/man/cat*, the pages man/recovery lists"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "man_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its evidence, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "recovery", "does": "boot the recovery kernel and image to their shell"},
+        {"step_id": "read", "stage": "execute", "machine": "recovery", "does": "compare what man gives through a pipe with each staged page, count them, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "recovery-kernel", "initrd": "recovery-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "count", "checks": "man reads as many pages as man/recovery lists", "source": "scenario"},
+        {"assertion_id": "pipe", "checks": "every page man gives through a pipe is the staged page decompressed, and not empty", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 33554432, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
+        {"name": "recovery-image", "node": "images/etude-recovery.krffs", "per_architecture": true},
+        {"name": "summary", "node": "tests/cases/machine/man/summary", "per_architecture": false},
+        {"name": "man_scenario", "node": "tests/cases/machine/man_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots the recovery image, which is not the native machine's system"}
+    }
+  ]
+}

@@ -130,6 +130,18 @@ char *lc_run(struct lc *l, struct etude_case_machine *m, const char *machine, co
              uint64_t *at, const char *id);
 
 /**
+ * Wait after `*at` for the kernel's record that hands the debug shell of
+ * machine `machine`, `m`, back, and judge the window from `from` to it as
+ * lc_run does, for a program that the scenario started at `from` and typed
+ * at since.
+ *
+ * @return the window, NUL-ended, which the caller frees; or NULL as lc_run
+ *         gives it.
+ */
+char *lc_handback(struct lc *l, struct etude_case_machine *m, const char *machine, uint64_t from,
+                  uint64_t *at, const char *id);
+
+/**
  * Report assertion `id` from a search of the console after `from`: it holds
  * when `text` is there and `present` is set, or is not there and `present`
  * is clear. An absence is shown only on a machine that has ended.
