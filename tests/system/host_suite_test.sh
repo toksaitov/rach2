@@ -1,9 +1,10 @@
 #!/bin/sh
 #
-# host_suite_test.sh: the host suite runs its checks at once, and every check
-# it selects gives a result: tests/system/suites/host.sh and etude-host, run
-# in a private tree whose tests/host has fixture tests and whose host.list
-# has fixture scripts.
+# host_suite_test.sh: the host cases run their checks at once, and every check
+# a case selects gives a result and an assertion: tests/cases/host/host.sh
+# and etude-host, run for the cases tests, checkers and scripts in a private
+# tree whose tests/host has fixture tests, whose host.list has fixture
+# scripts, and whose manifest names the checks.
 #
 # Eight tests each make a file of one name in their TMPDIR, refusing one that
 # is there, and then wait until all eight have started, so they pass only
@@ -17,9 +18,12 @@
 # it; a test repeats its `not run:` line under its PASS; and a test finds
 # SIGINT and SIGQUIT at their defaults. Two `host-alone:` tests find no other
 # check's scratch directory beside theirs, though a test before them waits
-# up to ten seconds for one to start. Every check of the selection has one
-# result line, the last line counts them, and no scratch is left but the kept
-# directory. A selection with a name given twice is refused and runs nothing.
+# up to ten seconds for one to start. Every check of a selection has one
+# result line, the last line of etude-host's counts them, and no scratch is
+# left but the kept directory. Each check has an assertion of its outcome in
+# the case's report; a test the manifest does not name is not run and fails
+# `listed`, and so does an assertion the tree has no test for, which fails
+# too. A selection with a name given twice is refused and runs nothing.
 #
 # With --mutate each fault below is compiled into a private etude-host, and
 # the checks must fail; the unchanged driver must then pass them again.
@@ -95,15 +99,16 @@ deadline=$repo/build/tests/system/deadline
 made=$(mktemp -d "${TMPDIR:-/tmp}/rach2-host-suite-test.XXXXXX") || exit 1
 work=$(cd "$made" && pwd -P) || exit 1
 tree=$work/tree
-mkdir -p "$tree/tests/host" "$tree/tests/system/suites" "$tree/build/.run.lock" \
+mkdir -p "$tree/tests/host" "$tree/tests/cases/host" "$tree/build/.run.lock" \
     "$tree/build/tools/etude" "$tree/tools/inspect" "$tree/tools/verify" \
     "$tree/tools/etude/win" "$tree/tests/system/runner" "$work/meet" "$work/tmp" || exit 1
-cp "$repo/tests/system/suites/host.sh" "$tree/tests/system/suites/" || exit 1
+cp "$repo/tests/cases/host/host.sh" "$tree/tests/cases/host/" || exit 1
 cp "$repo/tests/system/runlock.sh" "$tree/tests/system/" || exit 1
-# The tree is held for this script, as tests/run holds it for the suite.
+# The tree is held for this script, as tests/run holds it for the cases.
 echo "pid $$" > "$tree/build/.run.lock/owner"
 
-# The checkers whose selftests the suite compiles: each passes its selftest.
+# The checkers whose selftests the checkers case compiles: each passes its
+# selftest.
 for c in tools/inspect/elfcheck.c tools/inspect/cfgcheck.c tools/inspect/setidcheck.c \
     tools/verify/prosecheck.c tools/etude/win/pecheck.c tests/system/runner/runtests.c \
     tests/system/runner/harness.c; do
@@ -304,25 +309,58 @@ int main(void)
     return 0;
 }
 EOF
-cat > "$tree/tests/system/suites/host.list" <<'EOF'
+# A test the manifest does not name, which fails if it is run.
+printf 'int main(void)\n{\n    return 1;\n}\n' > "$tree/tests/host/unlisted_hosttest.c" || exit 1
+cat > "$tree/tests/cases/host/host.list" <<'EOF'
 # The fixture's scripted checks.
 script_pass|30|a script that passes|test -d "$TMPDIR" && echo fine
 script_fail|30|a script that fails|echo 'script: it failed'; exit 4
 EOF
 
-# run_suite DRIVER: run the private tree's suite with DRIVER, keeping its
-# output in $work/out and its status in $status.
+# The fixture's manifest, with the members the program reads: each test but
+# unlisted_hosttest.c, and ghost, which the tree does not have.
+{
+    printf '{"cases": [\n  {"case_id": "host.host.tests", "assertions": [{"assertion_id": "listed"}'
+    for t in "$tree"/tests/host/*_hosttest.c; do
+        t=$(basename "$t" _hosttest.c)
+        [ "$t" = unlisted ] || printf ', {"assertion_id": "%s"}' "$t"
+    done
+    printf ', {"assertion_id": "ghost"}]},\n  {"case_id": "host.host.checkers", "assertions": [{"assertion_id": "listed"}'
+    for c in elfcheck cfgcheck setidcheck prosecheck pecheck runtests harness; do
+        printf ', {"assertion_id": "%s"}' "$c"
+    done
+    printf ']},\n  {"case_id": "host.host.scripts", "assertions": [{"assertion_id": "listed"}'
+    printf ', {"assertion_id": "script_pass"}, {"assertion_id": "script_fail"}]}\n]}\n'
+} > "$tree/tests/cases/host.host.json" || exit 1
+
+# run_case CASE: run the private tree's case CASE, keeping its output in
+# $work/out.CASE and its status in $status_CASE. The variables of the case
+# that runs this script are not the fixture's.
+run_case()
+{
+    rc=0
+    # The bound only ends a case whose driver lets a check run on forever.
+    (unset ETUDE_CASE ARCH
+     HOST_SUITE_MEET=$work/meet RACH2_TREE_HELD=$$ RACH2_WORKERS=16 TMPDIR=$work/tmp ETUDE_TREE=$tree \
+         ASAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0:detect_leaks=0 \
+         UBSAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0 LSAN_OPTIONS=exitcode=0 \
+         exec "$deadline" 400 sh "$tree/tests/cases/host/host.sh" "$1") > "$work/out.$1" 2>&1 < /dev/null ||
+        rc=$?
+}
+
+# run_suite DRIVER: run the three cases with DRIVER, keeping their output
+# together in $work/out.
 run_suite()
 {
     cp "$1" "$tree/build/tools/etude/etude-host" || exit 1
     rm -rf "$work/meet" && mkdir "$work/meet" || exit 1
-    status=0
-    # The bound only ends a suite whose driver lets a check run on forever.
-    HOST_SUITE_MEET=$work/meet RACH2_TREE_HELD=$$ RACH2_WORKERS=16 TMPDIR=$work/tmp \
-        ASAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0:detect_leaks=0 \
-        UBSAN_OPTIONS=exitcode=0:halt_on_error=0:abort_on_error=0 LSAN_OPTIONS=exitcode=0 \
-        "$deadline" 400 sh "$tree/tests/system/suites/host.sh" > "$work/out" 2>&1 < /dev/null ||
-        status=$?
+    run_case tests
+    status_tests=$rc
+    run_case checkers
+    status_checkers=$rc
+    run_case scripts
+    status_scripts=$rc
+    cat "$work/out.tests" "$work/out.checkers" "$work/out.scripts" > "$work/out"
 }
 
 # line PATTERN: succeed when one line of the output matches PATTERN, an
@@ -339,52 +377,76 @@ miss()
     bad=1
 }
 
+# results CASE N: succeed when the case CASE has N result lines, the last
+# line of etude-host's counts N checks, and its report ends with the count of
+# its assertions.
+results()
+{
+    [ "$(grep -cE '^  (PASS|FAIL)' "$work/out.$1")" -eq "$2" ] &&
+        grep '^etude-host: result: ' "$work/out.$1" | tail -n 1 |
+        grep -qE "^etude-host: result: (pass: $2 checks|fail: [0-9]+ of $2 checks:.*)\$" &&
+        grep -qx "@etude 1 end $(grep -c '^@etude 1 assert ' "$work/out.$1")" "$work/out.$1"
+}
+
 # judge: print `host-suite-test: failed: WHAT` for each expectation the last
 # run missed, and fail when any did.
 judge()
 {
     bad=0
-    n=$(wc -l < "$tree/build/tests/host-suite/selection" | tr -d ' ')
     tests=$(find "$tree/tests/host" -name '*_hosttest.c' | wc -l | tr -d ' ')
-    [ "$status" -eq 1 ] || miss 'the suite fails'
-    [ "$n" -eq $((tests + 7 + 2)) ] || miss 'every test, checker and script is selected'
+    [ "$status_tests" -eq 1 ] || miss 'the tests case fails'
+    [ "$status_checkers" -eq 0 ] || miss 'the checkers case passes'
+    [ "$status_scripts" -eq 1 ] || miss 'the scripts case fails'
     for i in 1 2 3 4 5 6 7 8; do
         line "  PASS: meet${i}_hosttest" || miss "meet$i passes beside the others in its own scratch"
+        line "@etude 1 assert meet$i pass" || miss "meet$i's assertion passes"
     done
     for i in 1 2; do
         line "  PASS: alone${i}_hosttest" || miss "alone$i runs with no other check"
+        line "@etude 1 assert alone$i pass" || miss "alone$i's assertion passes"
     done
     line '  PASS: linger_hosttest' || miss 'the test before the alone ones passes'
-    for t in asan_hosttest ubsan_hosttest $leak; do
-        line "  FAIL \\(run, [^)]*\\): $t" || miss "$t fails"
+    for t in asan ubsan ${leak%_hosttest}; do
+        line "  FAIL \\(run, [^)]*\\): ${t}_hosttest" || miss "$t fails"
+        line "@etude 1 assert $t fail run, .*" || miss "$t's assertion fails"
     done
     grep -q '^    ! .*AddressSanitizer' "$work/out" || miss 'a sanitizer report is shown'
-    line '  FAIL \(run hung; killed after 2s; see .*\): hang_hosttest' ||
-        miss 'the endless test fails as hung'
+    line '  FAIL \(run hung; killed after 2s; see .*\): hang_hosttest' || miss 'the endless test fails as hung'
+    line '@etude 1 assert hang fail run hung.*' || miss "the endless test's assertion fails as hung"
     line '  FAIL \(run, status 1; see .*\): gone_hosttest' || miss 'a missing source fails its test'
-    line '    \| hosttest: gone_hosttest: missing host-deps: tests/host/gone.c' ||
+    line '    \| host: gone_hosttest: missing host-deps: tests/host/gone.c' ||
         miss 'a missing source is named'
     line '  FAIL \(run, status 4; see .*\): a script that fails' || miss 'a failing script fails'
+    line '@etude 1 assert script_fail fail .*' || miss "a failing script's assertion fails"
     line '  PASS: a script that passes' || miss 'a passing script passes'
+    line '@etude 1 assert script_pass pass' || miss "a passing script's assertion passes"
     line '  PASS: signals_hosttest' || miss 'the signals are at their defaults'
     line '    signals_hosttest: not run: nothing: this line is repeated under the pass' ||
         miss 'the not-run line is repeated'
     [ "$(grep -c '^  PASS: [a-z]* selftest under the sanitizers$' "$work/out")" -eq 7 ] ||
         miss 'each selftest passes'
-    [ "$(grep -cE '^  (PASS|FAIL)' "$work/out")" -eq "$n" ] || miss 'every check has one result'
-    tail -n 1 "$work/out" | grep -qE "^etude-host: result: fail: [0-9]+ of $n checks:" ||
-        miss 'the last line counts every check'
+    [ "$(grep -c '^@etude 1 assert [a-z]* pass$' "$work/out.checkers")" -eq 8 ] ||
+        miss 'each selftest and the list of checkers pass'
+    ! grep -q 'unlisted_hosttest$' "$work/out" || miss 'a test the manifest does not name is not run'
+    line '@etude 1 assert listed fail checks the case does not name: unlisted; checks the tree does not have: ghost' ||
+        miss 'a test the manifest does not name, and a test the tree does not have, fail the list'
+    line '@etude 1 assert ghost fail the tree has no such check.*' || miss 'a test the tree does not have fails'
+    results tests $((tests - 1)) || miss 'every test named has one result and one assertion'
+    results checkers 7 || miss 'every checker has one result and one assertion'
+    results scripts 2 || miss 'every script has one result and one assertion'
     kept=$(sed -n 's/^    scratch kept: //p' "$work/out")
     case $kept in
         */keep_hosttest) [ -f "$kept/evidence" ] || miss 'the failed test keeps its scratch' ;;
         *) miss 'the failed test keeps its scratch' ;;
     esac
-    left=$(find "$work/tmp" -mindepth 2 -maxdepth 2 ! -name keep_hosttest | wc -l | tr -d ' ')
+    left=$(find "$work"/tmp/rach2-host.*/scratch -mindepth 1 -maxdepth 1 ! -name keep_hosttest 2>/dev/null |
+        wc -l | tr -d ' ')
     [ "$left" -eq 0 ] || miss 'no other scratch is left'
     [ -z "$kept" ] || rm -rf "$kept"
     rm -rf "$work"/tmp/rach2-host.*
     return $bad
 }
+
 
 # refused DRIVER: a selection with a name given twice is refused before any
 # check runs.

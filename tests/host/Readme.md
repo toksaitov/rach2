@@ -4,37 +4,41 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 
 ## Running
 
-`tests/run host` runs the suite. Its make target, `run-host` in [`tests/system/suites.mk`](../system/suites.mk), first builds musl's installed library (`check-libc`), the extracted e2fsprogs tree, the `deadline` tool, the KRFFS stager, and the kernel and test image that `etude_qemu_hosttest.c` boots, those of the architecture `ARCH` names, then runs [`tests/system/machine_measure_test.sh`](../system/machine_measure_test.sh), the check of the machine measurement drivers in `tools/dev/` against command fixtures, and then [`tests/system/suites/host.sh`](../system/suites/host.sh). That script holds the tree, as [`tests/system/runlock.sh`](../system/runlock.sh) says, unless `tests/run` holds it already, since several of its checks put faults into private copies of the sources. It writes the selection of checks to `build/tests/host-suite/selection`, and [`etude-host`](../../tools/etude/Readme.md#the-host-checks) runs them, `RACH2_WORKERS` at once, or as many as the host has processors. The selection is:
+`tests/run host` runs the suite, the cases of etude's family `host.host`, [`tests/cases/host.host.json`](../cases/host.host.json), as [the cases' Readme](../cases/Readme.md) says. Each case is one run of [`tests/cases/host/host.sh`](../cases/host/host.sh), which writes the selection of the case's checks, has [`etude-host`](../../tools/etude/Readme.md#the-host-checks) run them, `RACH2_WORKERS` at once, or as many as the host has processors, and reports an assertion for each check. The program holds the tree, as [`tests/system/runlock.sh`](../system/runlock.sh) says, unless `tests/run` holds it already, since several of its checks put faults into private copies of the sources. The cases are:
 
-1. Each `tests/host/*_hosttest.c`, compiled and run.
-2. Seven checkers compiled again under the sanitizers, each running its self-test: `tools/inspect/elfcheck.c`, `cfgcheck.c` and `setidcheck.c`, `tools/verify/prosecheck.c`, `tools/etude/win/pecheck.c`, and `tests/system/runner/runtests.c` and `harness.c`, each with `-Wall -Wextra -Werror` and `--selftest`.
-3. Each fuzz harness of [`tests/fuzz/`](../fuzz/Readme.md), built as a replay program with `tests/fuzz/build.sh replay NAME` and run over its committed corpus, `tests/fuzz/corpus/NAME/`. A harness whose corpus is empty fails.
-4. The scripted checks that [`tests/system/suites/host.list`](../system/suites/host.list) lists, one a line with its bound and label: three checks in this directory, `kstack_check.sh`, `endothers_check.sh` and `doom_libc_check.sh`, and the `--check` modes of five of its fault scripts, the tests of the loops, ci and the tools in `tests/system/`, and TinyCC's comparisons with the GNU tools in `vendor/tcc/`.
+1. `tests`: each `tests/host/*_hosttest.c` but etude's own, compiled and run.
+2. `etude`: each `tests/host/etude_*_hosttest.c` that boots nothing.
+3. `boots`: each test with a `host-arch:` line, which boots the kernel and test image of the architecture `ARCH` names under QEMU; the case runs once for each architecture, and the others once for both.
+4. `checkers`: seven checkers compiled again under the sanitizers, each running its self-test: `tools/inspect/elfcheck.c`, `cfgcheck.c` and `setidcheck.c`, `tools/verify/prosecheck.c`, `tools/etude/win/pecheck.c`, and `tests/system/runner/runtests.c` and `harness.c`, each with `-Wall -Wextra -Werror` and `--selftest`.
+5. `fuzz`: each fuzz harness of [`tests/fuzz/`](../fuzz/Readme.md), built as a replay program with `tests/fuzz/build.sh replay NAME` and run over its committed corpus, `tests/fuzz/corpus/NAME/`. A harness whose corpus is empty fails.
+6. `scripts`: the scripted checks that [`tests/cases/host/host.list`](../cases/host/host.list) lists, one a line with its bound and label: three checks in this directory, `kstack_check.sh`, `endothers_check.sh` and `doom_libc_check.sh`, the base phases of five proof catalogues, the tests of the loops, ci, the tools and the machine measurement drivers in `tests/system/`, and TinyCC's comparisons with the GNU tools in `vendor/tcc/`.
 
-The suite has no option to run one test. To run one by hand, print the compile commands, compile the one wanted, and run the binary:
+Etude's preparation builds what the cases list: the program, `etude-host`, the extracted e2fsprogs tree that two tests compile `unix_io.c` from, and for `boots` the kernel, the test image, the disk `etude_scenario_hosttest.c` mounts as a root and `casecheck`; for `scripts` the `deadline` tool, `etude-proof` and the KRFFS stager. `sh tests/cases/host/host.sh CASE`, in the root of a built tree, runs one case by hand. There is no option to run one test. To run one, print the compile commands, compile the one wanted, and run the binary:
 
-    HOST_PRINT_COMMANDS=1 sh tests/system/suites/host.sh | grep '/fat32_hosttest ' | sh
+    HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh | grep '/fat32_hosttest ' | sh
     build/tests/host-suite/fat32_hosttest
 
-With `HOST_PRINT_COMMANDS` set, `host.sh` prints the command of each test and checker and compiles nothing; `tools/verify/coverage.sh` and `tools/dev/gen_compile_commands.sh` read the same output.
+With `HOST_PRINT_COMMANDS` set, `host.sh` takes no case, prints the command of each test, checker and fuzz harness, and compiles nothing; `tools/verify/coverage.sh` and `tools/dev/gen_compile_commands.sh` read the same output.
 
 The `icmp_hosttest.c` model sends pings with timer interrupts still pending at each attempt. It checks the deadline before and at its expiry, the tick count's wrap, release of the deadline, and a reply received before the timer handler catches up.
 
 ## Results
 
-`etude-host` prints a line for each check as it ends, and a last line that counts them:
+`etude-host` prints a line for each check as it ends, and a last line that counts them; `host.sh` then writes an assertion for each check, named for it, the test's name without `_hosttest`:
 
     PASS: fat32_hosttest
     PASS: exfat_hosttest
       exfat_hosttest: not run: the rows of the volume the host's tools made: this host has no newfs_exfat and hdiutil
-    FAIL (compile, status 1; see build/tests/host-suite/NAME.clog): NAME
-    FAIL (run, status 1; see build/tests/host-suite/NAME.rlog): NAME
-    FAIL (run hung; killed after 60s; see build/tests/host-suite/NAME.rlog): NAME
+    FAIL (compile, status 1; see DIR/NAME.clog): NAME
+    FAIL (run, status 1; see DIR/NAME.rlog): NAME
+    FAIL (run hung; killed after 60s; see DIR/NAME.rlog): NAME
     etude-host: result: fail: N of M checks: NAME ...
+    @etude 1 assert fat32 pass
+    @etude 1 assert NAME fail run, status 1; see DIR/NAME.rlog
 
 A test passes when it exits with status 0 and leaves no process running. A check a test could not run on this host, for want of a tool, it prints as `NAME: not run: WHAT: WHY`, and `etude-host` repeats each such line under the test's PASS. A nonzero exit, a sanitizer report (every sanitizer is fatal, by `-fno-sanitize-recover=all` and the settings `etude-host` gives the sanitizers), a compile failure, or a run past its time limit fails it. The time limit is 60 seconds, or the one a `host-seconds:` line gives; `etude-host` then ends the test's processes, which is the "hung" line. Under a failure it prints the log's sanitizer reports and its last lines. A test whose `host-deps:` name a missing source fails with the names, and with the repair when the source is under `vendor/musl/`: the musl tarball is not extracted, so remove `vendor/musl/.stamp` and run `make`.
 
-A self-test's label is `NAME selftest under the sanitizers`, a fuzz harness's `NAME corpus replayed (N inputs)`, and a scripted check's the one `host.list` gives. The compile and run logs are `build/tests/host-suite/NAME.clog` and `NAME.rlog`, which belong to the tree being tested, so runs in two clones write no file in common. Each check has a directory of its own as its `TMPDIR`, under a `rach2-host.XXXXXX` directory of the suite's in `${TMPDIR:-/tmp}`; it is removed after a pass and kept, and named, after a failure that left a file in it. The suite exits 1 when anything failed, and also when it found no test at all. A test that writes fixtures keeps its fixture directory when it fails and prints the directory's path.
+A self-test's label is `NAME selftest under the sanitizers` and its assertion `NAME`, a fuzz harness's `NAME corpus replayed (N inputs)` and `NAME`, and a scripted check's the label and the name `host.list` gives. DIR is the case's private directory, `rach2-host.XXXXXX` in `TMPDIR`, which etude makes the case's workspace; the first line of the case's output names it. It has the binaries, the compile and run logs `NAME.clog` and `NAME.rlog`, and under `scratch/` a directory for each check, its `TMPDIR`, which is removed after a pass and kept, and named, after a failure that left a file in it. A case that passes removes DIR, and one that fails keeps it. The manifest is the list of each case's checks: an assertion of a check the tree does not have fails, and a check of the tree that its case does not name is not run and fails the assertion `listed`, so a new test needs its line in the manifest. A test that writes fixtures keeps its fixture directory when it fails and prints the directory's path.
 
 ## Design
 
@@ -52,12 +56,13 @@ A test reaches the code under test in one of two ways. It names separately compi
 
 ### The header lines
 
-A test's opening comment may have four kinds of line, which `host.sh` reads with `grep`:
+A test's opening comment may have five kinds of line, which `host.sh` reads with `grep`:
 
-* `host-deps: PATH ...`: sources, by path from the repository root, compiled and linked with the test. The line repeats, one list per line. A list wrapped onto a following comment line without its own `host-deps:` prefix stops the suite, since the rest of the list would be lost; a named file that does not exist fails the test.
+* `host-deps: PATH ...`: sources, by path from the repository root, compiled and linked with the test. The line repeats, one list per line. A list wrapped onto a following comment line without its own `host-deps:` prefix fails the test, since the rest of the list would be lost, and so does a named file that does not exist.
 * `host-cflags: FLAGS`: more compiler flags, also repeatable: the include paths and warnings of a source outside the kernel tree, or a `-D` the test needs. 57 tests have one.
 * `host-seconds: N`: the time limit, in place of 60 seconds. The interruption matrices run external checkers on copies of the volumes: `ext2_hosttest.c` and `fat32_hosttest.c` declare 300 seconds, and `exfat_hosttest.c` 450.
 * `host-alone: REASON`: the test runs when no other check runs, after the others, for the reason given: a window of a fraction of a second that a machine busy with the other checks could miss. `etude_qemu_hosttest.c`, `etude_remote_hosttest.c`, `etude_repeat_hosttest.c` and `etude_watchdog_hosttest.c` have one.
+* `host-arch: REASON`: the test boots the kernel of the architecture `ARCH` names, for the reason given, and so is the `boots` case's, which runs once for each architecture. `etude_qemu_hosttest.c`, `etude_watchdog_hosttest.c`, `etude_scenario_hosttest.c` and `etude_legacyset_hosttest.c` have one.
 
 `tools/verify/coverage.sh` reads the same lines to measure which lines of the named sources a test runs, and several mutation scripts read them to compile a test the way the suite does.
 
@@ -109,7 +114,7 @@ int main(void)
 }
 ```
 
-Repeat the `host-deps:` prefix rather than wrap a long list. A test may use the host's C library, but one that includes kernel sources whole must avoid host headers that define the kernel's types again; the compat files above declare what they need for that reason. Return 0 only when every check passed, and a status from 1 to 255 otherwise: the exit status keeps the low eight bits of what `main` returns, so a count of 256 failures returned whole reads as a pass. Keep the files a test writes in the directory `compat/fixdir_host.c` gives it. A new test is trusted only after a mutation has made it fail; add the script beside it.
+Repeat the `host-deps:` prefix rather than wrap a long list. A test may use the host's C library, but one that includes kernel sources whole must avoid host headers that define the kernel's types again; the compat files above declare what they need for that reason. Return 0 only when every check passed, and a status from 1 to 255 otherwise: the exit status keeps the low eight bits of what `main` returns, so a count of 256 failures returned whole reads as a pass. Keep the files a test writes in the directory `compat/fixdir_host.c` gives it. Add the test's assertion, `NAME`, to its case in [`tests/cases/host.host.json`](../cases/host.host.json): `tests`, or `etude` for an `etude_` test, or `boots` for one with a `host-arch:` line. A new test is trusted only after a mutation has made it fail; add the script beside it.
 
 ## Limits
 

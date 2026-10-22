@@ -315,7 +315,7 @@ unit krffs "$REPO/krffs" host make -Bn all mount
 host_tools=$(make -s -C "$REPO" print-host-tools)
 # shellcheck disable=SC2086
 unit tools "$REPO" host make -Bn $host_tools
-unit host-tests "$REPO" host env HOST_PRINT_COMMANDS=1 sh tests/system/suites/host.sh
+unit host-tests "$REPO" host env HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh
 
 build_array "$entries" >"$out_tmp"
 if ! validate_db "$out_tmp"; then

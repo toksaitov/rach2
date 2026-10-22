@@ -10,7 +10,7 @@
  * kernel, so a bounds fault shows here, with the sanitizer's report, rather
  * than as a fault in QEMU. The test prints nothing; it returns the number of
  * failed checks as its exit status, 0 when all passed, which is what
- * tests/system/suites/host.sh reads.
+ * tests/cases/host/host.sh reads.
  */
 
 #include "kstring.h"

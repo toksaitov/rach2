@@ -1,8 +1,10 @@
-# host.list: the scripted checks of the host suite (host.sh), one a line, as
-# NAME|SECONDS|LABEL|COMMAND. NAME names the check's log and scratch directory,
-# SECONDS is the bound after which the check is ended as hung, LABEL is what
-# its result line says it checked, and COMMAND runs it from the root of the
-# tree; its exit status 0 is a pass.
+# host.list: the scripted checks of the host case host.host.scripts
+# (host.sh), one a line, as NAME|SECONDS|LABEL|COMMAND. NAME is the check's
+# assertion in tests/cases/host.host.json and names its log and scratch
+# directory, SECONDS is the bound after which the check is ended as hung,
+# LABEL is what its result line says it checked, and COMMAND runs it from the
+# root of the tree; its exit status 0 is a pass.
+machine_measure|600|the measurement drivers of tools/dev against fake commands|sh tests/system/machine_measure_test.sh
 krffs_open|600|krffs publication open|build/tools/etude/etude-proof --base tests/proofs/krffs-open.json
 krffs_root_lock|600|krffs root data operations under the mount's lock|build/tools/etude/etude-proof --base tests/proofs/krffs-root-lock.json
 kstack|600|a new kernel stack is cleared and guarded|sh tests/host/kstack_check.sh
@@ -37,5 +39,5 @@ mkext2_overlay|900|the modes an ext2 overlay adds under umask 002|sh tests/syste
 check_asm|600|TinyCC's assemblers against GNU as|sh vendor/tcc/check_asm.sh
 check_ldscript|600|TinyCC's linker script reader against GNU ld|sh vendor/tcc/check_ldscript.sh
 together|600|the makers of several fixture files run once for a parallel request of their files|sh tests/system/together_test.sh
-host_suite|300|the host suite runs its checks at once, each in its own scratch, with one result each|sh tests/system/host_suite_test.sh
+host_suite|300|the host cases run their checks at once, each in its own scratch, with one result and one assertion each|sh tests/system/host_suite_test.sh
 agent_select|60|focused agent selections preserve order and refuse invalid names|python3 -B tests/system/agent_select_test.py

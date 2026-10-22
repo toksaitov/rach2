@@ -22,7 +22,7 @@ COV="$REPO/build/verify/coverage"
 GCOV="${GCOV:-gcov}"
 rm -rf "$COV"
 mkdir -p "$COV"
-HOST_PRINT_COMMANDS=1 sh tests/system/suites/host.sh 2>/dev/null | grep "_hosttest" >"$COV/commands"
+HOST_PRINT_COMMANDS=1 sh tests/cases/host/host.sh 2>/dev/null | grep "_hosttest" >"$COV/commands"
 if [ $# -eq 0 ]; then
     while read -r n; do
         set -- "$@" "$n"

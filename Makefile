@@ -147,7 +147,6 @@ MKDISK          = krffs/mkdisk.sh
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        run-host \
         musl busybox dropbear tcc pdpmake e2fsprogs $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,

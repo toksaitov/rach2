@@ -11,6 +11,7 @@
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
  * host-seconds: 240
  * host-alone: a stand-in QEMU must quit within a grace of 300 ms
+ * host-arch: it boots the kernel and test image of ARCH
  *
  * The command lines of profiles, and the profiles the launcher refuses, are
  * checked as text, disks on IDE, AHCI and NVMe, a CD, disks that boot first,
