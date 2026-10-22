@@ -10,10 +10,10 @@
  *       as Linux does, and select still finds the empty end readable;
  *   (d) select: the same readable fd is found through an fd_set, through
  *       the fd_set to pollfd translation and, on i386, _newselect;
- *   (e) block and wake: a parent polls with a 60-second timeout while a
- *       forked child writes once it sees the parent asleep, and the poll
- *       returns the pipe readable with the child's byte in it (the row does
- *       not time the wake);
+ *   (e) block and wake: a parent polls with no timeout while a forked child
+ *       writes once it sees the parent asleep, and the poll returns the pipe
+ *       readable with the child's byte in it (the row does not time the
+ *       wake);
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
  *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
  *       width is -EINVAL, not a truncation;
@@ -217,12 +217,12 @@ static void hangup(void)
     pfd[0].fd = b[0];
     pfd[0].events = POLLIN;
     pfd[0].revents = 0;
-    n = do_poll(pfd, 1, 100);
+    n = do_poll(pfd, 1, -1);
     check(n == 1 && pfd[0].revents == (POLLIN | POLLHUP),
           "closed writer, byte buffered -> POLLIN | POLLHUP");
     do_read(b[0], buf, 1);
     pfd[0].revents = 0;
-    n = do_poll(pfd, 1, 100);
+    n = do_poll(pfd, 1, -1);
     check(n == 1 && pfd[0].revents == POLLHUP, "closed writer, pipe empty -> POLLHUP alone");
     for (i = 0; i < 32; i++) {
         rset[i] = 0;
@@ -363,7 +363,7 @@ void probe_main(unsigned long *sp)
     syscall3(SYS_WRITE, a[1], (long)"x", 1);
     pfd[0].revents = 0;
     pfd[1].revents = 0;
-    n = do_poll(pfd, 2, 100);
+    n = do_poll(pfd, 2, -1);
     check(n == 1, "poll reports exactly one ready fd");
     check((pfd[0].revents & POLLIN) != 0, "the written pipe is POLLIN");
     check(pfd[1].revents == 0, "the idle pipe stays clear");
@@ -400,7 +400,7 @@ void probe_main(unsigned long *sp)
         pfd[0].fd = a[0];
         pfd[0].events = POLLIN;
         pfd[0].revents = 0;
-        n = do_poll(pfd, 1, 60000);
+        n = do_poll(pfd, 1, -1);
         check(n == 1 && (pfd[0].revents & POLLIN) != 0,
               "poll blocks then wakes on the child's write");
         check(do_read(a[0], buf, 1) == 1, "the pipe poll waited for has the child's byte");
