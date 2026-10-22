@@ -10,8 +10,7 @@
 # stderr, for a message with it, the emoji footer Claude Code writes among
 # them. The copy is run as git runs it, through its own #! line, so a hook
 # that has lost its executable bit fails every row. COMMIT_MSG_HOOK names the
-# hook to copy, by default the tree's; tests/proofs/commit-msg.json runs the
-# rows against copies with faults in them.
+# hook to copy, by default the tree's.
 #
 # Usage: sh tests/system/commit_msg_test.sh
 #

@@ -12,8 +12,6 @@ The prepare, client and verify commands are also the parts a guest suite
 uses, with agy-session.json unchanged. WORK is an absolute path. The caller
 of those commands removes it. The Linux proof removes its work on success or
 a signal, and prints its evidence directory on failure.
-tests/proofs/gemini-agy.json runs the proof with a copy of proto_gemini.py
-whose result check is taken out.
 """
 
 import hashlib
@@ -29,8 +27,8 @@ import tarfile
 import tempfile
 import threading
 
-# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
-# and the protocol modules, that holds a proof's copies with faults in them.
+# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
+# and the protocol modules, so that copies there are tested in place of these.
 if os.environ.get("FAKEAPI_MODULES"):
     sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
 import fakeapi  # noqa: E402

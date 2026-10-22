@@ -6,8 +6,7 @@
 # start, the checks take and group make of the phase and of an issue labelled
 # owner-only, archive and phase, with issues that GitHub's list of the
 # board's items lacks.
-# BOARD_SH names the board.sh to test, by default the tree's;
-# tests/proofs/board.json runs the rows against copies with faults in them.
+# BOARD_SH names the board.sh to test, by default the tree's.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'board-test: usage: board_test.sh' >&2; exit 2; }

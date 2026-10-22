@@ -10,7 +10,7 @@
 # probe's bytes; after an edit a second later, one make must rebuild the
 # probe and restage it; a third make and a dry run must not rebuild the
 # image. IMAGERACE_MAKEFILE, when set, names the root Makefile to copy in
-# place of the tree's; tests/proofs/imagerace.json runs faulty copies so.
+# place of the tree's.
 set -eu
 unset ARCH RACH2_ARCH RACH2_PATH_MAP MAKEFLAGS MFLAGS
 

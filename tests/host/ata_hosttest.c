@@ -967,8 +967,7 @@ static void durability_rows(struct ata_drive *d)
  * refused by name. The same words with bit 12 clear are a 512-byte drive,
  * taken with the 48-bit count of words 100 to 103, and bit 12 without the
  * valid bit says nothing of the sector. The AHCI driver's refusal of the
- * same word is ahci_hosttest's; a fault of tests/proofs/ata-identify.json
- * drops this driver's.
+ * same word is ahci_hosttest's.
  */
 static void identify_rows(void)
 {

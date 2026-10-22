@@ -18,8 +18,8 @@
 
 #include "fixdir_host.h"
 
-/* The source of the builder the test compiles. A proof,
- * tests/proofs/fixture-readers.json, names a copy of its own. */
+/* The source of the builder the test compiles, unless BUILDER_SOURCE names
+ * another. */
 #ifndef BUILDER_SOURCE
 #define BUILDER_SOURCE "tests/host/mkfatfixture.c"
 #endif

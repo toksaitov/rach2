@@ -36,9 +36,8 @@
 # the tree, to which it changes first, ARCH naming the architecture of the
 # tests and boots cases, and TMPDIR the workspace, which etude keeps after a
 # failure.
-# Several scripted checks hold the tree, as a script that puts faults into
-# sources must, so the program holds it too, unless an ancestor such as
-# tests/run holds it already (tools/etude/hold.sh).
+# Several scripted checks hold the tree, so the program holds it too, unless
+# an ancestor such as tests/run holds it already (tools/etude/hold.sh).
 #
 # Usage, in the root of the tree, or anywhere with ETUDE_TREE set to it:
 #     sh tests/cases/host/host.sh CASE
@@ -348,8 +347,9 @@ fuzz()
     done
 }
 
-# The scripted checks: the proofs' --check modes, the tests of the loops,
-# ci and the tools, and TinyCC's comparisons with the GNU tools.
+# The scripted checks: the checks of tests/host over extracted kernel
+# functions and of the KRFFS host tools, the tests of the loops, ci and the
+# tools, and TinyCC's comparisons with the GNU tools.
 scripts()
 {
     while IFS='|' read -r name secs label cmd; do

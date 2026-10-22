@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Check Messages result rejection and streamed content reconstruction.
 
-Each test that fails is named on a line of its own; tests/proofs/anthropic.json
-runs the tests against a copy of proto_anthropic.py with a fault in it.
+Each test that fails is named on a line of its own.
 """
 
 import copy
@@ -11,8 +10,8 @@ import os
 import sys
 import unittest
 
-# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
-# and the protocol modules, that holds a proof's copies with faults in them.
+# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
+# and the protocol modules, so that copies there are tested in place of these.
 if os.environ.get("FAKEAPI_MODULES"):
     sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
 import fakeapi  # noqa: E402

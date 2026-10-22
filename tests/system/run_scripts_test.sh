@@ -21,8 +21,7 @@
 # a stand-in x86_64-elf-gdb waits for those arguments and exits.
 #
 # RUN_SCRIPTS names the directory the scripts are copied from, by default the
-# tree's rach2/; tests/proofs/run-scripts.json runs the rows against copies
-# with faults in them.
+# tree's rach2/.
 #
 # Usage: sh tests/system/run_scripts_test.sh
 #

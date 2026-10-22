@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Check Gemini function results, signatures, replies and unordered steps.
 
-Each test that fails is named on a line of its own; tests/proofs/gemini.json
-runs the tests against copies of proto_gemini.py and fakeapi.py with faults
-in them.
+Each test that fails is named on a line of its own.
 """
 
 import base64
@@ -14,8 +12,8 @@ import sys
 import tempfile
 import unittest
 
-# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
-# and the protocol modules, that holds a proof's copies with faults in them.
+# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
+# and the protocol modules, so that copies there are tested in place of these.
 if os.environ.get("FAKEAPI_MODULES"):
     sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
 import fakeapi  # noqa: E402

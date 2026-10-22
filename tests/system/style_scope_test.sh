@@ -18,8 +18,7 @@
 # not be read.
 #
 # STYLE_CHECKERS names the directory the two checkers are copied from, by
-# default the tree's tools/verify; tests/proofs/style-scope.json runs the rows
-# against copies with faults in them.
+# default the tree's tools/verify.
 #
 # Usage: sh tests/system/style_scope_test.sh
 #

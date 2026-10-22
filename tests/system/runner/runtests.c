@@ -31,9 +31,8 @@
  * deadline factor. A probe that does not return within its limit ends the
  * run, and each probe after it counts as a failure. --log keeps the console
  * in FILE. Each --probe runs only the probes it names, in the order of
- * `PROBES`, as a mutation proof runs the probe its fault reaches; the clock
- * check then counts only when musl/clockmusl is named. The exit status is 0
- * when every probe and both checks pass, 1
+ * `PROBES`; the clock check then counts only when musl/clockmusl is named.
+ * The exit status is 0 when every probe and both checks pass, 1
  * otherwise, 2 for a usage error or a run that could not start, and 3 when
  * the kernel shell never appeared. `--selftest` checks the scoring on fixed
  * text.

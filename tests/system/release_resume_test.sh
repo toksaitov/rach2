@@ -33,9 +33,7 @@
 # for the Lenovo starts with `make clean`; and that metal_accept.sh passing on
 # the trial boot leads to `bootctl commit` and a report that names the machine
 # of the tests, while its failure ends the release with no commit. RELEASE_SH
-# names the release.sh to copy, by default the tree's;
-# tests/proofs/release-resume.json runs the rows against copies with faults in
-# them.
+# names the release.sh to copy, by default the tree's.
 #
 # Usage: sh tests/system/release_resume_test.sh
 #

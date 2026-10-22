@@ -14,9 +14,7 @@
 # restore with a message, and the retry must finish. GROW_SPACE_SCRIPT, when
 # set, names the helper the guest runs in place of the tree's, and
 # GROW_SPACE_DIR the directory the fixture is made in in place of the
-# suite's; tests/proofs/machine-grow-space.json runs faulty copies so, in a
-# directory it empties before each run. The host and the guest open only
-# disposable image files.
+# suite's. The host and the guest open only disposable image files.
 # shellcheck disable=SC2016
 set -eu
 

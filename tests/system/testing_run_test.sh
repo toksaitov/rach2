@@ -2,9 +2,7 @@
 # testing_run_test.sh: check that `testing.sh run` delivers its command intact,
 # that a copy synced from a git worktree is a repository of its own, and that
 # `testing.sh wait` reports a run as it is on the host.
-# TESTING_SH names the testing.sh to copy, by default the tree's;
-# tests/proofs/testing-run.json runs the rows against copies with faults in
-# them.
+# TESTING_SH names the testing.sh to copy, by default the tree's.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'testing-run-test: usage: testing_run_test.sh' >&2; exit 2; }

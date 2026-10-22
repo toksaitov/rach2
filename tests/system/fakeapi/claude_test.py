@@ -11,8 +11,7 @@ uses, with claude-session.json unchanged; the agents suite's rows use
 render and verify through tests/system/agents/claude_session_verify.py.
 WORK is an absolute path. The caller of those commands removes it. The
 Linux proof removes its work on success or a signal, and prints its
-evidence directory on failure. tests/proofs/anthropic-claude.json runs the
-proof with a copy of proto_anthropic.py whose result check is taken out.
+evidence directory on failure.
 """
 
 import hashlib
@@ -27,8 +26,8 @@ import sys
 import tempfile
 import threading
 
-# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
-# and the protocol modules, that holds a proof's copies with faults in them.
+# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
+# and the protocol modules, so that copies there are tested in place of these.
 if os.environ.get("FAKEAPI_MODULES"):
     sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
 import fakeapi  # noqa: E402

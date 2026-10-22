@@ -18,10 +18,9 @@
 #            meets, which must refuse the grow by name.
 #
 # check, boot and space take as a second argument a copy of machine_grow.sh
-# to test in place of the tree's, as the fault proofs of tests/proofs give
-# one. Each copies the functions it tests out of the script and replaces only
-# the guest's paths and the disk's reads and writes, so the decisions tested
-# are the script's own.
+# to test in place of the tree's. Each copies the functions it tests out of
+# the script and replaces only the guest's paths and the disk's reads and
+# writes, so the decisions tested are the script's own.
 #
 # It writes the case's report records on its standard output, an assertion
 # for each check (tools/etude/Readme.md, Report records), with the lines a

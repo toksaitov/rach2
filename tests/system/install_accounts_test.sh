@@ -22,9 +22,7 @@
 # `crontab` comes, must be added alone; and a system account the machine has
 # by the image's name and id, with no shadow line, `nobody`'s of id 65534
 # among them, must get the image's. RACH2_INSTALL names the installer the
-# functions are taken from, by default the tree's;
-# tests/proofs/install-accounts.json runs the rows against copies with faults
-# in them.
+# functions are taken from, by default the tree's.
 #
 # Usage: sh tests/system/install_accounts_test.sh
 #

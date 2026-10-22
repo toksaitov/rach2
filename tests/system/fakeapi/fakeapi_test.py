@@ -5,8 +5,7 @@ a WebSocket exchange has played it.
 Usage: fakeapi_test.py
 
 It runs the tests, as `tests/run host` does, and names each test that fails
-on a line of its own. tests/proofs/fakeapi-steps.json runs them against
-copies of fakeapi.py with faults in them.
+on a line of its own.
 """
 
 import io
@@ -17,8 +16,8 @@ import tempfile
 import threading
 import unittest
 
-# FAKEAPI_MODULES names a directory, searched before this one for fakeapi.py
-# and the protocol modules, that holds a proof's copies with faults in them.
+# FAKEAPI_MODULES names a directory searched before this one for fakeapi.py
+# and the protocol modules, so that copies there are tested in place of these.
 if os.environ.get("FAKEAPI_MODULES"):
     sys.path.insert(0, os.environ["FAKEAPI_MODULES"])
 import fakeapi  # noqa: E402

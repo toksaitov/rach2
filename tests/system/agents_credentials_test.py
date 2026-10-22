@@ -2,8 +2,7 @@
 """Check the acceptance's credential enumeration and log scan in a fresh home.
 
 AGENTS_GUEST names the guest script to run, by default the tree's
-accept/agents_guest.sh; tests/proofs/agents-credentials.json runs the tests
-against copies with faults in them.
+accept/agents_guest.sh.
 """
 
 import hashlib

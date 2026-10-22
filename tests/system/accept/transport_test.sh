@@ -8,8 +8,7 @@
 # boots an ext2 root whose check found a fault, and the script must then
 # exit 1 and never print PASS; RACH2_ACCEPT_DD and RACH2_ACCEPT_BOOTLOG,
 # which the script refuses, must exit 2. SCRIPT is the metal_accept.sh the
-# cases run, the tree's by default; tests/proofs/transport.json gives a
-# private copy with each of its faults in it.
+# cases run, the tree's by default.
 #
 # Usage: sh tests/system/accept/transport_test.sh [SCRIPT]
 set -eu

@@ -21,8 +21,7 @@
 # ledger and lock files of their own, and runutil, whose host lock the
 # stand-in tests/run takes as the real one does.
 # CI_SCRIPTS names the directory report.sh and bisect.sh are copied from, by
-# default the tree's tools/ci; tests/proofs/ci.json runs the rows against
-# copies with faults in them.
+# default the tree's tools/ci.
 
 set -eu
 [ "$#" -eq 0 ] || { echo 'ci-test: usage: ci_test.sh' >&2; exit 2; }

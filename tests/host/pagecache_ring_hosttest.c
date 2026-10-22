@@ -22,8 +22,7 @@
  *
  * Built with PAGECACHE_HOSTTEST and the slots pagecache.h sets, it includes
  * pagecache.c whole; the backing is a function that stamps each page with
- * its number. `tests/proofs/pagecache-ring.json` sets `PC_SLOTS` to 1024
- * and requires the row at `PC_SLOTS` to fail.
+ * its number.
  */
 #define PAGECACHE_HOSTTEST
 

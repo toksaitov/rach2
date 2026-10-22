@@ -12,8 +12,7 @@ each call and fails: a refused RACH2_CASES exits 2 before anything is made
 or the tree's build directory exists, and an accepted one says on the start
 line that the run is a selection, and goes on to make. Each row prints
 `case-select-test: result: pass: ROW` or `fail: ROW`, and the test exits 1
-when one fails. tests/proofs/case-select.json runs the rows with faults in
-the selector and the runner.
+when one fails.
 """
 import json
 import os

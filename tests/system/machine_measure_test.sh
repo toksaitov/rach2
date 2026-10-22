@@ -8,9 +8,7 @@
 # timing, the load window and its late completions, the second between the
 # starts of the load sessions, and the removal of the inbound driver's
 # known-hosts file. MEASURE_DRIVERS names the directory the drivers are
-# copied from, by default the tree's tools/dev;
-# tests/proofs/machine-measure.json runs the rows against copies with faults
-# in them.
+# copied from, by default the tree's tools/dev.
 set -eu
 [ "$#" -eq 0 ] || { echo 'machine-measure-test: usage: machine_measure_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

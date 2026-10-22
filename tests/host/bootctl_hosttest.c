@@ -9,7 +9,7 @@
  * every image. The well-formed image (a volume label, a long-name entry, dot
  * entries, an empty file, the four named files) must open and install; each
  * malformed image must be refused with its own diagnostic, matched by
- * substring so a mutation cannot pass by failing a different rule. The
+ * substring so a fault cannot pass by failing a different rule. The
  * write callback injects the faults: it can report success while dropping a
  * chosen sector, which only the byte-for-byte readback can catch; stop the
  * run after any chosen write, which leaves the states of the interruption

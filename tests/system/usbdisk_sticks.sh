@@ -13,8 +13,7 @@
 # one with fewer; the kernel mounts such a volume, but BusyBox's blkid judges
 # by the cluster count, takes it for FAT16 and reads the label from the
 # FAT16 field, which is empty. The exFAT volume is the fixture's own 16 MiB,
-# placed at sector 100352. The Makefile makes the sticks of the cases here,
-# and tests/system/usbdisk_hold.sh its own.
+# placed at sector 100352. The Makefile makes the sticks of the cases here.
 set -u
 [ "$#" -eq 2 ] || { echo 'usage: usbdisk_sticks.sh DIR MKEXFATFIXTURE' >&2; exit 2; }
 DIR=$1

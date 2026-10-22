@@ -5,8 +5,7 @@
 # build of runner/ptydrive.c, in seven cases of prompt and echo.
 #
 # PTYDRIVE names a driver built elsewhere to use in place of the private
-# build; tests/proofs/password.json runs the cases with drivers that have
-# faults compiled into them.
+# build.
 set -eu
 
 [ "$#" -eq 0 ] || { echo 'accept-password: usage: password_test.sh' >&2; exit 2; }

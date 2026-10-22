@@ -10,8 +10,7 @@
 # synthetic message or before a trailing line, and Codex's message in its
 # errors or in a turn.failed event; the others end normally with the limit's
 # text in the final message, in a failed tool's output, or earlier in the
-# output. LIB_SH names the lib.sh to copy, by default the tree's;
-# tests/proofs/limited.json runs the rows against copies with faults in them.
+# output. LIB_SH names the lib.sh to copy, by default the tree's.
 #
 # Usage: sh tests/system/limited_test.sh
 #

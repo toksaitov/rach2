@@ -28,8 +28,7 @@
 # in and one that holds a running program.
 #
 # LIB_SH and SCRATCH_PL name the lib.sh and scratch.pl to copy, by default
-# the tree's; tests/proofs/tidy.json runs the rows against copies with faults
-# in them.
+# the tree's.
 #
 # Usage: sh tests/system/tidy_test.sh
 #

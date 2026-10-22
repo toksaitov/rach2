@@ -1286,7 +1286,7 @@ struct build {
 };
 
 /** The checksum of a set of `count` entries: the builder's own sums,
- *  apart from the reader's, so that a mutation in either is seen by the
+ *  apart from the reader's, so that a fault in either is seen by the
  *  other. */
 static uint16_t b_set_checksum(const unsigned char *entries, unsigned count)
 {

@@ -1,11 +1,10 @@
 # shellcheck shell=sh
-# runlock.sh: the tree lock for a script that changes sources in place.
+# runlock.sh: the tree lock for a script run outside tests/run.
 #
-# A fault script puts a fault into this tree's sources and builds and boots
-# it, so no suite may build or boot the tree, and no other proof may save a
-# source, while it runs. tests/run keeps two runs apart with a POSIX record
-# lock on build/.run.guard and a directory, build/.run.lock, whose owner
-# file names the holder. A script sources this file and calls
+# A script that holds the tree runs alone in it: no suite builds or boots the
+# tree while it runs. tests/run keeps two runs apart with a POSIX record lock
+# on build/.run.guard and a directory, build/.run.lock, whose owner file
+# names the holder. A script sources this file and calls
 #
 #   runlock_hold "$repo" NAME "$repo/PATH/OF/THE/SCRIPT" "$@"
 #

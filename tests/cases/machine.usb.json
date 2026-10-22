@@ -1508,7 +1508,7 @@
     {
       "case_id": "machine.usb.latency-spin",
       "behavior": "with `rach2.usblatency`, eight keys typed one at a time to keylatprobe beside a spinning child each leave a record of the keystroke's path from the controller's interrupt to the reader's dispatch",
-      "units": ["usb", "`tests/system/usb_latency.sh`", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
+      "units": ["usb", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
@@ -1621,7 +1621,7 @@
     {
       "case_id": "machine.usb.latency-random",
       "behavior": "with `rach2.usblatency`, eight keys typed one at a time to keylatprobe beside a child inside getrandom each leave a record of the keystroke's path from the controller's interrupt to the reader's dispatch",
-      "units": ["usb", "`tests/system/usb_latency.sh`", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
+      "units": ["usb", "keylatprobe", "`tests/system/checkers/usblatency.awk`"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},

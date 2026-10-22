@@ -9,8 +9,7 @@
 # the real mk/dryrun.mk: with no flags and with --no-print-directory the build
 # must run, and with -n, with --dry-run, and with -n beside
 # --no-print-directory it must not. DRYRUN_MK names the rule to copy, by
-# default the tree's; tests/proofs/dryrun.json runs the rows against a copy
-# with the first-word test put back.
+# default the tree's.
 #
 # Usage:
 #     sh tests/system/dryrun_test.sh

@@ -23,8 +23,7 @@
 # next run must pass. After each, the tree must have no stage, no lock and no
 # job directory, and the lock must have outlived the job. Every
 # row runs under sh and, where the host has it, bash, which is the sh of
-# macOS. TOOLING_IMAGE names the script to copy, by default the tree's;
-# tests/proofs/tooling-image.json runs the rows against faulted copies.
+# macOS. TOOLING_IMAGE names the script to copy, by default the tree's.
 #
 # Usage: sh tests/system/tooling_image_test.sh
 #

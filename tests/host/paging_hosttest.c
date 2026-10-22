@@ -50,10 +50,6 @@
  * handler's general panic. Each runs in a forked child, whose exit status
  * says which panic came.
  *
- * tests/proofs/paging.json compiles the rounding by `+ PAGE_SIZE - 1`, the
- * loop bounded by `va_start + size`, the range check without its exception
- * for address 0, the handler without its test of the guard page, and four
- * faults of the temporary mappings, and requires each to fail its row.
  * Returns 0 when every row passes, 1 otherwise.
  */
 

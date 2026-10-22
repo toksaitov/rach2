@@ -49,8 +49,7 @@
 # The trees hold copies of the real files, and marker directories stand for
 # build/, so a clean there cannot reach the real one. BUILD_RULES_OVERLAY
 # names a directory whose files, at their paths in the tree, replace the
-# tree's in both private trees; tests/proofs/build-rules.json runs the rows
-# with copies that have faults in them.
+# tree's in both private trees.
 #
 # Usage:
 #     sh tests/system/build_rules_test.sh

@@ -12,8 +12,8 @@
  *
  * The volumes are mkfatfixture's, built here on first use the way the
  * bootctl test builds them, in the test's own fixture directory
- * (compat/fixdir_host.c), or in the one a mutation proof names with FIXDIR,
- * so that two runs at once share none. The well-formed volume (`--vfs`)
+ * (compat/fixdir_host.c), or in the one FIXDIR names, so that two runs at
+ * once share none. The well-formed volume (`--vfs`)
  * must read back what the builder wrote: the long names, the one across a
  * 4 KiB boundary, the surrogate pair, the bad checksum falling back to a
  * lower-cased short name, the 0x05 short name reachable by its long name,
@@ -27,7 +27,7 @@
  *
  * With `--barriers` the program runs only the interruption matrix and the
  * durability rows, the rows that judge the driver's barriers, and ends at
- * the first failure: the mode tests/proofs/fat-barriers-fat32.json runs.
+ * the first failure.
  */
 
 #include "../../rach2/sys/fs/fat32.h"
@@ -172,8 +172,7 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 /* ---- the rows ---- */
 
 static int fails;
-/* Set by the mode a mutation proof runs: the first failure ends the run,
-   since the proof judges only whether a row fails. */
+/* Set by `--barriers`: the first failure ends the run. */
 static int first_failure_ends;
 
 /** Count and print a failed row; end the run when `first_failure_ends`. */
@@ -2575,8 +2574,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 }
 
 /**
- * Run every row. With `--barriers`, the mode of
- * tests/proofs/fat-barriers-fat32.json, only the matrix and the durability
+ * Run every row. With `--barriers` only the matrix and the durability
  * rows run, and the first failure ends the run; any other argument is a
  * usage error, status 2. Returns 0 when every row passed and 1 otherwise.
  * The count of failures would make a poor status, since an exit status

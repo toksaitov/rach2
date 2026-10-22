@@ -7,15 +7,15 @@
 #
 # SCRIPT runs in a process group of its own, as tests/run runs a suite, so a
 # signal sent to this process's group, as a terminal's interrupt is, reaches
-# the script once, through this process, and not again while its trap
-# restores the sources: a TERM, HUP or INT here is passed to the script's
-# group as TERM, once. The directory goes when the script has ended, and the
-# exit status is the script's: a wait a signal interrupts is waited again,
-# and a wait that had already ended with the script, the next returning 127,
-# keeps the status it had. Its owner file says `held`, which tests/run never
-# takes over: a script killed with KILL restored nothing and may have left
-# work running in groups of its own, and so may one whose holder was killed,
-# so only this process's own exit removes the directory.
+# the script once, through this process, and not again while its trap cleans
+# up: a TERM, HUP or INT here is passed to the script's group as TERM, once.
+# The directory goes when the script has ended, and the exit status is the
+# script's: a wait a signal interrupts is waited again, and a wait that had
+# already ended with the script, the next returning 127, keeps the status it
+# had. Its owner file says `held`, which tests/run never takes over: a script
+# killed with KILL cleaned up nothing and may have left work running in
+# groups of its own, and so may one whose holder was killed, so only this
+# process's own exit removes the directory.
 #
 # A directory left with no owner record, or one without a pid, is taken
 # over once it is ten seconds old, as tests/run takes it over: a run cut off
@@ -55,9 +55,8 @@ taken=
 if mkdir "$lock" 2>/dev/null; then
     taken=1
 elif grep -q '^held ' "$lock/owner" 2>/dev/null; then
-    echo "$name: a fault script's hold on this tree was left: $lock; its fault may" \
-        "be in the sources and its work may still run; restore them, stop its work" \
-        "and remove $lock" >&2
+    echo "$name: a script's hold on this tree was left: $lock; its work may still" \
+        "run; stop its work and remove $lock" >&2
 elif grep -q '^pid ' "$lock/owner" 2>/dev/null; then
     echo "$name: no run holds this tree, but a run that is gone left $lock;" \
         "tests/run takes it over when nothing of that run is left" >&2
@@ -76,7 +75,7 @@ if [ -z "$taken" ]; then
     rm -rf "$helper"
     exit 1
 fi
-printf 'pid %s\npgid %s\nsince %s\nargs %s\nheld fault script\n' "$$" \
+printf 'pid %s\npgid %s\nsince %s\nargs %s\nheld script\n' "$$" \
     "$(ps -o pgid= -p $$ | tr -d ' ')" "$(date '+%Y-%m-%d %H:%M:%S')" "$name $*" > "$lock/owner.new"
 mv "$lock/owner.new" "$lock/owner"
 RACH2_TREE_HELD=$$

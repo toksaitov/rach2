@@ -30,9 +30,7 @@
 # with status 1. mkext2.sh must fail, write its own message and the line,
 # and leave no image under the target's name.
 #
-# MKEXT2 is the mkext2.sh the rows run, the tree's by default;
-# tests/proofs/mkext2-overlay.json gives a private copy with each of its
-# faults in it.
+# MKEXT2 is the mkext2.sh the rows run, the tree's by default.
 #
 # Usage: sh tests/system/mkext2_overlay_test.sh [MKEXT2]
 #

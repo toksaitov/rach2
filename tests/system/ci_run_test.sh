@@ -17,8 +17,7 @@
 # stand-ins for git, make and tests/run, and with the built casecheck over
 # the history fixtures of tools/etude/fixtures/verdict. CI_RUN_SH names the
 # run.sh that is copied into the tree, tools/ci/run.sh of this tree by
-# default, so that the catalogue tests/proofs/ci-run.json can test a copy
-# with a fault in it.
+# default.
 #
 # Usage: sh tests/system/ci_run_test.sh
 

@@ -23,9 +23,7 @@
 # ci last reported on 80 before any hand-back, after an earlier one, or not at
 # all since a hand-back two days old. The row plain hands back a `ci` issue
 # that is not intermittent a minute before, and the loop takes it.
-# WORKER_SH names the worker.sh to copy, by default the tree's;
-# tests/proofs/worker-park.json runs the rows against copies with faults in
-# them.
+# WORKER_SH names the worker.sh to copy, by default the tree's.
 #
 # Usage: sh tests/system/worker_park_test.sh
 #

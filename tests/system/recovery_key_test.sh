@@ -10,8 +10,7 @@
 # a mixed extra file without changing the keys. RECOVERY_KEY_SCRIPT, when
 # set, names the gen_recovery_key.sh the recipe runs, and
 # RECOVERY_KEY_STAGER a stageimage.krffs to stage with in place of one
-# compiled from the tree's source; tests/proofs/recovery-key.json runs
-# faulty ones so.
+# compiled from the tree's source.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 . "$REPO/tests/system/runlock.sh"

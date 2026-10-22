@@ -28,8 +28,7 @@
 # In the copy each maker is a script that records its run, waits a second,
 # so that a second run of it would overlap the first, and writes empty files
 # in place of its own. TOGETHER_SUITES_MK names the fragment to copy, by
-# default the tree's; tests/proofs/together.json runs the rows with copies
-# that have faults in them.
+# default the tree's.
 #
 # Usage:
 #     sh tests/system/together_test.sh [MAKE...]

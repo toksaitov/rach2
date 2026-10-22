@@ -11,8 +11,8 @@
  * host-seconds: 450
  *
  * The builder is compiled and run on every run, in the test's own fixture
- * directory (compat/fixdir_host.c), or in the one a mutation proof names
- * with FIXDIR, so that runs at once do not share one. The rows read the
+ * directory (compat/fixdir_host.c), or in the one FIXDIR names, so that runs
+ * at once do not share one. The rows read the
  * well-formed volume back through every shape of file and set, mount each
  * damaged volume, mount a volume the host's own tools wrote, run the write
  * sequences and stop each after every write, bound the cost of creates in
@@ -22,7 +22,7 @@
  *
  * With `--scan-cost` or `--barriers` the program runs only the cost rows, or
  * only the rows that judge the driver's barriers, and ends at the first
- * failure. tests/proofs/fat-barriers-exfat.json runs the second mode.
+ * failure.
  */
 
 #include "../../rach2/sys/fs/exfat.h"
@@ -218,12 +218,11 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 /* ---- the rows ---- */
 
 static int fails;
-/* Set by a mode a mutation proof runs: the first failure ends the run,
-   since the proof judges only whether a row fails. */
+/* Set by `--scan-cost` and `--barriers`: the first failure ends the run. */
 static int first_failure_ends;
 
-/** Count a failed check and print `what`; in a mode a proof runs, end the
- *  run. */
+/** Count a failed check and print `what`; end the run when
+ *  `first_failure_ends`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
@@ -1775,8 +1774,6 @@ static uint64_t cache_gets(void)
  * each of the three costs would take: the twenty creates after the first
  * two hundred, one of which grows the directory, take at most 60 writes, 4
  * barriers and 4000 gets, and a lookup of the last name at most 200 gets.
- * tests/proofs/exfat-scan.json puts each of the three back in turn and
- * requires its row to fail.
  */
 static void scan_cost_rows(void)
 {

@@ -11,8 +11,7 @@
 # `work` runs its check, ends the command with status 143 and leaves TMPDIR
 # empty; and that `secrets` whose reader has gone ends with status 141 and
 # leaves TMPDIR empty. AGENTS_GUEST names the script to copy, by default the
-# tree's; tests/proofs/agents-guest.json runs the rows against a copy without
-# its traps.
+# tree's.
 #
 # Usage: sh tests/system/agents_guest_test.sh
 #

@@ -3,8 +3,8 @@
 
 /*
  * The directory a host test keeps its fixtures in (fixdir_host.c). A test
- * compiled with FIXDIR, as a mutation proof compiles one, has the directory
- * FIXDIR names. Any other has one of its own, made at the first call of
+ * compiled with FIXDIR has the directory FIXDIR names. Any other has one of
+ * its own, made at the first call of
  * fix_dir, so that two runs at once, of one test or of two, never write the
  * same file. It is made under $TMPDIR when that is an absolute path of at
  * most 100 characters, each a letter, a digit or one of / . _ + -, which a

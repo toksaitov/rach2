@@ -138,8 +138,7 @@ $(RUNUTIL): tests/system/runner/runutil.c
 # etude runs, and have no target here: guest cases that run under etude-guest,
 # and machine cases, whose scenario (tests/cases/machine/default_scenario.c)
 # runs a probe as the debug shell's transient init on the console. The runner
-# tests/system/runner/runtests.c, which boots the probes in one machine, is
-# kept for the proofs of tests/system/default_probe.sh.
+# tests/system/runner/runtests.c boots the probes in one machine.
 # `tests/run etudeguest`: etude-guest on the test image's serial console, as
 # the debug shell's designated init, without the debug-exit port. It is the
 # case of tests/cases/machine.etudeguest.json, which etude runs, and has no
@@ -1369,8 +1368,8 @@ ubsan-kernel:
 o2-kernel:
 	$(MAKE) -C rach2 COMPONENT=rach2-o2 KEXTRA=-O2
 
-# The kernel built with the harness exit port, which the exitline cases and
-# the usb-latency proof boot. It is a prerequisite, or a case's artifact, and
+# The kernel built with the harness exit port, which the exitline cases
+# boot. It is a prerequisite, or a case's artifact, and
 # never a step of a recipe: a recipe that ran `make` in `rach2/` while the pool
 # was running would be a second build of one tree beside the first, and two
 # builds of one tree write over each other. As a file rule beside the
