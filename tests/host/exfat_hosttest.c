@@ -253,6 +253,7 @@ static void take_image(unsigned long n)
         printf("exfat_hosttest: the cache did not empty for a new image\n");
         exit(1);
     }
+    model.bytes = n;
     devmodel_load(&model);
 }
 
