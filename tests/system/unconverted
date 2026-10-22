@@ -14,7 +14,6 @@ tests/host/exfat_hosttest.c: 1 skip
 tests/host/fat32_hosttest.c: 1 skip
 tests/host/netif_hosttest.c: 1 sleep
 tests/host/pwauth_hosttest.c: 2 sleep
-tests/jobprobe.c: 1 sleep
 tests/loadprobe.c: 1 sleep
 tests/loopprobe.c: 1 sleep
 tests/memprobe.c: 1 sleep
