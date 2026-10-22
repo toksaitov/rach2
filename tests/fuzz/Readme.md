@@ -28,12 +28,8 @@ Every harness defines the one function `fuzz.h` declares, `LLVMFuzzerTestOneInpu
 
 ## Adding tests
 
-A new harness is `NAME_fuzz.c` with its `fuzz-deps:` lines and a seed under `corpus/NAME/`; `build.sh` and `tests/run host` find it by its name. As every new test must, it is trusted only after it has been made to fail: a fault planted in the parser must give a sanitizer report from an input the fuzzer finds or one written by hand, and the replay of the corpus must pass again once the source is restored. The `testing` skill has the mechanics.
+A new harness is `NAME_fuzz.c` with its `fuzz-deps:` lines and a seed under `corpus/NAME/`; `build.sh` and `tests/run host` find it by its name.
 
 ## Limits
 
 Only the ELF loader is fuzzed in both configurations; the other harnesses compile the i686 configuration alone.
-
-## Tests
-
-`tests/host/elf64fuzz_mutate.sh` proves the ELF64 harness: it removes, one at a time, the loader's bound at the top of the window, its refusal of a segment that shares a page with the one before, its bound on the entry point and its check that a file offset fits in 32 bits, and requires the replay of the corpus to fail with the rule each loss breaks, and to pass before and after.

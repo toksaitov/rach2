@@ -3,18 +3,17 @@
  * none.
  *
  * First the kernel's `kcpu_id`, compiled into the probe from kcpu.c, must
- * give leaf 7, subleaf 0, as a direct cpuid does; tests/proofs/rng-probe.json
- * puts a fault there. Then the probe follows the boot's entropy source, the
- * branch `source` of its report. It asks getrandom() for bytes. If that
- * succeeds the source is trusted, and /dev/urandom must return bytes that
- * vary across reads and pass a loose monobit test, which a stuck or zero
- * stream fails. If getrandom() returns -EIO the source is untrusted, the
- * branch fail-closed, and the devices must refuse: /dev/urandom and
- * /dev/random each open and answer a read with -EIO, while
- * getrandom(GRND_INSECURE) still returns its best-effort bytes. The probe
- * passes on either branch; etude judges the branch against the processor,
- * which is trusted where it has RDSEED or RDRAND, so that a kernel that
- * distrusts them fails. The default suite boots `-cpu max` and takes the
+ * give leaf 7, subleaf 0, as a direct cpuid does. Then the probe follows
+ * the boot's entropy source, the branch `source` of its report. It asks
+ * getrandom() for bytes. If that succeeds the source is trusted, and
+ * /dev/urandom must return bytes that vary across reads and pass a loose
+ * monobit test, which a stuck or zero stream fails. If getrandom() returns
+ * -EIO the source is untrusted, the branch fail-closed, and the devices must
+ * refuse: /dev/urandom and /dev/random each open and answer a read with -EIO,
+ * while getrandom(GRND_INSECURE) still returns its best-effort bytes. The
+ * probe passes on either branch; etude judges the branch against the
+ * processor, which is trusted where it has RDSEED or RDRAND, so that a kernel
+ * that distrusts them fails. The default suite boots `-cpu max` and takes the
  * first branch; `tests/run noentropy` boots a processor with neither
  * instruction and requires the second.
  *

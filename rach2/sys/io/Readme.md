@@ -102,7 +102,7 @@ An instance (`struct inotify`) has a queue of events and a wait queue. Every wat
 
 ## Tests
 
-`tests/run host` compiles `poll_select_hosttest.c`, `poll_deadline_hosttest.c`, `epoll_hosttest.c`, `eventfd_hosttest.c`, `timerfd_hosttest.c` and `wait_queue_hosttest.c` from `tests/host/` natively under AddressSanitizer and UndefinedBehaviorSanitizer. [The host tests' Readme](../../../tests/host/Readme.md) gives their rows. `tests/proofs/deadline-wait.json`, `deadline-poll.json` and `deadline-tick.json` prove the deadline and wake-count rows with faults.
+`tests/run host` compiles `poll_select_hosttest.c`, `poll_deadline_hosttest.c`, `epoll_hosttest.c`, `eventfd_hosttest.c`, `timerfd_hosttest.c` and `wait_queue_hosttest.c` from `tests/host/` natively under AddressSanitizer and UndefinedBehaviorSanitizer. [The host tests' Readme](../../../tests/host/Readme.md) gives their rows.
 
 `tests/run default`, in the core tier, runs these on both architectures:
 
@@ -113,4 +113,4 @@ An instance (`struct inotify`) has a queue of events and a wait queue. Every wat
 * `tests/musl/inotifymusl.c`: the events of a watched directory and a watched file through a file's life, reads, `FIONREAD`, `poll`, and the errors and flags of the watch calls.
 * `tests/musl/callsmusl.c`: a POSIX timer's signal and overrun, a deleted id, and timers on clocks of processor time.
 
-The faults for the files here in the catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver are caught by those rows and by `limitprobe`; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json` runs a probe's. The `packet`, `raw`, `netif` and `dhcp` suites poll sockets. `tests/musl/pollmusl.c` is staged as `/musl/pollmusl` for a person to run; no suite runs it.
+The `packet`, `raw`, `netif` and `dhcp` suites poll sockets. `tests/musl/pollmusl.c` is staged as `/musl/pollmusl` for a person to run; no suite runs it.

@@ -16,8 +16,7 @@
  * written against the codec QEMU emulates.
  *
  * Prints "HDAPROBE OK: ..." on success or "HDAPROBE FAIL: <row>" for the first
- * failed check. No suite runs it; `tests/proofs/hda-guest.json` boots it and
- * requires a failure at "open /proc/audio" once the report is renamed.
+ * failed check. No suite runs it.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -36,9 +35,6 @@ static char text[8192];
 
 /**
  * Print "HDAPROBE FAIL: `row`" and exit with status 1 unless `ok` is true.
- *
- * The row is the name `tests/proofs/hda-guest.json` looks for in the serial
- * log.
  */
 static void require(int ok, const char *row)
 {

@@ -8,12 +8,13 @@
  * and the mounts on them use the wrapper; the whole-disk window keeps the
  * real device. The sleeping path is tested on it with a device that
  * answers and with one that does not: with N above the deadline it is a
- * device that never answers in time, which tests the quarantine without a
- * mutation. `rach2.blockfail=N` makes the Nth write through the wrapper fail
- * with EIO, so a test can see a mount go read-only. `rach2.blockdead=P`
- * builds the view of MBR partition P, read from the disk when the wrapper is
- * installed, over a second device that accepts every request and answers
- * none, so a device that stalls has a healthy neighbour on the same pool.
+ * device that never answers in time, which tests the quarantine with the
+ * driver unchanged. `rach2.blockfail=N` makes the Nth write through the
+ * wrapper fail with EIO, so a test can see a mount go read-only.
+ * `rach2.blockdead=P` builds the view of MBR partition P, read from the disk
+ * when the wrapper is installed, over a second device that accepts every
+ * request and answers none, so a device that stalls has a healthy neighbour
+ * on the same pool.
  * The wrapper has a `flush` too, answered after the lag with nothing under it
  * to flush, so a sync takes a request of the pool as a stick's flush does.
  */

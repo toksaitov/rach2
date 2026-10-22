@@ -207,7 +207,7 @@ int serial_rx_service(int budget)
         moved++;
 #if defined(SERIAL_RX_DROP_EVERY) && SERIAL_RX_DROP_EVERY > 1
         if (_rx.bytes % SERIAL_RX_DROP_EVERY == 0) {
-            continue; /* the mutation: a byte dropped on purpose */
+            continue; /* a byte dropped on purpose */
         }
 #endif
         _rx_ring[_rx_tail & (SERIAL_RX_SIZE - 1)] = c;

@@ -238,13 +238,11 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `tests/limitprobe.c`: `RLIMIT_NPROC`, `RLIMIT_NOFILE` and `RLIMIT_AS`.
 * `tests/musl/schedmusl.c`, `tests/musl/prctlmusl.c`, `tests/musl/seccompmusl.c`, `tests/musl/coremusl.c` and `tests/musl/callsmusl.c`: thread ids, nice values and the scheduling calls, `prctl`, seccomp filters, core files, and among other calls `getcpu`, `personality` and a suspend to idle.
 
-The catalogues `tests/proofs/probe-PROBE.json` of etude's proof driver put faults into the tree one at a time, each of which PROBE, run alone in one boot of the test image by the default suite's old runner, `runtests`, must catch; `sh tools/etude/proof.sh tests/proofs/probe-PROBE.json NAME` runs one.
-
 Other suites ([the suites](../../../tests/system/suites.md)):
 
-* `tests/run smp` boots one processor, four, and two of four, and on each runs `tests/musl/smpmusl.c`, which finds the processors and runs a stress of fork, exec, pipes, futexes and `munmap` across them. On two processors it also runs the debug shell's preemption test and ring-3 payload and raises an NMI, which must stop the machine, and it runs a parallel build on four whose every processor must count user time. Each boot is a machine case of [`tests/cases/machine.smp.json`](../../../tests/cases/machine.smp.json); `tests/proofs/smp-cases.json` proves them with `maxcpus=` ignored, a tick that does not preempt a kernel thread, and an NMI that does not stop the machine.
+* `tests/run smp` boots one processor, four, and two of four, and on each runs `tests/musl/smpmusl.c`, which finds the processors and runs a stress of fork, exec, pipes, futexes and `munmap` across them. On two processors it also runs the debug shell's preemption test and ring-3 payload and raises an NMI, which must stop the machine, and it runs a parallel build on four whose every processor must count user time. Each boot is a machine case of [`tests/cases/machine.smp.json`](../../../tests/cases/machine.smp.json).
 * `tests/run fpu` checks that a process's floating-point state is its own across switches.
 * `tests/run exitline` checks that the plain process-exit line is printed under the debug shell and nowhere else.
 * `tests/run memory` includes the overrun of a kernel stack ([the architectures' Readme](../arch/Readme.md)).
 
-`tests/run host` runs the host tests ([the host tests](../../../tests/host/Readme.md)) of this directory: `sched_hosttest.c`, `wait_queue_hosttest.c`, `smp_hosttest.c`, `process_timer_hosttest.c`, `exit_hosttest.c`, `elf_hosttest.c`, `uimage_hosttest.c`, `coredump_hosttest.c` and `corefile_hosttest.c`, in `tests/host/`. The catalogues `sched.json`, `smp.json`, `exit.json`, `uimage.json`, `corefile.json` and `kstack.json` in `tests/proofs/` prove them with faults in private copies of the sources.
+`tests/run host` runs the host tests ([the host tests](../../../tests/host/Readme.md)) of this directory: `sched_hosttest.c`, `wait_queue_hosttest.c`, `smp_hosttest.c`, `process_timer_hosttest.c`, `exit_hosttest.c`, `elf_hosttest.c`, `uimage_hosttest.c`, `coredump_hosttest.c` and `corefile_hosttest.c`, in `tests/host/`.

@@ -8,7 +8,7 @@
 # set changes, and a directory's own time changes more often: whenever any
 # entry is made or removed in it, and the directories an image stages
 # programs from, build/tests among them, also have the work directories of
-# proofs and suites. So mkimage.sh writes the set it staged to
+# suites. So mkimage.sh writes the set it staged to
 # IMAGE.programs, one line a directory, the directory and then the names,
 # and the image's dependency file lists that file in place of the
 # directories. The root Makefile has this script check the file each time

@@ -67,6 +67,5 @@ ISH has no quoting, escapes, variables, globbing, pipelines, command lists, subs
 
 * `tests/run default` runs `musl/ishmusl` on the test image. It runs `/ish -c` and the input mode and checks the statuses of a child, a builtin and a signal death, a redirection that cannot be opened, redirection with the standard descriptors closed, exact environment names, and input lines split across reads, at end of file and over the length limit.
 * `tests/run host` compiles `tests/host/ish_hosttest.c` with the shell's utilities against the host's libc (`ISH_USE_STDLIB`). It shares the input, descriptor and environment cases of `ishmusl`, injects interrupted and failed waits and short and failed reads, and checks the path join at its limit and a `PATH` element too long to join.
-* `tests/proofs/ish.json` compiles the host test twice, once with the libc's wait errors and once with the raw wrappers' (`ISH_RAW_HOSTTEST`), and compiles faults into private copies of the sources; each fault must fail the test, which passes before the faults and after the sources are restored.
 * `tests/run selfbuild` copies `/src/ish` as an ordinary account, builds it with `guest.mk`, runs the result with `-c`, and then builds `/src/ish` in place as root.
 * `tests/run style` checks with `tools/verify/guestcheck.c` that the object list of `guest.mk` equals the host `Makefile`'s.

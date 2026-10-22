@@ -132,7 +132,7 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 
 ## Tests
 
-`tests/run host` runs the host tests `tests/host/NAME_hosttest.c` of `arp`, `icmp`, `packet`, `tcp`, `tcp_reset`, `rcvwnd`, `socket_wake`, `raw`, `netif`, `netconf`, `netdev`, `netconsole`, `rtl8139`, `e1000` and `rtl8168`, which compile the stack's files natively under the sanitizers and drive them with crafted frames, segments and calls, the last two against a software model of the chip ([`tests/host/Readme.md`](../../../tests/host/Readme.md)). The `ip`, `network`, `netif`, `netconfig`, `rtl8139`, `tcp` and `tcp_reset` mutation scripts, `tests/host/NAME_mutate.sh`, require their rows to fail when a fault is compiled in.
+`tests/run host` runs the host tests `tests/host/NAME_hosttest.c` of `arp`, `icmp`, `packet`, `tcp`, `tcp_reset`, `rcvwnd`, `socket_wake`, `raw`, `netif`, `netconf`, `netdev`, `netconsole`, `rtl8139`, `e1000` and `rtl8168`, which compile the stack's files natively under the sanitizers and drive them with crafted frames, segments and calls, the last two against a software model of the chip ([`tests/host/Readme.md`](../../../tests/host/Readme.md)).
 
 The suites boot QEMU on the RTL8139 unless they say otherwise; [`tests/system/suites.md`](../../../tests/system/suites.md) says what each proves, and [`tests/Readme.md`](../../../tests/Readme.md) how to run one.
 

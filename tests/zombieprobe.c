@@ -4,8 +4,8 @@
  *
  * ROUNDS children in turn open and unlink files and die by SIGKILL while
  * another child writes, and each is reaped. This does not force a contended
- * close and is not a mutation proof; exit_hosttest forces the waits of the
- * cleanup and checks the state it ends in.
+ * close; exit_hosttest forces the waits of the cleanup and checks the state
+ * it ends in.
  *
  * Every child rewrites its file in place, so the file system never fills: a
  * fast machine would fill a small image in the victim's first milliseconds,

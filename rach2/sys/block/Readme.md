@@ -77,7 +77,7 @@ At most 16 requests are live (`REQ_LIMIT`), or N with `rach2.blockpool=N`, 1 to 
 
 Kernel test fixtures can call `block_lag_hold(1)` after installing the wrapper. Timer delivery then stops; the real backing transfer still runs in the submitting caller, and request deadlines continue. `block_lag_answer(generation, 0)` delivers one ready answer by its captured generation, and `block_lag_answer(generation, 1)` delivers its error duplicate. An unfinished transfer or a duplicate requested before its answer returns `EAGAIN`; an unknown or consumed capture returns `ENOENT`. Explicit answers outside held mode return `EPERM`. `block_lag_hold(0)` resumes timer delivery. These are kernel fixture calls under the kernel lock, with no user interface. Host fixtures advance request deadlines by explicit calls to `block_request_tick`, so completion order and expiry are independent of the host's disk and clock.
 
-`tests/host/request_hosttest.c` drives the real request pool, partition views and lag queue through those controls. It checks the device's share of the pool, independent completion, both holders of a request and its page, read and write copies, flushes, stale generations after address reuse, quarantine and late release. `tests/host/request_mutate.sh` proves the assertions with private source faults. The guest suites exercise the timer and real drivers alongside these assertions on request state.
+`tests/host/request_hosttest.c` drives the real request pool, partition views and lag queue through those controls. It checks the device's share of the pool, independent completion, both holders of a request and its page, read and write copies, flushes, stale generations after address reuse, quarantine and late release. The guest suites exercise the timer and real drivers alongside these assertions on request state.
 
 ### Loop devices
 
@@ -171,7 +171,7 @@ Beside the authority is the writer reservation, `writer_held` in `struct disk`: 
 * `devfs_hosttest.c`: where `/dev/grubcore` is published.
 * `bcache_hosttest.c`, `bcache_cost_hosttest.c`, `fat32_hosttest.c`, `exfat_hosttest.c`, `ext2_hosttest.c`: link `chain.c`.
 
-The catalogues `ata-identify.json`, `ata-durable.json`, `ata-wait.json`, `ata-rate.json`, `dma32.json`, `grubwindow.json` and `loop-attach.json` in `tests/proofs/`, which etude's proof driver runs, prove rows of these tests against faults. `request.c` has no host test; the suites reach it.
+`request.c` has no host test; the suites reach it.
 
 `tests/run NAME` runs a system suite under QEMU, `RACH2_WORKERS=4 tests/run A B C` several, and `ARCH=x86_64` the other architecture; [tests/system/suites.md](../../../tests/system/suites.md) gives each suite's tier and needs. Those that cover this layer:
 

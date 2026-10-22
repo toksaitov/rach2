@@ -23,7 +23,7 @@
 #                port stages, and the images
 #   RACH2_PATH_MAP for x86-64, when the caller has none, the map the stager
 #                reads a manifest's i686 paths through, as the root Makefile
-#                exports it, so that a fault script staging a manifest itself
+#                exports it, so that a script staging a manifest itself
 #                stages x86-64's files; its prefixes are relative to the
 #                directory the stager runs in, so a script working in a
 #                private copy of the tree stages from that copy, and a path

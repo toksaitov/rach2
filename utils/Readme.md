@@ -151,7 +151,7 @@ make -C utils -f Makefile.linux
 
 ## Tests
 
-A suite below runs as `tests/run NAME`, and a mutation script with `sh` from the repository root.
+A suite below runs as `tests/run NAME`.
 
 * `host` builds 26 host tests from these sources under AddressSanitizer and UndefinedBehaviorSanitizer, each `tests/host/NAME_hosttest.c`: `accounttools`, `bootctl`, `bootslot`, `bootverb`, `dhcpc`, `dhcpmsg`, `diskctl`, `file_read`, `gptdisk`, `growroot`, `grubembed`, `grubslot`, `httpd`, `initpolicy`, `ncport`, `ncwrite`, `netcfg`, `netcfg_io`, `netup`, `pwauth`, `pwauthatexit`, `pwauthfault`, `resolv`, `rm`, `sectorcopy` and `sha256`. Several include a program's whole source and replace the calls that reach the kernel, such as the ioctls of `dhcpc` and `diskctl`.
 * `default` runs the test image's probes of `sudo` (`tests/sudoprobe.c`) and of `su`, `passwd`, `adduser`, `adduser-crash` and `login` (`tests/musl/pwauthmusl.c`, `passwdmusl.c`, `addusermusl.c` and `loginmusl.c`).
@@ -162,5 +162,4 @@ A suite below runs as `tests/run NAME`, and a mutation script with `sh` from the
 * `install`, `menu` and `grub` drive `bootctl`'s kernel, menu and GRUB verbs. `grow` runs `growroot` and `diskctl shrink` on the recovery system and checks its writes with the host build of `growset`, and runs `growboot` on the host.
 * `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
-* The catalogues `tests/proofs/account.json`, `bootslot.json`, `file-read.json`, `growroot.json`, `grubwindow.json`, `netutil.json`, `rm.json` and `userland.json` compile faults into private copies of these sources, each of which must fail its host test while the restored copy passes. `tests/proofs/servicelog.json` proves the `servicelog` suite with two faults in `init.c`, and [`tests/proofs/recovery-disk-key.json`](../tests/proofs/recovery-disk-key.json) and [`tests/proofs/install-keys.json`](../tests/proofs/install-keys.json) put faults into `init.c` and `rach2-install`, each of which must fail rows of the installer suite while the restored sources pass them.
-* No suite runs `audiotest`; `tests/proofs/hda-guest.json` runs it through `tests/musl/hdaprobe.c`.
+* No suite runs `audiotest`.
