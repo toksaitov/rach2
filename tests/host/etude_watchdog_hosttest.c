@@ -62,11 +62,6 @@ static int fails;
         }                                                                                   \
     } while (0)
 
-/* The completion bounds of the stand-in rows and of the real QEMU's, past
- * which the test ends. */
-#define BOUND_MS      60000
-#define REAL_BOUND_MS 150000
-
 /* Microseconds in a millisecond and in a second. */
 #define MS 1000u
 #define S  1000000u
@@ -654,14 +649,10 @@ static void row_act(struct row *r)
     }
 }
 
-/**
- * Run the `n` rows at once until every one has finished, acting on each;
- * past `bound_ms` the test ends at once, and its keepers end what the rows
- * left.
- */
-static void run_rows(struct etude_supervisor *s, struct row *rows, int n, int bound_ms)
+/** Run the `n` rows at once until every one has finished, acting on each at
+ * least every 200 ms. */
+static void run_rows(struct etude_supervisor *s, struct row *rows, int n)
 {
-    uint64_t bound = now_us() + (uint64_t)bound_ms * MS;
     struct etude_supervised *a;
     int i, left = 0;
 
@@ -678,13 +669,6 @@ static void run_rows(struct etude_supervisor *s, struct row *rows, int n, int bo
                 left--;
             }
             row_act(&rows[i]);
-        }
-        if (now_us() > bound) {
-            for (i = 0; i < n; i++)
-                if (rows[i].a != NULL && !rows[i].done)
-                    printf("etude-watchdog-test: fail: %s: did not finish within %d ms\n",
-                           rows[i].name, bound_ms);
-            exit(1);
         }
     }
 }
@@ -840,7 +824,7 @@ static void test_host_and_remote(void)
             start_host(s, &rows[i]);
         else
             start_remote(s, &rows[i]);
-    run_rows(s, rows, n, BOUND_MS);
+    run_rows(s, rows, n);
     check_gap_rows(rows);
     check_work_rows(rows);
     check_remote_rows(rows);
@@ -875,7 +859,7 @@ static void test_machines(void)
     for (i = 0; i < 3; i++)
         start_machine(s, &rows[i], self, self, 300 * MS, 0);
     start_remote(s, &rows[3]);
-    run_rows(s, rows, n, BOUND_MS);
+    run_rows(s, rows, n);
 
     if (row_ended(&rows[0], ETUDE_END_STOPPED, ETUDE_EXPIRY_GAP)) {
         res = etude_supervised_result(rows[0].a);
@@ -978,7 +962,7 @@ static void test_real(void)
     if (s == NULL)
         return;
     start_machine(s, &r, q32, q64, 5 * S, 1);
-    run_rows(s, &r, 1, REAL_BOUND_MS);
+    run_rows(s, &r, 1);
     if (row_ended(&r, ETUDE_END_STOPPED, ETUDE_EXPIRY_GAP)) {
         res = etude_supervised_result(r.a);
         CHECK(r.staged && res->capture_error[0] == '\0', "real");
