@@ -46,13 +46,13 @@ The root `make` builds TinyCC after musl. An i686 build extracts into `vendor/tc
 [`build_tcc.sh`](build_tcc.sh):
 
 1. Checks the tarball's SHA-256, extracts it, applies the six patches with `patch --batch --forward`, and checks that a line of each patch is in the source.
-2. Writes `rach2-gcc`, which runs `muslgcc`, and `rach2-ar` and `rach2-strip`, which run the architecture's cross tools, and gives configure that prefix with `--cross-prefix`. Without a cross prefix configure would run a test program it built, which the host cannot run.
+2. Writes `rach2-gcc`, which runs `muslgcc`, and `rach2-ar` and `rach2-strip`, which run the architecture's cross tools, into `rach2-toolchain/` of the extracted tree, and gives configure that prefix with `--cross-prefix`. Without a cross prefix configure would run a test program it built, which the host cannot run.
 3. Configures with `--cpu=i386` or `--cpu=x86_64`, since configure would otherwise take the host's processor; with `--config-musl`, which leaves out the bounds-checking runtime that needs glibc's allocator hooks, so `tcc -b` is not available; and with the guest paths `--tccdir=/lib/tcc`, `--sysincludepaths=/lib/tcc/include:/include`, `--libpaths=/lib` and `--crtprefix=/lib`.
 4. Sets `TARGETOS=Linux` and removes `CONFIG_OSX` in `config.mak`, which configure writes on macOS, and checks `ARCH`, the absence of `CONFIG_OSX` and the guest paths in `config.mak` and `config.h`.
 5. Builds `tcc`, and builds `libtcc1.a` with the cross GCC through `i386-libtcc1-usegcc=yes` or `x86_64-libtcc1-usegcc=yes`, so the new compiler never runs on the host.
 6. Adds to `libtcc1.a` the libgcc objects that musl, compiled by GCC, refers to: `_udivmoddi4.o`, `_divmoddi4.o` and `_mulxc3.o` on i386, and `_mulsc3.o`, `_muldc3.o` and `_mulxc3.o` on x86-64.
 7. On x86-64, compiles the runtime's `va_list.o` again with `-mno-sse -mno-red-zone`, so the kernel can link it, and stops if its disassembly names an SSE register.
-8. Stages the stripped `tcc`, `libtcc1.a`, and `float.h`, `stdarg.h`, `stdbool.h`, `stddef.h` and `varargs.h`, and runs [`tools/inspect/check_link.sh`](../../tools/inspect/check_link.sh) over musl's `libc.a`, the staged `libtcc1.a` and the startup objects, which fails on a strong symbol a static link could not resolve.
+8. Stages, into an empty directory, the stripped `tcc`, `libtcc1.a`, and `float.h`, `stdarg.h`, `stdbool.h`, `stddef.h` and `varargs.h`, and runs [`tools/inspect/check_link.sh`](../../tools/inspect/check_link.sh) over musl's `libc.a`, the staged `libtcc1.a` and the startup objects, which fails on a strong symbol a static link could not resolve.
 
 `make check-tcc` requires every staged file, runs `elfcheck --selftest`, checks the compiler with `elfcheck --arch`, and requires the four refusal messages of the output policy in the binary. The root `make` runs `check_link.sh` again before it builds images. `make clean` leaves the extracted and staged trees; `make distclean` removes them.
 

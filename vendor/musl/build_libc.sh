@@ -112,6 +112,12 @@ make
 echo "libc: installing to $PREFIX (cleaned first for a reproducible tree)"
 rm -rf "$PREFIX"
 make install
+# musl's own wrapper, musl-gcc, and its specs file name the install by its
+# absolute path. Nothing here runs them, since muslgcc links the programs;
+# without them the install is the same in every copy of the tree, and the
+# host's store of step outputs can share it (tools/etude/Readme.md).
+rm -f "$PREFIX/bin/musl-gcc" "$PREFIX/lib/musl-gcc.specs"
+rmdir "$PREFIX/bin"
 
 echo "libc: built"
 echo "  libc.a:  $PREFIX/lib/libc.a"

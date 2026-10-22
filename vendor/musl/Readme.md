@@ -59,7 +59,7 @@ The root `make` builds musl before everything that links it. The stamp, `vendor/
 2. Extracts it, into `vendor/musl/` for i686 or `build/x86_64/vendor-work/musl/` for x86-64, removing an earlier tree.
 3. Applies the patches `patches/series` names, with `patch -p1 -F 0 --forward`. A named patch that is missing or does not apply, or a `patches/*.patch` the series does not name, stops the build.
 4. Unsets `CC` and runs musl's `configure` with `CROSS_COMPILE` set to `i686-elf-` or `x86_64-elf-`, `--target=i686` or `--target=x86_64`, `--disable-shared` and the install directory as the prefix. `mk/arch.sh` has removed `ARCH` and a caller's `make` variable overrides from the environment and `MAKEFLAGS`, so neither reaches musl's own Makefile.
-5. Runs `make`, removes the old install directory, and runs `make install`.
+5. Runs `make`, removes the old install directory, and runs `make install`. It then removes musl's own wrapper, `bin/musl-gcc`, and its `lib/musl-gcc.specs`, which name the install by its absolute path and which nothing here runs, so that the install is the same in every copy of the tree.
 
 `make clean` leaves the extracted and installed trees; `make distclean` removes them and the stamps.
 

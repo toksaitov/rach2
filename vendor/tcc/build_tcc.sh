@@ -18,9 +18,11 @@
 # A cross prefix, always. With an empty one, configure calls itself native and
 # RUNS the conftest it just built (configure:309-316); our compiler emits
 # Rach2 binaries, which the build host cannot run. So a toolchain directory is
-# written here holding rach2-gcc (the musl wrapper), rach2-ar and rach2-strip,
-# and configure is given --cross-prefix pointing at it. That also routes every
-# tool through the wrapper, which is why no --ar is needed.
+# written in the extracted tree holding rach2-gcc (the musl wrapper), rach2-ar
+# and rach2-strip, and configure is given --cross-prefix pointing at it. That
+# also routes every tool through the wrapper, which is why no --ar is needed.
+# The directory is not staged: rach2-gcc names the wrapper by its absolute
+# path, which is this copy's.
 #
 # A CPU, always. The cross prefix stops the conftest from running; it does not
 # say what to build for. Without --cpu, configure takes the target from
@@ -68,7 +70,7 @@ WRAP="$SCRIPT_DIR/../musl/muslgcc"
 # It lives under build/ so a routine `make clean` never reaches it; only `make
 # distclean` (which removes build/vendor) forces this rebuild.
 STAGE="$ARCH_BUILD/vendor/tcc"
-TOOLS="$STAGE/toolchain"
+TOOLS="$SRC/rach2-toolchain"
 
 # tcc's name for the CPU, which is configure's --cpu, config.mak's ARCH and the
 # prefix of lib/Makefile's runtime target; and the libgcc helpers the guest's
@@ -283,6 +285,7 @@ if [ "$RACH2_ARCH" = x86_64 ]; then
     fi
 fi
 
+rm -rf "$STAGE"
 mkdir -p "$STAGE" "$STAGE/include"
 echo "tcc: staging to $STAGE"
 "${CROSS}strip" "$SRC/tcc" -o "$STAGE/tcc"
