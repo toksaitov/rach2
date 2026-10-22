@@ -15,7 +15,9 @@
 # prints `doom-libc-check: ARCH: status N` for each, and ends with
 # `doom-libc-check: result: pass` and status 0, or
 # `doom-libc-check: result: fail: ARCH...` and status 1; a program that ends
-# with a status above 1 makes it exit 2.
+# with a status above 1 makes it exit 2. On a host that is not an x86 Linux,
+# `run` runs them in etude's tooling machine (tests/system/tooling.sh), and
+# exits 2 when it has none.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -39,9 +41,39 @@ build()
     done
 }
 
-# run DIR: run both programs and judge them.
+# elsewhere DIR: run `run DIR` in etude's tooling machine, on a host that
+# cannot execute the two Linux programs, and exit with its status.
+elsewhere()
+{
+    REPO=$repo
+    # shellcheck source=tests/system/tooling.sh
+    . "$repo/tests/system/tooling.sh"
+    tooling_made || {
+        echo 'doom-libc-check: result: fail: i686 x86_64: this host runs no x86 Linux program and has no made tooling machine'
+        exit 2
+    }
+    cat > "$1/job.sh" <<'JOB'
+mkdir -p tests/host d && mv doom_libc_check.sh tests/host/ && mv doom_libc-i686 doom_libc-x86_64 d/ &&
+    chmod +x d/doom_libc-i686 d/doom_libc-x86_64 && sh tests/host/doom_libc_check.sh run d
+JOB
+    status=0
+    tooling run -i "$repo/tests/host/doom_libc_check.sh" -i "$1/doom_libc-i686" \
+        -i "$1/doom_libc-x86_64" "$1/job.sh" || status=$?
+    [ "$status" -le 2 ] || {
+        echo "doom-libc-check: result: fail: i686 x86_64: the tooling machine's job ended with status $status"
+        exit 2
+    }
+    exit "$status"
+}
+
+# run DIR: run both programs and judge them, on this host when it is an x86
+# Linux and in the tooling machine otherwise.
 run()
 {
+    case $(uname -s)/$(uname -m) in
+        Linux/x86_64 | Linux/i?86) ;;
+        *) elsewhere "$1" ;;
+    esac
     failed=
     worst=0
     for arch in i686 x86_64; do
