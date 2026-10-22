@@ -131,6 +131,8 @@ int net_end(struct net_case *u)
             fprintf(stderr, "netcase: %s: not removed: %s\n", m->path, strerror(errno));
         free(m);
     }
+    if (u->st != ETUDE_OK && !u->told)
+        fprintf(stderr, "netcase: failed: %s\n", u->why);
     return u->st == ETUDE_OK ? 0 : 1;
 }
 

@@ -85,9 +85,11 @@ void net_assert(struct net_case *u, const char *id, int held, const char *format
 
 /**
  * End the attempt `u`, and give the value etude_scenario returns: 0 when
- * every operation succeeded. When every assertion held as well, remove the
- * files net_path gave, which the library does not know of; otherwise keep
- * them with the rest of the evidence.
+ * every operation succeeded. When an operation failed and no assertion
+ * reported why, write the reason on standard error as `netcase: failed:
+ * WHY`. When every assertion held as well, remove the files net_path gave,
+ * which the library does not know of; otherwise keep them with the rest of
+ * the evidence.
  */
 int net_end(struct net_case *u);
 
