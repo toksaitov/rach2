@@ -207,11 +207,11 @@ req clang        clang
 req clang-format clang-format
 
 echo
-# A default `make` reaches none of these. A set of suites, `make test` among
-# them, prepares every suite's products and needs mformat, mmd, mcopy and
-# xorriso, which `make prepare-tools` prints; the suites that write or read a
-# FAT volume on the host need the rest of the mtools commands tests/registry
-# names. Each command is named, so that one does not stand for the set.
+# A default `make` reaches none of these. The suites that make ISOs, sticks
+# and GRUB disks need xorriso, mformat, mmd and mcopy, and those that write
+# or read a FAT volume on the host need the rest of the mtools commands
+# tests/registry names. Each command is named, so that one does not stand for
+# the set.
 echo "Required by the suites (tests/registry names each suite's):"
 for t in mformat mmd mcopy mdir mtype mdel mdeltree minfo; do
     req "$t" mtools
