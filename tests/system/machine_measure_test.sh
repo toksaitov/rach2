@@ -11,8 +11,8 @@
 set -eu
 [ "$#" -eq 0 ] || { echo 'machine-measure-test: usage: machine_measure_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" machine-measure-test "$repo/tests/system/machine_measure_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" machine-measure-test "$repo/tests/system/machine_measure_test.sh" "$@"
 exec python3 - "$repo" <<'PY'
 import atexit
 import os

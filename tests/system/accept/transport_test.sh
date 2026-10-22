@@ -15,8 +15,8 @@ set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 [ "$#" -eq 0 ] || { echo 'accept-transport: usage: transport_test.sh' >&2; exit 2; }
 script=$repo/tests/system/accept/metal_accept.sh
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" accept-transport "$repo/tests/system/accept/transport_test.sh" "$@"
 work=
 
 # Remove the scratch directory.

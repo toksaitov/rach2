@@ -45,8 +45,8 @@ path.write_text(source.replace(before, after))
 PY
 }
 
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" poll-kernels "$repo/tools/dev/poll_kernels.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" poll-kernels "$repo/tools/dev/poll_kernels.sh" "$@"
 RACH2_ARCH=${RACH2_ARCH:-${ARCH:-i686}}
 REPO=$repo
 . "$repo/mk/arch.sh"

@@ -13,8 +13,8 @@
 set -eu
 [ "$#" -eq 0 ] || { echo 'usb-latency-test: usage: usb_latency_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" usb-latency-test "$repo/tests/system/usb_latency_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" usb-latency-test "$repo/tests/system/usb_latency_test.sh" "$@"
 cd "$repo"
 
 work=

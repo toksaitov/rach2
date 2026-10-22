@@ -11,8 +11,8 @@ set -eu
 
 [ "$#" -eq 0 ] || { echo 'accept-password: usage: password_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" accept-password "$repo/tests/system/accept/password_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" accept-password "$repo/tests/system/accept/password_test.sh" "$@"
 work=
 child=
 

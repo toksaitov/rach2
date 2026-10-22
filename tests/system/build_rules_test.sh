@@ -61,8 +61,8 @@ unset ARCH MAKEFLAGS MFLAGS
 [ "$#" -eq 0 ] || { echo 'build-rules-test: usage: build_rules_test.sh' >&2; exit 2; }
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$REPO/tests/system/runlock.sh"
-runlock_hold "$REPO" build-rules-test "$REPO/tests/system/build_rules_test.sh" "$@"
+. "$REPO/tools/etude/hold.sh"
+etude_hold "$REPO" build-rules-test "$REPO/tests/system/build_rules_test.sh" "$@"
 cd "$REPO"
 mkdir -p build/tests
 WORK=

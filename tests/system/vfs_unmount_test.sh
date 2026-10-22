@@ -23,8 +23,8 @@ build()
 }
 
 [ "$#" -eq 0 ] || { echo 'usage: vfs_unmount_test.sh' >&2; exit 2; }
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" vfs-unmount "$repo/tests/system/vfs_unmount_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" vfs-unmount "$repo/tests/system/vfs_unmount_test.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP

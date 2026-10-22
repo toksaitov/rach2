@@ -10,8 +10,8 @@
 # a mixed extra file without changing the keys.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
-. "$REPO/tests/system/runlock.sh"
-runlock_hold "$REPO" recovery-key-test "$REPO/tests/system/recovery_key_test.sh" "$@"
+. "$REPO/tools/etude/hold.sh"
+etude_hold "$REPO" recovery-key-test "$REPO/tests/system/recovery_key_test.sh" "$@"
 [ "$#" = 0 ] || { echo "recovery-key-test: usage: recovery_key_test.sh" >&2; exit 2; }
 mkdir -p "$REPO/build"
 WORK=

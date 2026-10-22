@@ -30,8 +30,8 @@ set -u
 [ "$#" -eq 0 ] || { echo 'install-accounts-test: usage: install_accounts_test.sh' >&2; exit 2; }
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" install-accounts-test "$repo/tests/system/install_accounts_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" install-accounts-test "$repo/tests/system/install_accounts_test.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP

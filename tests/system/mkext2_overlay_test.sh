@@ -40,8 +40,8 @@ repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
     exit 2
 }
 mkext2=$repo/tools/image/mkext2.sh
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" mkext2-overlay-test "$repo/tests/system/mkext2_overlay_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" mkext2-overlay-test "$repo/tests/system/mkext2_overlay_test.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP

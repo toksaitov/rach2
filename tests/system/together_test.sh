@@ -47,8 +47,8 @@ while [ "$n" -gt 0 ]; do
     set -- "$@" "$mk"
     n=$((n - 1))
 done
-. "$REPO/tests/system/runlock.sh"
-runlock_hold "$REPO" together-test "$REPO/tests/system/together_test.sh" "$@"
+. "$REPO/tools/etude/hold.sh"
+etude_hold "$REPO" together-test "$REPO/tests/system/together_test.sh" "$@"
 cd "$REPO"
 WORK=
 trap '[ -z "$WORK" ] || rm -rf "$WORK"' 0

@@ -28,8 +28,8 @@ if [ -z "${ARCH_BUILD:-}" ]; then
 fi
 QEMU=${RACH2_QEMU:-qemu-system-i386}
 helper=$repo/tools/dev/machine_grow.sh
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" grow-space "$repo/tests/system/machine_grow_space.sh" "$@"
 cd "$repo"
 
 if [ "$#" = 0 ]; then

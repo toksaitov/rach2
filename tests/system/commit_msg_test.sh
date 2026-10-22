@@ -18,8 +18,8 @@ set -u
 [ "$#" -eq 0 ] || { echo 'commit-msg-test: usage: commit_msg_test.sh' >&2; exit 2; }
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" commit-msg-test "$repo/tests/system/commit_msg_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" commit-msg-test "$repo/tests/system/commit_msg_test.sh" "$@"
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP

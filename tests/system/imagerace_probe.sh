@@ -14,8 +14,8 @@ set -eu
 unset ARCH RACH2_ARCH RACH2_PATH_MAP MAKEFLAGS MFLAGS
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" imagerace-probe "$repo/tests/system/imagerace_probe.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" imagerace-probe "$repo/tests/system/imagerace_probe.sh" "$@"
 cd "$repo"
 [ "$#" = 0 ] || { echo 'imagerace-probe: usage: imagerace_probe.sh' >&2; exit 2; }
 makefile=$repo/Makefile

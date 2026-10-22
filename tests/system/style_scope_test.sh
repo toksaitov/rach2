@@ -24,8 +24,8 @@ set -eu
 [ "$#" -eq 0 ] || { echo 'style-scope-test: usage: style_scope_test.sh' >&2; exit 2; }
 
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$repo/tests/system/runlock.sh"
-runlock_hold "$repo" style-scope-test "$repo/tests/system/style_scope_test.sh" "$@"
+. "$repo/tools/etude/hold.sh"
+etude_hold "$repo" style-scope-test "$repo/tests/system/style_scope_test.sh" "$@"
 work=
 trap 'rm -rf ${work:+"$work"}' EXIT
 trap 'exit 129' HUP

@@ -18,8 +18,8 @@ set -eu
 [ "$#" -eq 0 ] || { echo 'dryrun-test: usage: dryrun_test.sh' >&2; exit 2; }
 
 REPO=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-. "$REPO/tests/system/runlock.sh"
-runlock_hold "$REPO" dryrun-test "$REPO/tests/system/dryrun_test.sh" "$@"
+. "$REPO/tools/etude/hold.sh"
+etude_hold "$REPO" dryrun-test "$REPO/tests/system/dryrun_test.sh" "$@"
 cd "$REPO"
 mkdir -p build
 WORK=
