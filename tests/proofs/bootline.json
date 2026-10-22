@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "proof": "bootline",
+  "summary": "the cases of tests/run bootline under etude, against a kernel and a loader that take boots they must refuse, refuse one they must take, or spin where they must halt",
+  "tree": "shared",
+  "sources": [
+    "rach2/kernel.c",
+    "rach2/sys/arch/i686/loader.s",
+    "rach2/sys/arch/x86_64/loader.s"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run bootline </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "init-fallthrough",
+      "summary": "the init lookup's test of -ENOENT widened to any failure, which takes a link loop for an absent init and opens the debug shell",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "        if (rc == -ENOENT) {\n",
+          "replace": "        if (rc != 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootline: FAIL",
+          "assert refused fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "nodisk-taken",
+      "summary": "a boot line with rach2.nodisk and a root on the disk is taken",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    if (!skipping_disk || !root_on_disk || wants_rescue) {\n",
+          "replace": "    if (skipping_disk + root_on_disk + wants_rescue >= 0) {\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootline: FAIL",
+          "assert refused fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "rescue-ignored",
+      "summary": "rach2.rescue and init=rescue no longer excuse rach2.nodisk with a root on the disk",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    int wants_rescue = kcmdline_has(\"rach2.rescue\") || kcmdline_has(\"init=rescue\");\n",
+          "replace": "    int wants_rescue = 0;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootline: FAIL",
+          "assert shell fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "spin",
+      "summary": "a refused boot spins with its interrupts off instead of halting",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    smp_stop_others();\n    for (;;) {\n        arch_stop();\n    }\n",
+          "replace": "    smp_stop_others();\n    for (;;) {\n        arch_relax();\n    }\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootline: FAIL",
+          "assert halted fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "cut-silent",
+      "summary": "a boot line cut to its buffer is cut without a log line",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    klog(KLOG_WARN, \"boot\", \"command line cut: kept %u of %u%s bytes, at its last whole option\",\n         (unsigned int)k_strlen(kcmdline_get()), given,\n         given + 1 >= BOOT_CMDLINE_MAX ? \" or more\" : \"\");\n",
+          "replace": "    (void)given;\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootline: FAIL",
+          "assert cut-logged fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "processor",
+      "summary": "the i686 loader does not require cmov and the x86-64 loader does not require long mode",
+      "edits": [
+        {
+          "file": "rach2/sys/arch/i686/loader.s",
+          "find": "    testl $CPUID_CMOV, %edx\n    jz refuse\n",
+          "replace": "    testl $CPUID_CMOV, %edx\n"
+        },
+        {
+          "file": "rach2/sys/arch/x86_64/loader.s",
+          "find": "    testl $CPUID_LM, %edx\n    jz no_long_mode\n",
+          "replace": "    testl $CPUID_LM, %edx\n"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: bootline: FAIL",
+          "assert refused fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}

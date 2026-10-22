@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "proof": "conload",
+  "summary": "the case of tests/run conload under etude, against a line discipline that keeps the input typed before the interrupt character",
+  "tree": "shared",
+  "sources": [
+    "rach2/sys/tty/n_tty.c"
+  ],
+  "artifacts": [
+    "${WORK}/kernel"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "sh tests/proofs/guest.sh make rach2 tests && sh tests/proofs/guest.sh copy ${WORK} rach2/kernel"
+    ],
+    "bound_s": 3600
+  },
+  "test": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec tests/run conload </dev/null"
+    ],
+    "bound_s": 3600
+  },
+  "faults": [
+    {
+      "name": "no-flush",
+      "summary": "the interrupt character signals the foreground group and leaves the pending input in place",
+      "edits": [
+        {
+          "file": "rach2/sys/tty/n_tty.c",
+          "find": "            echo(t, out, ctx, c);\n            n_tty_flush(t);\n            *signo",
+          "replace": "            echo(t, out, ctx, c);\n            *signo"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: conload: FAIL",
+          "assert stage-c fail"
+        ],
+        "status": 1
+      }
+    }
+  ]
+}
