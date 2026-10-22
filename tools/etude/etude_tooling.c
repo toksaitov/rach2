@@ -272,6 +272,10 @@ static int read_options(int argc, char **argv, struct options *op, int *rest)
     op->site.recipe = "tools/etude/tooling";
     op->site.cache = cache != NULL && *cache != '\0' ? cache : "build/tooling";
     op->site.accel = getenv("RACH2_QEMU_ACCEL");
+#if defined(__APPLE__)
+    /* mtools on macOS appends `_` to names it copies out under LC_ALL=C. */
+    setenv("LC_ALL", "C.UTF-8", 1);
+#endif
     op->site.envp = environ;
     op->job.outdir = ".";
     for (i = 1; i < argc && argv[i][0] == '-'; i += 2) {
