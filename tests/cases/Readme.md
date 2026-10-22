@@ -15,7 +15,7 @@ This directory has the case manifests of the suites that etude runs as cases, on
     sh tests/cases/host/krffscheck.sh prefixes
     sh tests/cases/host/grow.sh check
 
-`RACH2_AGENTS_ROWS` selects agent rows by name, and `RACH2_ACCEPT_AGENTS` selects acceptance agents, in the order given. Both refuse a repeated name or an unknown name; unset or empty, the suite runs every case. These selections keep the existing focused mutation proofs usable. `tests/proofs/agent-select.json` proves the order and refusal checks of `agent_select.py`.
+`RACH2_CASES` chooses cases of any suite by identity, as [the tests' Readme](../Readme.md) says. `RACH2_AGENTS_ROWS` chooses rows of `agents`, and `RACH2_ACCEPT_AGENTS` agents of `agentsaccept`, by the last part of their identities, in the order given. Each refuses a repeated name or an unknown name; unset or empty, the suite runs every case. [`case_select.py`](../system/case_select.py) makes all three choices, and `tests/proofs/case-select.json` proves its order and its refusals.
 
 The Muse cases also need Muse Code, which `make build/downloads/muse/muse` fetches.
 

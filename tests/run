@@ -703,6 +703,29 @@ for suite in "$@"; do
     }
     check_tools "$suite" || { echo "run: result: refused: $suite has no tools to run with" >&2; exit 1; }
 done
+# The cases chosen, before anything is built: RACH2_CASES gives case
+# identities, of which each suite of the run runs those of its own, and must
+# name one of each; RACH2_AGENTS_ROWS and RACH2_ACCEPT_AGENTS give the rows of
+# `agents` and `agentsaccept` by the last part of their identities, run in the
+# order given. tests/system/case_select.py writes a manifest of the chosen
+# cases for each suite chosen from, which the set driver reads in place of
+# the suite's own, and prints how many cases it chose.
+agents_rows=${RACH2_AGENTS_ROWS:-}
+accept_rows=${RACH2_ACCEPT_AGENTS:-}
+chosen=""
+if [ -n "${RACH2_CASES:-}$agents_rows$accept_rows" ]; then
+    rm -rf "$WORK/chosen"
+    chosen=$(python3 "$REPO/tests/system/case_select.py" ${RACH2_CASES:+-c "$RACH2_CASES"} \
+        ${agents_rows:+-r agents "$agents_rows"} ${accept_rows:+-r agentsaccept "$accept_rows"} \
+        "$ARCH" "$REPO/tests/cases" "$WORK/chosen" "$@") || {
+        echo "run: result: refused: the cases chosen are not cases of the suites named" >&2; exit 2
+    }
+fi
+case "$chosen" in
+    '') selection="" ;;
+    1) selection=", a selection of 1 case" ;;
+    *) selection=", a selection of $chosen cases" ;;
+esac
 diskimage=""
 sockets="--no-sockets"
 machines=""
@@ -791,7 +814,7 @@ export RACH2_QEMU_ACCEL
 
 # The line that says this run began. Everything below it belongs to this run,
 # and a log without it is a run that never started.
-echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS)"
+echo "run: starting: $* (pid $$, $(date '+%Y-%m-%d %H:%M:%S'), architecture $ARCH, workers $WORKERS, memory $MEMORY_MIB MiB, timeout factor $CAL_FACTOR, accelerator $RACH2_QEMU_ACCEL, processors $RACH2_CPUS$selection)"
 # The recovery system starts an SSH server only where a key was built into it,
 # and the suites that repair or update a machine do that work through recovery
 # over SSH. The key is minted here: after the names are checked and the tree is
@@ -859,16 +882,7 @@ for suite in "$@"; do
     [ -n "$family" ] || {
         echo "run: result: refused: no family of cases in tests/cases is the suite $suite" >&2; exit 2
     }
-    rows=""
-    case $suite in
-        agents) rows=${RACH2_AGENTS_ROWS:-} ;;
-        agentsaccept) rows=${RACH2_ACCEPT_AGENTS:-} ;;
-    esac
-    if [ -n "$rows" ]; then
-        selected=$WORK/$suite.json
-        python3 "$REPO/tests/cases/machine/agent_select.py" "${family#* }" "$rows" "$selected" || exit 2
-        family="${family%% *} $selected"
-    fi
+    [ ! -f "$WORK/chosen/$suite.json" ] || family="${family%% *} $WORK/chosen/$suite.json"
     echo "$suite$flags cases=${family#* }"
     echo "$suite ${family%% *}" >> "$WORK/map"
 done > "$WORK/selection"

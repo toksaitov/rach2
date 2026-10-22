@@ -28,6 +28,7 @@ These variables change a run:
 | `RACH2_CPUS` | 2 | processors of every machine, 1 to 64; a suite that names its own count keeps it |
 | `RACH2_TIMEOUT_FACTOR` | 1 | multiplies every completion bound, 1 to 64, rounded up to a tenth |
 | `RACH2_STOP_ON_FAIL` | unset | when set, the first failure stops the set |
+| `RACH2_CASES` | unset | case identities separated by blanks, such as `guest.default.vforkmusl machine.ext2.cost`: each suite of the run runs only the cases listed of its own, in its manifest's order, and the start line says the run is a selection; an identity that is no case of a suite of the run, or of the architecture, one given twice and a suite left with no case are refused before anything is built |
 | `RACH2_KERNEL` | unset | `ubsan` or `o2`: a suite that boots the kernel directly boots that build instead; a disk keeps `rach2/kernel` |
 | `RACH2_QEMU_ACCEL` | `kvm` where `/dev/kvm` opens, `hvf` on an x86 Mac that supports it, `tcg` where neither exists; a `/dev/kvm` the user cannot open is refused | the accelerator every machine uses: `kvm`, `hvf` or `tcg` |
 | `RACH2_MIN_FREE_GIB` | 40 | free space a run of any suite besides `style` and `host` needs before it builds; 0 skips the check; when set, `make` too refuses to build with less |
