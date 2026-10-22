@@ -94,6 +94,18 @@ LC_ALL=C; export LC_ALL
 # e2fsprogs, where a package manager keeps it off the path, so that the suites
 # that name mke2fs or e2fsck find them where the build does.
 . "$REPO/tools/setup/e2fsprogs_path.sh"
+# On macOS, Homebrew's mtools 4.0.49 appends `_` to some of the names it copies
+# out of a volume under LC_ALL=C, so each mtools program on the path is put
+# first in it as a wrapper in the run's scratch that runs it under C.UTF-8.
+if [ "$(uname -s)" = Darwin ] && [ ! -d "$WORK/mtools" ]; then
+    mkdir "$WORK/mtools" || exit 1
+    for tool in mattrib mcopy mdel mdeltree mdir mformat minfo mlabel mmd mmove mrd mren mtype; do
+        real=$(command -v "$tool") || continue
+        printf '#!/bin/sh\nLC_ALL=C.UTF-8 exec "%s" "$@"\n' "$real" > "$WORK/mtools/$tool" &&
+            chmod 755 "$WORK/mtools/$tool" || exit 1
+    done
+    PATH=$WORK/mtools:$PATH; export PATH
+fi
 REGISTRY="$REPO/tests/registry"
 [ -f "$REGISTRY" ] || { echo "run: result: refused: missing $REGISTRY" >&2; exit 1; }
 
