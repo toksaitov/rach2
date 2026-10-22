@@ -75,7 +75,7 @@ Before a run, the runner hashes with POSIX `cksum` the files that decide a resul
 
 After the run, every file made under the images directory since the products were built must match the image globs of exactly one suite of the run; one that matches none or two is named, and the run fails as `images`. The check is of names, so it cannot see a suite that wrote a file another suite owns.
 
-A suite that does not pass keeps its work directory as `build/tests/failed/RUN.NAME`, where RUN is the run's identity in the history: its output, `suite.log`, the machines' ledger and consoles, `machines` and `machines.console`, runutil's record of its end, `end`, and the logs it wrote under the images, in `images/`. Its last line, `etude-legacy: evidence: DIR`, names the directory.
+A suite that does not pass keeps its work directory as `build/tests/failed/RUN.NAME`, or under the directory `RACH2_FAILED` names, where RUN is the run's identity in the history: its output, `suite.log`, the machines' ledger and consoles, `machines` and `machines.console`, runutil's record of its end, `end`, and the logs it wrote under the images, in `images/`. Its last line, `etude-legacy: evidence: DIR`, names the directory.
 
 ### Completion bounds
 

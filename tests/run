@@ -848,8 +848,10 @@ ETUDE_LEGACY=$WORK/etude/etude-legacy
 SCHEMAS=${RACH2_ETUDE_SCHEMAS:-$REPO/tools/etude/schemas}
 RECORD=$WORK/prepare.record
 RESULTS=${RACH2_RESULTS:-$WORK/results}
-mkdir -p "$RESULTS" "$REPO/build/tests/failed"
+FAILED=${RACH2_FAILED:-$REPO/build/tests/failed}
+mkdir -p "$RESULTS" "$FAILED"
 RESULTS=$(cd "$RESULTS" && pwd) || exit 1
+FAILED=$(cd "$FAILED" && pwd) || exit 1
 # The families of cases, `FAMILY PATH` a line, each checked by its schema and
 # rules first, so that a manifest at fault refuses every run; a suite is run
 # by the family whose identity ends in its name.
@@ -921,7 +923,7 @@ forward() { SIGNALLED=$1; [ -z "$DRIVER" ] || kill "-$1" "$DRIVER" 2>/dev/null; 
 trap 'forward INT' INT; trap 'forward TERM' TERM; trap 'forward HUP' HUP
 # shellcheck disable=SC2086 # the options are one word each or none
 "$ETUDE_LEGACY" set -t "$REPO" -a "$ARCH" ${RACH2_KERNEL:+-n "$RACH2_KERNEL"} \
-    -l "$WORK/ledger" -c "$capacity" -j "$WORKERS" -o "$RESULTS" -e "$REPO/build/tests/failed" \
+    -l "$WORK/ledger" -c "$capacity" -j "$WORKERS" -o "$RESULTS" -e "$FAILED" \
     -S "$SCHEMAS" ${MANIFESTS:+-K "$WORK/etude/casecheck"} -p "$RECORD" -i "$IDLE_SECONDS" -r "$STATUS_RECORD" -m "$WORK/images.stamp" \
     ${commit:+-g "$commit"} ${RACH2_STOP_ON_FAIL:+-k} ${admitted:+-P "$admitted"} -q "$*" "$WORK/selection" &
 DRIVER=$!

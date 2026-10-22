@@ -26,7 +26,9 @@
 #                                    in `evidence/` of each case's workspace
 #                                    it kept, after `guest: evidence: FILE`;
 #                                    a binary file, such as a disk image, it
-#                                    names alone
+#                                    names alone; given TMPDIR, as the
+#                                    proof driver gives it, the run keeps
+#                                    those workspaces in TMPDIR/failed
 #   guest.sh exec WORK COMMAND...    run COMMAND with ARCH the architecture,
 #                                    RACH2_QEMU its emulator and ARCH_BUILD
 #                                    its build tree relative to the root
@@ -123,6 +125,10 @@ case $verb in
         trap 'exit 130' INT
         trap 'exit 143' TERM
         scratch=$(mktemp -d "${TMPDIR:-/tmp}/rach2-guest.XXXXXX")
+        if [ -n "${TMPDIR:-}" ]; then
+            RACH2_FAILED=$TMPDIR/failed
+            export RACH2_FAILED
+        fi
         status=0
         ARCH=$RACH2_ARCH tests/run "$suite" >"$scratch/out" 2>&1 </dev/null || status=$?
         cat "$scratch/out"

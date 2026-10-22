@@ -21,7 +21,7 @@ set -u
 # copy have no such target, so the name a caller set is dropped here.
 RACH2_KERNEL=""
 export RACH2_KERNEL
-unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL RACH2_KVM_DEVICE RACH2_HOST_LOCK
+unset RACH2_TIMEOUT_FACTOR RACH2_IDLE_TIMEOUT RACH2_STOP_ON_FAIL RACH2_KVM_DEVICE RACH2_HOST_LOCK RACH2_FAILED
 # The fixture writes a few files, and asking Windows for its drive's free
 # space under WSL costs a second a run, so the floor is off but where a row
 # sets one.
@@ -427,6 +427,11 @@ check "the first run's directory has its log and console alone, as it left them"
     'logging-test.log |logging run 1|machine said 1' "$(kept "$first")"
 check "and the second run's has its own" \
     'logging-test.log |logging run 2|machine said 2' "$(kept "$second")"
+out=$(RACH2_FAILED=$WORK/elsewhere run logging)
+third=$(printf '%s\n' "$out" | sed -n 's/^etude-legacy: evidence: //p')
+check "a run given RACH2_FAILED keeps its logs in that directory" 1 \
+    "$(case "$third" in "$WORK"/elsewhere/*.logging) echo 1 ;; *) echo 0 ;; esac)"
+check "and adds none to build/tests/failed" 2 "$(set -- "$WORK"/build/tests/failed/*.logging; echo "$#")"
 
 out=$(run nosuch); rc=$?
 check "an unknown name is refused" 2 "$rc"
