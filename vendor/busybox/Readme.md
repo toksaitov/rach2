@@ -12,11 +12,12 @@ The tarball is not edited. The build applies the patches under `patches/` and co
 
 ### Patches
 
-`build_busybox.sh` applies every `patches/*.patch` with `patch -p1`, in name order, to a fresh extraction, before either configuration is built. A patch is only for an adaptation the configurations cannot express.
+`build_busybox.sh` applies every `patches/*.patch` with `patch -p1`, in name order, to a fresh extraction, before either configuration is built. A patch is only for an adaptation the configurations cannot express, or for a fix a later upstream release has, taken unchanged from its upstream commit.
 
 * `0001-udhcpc-build-against-musl.patch` replaces the includes of `linux/filter.h` and `linux/if_packet.h` in `networking/udhcp/dhcpc.c`, which musl does not install, with musl's `netpacket/packet.h`. That header has `sockaddr_ll` and `PACKET_AUXDATA` but not `struct tpacket_auxdata` or `TP_STATUS_CSUMNOTREADY`, so the patch defines both. The filter header served only a block upstream keeps under `#if 0`.
 * `0002-free-uptime-include-sysinfo.patch` makes `procps/free.c` and `procps/uptime.c` include `sys/sysinfo.h` unconditionally. Upstream includes it only under `__linux__`, which `i686-elf-gcc` and `x86_64-elf-gcc` do not define.
 * `0003-mkfs-vfat-define-linux-requests.patch` replaces the includes of `linux/hdreg.h` and `linux/fd.h` in `util-linux/mkfs_vfat.c` with the two requests the applet makes, `HDIO_GETGEO` with `struct hd_geometry` and `FDGETPRM` with `struct floppy_struct`, as the i386 Linux headers define them. The applet takes its defaults when either request fails.
+* `0004-shell-keep-line-on-sigchld.patch` is upstream commit `93e0898c663a`, which 1.37.0 has (BusyBox bug 15256). Without it, a background job that ends while a line is being typed interrupts the line editor's `poll` with `SIGCHLD`, the editor drops what was typed so far, and the shell runs the rest of the line alone as a new command. With it, the editor gives up a line only for a signal whose handler sets `bb_got_signal`, which `SIGCHLD` does only when it has a trap.
 
 ### Configurations
 
