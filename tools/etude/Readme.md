@@ -260,8 +260,11 @@ The `cpu` of a QEMU profile names a processor profile of [`processor.c`](process
 | `max` | `max` | `rdrand`, `rdseed`, `xsave`, `avx` | |
 | `max-nopdpe1gb` | `max` | `rdrand`, `rdseed`, `xsave`, `avx` | `pdpe1gb` |
 | `qemu64` | `qemu64` | | `rdrand`, `rdseed`, `xsave`, `avx` |
+| `486` | `486` | | `rdrand`, `rdseed`, `xsave`, `avx` |
+| `pentium` | `pentium` | | `rdrand`, `rdseed`, `xsave`, `avx` |
+| `qemu32` | `qemu32` | | `rdrand`, `rdseed`, `xsave`, `avx` |
 
-A feature a case requires is one of those five. Its boot's profile declares it as the case requires it: present for `present`, absent for `absent`, and either way for `either`, so that under QEMU every group decided by the feature is decided. A native machine's features are its own, which the controller reads and gives the judge.
+The last three lack what a kernel needs: the 486 has no time-stamp counter and the Pentium no `cmov`, which the i686 kernel needs, and `qemu32` has no long mode, which the x86-64 kernel needs; the cases of `tests/run bootline` boot them to see the kernel refuse them. A feature a case requires is one of those five. Its boot's profile declares it as the case requires it: present for `present`, absent for `absent`, and either way for `either`, so that under QEMU every group decided by the feature is decided. A native machine's features are its own, which the controller reads and gives the judge.
 
 ### Native runs
 

@@ -23,9 +23,9 @@ static const char *const no_1g[] = {"pdpe1gb", NULL};
 static const char *const none[] = {NULL};
 
 static const struct etude_processor profiles[] = {
-    {"max", "max", max_features, none},
-    {"max-nopdpe1gb", "max", max_features, no_1g},
-    {"qemu64", "qemu64", none, max_features},
+    {"max", "max", max_features, none},         {"max-nopdpe1gb", "max", max_features, no_1g},
+    {"qemu64", "qemu64", none, max_features},   {"486", "486", none, max_features},
+    {"pentium", "pentium", none, max_features}, {"qemu32", "qemu32", none, max_features},
 };
 
 const struct etude_processor *etude_processor_find(const char *name)
