@@ -58,55 +58,49 @@
  * SIGTRAP in sigtimedwait, is taken by the wait. PTRACE_INTERRUPT of a tracee
  * in PTRACE_LISTEN stops it before its next instruction.
  *
- * With no argument the program runs every ordinary row. With one argument it
- * runs the named_rows entry of that name. It prints "PTRACEMUSL OK" and
- * exits 0 when the rows pass, or prints "PTRACEMUSL FAIL (detail: errno N)"
- * and exits 1 at the first failure. PTRACE_DEBUG_ENTRY builds also have
- * delayed and delayed-poll rows, which need a kernel built with a fixture at
- * its debug entry; nothing in the tree builds either. They require a forced
- * TRAP_HWBKPT at the system call's return with SIGTRAP blocked, and EINTR
- * from an infinite poll. They fail if the debug entry is not exercised.
+ * The program takes no positional argument and runs every row. It prints
+ * "PTRACEMUSL OK" and exits 0 when the rows pass, or prints
+ * "PTRACEMUSL FAIL (detail: errno N)" and exits 1 at the first failure.
  *
- * NAME=VALUE arguments are not row names. Given `machine=native`
+ * Given `machine=native`
  * (tests/native/Readme.md), the row of a /proc/PID/mem descriptor leaves out
  * its comparison of MemFree, since the machine's services move free memory
  * meanwhile.
  *
- * etude's report (probe_report.h), for the case ETUDE_CASE names, comes from
- * the run with no argument alone and has an assertion for each row in order, a
- * setup step joined to the row after it: `traced-stop`, `peekdata`, `pokedata`,
- * `proc-mem-read`, `proc-mem-hole`, `getregs`, `fpregs`, `singlestep`,
- * `breakpoint-reached`, `breakpoint-ip`, `breakpoint-restore`,
- * `poked-word-read`, `ended-mem-live-read`, `ended-mem-child-exits`,
- * `ended-meminfo`, `ended-mem-read-zero`, `ended-mem-freed`, `setoptions`,
- * `debugreg-peekuser`, `dr7-kernel-einval`, `dr7-last-user`,
- * `dr7-bit12-einval`, `getpid-entry`, `getpid-exit`, `exec-waitid`,
- * `exec-event`, `exec-mem-empty`, `exec-runs`, `changes-getpid-entry`,
- * `changes-write-entry`, `changes-exit`, `changes-getppid`,
- * `changes-write-result`, `changes-write-not-run`, `kill-entry-stop`,
- * `kill-entry-sigkill`, `kill-entry-no-write`, `restart-read-entry`,
- * `restart-read-eintr`, `restart-signal`, `restart-cancelled`, `attach-stops`,
- * `detach`, `detach-runs-on`, `seize-stopped-event`, `seize-detach`,
- * `seize-stays-stopped`, `seize-sigcont-runs`, `listen-group-stop`,
- * `listen-interrupt`, `listen-cont-before`, `listen-sigcont-stop`,
- * `listen-delivery-eio`, `listen-second-sigstop`, `listen-second-group-stop`,
- * `listen-cont-during`, `listen-second-sigcont`, `listen-runs-on`,
- * `interrupt-stops`, `interrupt-read-restarted`, `fork-event`,
- * `fork-child-event-stop`, `fork-child-ends`, `fork-parent-ends`,
- * `leader-signal-wakes`, `leader-signal-taken`, `thread-attach`,
- * `thread-usage`, `thread-child-ends`, `tracer-seize`, `tracer-first`,
- * `tracer-then-parent`, `tracer-sees-end`, `tracer-echild`, `killed-sigchld`,
- * `killed-sigchld-info`, `killed-wait-status`, `step-syscall-trap`,
- * `step-syscall-result`, `step-next-trap`, `step-next-one`,
- * `entry-bad-stack-returns`, `entry-bad-stack-result`, `copy-watch-trap`,
- * `copy-watch-result`, `poll-watch-trap`, `poll-watch-eintr`,
- * `poll-watch-returns`, `sigwait-watch`, `interrupt-pause-stop`,
- * `listen-interrupt-before-instruction`, `tp-set-readback` and
- * `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`, `setoptions-wide-einval`,
- * `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`, `tp-arch-get-fs`,
- * `tp-peekuser-fs`, `tp-arch-prctl-errors`, `tp-arch-set-eperm`,
- * `tp-pokeuser-eio`, `tp-setregs-eio`, `tp-setregset-eio` and
- * `tp-refused-kept`; i386 adds `tp-get-thread-area`, `tp-entries-unused`,
+ * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
+ * assertion for each row in order, a setup step joined to the row after it:
+ * `traced-stop`, `peekdata`, `pokedata`, `proc-mem-read`, `proc-mem-hole`,
+ * `getregs`, `fpregs`, `singlestep`, `breakpoint-reached`, `breakpoint-ip`,
+ * `breakpoint-restore`, `poked-word-read`, `ended-mem-live-read`,
+ * `ended-mem-child-exits`, `ended-meminfo`, `ended-mem-read-zero`,
+ * `ended-mem-freed`, `setoptions`, `debugreg-peekuser`, `dr7-kernel-einval`,
+ * `dr7-last-user`, `dr7-bit12-einval`, `getpid-entry`, `getpid-exit`,
+ * `exec-waitid`, `exec-event`, `exec-mem-empty`, `exec-runs`,
+ * `changes-getpid-entry`, `changes-write-entry`, `changes-exit`,
+ * `changes-getppid`, `changes-write-result`, `changes-write-not-run`,
+ * `kill-entry-stop`, `kill-entry-sigkill`, `kill-entry-no-write`,
+ * `restart-read-entry`, `restart-read-eintr`, `restart-signal`,
+ * `restart-cancelled`, `attach-stops`, `detach`, `detach-runs-on`,
+ * `seize-stopped-event`, `seize-detach`, `seize-stays-stopped`,
+ * `seize-sigcont-runs`, `listen-group-stop`, `listen-interrupt`,
+ * `listen-cont-before`, `listen-sigcont-stop`, `listen-delivery-eio`,
+ * `listen-second-sigstop`, `listen-second-group-stop`, `listen-cont-during`,
+ * `listen-second-sigcont`, `listen-runs-on`, `interrupt-stops`,
+ * `interrupt-read-restarted`, `fork-event`, `fork-child-event-stop`,
+ * `fork-child-ends`, `fork-parent-ends`, `leader-signal-wakes`,
+ * `leader-signal-taken`, `thread-attach`, `thread-usage`, `thread-child-ends`,
+ * `tracer-seize`, `tracer-first`, `tracer-then-parent`, `tracer-sees-end`,
+ * `tracer-echild`, `killed-sigchld`, `killed-sigchld-info`,
+ * `killed-wait-status`, `step-syscall-trap`, `step-syscall-result`,
+ * `step-next-trap`, `step-next-one`, `entry-bad-stack-returns`,
+ * `entry-bad-stack-result`, `copy-watch-trap`, `copy-watch-result`,
+ * `poll-watch-trap`, `poll-watch-eintr`, `poll-watch-returns`, `sigwait-watch`,
+ * `interrupt-pause-stop`, `listen-interrupt-before-instruction`,
+ * `tp-set-readback` and `tp-tracee-runs`. x86-64 adds `dr7-bit32-einval`,
+ * `setoptions-wide-einval`, `ds-kernel-eio`, `ds-kept`, `seize-wide-einval`,
+ * `tp-arch-get-fs`, `tp-peekuser-fs`, `tp-arch-prctl-errors`,
+ * `tp-arch-set-eperm`, `tp-pokeuser-eio`, `tp-setregs-eio`, `tp-setregset-eio`
+ * and `tp-refused-kept`; i386 adds `tp-get-thread-area`, `tp-entries-unused`,
  * `tp-entries-write-back`, `tp-entries-no-base` and
  * `tp-entries-outside-einval`. The branch of the group `arch`, `i686` or
  * `x86-64`, says which ran. A native run reports `ended-mem-freed` not run. The
@@ -1824,117 +1818,6 @@ static int entry_system_call(void)
     return 0;
 }
 
-#ifdef PTRACE_DEBUG_ENTRY
-/* An armed breakpoint that the fixture classifies as a deferred user hit. */
-static unsigned short debug_word;
-
-/**
- * Fork a register child with SIGTRAP blocked. The entry fixture must force
- * the deferred user hit through that mask. Returns its pid, or -1.
- */
-static pid_t debug_child(void)
-{
-    sigset_t set, saved;
-    pid_t pid;
-
-    sigemptyset(&set);
-    sigaddset(&set, SIGTRAP);
-    if (sigprocmask(SIG_BLOCK, &set, &saved) != 0) {
-        fail("blocking SIGTRAP for debug entry");
-        return -1;
-    }
-    pid = register_child();
-    sigprocmask(SIG_SETMASK, &saved, NULL);
-    return pid;
-}
-
-/**
- * Require the fixture's debug interrupt at system-call entry to stop at
- * step_return with getpid's result, before the increment runs. The invalid
- * user stack also requires x86-64's debug interrupt stack and GS handling.
- * Returns 0, or 1 after the failure is printed.
- */
-static int delayed_debug(void)
-{
-    struct user_regs_struct regs;
-    siginfo_t info;
-    pid_t pid = debug_child();
-
-    if (pid < 0) {
-        return 1;
-    }
-    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
-        return abandon(pid, "registers before delayed debug exception");
-    }
-    R_IP(regs) = (unsigned long)step_call;
-    R_RET(regs) = SYS_getpid;
-    R_NR(regs) = -1;
-    R_BX(regs) = 41;
-    R_SP(regs) = 1;
-    if (debug_set(pid, 0, (unsigned long)&debug_word) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
-        ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "delayed debug exception did not trap") ||
-        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
-        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
-        return abandon(pid, "delayed debug exception lost its status");
-    }
-    if ((unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 41 ||
-        R_SP(regs) != 1 || (unsigned long)R_RET(regs) != (unsigned long)pid) {
-        return abandon(pid, "delayed debug exception lost its frame or result");
-    }
-    printf("ptracemusl: result: delayed: kernel entry, forced TRAP_HWBKPT, getpid result\n");
-    finish_register_child(pid);
-    return 0;
-}
-
-/**
- * Require the fixture's deferred user hit to end a descriptorless infinite
- * poll with EINTR at step_return, despite blocked SIGTRAP. No kernel access
- * to the watched word can raise another hit. Returns 0, or 1 on failure.
- */
-static int delayed_poll(void)
-{
-    struct user_regs_struct regs;
-    siginfo_t info;
-    pid_t pid = debug_child();
-
-    if (pid < 0) {
-        return 1;
-    }
-    if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0) {
-        return abandon(pid, "registers before delayed poll");
-    }
-    R_IP(regs) = (unsigned long)step_call;
-    R_RET(regs) = SYS_poll;
-    R_NR(regs) = -1;
-    R_BX(regs) = 0;
-#if defined __x86_64__
-    regs.rdi = 0;
-    regs.rsi = 0;
-    regs.rdx = -1;
-#else
-    regs.ecx = 0;
-    regs.edx = -1;
-#endif
-    if (debug_set(pid, 0, (unsigned long)&debug_word) != 0 || debug_set(pid, 7, 0x70001) != 0 ||
-        ptrace(PTRACE_SETREGS, pid, NULL, &regs) != 0 ||
-        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0 ||
-        expect_stop(pid, SIGTRAP, "delayed infinite poll did not trap") ||
-        ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0 ||
-        ptrace(PTRACE_GETSIGINFO, pid, NULL, &info) != 0 || info.si_code != TRAP_HWBKPT) {
-        return abandon(pid, "delayed poll lost its status");
-    }
-    if ((unsigned long)R_IP(regs) != (unsigned long)step_return || R_BX(regs) != 0 ||
-        (long)R_RET(regs) != -EINTR) {
-        return abandon(pid, "delayed poll lost its frame or EINTR result");
-    }
-    printf("ptracemusl: result: delayed-poll: kernel entry, forced TRAP_HWBKPT, EINTR\n");
-    finish_register_child(pid);
-    return 0;
-}
-#endif
-
 /**
  * Check that a write watchpoint on `byte`, which the kernel's copy of a read
  * into it hits, stops the tracee with TRAP_HWBKPT at its return to user mode,
@@ -2358,19 +2241,6 @@ static int thread_pointer(void)
 }
 #endif
 
-/* The rows a suite may run alone, by the name it passes. */
-static const struct {
-    const char *name;
-    int (*row)(void);
-} named_rows[] = {
-#ifdef PTRACE_DEBUG_ENTRY
-    {"delayed", delayed_debug}, {"delayed-poll", delayed_poll},
-#endif
-    {"step", step_system_call}, {"entry", entry_system_call},   {"copy", watched_copy},
-    {"poll", watched_poll},     {"sigwait", watched_sigwait},   {"listen", listen_user_return},
-    {"tp", thread_pointer},
-};
-
 /**
  * Run the rows of memory, system calls and attaching, and stop at the first
  * that fails. Returns 0, or 1.
@@ -2550,21 +2420,7 @@ static void plan(void)
 
 int main(int argc, char **argv)
 {
-    unsigned int i;
-
     probe_args(argc, argv);
-    if (probe_words() == 1) {
-        for (i = 0; i < sizeof(named_rows) / sizeof(named_rows[0]); i++) {
-            if (strcmp(probe_word(1), named_rows[i].name) == 0) {
-                if (named_rows[i].row() != 0) {
-                    return 1;
-                }
-                printf("PTRACEMUSL OK\n");
-                return 0;
-            }
-        }
-        return fail("unknown row");
-    }
     if (probe_words() != 0) {
         return fail("unexpected argument count");
     }

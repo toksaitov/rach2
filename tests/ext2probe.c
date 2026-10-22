@@ -18,7 +18,6 @@
  * its writes cost no commands before fsync whether or not ext2 batches them;
  * the batching saves commands on the ordered write-through of a `sync`
  * mount. Both counts include fsync, and both files are reopened and checked.
- * `ext2probe cost-append` judges the appends alone.
  *
  * A native run gives the fixture as a loop device (probe_args.h): the first
  * device that `loops=DEVICE,...` names is mounted in place of /dev/disk0p1,
@@ -569,10 +568,9 @@ static void cost_verify(const char *path, unsigned first, unsigned blocks)
  * one data write and one inode write, and none before the fsync. The two
  * appends together cost at least one command and one flush and at most ten
  * commands and five flushes, what one append costs when each write call is
- * written through on its own, and no flush before the fsync. With
- * `append_only` the rewrites' counts are printed and not judged.
+ * written through on its own, and no flush before the fsync.
  */
-static void cost_rows(int append_only)
+static void cost_rows(void)
 {
     struct disk_counts before, collected, committed;
     int fd = cost_create("/e2/cost-rewrite", 0);
@@ -591,12 +589,10 @@ static void cost_rows(int append_only)
     }
     committed = disk_counts();
     cost_report("rewrite", before, collected, committed);
-    if (!append_only &&
-        (committed.commands - before.commands != 4 || committed.flushes - before.flushes != 2)) {
+    if (committed.commands - before.commands != 4 || committed.flushes - before.flushes != 2) {
         fail("rewrite command count");
     }
-    if (!append_only &&
-        (collected.commands != before.commands || collected.flushes != before.flushes)) {
+    if (collected.commands != before.commands || collected.flushes != before.flushes) {
         fail("rewrite collection issued commands");
     }
     if (syscall1(SYS_CLOSE, fd) != 0) {
@@ -666,7 +662,7 @@ void probe_main(unsigned long *sp)
 
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1) != 0 ? probe_word(1) : "links";
-    writable = streq(mode, "cost") || streq(mode, "cost-append");
+    writable = streq(mode, "cost");
     take_loop();
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
     if (syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2",
@@ -676,7 +672,7 @@ void probe_main(unsigned long *sp)
     if (streq(mode, "links")) {
         links_rows();
     } else if (writable) {
-        cost_rows(streq(mode, "cost-append"));
+        cost_rows();
     } else {
         fail("unknown mode");
     }
