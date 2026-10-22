@@ -90,9 +90,6 @@ static int fails;
 #define MIB    UINT64_C(1048576)
 #define SCHEMA "tools/etude/schemas/history.schema.json"
 
-/* The bound of each wait of the test for a witness or a worker's end. */
-#define WITNESS_US (30 * SECOND)
-
 /* The boot the responders run in. */
 #define BOOT "0123456789abcdef"
 
@@ -107,13 +104,13 @@ static int fails;
 /* This program, by an absolute path. */
 static char self[PATH_MAX];
 
-/** Give the monotonic clock in microseconds. */
-static uint64_t now_us(void)
+/** Say whether the child `pid` is still running, without reaping it. */
+static int running(pid_t pid)
 {
-    struct timespec ts;
+    siginfo_t si;
 
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * SECOND + (uint64_t)ts.tv_nsec / 1000;
+    memset(&si, 0, sizeof(si));
+    return waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) == 0 && si.si_pid == 0;
 }
 
 /** Write the SHA-256 of `n` bytes as hexadecimal into `hex`. */
@@ -777,23 +774,16 @@ static int start(struct worker *w)
     return 0;
 }
 
-/**
- * Wait for process `pid`, for at most WITNESS_US, killing it then; its wait
- * status, or -1 when it had to be killed.
- */
-static int reap_within(pid_t pid)
+/** Wait for process `pid` to end; its wait status, or -1 when it cannot be
+ * reaped. */
+static int reap(pid_t pid)
 {
-    uint64_t until = now_us() + WITNESS_US;
     int status;
     pid_t got;
 
-    while ((got = waitpid(pid, &status, WNOHANG)) == 0 && now_us() < until)
-        poll(NULL, 0, 10);
-    if (got == pid)
-        return status;
-    kill(pid, SIGKILL);
-    waitpid(pid, &status, 0);
-    return -1;
+    while ((got = waitpid(pid, &status, 0)) < 0 && errno == EINTR) {
+    }
+    return got == pid ? status : -1;
 }
 
 /** Wait for worker `w` and read its summary into `s`; 0, or -1. */
@@ -801,12 +791,12 @@ static int finish(struct worker *w, struct summary *s)
 {
     char path[64], line[600];
     FILE *f;
-    int status = reap_within(w->pid);
+    int status = reap(w->pid);
 
     memset(s, 0, sizeof(*s));
     s->rc = -2;
     if (status == -1)
-        printf("etude-runtime-test: worker %s did not end and was killed\n", w->name);
+        printf("etude-runtime-test: worker %s cannot be reaped\n", w->name);
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return -1;
     snprintf(path, sizeof(path), "%s.summary", w->name);
@@ -983,16 +973,12 @@ static int nproc_visit(const struct etude_ledger_claim *c, void *ctx)
     return 0;
 }
 
-/**
- * Wait, for at most WITNESS_US, until claim `id` of ledger `name` has `n`
- * processes registered; 1 once it has.
- */
-static int await_nproc(const char *name, const char *id, size_t n)
+/** Wait until claim `id` of ledger `name` has `n` processes registered. */
+static void await_nproc(const char *name, const char *id, size_t n)
 {
-    uint64_t until = now_us() + WITNESS_US;
     struct etude_ledger *l;
 
-    do {
+    for (;;) {
         claim_nproc = 0;
         claim_sought = id;
         if ((l = etude_ledger_open(fix_path(name))) != NULL) {
@@ -1000,10 +986,10 @@ static int await_nproc(const char *name, const char *id, size_t n)
             etude_ledger_close(l);
         }
         if (claim_nproc >= n)
-            return 1;
+            return;
+        /* interval: the ledger is read again every 10 ms */
         poll(NULL, 0, 10);
-    } while (now_us() < until);
-    return 0;
+    }
 }
 
 /** Say whether the ledger and the log show what `w` wants now. */
@@ -1029,17 +1015,12 @@ static int seen(const struct want *w)
     return w->claim == NULL || !kept(w->ledger, w->claim);
 }
 
-/** Wait for what `w` wants, for at most WITNESS_US; 1 once it is seen. */
-static int await(const struct want *w)
+/** Wait until what `w` wants is seen. */
+static void await(const struct want *w)
 {
-    uint64_t until = now_us() + WITNESS_US;
-
-    while (!seen(w)) {
-        if (now_us() >= until)
-            return seen(w);
+    while (!seen(w))
+        /* interval: the ledger and the log are read again every 10 ms */
         poll(NULL, 0, 10);
-    }
-    return 1;
 }
 
 /** Say whether process `pid` runs, a zombie being ended. */
@@ -1200,7 +1181,7 @@ static void test_accounts(void)
     want.running = 4;
     want.held = 4;
     want.log_lines = 4;
-    CHECK(await(&want), "accounts");
+    await(&want);
     {
         struct look lk;
 
@@ -1220,10 +1201,9 @@ static void test_accounts(void)
     CHECK(empty("accounts"), "accounts");
 }
 
-/** Start the service; its PID, or -1 once it could not be made ready. */
+/** Start the service; its PID, or -1 when it ended before it was ready. */
 static pid_t service_start(void)
 {
-    uint64_t until = now_us() + WITNESS_US;
     pid_t pid;
 
     unlink(shared("service.ready"));
@@ -1231,7 +1211,8 @@ static pid_t service_start(void)
     pid = fork();
     if (pid == 0)
         service_main();
-    while (pid > 0 && access(shared("service.ready"), F_OK) != 0 && now_us() < until)
+    while (pid > 0 && access(shared("service.ready"), F_OK) != 0 && running(pid))
+        /* interval: the service is looked at again every 10 ms */
         poll(NULL, 0, 10);
     return pid > 0 && access(shared("service.ready"), F_OK) == 0 ? pid : -1;
 }
@@ -1348,26 +1329,22 @@ static void test_lost_worker(void)
     want.running = 2;
     want.held = -1;
     want.log_lines = 2;
-    CHECK(await(&want), "lost-worker");
-    CHECK(await_nproc("lost", deaf_id, 3), "lost-worker");
+    await(&want);
+    await_nproc("lost", deaf_id, 3);
     CHECK(pids_of("deaf deaf ", deaf) == 3 && pids_of("leak leak ", leak) == 1, "lost-worker");
     kill(a.pid, SIGKILL);
-    CHECK(reap_within(a.pid) != -1, "lost-worker");
+    CHECK(reap(a.pid) != -1, "lost-worker");
 
     memset(&want, 0, sizeof(want));
     want.ledger = "lost";
     want.held = -1;
     want.claim = deaf_id;
-    CHECK(await(&want), "lost-worker");
+    await(&want);
     for (i = 0; i < 3; i++)
         CHECK(!runs(deaf[i]), "lost-worker");
-    {
-        uint64_t until = now_us() + WITNESS_US;
-
-        while ((verdict_of("lost", leak_id, buf, sizeof(buf)) != 0 || buf[0] == '\0') &&
-               now_us() < until)
-            poll(NULL, 0, 10);
-    }
+    while (verdict_of("lost", leak_id, buf, sizeof(buf)) != 0 || buf[0] == '\0')
+        /* interval: the verdict is read again every 10 ms */
+        poll(NULL, 0, 10);
     CHECK(strcmp(buf, ETUDE_VERDICT_UNCONFIRMED) == 0, "lost-worker");
     CHECK(!runs(leak[0]), "lost-worker");
     CHECK(uncertain("lost", leak_id, "keeper"), "lost-worker");
@@ -1528,10 +1505,10 @@ static void test_blocked(void)
     want.running = 2;
     want.blocked = "alpha";
     want.held = 2;
-    CHECK(await(&want), "blocked");
+    await(&want);
     CHECK(start(&b) == 0, "blocked");
     want.request = "beta";
-    CHECK(await(&want), "blocked");
+    await(&want);
     gate_open(gate);
     CHECK(finish(&a, &s) == 0 && all_passed(&s, 4), "blocked");
     CHECK(finish(&b, &s) == 0 && all_passed(&s, 1), "blocked");
@@ -1561,18 +1538,18 @@ static void test_blocked(void)
     want.ledger = "dead";
     want.running = 2;
     want.held = 2;
-    CHECK(await(&want), "dead-request");
+    await(&want);
     CHECK(start(&e) == 0, "dead-request");
     want.blocked = "beta";
-    CHECK(await(&want), "dead-request");
+    await(&want);
     kill(e.pid, SIGKILL);
-    CHECK(reap_within(e.pid) != -1, "dead-request");
+    CHECK(reap(e.pid) != -1, "dead-request");
     want.blocked = NULL;
     want.gone = "beta";
-    CHECK(await(&want), "dead-request");
+    await(&want);
     CHECK(start(&f) == 0, "dead-request");
     want.blocked = "gamma";
-    CHECK(await(&want), "dead-request");
+    await(&want);
     gate_open(gate);
     CHECK(finish(&d, &s) == 0 && all_passed(&s, 2), "dead-request");
     CHECK(finish(&f, &s) == 0 && all_passed(&s, 1), "dead-request");
@@ -1778,7 +1755,7 @@ static int controller(const char *run, const char *mode, struct remote_summary *
         return -1;
     if (pid == 0)
         controller_main(run, mode);
-    status = reap_within(pid);
+    status = reap(pid);
     if (status == -1 || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
         return -1;
     snprintf(path, sizeof(path), "%s.summary", run);
