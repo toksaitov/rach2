@@ -71,9 +71,8 @@ static int fails;
         }                                                                                         \
     } while (0)
 
-/* The completion bound of each wait, the resend interval of both sides, and
- * the most output a controller keeps. */
-#define BOUND_US  20000000u
+/* The resend interval of both sides, and the most output a controller
+ * keeps. */
 #define RESEND_US 50000u
 #define KEEP      65536
 
@@ -1095,29 +1094,29 @@ static int satisfied(struct harness *h, enum serve_until w)
 
 /**
  * Carry the console both ways until the wait is over, sending again what the
- * controller has due; 1, or 0 when BOUND_US passed first.
+ * controller has due; 1, or 0 when etude-guest's output has ended with
+ * nothing due or held.
  */
 static int serve(struct harness *h, enum serve_until w)
 {
-    uint64_t until = now_us() + BOUND_US;
     char buf[4096];
 
     for (;;) {
-        uint64_t t = now_us(), wake = until, due;
+        uint64_t t = now_us(), wake = UINT64_MAX, due;
         struct pollfd p;
         int timeout, r;
         ssize_t n;
 
         if (satisfied(h, w))
             return 1;
-        if (t >= until)
-            return 0;
         due = etude_serial_deadline(h->s);
-        if (due != 0 && due < wake)
+        if (due != 0)
             wake = due;
         if ((h->held_len[0] > 0 || h->held_len[1] > 0) && t + HELD_US < wake)
             wake = t + HELD_US;
-        timeout = wake > t ? (int)((wake - t + 999) / 1000) : 0;
+        if (wake == UINT64_MAX && h->from < 0)
+            return 0;
+        timeout = wake == UINT64_MAX ? -1 : wake > t ? (int)((wake - t + 999) / 1000) : 0;
         p.fd = h->from;
         p.events = POLLIN;
         p.revents = 0;
@@ -1138,19 +1137,22 @@ static int serve(struct harness *h, enum serve_until w)
 }
 
 /** Read etude-guest's output until it closes it, feeding the controller;
- * 1, or 0 when BOUND_US passed first. */
+ * 1, or 0 when the wait for it fails. */
 static int drain(struct harness *h)
 {
-    uint64_t until = now_us() + BOUND_US, t;
     char buf[4096];
     struct pollfd p;
     ssize_t n;
+    int r;
 
-    while (h->from >= 0 && (t = now_us()) < until) {
+    while (h->from >= 0) {
         p.fd = h->from;
         p.events = POLLIN;
         p.revents = 0;
-        if (poll(&p, 1, (int)((until - t + 999) / 1000)) <= 0)
+        r = poll(&p, 1, -1);
+        if (r < 0 && errno != EINTR)
+            return 0;
+        if (r <= 0)
             continue;
         n = read(h->from, buf, sizeof(buf));
         if (n > 0) {
@@ -1199,7 +1201,7 @@ static int prepare(struct harness *h, const char *run_id, const char *name, cons
 }
 
 /** Begin a run of `token` from the invocation `inv` and wait as `w` says;
- * whether the wait ended before the bound. */
+ * whether the run began and the wait was satisfied, as serve gives it. */
 static int run(struct harness *h, const char *token, const char *inv, enum serve_until w)
 {
     memset(h->out, 0, sizeof(h->out));
@@ -1502,7 +1504,6 @@ int main(void)
     signal(SIGINT, stopped);
     signal(SIGTERM, stopped);
     signal(SIGHUP, stopped);
-    signal(SIGALRM, stopped);
     snprintf(work, sizeof(work), "%s/rach2-etude-serial.XXXXXX", tmp && *tmp ? tmp : "/tmp");
     if (mkdtemp(work) == NULL) {
         *work = '\0';
