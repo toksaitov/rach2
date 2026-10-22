@@ -16,29 +16,27 @@
  * The command lines of profiles, and the profiles the launcher refuses, are
  * checked as text, disks on IDE, AHCI and NVMe, a CD, disks that boot first,
  * qcow2 overlays, an IDE disk with a serial and the firmware's flash among
- * them; `--argv` runs these rows alone. A capture of a card's frames is a
- * filter-dump after the card, and a capture of a card the profile lacks is
- * refused; `--capture` runs these rows alone. Fourteen stand-in machines then
- * run at once, each with an end of its own, and each must keep its own console
- * and end: a QEMU that fails before it connects is an unexpected exit, and one
- * that reports that it could not start the accelerator is a failed
+ * them. A capture of a card's frames is a filter-dump after the card, and a
+ * capture of a card the profile lacks is refused. Fourteen stand-in machines
+ * then run at once, each with an end of its own, and each must keep its own
+ * console and end: a QEMU that fails before it connects is an unexpected exit,
+ * and one that reports that it could not start the accelerator is a failed
  * accelerator; so is one whose QMP reports another accelerator in use, through
  * query-accelerators or, for a QEMU without that command, query-kvm. QMP's
  * SHUTDOWN events of the guest give a shutdown, a reset and a panic; one of the
  * host, or an exit without an event, is an unexpected exit; a cancellation of a
  * machine that obeys QMP's quit, of one that ignores both quit and SIGTERM, of
  * one that never answers QMP, and of one that obeys quit while its QEMU is
- * suspended, which the cancellation resumes, is a cancellation; `--ends` runs
- * these machines alone. Each leaves no process and no socket behind. With the
- * real QEMU, the kernel of the architecture ARCH names boots under TCG to the
- * debug shell, the first boot with an empty disk on IDE and two on AHCI that
- * the kernel must find where the profile put them,
+ * suspended, which the cancellation resumes, is a cancellation. Each leaves no
+ * process and no socket behind. With the real QEMU, the kernel of the
+ * architecture ARCH names boots under TCG to the debug shell, the first boot
+ * with an empty disk on IDE and two on AHCI that the kernel must find where the
+ * profile put them,
  * and its `poweroff` must give a shutdown; a cancellation at the prompt must
  * give a cancellation, and an accelerator this host's QEMU does not have must
  * give a failed accelerator. OVMF's code image, as tools/setup/ovmf_path.sh
  * finds it, boots from the launcher's read-only flash with a CD and an empty
- * disk of 4 TiB on NVMe, and its boot manager must name both; `--uefi` runs
- * this row alone.
+ * disk of 4 TiB on NVMe, and its boot manager must name both.
  *
  * The memory rows check the reservations of an ordinary profile and of the
  * boundary profile, refuse a changed boundary profile and a site that has not
@@ -54,7 +52,7 @@
  * They refuse malformed and foreign addresses, bad and duplicate station
  * addresses, a card on a hub with an option of a user network, the
  * restriction, a forward or a guest forward, and a hub on a device that is no
- * network card. With `--network` the program runs only these rows.
+ * network card.
  *
  * The forward rows check the user network of each network card as text: the
  * forwards of the case's local ports by TCP and by UDP, a card without
@@ -75,8 +73,7 @@
  * that takes the line must have it whole. One card has every
  * option of its user network in its one `-netdev`: its network, host, DHCP
  * and name server addresses, the restriction, forwards and guest forwards,
- * with its station address on its `-device`. With `--forwards` the program
- * runs only the forward and guest forward rows.
+ * with its station address on its `-device`.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -2377,41 +2374,6 @@ static void test_memory(void)
     etude_qemu_free(q);
 }
 
-/** Run the rows that option `opt` selects alone; 0 for no such option. */
-static int test_alone(const char *opt)
-{
-    if (strcmp(opt, "--boundary") == 0) {
-        test_real(1);
-    } else if (strcmp(opt, "--network") == 0) {
-        test_network_argv();
-        test_network_refused();
-        test_hubs();
-    } else if (strcmp(opt, "--capture") == 0) {
-        test_captures();
-    } else if (strcmp(opt, "--audio") == 0) {
-        test_audio_argv();
-        test_audio();
-    } else if (strcmp(opt, "--memory") == 0) {
-        test_memory();
-    } else if (strcmp(opt, "--usb") == 0) {
-        test_usb();
-    } else if (strcmp(opt, "--argv") == 0) {
-        test_argv();
-    } else if (strcmp(opt, "--uefi") == 0) {
-        test_uefi();
-    } else if (strcmp(opt, "--ends") == 0) {
-        test_ends();
-    } else if (strcmp(opt, "--forwards") == 0) {
-        test_forwards();
-        test_guest_addresses();
-        test_guest_forwards();
-        test_card();
-    } else {
-        return 0;
-    }
-    return 1;
-}
-
 int main(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
@@ -2424,7 +2386,9 @@ int main(int argc, char **argv)
     }
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         return 1;
-    if (argc != 2 || !test_alone(argv[1])) {
+    if (argc == 2 && strcmp(argv[1], "--boundary") == 0) {
+        test_real(1);
+    } else {
         test_argv();
         test_network_argv();
         test_network_refused();

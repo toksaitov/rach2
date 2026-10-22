@@ -11,18 +11,12 @@
  * host-seconds: 450
  *
  * The builder is compiled and run on every run, in the test's own fixture
- * directory (compat/fixdir_host.c), or in the one FIXDIR names, so that runs
- * at once do not share one. The rows read the
- * well-formed volume back through every shape of file and set, mount each
- * damaged volume, mount a volume the host's own tools wrote, run the write
- * sequences and stop each after every write, bound the cost of creates in
- * a large directory, check what a sync and an unlink leave on the medium,
- * and mount dirty volumes. Each function's comment says what its rows
- * require.
- *
- * With `--scan-cost` or `--barriers` the program runs only the cost rows, or
- * only the rows that judge the driver's barriers, and ends at the first
- * failure.
+ * directory (compat/fixdir_host.c), so that runs at once do not share one. The
+ * rows read the well-formed volume back through every shape of file and set,
+ * mount each damaged volume, mount a volume the host's own tools wrote, run the
+ * write sequences and stop each after every write, bound the cost of creates in
+ * a large directory, check what a sync and an unlink leave on the medium, and
+ * mount dirty volumes. Each function's comment says what its rows require.
  */
 
 #include "../../rach2/sys/fs/exfat.h"
@@ -218,19 +212,13 @@ int block_request(block_device_t *device, int write, uint64_t lba, uint32_t coun
 /* ---- the rows ---- */
 
 static int fails;
-/* Set by `--scan-cost` and `--barriers`: the first failure ends the run. */
-static int first_failure_ends;
 
-/** Count a failed check and print `what`; end the run when
- *  `first_failure_ends`. */
+/** Count a failed check and print `what`. */
 static void check(int ok, const char *what)
 {
     if (!ok) {
         fails++;
         printf("exfat_hosttest: FAIL: %s\n", what);
-        if (first_failure_ends) {
-            exit(1);
-        }
     }
 }
 
@@ -2476,31 +2464,11 @@ static void dirty_rows(void)
     }
 }
 
-/**
- * Run every row; or with `--scan-cost` or `--barriers`, only the cost rows
- * or the barrier rows, the first failure ending the run. Returns 0 when
- * every check passed, 1 otherwise, and 2 for an unknown mode.
- */
-int main(int argc, char **argv)
+/** Run every row. Returns 0 when every check passed, and 1 otherwise. */
+int main(void)
 {
     proc_a.pid = 1;
     devmodel_init(&model, medium, image, IMG_BYTES);
-    if (argc > 1) {
-        first_failure_ends = 1;
-        if (strncmp(argv[1], "--scan-cost", 12) == 0) {
-            scan_cost_rows();
-        } else if (strncmp(argv[1], "--barriers", 11) == 0) {
-            durability_rows();
-            free_durability_row();
-            matrix_pass();
-        } else {
-            printf("exfat_hosttest: usage: exfat_hosttest [--scan-cost | --barriers]\n");
-            return 2;
-        }
-        printf("exfat_hosttest: OK\n");
-        fix_passed();
-        return 0;
-    }
     well_formed_rows("", "the held up-case table");
     well_formed_rows("--big-upcase", "the streamed up-case table");
     well_formed_rows("--uncompressed-upcase", "the indexed up-case table");

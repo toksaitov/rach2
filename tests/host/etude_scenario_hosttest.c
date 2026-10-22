@@ -76,11 +76,7 @@
  * powers off. Under the stand-in, which writes the monotonic clock on its
  * console every TICK_MS, the same suspension holds each stop, with no time
  * written inside one and one after each; a stop signal, a step's bound and a
- * kill of the scenario during a stop each leave no stopped QEMU. With
- * ETUDE_TEST_FORWARD set the program runs the two forward rows alone, with
- * ETUDE_TEST_FAULT_ONLY set the reboot row and the fault row alone, with
- * ETUDE_TEST_SUSPEND_ONLY the stand-in's suspension rows alone, and with
- * ETUDE_TEST_STOP_ALL_ONLY the row whose every process gets SIGTERM alone.
+ * kill of the scenario during a stop each leave no stopped QEMU.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -3589,14 +3585,10 @@ static void test_suspend(const struct site *s)
     CHECK(file_has(ended, "fake: terminated"), "suspend-kill: the stopped QEMU took its SIGTERM");
 }
 
-/** Run the audio rows and the capture rows, unless ETUDE_TEST_CAPTURE_ONLY or
- * ETUDE_TEST_AUDIO_ONLY asks for one kind alone, and then the stand-in rows,
- * the fault row, the stop row, the suspension rows, the forward row and the
- * damaged row; or the forward row alone when `forward_only` is set, the
- * reboot row and the fault row alone when ETUDE_TEST_FAULT_ONLY is, the
- * suspension rows alone when ETUDE_TEST_SUSPEND_ONLY is, or the stop-all row
- * alone when ETUDE_TEST_STOP_ALL_ONLY is. */
-static void test_stand_in(int forward_only)
+/** Run the audio rows, the capture rows, the stand-in rows, the fault row,
+ * the stop row, the suspension rows, the pair and isolation rows, the forward
+ * row and the damaged row. */
+static void test_stand_in(void)
 {
     struct site s;
     size_t i;
@@ -3607,58 +3599,27 @@ static void test_stand_in(int forward_only)
         fails++;
         return;
     }
-    if (!forward_only && getenv("ETUDE_TEST_FAULT_ONLY") != NULL) {
-        run_row(&stand_in_rows[0], &s, NULL);
-        run_row(fault_row, &s, NULL);
-        CHECK(!machines_left(), "every stand-in QEMU has ended");
-        etude_store_close(s.store);
-        return;
-    }
-    if (getenv("ETUDE_TEST_SUSPEND_ONLY") != NULL) {
-        test_suspend(&s);
-        CHECK(!machines_left(), "every stand-in QEMU has ended");
-        etude_store_close(s.store);
-        return;
-    }
-    if (getenv("ETUDE_TEST_STOP_ALL_ONLY") != NULL) {
-        test_stop_all(&s);
-        row_gone("stop-all");
-        CHECK(!machines_left(), "every stand-in QEMU has ended");
-        etude_store_close(s.store);
-        return;
-    }
-    if (!forward_only) {
-        for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
-            if (getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL)
-                run_row(&audio_rows[i], &s, NULL);
-        for (i = 0; i < sizeof(capture_rows) / sizeof(capture_rows[0]); i++)
-            if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL)
-                run_row(&capture_rows[i], &s, NULL);
-        if (getenv("ETUDE_TEST_AUDIO_ONLY") != NULL || getenv("ETUDE_TEST_CAPTURE_ONLY") != NULL) {
-            etude_store_close(s.store);
-            return;
-        }
-        for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
-            run_row(&stand_in_rows[i], &s, NULL);
-        run_row(fault_row, &s, NULL);
-        run_row(stop_row, &s, WAITING);
-        test_suspend(&s);
-        run_row(pair_row, &s, NULL);
-        test_isolation(&s);
-    }
+    for (i = 0; i < sizeof(audio_rows) / sizeof(audio_rows[0]); i++)
+        run_row(&audio_rows[i], &s, NULL);
+    for (i = 0; i < sizeof(capture_rows) / sizeof(capture_rows[0]); i++)
+        run_row(&capture_rows[i], &s, NULL);
+    for (i = 0; i < sizeof(stand_in_rows) / sizeof(stand_in_rows[0]); i++)
+        run_row(&stand_in_rows[i], &s, NULL);
+    run_row(fault_row, &s, NULL);
+    run_row(stop_row, &s, WAITING);
+    test_suspend(&s);
+    run_row(pair_row, &s, NULL);
+    test_isolation(&s);
     run_row(&forward_rows[0], &s, NULL);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the disk artifact is unchanged");
-    if (!forward_only) {
-        CHECK(damage(s.store, s.kernel) == 0, "damaged");
-        run_row(damaged_row, &s, NULL);
-    }
+    CHECK(damage(s.store, s.kernel) == 0, "damaged");
+    run_row(damaged_row, &s, NULL);
     CHECK(!machines_left(), "every stand-in QEMU and etude-guest has ended");
     etude_store_close(s.store);
 }
 
-/** Run the real rows, or the real forward row alone when `forward_only` is
- * set. */
-static void test_real(int forward_only)
+/** Run the real rows and the real forward row. */
+static void test_real(void)
 {
     struct site s;
     size_t i;
@@ -3668,7 +3629,7 @@ static void test_real(int forward_only)
         fails++;
         return;
     }
-    for (i = 0; !forward_only && i < sizeof(real_rows) / sizeof(real_rows[0]); i++)
+    for (i = 0; i < sizeof(real_rows) / sizeof(real_rows[0]); i++)
         run_row(&real_rows[i], &s, NULL);
     run_row(&forward_rows[1], &s, NULL);
     CHECK(etude_store_check(s.store, s.disk, NULL) == 0, "the real disk artifact is unchanged");
@@ -3684,7 +3645,6 @@ static void test_real(int forward_only)
 static void __attribute__((constructor)) dispatch(int argc, char **argv)
 {
     const char *fake = getenv("ETUDE_FAKE_QEMU");
-    int forward_only;
 
     if (argc == 2)
         return;
@@ -3698,13 +3658,8 @@ static void __attribute__((constructor)) dispatch(int argc, char **argv)
     }
     if (setenv("TMPDIR", fix_dir(), 1) != 0)
         exit(1);
-    forward_only = getenv("ETUDE_TEST_FORWARD") != NULL && *getenv("ETUDE_TEST_FORWARD") != '\0';
-    test_stand_in(forward_only);
-    if (getenv("ETUDE_TEST_AUDIO_ONLY") == NULL && getenv("ETUDE_TEST_CAPTURE_ONLY") == NULL &&
-        getenv("ETUDE_TEST_FAULT_ONLY") == NULL && getenv("ETUDE_TEST_SUSPEND_ONLY") == NULL &&
-        getenv("ETUDE_TEST_STOP_ALL_ONLY") == NULL &&
-        (getenv("ETUDE_TEST_NO_REAL") == NULL || *getenv("ETUDE_TEST_NO_REAL") == '\0'))
-        test_real(forward_only);
+    test_stand_in();
+    test_real();
     if (fails != 0)
         exit(1);
     fix_passed();

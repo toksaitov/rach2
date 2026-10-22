@@ -23,19 +23,13 @@
 # three steps, and a build and a record stopped by SIGTERM, each followed by
 # a deployment that finishes; a deployment on this machine from a clone,
 # which the probes leave as it was; a commit's source; Windows; the discovery
-# of QEMU's OVMF code image and an absent override. --ovmf runs only the two
-# firmware rows and Windows. --kvm runs only the three KVM device rows.
+# of QEMU's OVMF code image and an absent override.
 #
-# Usage: sh tests/system/etude_deploy_test.sh [--ovmf | --kvm]
+# Usage: sh tests/system/etude_deploy_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --ovmf) mode=ovmf ;;
-    --kvm) mode=kvm ;;
-    *) echo 'etude-deploy-test: usage: etude_deploy_test.sh [--ovmf | --kvm]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'etude-deploy-test: usage: etude_deploy_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 testpid=
@@ -668,8 +662,6 @@ row()
 }
 
 rows='deploy again admin sudo check busy format rights lost stopped local revision kvm-open kvm-unavailable kvm-missing ovmf-discovery ovmf-missing windows'
-[ "$mode" != ovmf ] || rows='ovmf-discovery ovmf-missing windows'
-[ "$mode" != kvm ] || rows='kvm-open kvm-unavailable kvm-missing'
 
 # rows: run every row against the copy, print `etude-deploy-test: failed:
 # NAME` for each that fails, and fail when any did.

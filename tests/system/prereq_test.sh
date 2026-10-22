@@ -21,17 +21,12 @@
 # machine is the one the codexapi cases run. The OVMF rows run each POSIX
 # platform's real probe with missing, directory, unreadable and readable
 # overrides, and with a readable pair found beside a directory of PATH.
-# --ovmf runs only the OVMF rows.
 #
-# Usage: sh tests/system/prereq_test.sh [--ovmf]
+# Usage: sh tests/system/prereq_test.sh
 #
 set -u
 
-case ${1:-} in
-    '') mode=check ;;
-    --ovmf) mode=ovmf ;;
-    *) echo 'prereq-test: usage: prereq_test.sh [--ovmf]' >&2; exit 2 ;;
-esac
+[ "$#" -eq 0 ] || { echo 'prereq-test: usage: prereq_test.sh' >&2; exit 2; }
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 work=
 trap '[ -z "$work" ] || rm -rf "$work"' EXIT
@@ -430,7 +425,6 @@ coverage()
 }
 
 rows='linux-present linux-report linux-root linux-install linux-sudo windows-report windows-install windows-elevated malformed coverage ovmf-linux ovmf-macos'
-[ "$mode" != ovmf ] || rows='ovmf-linux ovmf-macos'
 
 # rows: run every row against the copy, print `prereq-test: failed: NAME`
 # for each that fails, and fail when any did.

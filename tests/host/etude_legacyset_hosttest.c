@@ -2853,12 +2853,6 @@ int main(int argc, char **argv)
     unsetenv("RACH2_OVMF_CODE");
     unsetenv("FIXTURE_BREAK");
     make_tree();
-    if (argc == 2 && strcmp(argv[1], "--guest-only") == 0) {
-        test_guest();
-        if (fails == 0)
-            fix_passed();
-        return fails != 0;
-    }
     test_mixed();
     test_width();
     test_serial();

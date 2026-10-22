@@ -446,23 +446,15 @@ static void row_scale(void)
           "stall is reported after four lengths and a second");
 }
 
-/**
- * Select the rows: with no argument all of them; with one that begins with
- * `s` the frame rows and the setup rows; with any other the frame rows only.
- * Returns 0 when every check passes, 1 otherwise.
- */
-int main(int argc, char **argv)
+/** Run every row. Returns 0 when every check passes, 1 otherwise. */
+int main(void)
 {
     row_frames();
     row_short_write();
-    if (argc == 1 || argv[1][0] == 's') {
-        row_setup();
-    }
-    if (argc == 1) {
-        row_period();
-        row_callback();
-        row_scale();
-    }
+    row_setup();
+    row_period();
+    row_callback();
+    row_scale();
     printf("sb16-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }

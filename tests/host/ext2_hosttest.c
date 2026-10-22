@@ -3102,8 +3102,7 @@ static void remount_nomem_row(void)
  * ext2_batch_lifecycle.h, `batch_rows_under` and the cross-call order rows
  * at 16 and 512 buffers, from blocks 11, 1035 and 2059, then the default
  * mount, an rmdir of a held directory, a remount, a remount the heap cannot
- * give a batch, and the failed drain and flush rows. `main --batch-only`
- * runs only these.
+ * give a batch, and the failed drain and flush rows.
  */
 static void batch_rows(void)
 {
@@ -4303,9 +4302,8 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows. With `--batch-only` or `--times-only`, only the batch or
- * timestamp rows run. Returns 0, and
- * calls `fix_passed`, when every row passed.
+ * batch rows. With `--times-only`, only the timestamp rows run. Returns 0,
+ * and calls `fix_passed`, when every row passed.
  */
 int main(int argc, char **argv)
 {
@@ -4326,10 +4324,6 @@ int main(int argc, char **argv)
     }
     build_tree();
 
-    if (argc == 2 && streq(argv[1], "--batch-only")) {
-        batch_rows();
-        goto finish;
-    }
     if (argc == 2 && streq(argv[1], "--times-only")) {
         time_row();
         goto finish;

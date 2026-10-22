@@ -6,8 +6,7 @@
  * host-cflags: -DISH_USE_STDLIB
  *
  * ishmusl shares the input, descriptor and environment cases. Native wrappers
- * inject wait errors and short or failed reads. ISH_RAW_HOSTTEST selects the
- * raw error branch while retaining host calls for process and file operations.
+ * inject wait errors and short or failed reads.
  */
 #include <errno.h>
 #include <unistd.h>
@@ -53,11 +52,7 @@ static int test_waitpid(int pid, int *status, int options)
             return result;
         }
     }
-#ifdef ISH_RAW_HOSTTEST
-    return errno == EINTR ? -4 : -10;
-#else
     return -1;
-#endif
 }
 
 /** Bound each shell read or fail after a fixed number of successful reads. */
@@ -78,27 +73,17 @@ static ssize_t test_read(int fd, void *buffer, size_t count)
     return read(fd, buffer, count);
 }
 
-/**
- * Stat through the host, or report `stat_present` as a file without looking.
- *
- * The host result goes to a buffer of its own in both builds, since the raw
- * build's scratch buffer is not the host's `struct stat`.
- */
-static int test_stat(const char *path, void *unused)
+/** Stat through the host, or report `stat_present` as a file without
+ *  looking. */
+static int test_stat(const char *path, struct stat *result)
 {
-    struct stat result;
-
-    (void)unused;
     if (stat_present != NULL && strcmp(path, stat_present) == 0) {
         ++stat_present_calls;
         return 0;
     }
-    return stat(path, &result);
+    return stat(path, result);
 }
 
-#ifdef ISH_RAW_HOSTTEST
-#undef ISH_USE_STDLIB
-#endif
 #define stat(path, result) test_stat(path, result)
 
 #define waitpid test_waitpid
@@ -109,9 +94,6 @@ static int test_stat(const char *path, void *unused)
 #undef read
 #undef waitpid
 #undef stat
-#ifdef ISH_RAW_HOSTTEST
-#define ISH_USE_STDLIB
-#endif
 #define ISH_HOSTTEST
 #define main ish_probe_main
 #include "../musl/ishmusl.c"
