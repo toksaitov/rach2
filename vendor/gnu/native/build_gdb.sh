@@ -166,7 +166,11 @@ step_gdb()
 # it runs. The program's debugging information has its source's path as it
 # is in the root, and the safe path lets GDB load glibc's libthread_db from
 # /lib. The check requires the stop at the breakpoint, the backtrace, the
-# value printed, and the program's output and normal exit.
+# value printed, and the program's output and normal exit. A build host that
+# is not x86, as etude's tooling machine on a Mac is not, runs the target's
+# programs through QEMU's user-mode emulator, which cannot trace them, so
+# there the check ends before the session; the gnu suite's gdb rows run GDB's
+# session on Rach2.
 step_check()
 {
     lib="$SYSROOT/lib:$SYSROOT/usr/lib:$CROSS/$TARGET/lib"
@@ -176,6 +180,13 @@ step_check()
         grep -e --enable-tui
     v="$("$SYSROOT$GNU_LOADER" --library-path "$lib" "$ROOT/usr/bin/gdbserver" --version)"
     echo "$v" | sed -n 1p
+    case "$(uname -m)" in
+        x86_64 | i?86) ;;
+        *)
+            echo "gnu: gdb: check: no debugging session: this $(uname -m) host runs the target's programs through QEMU, which cannot trace them"
+            return 0
+            ;;
+    esac
     r="$(fresh check)/root"
     mkdir -p "$r/tmp" "$r/proc" "$r/check" "$r/usr/lib"
     cp -a "$SYSROOT/." "$r/"

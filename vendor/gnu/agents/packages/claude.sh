@@ -69,8 +69,18 @@ EOF
 }
 
 # claude reads its settings from its home, so it runs with one of its own.
+# The program is Bun's, whose JavaScriptCore aborts at its start under QEMU's
+# user-mode emulator, so a build host that is not x86, as etude's tooling
+# machine on a Mac is not, does not run it; the agents suite runs it on Rach2.
 package_check()
 {
+    case "$(uname -m)" in
+        x86_64 | i?86) ;;
+        *)
+            echo "claude: --version is not run on this $(uname -m) host, whose emulator of x86-64 cannot run Bun"
+            return 0
+            ;;
+    esac
     out=$(HOME="$SCRATCH" "$1/opt/claude/bin/claude" --version)
     case $out in
         "$VERSION (Claude Code)") ;;

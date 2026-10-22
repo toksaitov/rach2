@@ -45,7 +45,12 @@
 #   GNU_TOOLING_DRY_RUN  when not empty, the machine runs make with -n, which
 #                        prints what the layer's build would do, and makes no
 #                        image; OUTPUT is not written
-#   RACH2_QEMU_ACCEL     QEMU's accelerator: hvf on an Intel Mac, tcg elsewhere
+#   ETUDE_TOOLING_ARCH   the machine's architecture: arm64 on a Mac with Apple
+#                        silicon, which builds the layer as a cross build there
+#                        at the speed of the host, and amd64 elsewhere
+#   RACH2_QEMU_ACCEL     QEMU's accelerator: hvf on a Mac that can accelerate
+#                        the machine, an arm64 one on Apple silicon or an amd64
+#                        one on an Intel Mac, and tcg elsewhere
 #   ETUDE_TOOLING_CACHE  the machine's cache, build/tooling
 #
 
@@ -73,12 +78,21 @@ TOOLING="$REPO/build/tools/etude/etude-tooling"
 SHA="$REPO/build/tools/verify/sha256"
 DISK="$GNU_OUT/tooling.disk"
 LOCK="$DISK.lock"
+if [ -z "${ETUDE_TOOLING_ARCH:-}" ]; then
+    ETUDE_TOOLING_ARCH=amd64
+    if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+        ETUDE_TOOLING_ARCH=arm64
+    fi
+fi
 if [ -z "${RACH2_QEMU_ACCEL:-}" ]; then
     RACH2_QEMU_ACCEL=tcg
-    if [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = x86_64 ] &&
-        [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
-        RACH2_QEMU_ACCEL=hvf
-    fi
+    case "$(uname -m)/$ETUDE_TOOLING_ARCH" in
+        x86_64/amd64 | arm64/arm64)
+            if [ "$(uname -s)" = Darwin ] && [ "$(sysctl -n kern.hv_support 2>/dev/null)" = 1 ]; then
+                RACH2_QEMU_ACCEL=hvf
+            fi
+            ;;
+    esac
 fi
 if [ -z "${MUSL_CRYPT_SRC:-}" ]; then
     echo "gnu: tooling: MUSL_CRYPT_SRC is not set; make sets it" >&2
@@ -130,7 +144,7 @@ trap 'stop 143' TERM
 # tooling ARG...: run etude-tooling with the tree's recipe and cache.
 tooling()
 {
-    "$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -a "$RACH2_QEMU_ACCEL" "$@"
+    "$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" "$@"
 }
 
 # take_lock: wait until no other job uses the build disk, and take it. The
@@ -270,10 +284,10 @@ if [ -z "$DRY" ]; then
     set -- "$@" -d "$STAGE/image" -o digest
 fi
 volume=$(($(wc -c < "$STAGE/tree.tar.gz") / 1048576 + 64))
-echo "gnu: tooling: $RACH2_ARCH: the job runs in the tooling machine with $CPUS processors and $MIB MiB, on $DISK"
+echo "gnu: tooling: $RACH2_ARCH: the job runs in the $ETUDE_TOOLING_ARCH tooling machine under $RACH2_QEMU_ACCEL with $CPUS processors and $MIB MiB, on $DISK"
 follow &
 FOLLOWER=$!
-"$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -a "$RACH2_QEMU_ACCEL" run -n \
+"$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" run -n \
     -c "$CPUS" -m "$MIB" -s "$volume" -t "$DEADLINE" -i "$STAGE/tree.tar.gz" -i "$STAGE/job.env" \
     "$@" -O "$STAGE" "$DIR/tooling_job.sh" &
 JOB=$!

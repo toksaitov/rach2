@@ -62,7 +62,7 @@ EOF
 cat > "$tree/build/tools/etude/etude-tooling" << 'EOF'
 #!/bin/sh
 cache=
-while getopts r:C:a: o; do
+while getopts r:C:p:a: o; do
     [ "$o" != C ] || cache=$OPTARG
 done
 shift $((OPTIND - 1))

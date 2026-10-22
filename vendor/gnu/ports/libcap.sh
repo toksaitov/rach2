@@ -2,14 +2,16 @@
 # libcap, the library of POSIX capabilities, which BIND needs on Linux, and
 # its getcap, setcap and capsh, built by its Makefiles, without PAM's module
 # and Go's bindings; a program the build runs on the build host is compiled
-# with the host's compiler.
+# with the host's compiler. The objcopy that reads the target's loader from a
+# program it links is the cross toolchain's, since the host's reads only the
+# host's own objects on a build host that is not x86.
 VERSION=2.75
 SOURCE=libcap
 
 libcap_make()
 {
     make -C "$SRC" CC="$TARGET-gcc" BUILD_CC=cc AR="$TARGET-ar" RANLIB="$TARGET-ranlib" \
-        prefix=/usr lib=lib sbindir=sbin GOLANG=no PAM_CAP=no "$@"
+        OBJCOPY="$TARGET-objcopy" prefix=/usr lib=lib sbindir=sbin GOLANG=no PAM_CAP=no "$@"
 }
 
 port_build()

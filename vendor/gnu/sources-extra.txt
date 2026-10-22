@@ -9,11 +9,12 @@
 # release key, 14F26682D0916CDD81E37B6D61B7B526D98F0353, for Firefox's
 # source, whose signed SHA256SUMS lists the same digest; and the Rust
 # release key, 108F66205EAEB0AAA8DD5E1C85AB96E6FA1BE5FE, for the Rust
-# components. cbindgen's crate has no signature: its digest is the one the
-# crates.io index lists, and the crate records the git revision from which
-# Firefox's automation builds cbindgen. The Debian archive keys have the
-# fingerprints ftp-master publishes, and Ubuntu's debian-archive-keyring
-# package has the same ones.
+# components, the aarch64 host's among them, which the SpiderMonkey build
+# uses in etude's tooling machine on a Mac. cbindgen's crate has no
+# signature: its digest is the one the crates.io index lists, and the crate
+# records the git revision from which Firefox's automation builds cbindgen.
+# The Debian archive keys have the fingerprints ftp-master publishes, and
+# Ubuntu's debian-archive-keyring package has the same ones.
 #
 # The CA bundle is curl's extract of Mozilla's root store as Mozilla last
 # changed it, on 2026-09-25: 121 certificates in PEM form. It has no
@@ -30,6 +31,9 @@ rustc 1.86.0 https://static.rust-lang.org/dist/rustc-1.86.0-x86_64-unknown-linux
 cargo 1.86.0 https://static.rust-lang.org/dist/cargo-1.86.0-x86_64-unknown-linux-gnu.tar.xz c5c1590f7e9246ad9f4f97cfe26ffa92707b52a769726596a9ef81565ebd908b
 rust-std 1.86.0 https://static.rust-lang.org/dist/rust-std-1.86.0-x86_64-unknown-linux-gnu.tar.xz 67be7184ea388d8ce0feaf7fdea46f1775cfc2970930264343b3089898501d37
 rust-std-i686 1.86.0 https://static.rust-lang.org/dist/rust-std-1.86.0-i686-unknown-linux-gnu.tar.xz ce9f0fa4b0760730e26bf315cebe099f0b883436e095c5fc4b94ba20bd9f121a
+rustc-aarch64 1.86.0 https://static.rust-lang.org/dist/rustc-1.86.0-aarch64-unknown-linux-gnu.tar.xz ccece9e59546d2e6ff3fc3b8f4b033aab21631c271eefbe814b3cbace6628c6e
+cargo-aarch64 1.86.0 https://static.rust-lang.org/dist/cargo-1.86.0-aarch64-unknown-linux-gnu.tar.xz 37156542b702e8b4ffd1c5c75017632582343e93ca378285cdc92196c85c77e3
+rust-std-aarch64 1.86.0 https://static.rust-lang.org/dist/rust-std-1.86.0-aarch64-unknown-linux-gnu.tar.xz 176129577a5d560bbd94bcd2d24c0228bb495b73219df02556b4e4b4f0815bf7
 cbindgen 0.28.0 https://static.crates.io/crates/cbindgen/cbindgen-0.28.0.crate eadd868a2ce9ca38de7eeafdcec9c7065ef89b42b32f0839278d55f35c54d1ff
 debian-archive-key-12 12 https://ftp-master.debian.org/keys/archive-key-12.asc c2a9a16fde95e037bafd0fa6b7e31f41b4ff1e85851de5558f19a2a2f0e955e2
 debian-archive-key-13 13 https://ftp-master.debian.org/keys/archive-key-13.asc 6f1d277429dd7ffedcc6f8688a7ad9a458859b1139ffa026d1eeaadcbffb0da7

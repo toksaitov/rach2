@@ -6,7 +6,10 @@
 # test of it, a CLOCK_MONOTONIC timer with SIGEV_THREAD, which glibc runs on
 # a helper thread that the kernel signals by SIGEV_THREAD_ID, passes on
 # Rach2, so Vim times its searches with timer_create. The kernel's file
-# systems keep no extended attributes, and Vim is built without them.
+# systems keep no extended attributes, and Vim is built without them. Its
+# install strips vim and xxd with the strip configure found, the host's,
+# which on a build host that is not x86 cannot read them, so it is given the
+# cross toolchain's.
 VERSION=9.2.1132
 DEPENDS=ncurses
 CACHE="vim_cv_stat_ignores_slash=no vim_cv_timer_create_works=yes"
@@ -22,5 +25,5 @@ port_build()
 port_install()
 {
     cd "$SRC" || exit
-    make install DESTDIR="$DEST"
+    make install DESTDIR="$DEST" STRIP="$TARGET-strip"
 }

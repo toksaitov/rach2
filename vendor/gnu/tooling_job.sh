@@ -10,7 +10,10 @@
 # file name), SIZE (its size in MiB), JOBS (make's jobs) and DRY_RUN.
 # ETUDE_DISK1 is the layer's build disk, an ext4 volume labelled rach2-gnu
 # that persists between jobs; a disk on which blkid finds no signature, as a
-# new one, is formatted, and a disk with any other volume is refused.
+# new one, is formatted, and a disk with any other volume is refused. The
+# volume's file `machine` has the machine's architecture, as `uname -m` gives
+# it, since the build host's programs that the build tree keeps run on that
+# architecture alone; a disk of another machine is refused.
 # ETUDE_DISK2, which a dry run does not have, is the image's disk, of the
 # image's size and reading as zeros.
 #
@@ -25,13 +28,13 @@
 # a stopped machine left on the disk follows the files its step wrote.
 #
 # make's output and the scripts' go to a log of the job's own in /gnu/log,
-# which keeps the last 20, and to the machine's second serial port, each line
-# after the prefix `gnu-vm: `. That port is etude-tooling's channel, which
-# passes over lines it does not know and keeps them in channel.log in the
-# job's directory, where tooling_image.sh reads them while the job runs; the
-# console, the first port, is not used, since its getty hangs up the port
-# once it starts. The standard output has the outcome, and the end of the log
-# after a failure.
+# which keeps the last 20, and to the machine's second serial port, ttyS1 on
+# amd64 and ttyAMA1 on arm64, each line after the prefix `gnu-vm: `. That
+# port is etude-tooling's channel, which passes over lines it does not know
+# and keeps them in channel.log in the job's directory, where tooling_image.sh
+# reads them while the job runs; the console, the first port, is not used,
+# since its getty hangs up the port once it starts. The standard output has
+# the outcome, and the end of the log after a failure.
 #
 # Usage: sh tooling_job.sh
 #
@@ -41,6 +44,7 @@ set -u
 MNT=/gnu
 TREE=$MNT/rach2
 CHAN=/dev/ttyS1
+[ ! -c /dev/ttyAMA1 ] || CHAN=/dev/ttyAMA1
 BUILDER=rach2
 BUILDER_ID=1000
 LABEL=rach2-gnu
@@ -52,11 +56,15 @@ fail()
 }
 
 # builder COMMAND...: run COMMAND as the build's account, with an
-# environment of its own.
+# environment of its own. In a machine that is not x86, QEMU_LD_PREFIX gives
+# QEMU's user-mode emulator the toolchain's sysroot, under which an i386 or
+# x86-64 program's loader and libraries are found first, as an x86-64 host's
+# own are when the build runs a program it has just linked, such as bzip2's
+# test of itself.
 builder()
 {
     setpriv --reuid=$BUILDER_ID --regid=$BUILDER_ID --clear-groups \
-        env -i HOME=$MNT/home LANG=C.UTF-8 TMPDIR=$MNT/tmp \
+        env -i HOME=$MNT/home LANG=C.UTF-8 TMPDIR=$MNT/tmp ${LD_PREFIX:+QEMU_LD_PREFIX="$LD_PREFIX"} \
         PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin "$@"
 }
 
@@ -89,6 +97,12 @@ mount_disk()
     mkdir -p $MNT
     mount -o noinit_itable,nodelalloc "$DISK" $MNT || fail 'the build disk does not mount'
     resize2fs "$DISK" > /dev/null 2>&1 || fail 'resize2fs cannot grow the volume to the disk'
+    [ -s $MNT/machine ] || uname -m > $MNT/machine
+    built=$(cat $MNT/machine)
+    if [ "$built" != "$(uname -m)" ]; then
+        umount $MNT
+        fail "the build disk was built on $built, and this machine is $(uname -m); remove the disk"
+    fi
 }
 
 # sync_tree: as the build's account, replace the tree with the host's,
@@ -132,6 +146,11 @@ WORK=$(pwd)
 . ./job.env
 SUFFIX=
 [ "$RACH2_ARCH" != x86_64 ] || SUFFIX=/x86_64
+LD_PREFIX=
+case "$(uname -m)" in
+    x86_64 | i?86) ;;
+    *) LD_PREFIX=$TREE/build$SUFFIX/vendor/gnu/sysroot ;;
+esac
 [ -z "$DRY_RUN" ] || DRY_RUN=-n
 case ${1:-} in
     --tree) sync_tree; exit ;;

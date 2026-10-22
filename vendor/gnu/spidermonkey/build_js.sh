@@ -16,8 +16,10 @@
 # are:
 #
 #   rust      install Rust 1.86.0, the release Firefox 140 is built with, for
-#             this host, an x86-64 one, and for i686 when that is the
-#             target, from the pinned components into rust/ of the build tree
+#             this host, x86-64 or, in etude's tooling machine on a Mac,
+#             aarch64, and the standard library of the target where it is
+#             not the host's, from the pinned components into rust/ of the
+#             build tree
 #   cbindgen  build cbindgen 0.28.0, the release Firefox 140's automation
 #             uses, from its crate; configure requires it, though the shell
 #             does not use it
@@ -85,6 +87,10 @@ step_rust()
 {
     rm -rf "$RUST"
     components="rustc cargo rust-std"
+    if [ "$(uname -m)" = aarch64 ]; then
+        components="rustc-aarch64 cargo-aarch64 rust-std-aarch64"
+        [ "$RACH2_ARCH" = x86_64 ] && components="$components rust-std"
+    fi
     [ "$RACH2_ARCH" = i686 ] && components="$components rust-std-i686"
     for c in $components; do
         t="$(extract "$c" "$WORK/js-rust")"
