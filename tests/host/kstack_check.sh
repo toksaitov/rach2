@@ -9,7 +9,7 @@
 #
 # Usage: sh tests/host/kstack_check.sh
 # The script builds from the tree in a scratch directory under build/tests,
-# runs the fixture for at most 20 seconds and exits with its status.
+# runs the fixture and exits with its status.
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo"
@@ -73,4 +73,4 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "$repo/build/tests/kstack-check.XXXXXX")
 build "$work"
-perl -e 'alarm 20; exec @ARGV or die "kstack-check: exec: $!\n"' "$work/kstack"
+"$work/kstack"

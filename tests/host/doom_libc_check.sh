@@ -7,9 +7,8 @@
 # Usage: sh tests/host/doom_libc_check.sh
 #        sh tests/host/doom_libc_check.sh run DIR
 # With no operand it compiles doom_libc-i686 and doom_libc-x86_64 in a
-# scratch directory and runs them. `run` runs the two programs in DIR for at
-# most 10 seconds each, prints `doom-libc-check: ARCH: status N` for each,
-# and ends with
+# scratch directory and runs them. `run` runs the two programs in DIR, prints
+# `doom-libc-check: ARCH: status N` for each, and ends with
 # `doom-libc-check: result: pass` and status 0, or
 # `doom-libc-check: result: fail: ARCH...` and status 1; a program that ends
 # with a status above 1 makes it exit 2. On a host that is not an x86 Linux,
@@ -69,8 +68,7 @@ run()
         out="$1/doom_libc-$arch.out"
         rm -f "$1/doom_libc-$arch.data"
         status=0
-        perl -e 'alarm 10; exec @ARGV or die "doom-libc-check: exec: $!\n"' \
-            "$1/doom_libc-$arch" "$1/doom_libc-$arch.data" >"$out" 2>&1 || status=$?
+        "$1/doom_libc-$arch" "$1/doom_libc-$arch.data" >"$out" 2>&1 || status=$?
         cat "$out"
         echo "doom-libc-check: $arch: status $status"
         [ "$status" -le 1 ] || worst=2

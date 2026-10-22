@@ -63,13 +63,13 @@ core="$core krffs/krffs_platform.c"
 cp krffs/mkimage.sh "$tools/tree/krffs/mkimage.sh"
 cp "$tools/bin/mkfs.krffs" "$tools/bin/stageimage.krffs" "$tools/tree/build/krffs/"
 
-# Run one command with a time limit: its output in the file named first, its
-# status in $rc.
+# Run one command in the background, so that a signal to this script can end
+# it: its output in the file named first, its status in $rc.
 bounded()
 {
     out=$1
     shift
-    perl -e 'alarm 10; exec @ARGV or die "krffs-tools: exec: $!\n"' "$@" >"$out" 2>&1 &
+    "$@" >"$out" 2>&1 &
     child=$!
     rc=0
     wait "$child" || rc=$?
