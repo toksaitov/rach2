@@ -103,6 +103,16 @@
  * Their invocations, of a run that no site policy admitted, do not permit
  * the lazy boundary memory profile.
  *
+ * The kernel, the disk and the scenario that the five machine cases share
+ * are each copied to the store once, which the test counts by putting a
+ * copy of its own in the driver's place, `legacy_set_put`, and every case is
+ * given the digest of each. A disk changed after its first copy is copied
+ * again for the next case: the first case is given its first digest, and
+ * the next and those after it the changed disk's. When the disk's first
+ * copy fails, its case ends incomplete with the reason and no invocation,
+ * the next case copies the disk again, and the cases after it are given that
+ * copy's digest.
+ *
  * A suite of one machine case, on x86_64, whose machine is of the lazy 72 GiB
  * boundary profile with the case's 4 GiB reservation: given a site policy
  * with the line `boundary_lazy bigmem-boundary-v1`, its invocation permits
@@ -128,9 +138,15 @@
 
 #include "compat/fixdir_host.c"
 #include "sha256.h"
+#include "etude/artifact.h"
 #include "etude/history.h"
 #include "etude/ledger.h"
 #include "etude/legacy.h"
+
+/* The set driver's copy of a file to its store, which a host test build of
+ * legacy_set.c lets the test replace. */
+extern int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expect,
+                             char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size);
 
 static int fails;
 
@@ -356,6 +372,12 @@ static const struct {
                      {"fixture.machine.allowed", ", \"critical\": \"init: exited\"", 1},
                      {"fixture.machine.lost", "", 0},
                      {"fixture.machine.noconsole", "", 0}};
+
+/* The disk that the machine cases share, its text as the fixture's Makefile
+ * makes it, and the text a row gives it after its first copy. */
+#define DISK "build/images/disk.img"
+static const char disk_text[] = "disk\n";
+static const char disk_changed[] = "disk changed after its first copy\n";
 
 /* The family `boundary`: one machine case of a machine of the lazy 72 GiB
  * boundary profile on x86-64, with the boundary's 4 GiB reservation, which
@@ -616,6 +638,10 @@ struct history {
     size_t n, cap;
 };
 
+/* The fault a row puts into the driver's copies to its store: none, the
+ * first copy of the disk failing, or the disk changed after its first copy. */
+enum put_fault { PUT_NONE, PUT_FAIL, PUT_CHANGE };
+
 /* One run of the set driver, as a row asks for it, and what it gave. */
 struct run {
     const char *name; /* the row's, after which its files are named */
@@ -633,12 +659,14 @@ struct run {
     unsigned limit_mib; /* the ledger's memory limit, or 0 for MEMORY_MIB */
     int nojudge;        /* the driver is given no casecheck */
     int guest;          /* it runs guest cases, on the real QEMU */
+    enum put_fault put; /* the fault of the driver's copies */
     pid_t pid;
     int status;  /* the driver's, or -1 when it did not end by itself */
     long claims; /* the claims the ledger kept after it, or -1 */
     int leaks;   /* LeakSanitizer found a leak of the driver */
     char results[PATH_LEN], evidence[PATH_LEN], status_file[PATH_LEN];
     char out_file[PATH_LEN], side[PATH_LEN];
+    char copies[PATH_LEN]; /* the path of each copy to the store, a line each */
     char run_id[256];
     char out[OUT_LEN]; /* what it printed */
     int read;          /* etude_history_read's result, or -2 for no stream */
@@ -1267,11 +1295,52 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     o->site = r->site;
 }
 
+/* The run whose set this process drives. */
+static const struct run *driving;
+
+/** Say whether `path` names the file `name` of the tree: whether it ends in
+ * a slash and `name`. */
+static int names_file(const char *path, const char *name)
+{
+    size_t n = strlen(path), k = strlen(name);
+
+    return n > k && path[n - k - 1] == '/' && strcmp(path + n - k, name) == 0;
+}
+
 /**
- * Run the set of `r` as a set's driver, in this child of the test: write
- * what it printed to `r->out_file`, then the claims the ledger keeps while
- * this process, their owner, still runs and whether LeakSanitizer finds a
- * leak to `r->side`, and exit with the driver's status.
+ * Copy the file at `path` to the store `s` in the set driver's place, as
+ * `legacy_set_put`: add `path` to the run's list of copies, and then, for
+ * the row's fault, copy the disk the first time from a name that does not
+ * exist, so that the copy fails, or change the disk after its first copy.
+ */
+static int counted_put(struct etude_store *s, const char *path, const char *expect,
+                       char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size)
+{
+    static int disks;
+    char absent[PATH_MAX + 8];
+    FILE *f = fopen(driving->copies, "a");
+    int first = names_file(path, DISK) && disks++ == 0, rc;
+
+    if (f != NULL) {
+        fprintf(f, "%s\n", path);
+        fclose(f);
+    }
+    if (first && driving->put == PUT_FAIL) {
+        fix_format(absent, sizeof(absent), "%s.absent", path);
+        return etude_store_put(s, absent, expect, digest, size);
+    }
+    rc = etude_store_put(s, path, expect, digest, size);
+    if (first && driving->put == PUT_CHANGE)
+        write_text(path, disk_changed, 0644);
+    return rc;
+}
+
+/**
+ * Run the set of `r` as a set's driver, in this child of the test, with its
+ * copies to its store counted: write what it printed to `r->out_file`, then
+ * the claims the ledger keeps while this process, their owner, still runs
+ * and whether LeakSanitizer finds a leak to `r->side`, and exit with the
+ * driver's status.
  */
 static void driver(const struct run *r)
 {
@@ -1281,6 +1350,8 @@ static void driver(const struct run *r)
     int status, leaks;
     FILE *f;
 
+    driving = r;
+    legacy_set_put = counted_put;
     catch_stops();
     if (r->unset != NULL)
         unsetenv(r->unset);
@@ -1325,6 +1396,7 @@ static void set_start(struct run *r)
     fix_format(r->status_file, sizeof(r->status_file), "%s/%s.status", dir, r->name);
     fix_format(r->out_file, sizeof(r->out_file), "%s/%s.out", dir, r->name);
     fix_format(r->side, sizeof(r->side), "%s/%s.side", dir, r->name);
+    fix_format(r->copies, sizeof(r->copies), "%s/%s.copies", dir, r->name);
     r->status = -1;
     r->claims = -1;
     fflush(stdout);
@@ -2108,31 +2180,75 @@ static int invocation_has(const struct run *r, const char *tail, const char *tex
 }
 
 /** Write in `out` the member `"NAME":"DIGEST"` of an invocation's artifacts
- * for the file `file` of the tree. */
-static void digest_member(char *out, size_t size, const char *name, const char *file)
+ * for a file whose content is `text`. */
+static void digest_text(char *out, size_t size, const char *name, const char *text)
 {
-    static char data[4096];
     unsigned char sum[32];
-    char path[PATH_LEN], hex[65];
+    char hex[65];
     struct sha256 h;
-    long n = read_text(in(path, sizeof(path), file), data, sizeof(data));
 
     sha256_init(&h);
-    sha256_update(&h, (const unsigned char *)data, n > 0 ? (size_t)n : 0);
+    sha256_update(&h, (const unsigned char *)text, strlen(text));
     sha256_final(&h, sum);
     sha256_hex(sum, hex);
     fix_format(out, size, "\"%s\":\"%s\"", name, hex);
 }
 
-/** A suite of machine cases: their scenario's invocations, and the
- * judgement of each one's report, end and console. */
+/** Write in `out` the member `"NAME":"DIGEST"` of an invocation's artifacts
+ * for the file `file` of the tree. */
+static void digest_member(char *out, size_t size, const char *name, const char *file)
+{
+    static char data[4096];
+    char path[PATH_LEN];
+
+    read_text(in(path, sizeof(path), file), data, sizeof(data));
+    digest_text(out, size, name, data);
+}
+
+/** Say whether the invocation of each machine case of run `r`, from the
+ * `first` of `machine_cases` on, has the text `text`. */
+static int invocations_have(const struct run *r, size_t first, const char *text)
+{
+    char tail[64];
+    size_t i;
+
+    for (i = first; i < sizeof(machine_cases) / sizeof(machine_cases[0]); i++) {
+        fix_format(tail, sizeof(tail), "%s.r0", machine_cases[i].id);
+        if (!invocation_has(r, tail, text))
+            return 0;
+    }
+    return 1;
+}
+
+/** Count the copies of the file `name` of the tree that the driver of run
+ * `r` made to its store. */
+static int copies_of(const struct run *r, const char *name)
+{
+    static char text[OUT_LEN];
+    char *line, *next;
+    int count = 0;
+
+    read_text(r->copies, text, sizeof(text));
+    for (line = text; *line != '\0'; line = next) {
+        if ((next = strchr(line, '\n')) != NULL)
+            *next++ = '\0';
+        else
+            next = line + strlen(line);
+        count += names_file(line, name);
+    }
+    return count;
+}
+
+/** A suite of machine cases: their scenario's invocations, the artifacts
+ * they share copied to the store once, and the judgement of each one's
+ * report, end and console. */
 static void test_machine(void)
 {
     static const struct etude_legacy_member m[] = {
         {"machine", 0, 0, 0, "cases/machine/machine.json"}};
     static struct run r;
     char text[PATH_LEN * 2], console[PATH_LEN * 2];
-    int before = fails;
+    int before = fails, given;
 
     r.name = "machine";
     r.members = m;
@@ -2161,11 +2277,20 @@ static void test_machine(void)
           "machine: the scenario takes its invocation alone");
     digest_member(text, sizeof(text), "kernel", "build/rach2/kernel");
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the kernel's digest");
-    digest_member(text, sizeof(text), "disk", "build/images/disk.img");
+    digest_member(text, sizeof(text), "disk", DISK);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the disk's digest");
     digest_member(text, sizeof(text), "scenario", "cases/scenario.sh");
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
           "invocation: the scenario's digest");
+    CHECK(copies_of(&r, "build/rach2/kernel") == 1 && copies_of(&r, DISK) == 1 &&
+              copies_of(&r, "build/cases/scenario") == 1,
+          "publish: the artifacts the five cases share are copied once each");
+    given = invocations_have(&r, 0, text);
+    digest_member(text, sizeof(text), "kernel", "build/rach2/kernel");
+    given &= invocations_have(&r, 0, text);
+    digest_member(text, sizeof(text), "disk", DISK);
+    given &= invocations_have(&r, 0, text);
+    CHECK(given, "publish: each case is given each artifact's digest");
     fix_format(text, sizeof(text), "\"store\":\"%s/%s.store\"", r.evidence, r.run_id);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the store");
     fix_format(text, sizeof(text), "%s/%s.store", r.evidence, r.run_id);
@@ -2199,6 +2324,72 @@ static void test_machine(void)
     CHECK(r.claims == 0, "machine: the ledger has no claim");
     CHECK(!r.leaks, "machine: the driver leaks nothing");
     show(&r, before);
+}
+
+/**
+ * The machine cases' disk copied to the store again. Changed after its first
+ * copy, it is copied for the next case, which is given its new digest, as
+ * are the cases after it, and the first case its old one. When its first
+ * copy fails, that case ends incomplete with the reason, before its scenario
+ * starts, and the next case copies the disk again and gives its copy to the
+ * cases after it.
+ */
+static void test_publish(void)
+{
+    static const struct etude_legacy_member m[] = {
+        {"machine", 0, 0, 0, "cases/machine/machine.json"}};
+    static struct run changed, failed;
+    char text[PATH_LEN * 2], disk[PATH_LEN];
+    int before = fails;
+
+    changed.name = "publish-changed";
+    changed.members = m;
+    changed.n = 1;
+    changed.put = PUT_CHANGE;
+    set_run(&changed);
+    CHECK(write_text(in(disk, sizeof(disk), DISK), disk_text, 0644) == 0,
+          "publish-changed: the disk restored");
+    CHECK(changed.status == 1, "publish-changed: a case did not pass");
+    CHECK(changed.read == 0, "publish-changed: the history is whole");
+    CHECK(copies_of(&changed, "build/rach2/kernel") == 1 && copies_of(&changed, DISK) == 2 &&
+              copies_of(&changed, "build/cases/scenario") == 1,
+          "publish-changed: the disk changed after its first copy is copied again, and "
+          "nothing else");
+    digest_text(text, sizeof(text), "disk", disk_text);
+    CHECK(invocation_has(&changed, "fixture.machine.clean.r0", text),
+          "publish-changed: the first case is given the disk's first digest");
+    digest_text(text, sizeof(text), "disk", disk_changed);
+    CHECK(invocations_have(&changed, 1, text),
+          "publish-changed: the cases after it are given the changed disk's digest");
+    CHECK(changed.claims == 0, "publish-changed: the ledger has no claim");
+    CHECK(!changed.leaks, "publish-changed: the driver leaks nothing");
+    show(&changed, before);
+
+    before = fails;
+    failed.name = "publish-failed";
+    failed.members = m;
+    failed.n = 1;
+    failed.put = PUT_FAIL;
+    set_run(&failed);
+    CHECK(failed.status == 1, "publish-failed: a case did not pass");
+    CHECK(failed.read == 0, "publish-failed: the history is whole");
+    CHECK(case_is(&failed, "fixture.machine.clean", "i686", 0, "incomplete",
+                  "its artifact disk, " DISK ", could not be published: No such file or "
+                  "directory"),
+          "publish-failed: the case whose copy failed is incomplete with the reason");
+    CHECK(!invocation_has(&failed, "fixture.machine.clean.r0", "{"),
+          "publish-failed: that case has no invocation");
+    CHECK(copies_of(&failed, "build/rach2/kernel") == 1 && copies_of(&failed, DISK) == 2 &&
+              copies_of(&failed, "build/cases/scenario") == 1,
+          "publish-failed: the next case copies the disk again, and the others reuse its copy");
+    digest_text(text, sizeof(text), "disk", disk_text);
+    CHECK(invocations_have(&failed, 1, text),
+          "publish-failed: the cases after it are given the disk's digest");
+    CHECK(case_is(&failed, "fixture.machine.allowed", "i686", 0, "pass", NULL),
+          "publish-failed: a case after it passes");
+    CHECK(failed.claims == 0, "publish-failed: the ledger has no claim");
+    CHECK(!failed.leaks, "publish-failed: the driver leaks nothing");
+    show(&failed, before);
 }
 
 /** Say whether the scenario of the boundary case of run `r` started. */
@@ -2627,6 +2818,7 @@ int main(int argc, char **argv)
     test_cases_stops();
     test_cases_beside();
     test_machine();
+    test_publish();
     test_boundary();
     test_cases_refused();
     test_machine_locks();

@@ -1151,6 +1151,57 @@
           ": boundary-short: "
         ]
       }
+    },
+    {
+      "name": "publish-again",
+      "summary": "a file that the machine cases share is copied to the run's store again for each case that names it",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (!p->published || !unchanged(&p->st, &st)) {\n",
+          "replace": "    if (!p->published || !unchanged(&p->st, &st) || 1) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": publish: the artifacts the five cases share are copied once each: "
+        ]
+      }
+    },
+    {
+      "name": "publish-unchanged",
+      "summary": "a file that changed after its copy to the run's store is taken for the one copied",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "    if (!p->published || !unchanged(&p->st, &st)) {\n",
+          "replace": "    if (!p->published || !unchanged(&p->st, &p->st)) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": publish-changed: the disk changed after its first copy is copied again, and nothing else: "
+        ]
+      }
+    },
+    {
+      "name": "publish-failure-kept",
+      "summary": "a copy to the run's store that failed is kept for the cases after it",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_set.c",
+          "find": "        p->published = legacy_set_put(x->objects, path, NULL, p->digest, NULL) == 0;\n        if (!p->published)\n            return -1;\n",
+          "replace": "        p->published = 1;\n        if (legacy_set_put(x->objects, path, NULL, p->digest, NULL) != 0)\n            return -1;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": publish-failed: the next case copies the disk again, and the others reuse its copy: "
+        ]
+      }
     }
   ]
 }

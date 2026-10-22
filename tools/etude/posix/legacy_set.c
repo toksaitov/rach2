@@ -2198,6 +2198,15 @@ static int boundary_admits(const struct set *x, const struct member *m, char *wh
     return 0;
 }
 
+#ifdef RACH2_HOSTTEST
+/* In the host test, the copy of a file to the run's store: the test replaces
+ * it to count the copies, to fail one and to change a file after one. */
+int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expect,
+                      char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size) = etude_store_put;
+#else
+#define legacy_set_put etude_store_put
+#endif
+
 /** Say whether `a` and `b` are the status of one file that has not changed:
  * the same device, inode and size, and the same times of its last
  * modification and its last change. */
@@ -2254,7 +2263,7 @@ static int publish_file(struct set *x, const char *path, char digest[ETUDE_DIGES
     p = &x->sources[i];
     if (!p->published || !unchanged(&p->st, &st)) {
         p->st = st;
-        p->published = etude_store_put(x->objects, path, NULL, p->digest, NULL) == 0;
+        p->published = legacy_set_put(x->objects, path, NULL, p->digest, NULL) == 0;
         if (!p->published)
             return -1;
     }
