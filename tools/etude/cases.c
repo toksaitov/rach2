@@ -1244,13 +1244,16 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
 
 /**
  * Require a reservation that covers every machine of the case together, each
- * with QEMU's overhead. One boundary machine, declared exactly by
- * `guest_memory`, may be among them; no other machine has reduced backing.
+ * with QEMU's overhead, and a tooling reservation that does too, since the
+ * set driver claims it in place of the other where the case runs work in the
+ * tooling machine. One boundary machine, declared exactly by `guest_memory`,
+ * may be among them; no other machine has reduced backing.
  */
 static void memory_resources(const struct rule *r, const struct json *res)
 {
     const struct json *machines = json_member(r->c, "machines");
     const struct json *guest = json_member(res, "guest_memory");
+    const struct json *tooling = json_member(res, "tooling_memory_bytes");
     const struct json *qemu = json_member(json_member(r->c, "requirements"), "qemu");
     struct etude_qemu_memory m, special = {0, 0, 0, 0};
     uint64_t total = 0;
@@ -1276,6 +1279,10 @@ static void memory_resources(const struct rule *r, const struct json *res)
     }
     if (total > (uint64_t)json_member(res, "memory_bytes")->integer)
         finding(r->file, res->line, "%s: memory_bytes does not reserve QEMU memory and overhead",
+                json_text(r->c, "case_id"));
+    if (tooling != NULL && total > (uint64_t)tooling->integer)
+        finding(r->file, res->line,
+                "%s: tooling_memory_bytes does not reserve QEMU memory and overhead",
                 json_text(r->c, "case_id"));
     if (lazy != 0 &&
         (lazy != 1 || guest == NULL || !same(json_text(guest, "backing"), "lazy") ||

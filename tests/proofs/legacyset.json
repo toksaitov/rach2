@@ -1210,14 +1210,48 @@
       "edits": [
         {
           "file": "tools/etude/posix/legacy_cases.c",
-          "find": "    if (k->guest || k->machine || count_of(r, \"tooling_memory_bytes\") < 1)\n",
-          "replace": "    if (k->guest || k->machine)\n"
+          "find": "    if (k->guest || count_of(r, \"tooling_memory_bytes\") < 1)\n",
+          "replace": "    if (k->guest)\n"
         }
       ],
       "fails": {
         "status": 1,
         "lines": [
           ": tooling: tooling memory of no bytes is refused: "
+        ]
+      }
+    },
+    {
+      "name": "tooling-machine",
+      "summary": "a machine case's tooling memory is refused",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (k->guest || count_of(r, \"tooling_memory_bytes\") < 1)\n",
+          "replace": "    if (k->guest || k->machine || count_of(r, \"tooling_memory_bytes\") < 1)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": tooling: on a host of the tooling machine, a machine case claims its tooling memory: "
+        ]
+      }
+    },
+    {
+      "name": "tooling-guest",
+      "summary": "a guest case's tooling memory is taken",
+      "edits": [
+        {
+          "file": "tools/etude/posix/legacy_cases.c",
+          "find": "    if (k->guest || count_of(r, \"tooling_memory_bytes\") < 1)\n",
+          "replace": "    if (count_of(r, \"tooling_memory_bytes\") < 1)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          ": tooling: a guest case's tooling memory is refused: "
         ]
       }
     }

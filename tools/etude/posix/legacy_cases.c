@@ -225,14 +225,16 @@ static int ports_of(struct legacy_manifest *m, struct legacy_case *k, const stru
     return 0;
 }
 
-/** Take the tooling memory of host case `k` from its resources `r`, when it
- * has any; 0, or -1 after a refusal. */
+/** Take the tooling memory of host or machine case `k` from its resources
+ * `r`, when it has any; 0, or -1 after a refusal. */
 static int tooling_of(struct legacy_manifest *m, struct legacy_case *k, const struct json *r)
 {
     if (json_member(r, "tooling_memory_bytes") == NULL)
         return 0;
-    if (k->guest || k->machine || count_of(r, "tooling_memory_bytes") < 1)
-        return refuse(m, "%s: the case's tooling memory is not a host case's count of bytes",
+    if (k->guest || count_of(r, "tooling_memory_bytes") < 1)
+        return refuse(m,
+                      "%s: the case's tooling memory is not a host or machine case's count of "
+                      "bytes",
                       k->case_id);
     k->tooling_bytes = (uint64_t)count_of(r, "tooling_memory_bytes");
     return 0;

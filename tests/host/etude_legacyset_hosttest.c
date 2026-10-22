@@ -131,7 +131,9 @@
  * ledger's claim, which the case prints, shows. Its manifest read, the case
  * claims its tooling memory on such a host and its `memory_bytes` on Linux,
  * and a case without tooling memory its `memory_bytes` on both; tooling
- * memory of no bytes is refused.
+ * memory of no bytes is refused. A machine case's manifest read, the case
+ * claims its tooling memory and its `memory_bytes` as a host case does, and
+ * a guest case's tooling memory is refused.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -532,6 +534,12 @@ static const struct {
 #define TOOLING_FROM "\"memory_bytes\": 16777216,"
 #define TOOLING_TO   "\"memory_bytes\": 16777216, \"tooling_memory_bytes\": 3355443200,"
 #define TOOLING_NONE "\"memory_bytes\": 16777216, \"tooling_memory_bytes\": 0,"
+
+/* The resources of a machine case of the family `machine` and of the guest
+ * case of `badguest`, and the same with 3456 MiB of tooling memory, the
+ * manifests `machine.json` and `guest.json` of cases/tooling. */
+#define TOOLING_CASE    "\"memory_bytes\": 268435456,"
+#define TOOLING_CASE_TO "\"memory_bytes\": 268435456, \"tooling_memory_bytes\": 3623878656,"
 
 /* The case of `bad` that runs on x86_64 alone. */
 static const struct fcase other_cases[] = {
@@ -1086,8 +1094,9 @@ static int replaced(char *out, size_t size, const char *text, const char *from, 
 /** Write the program of the fixture's cases and their manifests under
  * cases/: `good`, `mixed` and `guest` in directories of their own, as
  * casecheck's verdict reads them, the families of one case in cases/one,
- * the family `tooling` of one case with tooling memory, and the refused ones
- * of `bad` and `badguest`; 0, or -1. */
+ * the family `tooling` of one case with tooling memory, a machine and a
+ * guest family with tooling memory beside it, and the refused ones of `bad`
+ * and `badguest`; 0, or -1. */
 static int make_cases(void)
 {
     static char text[32768], changed[32768];
@@ -1122,6 +1131,12 @@ static int make_cases(void)
            write_text(in(path, sizeof(path), "cases/tooling/tooling.json"), changed, 0644) != 0 ||
            replaced(text, sizeof(text), changed, TOOLING_TO, TOOLING_NONE) != 0 ||
            write_text(in(path, sizeof(path), "cases/tooling/none.json"), text, 0644) != 0;
+    bad |= machine_text(text, sizeof(text)) != 0 ||
+           replaced(changed, sizeof(changed), text, TOOLING_CASE, TOOLING_CASE_TO) != 0 ||
+           write_text(in(path, sizeof(path), "cases/tooling/machine.json"), changed, 0644) != 0;
+    bad |= guest_text(text, sizeof(text), "fixture.badguest", badguest_cases, 1) != 0 ||
+           replaced(changed, sizeof(changed), text, TOOLING_CASE, TOOLING_CASE_TO) != 0 ||
+           write_text(in(path, sizeof(path), "cases/tooling/guest.json"), changed, 0644) != 0;
     bad |= manifest_text(text, sizeof(text), "fixture.bad", bad_cases, 1);
     for (i = 0; i < sizeof(refusals) / sizeof(refusals[0]); i++) {
         if (refusals[i].from != NULL)
@@ -2475,7 +2490,8 @@ static uint64_t tooling_claim(const char *suite, const char *name, int tooling, 
 /** A host case with tooling memory claims its `memory_bytes` on Linux and
  * its tooling memory on another host, where its work runs in the tooling
  * machine; a case without tooling memory claims its `memory_bytes` on both,
- * and tooling memory of no bytes is refused. */
+ * and tooling memory of no bytes is refused. A machine case with tooling
+ * memory claims it as a host case does, and a guest case's is refused. */
 static void test_tooling(void)
 {
     static const struct etude_legacy_member m[] = {{"tooling", 0, 0, "cases/tooling/tooling.json"}};
@@ -2511,9 +2527,19 @@ static void test_tooling(void)
     CHECK(tooling_claim("plain", ONE("plain"), 1, why, sizeof(why)) == UINT64_C(16777216),
           "tooling: a case without tooling memory claims its memory");
     CHECK(tooling_claim("tooling", "cases/tooling/none.json", 1, why, sizeof(why)) == 0 &&
-              strstr(why, "fixture.tooling.one: the case's tooling memory is not a host case's "
-                          "count of bytes") != NULL,
+              strstr(why, "fixture.tooling.one: the case's tooling memory is not a host or "
+                          "machine case's count of bytes") != NULL,
           "tooling: tooling memory of no bytes is refused");
+    CHECK(tooling_claim("machine", "cases/tooling/machine.json", 1, why, sizeof(why)) ==
+              UINT64_C(3623878656),
+          "tooling: on a host of the tooling machine, a machine case claims its tooling memory");
+    CHECK(tooling_claim("machine", "cases/tooling/machine.json", 0, why, sizeof(why)) ==
+              UINT64_C(268435456),
+          "tooling: on Linux, a machine case claims its memory");
+    CHECK(tooling_claim("badguest", "cases/tooling/guest.json", 1, why, sizeof(why)) == 0 &&
+              strstr(why, "fixture.badguest.one: the case's tooling memory is not a host or "
+                          "machine case's count of bytes") != NULL,
+          "tooling: a guest case's tooling memory is refused");
 }
 
 /** Give the store of guest artifacts that run `r` left under its evidence,

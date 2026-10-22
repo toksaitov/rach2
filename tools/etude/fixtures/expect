@@ -311,8 +311,9 @@
 0 processor max | max,rdrand=on,rdseed=on,xsave=on,avx=on,enforce=on
 1 processor max,avx=on | is no processor profile
 
-# Memory reservations cover every machine, keep the boundary profile and reject
-# unproved backing.
+# Memory reservations, and tooling reservations, cover every machine, keep the
+# boundary profile and reject unproved backing; a guest case has no tooling
+# reservation.
 0 manifest ../schemas/case.memory.example.json ./memory-pair.json
 1 manifest ./memory.json | short: memory_bytes does not reserve QEMU memory and overhead
 1 manifest ./memory.json | wrong-cpu: unsafe QEMU memory profile
@@ -321,6 +322,9 @@
 1 manifest ./memory.json | ordinary-lazy: reduced backing requires the boundary memory profile
 1 manifest ./memory.json | ordinary-short: memory_bytes does not reserve QEMU memory and overhead
 1 manifest ./memory.json | pair-short: memory_bytes does not reserve QEMU memory and overhead
+1 manifest ./memory.json | tooling-short: tooling_memory_bytes does not reserve QEMU memory and overhead
+1 manifest ./memory.json | !tooling-covered: tooling_memory_bytes
+1 manifest ./tooling.json | /cases/0/resources: has "tooling_memory_bytes", which this form does not allow
 
 # Card objects use the same network rules in guest and machine profiles, and
 # a card on a hub, which either may have, takes no option of a user network.
