@@ -790,7 +790,8 @@ static int load(struct etude_case *c, const char *path)
 
 /* ---- Records. ---- */
 
-/** Write one report record, made of `fmt`, with one write(2). */
+/** Write one report record, made of `fmt`, with one write(2): cut to the
+ * line's limit, with no space before its newline. */
 static void record(const char *fmt, ...)
 {
     char line[ETUDE_REPORT_LINE_MAX + 1];
@@ -806,6 +807,8 @@ static void record(const char *fmt, ...)
     if (k < 0)
         return;
     n += (size_t)k < sizeof(line) - n - 1 ? (size_t)k : sizeof(line) - n - 2;
+    while (n > sizeof(ETUDE_REPORT_PREFIX) - 1 && line[n - 1] == ' ')
+        n--;
     line[n++] = '\n';
     fflush(stdout);
     while (done < n) {
@@ -818,15 +821,20 @@ static void record(const char *fmt, ...)
     }
 }
 
-/** Copy `in` into `out` as a record's detail: printable ASCII, not empty. */
+/** Copy `in` into `out` as a record's detail: printable ASCII, not empty,
+ * and neither beginning nor ending with a space, which a report refuses. */
 static const char *detail_text(const char *in, char *out, size_t size)
 {
     size_t i;
 
-    if (in == NULL || *in == '\0')
-        in = "-";
-    for (i = 0; in[i] != '\0' && i + 1 < size; i++)
+    if (in != NULL)
+        in += strspn(in, " ");
+    for (i = 0; in != NULL && in[i] != '\0' && i + 1 < size; i++)
         out[i] = in[i] >= ' ' && in[i] <= '~' ? in[i] : '?';
+    while (i > 0 && out[i - 1] == ' ')
+        i--;
+    if (i == 0)
+        out[i++] = '-';
     out[i] = '\0';
     return out;
 }

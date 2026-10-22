@@ -101,6 +101,7 @@
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "etude/artifact.h"
+#include "etude/report.h"
 #include "etude/scenario.h"
 #include "sha256.h"
 
@@ -154,6 +155,11 @@ static int fails;
 #define STALL_BOUND_US 3000000u
 #define TICK_MS        2
 #define TICKS_MAX      65536
+
+/* The byte of the detail row's long detail that is the last its record keeps:
+ * the line's limit less its newline, the prefix and `assert cut fail `. */
+#define CUT_HEAD   "assert cut fail "
+#define DETAIL_CUT (ETUDE_REPORT_LINE_MAX - sizeof(ETUDE_REPORT_PREFIX) - sizeof(CUT_HEAD))
 
 /* The media rows' empty disk, 4 TiB as the uefi suite's, on NVMe, their CD,
  * whose medium is the artifact `disk`, and an empty disk on AHCI whose
@@ -1432,6 +1438,23 @@ static int scenario_misuse(struct etude_case *c)
     return 0;
 }
 
+/**
+ * Run the detail row: two failures whose details a report refuses as they
+ * are given, one with spaces around it and one whose record is cut at the
+ * line's limit just after a space.
+ */
+static int scenario_detail(struct etude_case *c)
+{
+    char cut[300];
+
+    memset(cut, 'x', sizeof(cut) - 1);
+    cut[sizeof(cut) - 1] = '\0';
+    cut[DETAIL_CUT] = ' ';
+    etude_assert(c, "padded", 0, "  padded detail  ");
+    etude_assert(c, "cut", 0, cut);
+    return 0;
+}
+
 /** Run the rows whose machine does not boot: a failed accelerator, a
  * damaged kernel, and an unsafe memory profile. */
 static int scenario_noboot(struct etude_case *c, const char *row)
@@ -2026,6 +2049,7 @@ static int scenario_alone(struct etude_case *c, const char *row)
         const char *name;
         int (*run)(struct etude_case *);
     } rows[] = {{"real-overlay", scenario_overlay},
+                {"detail", scenario_detail},
                 {"bound", scenario_bound},
                 {"fault", scenario_fault},
                 {"stop", scenario_stop},
@@ -2793,6 +2817,19 @@ static void judge_left(const struct row *r, const char *scratch)
  * the exit status are as the row says, the machine records of the reboot and
  * fault rows give each boot's end once, and the scratch is kept or not, with
  * the consoles in either case. */
+/** Check the detail row's records: each detail without the spaces around it
+ * or the space where its record was cut, as a report requires. */
+static void judge_detail(const struct outcome *o)
+{
+    char rec[300];
+
+    CHECK(has_record(o, "assert padded fail padded detail"), "detail padded");
+    memcpy(rec, CUT_HEAD, sizeof(CUT_HEAD) - 1);
+    memset(rec + sizeof(CUT_HEAD) - 1, 'x', DETAIL_CUT);
+    rec[sizeof(CUT_HEAD) - 1 + DETAIL_CUT] = '\0';
+    CHECK(has_record(o, rec), "detail cut");
+}
+
 static void judge(const struct row *r, const struct outcome *o, const char *scratch)
 {
     char word[64], rec[160], copies[4352];
@@ -2802,6 +2839,10 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
 
     snprintf(rec, sizeof(rec), "begin test.scenario.%s", r->name);
     CHECK(has_record(o, rec), r->name);
+    if (strcmp(r->name, "detail") == 0) {
+        judge_detail(o);
+        p = "";
+    }
     while (*p != '\0') {
         n = strcspn(p, " ");
         snprintf(word, sizeof(word), "%.*s", (int)n, p);
@@ -2812,7 +2853,7 @@ static void judge(const struct row *r, const struct outcome *o, const char *scra
             fails++;
         }
     }
-    CHECK(strstr(o->out, " fail ") == NULL, r->name);
+    CHECK(strstr(o->out, " fail ") == NULL || strcmp(r->name, "detail") == 0, r->name);
     if (strcmp(r->name, "reboot") == 0)
         CHECK(has_record(o, "machine fixture.1 shutdown") &&
                   has_record(o, "machine fixture.2 shutdown"),
@@ -3440,6 +3481,7 @@ static const struct row stand_in_rows[] = {
      NULL, 0, NULL, 0},
     {"bound", "disk", "wait:fixture", "bounded after-bound", "disk", 0, SHORT_US, 0, 1, 0, 0, NULL,
      0, NULL, 0},
+    {"detail", "disk", "host", "padded cut", NULL, 0, STEP_US, 0, 1, 1, 0, NULL, 0, NULL, 0},
     {"misuse", "disk", "host boot:fixture",
      "no-step no-artifact no-copy host-step other-machine no-tool step-back machine-step "
      "other-disk running no-qmp no-capture no-text",
