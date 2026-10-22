@@ -9,7 +9,8 @@
 # su's prompt and the session's other output are left out. The status is 1
 # when the session fails, the prompt was not answered exactly once, or the
 # markers are missing, and the end of the session's transcript, with the
-# password redacted, is then printed on standard error.
+# password redacted, is then printed on standard error. The session has no
+# time limit of its own: the caller's watchdog ends one that hangs.
 #
 # A session the machine reset or refused before su prompted is tried again,
 # three times a second apart, as metal_accept.sh tries the account's own
@@ -22,9 +23,8 @@ if [ "$#" -ne 6 ] || [ -z "${RACH2_ACCEPT_PASSWORD:-}" ]; then
 fi
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../../.." && pwd)
 driver="$repo/build/tests/system/ptydrive"
-runner="$repo/build/tests/system/runutil"
-if [ ! -x "$driver" ] || [ ! -x "$runner" ]; then
-    echo 'accept-su: build/tests/system/ptydrive and runutil must be built' >&2
+if [ ! -x "$driver" ]; then
+    echo 'accept-su: build/tests/system/ptydrive must be built' >&2
     exit 2
 fi
 umask 077
@@ -68,9 +68,8 @@ show_session()
 tries=0
 while :; do
     # The driver filters credential bytes before either transcript is written.
-    "$runner" watch accept-su 100 \
-        "$driver" --rows 40 --cols 120 --timeout 90 \
-        --password-env RACH2_ACCEPT_PASSWORD ssh -tt -i "$1" -p "$3" \
+    "$driver" --rows 40 --cols 120 --password-env RACH2_ACCEPT_PASSWORD \
+        ssh -tt -i "$1" -p "$3" \
         -o StrictHostKeyChecking=no -o "UserKnownHostsFile=$5" \
         -o ConnectTimeout=10 -o BatchMode=yes "$4@$2" \
         "su -c $(quote "$command")" > "$work/raw" 2>&1 &
@@ -84,7 +83,6 @@ while :; do
     fi
     tr -d '\r' < "$work/raw" > "$work/text"
     if [ "$tries" -ge 3 ] || ! grep -qx 'PROMPTED=0' "$work/text" ||
-        grep -qx TIMEDOUT "$work/text" ||
         ! grep -q 'kex_exchange_identification\|ssh_exchange_identification\|Connection reset by\|Connection refused\|Connection timed out' "$work/text"; then
         break
     fi
@@ -96,7 +94,7 @@ if ! awk '
     /^PROMPTED=/ { prompts++; if ($0 != "PROMPTED=1") bad = 1 }
     /^ANSWERED=/ { answers++; if ($0 != "ANSWERED=1") bad = 1 }
     END { exit bad || prompts != 1 || answers != 1 }
-' "$work/text" || grep -qx TIMEDOUT "$work/text"; then
+' "$work/text"; then
     echo 'accept-su: password authentication did not complete' >&2
     show_session
     exit 1

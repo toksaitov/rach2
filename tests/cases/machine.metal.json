@@ -381,7 +381,6 @@
         {"name": "mkfs-krffs", "node": "krffs/mkfs.krffs", "per_architecture": false},
         {"name": "stageimage-krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
         {"name": "ptydrive", "node": "tests/system/ptydrive", "per_architecture": false},
-        {"name": "runutil", "node": "tests/system/runutil", "per_architecture": false},
         {"name": "sshpeer", "node": "tests/cases/machine/sshpeer", "per_architecture": false},
         {"name": "metal_scenario", "node": "tests/cases/machine/metal_scenario", "per_architecture": false}
       ],

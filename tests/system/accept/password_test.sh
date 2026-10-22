@@ -36,8 +36,6 @@ cp "$repo/tests/system/accept/su_command.sh" "$work/tests/system/accept/"
 
 "${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/bin/ssh" \
     "$repo/tests/system/fixtures/pty_secret.c"
-"${CC:-cc}" -O2 -Wall -Wextra -Werror -o "$work/build/tests/system/runutil" \
-    "$repo/tests/system/runner/runutil.c"
 cat > "$work/bin/su" <<'SU'
 #!/bin/sh
 [ "$1" = -c ] || exit 2
