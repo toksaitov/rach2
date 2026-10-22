@@ -497,7 +497,7 @@ busybox_elsewhere()
         COPYFILE_DISABLE=1 tar -c --format ustar -f "$work/job.tar" -C "$work/job" tests tools utils || exit 1
     echo 'tar -x -f job.tar && sh tests/system/etude_version_test.sh --busybox' > "$work/job.sh"
     rc=0
-    tooling run -m 1024 -t 300 -i "$work/job.tar" "$work/job.sh" > "$work/out" 2> "$work/err" || rc=$?
+    tooling run -m 1024 -i "$work/job.tar" "$work/job.sh" > "$work/out" 2> "$work/err" || rc=$?
     case $rc in
         0) ranbusybox='in the tooling machine' ;;
         3) nobusybox='no busybox on this host or in the tooling machine' ;;

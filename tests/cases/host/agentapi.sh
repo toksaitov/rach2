@@ -195,10 +195,6 @@ notrun() {
 
 # ---- The tooling machine. ----
 
-# The tooling machine's deadline for the job, in seconds, which is inside the
-# case's bound of 900.
-TOOLING_SECONDS=840
-
 # unrun REASON: complete the report of a case that the tooling machine did not
 # run to its end, and exit 1. The job's output, LOGS/job.out, has been
 # printed and may have `begin` and some assertions already: give `begin` when
@@ -253,7 +249,7 @@ exec setpriv --reuid=agentapi --regid=agentapi --init-groups env -i PATH="\$PATH
     ETUDE_TREE="\$ETUDE_WORK/tree" ETUDE_CASE=$ID \\
     sh "\$ETUDE_WORK/tree/${SELF##*/}" $AGENT $CASE
 EOF
-    tooling run -c 2 -m "$memory" -s $((bytes / 1048576 + 64)) -t "$TOOLING_SECONDS" "$@" \
+    tooling run -c 2 -m "$memory" -s $((bytes / 1048576 + 64)) "$@" \
         -o scratch -O "$LOGS" "$LOGS/job.sh" > "$LOGS/job.out"
     status=$?
     cat "$LOGS/job.out"
@@ -261,7 +257,7 @@ EOF
         echo "agentapi: the logs of the job are under $LOGS/scratch"
     ! grep -q '^@etude 1 end ' "$LOGS/job.out" || exit "$status"
     case $status in
-        124) unrun "the tooling machine's job ran past its deadline of $TOOLING_SECONDS seconds" ;;
+        124) unrun "the tooling machine's job ran past etude-tooling's deadline" ;;
         125) unrun "the tooling machine failed; etude-tooling's lines say why" ;;
         126) unrun "the tooling machine is not made; etude-tooling prepare makes it" ;;
         *) unrun "the tooling machine's job ended with status $status before its report did" ;;
@@ -600,7 +596,7 @@ check_isolation() {
     out=$(python3 -I -c '
 import socket
 try:
-    socket.create_connection(("1.1.1.1", 443), timeout=10)
+    socket.create_connection(("1.1.1.1", 443))
     print("connected")
 except OSError as error:
     print(error)
