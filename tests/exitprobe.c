@@ -4,21 +4,22 @@
  *
  * Each victim sees its parent asleep in waitpid before it dies. The parent
  * checks the encoded status, the end of input on a pipe the victim held, and
- * that the process record is gone. A separate supervisor bounds the whole
- * with poll, so that a lost zombie gives a named failure. The rows run on the
- * kernel's own process records, scheduler and reaping, with nothing put in
- * their place.
+ * that the process record is gone. A separate supervisor reads the parent's
+ * report, so that a reaper that ends without one gives a named failure; a
+ * lost zombie leaves the reaper waiting, and the case's watchdog ends it. The
+ * rows run on the kernel's own process records, scheduler and reaping, with
+ * nothing put in their place.
  *
- * `exitprobe [normal|signal|exec [MS]]` runs one row, or all three, with a
- * bound of MS milliseconds, 5000 by default. Prints "exitprobe: waiting:
- * ROW" when the victim sees its parent waiting, then "EXITPROBE OK ROW: ..."
- * or "EXITPROBE FAIL ROW: ...", and exits 0 when every row passed.
+ * `exitprobe [normal|signal|exec]` runs one row, or all three. Prints
+ * "exitprobe: waiting: ROW" when the victim sees its parent waiting, then
+ * "EXITPROBE OK ROW: ..." or "EXITPROBE FAIL ROW: ...", and exits 0 when
+ * every row passed.
  *
  * The fixtures, the directory `exit-cwd`, the truncated program `exit-bad`
  * and the victim's `exit-file`, are made in the working directory, which is
  * `/` on the test image and the case's own directory in a native run, and
- * removed before the probe exits. The row and the bound are the first two
- * arguments without `=` (probe_args.h).
+ * removed before the probe exits. The row is the first argument without `=`
+ * (probe_args.h).
  *
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has the
  * assertions `fixture`, the rows that run, `normal`, `signal` and `exec`,
@@ -183,31 +184,23 @@ static void reaper(int mode, int report)
     die(ok ? 0 : 93);
 }
 
-/** Kill the reaper `pid` and reap it, waiting at most `timeout` milliseconds,
- * so that a failed row leaves no reaper blocked in its wait; its victim then
- * exits by itself in wait_parent, or has already ended. */
-static void end_reaper(int pid, int timeout)
+/** Kill the reaper `pid` and reap it, so that a failed row leaves no reaper
+ * blocked in its wait; its victim then exits by itself in wait_parent, or has
+ * already ended. */
+static void end_reaper(int pid)
 {
-    long nap[2] = {0, 10000000};
-    int status, waited;
+    int status;
     call(SYS_KILL, pid, SIGKILL, 0);
-    for (waited = 0; waited < timeout && call(SYS_WAITPID, pid, (long)&status, 1) == 0;
-         waited += 10) {
-        call(SYS_NANOSLEEP, (long)nap, 0, 0);
-    }
+    call(SYS_WAITPID, pid, (long)&status, 0);
 }
 
-/** Run row `mode` in a reaper child and bound it, from outside, with a poll
- * of `timeout` milliseconds on the reaper's report, so that the reaper's own
- * blocking wait and signal state are untouched. Prints the row's result line
- * and returns 1 when it passed; a row that failed by the bound or by its
- * report has its reaper killed and reaped after the line. */
-static int run_row(int mode, int timeout)
+/** Run row `mode` in a reaper child and read its report from outside, so that
+ * the reaper's own blocking wait and signal state are untouched. Prints the
+ * row's result line and returns 1 when it passed; a row that failed by its
+ * report, or whose reaper ended without one, has its reaper killed and
+ * reaped after the line. */
+static int run_row(int mode)
 {
-    struct {
-        int fd;
-        short events, revents;
-    } pollfd;
     int report[2], pid, status = -1, ok;
     char byte = 0;
     row = mode == 0 ? "normal" : (mode == 1 ? "signal" : "exec");
@@ -221,17 +214,13 @@ static int run_row(int mode, int timeout)
         reaper(mode, report[1]);
     }
     call(SYS_CLOSE, report[1], 0, 0);
-    pollfd.fd = report[0];
-    pollfd.events = 1;
-    pollfd.revents = 0;
-    ok = pid > 0 && call(SYS_POLL, (long)&pollfd, 1, timeout) == 1;
-    ok = ok && call(SYS_READ, report[0], (long)&byte, 1) == 1 && byte == 1;
+    ok = pid > 0 && call(SYS_READ, report[0], (long)&byte, 1) == 1 && byte == 1;
     call(SYS_CLOSE, report[0], 0, 0);
     if (!ok) {
         result("EXITPROBE FAIL ", ": reap or release");
-        row_why = "no report that the reap held came within the bound";
+        row_why = "the reaper did not report that the reap held";
         if (pid > 0) {
-            end_reaper(pid, timeout);
+            end_reaper(pid);
         }
         return 0;
     }
@@ -306,30 +295,16 @@ static void rows_not_run(int from, int last, const char *why)
 }
 
 /** The probe's entry, given the initial stack `sp`: run all rows or the one
- * the first argument names, with the bound in milliseconds the second gives;
- * a bound that is not 1 to 320000 exits 94. */
+ * the first argument names. */
 void probe_main(unsigned long *sp)
 {
-    int first = 0, last = 2, timeout = 5000, i;
-    const char *mode, *bound;
+    int first = 0, last = 2, i;
+    const char *mode;
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1);
-    bound = probe_word(2);
     if (mode != 0) {
         first = mode[0] == 'n' ? 0 : (mode[0] == 's' ? 1 : 2);
         last = first;
-    }
-    if (bound != 0) {
-        timeout = 0;
-        for (i = 0; bound[i] >= '0' && bound[i] <= '9'; i++) {
-            if (timeout > 32000) {
-                die(94);
-            }
-            timeout = timeout * 10 + bound[i] - '0';
-        }
-        if (timeout < 1 || timeout > 320000 || bound[i]) {
-            die(94);
-        }
     }
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.default.exitprobe"));
     row = "fixture";
@@ -341,7 +316,7 @@ void probe_main(unsigned long *sp)
     }
     report_pass("fixture");
     for (i = first; i <= last; i++) {
-        if (!run_row(i, timeout)) {
+        if (!run_row(i)) {
             report_fail(row_ids[i], row_why);
             rows_not_run(i + 1, last, "an earlier row failed");
             finish(1);

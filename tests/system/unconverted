@@ -7,7 +7,7 @@
 # the check, so the list only falls. A person reads this list.
 tests/dgramprobe.c: 1 sleep
 tests/dnstest.c: 1 skip
-tests/exitprobe.c: 2 sleep
+tests/exitprobe.c: 1 sleep
 tests/fsbaseprobe.c: 1 sleep
 tests/host/etude_exec_hosttest.c: 2 skip
 tests/host/exfat_hosttest.c: 1 skip

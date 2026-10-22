@@ -2185,7 +2185,7 @@
       "execution": {"program": "exitprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
         {"assertion_id": "fixture", "checks": "The directory exit-cwd and the truncated program exit-bad are made in the working directory.", "source": "program"},
-        {"assertion_id": "normal", "checks": "A victim that ends by exit(37) is reaped with that status, its pipe reads end of file, a second wait is ECHILD and its /proc/PID is gone, all within the bound.", "source": "program"},
+        {"assertion_id": "normal", "checks": "A victim that ends by exit(37) is reaped with that status, its pipe reads end of file, a second wait is ECHILD and its /proc/PID is gone.", "source": "program"},
         {"assertion_id": "signal", "checks": "A victim that ends by SIGTERM is reaped in the same way.", "source": "program"},
         {"assertion_id": "exec", "checks": "A victim whose execve of a truncated ELF returns ENOEXEC and that then ends by exit(38) is reaped in the same way.", "source": "program"},
         {"assertion_id": "cleanup", "checks": "exit-bad and exit-cwd are removed.", "source": "program"}
