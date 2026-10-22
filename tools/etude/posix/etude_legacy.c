@@ -1,8 +1,8 @@
 /*
- * etude_legacy.c: etude-legacy, which prepares the suites of tests/registry
- * before a suite starts, as tests/run prepared them, checks a preparation's
- * record, and runs a set of suites by their cases through the machine's
- * ledger as one run of etude.
+ * etude_legacy.c: etude-legacy, which builds and records the goals that the
+ * suites of tests/run read before one starts, checks a preparation's record,
+ * and runs a set of suites by their cases through the machine's ledger as
+ * one run of etude.
  */
 #include <errno.h>
 #include <limits.h>
@@ -58,7 +58,7 @@ static int usage(void)
 {
     fprintf(stderr,
             "usage: etude-legacy prepare [-t TREE] [-a ARCH] [-n KERNEL] [-w WORK] "
-            "[-o RECORD] [-s SECONDS] [-b GOAL]... SUITE...\n"
+            "[-o RECORD] [-s SECONDS] -b GOAL [-b GOAL]...\n"
             "       etude-legacy check [-d] RECORD\n"
             "       etude-legacy set -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE "
             "-S SCHEMAS [-K CASECHECK] [-d LOCKS] [-t TREE] [-a ARCH] [-n KERNEL] [-p RECORD] "
@@ -111,10 +111,8 @@ static int prepare_main(int argc, char **argv)
         else
             return usage();
     }
-    if (optind == argc && o.ngoals == 0)
+    if (optind != argc)
         return usage();
-    o.suites = argv + optind;
-    o.nsuites = (size_t)(argc - optind);
     setvbuf(stdout, NULL, _IOLBF, 0);
     catch_stops();
     return etude_legacy_prepare(&o);

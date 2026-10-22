@@ -1,12 +1,12 @@
 #!/bin/sh
-# legacy.sh: prepare suites of tests/registry with etude's preparation
+# legacy.sh: build and record goals of this tree with etude's preparation
 # adapter, or check a preparation's record, with this tree held so that no
 # run builds or boots it meanwhile. The adapter is built first, under the
 # hold. ARCH and RACH2_KERNEL choose the architecture and the kernel of a
 # preparation, as they do for tests/run.
 #
 # Usage: sh tools/etude/legacy.sh prepare [-w WORK] [-o RECORD] [-s SECONDS]
-#                                    [-b GOAL]... SUITE...
+#                                    -b GOAL [-b GOAL]...
 #        sh tools/etude/legacy.sh check [-d] RECORD
 set -eu
 repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)

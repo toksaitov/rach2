@@ -210,19 +210,6 @@ static char guest_evidence[PATH_MAX];
 static char guest_bin[PATH_MAX]; /* the wrapper of QEMU, first on the path */
 static char real_path[8192];
 
-/* The suites of the fixture tree. */
-static const char registry[] = "# The suites of the fixture tree.\n"
-                               "boot|qemu|core\n"
-                               "plain|-|core\n"
-                               "fail|-|core\n"
-                               "meet-a|-|core\n"
-                               "meet-b|-|core\n"
-                               "serial|-|core\n"
-                               "side-x|-|core\n"
-                               "side-y|-|core\n"
-                               "long|-|core\n"
-                               "hold|-|core\n";
-
 /* The fixture's Makefile: the components, which fail when FIXTURE_BREAK is
  * set, the machine cases' disk, and the cases' programs, each its script
  * under cases/ copied to build/cases or build/x86_64/cases. */
@@ -234,13 +221,11 @@ static const char makefile[] =
     "ARCH_BUILD := build\n"
     "endif\n"
     "IMAGES := $(ARCH_BUILD)/images\n"
-    ".PHONY: components prepare-tools\n"
+    ".PHONY: components\n"
     "components: $(ARCH_BUILD)/rach2/kernel\n"
     "\t@if [ -n \"$$FIXTURE_BREAK\" ]; then echo broken components; exit 4; fi\n"
     "$(ARCH_BUILD)/rach2/kernel:\n"
     "\t@mkdir -p $(@D) && echo kernel > $@\n"
-    "prepare-tools:\n"
-    "\t@echo sh\n"
     "$(IMAGES)/disk.img:\n"
     "\t@mkdir -p $(@D) && echo disk > $@\n"
     "build/cases/%: cases/%.sh\n"
@@ -1170,10 +1155,20 @@ static int guest_rules(char *out, size_t size)
  * stand-in first on the path. */
 static void make_tree(void)
 {
-    static const char *const dirs[] = {
-        "",          "tests",       "build",          "build/.run.lock", "meet",
-        "qemu",      "cases",       "cases/one",      "cases/good",      "cases/mixed",
-        "cases/bad", "cases/guest", "cases/badguest", "cases/machine",   "cases/boundary"};
+    static const char *const dirs[] = {"",
+                                       "build",
+                                       "build/.run.lock",
+                                       "meet",
+                                       "qemu",
+                                       "cases",
+                                       "cases/one",
+                                       "cases/good",
+                                       "cases/mixed",
+                                       "cases/bad",
+                                       "cases/guest",
+                                       "cases/badguest",
+                                       "cases/machine",
+                                       "cases/boundary"};
     static char source[1 << 20], newpath[8192], rules[8192];
     const char *oldpath = getenv("PATH");
     char path[PATH_LEN], owner[64];
@@ -1190,7 +1185,6 @@ static void make_tree(void)
         bad |= mkdir(in(path, sizeof(path), dirs[i]), 0755) != 0;
     bad |= mkfifo(in(path, sizeof(path), "started.fifo"), 0644) != 0;
     snprintf(owner, sizeof(owner), "pid %ld\n", (long)getpid());
-    bad |= write_text(in(path, sizeof(path), "tests/registry"), registry, 0644);
     bad |= guest_rules(rules, sizeof(rules)) != 0;
     fix_format(source, sizeof(source), "%s%s", makefile, rules);
     bad |= write_text(in(path, sizeof(path), "Makefile"), source, 0644);

@@ -633,10 +633,10 @@ $(ETUDEHOST): $(ETUDE_HOST_SRC) tools/etude/include/etude/exec.h tools/etude/pos
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
 
 # etude-legacy (tools/etude/posix/etude_legacy.c), the preparation adapter
-# that builds what the suites of tests/registry read before one starts, as
-# tests/run builds it: `components`, `prepare-all` and the artifacts it finds
-# in make's database; and the set driver, which tests/run runs, over the
-# supervisor, the ledger, the old runner's locks and the history.
+# that builds what the suites of tests/run read before one starts:
+# `components` and the goals it is given; and the set driver, which tests/run
+# runs, over the supervisor, the ledger, the old runner's locks and the
+# history.
 ETUDELEGACY = build/tools/etude/etude-legacy
 $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
                 tools/etude/include/etude/exec.h tools/etude/posix/posix.h \

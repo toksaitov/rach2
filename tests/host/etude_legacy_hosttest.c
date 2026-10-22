@@ -1,8 +1,8 @@
 /**
  * Check etude's preparation adapter (tools/etude/posix/legacy.c) on fixture
- * trees, each a registry and a Makefile whose recipes append their goals to
- * the file `calls`, with the tree's run lock held by this program, which is
- * also the recipe of a preparation graph's node with `--legacy`.
+ * trees, each a Makefile whose recipes append their goals to the file
+ * `calls`, with the tree's run lock held by this program, which is also the
+ * recipe of a preparation graph's node with `--legacy`.
  *
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/store.c
  * host-deps: tools/etude/posix/prepare.c tools/etude/capture.c
@@ -12,20 +12,16 @@
  * host-cflags: -Wall -Wextra -Werror
  * host-seconds: 180
  *
- * A suite alone has the recovery key minted, the components and then its own
- * artifacts built, its target's recipe never run, and its files recorded with
- * their digests, once each though make names one both from the tree's root and
- * from the file system's; a second preparation mints no key. A set has
- * `prepare-all` and then the artifacts outside it built, and an e1000 suite its
- * plain twin's. The architecture and the kernel reach every make, over an
- * `ARCH` in the environment. A suite unknown, named twice or of another
- * architecture, a tool missing, a set whose preparation lacks a tool, an
+ * Goals have the recovery key minted, the components and then the goals
+ * built, and the goals' files and the kernel's recorded with their digests, a
+ * directory among the goals accepted and not recorded; a second preparation
+ * mints no key. The architecture and the kernel reach every make, over an
+ * `ARCH` in the environment. A request of no goal, a goal outside the tree, an
  * architecture or a kernel name refused and a tree not held are each refused
- * with nothing built. A failed step stops the preparation and keeps its log; an
- * artifact missing fails it; a step past its bound and one under a stop signal
- * are ended, and nothing of theirs runs after. The record is checked by status
- * and by digest, and a preparation graph publishes it as a fresh node's
- * product.
+ * with nothing built. A failed step stops the preparation and keeps its log; a
+ * goal missing fails it; a step past its bound and one under a stop signal are
+ * ended, and nothing of theirs runs after. The record is checked by status and
+ * by digest, and a preparation graph publishes it as a fresh node's product.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -65,21 +61,7 @@ static int fails;
 /* This program, by an absolute path. */
 static char self[PATH_LEN];
 
-/* The suites of the fixture trees. */
-static const char registry[] = "# The suites of the fixture tree.\n"
-                               "alpha|-|core||||serial\n"
-                               "beta|-|full||256|x86_64\n"
-                               "gamma|-|full\n"
-                               "alpha-e1000|-|full\n"
-                               "delta|-|full\n"
-                               "hang|-|full\n"
-                               "wait|-|full\n"
-                               "needy|sh,etude-legacy-no-such-tool|full\n"
-                               "sbinny|fixturetool+sh/etude-legacy-no-such-tool|full\n";
-
-/* The fixture's Makefile. A target's own variable names a path, and a
- * multi-line variable holds a rule, and neither may become an artifact; an
- * artifact is also named from the root of the file system. */
+/* The fixture's Makefile. */
 static const char makefile[] =
     "ARCH ?= i686\n"
     "ifeq ($(ARCH),x86_64)\n"
@@ -90,13 +72,7 @@ static const char makefile[] =
     "BOOT_KERNEL ?= $(ARCH_BUILD)/rach2/kernel\n"
     "IMAGES := $(ARCH_BUILD)/images\n"
     "note = echo \"$@ $(ARCH) $(BOOT_KERNEL) $$LC_ALL\" >> calls\n"
-    "define CANNED\n"
-    "run-alpha: build/images/canned.img\n"
-    "\techo canned\n"
-    "endef\n"
-    ".PHONY: components prepare-all prepare-images prepare-products prepare-tools \\\n"
-    "        recovery-key ubsan-kernel tools/guest run-alpha run-gamma run-beta \\\n"
-    "        run-needy run-sbinny run-delta run-hang run-wait\n"
+    ".PHONY: components recovery-key ubsan-kernel\n"
     "components: $(ARCH_BUILD)/rach2/kernel\n"
     "\t@$(note)\n"
     "\t@test ! -f fail-components\n"
@@ -107,12 +83,6 @@ static const char makefile[] =
     "ubsan-kernel:\n"
     "\t@mkdir -p $(ARCH_BUILD)/rach2-ubsan && echo ubsan > $(ARCH_BUILD)/rach2-ubsan/kernel\n"
     "\t@$(note)\n"
-    "prepare-all: components\n"
-    "\t$(MAKE) --no-print-directory prepare-images prepare-products\n"
-    "prepare-images: $(IMAGES)/a.img\n"
-    "prepare-products: $(IMAGES)/b.img\n"
-    "prepare-tools:\n"
-    "\t@if [ -f no-tools ]; then echo sh,etude-legacy-no-such-tool; else echo sh; fi\n"
     "$(IMAGES):\n"
     "\t@mkdir -p $@\n"
     "$(IMAGES)/%.img: src/in.c | $(IMAGES)\n"
@@ -124,25 +94,7 @@ static const char makefile[] =
     "$(IMAGES)/w.img:\n"
     "\t@$(note); echo started > started.fifo; read x < hang.fifo\n"
     "krffs/shadow:\n"
-    "\t@echo shadow > $@ && $(note)\n"
-    "tools/guest:\n"
-    "\t@$(note)\n"
-    "run-alpha: EXTRA := $(IMAGES)/bogus.img\n"
-    "$(CURDIR)/$(IMAGES)/a.img: $(IMAGES)/a.img\n"
-    "run-alpha: $(IMAGES)/a.img $(CURDIR)/$(IMAGES)/a.img krffs/shadow tools/guest src/in.c\n"
-    "\t@$(note)\n"
-    "run-gamma: $(IMAGES)/g.img $(IMAGES)/a.img\n"
-    "\t@$(note)\n"
-    "run-beta: $(IMAGES)/a.img\n"
-    "\t@$(note)\n"
-    "run-delta: $(IMAGES)/d.img\n"
-    "\t@$(note)\n"
-    "run-hang: $(IMAGES)/h.img\n"
-    "\t@$(note)\n"
-    "run-wait: $(IMAGES)/w.img\n"
-    "\t@$(note)\n"
-    "run-needy run-sbinny:\n"
-    "\t@$(note)\n";
+    "\t@echo shadow > $@ && $(note)\n";
 
 /* What one preparation gave. */
 struct outcome {
@@ -265,9 +217,8 @@ static void record_files(const char *record, char *buf, size_t max)
  */
 static void make_tree(const char *name, char *tree, size_t size)
 {
-    static const char *const dirs[] = {"",      "tests",           "krffs", "krffs/manifests",
-                                       "build", "build/.run.lock", "src",   "sbin",
-                                       "tools", "tools/setup"};
+    static const char *const dirs[] = {"",      "krffs",           "krffs/manifests",
+                                       "build", "build/.run.lock", "src"};
     char path[PATH_LEN], owner[64];
     size_t i;
     int bad = 0;
@@ -276,15 +227,11 @@ static void make_tree(const char *name, char *tree, size_t size)
     for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
         bad |= mkdir(in(path, sizeof(path), tree, dirs[i]), 0755) != 0;
     snprintf(owner, sizeof(owner), "pid %ld\nheld test\n", (long)getpid());
-    bad |= write_text(in(path, sizeof(path), tree, "tests/registry"), registry, 0644);
     bad |= write_text(in(path, sizeof(path), tree, "Makefile"), makefile, 0644);
     bad |= write_text(in(path, sizeof(path), tree, "krffs/manifests/rach2-recovery.manifest"), "",
                       0644);
     bad |= write_text(in(path, sizeof(path), tree, "krffs/rach2_demo_ed25519"), "key\n", 0644);
     bad |= write_text(in(path, sizeof(path), tree, "src/in.c"), "src\n", 0644);
-    bad |= write_text(in(path, sizeof(path), tree, "sbin/fixturetool"), "#!/bin/sh\n", 0755);
-    bad |= write_text(in(path, sizeof(path), tree, "tools/setup/e2fsprogs_path.sh"),
-                      "PATH=\"$PATH:$(pwd)/sbin\"\nexport PATH\n", 0644);
     bad |= write_text(in(path, sizeof(path), tree, "build/.run.lock/owner"), owner, 0644);
     bad |= mkfifo(in(path, sizeof(path), tree, "hang.fifo"), 0644) != 0;
     bad |= mkfifo(in(path, sizeof(path), tree, "started.fifo"), 0644) != 0;
@@ -296,10 +243,10 @@ static void make_tree(const char *name, char *tree, size_t size)
 
 /* ---- Preparations. ---- */
 
-/** Fill `o` for the suites `suites` of `tree` on i686, with the work
+/** Fill `o` for the goals `goals` of `tree` on i686, with the work
  * directory and the record named after `row` in the fixture directory. */
 static void opts_for(struct etude_legacy_opts *o, const char *tree, const char *row,
-                     char *const *suites)
+                     char *const *goals)
 {
     static char work[PATH_LEN], record[PATH_LEN];
 
@@ -311,9 +258,9 @@ static void opts_for(struct etude_legacy_opts *o, const char *tree, const char *
     o->work = work;
     o->record = record;
     o->seconds = 60;
-    o->suites = suites;
-    while (suites[o->nsuites] != NULL)
-        o->nsuites++;
+    o->goals = goals;
+    while (goals[o->ngoals] != NULL)
+        o->ngoals++;
 }
 
 /** Run the preparation `o` and take what it printed into `r`. */
@@ -344,10 +291,10 @@ static void show(const struct outcome *r, int before)
 
 /* ---- Rows. ---- */
 
-/** One suite alone: the steps in order, the target unrun, the record. */
+/** Goals: the steps in order, the goals built, the record. */
 static void test_alone(void)
 {
-    char *suites[] = {"alpha", NULL};
+    char *goals[] = {"build/images/a.img", "krffs/shadow", "build/images", NULL};
     char tree[PATH_LEN], path[PATH_LEN], calls[4096], record[8192], files[1024], want[128], hex[65];
     struct etude_legacy_opts o;
     struct outcome r;
@@ -355,13 +302,13 @@ static void test_alone(void)
     int before = fails;
 
     make_tree("alone", tree, sizeof(tree));
-    opts_for(&o, tree, "alone", suites);
+    opts_for(&o, tree, "alone", goals);
     run(&o, &r);
     read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
     read_text(o.record, record, sizeof(record));
     record_files(record, files, sizeof(files));
     CHECK(r.status == 0, "alone: prepared");
-    CHECK(has_line(r.out, "etude-legacy: result: prepared: 1 suites, 3 files"), "alone: result");
+    CHECK(has_line(r.out, "etude-legacy: result: prepared: 3 goals, 3 files"), "alone: result");
     CHECK(line_at(calls, "recovery-key i686 build/rach2/kernel C") == 0, "alone: key first");
     CHECK(line_at(calls, "components i686 build/rach2/kernel C") >
               line_at(calls, "build/rach2/kernel i686 build/rach2/kernel C"),
@@ -370,17 +317,14 @@ static void test_alone(void)
               line_at(calls, "components i686 build/rach2/kernel C"),
           "alone: artifacts after the components");
     CHECK(has_line(calls, "krffs/shadow i686 build/rach2/kernel C"), "alone: a tree's target");
-    CHECK(strstr(calls, "run-alpha") == NULL && strstr(calls, "tools/guest") == NULL,
-          "alone: no phony target run");
-    CHECK(strstr(calls, "b.img") == NULL && strstr(calls, "bogus") == NULL &&
-              strstr(calls, "canned") == NULL,
-          "alone: nothing else built");
+    CHECK(strstr(calls, "g.img") == NULL, "alone: nothing else built");
     CHECK(strcmp(files, "build/images/a.img\nbuild/rach2/kernel\nkrffs/shadow\n") == 0,
           "alone: the record's files");
     sha_text("src\n", hex);
     fix_format(want, sizeof(want), "file %s 4 ", hex);
     CHECK(strstr(record, want) != NULL, "alone: a file's digest and size");
-    CHECK(has_line(record, "suite alpha run-alpha") && has_line(record, "arch i686"),
+    CHECK(has_line(record, "etude-legacy 1") && has_line(record, "arch i686") &&
+              has_line(record, "kernel build/rach2/kernel"),
           "alone: the record's head");
     CHECK(exists(in(path, sizeof(path), tree, "krffs/recovery_authorized_keys")),
           "alone: the key minted");
@@ -391,10 +335,10 @@ static void test_alone(void)
     show(&r, before);
 }
 
-/** The same suite again: no key minted, nothing rebuilt. */
+/** The same goals again: no key minted, nothing rebuilt. */
 static void test_again(void)
 {
-    char *suites[] = {"alpha", NULL};
+    char *goals[] = {"build/images/a.img", "krffs/shadow", "build/images", NULL};
     char tree[PATH_LEN], path[PATH_LEN], calls[4096];
     struct etude_legacy_opts o;
     struct outcome r;
@@ -402,7 +346,7 @@ static void test_again(void)
 
     fix_format(tree, sizeof(tree), "%s/alone", fix_dir());
     unlink(in(path, sizeof(path), tree, "calls"));
-    opts_for(&o, tree, "again", suites);
+    opts_for(&o, tree, "again", goals);
     run(&o, &r);
     read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
     CHECK(r.status == 0, "again: prepared");
@@ -412,38 +356,10 @@ static void test_again(void)
     show(&r, before);
 }
 
-/** A set: prepare-all, then the artifacts outside it; an e1000 twin. */
-static void test_set(void)
-{
-    char *suites[] = {"alpha", "gamma", "alpha-e1000", NULL};
-    char tree[PATH_LEN], path[PATH_LEN], calls[4096], record[8192], files[1024];
-    struct etude_legacy_opts o;
-    struct outcome r;
-    int before = fails;
-
-    make_tree("set", tree, sizeof(tree));
-    opts_for(&o, tree, "set", suites);
-    run(&o, &r);
-    read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
-    read_text(o.record, record, sizeof(record));
-    record_files(record, files, sizeof(files));
-    CHECK(r.status == 0, "set: prepared");
-    CHECK(has_line(r.out, "etude-legacy: step: prepare-all"), "set: prepare-all");
-    CHECK(line_at(calls, "build/images/g.img i686 build/rach2/kernel C") >
-              line_at(calls, "build/images/b.img i686 build/rach2/kernel C"),
-          "set: the artifacts outside prepare-all after it");
-    CHECK(has_line(calls, "build/images/a.img i686 build/rach2/kernel C"), "set: prepare-all's");
-    CHECK(strcmp(files, "build/images/a.img\nbuild/images/g.img\nbuild/rach2/kernel\n"
-                        "krffs/shadow\n") == 0,
-          "set: the record's files");
-    CHECK(has_line(record, "suite alpha-e1000 run-alpha"), "set: the e1000 twin's target");
-    show(&r, before);
-}
-
 /** x86_64 and a kernel of its own reach every make and the record. */
 static void test_machine(void)
 {
-    char *suites[] = {"beta", NULL};
+    char *goals[] = {"build/x86_64/images/a.img", NULL};
     char tree[PATH_LEN], path[PATH_LEN], calls[4096], record[8192], files[1024];
     const char *k = "build/x86_64/rach2-ubsan/kernel";
     struct etude_legacy_opts o;
@@ -451,7 +367,7 @@ static void test_machine(void)
     int before = fails;
 
     make_tree("machine", tree, sizeof(tree));
-    opts_for(&o, tree, "machine", suites);
+    opts_for(&o, tree, "machine", goals);
     o.arch = "x86_64";
     o.kernel = "ubsan";
     run(&o, &r);
@@ -463,7 +379,7 @@ static void test_machine(void)
               line_at(calls, "components x86_64 build/x86_64/rach2-ubsan/kernel C"),
           "machine: the kernel after the components");
     CHECK(has_line(calls, "build/x86_64/images/a.img x86_64 build/x86_64/rach2-ubsan/kernel C"),
-          "machine: the artifacts");
+          "machine: the goal");
     CHECK(strcmp(files, "build/x86_64/images/a.img\nbuild/x86_64/rach2-ubsan/kernel\n") == 0,
           "machine: the record's files");
     fix_format(path, sizeof(path), "kernel %s", k);
@@ -472,10 +388,10 @@ static void test_machine(void)
 }
 
 /**
- * Prepare `suites` of tree `tree` as row `row`, with `arch` and `kernel`,
+ * Prepare `goals` of tree `tree` as row `row`, with `arch` and `kernel`,
  * and require a refusal with `why` and nothing built or left.
  */
-static void refused(const char *tree, const char *row, char *const *suites, const char *arch,
+static void refused(const char *tree, const char *row, char *const *goals, const char *arch,
                     const char *kernel, const char *why)
 {
     char path[PATH_LEN], line[256];
@@ -483,7 +399,7 @@ static void refused(const char *tree, const char *row, char *const *suites, cons
     struct outcome r;
     int before = fails;
 
-    opts_for(&o, tree, row, suites);
+    opts_for(&o, tree, row, goals);
     o.arch = arch;
     o.kernel = kernel;
     run(&o, &r);
@@ -495,51 +411,35 @@ static void refused(const char *tree, const char *row, char *const *suites, cons
     show(&r, before);
 }
 
-/** Each refusal builds nothing; a tool on the path that e2fsprogs_path.sh
- * adds is found. */
+/** Each refusal builds nothing. */
 static void test_refused(void)
 {
-    char *unknown[] = {"alpha", "nosuch", NULL}, *twice[] = {"alpha", "gamma", "alpha", NULL};
-    char *beta[] = {"beta", NULL}, *needy[] = {"needy", NULL}, *alpha[] = {"alpha", NULL};
-    char *set[] = {"alpha", "gamma", NULL}, *sbinny[] = {"sbinny", NULL};
-    char tree[PATH_LEN], path[PATH_LEN], held[32];
-    struct etude_legacy_opts o;
-    struct outcome r;
-    int before;
+    char *none[] = {NULL}, *a[] = {"build/images/a.img", NULL};
+    char *absolute[] = {"build/images/a.img", "/x", NULL}, *parent[] = {"build/../x", NULL};
+    char tree[PATH_LEN], held[32];
 
     make_tree("refused", tree, sizeof(tree));
-    refused(tree, "unknown", unknown, "i686", NULL, "unknown suite 'nosuch'");
-    refused(tree, "twice", twice, "i686", NULL, "alpha is named twice");
-    refused(tree, "arch", beta, "i686", NULL,
-            "beta runs on x86_64 alone, and the architecture is i686");
-    refused(tree, "needy", needy, "i686", NULL,
-            "needy needs etude-legacy-no-such-tool, which this host does not have");
-    refused(tree, "arm", alpha, "arm", NULL, "arm: the architectures are i686 and x86_64");
-    refused(tree, "kernel", alpha, "i686", "../x",
+    refused(tree, "none", none, "i686", NULL, "no goal named");
+    refused(tree, "absolute", absolute, "i686", NULL,
+            "/x: a goal is a relative path inside the tree");
+    refused(tree, "parent", parent, "i686", NULL,
+            "build/../x: a goal is a relative path inside the tree");
+    refused(tree, "arm", a, "arm", NULL, "arm: the architectures are i686 and x86_64");
+    refused(tree, "kernel", a, "i686", "../x",
             "../x: a kernel's name is letters, digits, '_' and '-'");
-    write_text(in(path, sizeof(path), tree, "no-tools"), "", 0644);
-    refused(tree, "tools", set, "i686", NULL,
-            "a set prepares every suite's artifacts, and needs etude-legacy-no-such-tool, which "
-            "this host does not have");
-    unlink(path);
     snprintf(held, sizeof(held), "%ld", (long)getppid());
     setenv("RACH2_TREE_HELD", held, 1);
-    refused(tree, "held", alpha, "i686", NULL,
+    refused(tree, "held", a, "i686", NULL,
             "the tree is not held: RACH2_TREE_HELD must name the running process that "
             "build/.run.lock/owner names");
     snprintf(held, sizeof(held), "%ld", (long)getpid());
     setenv("RACH2_TREE_HELD", held, 1);
-    before = fails;
-    opts_for(&o, tree, "sbinny", sbinny);
-    run(&o, &r);
-    CHECK(r.status == 0, "sbinny: a tool on the path e2fsprogs_path.sh adds");
-    show(&r, before);
 }
 
 /** A failed step stops the preparation and keeps its log. */
 static void test_failed(void)
 {
-    char *suites[] = {"alpha", NULL};
+    char *goals[] = {"build/images/a.img", NULL};
     char tree[PATH_LEN], path[PATH_LEN], calls[4096], log[4096], line[PATH_LEN + 64], *work;
     struct etude_legacy_opts o;
     struct outcome r;
@@ -547,7 +447,7 @@ static void test_failed(void)
 
     make_tree("failed", tree, sizeof(tree));
     write_text(in(path, sizeof(path), tree, "fail-components"), "", 0644);
-    opts_for(&o, tree, "failed", suites);
+    opts_for(&o, tree, "failed", goals);
     run(&o, &r);
     read_text(in(path, sizeof(path), tree, "calls"), calls, sizeof(calls));
     fix_format(path, sizeof(path), "%s/3-components.log", o.work);
@@ -559,27 +459,27 @@ static void test_failed(void)
     fix_format(line, sizeof(line), "etude-legacy: evidence: %s", work != NULL ? work : o.work);
     free(work);
     CHECK(has_line(r.out, line) && strstr(log, "components") != NULL, "failed: its log kept");
-    CHECK(strstr(r.out, "step: database") == NULL && strstr(calls, "a.img") == NULL,
+    CHECK(strstr(r.out, "step: artifacts") == NULL && strstr(calls, "a.img") == NULL,
           "failed: no step after it");
     CHECK(!exists(o.record), "failed: no record");
     show(&r, before);
 }
 
-/** An artifact that its rule does not make fails the preparation. */
+/** A goal that its rule does not make fails the preparation. */
 static void test_missing(void)
 {
-    char *suites[] = {"delta", NULL};
+    char *goals[] = {"build/images/d.img", NULL};
     char tree[PATH_LEN];
     struct etude_legacy_opts o;
     struct outcome r;
     int before = fails;
 
     make_tree("missing", tree, sizeof(tree));
-    opts_for(&o, tree, "missing", suites);
+    opts_for(&o, tree, "missing", goals);
     run(&o, &r);
     CHECK(r.status == 1, "missing: failed");
     CHECK(has_line(r.out, "etude-legacy: missing: build/images/d.img: No such file or directory"),
-          "missing: the artifact named");
+          "missing: the goal named");
     CHECK(has_line(r.out, "etude-legacy: result: failed: 1 of 2 artifacts are missing"),
           "missing: the result");
     CHECK(!exists(o.record), "missing: no record");
@@ -601,14 +501,14 @@ static int no_reader(const char *path)
 /** A step past its bound is ended, with what it started. */
 static void test_bound(void)
 {
-    char *suites[] = {"hang", NULL};
+    char *goals[] = {"build/images/h.img", NULL};
     char tree[PATH_LEN], path[PATH_LEN];
     struct etude_legacy_opts o;
     struct outcome r;
     int before = fails;
 
     make_tree("bound", tree, sizeof(tree));
-    opts_for(&o, tree, "bound", suites);
+    opts_for(&o, tree, "bound", goals);
     o.seconds = 1;
     run(&o, &r);
     CHECK(r.status == 1, "bound: failed");
@@ -652,7 +552,7 @@ static pid_t start_child(struct etude_legacy_opts *o, const char *out)
 /** A stop signal ends the step that runs and removes the work. */
 static void test_stop(void)
 {
-    char *suites[] = {"wait", NULL};
+    char *goals[] = {"build/images/w.img", NULL};
     char tree[PATH_LEN], path[PATH_LEN], got[16];
     const char *out = fix_path("stop.out");
     struct etude_legacy_opts o;
@@ -662,7 +562,7 @@ static void test_stop(void)
     pid_t pid;
 
     make_tree("stop", tree, sizeof(tree));
-    opts_for(&o, tree, "stop", suites);
+    opts_for(&o, tree, "stop", goals);
     o.seconds = 30;
     fd = open(in(path, sizeof(path), tree, "started.fifo"), O_RDWR);
     fflush(stdout);
@@ -758,8 +658,8 @@ static void test_check(void)
     CHECK(check(tmp, 0, out, sizeof(out)) == 2, "check: another record");
 }
 
-/** Run as a graph's recipe: prepare ARGV[4...] of tree ARGV[2] into the
- * record ARGV[3]. */
+/** Run as a graph's recipe: prepare the goals ARGV[4...] of tree ARGV[2]
+ * into the record ARGV[3]. */
 static int recipe(int argc, char **argv)
 {
     struct etude_legacy_opts o;
@@ -769,8 +669,8 @@ static int recipe(int argc, char **argv)
     o.arch = "i686";
     o.record = argv[3];
     o.seconds = 60;
-    o.suites = argv + 4;
-    o.nsuites = (size_t)(argc - 4);
+    o.goals = argv + 4;
+    o.ngoals = (size_t)(argc - 4);
     o.out = stdout;
     return etude_legacy_prepare(&o);
 }
@@ -779,7 +679,7 @@ static int recipe(int argc, char **argv)
 static void test_graph(void)
 {
     char tree[PATH_LEN], dir[PATH_LEN], obj[PATH_LEN], text[8192];
-    char *argv[] = {self, "--legacy", tree, "${WORK}/record", "alpha", NULL};
+    char *argv[] = {self, "--legacy", tree, "${WORK}/record", "build/images/a.img", NULL};
     struct etude_prep_node n;
     struct etude_prep_opts po;
     struct etude_prep *g = etude_prep_new();
@@ -808,7 +708,8 @@ static void test_graph(void)
     CHECK(res != NULL && res->state == ETUDE_PREP_BUILT &&
               etude_store_path(s, res->digest, obj, sizeof(obj)) == 0 &&
               read_text(obj, text, sizeof(text)) > 0 &&
-              strncmp(text, "etude-legacy 1\n", 15) == 0 && has_line(text, "suite alpha run-alpha"),
+              strncmp(text, "etude-legacy 1\n", 15) == 0 && has_line(text, "arch i686") &&
+              strstr(text, " build/images/a.img\n") != NULL,
           "graph: the record published");
     if (res != NULL && res->state != ETUDE_PREP_BUILT)
         printf("etude-legacy-test: the recipe's errors: %s\n", res->why);
@@ -836,7 +737,6 @@ int main(int argc, char **argv)
     setenv("ARCH", "x86_64", 1);
     test_alone();
     test_again();
-    test_set();
     test_machine();
     test_refused();
     test_failed();

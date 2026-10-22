@@ -1,8 +1,8 @@
 /*
  * legacy.c: the preparation adapter on POSIX systems. It runs the
- * preparation of tests/run one step at a time through the executor, finds
- * each suite's artifacts in make's database, checks that they exist, and
- * records them, and it checks a record against its tree.
+ * preparation of tests/run one step at a time through the executor, builds
+ * the goals it is given, checks that they exist, and records them, and it
+ * checks a record against its tree.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -27,8 +27,8 @@ extern char **environ;
 #define GRACE_US 5000000u
 
 /* The bytes kept of a step's standard output and of its standard error
- * through the executor: the path, the preparation's tools, and whatever the
- * shell printed before its output went to the log. */
+ * through the executor: the path, and whatever the shell printed before its
+ * output went to the log. */
 #define OUTPUT_MAX 65536
 
 /* The lines of a failed step's log printed under its result, and the bytes
@@ -39,18 +39,8 @@ extern char **environ;
 /* The first line of a record. */
 #define RECORD_HEAD "etude-legacy 1"
 
-/* The most commands one entry of a suite's tools may name. */
-#define TOOL_MAX 255
-
 /* A build step's output, and its errors, go to the log $1. */
 static const char script_log[] = "exec >\"$1\" 2>&1; shift; exec \"$@\"";
-
-/* make's database goes to the file $2, and its errors to the log. */
-static const char script_file[] = "exec >\"$2\" 2>\"$1\"; shift 2; exec \"$@\"";
-
-/* Standard output goes to the executor, which keeps it: a short answer, or
- * a suite's `child` records; standard error goes to the log $1. */
-static const char script_answer[] = "exec 2>\"$1\"; shift; exec \"$@\"";
 
 /* The path the steps search: the caller's, with e2fsprogs's directories
  * added where a package manager keeps them off, as tests/run adds them. */
@@ -68,43 +58,10 @@ struct list {
     size_t n, cap;
 };
 
-/* A suite of the registry. */
-struct suite {
-    char *name;
-    char *tools;  /* the commands it needs, `-` for none, empty when unknown */
-    char *images; /* the globs of what it writes under the images, or empty */
-    char *arches; /* the architectures it runs on, empty for both */
-};
-
-/* A file or target of make's database. */
-struct node {
-    char *name;
-    size_t *deps; /* the indices of its prerequisites */
-    size_t ndeps, cap;
-    unsigned char target; /* a rule of the makefiles makes it */
-    unsigned char phony;
-};
-
-/* make's database: its nodes, and a table of their indices by name. */
-struct db {
-    struct node *n;
-    size_t len, cap;
-    size_t *slot; /* each an index plus one, or 0 when empty */
-    size_t nslot; /* a power of two, more than twice `len` */
-};
-
-/* The state of a reading of the database. */
-struct parse {
-    long cur;       /* the target whose recipe the tab lines are, or -1 */
-    int not_target; /* the next entry is a file no rule makes */
-    int in_define;  /* inside a multi-line variable's value */
-};
-
 /* One step: a command run under sh(1) from the tree's root. */
 struct step {
     const char *name;   /* names its log, WORK/N-NAME.log */
     const char *script; /* where its output goes */
-    const char *file;   /* the file of script_file, or NULL */
     char **cmd;         /* the command, ended by NULL */
     int capture;        /* nonzero: its standard output is its answer */
     char *answer;       /* that answer, its first line, once it passed */
@@ -116,21 +73,16 @@ struct prep {
     FILE *out;
     char *tree;
     const char *arch_build; /* the architecture's build tree */
-    char *arch_var;         /* ARCH=..., given to every make of the suites */
+    char *arch_var;         /* ARCH=..., given to every make */
     char *kernel;           /* the kernel the suites boot */
     char *kernel_var;       /* BOOT_KERNEL=..., or NULL for the default */
     char *work;
     char **env; /* the steps' environment */
     struct etude_exec *ex;
-    unsigned steps; /* the steps begun, which number their logs */
-    struct suite *reg;
-    size_t nreg;
-    const struct suite **chosen; /* the suites, in the order named */
-    char **targets;              /* their targets, in that order */
-    char *why;                   /* what failed, for the result line */
-    struct db db;
+    unsigned steps;       /* the steps begun, which number their logs */
+    char *why;            /* what failed, for the result line */
     struct list goals;    /* the artifacts the last step builds */
-    struct list required; /* every artifact the suites read */
+    struct list required; /* every artifact recorded */
     size_t files;         /* the regular files of `required` */
 };
 
@@ -207,20 +159,6 @@ static void list_unique(struct list *l)
     l->v[l->n] = NULL;
 }
 
-/** Say whether `word` is one of the comma-separated words of `list`. */
-static int listed(const char *list, const char *word)
-{
-    size_t n = strlen(word), len;
-
-    while (*list != '\0') {
-        len = strcspn(list, ",");
-        if (len == n && strncmp(list, word, n) == 0)
-            return 1;
-        list += len + (list[len] == ',');
-    }
-    return 0;
-}
-
 /** Say whether `s` is letters, digits, `_` and `-`, and begins with neither. */
 static int plain_name(const char *s)
 {
@@ -277,154 +215,6 @@ static int stopped(const struct prep *p)
     return p->o->stop != NULL && *p->o->stop != 0;
 }
 
-/* ---- The registry and the tools. ---- */
-
-/** Take one line of the registry as a suite; 0, or -1 when memory ran out. */
-static int take_suite(struct prep *p, char *line)
-{
-    char *field[7] = {NULL, "", "", "", "", "", ""};
-    struct suite *more, *s;
-    int i;
-
-    field[0] = line;
-    for (i = 1; i < 7 && (line = strchr(line, '|')) != NULL; i++) {
-        *line++ = '\0';
-        field[i] = line;
-    }
-    if (i == 1)
-        return 0;
-    more = realloc(p->reg, (p->nreg + 1) * sizeof(*more));
-    if (more == NULL)
-        return -1;
-    p->reg = more;
-    s = &p->reg[p->nreg++];
-    s->name = strdup(field[0]);
-    s->tools = strdup(field[1]);
-    s->images = strdup(field[3]);
-    s->arches = strdup(field[5]);
-    return s->name == NULL || s->tools == NULL || s->images == NULL || s->arches == NULL ? -1 : 0;
-}
-
-/** Read the tree's registry, tests/registry; 0, or 2 after a refusal. */
-static int read_registry(struct prep *p)
-{
-    char *path = format("%s/tests/registry", p->tree), *line = NULL;
-    size_t cap = 0;
-    ssize_t len;
-    FILE *f = path != NULL ? fopen(path, "r") : NULL;
-    int bad = 0;
-
-    if (f == NULL) {
-        free(path);
-        return refuse(p, "tests/registry cannot be read: %s", strerror(errno));
-    }
-    while (!bad && (len = getline(&line, &cap, f)) >= 0) {
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
-        if (line[0] != '#' && take_suite(p, line) != 0)
-            bad = 1;
-    }
-    bad = bad || ferror(f);
-    free(line);
-    free(path);
-    fclose(f);
-    return bad ? refuse(p, "tests/registry cannot be read") : 0;
-}
-
-/** Give the suite of the registry named `name`, or NULL for none. */
-static const struct suite *find_suite(const struct prep *p, const char *name)
-{
-    size_t i;
-
-    for (i = 0; i < p->nreg; i++) {
-        if (strcmp(p->reg[i].name, name) == 0 && p->reg[i].tools[0] != '\0')
-            return &p->reg[i];
-    }
-    return NULL;
-}
-
-/** Give the first executable file `tool` in a directory of `path`, from
- * malloc, or NULL when there is none. */
-static char *path_of(const char *tool, const char *path)
-{
-    struct stat st;
-    char *file;
-    size_t len;
-
-    for (;;) {
-        len = strcspn(path, ":");
-        file = len == 0 ? format("./%s", tool) : format("%.*s/%s", (int)len, path, tool);
-        if (file != NULL && stat(file, &st) == 0 && S_ISREG(st.st_mode) && access(file, X_OK) == 0)
-            return file;
-        free(file);
-        if (path[len] == '\0')
-            return NULL;
-        path += len + 1;
-    }
-}
-
-/** Say whether `tool` is an executable file in a directory of `path`. */
-static int on_path(const char *tool, const char *path)
-{
-    char *file = path_of(tool, path);
-
-    free(file);
-    return file != NULL;
-}
-
-/** Say whether every command of `choice`, `len` bytes of names joined by
- * `+`, is on `path`; `qemu` stands for the architecture's emulator. */
-static int choice_met(const char *choice, size_t len, const char *qemu, const char *path)
-{
-    char name[TOOL_MAX + 1];
-    size_t n;
-
-    while (len > 0) {
-        n = strcspn(choice, "+");
-        n = n < len ? n : len;
-        if (n == 0 || n > TOOL_MAX)
-            return 0;
-        memcpy(name, choice, n);
-        name[n] = '\0';
-        if (!on_path(strcmp(name, "qemu") == 0 ? qemu : name, path))
-            return 0;
-        choice += n;
-        len -= n;
-        if (len > 0) {
-            choice++;
-            len--;
-        }
-    }
-    return 1;
-}
-
-/**
- * Give the first entry of `tools`, the registry's form, that `path` does
- * not meet, from malloc, or NULL when every entry is met. An entry of
- * choices, `a+b/c+d`, is met when every command of one choice is there.
- */
-static char *tools_missing(const char *tools, const char *qemu, const char *path)
-{
-    const char *choice;
-    size_t len, n;
-    int met;
-
-    if (strcmp(tools, "-") == 0)
-        return NULL;
-    while (*tools != '\0') {
-        len = strcspn(tools, ",");
-        met = 0;
-        for (choice = tools; !met && choice < tools + len; choice += n + 1) {
-            n = strcspn(choice, "/,");
-            met = choice_met(choice, n, qemu, path);
-        }
-        if (!met)
-            return format("%.*s", (int)len, tools);
-        tools += len + (tools[len] == ',');
-    }
-    return NULL;
-}
-
 /* ---- Admission. ---- */
 
 /**
@@ -475,17 +265,6 @@ static int admit_machine(struct prep *p)
     return 0;
 }
 
-/** Give the target whose closure is suite `name`'s artifacts: an e1000
- * suite's target runs its plain twin's with the second card. */
-static char *target_of(const char *name)
-{
-    size_t n = strlen(name);
-
-    if (n > 6 && strcmp(name + n - 6, "-e1000") == 0)
-        return format("run-%.*s", (int)(n - 6), name);
-    return format("run-%s", name);
-}
-
 /** Say whether `s` names a goal inside the tree: a relative path of
  * letters, digits, `.`, `_`, `+` and `-`, whose parts are not `.` or `..`. */
 static int goal_name(const char *s)
@@ -505,38 +284,18 @@ static int goal_name(const char *s)
     return 1;
 }
 
-/** Take the suites and the goals named; 0, or 2 after a refusal. */
-static int admit_suites(struct prep *p)
+/** Take the goals named, of which there must be one at least; 0, or 2
+ * after a refusal. */
+static int admit_goals(struct prep *p)
 {
     const struct etude_legacy_opts *o = p->o;
-    const char *arch = p->arch_var + 5;
-    size_t i, j;
+    size_t i;
 
-    if (o->nsuites == 0 && o->ngoals == 0)
-        return refuse(p, "no suite named");
+    if (o->ngoals == 0)
+        return refuse(p, "no goal named");
     for (i = 0; i < o->ngoals; i++)
         if (!goal_name(o->goals[i]))
             return refuse(p, "%s: a goal is a relative path inside the tree", o->goals[i]);
-    p->chosen = calloc(o->nsuites + 1, sizeof(*p->chosen));
-    p->targets = calloc(o->nsuites + 1, sizeof(*p->targets));
-    if (p->chosen == NULL || p->targets == NULL)
-        return sys_error(p, "the request", ENOMEM);
-    for (i = 0; i < o->nsuites; i++) {
-        const struct suite *s = find_suite(p, o->suites[i]);
-
-        if (s == NULL)
-            return refuse(p, "unknown suite '%s'", o->suites[i]);
-        for (j = 0; j < i; j++) {
-            if (p->chosen[j] == s)
-                return refuse(p, "%s is named twice", s->name);
-        }
-        if (s->arches[0] != '\0' && !listed(s->arches, arch))
-            return refuse(p, "%s runs on %s alone, and the architecture is %s", s->name, s->arches,
-                          arch);
-        p->chosen[i] = s;
-        if ((p->targets[i] = target_of(s->name)) == NULL)
-            return sys_error(p, "the request", ENOMEM);
-    }
     return 0;
 }
 
@@ -550,7 +309,7 @@ static int admit(struct prep *p)
     p->tree = realpath(p->o->tree != NULL ? p->o->tree : ".", NULL);
     if (p->tree == NULL)
         return refuse(p, "%s: %s", p->o->tree != NULL ? p->o->tree : ".", strerror(errno));
-    if ((status = read_registry(p)) != 0 || (status = admit_suites(p)) != 0)
+    if ((status = admit_goals(p)) != 0)
         return status;
     if (!tree_held(p))
         return refuse(p, "the tree is not held: RACH2_TREE_HELD must name the running process "
@@ -705,8 +464,6 @@ static char **step_argv(const struct step *s, const char *log)
     argv[k++] = (char *)s->script;
     argv[k++] = "etude-legacy";
     argv[k++] = (char *)log;
-    if (s->file != NULL)
-        argv[k++] = (char *)s->file;
     for (i = 0; i < n; i++)
         argv[k++] = s->cmd[i];
     return argv;
@@ -902,7 +659,7 @@ static int build_step(struct prep *p, const char *name, const char *a, const cha
     return run_make(p, &s, args, n);
 }
 
-/* ---- The host's tools. ---- */
+/* ---- The steps' path. ---- */
 
 /** Find the path the steps search, and set it in their environment. */
 static int find_path(struct prep *p)
@@ -923,418 +680,25 @@ static int find_path(struct prep *p)
     return status;
 }
 
-/** Give the PATH of the steps' environment. */
-static const char *env_path(const struct prep *p)
-{
-    size_t i;
-
-    for (i = 0; p->env[i] != NULL; i++) {
-        if (strncmp(p->env[i], "PATH=", 5) == 0)
-            return p->env[i] + 5;
-    }
-    return "";
-}
-
-/**
- * Check the tools of every suite and, for more than one, those of
- * `prepare-all`, which `make prepare-tools` prints; 0, 1 after a failed
- * step, 2 after a refusal, or 128 plus a stop signal.
- */
-static int check_tools(struct prep *p)
-{
-    const char *qemu =
-        strcmp(p->arch_build, "build") == 0 ? "qemu-system-i386" : "qemu-system-x86_64";
-    char *args[] = {"-s", "prepare-tools"}, *missing;
-    struct step s;
-    size_t i;
-    int status;
-
-    for (i = 0; i < p->o->nsuites; i++) {
-        if ((missing = tools_missing(p->chosen[i]->tools, qemu, env_path(p))) != NULL) {
-            status = refuse(p, "%s needs %s, which this host does not have", p->chosen[i]->name,
-                            missing);
-            free(missing);
-            return status;
-        }
-    }
-    if (p->o->nsuites < 2)
-        return 0;
-    memset(&s, 0, sizeof(s));
-    s.name = "prepare-tools";
-    s.script = script_answer;
-    s.capture = 1;
-    if ((status = run_make(p, &s, args, 2)) != 0)
-        return status;
-    missing = tools_missing(s.answer, qemu, env_path(p));
-    free(s.answer);
-    if (missing == NULL)
-        return 0;
-    status = refuse(p,
-                    "a set prepares every suite's artifacts, and needs %s, which this host "
-                    "does not have",
-                    missing);
-    free(missing);
-    return status;
-}
-
-/* ---- make's database. ---- */
-
-/** Give the 64-bit FNV-1a hash of `s`. */
-static uint64_t hash_of(const char *s)
-{
-    uint64_t h = 14695981039346656037u;
-
-    while (*s != '\0')
-        h = (h ^ (unsigned char)*s++) * 1099511628211u;
-    return h;
-}
-
-/** Give the index of the node named `s`, or -1 for none. */
-static long db_find(const struct db *d, const char *s)
-{
-    size_t i;
-
-    if (d->nslot == 0)
-        return -1;
-    for (i = hash_of(s) & (d->nslot - 1); d->slot[i] != 0; i = (i + 1) & (d->nslot - 1)) {
-        if (strcmp(d->n[d->slot[i] - 1].name, s) == 0)
-            return (long)(d->slot[i] - 1);
-    }
-    return -1;
-}
-
-/** Give the first free entry on the path that `name` probes in the table
- * `slot` of `nslot` entries, a power of two. */
-static size_t free_slot(const size_t *slot, size_t nslot, const char *name)
-{
-    size_t i = hash_of(name) & (nslot - 1);
-
-    while (slot[i] != 0)
-        i = (i + 1) & (nslot - 1);
-    return i;
-}
-
-/** Make the table twice as large; 0, or -1 when memory ran out. */
-static int db_grow(struct db *d)
-{
-    size_t nslot = d->nslot != 0 ? d->nslot * 2 : 1024, i;
-    size_t *slot = calloc(nslot, sizeof(*slot));
-
-    if (slot == NULL)
-        return -1;
-    for (i = 0; i < d->len; i++)
-        slot[free_slot(slot, nslot, d->n[i].name)] = i + 1;
-    free(d->slot);
-    d->slot = slot;
-    d->nslot = nslot;
-    return 0;
-}
-
-/** Give the index of the node named `s`, added when it is new, or -1. */
-static long db_intern(struct db *d, const char *s)
-{
-    long found = db_find(d, s);
-    struct node *more;
-
-    if (found >= 0)
-        return found;
-    if ((d->len + 1) * 2 >= d->nslot && db_grow(d) != 0)
-        return -1;
-    if (d->len == d->cap) {
-        more = realloc(d->n, (d->cap * 2 + 1024) * sizeof(*more));
-        if (more == NULL)
-            return -1;
-        d->n = more;
-        d->cap = d->cap * 2 + 1024;
-    }
-    memset(&d->n[d->len], 0, sizeof(d->n[d->len]));
-    if ((d->n[d->len].name = strdup(s)) == NULL)
-        return -1;
-    d->slot[free_slot(d->slot, d->nslot, s)] = d->len + 1;
-    return (long)d->len++;
-}
-
-/** Add node `dep` to node `t`'s prerequisites; 0, or -1. */
-static int db_dep(struct db *d, size_t t, size_t dep)
-{
-    struct node *n = &d->n[t];
-    size_t *more;
-
-    if (n->ndeps == n->cap) {
-        more = realloc(n->deps, (n->cap * 2 + 8) * sizeof(*more));
-        if (more == NULL)
-            return -1;
-        n->deps = more;
-        n->cap = n->cap * 2 + 8;
-    }
-    n->deps[n->ndeps++] = dep;
-    return 0;
-}
-
-/** Free the database. */
-static void db_free(struct db *d)
-{
-    size_t i;
-
-    for (i = 0; i < d->len; i++) {
-        free(d->n[i].name);
-        free(d->n[i].deps);
-    }
-    free(d->n);
-    free(d->slot);
-    memset(d, 0, sizeof(*d));
-}
-
-/**
- * Give the length of the target's name when `line` is a rule of the
- * database, `NAME: PREREQUISITES` or `NAME:: PREREQUISITES`, with the
- * prerequisites in `*rest`; 0 for any other line. A target's own variable,
- * `NAME: VAR := VALUE`, is not a rule.
- */
-static size_t rule_name(char *line, char **rest)
-{
-    size_t n = strcspn(line, " \t:=");
-
-    if (n == 0 || line[n] != ':')
-        return 0;
-    *rest = line + n + 1 + (line[n + 1] == ':');
-    return strchr(*rest, '=') == NULL ? n : 0;
-}
-
-/** Add each word of `words` as a prerequisite of node `t`, all of them or,
- * with `prefix`, those that begin with it; 0, or -1. */
-static int db_words(struct db *d, size_t t, char *words, const char *prefix)
-{
-    char *w;
-    size_t n;
-    long dep;
-
-    for (w = words + strspn(words, " \t"); *w != '\0'; w += strspn(w, " \t")) {
-        n = strcspn(w, " \t");
-        if (w[n] != '\0')
-            w[n++] = '\0';
-        if (strcmp(w, "|") != 0 && (prefix == NULL || strncmp(w, prefix, strlen(prefix)) == 0)) {
-            if ((dep = db_intern(d, w)) < 0 || db_dep(d, t, (size_t)dep) != 0)
-                return -1;
-        }
-        w += n;
-    }
-    return 0;
-}
-
-/** Mark each prerequisite of `.PHONY` phony. */
-static void db_phony(struct db *d)
-{
-    long t = db_find(d, ".PHONY");
-    size_t i;
-
-    for (i = 0; t >= 0 && i < d->n[t].ndeps; i++)
-        d->n[d->n[t].deps[i]].phony = 1;
-}
-
-/**
- * Take one line of the database. The recipe of `prepare-all` makes its two
- * halves with a make of their own, so the words of its recipe that begin
- * with `prepare-` are its prerequisites too, as tests/run read them.
- *
- * @return 0, or -1 when memory ran out.
- */
-static int db_line(struct db *d, struct parse *ps, char *line)
-{
-    char *rest;
-    size_t n;
-    long t;
-
-    if (ps->in_define) {
-        ps->in_define = strcmp(line, "endef") != 0;
-        return 0;
-    }
-    if (line[0] == '\t')
-        return ps->cur >= 0 && strcmp(d->n[ps->cur].name, "prepare-all") == 0
-                   ? db_words(d, (size_t)ps->cur, line, "prepare-")
-                   : 0;
-    if (line[0] == '#') {
-        ps->not_target = ps->not_target || strcmp(line, "# Not a target:") == 0;
-        return 0;
-    }
-    ps->cur = -1;
-    ps->in_define = strncmp(line, "define ", 7) == 0 || strncmp(line, "override define ", 16) == 0;
-    if ((n = rule_name(line, &rest)) == 0) {
-        ps->not_target = 0;
-        return 0;
-    }
-    line[n] = '\0';
-    if ((t = db_intern(d, line)) < 0)
-        return -1;
-    d->n[t].target = d->n[t].target || !ps->not_target;
-    ps->not_target = 0;
-    ps->cur = t;
-    return db_words(d, (size_t)t, rest, NULL);
-}
-
-/** Read make's database, as `make -p` prints it, from `path`; 0, or -1. */
-static int db_read(struct db *d, const char *path)
-{
-    struct parse ps = {-1, 0, 0};
-    char *line = NULL;
-    size_t cap = 0;
-    ssize_t len;
-    FILE *f = fopen(path, "r");
-    int bad = 0;
-
-    if (f == NULL)
-        return -1;
-    while (!bad && (len = getline(&line, &cap, f)) >= 0) {
-        if (len > 0 && line[len - 1] == '\n')
-            line[len - 1] = '\0';
-        bad = db_line(d, &ps, line) != 0;
-    }
-    bad = bad || ferror(f);
-    free(line);
-    fclose(f);
-    db_phony(d);
-    return bad ? -1 : 0;
-}
-
-/**
- * Mark in `mark` every node reachable from the node named `root`, itself
- * included.
- *
- * @return 0, or -1 with errno ENOENT for a root the database lacks or
- *         ENOMEM.
- */
-static int db_reach(const struct db *d, const char *root, unsigned char *mark)
-{
-    long r = db_find(d, root);
-    size_t *queue, head = 0, tail = 0, i;
-    const struct node *n;
-
-    if (r < 0) {
-        errno = ENOENT;
-        return -1;
-    }
-    if ((queue = malloc(d->len * sizeof(*queue))) == NULL)
-        return -1;
-    memset(mark, 0, d->len);
-    mark[r] = 1;
-    queue[tail++] = (size_t)r;
-    while (head < tail) {
-        n = &d->n[queue[head++]];
-        for (i = 0; i < n->ndeps; i++) {
-            if (!mark[n->deps[i]]) {
-                mark[n->deps[i]] = 1;
-                queue[tail++] = n->deps[i];
-            }
-        }
-    }
-    free(queue);
-    return 0;
-}
-
-/** Give the name `name` from the tree's root `tree` when it is an absolute
- * path inside the tree, as make's database may name one file both ways;
- * otherwise `name`. */
-static const char *in_tree(const char *tree, const char *name)
-{
-    size_t n = strlen(tree);
-
-    return strncmp(name, tree, n) == 0 && name[n] == '/' ? name + n + 1 : name;
-}
-
-/** Say whether node `n`, whose name from the tree's root is `name`, is an
- * artifact: a file under build/, or a target with a directory in its name;
- * a phony target is not. */
-static int artifact(const struct node *n, const char *name)
-{
-    if (n->phony)
-        return 0;
-    return strncmp(name, "build/", 6) == 0 || (n->target && strchr(name, '/') != NULL);
-}
-
 /* ---- The artifacts. ---- */
 
-/** Dump make's database into WORK/database and read it. */
-static int read_database(struct prep *p)
-{
-    char *args[] = {"-pn", "prepare-tools"};
-    char *file = format("%s/database", p->work);
-    struct step s;
-    int status;
-
-    if (file == NULL)
-        return failed(p, "database: memory ran out");
-    memset(&s, 0, sizeof(s));
-    s.name = "database";
-    s.script = script_file;
-    s.file = file;
-    status = run_make(p, &s, args, 2);
-    if (status == 0 && db_read(&p->db, file) != 0)
-        status = failed(p, "database: %s cannot be read: %s", file, strerror(errno));
-    free(file);
-    return status;
-}
-
-/**
- * Add suite `i`'s artifacts to the ones required, by their names from the
- * tree's root, and those that `prepared` does not mark, NULL for none, to the
- * goals of the last step, by the names make knows them by; 0, or 1.
- */
-static int take_artifacts(struct prep *p, size_t i, unsigned char *mark,
-                          const unsigned char *prepared)
-{
-    const char *name;
-    size_t k;
-    int bad = 0;
-
-    if (db_reach(&p->db, p->targets[i], mark) != 0)
-        return errno == ENOENT ? failed(p, "%s: make's database has no target %s",
-                                        p->chosen[i]->name, p->targets[i])
-                               : failed(p, "artifacts: memory ran out");
-    for (k = 0; k < p->db.len && !bad; k++) {
-        name = in_tree(p->tree, p->db.n[k].name);
-        if (!mark[k] || !artifact(&p->db.n[k], name))
-            continue;
-        bad = list_add(&p->required, name) != 0;
-        if (!bad && (prepared == NULL || !prepared[k]))
-            bad = list_add(&p->goals, p->db.n[k].name) != 0;
-    }
-    return bad ? failed(p, "artifacts: memory ran out") : 0;
-}
-
-/**
- * Find the artifacts every suite reads and those no step has built yet:
- * for one suite, all of its own, which its target would otherwise build as
- * it starts; for a set, those outside `prepare-all`'s, such as the GNU
- * system's images. The goals named are artifacts as well, and built.
- */
+/** Take the goals and the kernel the suites boot as the artifacts required,
+ * and the goals as those the last step builds; 0, or 1. */
 static int find_artifacts(struct prep *p)
 {
-    unsigned char *mark = malloc(p->db.len + 1), *prepared = NULL;
     size_t i;
-    int status = mark == NULL ? failed(p, "artifacts: memory ran out") : 0;
 
-    if (status == 0 && p->o->nsuites > 1) {
-        prepared = malloc(p->db.len + 1);
-        if (prepared == NULL)
-            status = failed(p, "artifacts: memory ran out");
-        else if (db_reach(&p->db, "prepare-all", prepared) != 0)
-            status = failed(p, "make's database has no target prepare-all");
-    }
-    for (i = 0; status == 0 && i < p->o->nsuites; i++)
-        status = take_artifacts(p, i, mark, prepared);
-    for (i = 0; status == 0 && i < p->o->ngoals; i++)
+    for (i = 0; i < p->o->ngoals; i++)
         if (list_add(&p->required, p->o->goals[i]) != 0 || list_add(&p->goals, p->o->goals[i]) != 0)
-            status = failed(p, "artifacts: memory ran out");
-    if (status == 0 && list_add(&p->required, p->kernel) != 0)
-        status = failed(p, "artifacts: memory ran out");
+            return failed(p, "artifacts: memory ran out");
+    if (list_add(&p->required, p->kernel) != 0)
+        return failed(p, "artifacts: memory ran out");
     list_unique(&p->goals);
     list_unique(&p->required);
-    free(mark);
-    free(prepared);
-    return status;
+    return 0;
 }
 
-/** Build the goals that no step has built, in one make. */
+/** Build the goals in one make. */
 static int build_goals(struct prep *p)
 {
     struct step s;
@@ -1381,12 +745,8 @@ static char *artifact_path(const char *tree, const char *name)
 /** Write the record's head to `f`. */
 static void record_head(const struct prep *p, FILE *f)
 {
-    size_t i;
-
     fprintf(f, "%s\ntree %s\narch %s\nkernel %s\n", RECORD_HEAD, p->tree, p->arch_var + 5,
             p->kernel);
-    for (i = 0; i < p->o->nsuites; i++)
-        fprintf(f, "suite %s %s\n", p->chosen[i]->name, p->targets[i]);
 }
 
 /**
@@ -1505,8 +865,6 @@ static int prepare(struct prep *p)
     int status = find_path(p);
 
     if (status == 0)
-        status = check_tools(p);
-    if (status == 0)
         status = keys(p);
     if (status == 0)
         status = build_step(p, "components", "-j", "components");
@@ -1516,10 +874,6 @@ static int prepare(struct prep *p)
                                      : failed(p, "kernel: memory ran out");
         free(kernel_goal);
     }
-    if (status == 0 && p->o->nsuites > 1)
-        status = build_step(p, "prepare-all", "-j", "prepare-all");
-    if (status == 0)
-        status = read_database(p);
     if (status == 0)
         status = find_artifacts(p);
     if (status == 0)
@@ -1544,26 +898,15 @@ static void release(struct prep *p, int keep)
     fflush(p->out);
     for (i = 0; p->env != NULL && p->env[i] != NULL; i++)
         free(p->env[i]);
-    for (i = 0; i < p->nreg; i++) {
-        free(p->reg[i].name);
-        free(p->reg[i].tools);
-        free(p->reg[i].images);
-        free(p->reg[i].arches);
-    }
-    for (i = 0; p->targets != NULL && p->targets[i] != NULL; i++)
-        free(p->targets[i]);
     free(p->env);
-    free(p->reg);
-    free(p->targets);
-    free((void *)p->chosen);
 }
 
 /** Print the result line, remove or keep the work, and free the rest. */
 static void conclude(struct prep *p, int status)
 {
     if (status == 0)
-        fprintf(p->out, "etude-legacy: result: prepared: %lu suites, %lu files\n",
-                (unsigned long)p->o->nsuites, (unsigned long)p->files);
+        fprintf(p->out, "etude-legacy: result: prepared: %lu goals, %lu files\n",
+                (unsigned long)p->o->ngoals, (unsigned long)p->files);
     else if (status == 1)
         fprintf(p->out, "etude-legacy: result: failed: %s\n",
                 p->why != NULL ? p->why : "memory ran out");
@@ -1582,14 +925,13 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     p.out = o->out != NULL ? o->out : stdout;
     status = admit(&p);
     if (status == 0) {
-        fprintf(p.out, "etude-legacy: preparing %lu suites for %s in %s\n",
-                (unsigned long)o->nsuites, p.arch_var + 5, p.tree);
+        fprintf(p.out, "etude-legacy: preparing %lu goals for %s in %s\n", (unsigned long)o->ngoals,
+                p.arch_var + 5, p.tree);
         status = open_work(&p);
     }
     if (status == 0)
         status = prepare(&p);
     conclude(&p, status);
-    db_free(&p.db);
     list_free(&p.goals);
     list_free(&p.required);
     free(p.tree);
@@ -1689,8 +1031,7 @@ static const char *check_line(struct reading *rd, char *line, size_t lineno)
         return (rd->arch = strdup(line + 5)) == NULL ? "memory ran out" : NULL;
     if (strncmp(line, "kernel ", 7) == 0 && rd->kernel == NULL)
         return (rd->kernel = strdup(line + 7)) == NULL ? "memory ran out" : NULL;
-    if (strncmp(line, "arch ", 5) == 0 || strncmp(line, "kernel ", 7) == 0 ||
-        strncmp(line, "suite ", 6) == 0)
+    if (strncmp(line, "arch ", 5) == 0 || strncmp(line, "kernel ", 7) == 0)
         return NULL;
     return "an unknown line";
 }

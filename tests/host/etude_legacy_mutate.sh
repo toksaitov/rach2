@@ -1,12 +1,10 @@
 #!/bin/sh
 # Prove etude_legacy_hosttest.c with faults in a private copy of the
 # preparation adapter: a failed step taken for a pass, a missing artifact
-# passed over, a tree held by another process taken, a set's artifacts
-# outside prepare-all left unbuilt, a file no rule makes taken for an
-# artifact, a file named by its absolute path recorded twice, a target's own
-# variable and a multi-line variable read as rules, make's flags passed to
-# the steps, a changed digest not found and a stop signal ignored must each
-# be found.
+# passed over, a tree held by another process taken, a request of no goal
+# and a goal outside the tree taken, the kernel left out of the record,
+# make's flags passed to the steps, a changed digest not found and a stop
+# signal ignored must each be found.
 #
 # Usage: sh tests/host/etude_legacy_mutate.sh [--texts]
 set -eu
@@ -29,15 +27,9 @@ faults = {
                 '        } else if (0) {\n'),
     'held': ('    return ok && (kill((pid_t)pid, 0) == 0 || errno == EPERM);\n',
              '    return ok || (kill((pid_t)pid, 0) == 0 || errno == EPERM);\n'),
-    'set': ('        if (!bad && (prepared == NULL || !prepared[k]))\n',
-            '        if (!bad && prepared == NULL)\n'),
-    'target': ('    d->n[t].target = d->n[t].target || !ps->not_target;\n',
-               '    d->n[t].target = 1;\n'),
-    'absolute': ("    return strncmp(name, tree, n) == 0 && name[n] == '/' ? name + n + 1 : name;\n",
-                 "    return strncmp(name, tree, n) == 0 && name[n] == '\\0' ? name + n + 1 : name;\n"),
-    'variable': ("    return strchr(*rest, '=') == NULL ? n : 0;\n",
-                 '    return n;\n'),
-    'define': ('    if (ps->in_define) {\n', '    if (0) {\n'),
+    'nogoal': ('    if (o->ngoals == 0)\n', '    if (0)\n'),
+    'goal': ('        if (!goal_name(o->goals[i]))\n', '        if (!goal_name(o->goals[i]) && 0)\n'),
+    'kernel': ('    if (list_add(&p->required, p->kernel) != 0)\n', '    if (0)\n'),
     'flags': ('    "MAKEFLAGS=", "MFLAGS=",', '    "MFLAGS=",'),
     'digest': ('        changed = changed || strcmp(hex, e->digest) != 0;\n',
                '        changed = changed || strcmp(hex, hex) != 0;\n'),
@@ -55,10 +47,10 @@ PY
 if [ "${1:-}" = --texts ]; then
     RACH2_FAULT_TEXTS=1
     export RACH2_FAULT_TEXTS
-    for fault in exit missing held set target absolute variable define flags digest stop; do
+    for fault in exit missing held nogoal goal kernel flags digest stop; do
         apply_fault tools/etude/posix/legacy.c "$fault"
     done
-    echo 'etude-legacy-mutation: texts: all eleven faults found once'
+    echo 'etude-legacy-mutation: texts: all nine faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -136,11 +128,9 @@ run_phase fixed 0
 prove exit 'failed: failed'
 prove missing 'missing: failed'
 prove held 'held'
-prove set 'set: prepared'
-prove target "alone: the record's files"
-prove absolute "alone: the record's files"
-prove variable "alone: the record's files"
-prove define "alone: the record's files"
+prove nogoal 'none'
+prove goal 'absolute'
+prove kernel "alone: the record's files"
 prove flags 'alone: prepared'
 prove digest 'check: a changed content found by digest'
 prove stop 'stop: stopped'

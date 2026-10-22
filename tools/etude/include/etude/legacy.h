@@ -1,9 +1,9 @@
 /*
- * legacy.h: the preparation adapter, which builds what the suites of
- * tests/registry read before a suite starts, as tests/run built it, and
- * records those artifacts, and the set driver, which runs the suites of one
- * run of tests/run by their cases through the machine's ledger and writes
- * the run's history. tools/etude/Readme.md describes them.
+ * legacy.h: the preparation adapter, which builds the goals that the suites
+ * of tests/run read before one starts and records those artifacts, and the
+ * set driver, which runs the suites of one run of tests/run by their cases
+ * through the machine's ledger and writes the run's history.
+ * tools/etude/Readme.md describes them.
  */
 #ifndef ETUDE_LEGACY_H
 #define ETUDE_LEGACY_H
@@ -23,19 +23,17 @@
 
 /* One preparation, as the caller asks for it. */
 struct etude_legacy_opts {
-    const char *tree;    /* the root of the tree whose suites are prepared */
-    const char *arch;    /* i686 or x86_64 */
-    const char *kernel;  /* NAME of the kernel rach2-NAME the suites boot, as
-                            RACH2_KERNEL names it, or NULL for rach2 */
-    const char *work;    /* the work directory, which must not exist, or
-                            NULL for a new one under TMPDIR */
-    const char *record;  /* the file the record is written to, or NULL */
-    unsigned seconds;    /* the bound of each step */
-    char *const *suites; /* the suites' names, as the registry gives them */
-    size_t nsuites;
-    char *const *goals; /* further make goals of the tree, such as
-                           build/tools/verify/prosecheck, built with the
-                           suites' artifacts and recorded as artifacts */
+    const char *tree;   /* the root of the tree whose goals are built */
+    const char *arch;   /* i686 or x86_64 */
+    const char *kernel; /* NAME of the kernel rach2-NAME the suites boot, as
+                           RACH2_KERNEL names it, or NULL for rach2 */
+    const char *work;   /* the work directory, which must not exist, or
+                           NULL for a new one under TMPDIR */
+    const char *record; /* the file the record is written to, or NULL */
+    unsigned seconds;   /* the bound of each step */
+    char *const *goals; /* the make goals of the tree, such as
+                           build/tools/verify/prosecheck, built and recorded
+                           as artifacts; one at least */
     size_t ngoals;
     FILE *out;                   /* the progress and the result */
     volatile sig_atomic_t *stop; /* the number of a stop signal once one has
@@ -43,19 +41,17 @@ struct etude_legacy_opts {
 };
 
 /**
- * Prepare the suites `o` names in the tree `o->tree`, which the caller holds.
+ * Build the goals `o->goals` of the tree `o->tree`, which the caller holds,
+ * and record them.
  *
- * The suites' names, architectures and tools, and the goals' names, are
- * checked before anything is built; with a goal the suites may be none. The
- * steps then run one at a time through the executor, each with its output
- * in a log in the work directory and cancelled at its bound: the recovery
- * key when the tree has a recovery system and no key, the components, the
- * kernel `o->kernel` names, `prepare-all` for more than one suite, and last
- * the goals and the artifacts that each suite's target reaches in make's
- * database and that the steps before did not build. Every artifact, each
- * goal among them, must then exist; each regular file is hashed into the
- * record. The work directory is removed after a success and after a stop,
- * and kept after a failure.
+ * The goals' names are checked before anything is built, and a request of
+ * no goal is refused. The steps then run one at a time through the
+ * executor, each with its output in a log in the work directory and
+ * cancelled at its bound: the path, the recovery key when the tree has a
+ * recovery system and no key, the components, the kernel `o->kernel` names,
+ * and last the goals. Every goal, and the kernel the suites boot, must then
+ * exist; each regular file is hashed into the record. The work directory is
+ * removed after a success and after a stop, and kept after a failure.
  *
  * @return 0 when every artifact exists; 1 when a step failed or an artifact
  *         is missing; 2 for a request refused before anything was built or
