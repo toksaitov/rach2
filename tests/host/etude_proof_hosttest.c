@@ -689,9 +689,10 @@ static void test_bound(void)
 }
 
 /**
- * Each command's TMPDIR is a new directory of its own in the work, which
- * keeps a faulty test's scratch after a failure and goes with the work after
- * a pass, and the driver's own TMPDIR gets nothing.
+ * Each command's TMPDIR is a new directory in the work, at one short path in
+ * every phase and renamed for its phase when the command ends, which keeps a
+ * faulty test's scratch after a failure and goes with the work after a pass,
+ * and the driver's own TMPDIR gets nothing.
  */
 static void test_scratch(void)
 {
@@ -719,9 +720,12 @@ static void test_scratch(void)
     CHECK(!exists(path), "scratch: the build's TMPDIR is renamed when the build ends");
     fix_format(path, sizeof path, "%s/restored-value.build.tmp", out.work);
     CHECK(entries(path) == 0, "scratch: the restored build's TMPDIR is kept as its own");
-    fix_format(want, sizeof want, "tmp: %s/fault-value.test.tmp\n", out.work);
-    CHECK(work_has(out.work, "fault-value.test.out", want),
-          "scratch: the faulty test's TMPDIR is its own in the work");
+    fix_format(want, sizeof want, "tmp: %s/test.tmp\n", out.work);
+    CHECK(work_has(out.work, "fault-value.test.out", want) &&
+              work_has(out.work, "restored-value.test.out", want),
+          "scratch: every test's TMPDIR has one path in the work, apart from the fault's name");
+    fix_format(path, sizeof path, "%s/test.tmp", out.work);
+    CHECK(!exists(path), "scratch: the test's TMPDIR is renamed when the test ends");
     fix_format(path, sizeof path, "%s/fault-value.test.tmp", out.work);
     CHECK(entries(path) == 1, "scratch: the faulty test's scratch is in its TMPDIR");
     fix_format(path, sizeof path, "%s/restored-value.test.tmp", out.work);
@@ -852,7 +856,7 @@ static void test_relative(void)
         }
     }
     etude_proof_free(p);
-    fix_format(want, sizeof want, "tmp: %s/work-relative/base.test.tmp\n", here);
+    fix_format(want, sizeof want, "tmp: %s/work-relative/test.tmp\n", here);
     fix_format(path, sizeof path, "%s/work-relative/base.test.out", here);
     CHECK(status == 0 && strstr(get(path, buf, sizeof buf), want) != NULL,
           "relative: a relative work directory gives the commands an absolute TMPDIR");

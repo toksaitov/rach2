@@ -560,10 +560,11 @@ static void env_free(char **env)
  * Run command `argv`, named `what`, in the tree's root under `bound_us`, with
  * a new directory as its `TMPDIR`, and say in `*x` how it ended.
  *
- * The directory is `WORK/PHASE.WHAT.tmp`. A build runs in `WORK/build.tmp`,
- * the same path in every phase, and the directory is renamed when the build
- * ends: a compiler may write the path of its scratch into what it makes, as
- * Apple's linker does in a debug map.
+ * The command runs in `WORK/WHAT.tmp`, the same path in every phase, and the
+ * directory is renamed `WORK/PHASE.WHAT.tmp` when the command ends. A compiler
+ * may write the path of its scratch into what it makes, as Apple's linker does
+ * in a debug map, and a test may bind a Unix socket in its scratch, whose path
+ * must fit in `sun_path` however long the fault's name is.
  *
  * @return 0, -1 with errno set when it did not start or its directory could
  *         not be renamed, or ETUDE_PROOF_STOPPED.
@@ -574,14 +575,14 @@ static int run_command(const struct run *r, char *const *argv, uint64_t bound_us
     struct etude_exec_spec spec;
     struct etude_proc *p = NULL;
     char **args = expand_list(r, argv), **env = NULL;
-    char id[160], name[160], *tmp = NULL, *kept;
-    int build = strcmp(what, "build") == 0, e = 0;
+    char id[160], name[160], *tmp, *kept;
+    int e = 0;
 
     memset(x, 0, sizeof(*x));
     snprintf(name, sizeof name, "%s.%s.tmp", r->phase, what);
     kept = join(r->work, name);
-    if (kept != NULL)
-        tmp = build ? join(r->work, "build.tmp") : text_copy(kept);
+    snprintf(name, sizeof name, "%s.tmp", what);
+    tmp = join(r->work, name);
     if (tmp != NULL)
         env = command_env(tmp);
     if (args == NULL || env == NULL || kept == NULL)
@@ -606,7 +607,7 @@ static int run_command(const struct run *r, char *const *argv, uint64_t bound_us
         await(r, p, bound_us, x);
         collect(r, p, what, x);
         etude_proc_free(p);
-        if (build && rename(tmp, kept) != 0)
+        if (rename(tmp, kept) != 0)
             e = errno;
     }
     free(tmp);
