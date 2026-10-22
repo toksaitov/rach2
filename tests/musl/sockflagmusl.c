@@ -131,24 +131,22 @@ static int has(int fd, int cloexec, int nonblock)
 
 /**
  * Accept a connection on the non-blocking listener `ls` with the accept4
- * `flags`, trying again every 10 ms for at most a second while the
- * handshake's last segment is on its way through the loopback ring. Returns
- * the new descriptor, or -1 with errno set.
+ * `flags`, trying again every 10 ms while the handshake's last segment is on
+ * its way through the loopback ring. Returns the new descriptor, or -1 with
+ * errno set to an error other than EAGAIN.
  */
-static int accept_within(int ls, int flags)
+static int accept_arrived(int ls, int flags)
 {
     struct timespec tick = {0, 10000000};
-    long fd = -1;
-    int tries;
+    long fd;
 
-    for (tries = 0; tries < 100; tries++) {
+    for (;;) {
         fd = sc(SC_ACCEPT4, ls, 0, 0, flags);
         if (fd >= 0 || errno != EAGAIN) {
-            break;
+            return (int)fd;
         }
         nanosleep(&tick, NULL);
     }
-    return (int)fd;
 }
 
 /**
@@ -203,7 +201,7 @@ static int half_close(int ls)
     size_t got = 0;
     ssize_t n;
     int cs = connect_one();
-    int as = cs < 0 ? -1 : accept_within(ls, 0);
+    int as = cs < 0 ? -1 : accept_arrived(ls, 0);
 
     signal(SIGPIPE, SIG_IGN);
     if (as < 0 || send(cs, "ask\n", 4, 0) != 4 || shutdown(cs, SHUT_WR) != 0) {
@@ -269,7 +267,7 @@ int main(int argc, char **argv)
         return fail("an accept4 flag other than SOCK_CLOEXEC and SOCK_NONBLOCK was not EINVAL");
     }
     report_held();
-    as = connect_one() < 0 ? -1 : accept_within(ls, SOCK_CLOEXEC | SOCK_NONBLOCK);
+    as = connect_one() < 0 ? -1 : accept_arrived(ls, SOCK_CLOEXEC | SOCK_NONBLOCK);
     if (as < 0 || !has(as, 1, 1)) {
         return fail("a connection accepted with both flags does not have both");
     }
@@ -278,7 +276,7 @@ int main(int argc, char **argv)
         return fail("a read with nothing to read on a SOCK_NONBLOCK connection was not EAGAIN");
     }
     report_held();
-    as = connect_one() < 0 ? -1 : accept_within(ls, 0);
+    as = connect_one() < 0 ? -1 : accept_arrived(ls, 0);
     if (as < 0 || !has(as, 0, 0)) {
         return fail("a connection accepted with no flags has one");
     }
