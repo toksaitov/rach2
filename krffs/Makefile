@@ -3,7 +3,11 @@
 # and, with `make mount`, the optional FUSE driver. They run on the build
 # machine, so they are compiled with the host compiler and the host flags of
 # mk/host.mk, not the cross toolchain.
+include ../mk/arch.mk
 include ../mk/deps.mk
+# The tools are the same for either architecture, and are built into build/
+# whatever ARCH says; mk/arch.mk is included only for ARCH_VENDOR, below.
+BUILDROOT = $(TOP)/build
 include ../mk/build.mk
 include ../mk/host.mk
 
@@ -46,8 +50,10 @@ TARGETS = $(addprefix $(BUILD)/, mkfs.krffs defrag.krffs fsck.krffs \
 
 # mkhash's crypt is musl's SHA-512 implementation, compiled from the extracted
 # tree of the pinned tarball, unmodified, so the host makes the hash the
-# guest's C library checks.
-MUSL_CRYPT = $(TOP)/vendor/musl/musl-1.2.5/src/crypt/crypt_sha512.c
+# guest's C library checks. The file is the same in either architecture's
+# tree, and is read from the tree of the architecture ARCH names, the one a
+# build of that architecture extracts.
+MUSL_CRYPT = $(TOP)/$(ARCH_VENDOR)/musl/musl-1.2.5/src/crypt/crypt_sha512.c
 
 # The configuration fingerprint (mk/fingerprint.mk): a changed flag or host
 # compiler rebuilds every object. The mount tool's pkg-config flags stay out

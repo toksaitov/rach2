@@ -14,8 +14,9 @@
 # A component that includes mk/toolchain.mk is built for the architecture
 # mk/arch.mk names, and its BUILDROOT is that architecture's tree: `build/` for
 # i686 and `build/x86_64/` for x86-64, so the kernel of x86-64 is
-# build/x86_64/rach2/kernel. A host component (krffs/) includes no toolchain,
-# ARCH_SUFFIX is empty for it, and it builds into `build/` whatever ARCH says.
+# build/x86_64/rach2/kernel. A host component (krffs/) includes no toolchain
+# and sets BUILDROOT to `$(TOP)/build`, so it builds into `build/` whatever
+# ARCH says.
 #
 # BUILDROOT is kept relative (`$(TOP)/build`). Each sub-make runs with CURDIR
 # set to its own component directory, whether built standalone (`make -C utils`)

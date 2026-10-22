@@ -399,7 +399,7 @@ $(CURDIR)/$(ARCH_BUILD)/ish/ish: $(ARCH_BUILD)/ish/ish
 # all four would run four sub-makes of one directory at once in a clean
 # build.
 build/krffs/mkfs.krffs: ask-the-sub-make | check-libc
-	@$(MAKE) --no-print-directory -C krffs $(if $(ARCH_SUFFIX),MUSL_CRYPT=../$(MUSL_CRYPT_SRC))
+	@$(MAKE) --no-print-directory -C krffs
 build/krffs/stageimage.krffs build/krffs/fsck.krffs build/krffs/readfile.krffs: build/krffs/mkfs.krffs
 	@:
 

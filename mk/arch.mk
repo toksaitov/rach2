@@ -4,8 +4,10 @@
 # given. The root Makefile and mk/toolchain.mk include this file, so the
 # kernel, the guest programs and the vendored ports all read one setting. The
 # host programs (the KRFFS tools, the checkers under tools/, the host tests)
-# do not include it: they run on the build machine and are the same for
-# either architecture.
+# run on the build machine and are the same for either architecture.
+# krffs/Makefile includes this file only for ARCH_VENDOR, since mkhash
+# compiles a source of the extracted musl, which each architecture extracts
+# in its own tree; it keeps its tools under build/ (mk/build.mk).
 #
 # ARCH_SUFFIX is what a path of this architecture adds after `build`: empty
 # for i686 (build/rach2/kernel) and `/x86_64` for x86-64
