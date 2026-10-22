@@ -280,14 +280,13 @@ row() {
         "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -a tcg run $(history stop) "$work/job.sh" \
             > /dev/null 2> "$work/stderr" &
         pid=$!
-        n=0
         until grep -q '^etude-job: start$' "$CACHE"/job-*/channel.log 2> /dev/null; do
-            n=$((n + 1))
-            if [ "$n" -gt 20 ]; then
-                kill -KILL "$pid"; wait "$pid"
-                echo 'the job did not start' > "$work/why"
-                return 1
-            fi
+            case $(ps -o stat= -p "$pid" 2> /dev/null) in
+                '' | Z*)
+                    wait "$pid"
+                    echo 'etude-tooling ended before the job started' > "$work/why"
+                    return 1 ;;
+            esac
             sleep 1
         done
         kill -TERM "$pid"

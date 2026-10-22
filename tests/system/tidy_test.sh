@@ -164,16 +164,16 @@ has()
 }
 
 # started PID LINK PATH: wait until /proc/PID/LINK names PATH, as the sweep
-# reads it, for at most 30 seconds: a busy row means nothing until its
-# process is in its directory or running its program.
+# reads it, and fail when the process ends first: a busy row means nothing
+# until its process is in its directory or running its program.
 started()
 {
     want=$(cd "$(dirname "$3")" && pwd -P)/$(basename "$3")
-    tries=0
     while [ "$(readlink "/proc/$1/$2" 2> /dev/null)" != "$want" ]; do
-        [ "$tries" -lt 300 ] || return 1
+        case $(ps -o stat= -p "$1" 2> /dev/null) in
+            '' | Z*) return 1 ;;
+        esac
         sleep 0.1
-        tries=$((tries + 1))
     done
 }
 
@@ -185,9 +185,9 @@ rows()
     failed=0
     (setup) > "$work/setup.out" 2>&1 || { cat "$work/setup.out"; echo 'tidy-test: setup failed'; return 1; }
     if [ -d /proc/self/fd ]; then
-        (cd "$work/tmp/rach2-busy.Bu5yBu" && exec sleep 300) &
+        (cd "$work/tmp/rach2-busy.Bu5yBu" && exec sleep infinity) &
         busy=$!
-        (cd / && exec "$work/tmp/rach2-prog.Pr0gPr/sleep" 300) &
+        (cd / && exec "$work/tmp/rach2-prog.Pr0gPr/sleep" infinity) &
         busy="$busy $!"
         # shellcheck disable=SC2086 # busy is a list of process ids
         set -- $busy

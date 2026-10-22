@@ -82,7 +82,7 @@ case $(cat "$FIX/mode") in
         exit 0 ;;
     bare)
         : > "$FIX/running"
-        exec sleep 60 ;;
+        while :; do sleep 1; done ;;
 esac
 stopped()
 {
@@ -95,7 +95,7 @@ stopped()
 trap 'stopped 129' HUP
 trap 'stopped 130' INT
 trap 'stopped 143' TERM
-sleep 60 &
+while :; do sleep 1; done &
 waiter=$!
 : > "$FIX/running"
 wait "$waiter"
@@ -116,35 +116,27 @@ run()
     pid=$!
 }
 
-# running: wait until the stand-in's job runs, for at most 30 seconds.
+# running: wait until the stand-in's job runs, and fail when the copy ends
+# first.
 running()
 {
-    tries=0
     until [ -e "$FIX/running" ]; do
-        [ "$tries" -lt 300 ] || return 1
+        case $(ps -o stat= -p "$pid" 2> /dev/null) in
+            '' | Z*) return 1 ;;
+        esac
         sleep 0.1
-        tries=$((tries + 1))
     done
 }
 
 # finish: wait for the copy, set $status to its exit status, and wait until
-# no process of its group is left, for at most 30 seconds; then end them.
+# no process of its group is left.
 finish()
 {
     status=0
-    tries=0
-    while kill -0 "$pid" 2> /dev/null || kill -0 "-$pid" 2> /dev/null; do
-        if [ "$tries" -ge 300 ]; then
-            kill -KILL "-$pid" 2> /dev/null
-            wait "$pid" 2> /dev/null
-            pid=
-            status=
-            return 1
-        fi
-        sleep 0.1
-        tries=$((tries + 1))
-    done
     wait "$pid" 2> /dev/null || status=$?
+    while kill -0 "-$pid" 2> /dev/null; do
+        sleep 0.1
+    done
     pid=
 }
 
