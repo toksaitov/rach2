@@ -1729,21 +1729,34 @@ static int krffs_disk_mark_clean(void)
 
 /**
  * The one way out of a running Rach2, from the debug shell or from
- * reboot(2). Scheduling is disabled first, so that a second caller cannot
- * exist: the timer does not switch away from a system call (`in_syscall`),
+ * reboot(2).
+ *
+ * A root of a type other than KRFFS is unmounted first, as mount(2)'s are:
+ * its namespace lock taken, its buffers written and its valid bit set, so
+ * that the next mount does not check it. This is done with scheduling still
+ * on, since another process may hold the lock or a buffer, or be next in the
+ * lock's line, and only that process can give them up: a shutdown that
+ * waited for it with scheduling off would wait for ever on an idle machine.
+ * The lock is never given back, so no process changes the root once its
+ * valid bit is set, and a second caller waits on it for good.
+ *
+ * Scheduling is disabled next, so that a second caller cannot exist: the
+ * timer does not switch away from a system call (`in_syscall`),
  * `sched_disable` covers the debug shell and the kernel threads, where it
- * would, and nothing returns from here to enter again. It stays ahead of the
- * flush for that reason.
+ * would, and nothing returns from here to enter again. Nothing between the
+ * unmount and `sched_disable` sleeps, so the caller is not switched away
+ * between them.
  *
  * A KRFFS root on a disk is flushed and its dirty-mount flag cleared
  * (`krffs_disk_mark_clean`), and the clean-unmount line is printed only when
  * the flag was cleared: a failure has already said why, and a line printed
- * either way would be one no test could trust. A root of another type is
- * unmounted as mount(2)'s are, its buffers written and its valid bit set, so
- * that the next mount does not check it. On any other machine the page cache
- * is flushed. A failed flush does not keep the machine from stopping, since
- * an unwritable disk would otherwise make a machine that cannot be stopped;
- * it costs the flag, which stays set, so the next boot asks for `fsck.krffs`.
+ * either way would be one no test could trust. That flush passes over a page
+ * another process is writing instead of waiting for it, and runs with
+ * scheduling off, so that no write lands between it and the clear. On any
+ * other machine the page cache is flushed. A failed flush does not keep the
+ * machine from stopping, since an unwritable disk would otherwise make a
+ * machine that cannot be stopped; it costs the flag, which stays set, so the
+ * next boot asks for `fsck.krffs`.
  *
  * The goodbye line is a log record and not a console line, so that it reaches
  * the serial port, the ring and netconsole, and the screen too on a boot that
@@ -1758,20 +1771,25 @@ static int krffs_disk_mark_clean(void)
  */
 void kernel_shutdown(int how)
 {
+    struct vfs_mount *root = 0;
+    int unmounted = 0;
+
+    if (!_krffs_on_disk && vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
+        root = vfs_root_mount();
+        vfs_ns_lock(root);
+        unmounted =
+            !root->type->ops->prepare_unmount || root->type->ops->prepare_unmount(root) == 0;
+    }
     sched_disable();
 
     if (_krffs_on_disk) {
         if (krffs_disk_mark_clean() == 0) {
             klog(KLOG_INFO, "shutdown", "clean unmount: dirty-mount flag cleared");
         }
-    } else if (vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
-        struct vfs_mount *root = vfs_root_mount();
-
-        if (root->type->ops->prepare_unmount && root->type->ops->prepare_unmount(root) != 0) {
-            klog(KLOG_WARN, "shutdown", "root: the unmount failed; the next mount checks it");
-        } else {
-            klog(KLOG_INFO, "shutdown", "root: unmounted");
-        }
+    } else if (root && !unmounted) {
+        klog(KLOG_WARN, "shutdown", "root: the unmount failed; the next mount checks it");
+    } else if (root) {
+        klog(KLOG_INFO, "shutdown", "root: unmounted");
     } else if (pc_sync() != 0) {
         klog(KLOG_WARN, "shutdown", "page cache flush failed");
     } else {

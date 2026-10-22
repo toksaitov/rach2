@@ -2,10 +2,10 @@
  * ext2_scenario.c: the scenario of machine.ext2, the ext2 driver booted.
  * Cases `probe-NAME` run a probe as init on an ext2 root staged from the test
  * manifest; `links` and `cost` run ext2probe's rows on the fixture volume the
- * host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`, `dirent` and
- * `zombie` each boot os-real on a fresh copy of its ext2 root; and `repair`
- * takes one copy of that root through a kill, the mount's check, a lost
- * block, a fault, recovery's e2fsck and a clean boot.
+ * host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`, `dirent`,
+ * `zombie` and `busy` each boot os-real on a fresh copy of its ext2 root; and
+ * `repair` takes one copy of that root through a kill, the mount's check, a
+ * lost block, a fault, recovery's e2fsck and a clean boot.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -97,6 +97,12 @@ static const struct row rows[] = {
     {"zombie", "cd /tmp && /zombieprobe; echo ZOMBIE\"\"END\r", "ZOMBIEEND", "ZOMBIEPROBE OK",
      "ZOMBIEPROBE FAIL"},
 };
+
+/* What case `busy` types before its poweroff: three loops that each write a
+ * file of the root and sync, and a wait until the third has written. */
+static const char busy_line[] =
+    "for i in 1 2 3; do (while :; do echo $i > /root/busy$i; sync; done) & done; "
+    "until [ -s /root/busy3 ]; do :; done; echo BUSY=$(cat /root/busy3); echo BUSY\"\"END\r";
 
 /* What the mkfs step types: mke2fs and mkfs.vfat make a volume each in a
  * file on the second partition, which a loop device mounts writable. */
@@ -718,6 +724,29 @@ static void row(struct lc *l, const struct row *r)
 }
 
 /**
+ * Run case `busy`: `poweroff -f` while three processes write and sync the
+ * root, on a disk that answers each request late, so that the shutdown finds
+ * the root's lock held or promised to a writer. Assertions `writing` and
+ * `unmounted`: the shutdown waits for the writers, unmounts the root and
+ * reaches the kernel's goodbye.
+ */
+static void busy(struct lc *l)
+{
+    struct boot b;
+    char *w;
+
+    if (!lc_step(l, "row") || !start(l, "root", 1, &b))
+        return;
+    w = run(l, &b, busy_line, "BUSYEND");
+    seen(l, w, "writing", "BUSY=3");
+    free(w);
+    w = run(l, &b, "poweroff -f\r", "Goodbye");
+    seen(l, w, "unmounted", "shutdown: root: unmounted");
+    free(w);
+    lc_quit(l, b.m, NULL);
+}
+
+/**
  * The first boot of case `repair`: the root mounts writable and takes a
  * write, its partition node refuses one, and the machine is ended with the
  * root unclean. Assertions `first-mounted`, `first-write`, `node-refused`,
@@ -978,6 +1007,7 @@ int etude_scenario(struct etude_case *c)
     static const char *const count_ids[] = {"writes", "commands", NULL};
     static const char *const row_ids[] = {"said-ok", NULL};
     static const char *const zombie_ids[] = {"said-ok", "unmounted", NULL};
+    static const char *const busy_ids[] = {"writing", "unmounted", NULL};
     static const char *const repair_ids[] = {
         "first-mounted",   "first-write",     "node-refused",    "root-before-usb",
         "first-unchecked", "loop-ext2",       "loop-ext2-read",  "loop-vfat",
@@ -1020,6 +1050,11 @@ int etude_scenario(struct etude_case *c)
             row(&l, &rows[i]);
             return lc_finish(&l);
         }
+    if (strcmp(name, "busy") == 0) {
+        lc_begin(&l, c, busy_ids);
+        busy(&l);
+        return lc_finish(&l);
+    }
     if (strcmp(name, "repair") != 0)
         return 1;
     lc_begin(&l, c, repair_ids);

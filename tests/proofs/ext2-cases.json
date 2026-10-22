@@ -1,10 +1,11 @@
 {
   "schema_version": 1,
   "proof": "ext2-cases",
-  "summary": "the cases of tests/run ext2 under etude, against a mount's check that counts no lost block, a statfs that gives a magic number other than ext2's, and a recovery init that checks the partitions of the first disk alone",
+  "summary": "the cases of tests/run ext2 under etude, against a mount's check that counts no lost block, a statfs that gives a magic number other than ext2's, a recovery init that checks the partitions of the first disk alone, and a shutdown that disables scheduling before it takes the root's lock",
   "tree": "shared",
   "sources": [
     "rach2/sys/fs/ext2.c",
+    "rach2/kernel.c",
     "utils/init.c"
   ],
   "artifacts": [
@@ -83,6 +84,25 @@
           "run: ext2: FAIL",
           "run: ext2: machine.ext2.repair: evidence: ",
           "assert repair-copy fail"
+        ],
+        "status": 1
+      }
+    },
+    {
+      "name": "shutdown-unscheduled",
+      "summary": "the shutdown disables scheduling before it takes the root's lock, so that it waits for ever for a writer that holds the lock or is next in its line, and the machine of case busy never reaches its goodbye",
+      "edits": [
+        {
+          "file": "rach2/kernel.c",
+          "find": "    int unmounted = 0;\n\n    if (!_krffs_on_disk && vfs_root_mounted()",
+          "replace": "    int unmounted = 0;\n\n    sched_disable();\n    if (!_krffs_on_disk && vfs_root_mounted()"
+        }
+      ],
+      "fails": {
+        "lines": [
+          "run: ext2: INCOMPLETE",
+          "run: ext2: machine.ext2.busy: evidence: ",
+          "unmounted was not run: the wait for 'Goodbye'"
         ],
         "status": 1
       }

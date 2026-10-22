@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.ext2",
-  "summary": "The ext2 driver booted: the probes as init on an ext2 root, ext2probe's rows on a fixture volume the host's mke2fs wrote, os-real on its ext2 root, each row on a copy of its own, and one copy taken through a kill, the mount's check, a lost block, a fault, recovery's e2fsck and a clean boot; the program is tests/cases/machine/ext2_scenario.c",
+  "summary": "The ext2 driver booted: the probes as init on an ext2 root, ext2probe's rows on a fixture volume the host's mke2fs wrote, os-real on its ext2 root, each row on a copy of its own, a poweroff beside writers on a disk that answers late, and one copy taken through a kill, the mount's check, a lost block, a fault, recovery's e2fsck and a clean boot; the program is tests/cases/machine/ext2_scenario.c",
   "cases": [
     {
       "case_id": "machine.ext2.probe-shelltest",
@@ -828,6 +828,51 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "disk", "reason": "the case boots its own copy of an ext2 root of os-real with test programs added, a system image other than the installed one"}
+    },
+    {
+      "case_id": "machine.ext2.busy",
+      "behavior": "A poweroff -f beside three processes that write and sync the ext2 root in a loop, on a disk whose requests answer late, waits its turn for the root's lock with the writers still scheduled, unmounts the root and stops the machine",
+      "units": ["ext2", "rach2/kernel.c"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"writers": 3, "blocklag": 3}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk with rach2.blocklag=3, log in as root at the console, start three shell loops that each write a file of /root and sync, wait until the third has written, power the machine off with poweroff -f and end it"}
+      ],
+      "machines": [
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3"]}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "writing", "checks": "the third writer's file has its number before the poweroff is typed, so all three loops run", "source": "scenario"},
+        {"assertion_id": "unmounted", "checks": "the poweroff -f reaches the kernel's goodbye with the record shutdown: root: unmounted before it", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000},
+        "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "root-disk", "node": "images/ext2-root.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
+      ],
+      "timing": [
+        {"kind": "injected_delay", "where": "rach2/sys/block/lag.c:222-223", "assumes": "the lag device answers each request of disk 0's partitions three kernel ticks late as the stimulus, so that a writer's sync holds the root's lock while it sleeps and the others wait in its line; the case judges the records of the shutdown, never elapsed time", "uncertainty_us": null}
+      ],
+      "native": {"plan": "none", "class": "boot", "reason": "the lag device over disk 0 is set on the kernel's boot line, and the case stops the machine"}
     },
     {
       "case_id": "machine.ext2.repair",
