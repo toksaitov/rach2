@@ -47,6 +47,12 @@
 
 static int fails;
 
+/* A host test build of store.c's settling time, after which a file's digest
+ * may be kept, and its counts of the reads that hashed a file and of the
+ * copies it made. */
+extern long long etude_store_settle_ns;
+extern unsigned long etude_store_hashed, etude_store_copied;
+
 /** Count a failure when `cond` is false, and print its file, line and row. */
 #define CHECK(cond, row)                                                                    \
     do {                                                                                    \
@@ -501,6 +507,198 @@ static void test_put(void)
     CHECK(etude_store_check(s, other, NULL) == -1 && errno == ENOENT, "put: check");
     CHECK(etude_store_path(s, "xyz", path, sizeof(path)) == -1 && errno == EINVAL, "put: path");
     CHECK(etude_store_path(s, want, path, 8) == -1 && errno == ERANGE, "put: path");
+    etude_store_close(s);
+}
+
+/** Give the times of the last modification and the last change of `st`. */
+static void times_of(const struct stat *st, struct timespec *m, struct timespec *c)
+{
+#if defined(__APPLE__)
+    *m = st->st_mtimespec;
+    *c = st->st_ctimespec;
+#else
+    *m = st->st_mtim;
+    *c = st->st_ctim;
+#endif
+}
+
+/**
+ * Write `text`, as long as the file's content, over the file at `path` in
+ * place and give it back the modification time of `*was`, again until its
+ * change time differs from `*was`'s, since two writes in one tick of the
+ * file system's clock may leave it as it was, and at most a million times;
+ * 0 when the file then differs from `*was` in its change time alone, or -1.
+ */
+static int overwrite(const char *path, const char *text, const struct stat *was)
+{
+    struct timespec times[2], m, c, was_m, was_c;
+    struct stat st;
+    int tries, fd, r;
+
+    times_of(was, &was_m, &was_c);
+    times[0].tv_sec = 0;
+    times[0].tv_nsec = UTIME_OMIT;
+    times[1] = was_m;
+    for (tries = 0; tries < 1000000; tries++) {
+        if ((fd = open(path, O_WRONLY)) < 0)
+            return -1;
+        r = put_all(fd, text, strlen(text));
+        if (close(fd) != 0 || r != 0 || utimensat(AT_FDCWD, path, times, 0) != 0 ||
+            stat(path, &st) != 0)
+            return -1;
+        times_of(&st, &m, &c);
+        if (c.tv_sec != was_c.tv_sec || c.tv_nsec != was_c.tv_nsec)
+            return st.st_ino == was->st_ino && st.st_size == was->st_size &&
+                           m.tv_sec == was_m.tv_sec && m.tv_nsec == was_m.tv_nsec
+                       ? 0
+                       : -1;
+    }
+    return -1;
+}
+
+/** Say whether the file at `path` has a line that ends in ` NAME`. */
+static int has_line(const char *path, const char *name)
+{
+    char buf[8192], *line, *save = NULL;
+    size_t n = strlen(name), k;
+    int found = 0;
+
+    if (read_text(path, buf, sizeof(buf)) < 0)
+        return 0;
+    for (line = strtok_r(buf, "\n", &save); line != NULL; line = strtok_r(NULL, "\n", &save)) {
+        k = strlen(line);
+        found |= k > n && line[k - n - 1] == ' ' && strcmp(line + k - n, name) == 0;
+    }
+    return found;
+}
+
+/**
+ * Keep the digests of files in a digests file: a file hashed once is not read
+ * again while its status stands, and a write that keeps its size and its
+ * modification time has it hashed again.
+ */
+static void test_digests(void)
+{
+    const char *cache = fix_path("digests"), *src = fix_path("digests-src");
+    char d[ETUDE_DIGEST_HEX + 1], first[ETUDE_DIGEST_HEX + 1], second[ETUDE_DIGEST_HEX + 1];
+    unsigned long hashed = etude_store_hashed;
+    struct stat st, was;
+
+    sha_hex("first\n", 6, first);
+    sha_hex("again\n", 6, second);
+    etude_store_settle_ns = 0;
+    CHECK(write_text(src, "first\n") == 0, "digests");
+    CHECK(etude_digest_file(cache, src, &was, d) == 0 && strcmp(d, first) == 0 &&
+              etude_store_hashed == hashed + 1,
+          "digests: hashed");
+    CHECK(etude_digest_file(cache, src, &st, d) == 0 && strcmp(d, first) == 0 &&
+              etude_store_hashed == hashed + 1 && st.st_size == 6,
+          "digests: reused");
+    CHECK(overwrite(src, "again\n", &was) == 0,
+          "digests: a write that keeps the size and the time");
+    CHECK(etude_digest_file(cache, src, &st, d) == 0 && strcmp(d, second) == 0 &&
+              etude_store_hashed == hashed + 2,
+          "digests: a write that keeps the size and the time is hashed again");
+    CHECK(etude_digest_file(NULL, src, &st, d) == 0 && strcmp(d, second) == 0 &&
+              etude_store_hashed == hashed + 3,
+          "digests: without a digests file, read every time");
+    CHECK(etude_digest_file(cache, fix_path("put"), &st, d) == -1 && errno == EISDIR,
+          "digests: a directory");
+}
+
+/** Keep no digest of a file changed less than the settling time before its
+ * read, which is then hashed at every read. */
+static void test_digests_settle(void)
+{
+    const char *cache = fix_path("digests"), *fresh = fix_path("digests-fresh");
+    char d[ETUDE_DIGEST_HEX + 1];
+    unsigned long hashed = etude_store_hashed;
+    struct stat st;
+
+    etude_store_settle_ns = 3600000000000LL;
+    CHECK(write_text(fresh, "fresh\n") == 0, "digests");
+    CHECK(etude_digest_file(cache, fresh, &st, d) == 0 &&
+              etude_digest_file(cache, fresh, &st, d) == 0 && etude_store_hashed == hashed + 2,
+          "digests: a file changed just before its read is hashed again");
+    CHECK(!has_line(cache, fresh), "digests: a file changed just before its read is not kept");
+    etude_store_settle_ns = 0;
+}
+
+/**
+ * A store with a digests file publishes a file whose digest is kept without
+ * hashing it, and not at all once its object is published.
+ */
+static void test_digests_put(void)
+{
+    const char *cache = fix_path("digests"), *src = fix_path("digests-src");
+    char d[ETUDE_DIGEST_HEX + 1], other[ETUDE_DIGEST_HEX + 1], wrong[ETUDE_DIGEST_HEX + 1];
+    char buf[64];
+    struct etude_store *s = etude_store_open(fix_path("digests-store"));
+    struct etude_store *s2 = etude_store_open(fix_path("digests-store2"));
+    unsigned long hashed = etude_store_hashed, copied = etude_store_copied;
+    uint64_t size = 0;
+
+    CHECK(s != NULL && s2 != NULL && etude_store_digests(s, cache) == 0 &&
+              etude_store_digests(s2, cache) == 0 && write_text(src, "other\n") == 0,
+          "digests: store");
+    if (s == NULL || s2 == NULL) {
+        etude_store_close(s);
+        etude_store_close(s2);
+        return;
+    }
+    sha_hex("other\n", 6, other);
+    sha_hex("first\n", 6, wrong);
+    CHECK(etude_store_put(s, src, NULL, d, &size) == 0 && strcmp(d, other) == 0 && size == 6 &&
+              etude_store_hashed == hashed + 1 && etude_store_copied == copied + 1,
+          "digests: put: copied and hashed");
+    size = 0;
+    CHECK(etude_store_put(s, src, other, d, &size) == 0 && strcmp(d, other) == 0 && size == 6 &&
+              etude_store_hashed == hashed + 1 && etude_store_copied == copied + 1,
+          "digests: put: a kept file whose object is kept is not copied");
+    CHECK(etude_store_put(s, src, wrong, d, NULL) == -1 && errno == EBADMSG,
+          "digests: put: expected");
+    CHECK(etude_store_put(s2, src, NULL, d, NULL) == 0 && strcmp(d, other) == 0 &&
+              etude_store_hashed == hashed + 1 && etude_store_copied == copied + 2 &&
+              read_object(s2, other, buf, sizeof(buf)) == 6 && strcmp(buf, "other\n") == 0,
+          "digests: put: a kept file is copied to another store without being hashed");
+    etude_store_close(s);
+    etude_store_close(s2);
+}
+
+/**
+ * A store with a digests file checks and copies a kept object without
+ * reading it to hash it; a damaged object is read again and refused, and
+ * the line of a file gone or changed is dropped.
+ */
+static void test_digests_objects(void)
+{
+    const char *cache = fix_path("digests"), *src = fix_path("digests-src");
+    const char *copy = fix_path("digests-copy");
+    char d[ETUDE_DIGEST_HEX + 1], other[ETUDE_DIGEST_HEX + 1], path[PATH_MAX], buf[64];
+    struct etude_store *s = etude_store_open(fix_path("digests-store"));
+    unsigned long hashed = etude_store_hashed;
+    uint64_t size = 0;
+    struct stat st;
+
+    CHECK(s != NULL && etude_store_digests(s, cache) == 0, "digests: objects");
+    if (s == NULL)
+        return;
+    sha_hex("other\n", 6, other);
+    CHECK(etude_store_check(s, other, &size) == 0 && size == 6 && etude_store_hashed == hashed,
+          "digests: check: a kept object is not read");
+    CHECK(etude_store_copy(s, other, copy) == 0 && etude_store_hashed == hashed &&
+              read_text(copy, buf, sizeof(buf)) == 6 && strcmp(buf, "other\n") == 0,
+          "digests: copy: a kept object is copied without being hashed");
+    CHECK(etude_store_path(s, other, path, sizeof(path)) == 0 && chmod(path, 0644) == 0 &&
+              write_text(path, "OTHER\n") == 0,
+          "digests: an object damaged");
+    CHECK(etude_store_check(s, other, NULL) == -1 && errno == EBADMSG &&
+              etude_store_hashed == hashed + 1,
+          "digests: check: a damaged object is read again and refused");
+    CHECK(unlink(copy) == 0 && unlink(src) == 0 && write_text(src, "first\n") == 0 &&
+              etude_digest_file(cache, src, &st, d) == 0 && has_line(cache, src) &&
+              !has_line(cache, path),
+          "digests: the line of a file changed or gone is dropped");
     etude_store_close(s);
 }
 
@@ -1371,6 +1569,10 @@ int main(int argc, char **argv)
     }
     signal(SIGPIPE, SIG_IGN);
     test_put();
+    test_digests();
+    test_digests_settle();
+    test_digests_put();
+    test_digests_objects();
     test_sparse();
     test_overlay();
     test_interrupt();

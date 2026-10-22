@@ -6,7 +6,8 @@
  * tree's run lock. The tree has a copy of runutil's source, the file
  * ETUDE_LEGACYRUN_RUNUTIL names or this tree's, which the adapter compiles.
  *
- * host-deps: tools/etude/posix/legacy.c tools/etude/posix/exec.c
+ * host-deps: tools/etude/posix/legacy.c tools/etude/posix/store.c
+ * host-deps: tools/etude/posix/exec.c
  * host-deps: tools/etude/posix/keeper.c tools/etude/posix/process.c
  * host-deps: tools/etude/capture.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude/posix

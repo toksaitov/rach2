@@ -22,6 +22,10 @@
  * caller gives no limit, as tests/run's RACH2_IDLE_TIMEOUT. */
 #define ETUDE_LEGACY_IDLE 300u
 
+/* The digests file of a tree, from its root, which the preparation, its
+ * check and the set's store share across runs. */
+#define ETUDE_LEGACY_DIGESTS "build/tests/digests"
+
 /* One preparation, as the caller asks for it. */
 struct etude_legacy_opts {
     const char *tree;    /* the root of the tree whose suites are prepared */

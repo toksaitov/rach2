@@ -20,10 +20,10 @@
 #include <sys/sysctl.h>
 #endif
 
+#include "etude/artifact.h"
 #include "etude/exec.h"
 #include "etude/legacy.h"
 #include "posix.h"
-#include "sha256.h"
 
 extern char **environ;
 
@@ -1372,46 +1372,10 @@ static long long mtime_ns(const struct stat *st)
 #endif
 }
 
-/**
- * Hash the regular file at `path` into `hex`, with its status in `*st` as
- * it was opened.
- *
- * @return 0, or -1 with errno set, EISDIR for a directory and EINVAL for
- *         anything else but a regular file.
- */
-static int hash_file(const char *path, struct stat *st, char hex[65])
+/** Give the path of the digests file of the tree `tree`, from malloc. */
+static char *digests_path(const char *tree)
 {
-    static unsigned char buf[65536];
-    unsigned char sum[32];
-    struct sha256 h;
-    ssize_t n;
-    int fd = open(path, O_RDONLY), e;
-
-    if (fd < 0)
-        return -1;
-    if (fstat(fd, st) != 0) {
-        e = errno;
-        close(fd);
-        errno = e;
-        return -1;
-    }
-    if (!S_ISREG(st->st_mode)) {
-        close(fd);
-        errno = S_ISDIR(st->st_mode) ? EISDIR : EINVAL;
-        return -1;
-    }
-    sha256_init(&h);
-    while ((n = read(fd, buf, sizeof(buf))) > 0)
-        sha256_update(&h, buf, (size_t)n);
-    e = errno;
-    close(fd);
-    if (n < 0) {
-        errno = e;
-        return -1;
-    }
-    sha256_final(&h, sum);
-    sha256_hex(sum, hex);
-    return 0;
+    return format("%s/%s", tree, ETUDE_LEGACY_DIGESTS);
 }
 
 /** Give the path of artifact `name`, from malloc: a name of the tree is
@@ -1435,18 +1399,23 @@ static void record_head(const struct prep *p, FILE *f)
 /**
  * Check that every artifact required exists, and write the record of each
  * regular file to `f`: `file DIGEST SIZE INODE MTIME PATH`, its time in
- * nanoseconds. A directory is accepted and not recorded.
+ * nanoseconds. A directory is accepted and not recorded. A file's digest is
+ * taken from the tree's digests file when it keeps one.
  */
 static int hash_artifacts(struct prep *p, FILE *f)
 {
     struct stat st;
-    char hex[65], *path;
+    char hex[65], *path, *cache = digests_path(p->tree);
     size_t i, missing = 0;
 
+    if (cache == NULL)
+        return failed(p, "artifacts: memory ran out");
     for (i = 0; i < p->required.n && !stopped(p); i++) {
-        if ((path = artifact_path(p->tree, p->required.v[i])) == NULL)
+        if ((path = artifact_path(p->tree, p->required.v[i])) == NULL) {
+            free(cache);
             return failed(p, "artifacts: memory ran out");
-        if (hash_file(path, &st, hex) == 0) {
+        }
+        if (etude_digest_file(cache, path, &st, hex) == 0) {
             p->files++;
             fprintf(f, "file %s %llu %llu %lld %s\n", hex, (unsigned long long)st.st_size,
                     (unsigned long long)st.st_ino, mtime_ns(&st), p->required.v[i]);
@@ -1457,6 +1426,7 @@ static int hash_artifacts(struct prep *p, FILE *f)
         }
         free(path);
     }
+    free(cache);
     if (stopped(p)) {
         fprintf(p->out, "etude-legacy: artifacts: stopped by signal %d\n", (int)*p->o->stop);
         return 128 + (int)*p->o->stop;
@@ -1663,18 +1633,23 @@ static int take_entry(char *line, struct entry *e)
 }
 
 /**
- * Compare artifact `e` of the tree `tree` with the file there now.
+ * Compare artifact `e` of the tree `tree` with the file there now, by its
+ * digest when `digests` is set, taken from the tree's digests file when it
+ * keeps one.
  *
  * @return 0 when it is unchanged, 1 when it changed or is missing.
  */
 static int compare(const char *tree, const struct entry *e, int digests, FILE *out)
 {
-    char *path = artifact_path(tree, e->path), hex[65];
+    char *path = artifact_path(tree, e->path), *cache = digests_path(tree), hex[65];
     struct stat st;
-    int r = path == NULL ? -1 : digests ? hash_file(path, &st, hex) : stat(path, &st);
+    int r = path == NULL || cache == NULL ? -1
+            : digests                     ? etude_digest_file(cache, path, &st, hex)
+                                          : stat(path, &st);
     int changed;
 
     free(path);
+    free(cache);
     if (r != 0) {
         fprintf(out, "etude-legacy: missing: %s: %s\n", e->path,
                 errno == EINVAL || errno == EISDIR ? "not a regular file" : strerror(errno));

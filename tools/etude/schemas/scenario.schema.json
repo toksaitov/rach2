@@ -15,6 +15,7 @@
     "case_id": {"$ref": "#/$defs/id"},
     "architecture": {"enum": ["i686", "x86_64"]},
     "store": {"$ref": "#/$defs/path"},
+    "digests": {"$ref": "#/$defs/path"},
     "artifacts": {
       "type": "object",
       "propertyNames": {"$ref": "#/$defs/name"},

@@ -3,8 +3,10 @@
 # artifact store and the preparation graph: a recipe's failed exit taken for
 # success, a dependent of a failed node run, a live writer's partial file
 # swept, a damaged object reused, the key's lock never contended, a digest
-# other than the one expected accepted, a chunk of zeros written out and a
-# file that ends in a hole cut short must each be found.
+# other than the one expected accepted, a chunk of zeros written out, a
+# file that ends in a hole cut short, a kept digest reused after a write that
+# changed only the file's change time, and the digest of a file changed just
+# before its read kept must each be found.
 #
 # Usage: sh tests/host/etude_artifact_mutate.sh [--texts]
 set -eu
@@ -36,6 +38,10 @@ faults = {
               '        if (all_zero(buf, (size_t)r) && 0) {\n'),
     'end': ('    if (to >= 0 && ftruncate(to, (off_t)total) != 0)\n',
             '    if (0)\n'),
+    'ctime': ('a->mtime == b->mtime &&\n           a->ctime == b->ctime;\n',
+              'a->mtime == b->mtime;\n'),
+    'settle': ('&r->after) && r->before.ctime + SETTLE <= r->began)\n',
+               '&r->after) && r->began != -1)\n'),
 }
 old, new = faults[sys.argv[2]]
 if source.count(old) != 1:
@@ -51,10 +57,10 @@ if [ "${1:-}" = --texts ]; then
     for fault in exit blocked; do
         apply_fault tools/etude/posix/prepare.c "$fault"
     done
-    for fault in sweep verify lock expect zeros end; do
+    for fault in sweep verify lock expect zeros end ctime settle; do
         apply_fault tools/etude/posix/store.c "$fault"
     done
-    echo 'etude-artifact-mutation: texts: all eight faults found once'
+    echo 'etude-artifact-mutation: texts: all ten faults found once'
     exit 0
 fi
 . "$repo/tests/system/runlock.sh"
@@ -96,7 +102,7 @@ run_phase()
 {
     phase=$1
     expected=$2
-    "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 \
+    "${CC:-cc}" -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST \
         -Wall -Wextra -Werror -g -O1 -fsanitize=address,undefined \
         -fno-sanitize-recover=all -I tests/host -I utils -I tools/etude/include \
         -I tools/etude/posix tests/host/etude_artifact_hosttest.c "$work/store.c" \
@@ -136,5 +142,7 @@ prove store.c lock 'race: the recipe ran once'
 prove store.c expect 'put: expected'
 prove store.c zeros 'sparse: put: the object keeps the holes'
 prove store.c end 'sparse: put: whole'
+prove store.c ctime 'digests: a write that keeps the size and the time is hashed again'
+prove store.c settle 'digests: a file changed just before its read is hashed again'
 restore
 run_phase restored 0

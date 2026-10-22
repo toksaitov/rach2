@@ -15,7 +15,7 @@
     "argv": [
       "/bin/sh",
       "-c",
-      "cp ${SRC}/tests/system/runner/runutil.c ${WORK}/runutil.c && exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude/posix tests/host/etude_legacyrun_hosttest.c ${SRC}/tools/etude/posix/legacy.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c utils/sha256.c -o ${WORK}/etude_legacyrun_hosttest"
+      "cp ${SRC}/tests/system/runner/runutil.c ${WORK}/runutil.c && exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -I utils -I tools/etude/include -I tools/etude/posix tests/host/etude_legacyrun_hosttest.c ${SRC}/tools/etude/posix/legacy.c tools/etude/posix/store.c tools/etude/posix/exec.c tools/etude/posix/keeper.c tools/etude/posix/process.c tools/etude/capture.c utils/sha256.c -o ${WORK}/etude_legacyrun_hosttest"
     ],
     "bound_s": 300
   },

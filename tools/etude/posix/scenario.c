@@ -780,6 +780,11 @@ static int load(struct etude_case *c, const char *path)
         diag("%s: the store cannot be opened: %s", store, strerror(errno));
         return -1;
     }
+    if (jtext(c->inv, "digests") != NULL &&
+        etude_store_digests(c->store, jtext(c->inv, "digests")) != 0) {
+        diag("%s: the digests file cannot be used: %s", store, strerror(errno));
+        return -1;
+    }
     return 0;
 }
 

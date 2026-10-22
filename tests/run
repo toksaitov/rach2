@@ -501,7 +501,9 @@ run_make() {
 # decide a result and the tools that judge one, hashed when the run starts,
 # again every two seconds while the driver runs, and again at the end; and
 # the products the suites read, which the preparation records with their
-# SHA-256, and which `etude-legacy check -d` hashes again at the end. A
+# SHA-256, and which `etude-legacy check -d` compares again at the end, by
+# the digests that build/tests/digests keeps for a file that has not been
+# written since it was hashed, and by reading the others again. A
 # difference, or a file gone, voids the run by name. Two equal hashes do not
 # say the file stood still in between; they say what the result was made
 # with is what is there now.

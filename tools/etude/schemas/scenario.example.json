@@ -6,6 +6,7 @@
   "case_id": "machine.shutdown.poweroff",
   "architecture": "i686",
   "store": "/var/tmp/etude/store",
+  "digests": "/var/tmp/etude/digests",
   "artifacts": {
     "kernel": "5d7f0c0f6e6f1e9a5f0c3bb4d2a1c0e9f8d7c6b5a4938271605f4e3d2c1b0a99",
     "shutdown-disk": "0e3c1b2a39485766a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f00f1e",

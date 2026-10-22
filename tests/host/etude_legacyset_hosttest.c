@@ -105,13 +105,14 @@
  *
  * The kernel, the disk and the scenario that the five machine cases share
  * are each copied to the store once, which the test counts by putting a
- * copy of its own in the driver's place, `legacy_set_put`, and every case is
- * given the digest of each. A disk changed after its first copy is copied
- * again for the next case: the first case is given its first digest, and
- * the next and those after it the changed disk's. When the disk's first
- * copy fails, its case ends incomplete with the reason and no invocation,
- * the next case copies the disk again, and the cases after it are given that
- * copy's digest.
+ * copy of its own in the driver's place, `legacy_set_put`, with the
+ * store's settling time made zero so that a digest is kept as soon as it is
+ * read, and every case is given the digest of each and the tree's digests
+ * file. A disk changed after its first copy is copied again for the next
+ * case: the first case is given its first digest, and the next and those
+ * after it the changed disk's. When the disk's first copy fails, its case
+ * ends incomplete with the reason and no invocation, the next case copies
+ * the disk again, and the cases after it are given that copy's digest.
  *
  * A suite of one machine case, on x86_64, whose machine is of the lazy 72 GiB
  * boundary profile with the case's 4 GiB reservation: given a site policy
@@ -147,6 +148,11 @@
  * legacy_set.c lets the test replace. */
 extern int (*legacy_set_put)(struct etude_store *s, const char *path, const char *expect,
                              char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size);
+
+/* A host test build of store.c's settling time, after which a file's digest
+ * may be kept, and its count of the copies it made. */
+extern long long etude_store_settle_ns;
+extern unsigned long etude_store_copied;
 
 static int fails;
 
@@ -1307,29 +1313,40 @@ static int names_file(const char *path, const char *name)
     return n > k && path[n - k - 1] == '/' && strcmp(path + n - k, name) == 0;
 }
 
+/** Add `path` to the list of copies of the run the driver runs. */
+static void count_copy(const char *path)
+{
+    FILE *f = fopen(driving->copies, "a");
+
+    if (f != NULL) {
+        fprintf(f, "%s\n", path);
+        fclose(f);
+    }
+}
+
 /**
  * Copy the file at `path` to the store `s` in the set driver's place, as
- * `legacy_set_put`: add `path` to the run's list of copies, and then, for
- * the row's fault, copy the disk the first time from a name that does not
- * exist, so that the copy fails, or change the disk after its first copy.
+ * `legacy_set_put`: for the row's fault, copy the disk the first time from
+ * a name that does not exist, so that the copy fails, or change the disk
+ * after its first copy, and add `path` to the run's list of copies when the
+ * store copied it or failed to.
  */
 static int counted_put(struct etude_store *s, const char *path, const char *expect,
                        char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size)
 {
     static int disks;
     char absent[PATH_MAX + 8];
-    FILE *f = fopen(driving->copies, "a");
+    unsigned long copied = etude_store_copied;
     int first = names_file(path, DISK) && disks++ == 0, rc;
 
-    if (f != NULL) {
-        fprintf(f, "%s\n", path);
-        fclose(f);
-    }
     if (first && driving->put == PUT_FAIL) {
         fix_format(absent, sizeof(absent), "%s.absent", path);
+        count_copy(path);
         return etude_store_put(s, absent, expect, digest, size);
     }
     rc = etude_store_put(s, path, expect, digest, size);
+    if (rc != 0 || etude_store_copied != copied)
+        count_copy(path);
     if (first && driving->put == PUT_CHANGE)
         write_text(path, disk_changed, 0644);
     return rc;
@@ -1352,6 +1369,7 @@ static void driver(const struct run *r)
 
     driving = r;
     legacy_set_put = counted_put;
+    etude_store_settle_ns = 0;
     catch_stops();
     if (r->unset != NULL)
         unsetenv(r->unset);
@@ -2293,6 +2311,9 @@ static void test_machine(void)
     CHECK(given, "publish: each case is given each artifact's digest");
     fix_format(text, sizeof(text), "\"store\":\"%s/%s.store\"", r.evidence, r.run_id);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text), "invocation: the store");
+    fix_format(text, sizeof(text), "\"digests\":\"%s/build/tests/digests\"", tree);
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", text),
+          "invocation: the tree's digests file");
     fix_format(text, sizeof(text), "%s/%s.store", r.evidence, r.run_id);
     CHECK(!exists(text), "machine: the store of the artifacts is removed at the end");
     fix_format(text, sizeof(text), "\"qemu_i686\":\"%s/qemu/qemu-system-i386\"", tree);

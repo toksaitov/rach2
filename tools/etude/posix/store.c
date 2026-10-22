@@ -1,7 +1,9 @@
 /*
  * store.c: etude's store of immutable artifacts on POSIX systems. An object
  * is written under a partial name, synchronized, and then linked to the name
- * of its digest; a record of a node's key names the object it published.
+ * of its digest; a record of a node's key names the object it published. A
+ * digests file keeps the digests of files that have not changed since they
+ * were read, so that a file is not read again to be hashed.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -11,6 +13,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "etude/artifact.h"
@@ -32,6 +35,27 @@
 /* The buffer of a copy; a chunk read that is all zeros is left a hole. */
 #define COPY_CHUNK (1u << 20)
 
+/* A file whose change time is less than this before a read of it began may
+ * be written again within the same tick of the file system's clock, and so
+ * keep the status it had when it was read; its digest is not kept. */
+#define SETTLE_NS 2000000000LL
+
+/* The most lines a digests file keeps, and the longest line read from one. */
+#define DIGESTS_MAX  16384
+#define DIGESTS_LINE 8192
+
+#ifdef RACH2_HOSTTEST
+/* In a host test, the settling time, which a test may shorten, and the count
+ * of the reads that hashed a file and of the copies made. */
+long long etude_store_settle_ns = SETTLE_NS;
+unsigned long etude_store_hashed, etude_store_copied;
+#define SETTLE         etude_store_settle_ns
+#define COUNT(counter) ((counter)++)
+#else
+#define SETTLE         SETTLE_NS
+#define COUNT(counter) ((void)0)
+#endif
+
 /* An overlay's qcow2 header: its magic, "QFI\xfb"; the length of version 3's
  * header; the type of the extension that gives the backing file's format;
  * where the backing file's name begins, past that extension and the end of
@@ -49,6 +73,20 @@ struct etude_store {
     char *nodes;   /* KEY: the records of the nodes' products */
     char *locks;   /* KEY: the locks of preparations under way */
     char *tmp;     /* part.XXXXXX: partial files, each locked by its writer */
+    char *digests; /* the digests file, or NULL for none */
+};
+
+/* What tells that a file has not changed since its digest was taken. */
+struct status {
+    unsigned long long dev, ino, size;
+    long long mtime, ctime; /* nanoseconds since the epoch */
+};
+
+/* A whole read of a file: its status when the read began and when it ended,
+ * and the time it began, in nanoseconds since the epoch. */
+struct reading {
+    struct status before, after;
+    long long began;
 };
 
 /* ---- Names and files. ---- */
@@ -138,8 +176,9 @@ static int all_zero(const unsigned char *buf, size_t n)
 }
 
 /**
- * Read `from` to its end, hashing it, and write it to `to` unless `to` is
- * negative; 0 with the digest and size, or -1 with errno set.
+ * Read `from` to its end, hashing it unless `hex` is NULL, and write it to
+ * `to` unless `to` is negative; 0 with the digest and size, or -1 with errno
+ * set.
  *
  * `to` is a new regular file. A chunk of zeros is passed over with
  * lseek(2), which leaves a hole in `to`, so that a sparse file stays
@@ -157,7 +196,12 @@ static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t 
         errno = ENOMEM;
         return -1;
     }
-    sha256_init(&h);
+    if (hex != NULL) {
+        sha256_init(&h);
+        COUNT(etude_store_hashed);
+    }
+    if (to >= 0)
+        COUNT(etude_store_copied);
     for (;;) {
         r = read(from, buf, COPY_CHUNK);
         if (r < 0 && errno == EINTR)
@@ -166,7 +210,8 @@ static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t 
             goto fail;
         if (r == 0)
             break;
-        sha256_update(&h, buf, (size_t)r);
+        if (hex != NULL)
+            sha256_update(&h, buf, (size_t)r);
         total += (uint64_t)r;
         if (to < 0)
             continue;
@@ -180,8 +225,10 @@ static int copy_hash(int from, int to, char hex[ETUDE_DIGEST_HEX + 1], uint64_t 
     if (to >= 0 && ftruncate(to, (off_t)total) != 0)
         goto fail;
     free(buf);
-    sha256_final(&h, sum);
-    sha256_hex(sum, hex);
+    if (hex != NULL) {
+        sha256_final(&h, sum);
+        sha256_hex(sum, hex);
+    }
     if (size != NULL)
         *size = total;
     return 0;
@@ -288,6 +335,290 @@ static int publish(const char *dir, const char *name, const char *part,
     return r;
 }
 
+/* ---- The digests of files. ---- */
+
+/* A digests file has a line for each file whose digest it keeps:
+ * `DIGEST SIZE DEVICE INODE MTIME CTIME PATH`, its times in nanoseconds. */
+
+/** Take the status of `st` into `k`. */
+static void status_of(const struct stat *st, struct status *k)
+{
+#ifdef __APPLE__
+    const struct timespec *m = &st->st_mtimespec, *c = &st->st_ctimespec;
+#else
+    const struct timespec *m = &st->st_mtim, *c = &st->st_ctim;
+#endif
+
+    k->dev = (unsigned long long)st->st_dev;
+    k->ino = (unsigned long long)st->st_ino;
+    k->size = (unsigned long long)st->st_size;
+    k->mtime = (long long)m->tv_sec * 1000000000LL + m->tv_nsec;
+    k->ctime = (long long)c->tv_sec * 1000000000LL + c->tv_nsec;
+}
+
+/** Say whether `a` and `b` are the status of one file that has not changed:
+ * the same device, inode and size, and the same times of its last
+ * modification and its last change. */
+static int status_same(const struct status *a, const struct status *b)
+{
+    return a->dev == b->dev && a->ino == b->ino && a->size == b->size && a->mtime == b->mtime &&
+           a->ctime == b->ctime;
+}
+
+/** Give the time of the realtime clock, which stamps the files, in
+ * nanoseconds since the epoch. */
+static long long now_ns(void)
+{
+    struct timespec t;
+
+    if (clock_gettime(CLOCK_REALTIME, &t) != 0)
+        return 0;
+    return (long long)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+
+/** Read the next line of `f` into `buf`; 1, or 0 at the end. A line too long
+ * for `buf` is given without its newline, and read to its end. */
+static int next_line(FILE *f, char *buf, size_t size)
+{
+    size_t n;
+    int c;
+
+    if (fgets(buf, (int)size, f) == NULL)
+        return 0;
+    n = strlen(buf);
+    if (n == size - 1 && buf[n - 1] != '\n')
+        while ((c = getc(f)) != EOF && c != '\n') {
+        }
+    return 1;
+}
+
+/** Take a line of a digests file, with its newline, into `k`, `hex` and
+ * `*path`; 0, or -1 for a malformed line. */
+static int digests_line(char *line, struct status *k, char hex[ETUDE_DIGEST_HEX + 1], char **path)
+{
+    size_t n = strlen(line);
+    int at = -1;
+
+    if (n == 0 || line[n - 1] != '\n')
+        return -1;
+    line[n - 1] = '\0';
+    if (sscanf(line, "%64s %llu %llu %llu %lld %lld %n", hex, &k->size, &k->dev, &k->ino, &k->mtime,
+               &k->ctime, &at) != 6 ||
+        at < 0 || line[at] != '/' || !store_is_digest(hex))
+        return -1;
+    *path = line + at;
+    return 0;
+}
+
+/** Write the line of the file at `path`, of status `k` and digest `hex`, to
+ * `f`; 0, or -1. */
+static int digests_put(FILE *f, const struct status *k, const char *hex, const char *path)
+{
+    return fprintf(f, "%s %llu %llu %llu %lld %lld %s\n", hex, k->size, k->dev, k->ino, k->mtime,
+                   k->ctime, path) < 0
+               ? -1
+               : 0;
+}
+
+/** Find in digests file `cache` the digest of a file of status `k`; 0 with
+ * it in `hex`, or -1 when the file keeps none. */
+static int digests_find(const char *cache, const struct status *k, char hex[ETUDE_DIGEST_HEX + 1])
+{
+    char line[DIGESTS_LINE], found[ETUDE_DIGEST_HEX + 1], *path;
+    struct status e;
+    FILE *f = fopen(cache, "r");
+    int r = -1;
+
+    if (f == NULL)
+        return -1;
+    while (r != 0 && next_line(f, line, sizeof(line)))
+        if (digests_line(line, &e, found, &path) == 0 && status_same(&e, k)) {
+            memcpy(hex, found, sizeof(found));
+            r = 0;
+        }
+    fclose(f);
+    return r;
+}
+
+/** Give a copy of `a` followed by `b` from malloc, or NULL. */
+static char *suffixed(const char *a, const char *b)
+{
+    size_t na = strlen(a), nb = strlen(b);
+    char *s = malloc(na + nb + 1);
+
+    if (s != NULL) {
+        memcpy(s, a, na);
+        memcpy(s + na, b, nb + 1);
+    }
+    return s;
+}
+
+/** Make the directory of file `path` unless it is there. */
+static void parent_make(const char *path)
+{
+    char *dir = strdup(path), *slash = dir != NULL ? strrchr(dir, '/') : NULL;
+
+    if (slash != NULL && slash != dir) {
+        *slash = '\0';
+        (void)mkdir(dir, 0755);
+    }
+    free(dir);
+}
+
+/**
+ * Keep `hex` in digests file `cache` as the digest of the file at `path`,
+ * an absolute path, whose status is `k`.
+ *
+ * The file is written whole as `CACHE.new` and renamed to its name, under
+ * the lock of `CACHE.lock`, so that a reader finds it whole and two writers
+ * do not lose each other's lines. The line of the same file is replaced,
+ * and a line whose file is gone or has changed is dropped, so that the file
+ * keeps no more lines than there are files unchanged. A digest that cannot
+ * be kept is only read again the next time, so nothing here fails, and
+ * errno is kept.
+ */
+static void digests_keep(const char *cache, const char *path, const struct status *k,
+                         const char *hex)
+{
+    char line[DIGESTS_LINE], old[ETUDE_DIGEST_HEX + 1], *other;
+    char *lock = suffixed(cache, ".lock"), *next = suffixed(cache, ".new");
+    struct status e, now;
+    struct flock fl;
+    struct stat st;
+    size_t kept = 1;
+    FILE *in, *out = NULL;
+    int fd = -1, ok, saved = errno;
+
+    if (lock == NULL || next == NULL || path[0] != '/' || strchr(path, '\n') != NULL ||
+        strlen(path) + 6 * 21 + ETUDE_DIGEST_HEX >= DIGESTS_LINE)
+        goto done;
+    parent_make(cache);
+    memset(&fl, 0, sizeof(fl));
+    fl.l_type = F_WRLCK;
+    fl.l_whence = SEEK_SET;
+    if ((fd = open(lock, O_RDWR | O_CREAT | O_CLOEXEC, 0644)) < 0 ||
+        fcntl(fd, F_SETLKW, &fl) != 0 || (out = fopen(next, "w")) == NULL)
+        goto done;
+    ok = digests_put(out, k, hex, path) == 0;
+    if ((in = fopen(cache, "r")) != NULL) {
+        while (ok && kept < DIGESTS_MAX && next_line(in, line, sizeof(line))) {
+            if (digests_line(line, &e, old, &other) != 0 || (e.dev == k->dev && e.ino == k->ino) ||
+                stat(other, &st) != 0)
+                continue;
+            status_of(&st, &now);
+            if (!status_same(&e, &now))
+                continue;
+            ok = digests_put(out, &e, old, other) == 0;
+            kept++;
+        }
+        fclose(in);
+    }
+    ok = fclose(out) == 0 && ok;
+    if (!ok || rename(next, cache) != 0)
+        unlink(next);
+done:
+    if (fd >= 0)
+        close(fd);
+    free(lock);
+    free(next);
+    errno = saved;
+}
+
+/**
+ * Keep the digest `hex` of the file at `path` in digests file `cache`, when
+ * there is one, after the whole read `r`. A file that changed while it was
+ * read is not kept, nor one that changed so shortly before the read began
+ * that a write after the read could leave its status as it was.
+ */
+static void digests_read(const char *cache, const char *path, const struct reading *r,
+                         const char *hex)
+{
+    if (cache != NULL && status_same(&r->before, &r->after) && r->before.ctime + SETTLE <= r->began)
+        digests_keep(cache, path, &r->before, hex);
+}
+
+int etude_digest_file(const char *cache, const char *path, struct stat *st,
+                      char digest[ETUDE_DIGEST_HEX + 1])
+{
+    struct reading r;
+    struct stat now;
+    int fd, e;
+
+    r.began = now_ns();
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+
+    if (fd < 0)
+        return -1;
+    if (fstat(fd, st) != 0)
+        goto fail;
+    if (!S_ISREG(st->st_mode)) {
+        errno = S_ISDIR(st->st_mode) ? EISDIR : EINVAL;
+        goto fail;
+    }
+    status_of(st, &r.before);
+    if (cache != NULL && digests_find(cache, &r.before, digest) == 0) {
+        close(fd);
+        return 0;
+    }
+    if (copy_hash(fd, -1, digest, NULL) != 0 || fstat(fd, &now) != 0)
+        goto fail;
+    close(fd);
+    status_of(&now, &r.after);
+    digests_read(cache, path, &r, digest);
+    return 0;
+fail:
+    e = errno;
+    close(fd);
+    errno = e;
+    return -1;
+}
+
+/** Say whether the store's digests file keeps `digest` as the digest of a
+ * file of status `st`. */
+static int known(const struct etude_store *s, const struct stat *st, const char *digest)
+{
+    char hex[ETUDE_DIGEST_HEX + 1];
+    struct status k;
+
+    status_of(st, &k);
+    return s->digests != NULL && digests_find(s->digests, &k, hex) == 0 && strcmp(hex, digest) == 0;
+}
+
+/** Say whether object `digest` is published and its digest kept, so that it
+ * need not be read to be trusted. */
+static int object_known(const struct etude_store *s, const char *digest)
+{
+    char *path = store_join(s->objects, digest);
+    struct stat st;
+    int r = path != NULL && stat(path, &st) == 0 && S_ISREG(st.st_mode) && known(s, &st, digest);
+
+    free(path);
+    return r;
+}
+
+/**
+ * Keep the digest of object `digest` when the object is `mine`, the file
+ * this process copied and published under that name.
+ *
+ * Its content is what the copy wrote, and it had mode 0444 before it had a
+ * name, so a later write needs its mode changed, which changes its change
+ * time. The digest is therefore kept although the object has only just
+ * changed.
+ */
+static void object_written(const struct etude_store *s, const char *digest, const struct stat *mine)
+{
+    char *path = store_join(s->objects, digest);
+    struct status k;
+    struct stat st;
+
+    if (s->digests != NULL && path != NULL && stat(path, &st) == 0 && st.st_dev == mine->st_dev &&
+        st.st_ino == mine->st_ino) {
+        status_of(&st, &k);
+        digests_keep(s->digests, path, &k, digest);
+    }
+    free(path);
+}
+
 /* ---- The store. ---- */
 
 struct etude_store *etude_store_open(const char *dir)
@@ -327,7 +658,21 @@ void etude_store_close(struct etude_store *s)
     free(s->nodes);
     free(s->locks);
     free(s->tmp);
+    free(s->digests);
     free(s);
+}
+
+int etude_store_digests(struct etude_store *s, const char *cache)
+{
+    char *copy = strdup(cache);
+
+    if (copy == NULL) {
+        errno = ENOMEM;
+        return -1;
+    }
+    free(s->digests);
+    s->digests = copy;
+    return 0;
 }
 
 int etude_store_path(const struct etude_store *s, const char *digest, char *buf, size_t size)
@@ -349,7 +694,8 @@ int etude_store_path(const struct etude_store *s, const char *digest, char *buf,
 int etude_store_check(const struct etude_store *s, const char *digest, uint64_t *size)
 {
     char hex[ETUDE_DIGEST_HEX + 1];
-    struct stat st;
+    struct reading r;
+    struct stat st, now;
     char *path;
     int fd, e;
 
@@ -357,38 +703,45 @@ int etude_store_check(const struct etude_store *s, const char *digest, uint64_t 
         errno = EINVAL;
         return -1;
     }
+    r.began = now_ns();
     path = store_join(s->objects, digest);
     if (path == NULL) {
         errno = ENOMEM;
         return -1;
     }
     fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    free(path);
     if (fd < 0)
-        return -1;
-    if (fstat(fd, &st) != 0) {
-        e = errno;
-        close(fd);
-        errno = e;
-        return -1;
-    }
+        goto fail;
+    if (fstat(fd, &st) != 0)
+        goto fail;
     if (!S_ISREG(st.st_mode)) {
-        close(fd);
         errno = EBADMSG;
-        return -1;
+        goto fail;
     }
-    if (copy_hash(fd, -1, hex, size) != 0) {
-        e = errno;
-        close(fd);
-        errno = e;
-        return -1;
+    if (known(s, &st, digest)) {
+        if (size != NULL)
+            *size = (uint64_t)st.st_size;
+    } else {
+        if (copy_hash(fd, -1, hex, size) != 0 || fstat(fd, &now) != 0)
+            goto fail;
+        if (strcmp(hex, digest) != 0) {
+            errno = EBADMSG;
+            goto fail;
+        }
+        status_of(&st, &r.before);
+        status_of(&now, &r.after);
+        digests_read(s->digests, path, &r, hex);
     }
     close(fd);
-    if (strcmp(hex, digest) != 0) {
-        errno = EBADMSG;
-        return -1;
-    }
+    free(path);
     return 0;
+fail:
+    e = errno;
+    if (fd >= 0)
+        close(fd);
+    free(path);
+    errno = e;
+    return -1;
 }
 
 /** Check object `digest` as publish's test of a file already there. */
@@ -397,11 +750,41 @@ static int object_valid(const struct etude_store *s, const char *digest)
     return etude_store_check(s, digest, NULL);
 }
 
+/**
+ * Copy `from`, read as `*r` says from its start, to the partial file `fd`,
+ * hashing it into `digest` unless `trust` says that `digest` is the digest
+ * the digests file keeps for the status the read began with, and give in
+ * `*r` the status at the end. A copy not hashed during which the file
+ * changed is made again and hashed, and `*r` is then that read's.
+ *
+ * @return 1 for a copy not hashed, 0 for one hashed, or -1 with errno set.
+ */
+static int put_copy(int from, int fd, int trust, struct reading *r,
+                    char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size)
+{
+    struct stat st;
+
+    for (;;) {
+        if (copy_hash(from, fd, trust ? NULL : digest, size) != 0 || fstat(from, &st) != 0)
+            return -1;
+        status_of(&st, &r->after);
+        if (!trust || status_same(&r->before, &r->after))
+            return trust;
+        trust = 0;
+        r->before = r->after;
+        r->began = now_ns();
+        if (lseek(from, 0, SEEK_SET) < 0 || ftruncate(fd, 0) != 0 || lseek(fd, 0, SEEK_SET) < 0)
+            return -1;
+    }
+}
+
 int etude_store_put(struct etude_store *s, const char *path, const char *expect,
                     char digest[ETUDE_DIGEST_HEX + 1], uint64_t *size)
 {
+    struct reading r;
+    struct stat st, mine;
     char *part = NULL;
-    int from, fd = -1, e;
+    int from, fd = -1, trust, e;
 
     if (expect != NULL && !store_is_digest(expect)) {
         errno = EINVAL;
@@ -410,71 +793,115 @@ int etude_store_put(struct etude_store *s, const char *path, const char *expect,
     from = open(path, O_RDONLY | O_CLOEXEC);
     if (from < 0)
         return -1;
-    if (part_open(s, &part, &fd) != 0) {
-        e = errno;
-        close(from);
-        errno = e;
-        return -1;
+    r.began = now_ns();
+    if (fstat(from, &st) != 0)
+        goto fail;
+    status_of(&st, &r.before);
+    trust = s->digests != NULL && digests_find(s->digests, &r.before, digest) == 0;
+    if (trust && expect != NULL && strcmp(digest, expect) != 0) {
+        errno = EBADMSG;
+        goto fail;
     }
-    if (copy_hash(from, fd, digest, size) != 0 || fsync(fd) != 0)
+    if (trust && object_known(s, digest)) {
+        close(from);
+        if (size != NULL)
+            *size = (uint64_t)st.st_size;
+        return 0;
+    }
+    if (part_open(s, &part, &fd) != 0) {
+        part = NULL;
+        goto fail;
+    }
+    if ((trust = put_copy(from, fd, trust, &r, digest, size)) < 0 || fsync(fd) != 0)
         goto fail;
     close(from);
     from = -1;
+    if (!trust)
+        digests_read(s->digests, path, &r, digest);
     if (expect != NULL && strcmp(expect, digest) != 0) {
         errno = EBADMSG;
         goto fail;
     }
-    if (fchmod(fd, 0444) != 0 || publish(s->objects, digest, part, object_valid, s) != 0)
+    if (fchmod(fd, 0444) != 0 || fstat(fd, &mine) != 0 ||
+        publish(s->objects, digest, part, object_valid, s) != 0)
         goto fail;
     part_drop(part, fd);
+    object_written(s, digest, &mine);
     return 0;
 fail:
+    e = errno;
     if (from >= 0)
         close(from);
-    part_drop(part, fd);
+    if (part != NULL)
+        part_drop(part, fd);
+    errno = e;
     return -1;
 }
 
 int etude_store_copy(const struct etude_store *s, const char *digest, const char *dest)
 {
-    char hex[ETUDE_DIGEST_HEX + 1];
+    char hex[ETUDE_DIGEST_HEX + 1] = "";
+    struct reading r;
+    struct stat st, now;
     char *path;
-    int from, to, e;
+    int from, to, trust, e;
 
     if (!store_is_digest(digest)) {
         errno = EINVAL;
         return -1;
     }
+    r.began = now_ns();
     path = store_join(s->objects, digest);
     if (path == NULL) {
         errno = ENOMEM;
         return -1;
     }
     from = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-    free(path);
-    if (from < 0)
-        return -1;
-    to = open(dest, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-    if (to < 0) {
-        e = errno;
-        close(from);
-        errno = e;
-        return -1;
+    if (from < 0 || fstat(from, &st) != 0)
+        goto fail;
+    status_of(&st, &r.before);
+    trust = known(s, &st, digest);
+    for (;;) {
+        to = open(dest, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
+        if (to < 0)
+            goto fail;
+        if (copy_hash(from, to, trust ? NULL : hex, NULL) != 0) {
+            e = errno;
+            close(to);
+            errno = e;
+            goto drop;
+        }
+        if (close(to) != 0 || fstat(from, &now) != 0)
+            goto drop;
+        status_of(&now, &r.after);
+        if (!trust || status_same(&r.before, &r.after))
+            break;
+        trust = 0;
+        r.before = r.after;
+        r.began = now_ns();
+        if (unlink(dest) != 0 || lseek(from, 0, SEEK_SET) < 0)
+            goto fail;
     }
-    if (copy_hash(from, to, hex, NULL) != 0 || close(to) != 0) {
-        e = errno;
-        close(from);
-        unlink(dest);
-        errno = e;
-        return -1;
-    }
-    close(from);
-    if (strcmp(hex, digest) != 0) {
-        unlink(dest);
+    if (!trust && strcmp(hex, digest) != 0) {
         errno = EBADMSG;
-        return -1;
+        goto drop;
     }
+    if (!trust)
+        digests_read(s->digests, path, &r, hex);
+    close(from);
+    free(path);
     return 0;
+drop:
+    e = errno;
+    unlink(dest);
+    errno = e;
+fail:
+    e = errno;
+    if (from >= 0)
+        close(from);
+    free(path);
+    errno = e;
+    return -1;
 }
 
 /** Put the low `n` bytes of `v` at `p`, most significant first. */

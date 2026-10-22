@@ -18,6 +18,26 @@
 /* A store of artifacts in one directory, open in one process. */
 struct etude_store;
 
+struct stat;
+
+/**
+ * Give the SHA-256 of the regular file at `path` in `digest`, and its status
+ * as it was opened in `*st`.
+ *
+ * `cache` is the path of a digests file, or NULL for none. A digest kept
+ * there for a file of the same device, inode, size and times of
+ * modification and change is given without reading the file. Otherwise the
+ * file is read whole, and its digest is kept there unless the file changed
+ * while it was read, or less than two seconds before the read began, since
+ * a write in the same tick of the file system's clock could leave its status
+ * as it was. tools/etude/Readme.md describes the file.
+ *
+ * @return 0, or -1 with errno set, EISDIR for a directory and EINVAL for
+ *         anything else but a regular file.
+ */
+int etude_digest_file(const char *cache, const char *path, struct stat *st,
+                      char digest[ETUDE_DIGEST_HEX + 1]);
+
 /**
  * Open the store in directory `dir`, made with its subdirectories if they
  * are missing, and remove the partial files of writers that have ended.
@@ -34,6 +54,16 @@ struct etude_store *etude_store_open(const char *dir);
 void etude_store_close(struct etude_store *s);
 
 /**
+ * Make the store use the digests file `cache`, as etude_digest_file does,
+ * for the files it publishes and for its objects, so that a file whose
+ * digest is kept is not read to be hashed. An object the store publishes is
+ * kept with its digest at once.
+ *
+ * @return 0, or -1 with errno ENOMEM.
+ */
+int etude_store_digests(struct etude_store *s, const char *cache);
+
+/**
  * Publish a copy of the file at `path` as an object, and give its digest in
  * `digest` and its size in `*size` when `size` is not NULL.
  *
@@ -44,6 +74,10 @@ void etude_store_close(struct etude_store *s);
  * kept, and one whose content differs from its name is replaced. When
  * `expect` is not NULL, a copy whose digest differs from it is refused, and
  * nothing is published.
+ *
+ * With a digests file, a file whose digest is kept is copied without being
+ * hashed, and is not copied at all when its object is published and kept;
+ * a file that changes while it is copied so is copied again and hashed.
  *
  * @return 0, or -1 with errno set: EBADMSG for a digest other than `expect`,
  *         or an error of the system.
@@ -61,7 +95,8 @@ int etude_store_path(const struct etude_store *s, const char *digest, char *buf,
 
 /**
  * Read object `digest` whole and check its content against its name, giving
- * its size in `*size` when `size` is not NULL.
+ * its size in `*size` when `size` is not NULL. With a digests file that
+ * keeps the object's digest, the object is not read.
  *
  * @return 0, or -1 with errno ENOENT for no such object, EBADMSG for one
  *         whose content differs from its name, or an error of the system.
@@ -70,8 +105,10 @@ int etude_store_check(const struct etude_store *s, const char *digest, uint64_t 
 
 /**
  * Make `dest`, a file that must not exist, a private writable copy of object
- * `digest`, checked by the digest as it is copied. A chunk of zeros in the
- * object is left a hole in `dest`, as etude_store_put leaves it.
+ * `digest`, checked by the digest as it is copied, unless a digests file
+ * keeps the object's digest and the object does not change while it is
+ * copied. A chunk of zeros in the object is left a hole in `dest`, as
+ * etude_store_put leaves it.
  *
  * @return 0, or -1 with errno set as etude_store_check gives, EEXIST for a
  *         `dest` that exists, or an error of the system; `dest` is then
