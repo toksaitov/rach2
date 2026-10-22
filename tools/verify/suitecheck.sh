@@ -6,11 +6,11 @@
 # takes, and one that compares a duration with a constant has too: both pass
 # on the machine that set the number and fail on a slower one, or on the same
 # one under load. A test that prints that it skipped a check and then passes
-# reports the skip as a pass. The check reads the suites,
-# tests/system/suites/*.sh and tests/system/suites.mk, the scripts of the
-# host tests, tests/host/*.sh, the probes, tests/*.c, tests/musl/*.c and
-# tests/host/*.c, and the scenario code of etude's cases under tests/cases/,
-# and fails on these forms:
+# reports the skip as a pass. The check reads the rules that make the cases'
+# artifacts, tests/system/suites.mk, the scripts of the host tests,
+# tests/host/*.sh, the probes, tests/*.c, tests/musl/*.c and tests/host/*.c,
+# and the programs and scenario code of etude's cases under tests/cases/, and
+# fails on these forms:
 #
 #   * `sleep N` or `usleep N` in a script, on the host or typed into the guest
 #   * `wait=N`, a harness step that slept
@@ -301,7 +301,7 @@ check_tree() {
     [ "$vs" -eq 2 ] && return 2
     [ "$vs" -eq 0 ] || rc=1
     out=
-    for f in "$REPO"/tests/system/suites/*.sh "$REPO"/tests/system/suites.mk "$REPO"/tests/host/*.sh; do
+    for f in "$REPO"/tests/system/suites.mk "$REPO"/tests/host/*.sh; do
         case "$f" in */tests/host/\*.sh) continue ;; esac
         [ -r "$f" ] || { echo "suitecheck: $f: cannot read" >&2; return 2; }
         out="$out$(scan "$f" suite "$declared")
@@ -354,12 +354,11 @@ selftest() {
         fi
     }
     # tree NAME SUITE PROBE REASONS [UNCONVERTED]: write a tree under $T/NAME
-    # with SUITE as its one suite, PROBE as its one probe, REASONS as its
+    # with SUITE as its suites.mk, PROBE as its one probe, REASONS as its
     # intervals file and UNCONVERTED as its list of unconverted findings.
     tree() {
-        mkdir -p "$T/$1/tests/system/suites"
-        printf '%s\n' "$2" > "$T/$1/tests/system/suites/a.sh"
-        : > "$T/$1/tests/system/suites.mk"
+        mkdir -p "$T/$1/tests/system"
+        printf '%s\n' "$2" > "$T/$1/tests/system/suites.mk"
         printf '%s\n' "$3" > "$T/$1/tests/probe.c"
         printf '%s\n' "$4" > "$T/$1/tests/system/intervals"
         printf '%s\n' "${5-}" > "$T/$1/tests/system/unconverted"
@@ -382,29 +381,29 @@ selftest() {
     case_ 1 sleep
     tree sleepguest '"send=sleep 3; echo DONE"' 'int x;' ''
     case_ 1 sleepguest
-    tree sleepmarked 'sleep 2 # interval: the load runs for two seconds' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
+    tree sleepmarked 'sleep 2 # interval: the load runs for two seconds' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 0 sleepmarked
     tree sleepabove '# interval: the load runs for two seconds
-sleep 2' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
+sleep 2' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 0 sleepabove
     tree continued '# interval: the load runs for two seconds
 run "$HARNESS" \
     "send=sleep 2; echo DONE" \
-    "expect=DONE"' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
+    "expect=DONE"' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 0 continued
     tree pastcommand '# interval: the load runs for two seconds
 run "$HARNESS" "expect=DONE"
-sleep 2' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
+sleep 2' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 1 pastcommand
     tree sleepunlisted 'sleep 2 # interval: the load runs for two seconds' 'int x;' ''
     case_ 1 sleepunlisted
-    tree sleepother 'sleep 2 # interval: the load runs for two seconds' 'int x;' 'tests/system/suites/a.sh: the load runs for a while'
+    tree sleepother 'sleep 2 # interval: the load runs for two seconds' 'int x;' 'tests/system/suites.mk: the load runs for a while'
     case_ 1 sleepother
-    tree stale 'echo' 'int x;' 'tests/system/suites/a.sh: the load runs for two seconds'
+    tree stale 'echo' 'int x;' 'tests/system/suites.mk: the load runs for two seconds'
     case_ 1 stale
     tree waitstep '"expect=lease" wait=3' 'int x;' ''
     case_ 1 waitstep
-    tree waitmarked '"expect=lease" wait=3 # interval: settling' 'int x;' 'tests/system/suites/a.sh: settling'
+    tree waitmarked '"expect=lease" wait=3 # interval: settling' 'int x;' 'tests/system/suites.mk: settling'
     case_ 1 waitmarked
     tree usleep 'usleep 200' 'int x;' ''
     case_ 1 usleep

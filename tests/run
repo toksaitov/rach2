@@ -504,7 +504,7 @@ present() { ( cd "$REPO" && while read -r f; do [ -f "$f" ] && echo "$f"; done )
 scripts_inventory() {
     ( cd "$REPO" && {
         echo tests/run; echo tests/registry; echo tests/system/suites.mk; echo Makefile
-        ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/suites/*.sh tests/system/accept/*.sh \
+        ls mk/*.mk tests/system/runner/*.c tests/system/*.sh tests/system/accept/*.sh \
            tests/system/*.py tests/system/accept/agents/* tests/system/checkers/*.awk tests/system/fixtures/*.sh \
            tests/system/agents/* tests/system/fakeapi/* tests/system/fakeapi/repo/* tools/flow/* \
            tools/image/*.sh krffs/*.sh tests/cases/*.json tests/cases/host/*.sh tests/cases/machine/*.c tests/cases/machine/*.h \
