@@ -122,8 +122,8 @@ static enum etude_status as_root(struct gnu_case *s, const char *command, const 
  * most `prompts` prompts, and run `command`. ptydrive does not pass on the
  * status of what it runs, so ssh runs under a shell that prints `SSHRC=N`,
  * ssh's own status, once ssh has ended; ptydrive prints `PROMPTED=N` after
- * it, and `TIMEDOUT` when its own time ran out, which the step's bound makes
- * longer than any wait here.
+ * it. ptydrive has no time limit of its own: the step's watchdog ends a
+ * login that hangs.
  */
 static enum etude_status ssh_password(struct gnu_case *s, const char *user, const char *prompts,
                                       const char *command, const char *output, struct net_run *r)
@@ -134,8 +134,6 @@ static enum etude_status ssh_password(struct gnu_case *s, const char *user, cons
                     "40",
                     "--cols",
                     "100",
-                    "--timeout",
-                    "3600",
                     "--",
                     "sh",
                     "-c",
@@ -266,8 +264,7 @@ static void passwords(struct gnu_case *s)
         ssh_password(s, "test", "3", "id -u; echo PASS\"\"LOGIN", "test-password", &r);
     if (net_ok(&s->u)) {
         net_assert(&s->u, "test-password",
-                   net_exited0(&r) && strstr(r.out, "TIMEDOUT") == NULL &&
-                       strstr(r.out, "PROMPTED=1") != NULL &&
+                   net_exited0(&r) && strstr(r.out, "PROMPTED=1") != NULL &&
                        in_order(r.out, "1000", "PASSLOGIN", "SSHRC=0"),
                    "no session as uid 1000 after one prompt: %s", said(&r, line, sizeof(line)));
         net_run_free(&r);
@@ -280,8 +277,7 @@ static void passwords(struct gnu_case *s)
         return;
     }
     net_assert(&s->u, "root-password-refused",
-               net_exited0(&r) && strstr(r.out, "TIMEDOUT") == NULL &&
-                   strstr(r.out, "ROOTPASSWORD") == NULL &&
+               net_exited0(&r) && strstr(r.out, "ROOTPASSWORD") == NULL &&
                    (strstr(r.out, "Permission denied") != NULL ||
                     strstr(r.err, "Permission denied") != NULL) &&
                    strstr(r.out, "SSHRC=255") != NULL,

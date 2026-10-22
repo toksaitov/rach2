@@ -29,7 +29,7 @@
         {"assertion_id": "root-key", "checks": "ssh as root by the demo key exits 0 and id -u prints 0", "source": "scenario"},
         {"assertion_id": "host-keys", "checks": "/etc/ssh has ssh_host_ed25519_key, which the first boot made", "source": "scenario"},
         {"assertion_id": "test-key", "checks": "ssh as the test account by its key exits 0 and id -u prints 1000 alone", "source": "scenario"},
-        {"assertion_id": "test-password", "checks": "the test account's password login asks once, prints 1000 and the command's marker, and ssh ends with status 0, before ptydrive's time runs out", "source": "scenario"},
+        {"assertion_id": "test-password", "checks": "the test account's password login asks once, prints 1000 and the command's marker, and ssh ends with status 0", "source": "scenario"},
         {"assertion_id": "root-password-refused", "checks": "root's right password is refused by the server, Permission denied with ssh's status 255, and runs no command", "source": "scenario"},
         {"assertion_id": "scp", "checks": "scp puts the rows' script at /tmp/gnu/rows.sh and exits 0", "source": "scenario"},
         {"assertion_id": "sftp", "checks": "sftp, whose server is OpenSSH's sftp-server, fetches /tmp/gnu/rows.sh back, exits 0, and the file is the one scp sent, byte for byte", "source": "scenario"}

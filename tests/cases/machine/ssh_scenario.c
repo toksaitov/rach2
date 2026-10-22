@@ -61,7 +61,8 @@ static enum etude_status ssh_key(struct ssh_case *s, const char *command, const 
  * Log in as `user` by `password` under ptydrive and run `command`. ssh asks
  * for the password once. ptydrive sizes the terminal at 40 rows by 100
  * columns, takes the password from the environment, and prints `PROMPTED=N`
- * after the session's output.
+ * after the session's output. It has no time limit of its own: the step's
+ * watchdog ends a login that hangs.
  */
 static enum etude_status ssh_password(struct ssh_case *s, const char *user, const char *password,
                                       const char *command, const char *output, struct net_run *r)
@@ -72,8 +73,6 @@ static enum etude_status ssh_password(struct ssh_case *s, const char *user, cons
                     "40",
                     "--cols",
                     "100",
-                    "--timeout",
-                    "3600",
                     "--",
                     NET_SSH,
                     "-o",
@@ -110,12 +109,12 @@ static const char *said(const struct net_run *r, char *buf, size_t size)
 }
 
 /** Say whether `r` is the server's refusal: `Permission denied` from ssh,
- * no time-out of ptydrive, and none of `ran`, the command's marker. */
+ * and none of `ran`, the command's marker. */
 static int refused(const struct net_run *r, const char *ran)
 {
     return (strstr(r->out, "Permission denied") != NULL ||
             strstr(r->err, "Permission denied") != NULL) &&
-           strstr(r->out, "TIMEDOUT") == NULL && strstr(r->out, ran) == NULL;
+           strstr(r->out, ran) == NULL;
 }
 
 /** Boot the copy of the disk and log in as root at its console. */

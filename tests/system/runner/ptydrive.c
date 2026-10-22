@@ -21,13 +21,14 @@
  * held at the end of the output, a timeout or a stop is written as
  * `[redacted]` too.
  *
- * The run ends when the command closes the terminal, or after S seconds, 60
- * unless given, which prints `TIMEDOUT`. `PROMPTED=N` then counts the
- * prompts seen and `ANSWERED=N` the answers sent. The exit status is 0,
- * after a timeout too, 1 after a second prompt or an answer that could not
- * be written, and 2 for a usage error or a failure to set up. The command's
- * own status is not reported; the suites judge its output and the two
- * counts.
+ * The run ends when the command closes the terminal, or when SIGTERM, SIGINT
+ * or SIGHUP stops the driver, as a case's watchdog does. It has no time
+ * limit unless --timeout gives one: then it also ends after S seconds, which
+ * prints `TIMEDOUT`. `PROMPTED=N` then counts the prompts seen and
+ * `ANSWERED=N` the answers sent. The exit status is 0, after a timeout or a
+ * stop too, 1 after a second prompt or an answer that could not be written,
+ * and 2 for a usage error or a failure to set up. The command's own status
+ * is not reported; the cases judge its output and the two counts.
  *
  * With PTYDRIVE_READS naming a file, each read of the command's output adds
  * a line with its count of bytes to that file once the bytes are handled,
@@ -328,6 +329,31 @@ static double now(void)
     return (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
 }
 
+/* The signal that stopped the driver, or 0. */
+static volatile sig_atomic_t stop_signal;
+
+/** Record the signal that stops the driver, for the relay loop to end on. */
+static void on_stop(int sig)
+{
+    stop_signal = sig;
+}
+
+/**
+ * Make SIGTERM, SIGINT and SIGHUP end the relay loop, without SA_RESTART, so
+ * that the `select` they interrupt returns at once.
+ */
+static void stop_signals(void)
+{
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_stop;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+}
+
 /* The file PTYDRIVE_READS names, or NULL when the variable is unset. */
 static FILE *reads;
 
@@ -363,20 +389,46 @@ static void read_handled(ssize_t n)
 }
 
 /**
+ * Reap the command `pid` once the run has ended: its group is sent SIGKILL
+ * when it is still running five seconds later, and five seconds after that
+ * the driver gives up on it with a message.
+ */
+static void command_reap(pid_t pid)
+{
+    double until = now() + 5.0;
+    int killed = 0;
+
+    while (waitpid(pid, NULL, WNOHANG) == 0) {
+        if (now() >= until && !killed) {
+            if (kill(-pid, SIGKILL) != 0)
+                kill(pid, SIGKILL);
+            killed = 1;
+            until = now() + 5.0;
+        } else if (now() >= until) {
+            fprintf(stderr, "ptydrive: the command survived SIGKILL; "
+                            "leaving it and reporting\n");
+            break;
+        }
+        usleep(50000);
+    }
+}
+
+/**
  * Read the options, start the command on a terminal with `forkpty`, and
  * relay its output and answer its prompt until the end of the run.
  *
- * After a timeout or a second prompt the command's group is sent SIGTERM,
- * which reaches what the command started, since `forkpty` makes the
- * command a session leader; a command that ignores it, or a descendant that
- * holds the terminal, would otherwise keep the driver waiting past its
- * deadline. A command still running five seconds after the end is sent
- * SIGKILL, and five seconds after that the driver reports without it.
+ * After a timeout, a stop or a second prompt the command's group is sent
+ * SIGTERM, which reaches what the command started, since `forkpty` makes
+ * the command a session leader and so puts it out of the driver's own
+ * process group; a command that ignores it, or a descendant that holds the
+ * terminal, would otherwise keep the driver waiting. A command still
+ * running five seconds after the end is sent SIGKILL, and five seconds
+ * after that the driver reports without it.
  */
 int main(int argc, char **argv)
 {
     int rows = 40, cols = 100;
-    double timeout = 60.0;
+    double timeout = 0.0;
     const char *prompt_re = "[Pp]assword:";
     const char *password_env = "RACH2_PASSWORD";
     const char *password;
@@ -437,6 +489,7 @@ int main(int argc, char **argv)
     }
     compile_prompt(prompt_re);
     reads_open();
+    stop_signals();
 
     ws.ws_row = (unsigned short)rows;
     ws.ws_col = (unsigned short)cols;
@@ -456,22 +509,24 @@ int main(int argc, char **argv)
     }
 
     deadline = now() + timeout;
-    for (;;) {
-        double remaining = deadline - now();
+    while (stop_signal == 0) {
+        double wait = timeout > 0 ? deadline - now() : 1.0;
         fd_set r;
         struct timeval tv;
         unsigned char data[4096];
         ssize_t n;
         size_t at;
 
-        if (remaining <= 0) {
+        if (wait <= 0) {
             timed_out = 1;
             break;
         }
+        if (wait > 1.0)
+            wait = 1.0;
         FD_ZERO(&r);
         FD_SET(master, &r);
-        tv.tv_sec = (long)(remaining < 1.0 ? remaining : 1.0);
-        tv.tv_usec = (long)(((remaining < 1.0 ? remaining : 1.0) - (double)tv.tv_sec) * 1e6);
+        tv.tv_sec = (long)wait;
+        tv.tv_usec = (long)((wait - (double)tv.tv_sec) * 1e6);
         if (select(master + 1, &r, NULL, NULL, &tv) <= 0)
             continue;
         n = read(master, data, sizeof(data));
@@ -510,29 +565,12 @@ int main(int argc, char **argv)
     free(filter.pending);
     if (timed_out)
         printf("\nTIMEDOUT\n");
-    if (timed_out || failed) {
+    if (timed_out || failed || stop_signal != 0) {
         if (kill(-pid, SIGTERM) != 0)
             kill(pid, SIGTERM);
     }
     close(master);
-    {
-        double until = now() + 5.0;
-        int killed = 0;
-
-        while (waitpid(pid, NULL, WNOHANG) == 0) {
-            if (now() >= until && !killed) {
-                if (kill(-pid, SIGKILL) != 0)
-                    kill(pid, SIGKILL);
-                killed = 1;
-                until = now() + 5.0;
-            } else if (now() >= until) {
-                fprintf(stderr, "ptydrive: the command survived SIGKILL; "
-                                "leaving it and reporting\n");
-                break;
-            }
-            usleep(50000);
-        }
-    }
+    command_reap(pid);
     printf("\nPROMPTED=%d\nANSWERED=%d\n", asked, answered);
     return failed ? 1 : 0;
 }

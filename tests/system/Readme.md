@@ -71,7 +71,7 @@ A case that does not pass keeps its workspace as `build/tests/failed/RUN.CASE.rR
 
 ### Completion bounds
 
-A suite waits for a token and judges what the kernel counts, never the clock. Etude stops a case only when it has made no progress for longer than the case's history on that machine allows, as [etude's Readme](../../tools/etude/Readme.md#progress-and-bounds) says. The harness, `runtests`, `drive.sh` and `ptydrive` bound each wait by the seconds their caller gives, and `hostpeer echo`, as the socket cases run it, serves until it is stopped. The runner measures nothing about the host and scales no bound.
+A suite waits for a token and judges what the kernel counts, never the clock. Etude stops a case only when it has made no progress for longer than the case's history on that machine allows, as [etude's Readme](../../tools/etude/Readme.md#progress-and-bounds) says. The drivers a case runs set no time limit of their own: `ptydrive` waits until its command ends or a signal stops it, and `hostpeer echo`, as the socket cases run it, serves until it is stopped. The old drivers, the harness, `runtests` and `drive.sh`, still bound each wait by the seconds their caller gives. The runner measures nothing about the host and scales no bound.
 
 The `clock` suite is the one exception, since the clock is what it tests: it compares the guest's clocks with the host's across thirty stops of the machine, within 250 ms, which its case declares as a clock reference (see [`machine.clock.json`](../cases/machine.clock.json)).
 
@@ -86,7 +86,7 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 * `harness.c` boots one machine, headless, and drives its serial console with steps: wait for a pattern, type a line or raw bytes, press a key or move the mouse through QEMU's monitor, plug or pull a device, connect to a forwarded port, run a probe. It decides a run by the exit status the kernel prints for the probe; with a kernel built with `HARNESS=1`, QEMU stops through its `isa-debug-exit` device when that process exits. `--ok TOKEN` decides the run by a serial token instead, and `--never TEXT` fails it if a text appears. The header comment lists the options, steps and exit statuses. `--selftest` checks the matcher, the waits and the writes without QEMU.
 * `runtests.c` runs every program of the `default` suite's `PROBES` list in turn in one boot of the test image, when a person runs it by hand, as [the tests' Readme](../Readme.md) describes; the suite itself runs them as etude's cases.
 * `hostpeer.c` is the host end of a connection: `hold` keeps a TCP connection open for a number of seconds, `echo` sends back what arrives over TCP and UDP, for a time or until it is stopped, and `send` sends one UDP datagram. Etude's socket and dgram cases run `echo` and `send`.
-* `ptydrive.c` runs a command, such as `ssh`, on a pseudo-terminal of a given size and answers one password prompt from an environment variable, which it removes from the command's environment and from the output it passes on.
+* `ptydrive.c` runs a command, such as `ssh`, on a pseudo-terminal of a given size and answers one password prompt from an environment variable, which it removes from the command's environment and from the output it passes on. It waits for the command without a time limit unless `--timeout` gives one, and a SIGTERM, SIGINT or SIGHUP ends the command with it.
 * `deadline.c` runs a command in a process group of its own and kills the group when a time limit passes, with status 124.
 * `screentext.c` prints the text a framebuffer console shows in a QEMU screen dump, matching each cell against the kernel's own font, `rach2/sys/display/vga_font.c`; `--colors` prints how many colours the dump has.
 * `runutil.c` is the runner's helper above. Built at `build/tests/system/runutil`, its `watch NAME IDLE COMMAND` also runs a command for `tools/dev/poll_kernels.sh` and `accept/su_command.sh`, and stops it, with status 124, when for IDLE seconds it has written nothing and its processes have used next to no processor time.
@@ -153,7 +153,7 @@ A suite waits for what the machine prints and bounds each wait; a shell suite wr
 
 * The runner checks image files by name. It cannot tell which suite wrote a file, so a suite that writes a file another suite owns passes the check.
 * Equal hashes before and after a run show that the files the run used are the files there now, not that they did not change in between.
-* The drivers' bounds, the seconds a script gives the harness, `runtests`, `drive.sh` or `ptydrive`, are written for an idle host under KVM, and the runner does not adjust them: on a loaded host or under the emulator such a wait can run out before the machine is done.
+* The old drivers' bounds, the seconds a script gives the harness, `runtests` or `drive.sh`, are written for an idle host under KVM, and the runner does not adjust them: on a loaded host or under the emulator such a wait can run out before the machine is done.
 
 ## Tests
 
