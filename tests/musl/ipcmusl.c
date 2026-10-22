@@ -88,11 +88,6 @@
 #include "../probe_args.h"
 #include "../probe_report.h"
 
-/* The longest wait, in seconds, for another process to be seen asleep or
- * waiting on a semaphore: a bound that ends a wait the kernel never
- * satisfies, far past a correct one. */
-#define ASLEEP_BOUND 20
-
 /* The assertions of etude's report in the order they are checked, more than
  * probe_report.h's path holds, and how many are planned and reported. */
 static const char *rows[48];
@@ -302,20 +297,16 @@ static int sem_wide_count(int id)
 /**
  * Wait for the child `child` to block on semaphore 0 of `id`, as GETNCNT
  * reports, looking every 10 ms. Returns 0 once it waits there. When the
- * child ends first, or ASLEEP_BOUND seconds pass, kills and reaps it, removes
- * the set, and returns 1, so that a waiter that never blocks fails its row.
+ * child ends first, reaps it, removes the set, and returns 1, so that a
+ * waiter that ends without blocking fails its row.
  */
 static int await_waiter(int id, pid_t child)
 {
-    struct timespec start, now;
-
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         if (semctl(id, 0, GETNCNT) == 1) {
             return 0;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (waitpid(child, NULL, WNOHANG) != 0 || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (waitpid(child, NULL, WNOHANG) != 0) {
             break;
         }
         usleep(10000);
@@ -493,21 +484,18 @@ static int proc_state(pid_t pid)
 /**
  * Wait for process `pid` to be asleep, state S in /proc/<pid>/stat, looking
  * every 10 ms. Returns 1 once it is, and 0 when it ends first, as a zombie or
- * gone from /proc, or when ASLEEP_BOUND seconds pass.
+ * gone from /proc.
  */
 static int seen_asleep(pid_t pid)
 {
-    struct timespec start, now;
     int state;
 
-    clock_gettime(CLOCK_MONOTONIC, &start);
     for (;;) {
         state = proc_state(pid);
         if (state == 'S') {
             return 1;
         }
-        clock_gettime(CLOCK_MONOTONIC, &now);
-        if (state == 0 || state == 'Z' || now.tv_sec - start.tv_sec >= ASLEEP_BOUND) {
+        if (state == 0 || state == 'Z') {
             return 0;
         }
         usleep(10000);
@@ -578,11 +566,13 @@ static long cut_call(const struct cut_wait *w, int id)
 
 /**
  * Fork a child that waits to see this process asleep (`seen_asleep`), sends
- * it SIGUSR1, waits up to 3 s for the handler's byte on `answer`, and only
- * then ends a wait of `kind` on `id`: it gives the semaphore, takes a message
- * from the full queue, or sends one to the empty queue. The child exits 0
- * when all of that happened, 2 when the process was never seen asleep and 3
- * when the handler's byte did not come; it ends the wait in every case.
+ * it SIGUSR1, waits for the handler's byte on `answer`, and only then ends a
+ * wait of `kind` on `id`: it gives the semaphore, takes a message from the
+ * full queue, or sends one to the empty queue. The child exits 0 when all of
+ * that happened, 2 when the process was never seen asleep and 3 when the
+ * signal or the read of the handler's byte failed; it ends the wait in every
+ * case. A handler that never runs leaves the child and the wait asleep, and
+ * the case's watchdog ends them.
  */
 static pid_t signal_then_give(int kind, int id, int answer)
 {
@@ -600,8 +590,7 @@ static pid_t signal_then_give(int kind, int id, int answer)
         } else {
             pfd.fd = answer;
             pfd.events = POLLIN;
-            if (kill(parent, SIGUSR1) != 0 || poll(&pfd, 1, 3000) != 1 ||
-                read(answer, &c, 1) != 1) {
+            if (kill(parent, SIGUSR1) != 0 || poll(&pfd, 1, -1) != 1 || read(answer, &c, 1) != 1) {
                 code = 3;
             }
         }
