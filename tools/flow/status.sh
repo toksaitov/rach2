@@ -230,6 +230,8 @@ fi
 echo "== master $(git ls-remote "https://github.com/$REPO" refs/heads/master | cut -c 1-8)  $(date -u '+%F %T') UTC"
 echo "== phase"
 sh "$(dirname "$0")/board.sh" phase 2>&1
+echo "== progress"
+python3 -B "$(dirname "$0")/progress.py" 2>&1 || echo "status: progress could not be read; investigate before acting"
 echo "== release"
 if tmux has-session -t rach2-release 2> /dev/null; then echo "release.sh runs"; else echo "release.sh is not running"; fi
 r=$HOME/flow/manager/release/record

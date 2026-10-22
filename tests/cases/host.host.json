@@ -345,6 +345,7 @@
         {"assertion_id": "ci", "checks": "ci reports and bisection: `sh tests/system/ci_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "ci_run", "checks": "ci's reading of the runner's lines and of etude's history, and its stop after a killed step: `sh tests/system/ci_run_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "board", "checks": "board groups, take and the phase in progress: `sh tests/system/board_test.sh` exits 0 within 600 seconds", "source": "program"},
+        {"assertion_id": "progress", "checks": "the manager reports delayed phase work and unassigned failures: `python3 -B tests/system/progress_test.py` exits 0 within 60 seconds", "source": "program"},
         {"assertion_id": "limited", "checks": "the loops' reading of a usage limit: `sh tests/system/limited_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "worker_park", "checks": "the worker loop's parking during a hold and rest of a handed-back intermittent issue: `sh tests/system/worker_park_test.sh` exits 0 within 600 seconds", "source": "program"},
         {"assertion_id": "release_resume", "checks": "a release resumed from its record, with its runs, reruns and acceptance: `sh tests/system/release_resume_test.sh` exits 0 within 600 seconds", "source": "program"},

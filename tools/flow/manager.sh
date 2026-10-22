@@ -85,6 +85,9 @@ main()
         t=$(date -u '+%m%d-%H%M%S')
         prompt="$(cat "$state/run/manager.txt")
 
+Your persistent progress record is $state/progress. Read it before checking the
+phase, and replace it before ending, as manager.txt says.
+
 The manager's log ends:
 $(tail -n 10 "$state/manager.log" 2> /dev/null)"
         log "check $t starts"

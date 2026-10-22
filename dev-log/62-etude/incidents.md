@@ -79,7 +79,7 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * `tools/flow/worker.sh`: a worker loop does not pause on an issue that another open issue waits on.
 * `AGENTS.md`, Writing: times to the owner in local time.
 * #817: ci reads the failed suites whatever the order of the summaries.
-* #814: the manager, to be redesigned around the phase's progress.
+* #814: the manager reads measured phase progress, follows delayed work through an incident and keeps its next action and deadline between checks. A blocking member late by elapsed time, repeated sessions or a missed landing time is an incident even while its worker writes output.
 * #824: ci's core runs take at most half the testing host.
 * #829: the testing host admits claims by memory alone, and a shell command takes an ordinary run's share; an installed bridge is made readable by every account and tried as the testing account and as ci's before the site is switched to it.
 * `AGENTS.md`, Resources: a session removes a worktree or copy once its branch has landed, and writes its scratch and logs under `build/tests` or `$TMPDIR`.
