@@ -45,7 +45,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <poll.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -253,40 +252,27 @@ static int set_hash(char *text, const char *user, const char *value)
 /**
  * Read from `fd`, appending to the terminated string in `buffer` of `size`
  * bytes, until `needle` appears in it. Returns 1 on a match, and 0 at end of
- * file, on a read error, when the buffer is full, or once `ms` milliseconds
- * of polls have passed with nothing to read.
+ * file, on a read error, or when the buffer is full.
  */
-static int read_until(int fd, const char *needle, char *buffer, size_t size, long ms)
+static int read_until(int fd, const char *needle, char *buffer, size_t size)
 {
     size_t held = strlen(buffer);
-    long waited = 0;
+    ssize_t got;
 
-    while (waited < ms) {
-        struct pollfd watching;
-        ssize_t got;
-
-        watching.fd = fd;
-        watching.events = POLLIN;
-        watching.revents = 0;
-        if (poll(&watching, 1, 200) == 1) {
-            got = read(fd, buffer + held, size - held - 1);
-            if (got <= 0) {
-                return 0;
-            }
-            held += (size_t)got;
-            buffer[held] = '\0';
-            if (strstr(buffer, needle) != NULL) {
-                return 1;
-            }
-            if (held + 1 >= size) {
-                return 0;
-            }
-            continue;
+    for (;;) {
+        got = read(fd, buffer + held, size - held - 1);
+        if (got <= 0) {
+            return 0;
         }
-        waited += 200;
+        held += (size_t)got;
+        buffer[held] = '\0';
+        if (strstr(buffer, needle) != NULL) {
+            return 1;
+        }
+        if (held + 1 >= size) {
+            return 0;
+        }
     }
-
-    return 0;
 }
 
 /**
@@ -589,11 +575,11 @@ static int check_wedges(void)
             char seen[2048];
 
             seen[0] = '\0';
-            if (read_until(master, "rach2 login:", seen, sizeof(seen), 20000)) {
+            if (read_until(master, "rach2 login:", seen, sizeof(seen))) {
                 (void)write(master, PROBE_USER "\n", strlen(PROBE_USER) + 1);
-                if (read_until(master, "Password:", seen, sizeof(seen), 20000)) {
+                if (read_until(master, "Password:", seen, sizeof(seen))) {
                     (void)write(master, PROBE_PASS "\n", strlen(PROBE_PASS) + 1);
-                    (void)read_until(master, "uid=", seen, sizeof(seen), 20000);
+                    (void)read_until(master, "uid=", seen, sizeof(seen));
                 }
             }
             if (tcgetattr(slave, &asked) == 0 && (asked.c_lflag & ICANON) != 0 &&
