@@ -12,6 +12,7 @@ tests/host/etude_native_hosttest.c: a process or a group is looked at again ever
 tests/host/etude_legacyset_hosttest.c: a set is looked at again every 50 ms
 tests/host/etude_legacyset_hosttest.c: the record is read again every 50 ms
 tests/host/etude_exec_hosttest.c: the child is checked every 1 ms
+tests/host/etude_ports_hosttest.c: a run is looked at again, or watched while it must wait
 tests/system/accept/agents_accept.sh: the reopened conversation is read every two seconds
 tests/host/etude_hold_hosttest.c: the path is looked at again every 10 ms
 tests/host/etude_hold_hosttest.c: a second TERM follows the first by 100 ms

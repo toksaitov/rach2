@@ -222,13 +222,15 @@ exec bash -c "$4"
     clear()
 
     # An old checkout is admitted from outside its source, with no nested
-    # runutil lock. A fixture helper attempts the same lock tests/run takes.
-    runutil = repo / "build/tests/system/runutil"
+    # port claim. The stand-in for an older checkout's claim, which
+    # tests/host/etude_ports_hosttest.c checks against etude-ports, attempts
+    # the same lock an older tests/run takes.
+    standin = repo / "tests/system/fixtures/old_ports.py"
     program = root / "old-run"
     stage = "legacy"
     write(program, f'''#!/bin/sh
 if [ -n "${{RACH2_PORT_OFFSET:-}}" ]; then exec {observe}; fi
-exec '{runutil}' ports '{locks}' 2 '{sys.executable}' '{observer}'
+exec '{sys.executable}' '{standin}' '{locks}' 2 '{sys.executable}' '{observer}'
 ''',
           executable=True)
     result = root / "result"

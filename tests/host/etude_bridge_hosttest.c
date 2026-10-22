@@ -1,6 +1,7 @@
 /**
  * Check the bridge against the POSIX record locks used by old runners.
- * host-deps: tools/etude/posix/bridge.c tools/etude/ledger.c
+ * host-deps: tools/etude/posix/bridge.c tools/etude/portlock.c
+ * host-deps: tools/etude/ledger.c
  * host-deps: tools/etude/posix/process.c tools/etude/capture.c utils/sha256.c
  * host-deps: tools/etude/posix/exec.c tools/etude/posix/keeper.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror

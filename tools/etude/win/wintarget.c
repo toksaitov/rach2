@@ -477,6 +477,15 @@ static int do_cat(int argc, wchar_t **argv)
     return 0;
 }
 
+/** envcat NAME...: report the variables NAME as `env` does, then copy the
+ * standard input to the standard output until its end. */
+static int do_envcat(int argc, wchar_t **argv)
+{
+    do_env(argc, argv);
+    cat();
+    return 0;
+}
+
 /** big N: write N bytes of a pattern, then a line to the errors. */
 static int do_big(int argc, wchar_t **argv)
 {
@@ -542,6 +551,7 @@ static const struct {
     {L"family", 2, do_family},
     {L"connect", 2, do_connect},
     {L"cat", 0, do_cat},
+    {L"envcat", 0, do_envcat},
     {L"big", 1, do_big},
     {L"hold", 2, do_hold},
     {L"gate", 2, do_gate},

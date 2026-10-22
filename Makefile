@@ -580,9 +580,17 @@ $(ETUDENATIVE): $(ETUDE_NATIVE_SRC) tools/etude/include/etude/remote.h \
 # The external bridge to the old runner's host and port locks.
 ETUDEBRIDGE = build/tools/etude/etude-bridge
 $(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
-                tools/etude/include/etude/ledger.h tools/etude/posix/posix.h
+                tools/etude/include/etude/ledger.h tools/etude/include/etude/portlock.h \
+                tools/etude/posix/posix.h
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
+
+# etude-ports (tools/etude/etude_ports.c), which runs a command holding the
+# host lock and a block of host ports.
+ETUDEPORTS = build/tools/etude/etude-ports
+$(ETUDEPORTS): $(ETUDE_PORTS_SRC) tools/etude/include/etude/portlock.h tools/etude/win/winfmt.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude
 
 # The listing of a ledger's claims, and the drop of one whose processes a
 # person has found ended (tools/etude/posix/etude_ledger.c).
@@ -640,7 +648,7 @@ $(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
                 tools/etude/include/etude/exec.h tools/etude/posix/posix.h \
                 tools/etude/include/etude/watchdog.h tools/etude/include/etude/ledger.h \
                 tools/etude/include/etude/sched.h tools/etude/include/etude/bridge.h \
-                tools/etude/include/etude/status.h tools/etude/include/etude/history.h \
+                tools/etude/include/etude/portlock.h tools/etude/include/etude/status.h tools/etude/include/etude/history.h \
                 tools/etude/include/etude/qemu.h tools/etude/compare.h \
                 tools/etude/history_json.h tools/etude/capture.h utils/sha256.h \
                 tools/etude/posix/legacy_cases.h tools/etude/digest.h tools/etude/json.h \
@@ -1551,7 +1559,7 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
              $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEHOST) \
-             $(ETUDEBRIDGE) $(ETUDELEDGER) $(ETUDEHOLD) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
+             $(ETUDEBRIDGE) $(ETUDEPORTS) $(ETUDELEDGER) $(ETUDEHOLD) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer

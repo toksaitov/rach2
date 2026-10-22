@@ -26,8 +26,8 @@
 # failed compile; a script cut short, which changes nothing; damaged source;
 # two builds of one version at once, of which one is published; a local
 # build under a parallel make with a variable of its own, neither of which
-# reaches the compiles; Windows, whose version has neither etude-remote nor
-# etude-bridge; a commit's source; and the real build.
+# reaches the compiles; Windows, whose version has etude-ports but neither
+# etude-remote nor etude-bridge; a commit's source; and the real build.
 #
 # The busybox row runs on the host when it has BusyBox, and otherwise in
 # etude's tooling machine (tests/system/tooling.sh), whose Ubuntu has it: the
@@ -271,7 +271,7 @@ shell_row()
     result built || { why "under $1"; return 1; }
     run -c fakecc -C "$FIX/cache" machine
     result reused || { why "under $1"; return 1; }
-    [ "$(compiles)" = 5 ] || { why "under $1: $(compiles) compiles, wanted 5"; return 1; }
+    [ "$(compiles)" = 6 ] || { why "under $1: $(compiles) compiles, wanted 6"; return 1; }
     case $1 in
         bash|zsh|tcsh|csh|fish)
             grep -q '^noise from ' "$work/err" || { why "under $1: the startup file's output was lost"; return 1; } ;;
@@ -290,12 +290,12 @@ row()
                 { why "ssh was run as: $(cat "$FIX/ssh.log")"; return 1; }
             [ "$(count "$FIX/cache/builds")" = 1 ] && [ "$(count "$FIX/cache/versions")" = 1 ] ||
                 { why 'not one build and one version'; return 1; }
-            [ "$(cd "$dir/bin" && echo *)" = 'casecheck etude-bridge etude-hold etude-remote history_check' ] ||
+            [ "$(cd "$dir/bin" && echo *)" = 'casecheck etude-bridge etude-hold etude-ports etude-remote history_check' ] ||
                 { why "the programs are $(cd "$dir/bin" && echo *)"; return 1; }
-            [ "$(compiles)" = 5 ] || { why "$(compiles) compiles, wanted 5"; return 1; }
+            [ "$(compiles)" = 6 ] || { why "$(compiles) compiles, wanted 6"; return 1; }
             [ "$(sed -n 's/^cc //p;s/^flags //p' "$dir/version" | tr '\n' ' ')" = '-std=c99 -O2 fakecc ' ] ||
                 { why 'the record does not give the compiler and its flags'; return 1; }
-            for p in casecheck etude-bridge etude-hold etude-remote history_check; do
+            for p in casecheck etude-bridge etude-hold etude-ports etude-remote history_check; do
                 grep -qx "program $p $(sha "$dir/bin/$p")" "$dir/version" ||
                     { why "the record does not give $p's digest"; return 1; }
             done
@@ -313,14 +313,14 @@ row()
             rm -f "$TREE/tools/etude/fixtures/new.c"
             result reused || return 1
             [ "$key $dir" = "$first" ] || { why "reused $key $dir, not $first"; return 1; }
-            [ "$(compiles)" = 5 ] || { why "$(compiles) compiles, wanted 5"; return 1; } ;;
+            [ "$(compiles)" = 6 ] || { why "$(compiles) compiles, wanted 6"; return 1; } ;;
         versions)
             state
             run -c fakecc -C "$FIX/cache" machine
             result built || return 1
             first="$key $dir"
             before=$(digest "$dir/version" "$dir/bin/casecheck" "$dir/bin/etude-bridge" \
-                "$dir/bin/etude-hold" "$dir/bin/etude-remote" "$dir/bin/history_check")
+                "$dir/bin/etude-hold" "$dir/bin/etude-ports" "$dir/bin/etude-remote" "$dir/bin/history_check")
             echo '/* A change. */' >> "$TREE/tools/etude/json.c"
             run -c fakecc -C "$FIX/cache" machine
             cp "$repo/tools/etude/json.c" "$TREE/tools/etude/json.c"
@@ -335,9 +335,9 @@ row()
             run -c fakecc -C "$FIX/cache" machine
             result reused || { why 'for the first version again'; return 1; }
             [ "$key $dir" = "$first" ] || { why "reused $key $dir, not $first"; return 1; }
-            [ "$(compiles)" = 15 ] || { why "$(compiles) compiles, wanted 15"; return 1; }
+            [ "$(compiles)" = 18 ] || { why "$(compiles) compiles, wanted 18"; return 1; }
             [ "$(digest "$dir/version" "$dir/bin/casecheck" "$dir/bin/etude-bridge" \
-                "$dir/bin/etude-hold" "$dir/bin/etude-remote" "$dir/bin/history_check")" = "$before" ] ||
+                "$dir/bin/etude-hold" "$dir/bin/etude-ports" "$dir/bin/etude-remote" "$dir/bin/history_check")" = "$before" ] ||
                 { why 'the first version changed'; return 1; }
             [ "$(count "$FIX/cache/versions")" = 3 ] && [ "$(count "$FIX/cache/builds")" = 3 ] ||
                 { why 'not three versions side by side'; return 1; } ;;
@@ -427,7 +427,7 @@ row()
             [ "$(cat "$FIX/ssh.log")" = "-T -o BatchMode=yes -- machine $windows_command" ] ||
                 { why "ssh was run as: $(cat "$FIX/ssh.log")"; return 1; }
             [ "$(sed -n 's/^platform //p' "$dir/version")" = 'windows x86_64' ] &&
-                [ "$(sed -n 's/^program \([^ ]*\) .*/\1/p' "$dir/version" | tr '\n' ' ')" = 'casecheck.exe etude-hold.exe history_check.exe ' ] ||
+                [ "$(sed -n 's/^program \([^ ]*\) .*/\1/p' "$dir/version" | tr '\n' ' ')" = 'casecheck.exe etude-hold.exe etude-ports.exe history_check.exe ' ] ||
                 { why 'not a version for Windows'; return 1; } ;;
         revision)
             state
@@ -445,7 +445,7 @@ row()
             rm -rf "$TREE/.git"
             result reused || { why 'for the working tree as committed'; return 1; }
             [ "$key $dir" = "$first" ] || { why 'the commit and its working tree gave two versions'; return 1; }
-            [ "$(compiles)" = 10 ] || { why "$(compiles) compiles, wanted 10"; return 1; } ;;
+            [ "$(compiles)" = 12 ] || { why "$(compiles) compiles, wanted 12"; return 1; } ;;
         real)
             state
             run -l -C "$FIX/cache"
@@ -470,7 +470,12 @@ row()
             "$dir/bin/etude-hold" > "$work/out" 2> "$work/err" || rc=$?
             [ "$rc" = 2 ] || { why "the built etude-hold exited $rc without arguments"; return 1; }
             grep -q '^usage: etude-hold ' "$work/err" ||
-                { why 'the built etude-hold did not give its usage'; return 1; } ;;
+                { why 'the built etude-hold did not give its usage'; return 1; }
+            rc=0
+            "$dir/bin/etude-ports" > "$work/out" 2> "$work/err" || rc=$?
+            [ "$rc" = 2 ] || { why "the built etude-ports exited $rc without arguments"; return 1; }
+            grep -q '^etude-ports: usage: etude-ports ' "$work/err" ||
+                { why 'the built etude-ports did not give its usage'; return 1; } ;;
     esac
 }
 

@@ -204,6 +204,7 @@
         {"assertion_id": "etude_legacy", "checks": "tests/host/etude_legacy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_lines", "checks": "tests/host/etude_lines_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_native", "checks": "tests/host/etude_native_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
+        {"assertion_id": "etude_ports", "checks": "tests/host/etude_ports_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_remote", "checks": "tests/host/etude_remote_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_repeat", "checks": "tests/host/etude_repeat_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},
         {"assertion_id": "etude_runtime", "checks": "tests/host/etude_runtime_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0 within its bound", "source": "program"},

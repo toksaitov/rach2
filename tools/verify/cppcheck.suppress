@@ -280,6 +280,10 @@ unusedStructMember:*tools/etude/guest/fixture.h
 # posix/etude_bridge.c, beyond the header's own analysis unit.
 unusedStructMember:*tools/etude/include/etude/bridge.h
 
+# The host and port locks' structures: cppcheck checks portlock.h alone, and
+# its members are read in portlock.c, posix/bridge.c and etude_ports.c.
+unusedStructMember:*tools/etude/include/etude/portlock.h
+
 # The tooling machine's structures: cppcheck checks tooling.h alone, and its
 # members are read in tooling.c, etude_tooling.c and their test.
 unusedStructMember:*tools/etude/include/etude/tooling.h

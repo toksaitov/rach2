@@ -86,7 +86,7 @@ ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
                    tools/etude/supervise.c tools/etude/qemu_profile.c \
                    tools/etude/posix/qemu.c tools/etude/processor.c \
                    tools/etude/ledger.c tools/etude/sched.c \
-                   tools/etude/posix/bridge.c tools/etude/posix/status.c \
+                   tools/etude/posix/bridge.c tools/etude/portlock.c tools/etude/posix/status.c \
                    tools/etude/compare.c tools/etude/baseline.c \
                    tools/etude/compare_report.c tools/etude/compare_run.c \
                    tools/etude/history.c tools/etude/history_json.c \
@@ -98,7 +98,7 @@ ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c
 
 # etude-bridge, the external admission wrapper for old checkouts and new runs.
 ETUDE_BRIDGE_SRC = tools/etude/posix/etude_bridge.c tools/etude/posix/bridge.c \
-                   tools/etude/ledger.c tools/etude/posix/exec.c \
+                   tools/etude/portlock.c tools/etude/ledger.c tools/etude/posix/exec.c \
                    tools/etude/posix/keeper.c tools/etude/posix/process.c \
                    tools/etude/capture.c utils/sha256.c
 
@@ -106,6 +106,10 @@ ETUDE_BRIDGE_SRC = tools/etude/posix/etude_bridge.c tools/etude/posix/bridge.c \
 # and macOS, and on Windows.
 ETUDE_HOLD_SRC = tools/etude/etude_hold.c tools/etude/posix/hold.c
 ETUDE_HOLD_WIN_SRC = tools/etude/etude_hold.c tools/etude/win/hold.c tools/etude/win/winfmt.c
+
+# etude-ports, which runs a command holding the host lock and a block of host
+# ports, on Linux, macOS and Windows; winfmt.c gives it a Windows command line.
+ETUDE_PORTS_SRC = tools/etude/etude_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c
 
 # etude-ledger, which lists a ledger's claims and drops one whose processes a
 # person has found ended.

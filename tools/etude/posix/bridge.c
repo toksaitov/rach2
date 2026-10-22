@@ -6,12 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include "etude/bridge.h"
 #include "etude/ledger.h"
+#include "etude/portlock.h"
 #include "posix.h"
 
 struct etude_bridge {
@@ -51,118 +51,32 @@ static int visit(const struct etude_ledger_claim *c, void *ctx)
     return 0;
 }
 
-/** Open an existing shared lock, or create it mode 0666 for all accounts. */
-static int shared_file(const char *dir, const char *name)
-{
-    char path[4096];
-    mode_t mask;
-    int fd, n;
-
-    n = snprintf(path, sizeof(path), "%s/%s", dir, name);
-    if (n < 0 || (size_t)n >= sizeof(path)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-    fd = open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW);
-    if (fd < 0 && errno == ENOENT) {
-        mask = umask(0);
-        fd = open(path, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0666);
-        umask(mask);
-        if (fd < 0 && errno == EEXIST)
-            fd = open(path, O_RDWR | O_CLOEXEC | O_NOFOLLOW);
-    }
-    if (fd >= 0) {
-        struct stat st;
-        if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
-            close(fd);
-            errno = EINVAL;
-            return -1;
-        }
-        (void)fchmod(fd, 0666);
-    }
-    return fd;
-}
-
-/** Try a whole-file POSIX record lock, giving EAGAIN for either conflict. */
-static int lock_try(int fd, short type)
-{
-    struct flock fl;
-
-    memset(&fl, 0, sizeof(fl));
-    fl.l_type = type;
-    fl.l_whence = SEEK_SET;
-    if (fcntl(fd, F_SETLK, &fl) == 0)
-        return 0;
-    if (errno == EACCES)
-        errno = EAGAIN;
-    return -1;
-}
+/* The bound of a holder's waits, and the pipe whose closing ends them. */
+struct bound {
+    int wake;
+    uint64_t until;
+    unsigned wait_ms;
+};
 
 /** Wait for another try, within the bound and while the caller is present. */
-static int retry(int wake, uint64_t until, unsigned wait_ms)
+static int retry(void *ctx, const struct etude_portlock_wait *w)
 {
-    struct pollfd p = {wake, POLLIN, 0};
+    const struct bound *b = ctx;
+    struct pollfd p = {b->wake, POLLIN, 0};
     uint64_t now = posix_now_us();
     int ms;
 
-    if (wait_ms == 0 || now >= until) {
-        errno = wait_ms == 0 ? EAGAIN : ETIMEDOUT;
+    (void)w;
+    if (b->wait_ms == 0 || now >= b->until) {
+        errno = b->wait_ms == 0 ? EAGAIN : ETIMEDOUT;
         return -1;
     }
-    ms = until - now > 100000 ? 100 : (int)((until - now + 999) / 1000);
+    ms = b->until - now > 100000 ? 100 : (int)((b->until - now + 999) / 1000);
     if (poll(&p, 1, ms) > 0) {
         errno = ECANCELED;
         return -1;
     }
     return 0;
-}
-
-/** Acquire one lock, keeping an earlier lock while this one waits. */
-static int take(int fd, short type, int wake, uint64_t until, unsigned wait_ms)
-{
-    while (lock_try(fd, type) != 0) {
-        if (errno != EAGAIN || retry(wake, until, wait_ms) != 0)
-            return -1;
-    }
-    return 0;
-}
-
-/** Take the host lock, with the old runner's writer-preference protocol. */
-static int host_take(const char *dir, int alone, int wake, uint64_t until, unsigned wait_ms)
-{
-    int gate = shared_file(dir, "rach2-host.gate");
-    int host = shared_file(dir, "rach2-host.lock");
-    short type = alone ? F_WRLCK : F_RDLCK;
-
-    if (gate < 0 || host < 0 || take(gate, type, wake, until, wait_ms) != 0 ||
-        take(host, type, wake, until, wait_ms) != 0)
-        return -1;
-    if (!alone)
-        close(gate);
-    return 0;
-}
-
-/** Take the first free legacy port block, or wait within the same bound. */
-static int port_take(const char *dir, int wake, uint64_t until, unsigned wait_ms)
-{
-    char name[64];
-    int slot, fd;
-
-    for (;;) {
-        for (slot = 0; slot < 10; slot++) {
-            snprintf(name, sizeof(name), "rach2-ports.%d", slot);
-            fd = shared_file(dir, name);
-            if (fd < 0)
-                return -1;
-            if (lock_try(fd, F_WRLCK) == 0)
-                return slot * 1000;
-            close(fd);
-            if (errno != EAGAIN)
-                return -1;
-        }
-        if (retry(wake, until, wait_ms) != 0)
-            return -1;
-    }
 }
 
 /** Recover until the claim disappears; every doubt keeps its locks. */
@@ -188,7 +102,11 @@ static void holder(const struct etude_bridge_spec *s, int wake, int out, long ow
     struct lookup q = {s->id, owner, 0, 0};
     struct ready r = {0, -1};
     const int keep[2] = {wake, out};
-    uint64_t until = posix_now_us() + (uint64_t)s->wait_ms * 1000;
+    struct bound b = {wake, posix_now_us() + (uint64_t)s->wait_ms * 1000, s->wait_ms};
+    struct etude_portlock_spec ps = {s->dir,
+                                     s->alone ? ETUDE_PORTLOCK_ALONE : ETUDE_PORTLOCK_SHARED,
+                                     s->legacy ? ETUDE_PORTLOCK_BLOCKS : 0, retry, &b};
+    struct etude_portlock locks;
     ssize_t n;
 
     posix_untrack_runner();
@@ -200,10 +118,10 @@ static void holder(const struct etude_bridge_spec *s, int wake, int out, long ow
         r.error = errno;
     else if (!q.found || q.error != 0)
         r.error = q.found ? q.error : ENOENT;
-    else if (host_take(s->dir, s->alone, wake, until, s->wait_ms) != 0)
+    else if (etude_portlock_take(&locks, &ps) != 0)
         r.error = errno;
-    else if (s->legacy && (r.offset = port_take(s->dir, wake, until, s->wait_ms)) < 0)
-        r.error = errno;
+    else if (locks.block >= 0)
+        r.offset = locks.block * 1000;
     signal(SIGTERM, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
     signal(SIGINT, SIG_IGN);

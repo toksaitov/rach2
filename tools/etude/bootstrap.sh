@@ -139,11 +139,11 @@ etude_main()
     root=${ETUDE_CACHE:-}
     case $platform in
         linux*|macos*)
-            targets='all remote bridge hold' ;;
+            targets='all remote bridge hold ports' ;;
         windows*)
             cc=${ETUDE_CC:-/ucrt64/bin/gcc}
             exe=.exe
-            targets='all hold'
+            targets='all hold ports'
             # shellcheck disable=SC2016 # make expands the variable
             hold='HOLD_SRC=$(ETUDE_HOLD_WIN_SRC)'
             hold_flags=-D_WIN32_WINNT=0x0A00

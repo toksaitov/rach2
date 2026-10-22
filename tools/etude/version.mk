@@ -5,8 +5,9 @@
 # executable, and CC and CFLAGS the compiler and its flags, which bootstrap.sh
 # chooses for the platform. `all` builds the programs of every platform,
 # `remote` etude-remote and `bridge` etude-bridge, which bootstrap.sh asks for
-# on Linux and macOS, and `hold` etude-hold, which it asks for on every
-# platform but Rach2.
+# on Linux and macOS, `hold` etude-hold, which it asks for on every platform
+# but Rach2, and `ports` etude-ports, which it asks for on Linux, macOS and
+# Windows.
 
 include tools/etude/sources.mk
 
@@ -38,3 +39,9 @@ hold: $(OUT)/etude-hold$(EXE)
 
 $(OUT)/etude-hold$(EXE): $(HOLD_SRC)
 	$(CC) $(CFLAGS) $(HOLD_FLAGS) -o $@ $(HOLD_SRC)
+
+# The holder of the host lock and a block of host ports for one command.
+ports: $(OUT)/etude-ports$(EXE)
+
+$(OUT)/etude-ports$(EXE): $(ETUDE_PORTS_SRC)
+	$(CC) $(CFLAGS) -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude -o $@ $(ETUDE_PORTS_SRC)

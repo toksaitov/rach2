@@ -113,4 +113,12 @@ int fx_hold_left(void);
 int fx_hold_ancestor(void);
 int fx_hold_killed(void);
 
+/**
+ * The fixture of etude-ports, beside winfixture.exe: a shared run takes
+ * block 0 and the host lock shared and gives its command the offset, a second
+ * takes block 1, a run that needs the host alone waits for both and gives
+ * its command's status, and no lock outlives its run.
+ */
+int fx_ports(void);
+
 #endif

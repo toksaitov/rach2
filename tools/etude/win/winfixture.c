@@ -1162,6 +1162,7 @@ static const struct {
     {"hold-left", fx_hold_left},
     {"hold-ancestor", fx_hold_ancestor},
     {"hold-killed", fx_hold_killed},
+    {"ports", fx_ports},
 };
 
 /** Find this program's path and directory, and the target's path beside it. */

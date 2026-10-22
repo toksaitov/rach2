@@ -1,8 +1,8 @@
 #!/bin/sh
 # wincheck.sh: build etude's Windows adapter, executor and supervisor,
-# etude-tooling, etude-volume, etude-hold and their fixtures with MinGW-w64,
-# check that the programs import no MSYS or Cygwin runtime, and run the
-# fixtures on Windows.
+# etude-tooling, etude-volume, etude-hold, etude-ports and their fixtures with
+# MinGW-w64, check that the programs import no MSYS or Cygwin runtime, and run
+# the fixtures on Windows.
 #
 # Usage: sh tools/etude/wincheck.sh [FIXTURE...]
 #
@@ -81,7 +81,8 @@ copy() {
     cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
     cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$src"/tooling.c "$src"/etude_tooling.c \
         "$src"/history.c "$src"/history_json.h "$src"/history_json.c "$src"/history_collect.c \
-        "$src"/watchdog.c "$src"/supervise.c "$src"/hold.h "$src"/etude_hold.c "$e/"
+        "$src"/watchdog.c "$src"/supervise.c "$src"/hold.h "$src"/etude_hold.c "$src"/portlock.c \
+        "$src"/etude_ports.c "$e/"
     cp "$src"/volume/volume.h "$src"/volume/volume.c "$src"/volume/etude_volume.c "$e/volume/"
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
@@ -89,7 +90,8 @@ copy() {
         "$src"/win/winfmt.c "$src"/win/exec.c "$src"/win/noqemu.c "$src"/win/wintarget.c \
         "$src"/win/winfixture.h "$src"/win/winfixture.c "$src"/win/winexecfix.c \
         "$src"/win/winledgerfix.c "$src"/win/winrunfix.c "$src"/win/wintoolfix.c \
-        "$src"/win/winstand.c "$src"/win/hold.c "$src"/win/winholdfix.c "$e/win/"
+        "$src"/win/winstand.c "$src"/win/hold.c "$src"/win/winholdfix.c "$src"/win/winportsfix.c \
+        "$e/win/"
 }
 
 # compile DIR FLAGS: build the programs in DIR/tools/etude/win. A Windows
@@ -101,8 +103,8 @@ compile() {
         history='../history.c ../history_json.c ../history_collect.c ../../../utils/sha256.c'
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -I ../../../utils -o winfixture.exe winfixture.c winexecfix.c \
-            winledgerfix.c winrunfix.c wintoolfix.c winholdfix.c ../ledger.c ../watchdog.c \
-            ../supervise.c noqemu.c $executor ../../../utils/sha256.c -lws2_32
+            winledgerfix.c winrunfix.c wintoolfix.c winholdfix.c winportsfix.c ../ledger.c \
+            ../watchdog.c ../supervise.c noqemu.c $executor ../../../utils/sha256.c -lws2_32
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
         # shellcheck disable=SC2086
@@ -114,6 +116,8 @@ compile() {
         "$cc" $2 -o etude-volume.exe ../volume/etude_volume.c ../volume/volume.c
         # shellcheck disable=SC2086
         "$cc" $2 -o etude-hold.exe ../etude_hold.c hold.c winfmt.c
+        # shellcheck disable=SC2086
+        "$cc" $2 -I ../include -I .. -o etude-ports.exe ../etude_ports.c ../portlock.c winfmt.c
     ) </dev/null
 }
 
@@ -134,7 +138,7 @@ copy "$work/ok"
 compile "$work/ok" "$flags -Wall -Wextra -Werror"
 w=$work/ok/tools/etude/win
 "$pecheck" "$w/winfixture.exe" "$w/wintarget.exe" "$w/winstand.exe" "$w/etude-tooling.exe" \
-    "$w/etude-volume.exe" "$w/etude-hold.exe"
+    "$w/etude-volume.exe" "$w/etude-hold.exe" "$w/etude-ports.exe"
 if fixtures "$work/ok" "$work/ok.log" "$@"; then
     cat "$work/ok.log"
     finished=1

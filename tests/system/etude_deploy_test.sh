@@ -425,7 +425,7 @@ row()
             { grep -q '^etude-version: result: reused ' "$work/out" &&
                 grep -qx "etude-deploy: machine: unchanged $home_state/machine" "$work/out"; } ||
                 { why 'the second deployment was not a reuse'; return 1; }
-            [ "$(wc -l < "$FIX/cc.log")" -eq 5 ] || { why 'the second deployment compiled'; return 1; }
+            [ "$(wc -l < "$FIX/cc.log")" -eq 6 ] || { why 'the second deployment compiled'; return 1; }
             snapshot "$FIX/home" "$FIX/cache" "$FIX/have" > "$work/after"
             cmp -s "$work/before" "$work/after" || {
                 why 'the second deployment changed the machine:'
