@@ -205,11 +205,6 @@ int serial_rx_service(int budget)
 
         _rx.bytes++;
         moved++;
-#if defined(SERIAL_RX_DROP_EVERY) && SERIAL_RX_DROP_EVERY > 1
-        if (_rx.bytes % SERIAL_RX_DROP_EVERY == 0) {
-            continue; /* a byte dropped on purpose */
-        }
-#endif
         _rx_ring[_rx_tail & (SERIAL_RX_SIZE - 1)] = c;
         _rx_tail++;
         if (_rx_count() > _rx.ring_max) {
