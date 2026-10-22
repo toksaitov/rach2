@@ -70,6 +70,10 @@ ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
                     tools/etude/history.c tools/etude/history_json.c \
                     tools/etude/history_collect.c utils/sha256.c
 
+# etude-volume, the helper that makes and reads the tooling machine's
+# volumes for etude-tooling, on every platform etude-tooling runs on.
+ETUDE_VOLUME_SRC = tools/etude/volume/etude_volume.c tools/etude/volume/volume.c
+
 # etude-legacy, the preparation adapter of the suites of tests/run and their
 # set driver, on Linux and macOS.
 ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \

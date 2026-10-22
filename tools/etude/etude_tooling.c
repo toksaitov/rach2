@@ -26,6 +26,9 @@ extern char **environ;
 /* The signal that asked the command to stop, or 0. */
 static volatile sig_atomic_t stop_signal;
 
+/* etude-volume beside this program, or its name alone. */
+static char volume[4096];
+
 /* The history's options. */
 struct record {
     const char *path, *stream, *run, *schema;
@@ -258,6 +261,27 @@ static int job_option(struct options *op, char o, const char *v)
 }
 
 /**
+ * Give the path of etude-volume, which is built and deployed beside this
+ * program: in the directory of `self`, this program's `argv[0]`, or, when
+ * that has none, on the PATH as this program was.
+ */
+static const char *find_volume(const char *self)
+{
+    size_t n = strlen(self);
+
+#ifdef _WIN32
+    while (n > 0 && self[n - 1] != '/' && self[n - 1] != '\\' && self[n - 1] != ':')
+        n--;
+    snprintf(volume, sizeof(volume), "%.*setude-volume%s", (int)n, self, n > 0 ? ".exe" : "");
+#else
+    while (n > 0 && self[n - 1] != '/')
+        n--;
+    snprintf(volume, sizeof(volume), "%.*setude-volume", (int)n, self);
+#endif
+    return volume;
+}
+
+/**
  * Read the options before the command and after it.
  *
  * @return the index of the command, with `*rest` the index of its first
@@ -270,12 +294,9 @@ static int read_options(int argc, char **argv, struct options *op, int *rest)
 
     memset(op, 0, sizeof(*op));
     op->site.recipe = "tools/etude/tooling";
+    op->site.volume = find_volume(argv[0]);
     op->site.cache = cache != NULL && *cache != '\0' ? cache : "build/tooling";
     op->site.accel = getenv("RACH2_QEMU_ACCEL");
-#if defined(__APPLE__)
-    /* mtools on macOS appends `_` to names it copies out under LC_ALL=C. */
-    setenv("LC_ALL", "C.UTF-8", 1);
-#endif
     op->site.envp = environ;
     op->job.outdir = ".";
     for (i = 1; i < argc && argv[i][0] == '-'; i += 2) {

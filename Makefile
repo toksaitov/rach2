@@ -594,14 +594,18 @@ $(ETUDELEDGER): $(ETUDE_LEDGER_SRC) tools/etude/include/etude/ledger.h \
 
 # etude's tooling machine (tools/etude/tooling.c), which runs on a host the
 # commands it lacks, built here so that `make` compiles it under the host
-# flags.
+# flags, with etude-volume beside it, which makes and reads its volumes.
 ETUDETOOLING = build/tools/etude/etude-tooling
+ETUDEVOLUME = build/tools/etude/etude-volume
 $(ETUDETOOLING): $(ETUDE_TOOLING_SRC) tools/etude/include/etude/tooling.h \
                  tools/etude/include/etude/exec.h tools/etude/include/etude/history.h \
                  tools/etude/posix/posix.h tools/etude/capture.h tools/etude/history_json.h \
-                 utils/sha256.h
+                 utils/sha256.h | $(ETUDEVOLUME)
 	@mkdir -p $(@D)
 	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
+$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
+	@mkdir -p $(@D)
+	$(HOST_LINK) -std=c99
 
 # etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
 # starts beside a case, built here so that `make` compiles it under the host
@@ -1552,8 +1556,8 @@ HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GU
              $(HOSTPEER) $(WAVCHECK) $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(RUNUTIL) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
              $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
-             $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) $(ETUDEBRIDGE) \
-             $(ETUDELEDGER) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
+             $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEPROOF) $(ETUDEHOST) \
+             $(ETUDEBRIDGE) $(ETUDELEDGER) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer

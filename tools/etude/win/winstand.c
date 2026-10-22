@@ -1,21 +1,21 @@
 /*
  * winstand.c: the stand-ins that the tooling fixtures of winfixture put on
- * etude-tooling's PATH for curl, qemu-img, QEMU, mformat, mmd and mcopy, as
+ * etude-tooling's PATH for curl, qemu-img and QEMU, as
  * tests/system/etude_tooling_test.sh does with shell scripts on POSIX
  * systems. One program plays each, by the name it is run under.
  *
  * The fixture's files are in FIX, the directory `fix` beside the directory
  * of the program. `curl` copies FIX/image. `qemu-img create` writes an
  * overlay that names its backing file, which must be found from the
- * overlay's directory. The mtools stand-ins keep a volume as a list of
- * entries in one file, not as a FAT file system. QEMU keeps its arguments in
- * FIX/qemu.args and plays the machine: with the seed volume it answers as
- * provision.sh does, and with the job volume it does what runner.sh does,
- * with a job of the lines below in place of a shell script. FIX/qemu says
- * how it misbehaves: `hang`, `crash`, `lie`, or `slow`, which holds memory
- * and uses processor time in the job; FIX/provision `fail` makes
- * provision.sh fail. A machine that hangs and is not stopped writes
- * FIX/woke when its sleep ends.
+ * overlay's directory. QEMU keeps its arguments in FIX/qemu.args and plays
+ * the machine: with the seed volume, which must have the bytes of the
+ * recipe's provision.sh, it answers as provision.sh does, and with the job
+ * volume it does what runner.sh does, reading and writing the volume's
+ * archive with etude-volume's code, volume/volume.c, and with a job of the
+ * lines below in place of a shell script. FIX/qemu says how it misbehaves:
+ * `hang`, `crash`, `lie`, or `slow`, which holds memory and uses processor
+ * time in the job; FIX/provision `fail` makes provision.sh fail. A machine
+ * that hangs and is not stopped writes FIX/woke when its sleep ends.
  *
  * A job's lines: `cat NAME` writes the working file NAME to the standard
  * output, `err TEXT` writes TEXT to the standard error, `disks` writes
@@ -27,29 +27,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
-/* The most entries a volume has, and the longest name of one. */
-#define ENTRIES  256
+#include "volume.h"
+
+/* The longest name of a working file. */
 #define NAME_MAX 512
 
-/* The first line of a volume's file. */
-#define VOLUME "winstand volume\n"
-
-/* One file or directory of a volume, by its path in the volume. */
-struct entry {
-    char name[NAME_MAX];
-    int dir;
-    char *data;
-    size_t size;
-};
-
-struct volume {
-    struct entry e[ENTRIES];
-    size_t n;
-};
-
 static char fix[MAX_PATH * 2];
+
+/* Why the job volume could not be read or written. */
+static char why[512];
 
 /** Give the file's contents with a NUL after them, or NULL. */
 static char *slurp(const char *path, size_t *size)
@@ -106,14 +93,6 @@ static const char *fix_word(const char *name)
     return word;
 }
 
-/** Say whether `path` is a directory. */
-static int is_dir(const char *path)
-{
-    struct stat st;
-
-    return stat(path, &st) == 0 && (st.st_mode & S_IFDIR);
-}
-
 /** Give the last name of `path`, which may end in separators, in `out`. */
 static void base_name(const char *path, char *out, size_t size)
 {
@@ -130,7 +109,7 @@ static void base_name(const char *path, char *out, size_t size)
 /** Make the directories above file `path` that are missing. */
 static void make_parents(const char *path)
 {
-    char buf[MAX_PATH * 4];
+    char buf[MAX_PATH * 6];
     char *p;
 
     snprintf(buf, sizeof buf, "%s", path);
@@ -143,239 +122,6 @@ static void make_parents(const char *path)
             *p = c;
         }
     }
-}
-
-/** Find entry `name` of `v`, or NULL. */
-static struct entry *find(struct volume *v, const char *name)
-{
-    size_t i;
-
-    for (i = 0; i < v->n; i++)
-        if (strcmp(v->e[i].name, name) == 0)
-            return &v->e[i];
-    return NULL;
-}
-
-/** Give entry `name` of `v`, made when it is missing; exits when it is full. */
-static struct entry *entry(struct volume *v, const char *name)
-{
-    struct entry *e = find(v, name);
-
-    if (e != NULL)
-        return e;
-    if (v->n == ENTRIES || strlen(name) >= NAME_MAX)
-        exit(3);
-    e = &v->e[v->n++];
-    memset(e, 0, sizeof *e);
-    strcpy(e->name, name);
-    return e;
-}
-
-/** Put a file of `n` bytes of `data`, which `v` takes, as `name`. */
-static void put_file(struct volume *v, const char *name, char *data, size_t n)
-{
-    struct entry *e = entry(v, name);
-
-    free(e->data);
-    e->dir = 0;
-    e->data = data;
-    e->size = n;
-}
-
-/** Put a file of a copy of `n` bytes of `data` as `name`. */
-static void put_text(struct volume *v, const char *name, const char *data, size_t n)
-{
-    char *d = malloc(n + 1);
-
-    if (d == NULL)
-        exit(3);
-    memcpy(d, data, n);
-    d[n] = '\0';
-    put_file(v, name, d, n);
-}
-
-/** Read volume `path`; exits when it is not one. */
-static void load(const char *path, struct volume *v)
-{
-    char *d, *p, *end, name[NAME_MAX];
-    size_t size, n;
-    char kind;
-
-    v->n = 0;
-    if ((d = slurp(path, &size)) == NULL || strncmp(d, VOLUME, strlen(VOLUME)) != 0)
-        exit(4);
-    end = d + size;
-    for (p = d + strlen(VOLUME); p < end;) {
-        unsigned long long len = 0;
-
-        if (sscanf(p, "%c %511s %llu", &kind, name, &len) < 2 || (p = strchr(p, '\n')) == NULL)
-            exit(4);
-        p++;
-        if (kind == 'd') {
-            entry(v, name)->dir = 1;
-            continue;
-        }
-        n = (size_t)len;
-        if (kind != 'f' || (size_t)(end - p) < n + 1)
-            exit(4);
-        put_text(v, name, p, n);
-        p += n + 1;
-    }
-    free(d);
-}
-
-/** Write volume `v` to `path`; exits when it cannot. */
-static void save(const char *path, const struct volume *v)
-{
-    FILE *f = fopen(path, "wb");
-    size_t i;
-
-    if (f == NULL)
-        exit(5);
-    fputs(VOLUME, f);
-    for (i = 0; i < v->n; i++) {
-        if (v->e[i].dir) {
-            fprintf(f, "d %s\n", v->e[i].name);
-            continue;
-        }
-        fprintf(f, "f %s %llu\n", v->e[i].name, (unsigned long long)v->e[i].size);
-        fwrite(v->e[i].data, 1, v->e[i].size, f);
-        fputc('\n', f);
-    }
-    if (fclose(f) != 0)
-        exit(5);
-}
-
-/** Copy file or directory `host` into `v` as `name`. */
-static void add_host(struct volume *v, const char *host, const char *name)
-{
-    char pattern[MAX_PATH * 4], child[MAX_PATH * 4], inner[NAME_MAX];
-    WIN32_FIND_DATAA fd;
-    HANDLE h;
-    size_t n;
-    char *data;
-
-    if (!is_dir(host)) {
-        if ((data = slurp(host, &n)) == NULL)
-            exit(6);
-        put_file(v, name, data, n);
-        return;
-    }
-    entry(v, name)->dir = 1;
-    snprintf(pattern, sizeof pattern, "%s\\*", host);
-    if ((h = FindFirstFileA(pattern, &fd)) == INVALID_HANDLE_VALUE)
-        return;
-    do {
-        if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0)
-            continue;
-        snprintf(child, sizeof child, "%s\\%s", host, fd.cFileName);
-        snprintf(inner, sizeof inner, "%s/%s", name, fd.cFileName);
-        add_host(v, child, inner);
-    } while (FindNextFileA(h, &fd));
-    FindClose(h);
-}
-
-/** Copy entry `name` of `v`, a file or a directory, out to `host`. */
-static void extract(struct volume *v, const char *name, const char *host)
-{
-    char path[MAX_PATH * 4];
-    size_t i, n = strlen(name);
-    struct entry *e = find(v, name);
-    int found = e != NULL;
-
-    if (e != NULL && !e->dir) {
-        make_parents(host);
-        if (spill(host, "wb", e->data, e->size) != 0)
-            exit(7);
-        return;
-    }
-    _mkdir(host);
-    for (i = 0; i < v->n; i++) {
-        if (strncmp(v->e[i].name, name, n) != 0 || v->e[i].name[n] != '/')
-            continue;
-        found = 1;
-        if (snprintf(path, sizeof path, "%s\\%s", host, v->e[i].name + n + 1) >= (int)sizeof path)
-            exit(7);
-        if (v->e[i].dir) {
-            make_parents(path);
-            _mkdir(path);
-        } else {
-            make_parents(path);
-            if (spill(path, "wb", v->e[i].data, v->e[i].size) != 0)
-                exit(7);
-        }
-    }
-    if (!found)
-        exit(7);
-}
-
-/** Copy every entry under `from` in `v` to the same place under `to`. */
-static void copy_tree(struct volume *v, const char *from, const char *to)
-{
-    char name[NAME_MAX * 2];
-    size_t i, n = strlen(from), count = v->n;
-
-    for (i = 0; i < count; i++) {
-        const char *rest = v->e[i].name + n;
-
-        if (strncmp(v->e[i].name, from, n) != 0 || (*rest != '\0' && *rest != '/'))
-            continue;
-        snprintf(name, sizeof name, "%s%s", to, rest);
-        if (v->e[i].dir) {
-            entry(v, name)->dir = 1;
-            continue;
-        }
-        put_text(v, name, v->e[i].data, v->e[i].size);
-    }
-}
-
-/**
- * The mtools: `mformat -C -i IMG ... ::`, `mmd -i IMG ::DIR...` and
- * `mcopy [-s] [-n] -i IMG FROM TO`.
- */
-static int mtools(const char *tool, int argc, char **argv)
-{
-    struct volume *v = calloc(1, sizeof *v);
-    const char *img = NULL;
-    char name[NAME_MAX], target[MAX_PATH * 4];
-    int i;
-
-    for (i = 1; i < argc && argv[i][0] == '-'; i++)
-        if (strcmp(argv[i], "-i") == 0 && i + 1 < argc)
-            img = argv[++i];
-        else if (strcmp(argv[i], "-T") == 0 || strcmp(argv[i], "-v") == 0)
-            i++;
-    if (v == NULL || img == NULL)
-        return 2;
-    if (strcmp(tool, "mformat") == 0)
-        return spill(img, "wb", VOLUME, strlen(VOLUME)) != 0;
-    load(img, v);
-    if (strcmp(tool, "mmd") == 0) {
-        for (; i < argc; i++)
-            entry(v, argv[i] + 2)->dir = 1;
-    } else if (argc - i != 2) {
-        return 2;
-    } else if (strncmp(argv[i], "::", 2) == 0) {
-        base_name(argv[i], name, sizeof name);
-        if (is_dir(argv[i + 1]))
-            snprintf(target, sizeof target, "%s\\%s", argv[i + 1], name);
-        else
-            snprintf(target, sizeof target, "%s", argv[i + 1]);
-        extract(v, argv[i] + 2, target);
-        return 0;
-    } else {
-        const char *to = argv[i + 1] + 2;
-        size_t n = strlen(to);
-
-        base_name(argv[i], name, sizeof name);
-        if (n == 0 || to[n - 1] == '/')
-            snprintf(target, sizeof target, "%s%s", to, name);
-        else
-            snprintf(target, sizeof target, "%s", to);
-        add_host(v, argv[i], target);
-    }
-    save(img, v);
-    return 0;
 }
 
 /** Append a line to the channel `path`. */
@@ -419,31 +165,35 @@ static void slow(void)
 }
 
 /**
- * Run the job of volume `v` with its working files under `in/`, as runner.sh
- * runs job.sh in its working directory; give its status.
+ * Run the job whose files the volume gave in `vol`, with its working files
+ * under `in`, as runner.sh runs job.sh in its working directory; give its
+ * status.
  */
-static int run_job(struct volume *v, const char *disk, int ndisks, struct text *out,
+static int run_job(const char *vol, const char *disk, int ndisks, struct text *out,
                    struct text *err)
 {
-    struct entry *script = find(v, "job.sh");
-    char line[1024], name[NAME_MAX], path[NAME_MAX + 8], *data;
-    struct entry *e;
+    char line[1024], name[NAME_MAX], path[MAX_PATH * 6], *script, *data;
     const char *p;
-    int status;
+    size_t size;
+    int status = 0, at;
 
-    if (script == NULL)
+    snprintf(path, sizeof path, "%s\\job.sh", vol);
+    if ((script = slurp(path, NULL)) == NULL)
         return 127;
-    for (p = script->data; *p != '\0';) {
+    for (p = script; *p != '\0';) {
         size_t n = strcspn(p, "\n");
-        int at = 0;
 
+        at = 0;
         snprintf(line, sizeof line, "%.*s", (int)n, p);
         p += n + (p[n] == '\n');
         if (sscanf(line, "cat %511s", name) == 1) {
-            snprintf(path, sizeof path, "in/%s", name);
-            if ((e = find(v, path)) == NULL || e->dir)
-                return 1;
-            add_text(out, e->data, e->size);
+            snprintf(path, sizeof path, "%s\\in\\%s", vol, name);
+            if ((data = slurp(path, &size)) == NULL) {
+                status = 1;
+                break;
+            }
+            add_text(out, data, size);
+            free(data);
         } else if (strncmp(line, "err ", 4) == 0) {
             add_text(err, line + 4, strlen(line + 4));
             add_text(err, "\n", 1);
@@ -451,21 +201,27 @@ static int run_job(struct volume *v, const char *disk, int ndisks, struct text *
             snprintf(name, sizeof name, "disks %d\n", ndisks);
             add_text(err, name, strlen(name));
         } else if (strncmp(line, "disk ", 5) == 0 && disk != NULL) {
-            if (spill(disk, "wb", line + 5, strlen(line + 5)) != 0 || spill(disk, "ab", "\n", 1))
-                return 1;
+            if (spill(disk, "wb", line + 5, strlen(line + 5)) != 0 || spill(disk, "ab", "\n", 1)) {
+                status = 1;
+                break;
+            }
         } else if (sscanf(line, "write %511s %n", name, &at) == 1 && at > 0) {
-            snprintf(path, sizeof path, "in/%s", name);
-            if ((data = malloc(strlen(line + at) + 2)) == NULL)
-                return 1;
-            sprintf(data, "%s\n", line + at);
-            put_file(v, path, data, strlen(data));
+            snprintf(path, sizeof path, "%s\\in\\%s", vol, name);
+            make_parents(path);
+            if (spill(path, "wb", line + at, strlen(line + at)) != 0 ||
+                spill(path, "ab", "\n", 1) != 0) {
+                status = 1;
+                break;
+            }
         } else if (sscanf(line, "exit %d", &status) == 1) {
-            return status;
+            break;
         } else if (line[0] != '\0') {
-            return 127;
+            status = 127;
+            break;
         }
     }
-    return 0;
+    free(script);
+    return status;
 }
 
 /* A boot of the machine, as QEMU's arguments give it. */
@@ -549,10 +305,14 @@ static int parse(int argc, char **argv, struct machine *m)
 /** Answer a boot with the seed volume as provision.sh does. */
 static int provision(const struct machine *m)
 {
-    static struct volume v;
+    size_t size, i;
+    char *seed = slurp(m->seed, &size);
+    int found = 0;
 
-    load(m->seed, &v);
-    if (find(&v, "provision.sh") == NULL)
+    for (i = 0; seed != NULL && i + 12 <= size && !found; i++)
+        found = memcmp(seed + i, "provision.sh", 12) == 0;
+    free(seed);
+    if (!found)
         return 1;
     if (strcmp(fix_word("provision"), "fail") == 0) {
         say(m->chan, "etude-tooling: provision: failed: apt-get install\n");
@@ -563,35 +323,69 @@ static int provision(const struct machine *m)
     return 0;
 }
 
-/** Copy each output that the volume's list names from `in/` to `out/`. */
-static void copy_outputs(struct volume *v)
+/**
+ * Write the job's results over volume `img` as runner.sh does: out/ with each
+ * output that the volume's list in `vol` names, then stdout, stderr and the
+ * status `line`. A failure leaves its reason in `why`.
+ */
+static int results(const char *img, const char *vol, const struct text *out, const struct text *err,
+                   const char *line)
 {
-    char from[NAME_MAX + 8], to[NAME_MAX + 8];
-    struct entry *e = find(v, "outputs");
-    const char *list = e != NULL ? e->data : "";
+    char path[MAX_PATH * 6], from[MAX_PATH * 6], name[NAME_MAX + 8], *list, *l;
+    struct etude_volume *v;
+    long long size;
+    FILE *f;
 
-    while (*list != '\0') {
-        int k = (int)strcspn(list, "\n");
+    snprintf(why, sizeof why, "it cannot be read");
+    if ((f = fopen(img, "rb")) == NULL || _fseeki64(f, 0, SEEK_END) != 0 ||
+        (size = _ftelli64(f)) <= 0) {
+        if (f != NULL)
+            fclose(f);
+        return -1;
+    }
+    fclose(f);
+    snprintf(path, sizeof path, "%s\\outputs", vol);
+    if ((list = slurp(path, NULL)) == NULL ||
+        (v = etude_volume_create(img, (uint64_t)size, why, sizeof why)) == NULL) {
+        free(list);
+        return -1;
+    }
+    etude_volume_dir(v, "out");
+    for (l = list; *l != '\0';) {
+        int k = (int)strcspn(l, "\n");
 
         if (k > 0 && k < NAME_MAX) {
-            snprintf(from, sizeof from, "in/%.*s", k, list);
-            snprintf(to, sizeof to, "out/%.*s", k, list);
-            copy_tree(v, from, to);
+            snprintf(from, sizeof from, "%s\\in\\%.*s", vol, k, l);
+            snprintf(name, sizeof name, "out/%.*s", k, l);
+            etude_volume_add(v, name, from);
         }
-        list += k + (list[k] == '\n');
+        l += k + (l[k] == '\n');
     }
+    free(list);
+    etude_volume_text(v, "stdout", out->data, out->len);
+    etude_volume_text(v, "stderr", err->data, err->len);
+    etude_volume_text(v, "status", line, strlen(line));
+    return etude_volume_close(v);
 }
 
 /** Answer a boot with the job volume as runner.sh does, as FIX/qemu says. */
 static int run(const struct machine *m)
 {
-    static struct volume v;
     static struct text out, err;
     const char *how = fix_word("qemu");
-    char line[64], path[MAX_PATH * 2 + 16];
+    char line[64], path[MAX_PATH * 2 + 16], vol[MAX_PATH * 2 + 32];
+    char script[sizeof vol + 8], outputs[sizeof vol + 8], in[sizeof vol + 8];
+    const char *map[] = {"job.sh", script, "outputs", outputs, "in", in, NULL};
     int status;
 
-    load(m->job, &v);
+    snprintf(vol, sizeof vol, "%s\\vol%lu", fix, (unsigned long)GetCurrentProcessId());
+    snprintf(script, sizeof script, "%s\\job.sh", vol);
+    snprintf(outputs, sizeof outputs, "%s\\outputs", vol);
+    snprintf(in, sizeof in, "%s\\in", vol);
+    if (_mkdir(vol) != 0 || etude_volume_read(m->job, map, why, sizeof why) != 0) {
+        fprintf(stderr, "winstand: the job volume %s: %s\n", m->job, why);
+        return 1;
+    }
     say(m->chan, "etude-job: start\n");
     if (strcmp(how, "crash") == 0)
         return 1;
@@ -603,15 +397,14 @@ static int run(const struct machine *m)
     }
     if (strcmp(how, "slow") == 0)
         slow();
-    status = run_job(&v, m->disk1, m->ndisks, &out, &err);
+    status = run_job(vol, m->disk1, m->ndisks, &out, &err);
     snprintf(line, sizeof line, "etude-job: ran %d\n", status);
     say(m->chan, line);
-    copy_outputs(&v);
     snprintf(line, sizeof line, "%d\n", strcmp(how, "lie") == 0 ? status + 1 : status);
-    put_text(&v, "stdout", out.data, out.len);
-    put_text(&v, "stderr", err.data, err.len);
-    put_text(&v, "status", line, strlen(line));
-    save(m->job, &v);
+    if (results(m->job, vol, &out, &err, line) != 0) {
+        fprintf(stderr, "winstand: the job volume %s: %s\n", m->job, why);
+        return 1;
+    }
     snprintf(line, sizeof line, "etude-job: end %d\n", status);
     say(m->chan, line);
     return 0;
@@ -695,8 +488,6 @@ int main(int argc, char **argv)
         return qemu_img(argc, argv);
     if (strcmp(name, "qemu-system-x86_64") == 0)
         return qemu(argc, argv);
-    if (strcmp(name, "mformat") == 0 || strcmp(name, "mmd") == 0 || strcmp(name, "mcopy") == 0)
-        return mtools(name, argc, argv);
     fprintf(stderr, "winstand: no stand-in %s\n", name);
     return 2;
 }

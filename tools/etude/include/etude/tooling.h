@@ -22,10 +22,11 @@
      "runner.sh", "etude-job.service", "tools",     NULL}
 
 /* Where the machine is made and run. Programs are found on the PATH of
- * `envp`: qemu-system-x86_64, qemu-img, curl, and mtools' mformat, mmd and
- * mcopy. */
+ * `envp`: qemu-system-x86_64, qemu-img and curl, and etude-volume where
+ * `volume` is a name without a directory. */
 struct etude_tooling_site {
     const char *recipe;          /* the recipe's directory */
+    const char *volume;          /* etude-volume, which makes and reads the volumes */
     const char *cache;           /* the image, the made machine and the jobs' copies */
     const char *accel;           /* QEMU's accelerator: kvm, hvf, whpx or tcg */
     char *const *envp;           /* the environment of every program run */

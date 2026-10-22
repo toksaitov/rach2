@@ -1,7 +1,7 @@
 /*
  * wintoolfix.c: the tooling fixtures of winfixture. Each runs etude-tooling,
  * beside winfixture.exe, through etude/exec.h, with copies of winstand.exe
- * in place of curl, qemu-img, QEMU and mtools, and judges a row of
+ * in place of curl, qemu-img and QEMU, and judges a row of
  * tests/system/etude_tooling_test.sh by the command's status and output,
  * the cache, the stand-ins' files and the history it wrote. One more row
  * requires a job's steps to have QEMU's processor time and working set,
@@ -26,8 +26,7 @@
 #define PATH 2048
 
 /* The programs winstand.exe stands in for. */
-static const char *const stand_ins[] = {"curl",    "qemu-img", "qemu-system-x86_64",
-                                        "mformat", "mmd",      "mcopy"};
+static const char *const stand_ins[] = {"curl", "qemu-img", "qemu-system-x86_64"};
 
 /* The fixture's directories under scratch\tooling, and its files. */
 static char base[PATH], bin[PATH], fix[PATH], cache[PATH], recipe[PATH], outdir[PATH], store[PATH],

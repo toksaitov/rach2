@@ -6,16 +6,18 @@
 # machine that failed or ran out of time, and records each boot's steps in
 # the history.
 #
-# The rows build a private etude-tooling from a copy of tools/etude and run
-# it against stand-ins for curl, qemu-img and QEMU, with the real mtools. The
-# `curl` stand-in copies a fixture image; `qemu-img` writes an overlay that
-# names its backing file, which must be found from the overlay's directory;
-# and QEMU plays the machine: on a boot with the seed volume it answers as
-# provision.sh does, and on a boot with the job volume it does what runner.sh
-# does, on this host, with the volume through mtools and each attached disk
-# as the file itself. FIX/qemu says how the stand-in misbehaves: hang, crash
-# or lie, and FIX/provision `fail` makes provision.sh fail. A machine that
-# hangs and is not stopped leaves FIX/woke when its sleep ends.
+# The rows build a private etude-tooling and etude-volume from a copy of
+# tools/etude and run them against stand-ins for curl, qemu-img and QEMU.
+# The `curl` stand-in copies a fixture image; `qemu-img` writes an overlay
+# that names its backing file, which must be found from the overlay's
+# directory; and QEMU plays the machine: on a boot with the seed volume,
+# which must have provision.sh's text, it answers as provision.sh does, and on
+# a boot with the job volume it does what runner.sh does, on this host,
+# reading and writing the volume's archive with the host's tar and each
+# attached disk as the file itself. FIX/qemu says how the stand-in
+# misbehaves: hang, crash or lie, and FIX/provision `fail` makes provision.sh
+# fail. A machine that hangs and is not stopped leaves FIX/woke when its
+# sleep ends.
 #
 # The rows: a machine made, recorded and reused; an image with another
 # digest, refused; a provision that fails, which publishes nothing; a job
@@ -53,9 +55,7 @@ export FIX
 mkdir -p "$TREE/tools" "$TREE/utils" "$work/bin" "$FIX" || exit 1
 cp -R "$repo/tools/etude" "$TREE/tools/" || exit 1
 cp "$repo/utils/sha256.c" "$repo/utils/sha256.h" "$TREE/utils/" || exit 1
-for t in mformat mmd mcopy mtype; do
-    command -v "$t" > /dev/null 2>&1 || { echo "etude-tooling-test: no $t on this host" >&2; exit 1; }
-done
+command -v tar > /dev/null 2>&1 || { echo 'etude-tooling-test: no tar on this host' >&2; exit 1; }
 
 # The fixture's image and its recipe, whose image line names it.
 printf 'the cloud image\n' > "$FIX/image"
@@ -113,7 +113,7 @@ done
 : > "$chan"
 how=$(cat "$FIX/qemu" 2>/dev/null)
 if [ -n "$seed" ]; then
-    mtype -i "$seed" ::provision.sh > /dev/null || exit 1
+    grep -q 'provision.sh: make the tooling machine' "$seed" || exit 1
     if [ "$(cat "$FIX/provision" 2>/dev/null)" = fail ]; then
         echo 'etude-tooling: provision: failed: apt-get install' >> "$chan"
     else
@@ -123,38 +123,42 @@ if [ -n "$seed" ]; then
     exit 0
 fi
 [ -n "$job" ] || exit 1
-ws=$FIX/ws
-rm -rf "$ws" && mkdir -p "$ws" || exit 1
-mcopy -s -n -i "$job" '::in/*' "$ws/" 2>/dev/null
-mcopy -n -i "$job" ::job.sh "$FIX/job.sh" || exit 1
-mcopy -n -i "$job" ::outputs "$FIX/outputs" || exit 1
+vol=$FIX/vol ws=$FIX/vol/in st=$FIX/st
+rm -rf "$vol" "$st" && mkdir -p "$vol" "$st/out" || exit 1
+tar -x -f "$job" -C "$vol" || exit 1
+[ -f "$vol/job.sh" ] && [ -f "$vol/outputs" ] && [ -d "$ws" ] || exit 1
 export ETUDE_DISKS=$serials ETUDE_WORK=$ws
 echo 'etude-job: start' >> "$chan"
 [ "$how" = crash ] && exit 1
 [ "$how" = hang ] && { sleep 30; touch "$FIX/woke"; exit 0; }
-(cd "$ws" && sh "$FIX/job.sh" < /dev/null > "$FIX/stdout" 2> "$FIX/stderr")
-st=$?
-echo "etude-job: ran $st" >> "$chan"
+(cd "$ws" && sh "$vol/job.sh" < /dev/null > "$st/stdout" 2> "$st/stderr")
+rc=$?
+echo "etude-job: ran $rc" >> "$chan"
 while IFS= read -r name; do
-    [ -n "$name" ] && mcopy -s -i "$job" "$ws/$name" ::out/
-done < "$FIX/outputs"
-[ "$how" = lie ] && echo $((st + 1)) > "$FIX/status" || echo "$st" > "$FIX/status"
-mcopy -i "$job" "$FIX/stdout" ::stdout && mcopy -i "$job" "$FIX/stderr" ::stderr &&
-    mcopy -i "$job" "$FIX/status" ::status || exit 1
-echo "etude-job: end $st" >> "$chan"
+    [ -n "$name" ] && { cp -R "$ws/$name" "$st/out/" || exit 1; }
+done < "$vol/outputs"
+[ "$how" = lie ] && echo $((rc + 1)) > "$st/status" || echo "$rc" > "$st/status"
+(cd "$st" && tar -c -f - out stdout stderr status) | dd of="$job" conv=notrunc 2> /dev/null || exit 1
+echo "etude-job: end $rc" >> "$chan"
 exit 0
 EOF
 chmod +x "$work/bin/curl" "$work/bin/qemu-img" "$work/bin/qemu-system-x86_64" || exit 1
 PATH=$work/bin:$PATH
 export PATH
 
-# build: compile the copy's etude-tooling into work/etude-tooling.
+# sources NAME: the sources of the copy's sources.mk list NAME.
+sources() {
+    awk -v n="$1" '$1 == n { on = 1; sub(/^[^=]*=/, "") }
+        on { more = sub(/\\$/, ""); print; if (!more) exit }' "$TREE/tools/etude/sources.mk"
+}
+
+# build: compile the copy's etude-tooling into work/etude-tooling, and
+# etude-volume beside it.
 build() {
-    srcs=$(sed -n '/^ETUDE_TOOLING_SRC/,/[^\\]$/p' "$TREE/tools/etude/sources.mk" |
-        sed 's/^ETUDE_TOOLING_SRC *=//; s/\\$//')
-    # shellcheck disable=SC2086 # the list is words
-    (cd "$TREE" && cc -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -o "$work/etude-tooling" $srcs) \
-        > "$work/build.log" 2>&1
+    # shellcheck disable=SC2046 # the lists are words
+    (cd "$TREE" && cc -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -o "$work/etude-tooling" \
+        $(sources ETUDE_TOOLING_SRC) && cc -std=c99 -o "$work/etude-volume" \
+        $(sources ETUDE_VOLUME_SRC)) > "$work/build.log" 2>&1
 }
 
 # tooling ARG...: run the copy with the fixture's recipe and cache.
@@ -358,7 +362,7 @@ faults() {
 unchecked-digest~    if (file_sha256(part, hex) != 0 || strcmp(hex, m->image_sha256) != 0) {~    if (file_sha256(part, hex) != 0) {
 unprovisioned~    if (!b->provisioned || b->failed[0] != '\0')~    if (b->failed[0] == 'x')
 status-unchecked~            if (sscanf(data, "%d", &status) != 1 || status != res->status) {~            if (sscanf(data, "%d", &status) != 1) {
-no-outputs~        if (run_program(site, out, res->why, sizeof(res->why)) != 0)~        if (0)
+no-outputs~        add_arg(&a, "%s/%s", job->outdir, base);~        add_arg(&a, "%s/%s", dir, base);
 no-deadline~            end = BOOT_LATE;~            continue;
 no-stop~            end = BOOT_STOPPED;~            continue;
 stop-kept~    if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) || job->keep)~    if (res->outcome != ETUDE_TOOLING_ENDED || job->keep)

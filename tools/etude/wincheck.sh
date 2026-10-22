@@ -1,7 +1,8 @@
 #!/bin/sh
 # wincheck.sh: build etude's Windows adapter, executor and supervisor,
-# etude-tooling and their fixtures with MinGW-w64, check that the programs
-# import no MSYS or Cygwin runtime, and run the fixtures on Windows.
+# etude-tooling, etude-volume and their fixtures with MinGW-w64, check that
+# the programs import no MSYS or Cygwin runtime, and run the fixtures on
+# Windows.
 #
 # Usage: sh tools/etude/wincheck.sh [FIXTURE...]
 #        sh tools/etude/wincheck.sh --mutate | --texts
@@ -52,11 +53,12 @@ unwatched|supervise.c|    if (a->phase == PHASE_RUN \&\& etude_watchdog_check(a-
 expiry-unsampled|supervise.c|    rc = a->proc != NULL ? etude_proc_sample(a->proc, \&cpu, \&rss) : -1;|    rc = -1;|runtime-hang
 path-case|tooling.c|#define name_cmp  _strnicmp|#define name_cmp  strncmp|tooling-made
 text-outputs|tooling.c|    if ((f = fopen(names, "wb")) == NULL)|    if ((f = fopen(names, "w")) == NULL)|tooling-job
+text-extract|volume/volume.c|    if (make_dirs(path, 1) != 0 \|\| (f = fopen(path, "wb")) == NULL)|    if (make_dirs(path, 1) != 0 \|\| (f = fopen(path, "w")) == NULL)|tooling-job
 text-stdout|etude_tooling.c|    _setmode(_fileno(stdout), _O_BINARY);|    (void)0;|tooling-job
 unchecked-digest|tooling.c|    if (file_sha256(part, hex) != 0 \|\| strcmp(hex, m->image_sha256) != 0) {|    if (file_sha256(part, hex) != 0) {|tooling-digest
 unprovisioned|tooling.c|    if (!b->provisioned \|\| b->failed[0] != '\0')|    if (b->failed[0] == 'x')|tooling-provision
 status-unchecked|tooling.c|            if (sscanf(data, "%d", \&status) != 1 \|\| status != res->status) {|            if (sscanf(data, "%d", \&status) != 1) {|tooling-lie
-no-outputs|tooling.c|        if (run_program(site, out, res->why, sizeof(res->why)) != 0)|        if (0)|tooling-job
+no-outputs|tooling.c|        add_arg(\&a, "%s/%s", job->outdir, base);|        add_arg(\&a, "%s/%s", dir, base);|tooling-job
 no-deadline|tooling.c|            end = BOOT_LATE;|            continue;|tooling-late
 no-bootindex|tooling.c|    disk(l, "root", root, "qcow2", NULL, ",bootindex=0");|    disk(l, "root", root, "qcow2", NULL, "");|tooling-line
 status-passes|tooling.c|    if (s->done \&\& !res->making \&\& i == ETUDE_TOOLING_JOB \&\& res->status != 0) {|    if (0) {|tooling-status
@@ -150,11 +152,12 @@ fi
 # copy DIR: copy the sources to DIR/tools/etude and DIR/utils.
 copy() {
     e=$1/tools/etude
-    mkdir -p "$e/win" "$e/include/etude" "$e/schemas" "$1/utils"
+    mkdir -p "$e/win" "$e/volume" "$e/include/etude" "$e/schemas" "$1/utils"
     cp "$repo"/utils/sha256.h "$repo"/utils/sha256.c "$1/utils/"
     cp "$src"/capture.h "$src"/capture.c "$src"/ledger.c "$src"/tooling.c "$src"/etude_tooling.c \
         "$src"/history.c "$src"/history_json.h "$src"/history_json.c "$src"/history_collect.c \
         "$src"/watchdog.c "$src"/supervise.c "$e/"
+    cp "$src"/volume/volume.h "$src"/volume/volume.c "$src"/volume/etude_volume.c "$e/volume/"
     cp "$src"/include/etude/*.h "$e/include/etude/"
     cp "$src"/schemas/history.schema.json "$e/schemas/"
     cp "$src"/win/winexec.h "$src"/win/winexec.c "$src"/win/winsys.c "$src"/win/winfmt.h \
@@ -178,10 +181,12 @@ compile() {
         # shellcheck disable=SC2086
         "$cc" $2 -municode -o wintarget.exe wintarget.c -lws2_32
         # shellcheck disable=SC2086
-        "$cc" $2 -o winstand.exe winstand.c
+        "$cc" $2 -I ../volume -o winstand.exe winstand.c ../volume/volume.c
         # shellcheck disable=SC2086
         "$cc" $2 -I ../include -o etude-tooling.exe ../etude_tooling.c ../tooling.c $executor \
             $history -lws2_32
+        # shellcheck disable=SC2086
+        "$cc" $2 -o etude-volume.exe ../volume/etude_volume.c ../volume/volume.c
     ) </dev/null
 }
 
@@ -203,7 +208,8 @@ pristine() {
     copy "$work/ok"
     compile "$work/ok" "$flags -Wall -Wextra -Werror"
     w=$work/ok/tools/etude/win
-    "$pecheck" "$w/winfixture.exe" "$w/wintarget.exe" "$w/winstand.exe" "$w/etude-tooling.exe"
+    "$pecheck" "$w/winfixture.exe" "$w/wintarget.exe" "$w/winstand.exe" "$w/etude-tooling.exe" \
+        "$w/etude-volume.exe"
     if fixtures "$work/ok" "$work/ok.log" "$@"; then
         cat "$work/ok.log"
         return 0

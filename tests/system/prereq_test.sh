@@ -61,7 +61,7 @@ export FIX
 # in their recipes.
 linux_only_macos='unshare ip codex'
 linux_only_windows='unshare ip codex mkfs.exfat fsck.exfat'
-tooling_needs='qemu-system-x86_64 qemu-img curl mformat mmd mcopy'
+tooling_needs='qemu-system-x86_64 qemu-img curl'
 
 # Stand-ins: `id` answers as the account `fixuser`, uid 0 when FIX/root
 # exists; `sudo -n` succeeds when FIX/sudo exists and logs what it runs; and

@@ -352,7 +352,8 @@ static int stopped(const struct etude_tooling_site *site)
 
 /**
  * Run a program to its end, or until a signal asks the boot to stop.
- * `argv[0]` is a name found on the PATH of `site->envp`.
+ * `argv[0]` is a path with a directory, or a name found on the PATH of
+ * `site->envp`.
  *
  * @return its exit status, or -1 when it did not run, did not exit or was
  *         stopped, with `why` saying so; a status other than 0 also sets
@@ -365,21 +366,22 @@ static int run_program(const struct etude_tooling_site *site, char *const *argv,
     struct etude_exec_spec spec;
     struct etude_proc *p, *done;
     const struct etude_exec_result *r;
-    char path[PATH_LEN], *args[64];
+    char path[PATH_LEN], **args;
     const char *name = argv[0];
     size_t n;
     int status = -1;
 
-    for (n = 0; argv[n] != NULL; n++) {
-        if (n + 1 == sizeof(args) / sizeof(args[0]))
-            return failure(why, whylen, "%s has too many arguments", name);
-        args[n] = argv[n];
-    }
-    args[n] = NULL;
     if (find_program(site->envp, name, path, sizeof(path)) != 0)
         return failure(why, whylen, "%s is not found on the PATH", name);
-    if ((ex = etude_exec_new()) == NULL)
+    for (n = 0; argv[n] != NULL; n++)
+        ;
+    if ((args = malloc((n + 1) * sizeof(*args))) == NULL)
         return failure(why, whylen, "out of memory");
+    memcpy(args, argv, (n + 1) * sizeof(*args));
+    if ((ex = etude_exec_new()) == NULL) {
+        free(args);
+        return failure(why, whylen, "out of memory");
+    }
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = name;
     args[0] = path;
@@ -390,6 +392,7 @@ static int run_program(const struct etude_tooling_site *site, char *const *argv,
     if (etude_exec_start(ex, &spec, &p) != 0) {
         failure(why, whylen, "%s does not start: %s", name, strerror(errno));
         etude_exec_free(ex);
+        free(args);
         return -1;
     }
     while ((done = etude_exec_wait(ex, POLL_MS)) != p)
@@ -406,7 +409,61 @@ static int run_program(const struct etude_tooling_site *site, char *const *argv,
                 r->err.data != NULL ? r->err.data : "");
     etude_proc_free(p);
     etude_exec_free(ex);
+    free(args);
     return status;
+}
+
+/* The arguments of a program being made, each a string of its own. */
+struct args {
+    char **v; /* ended by NULL */
+    size_t n, cap;
+    int failed;
+};
+
+/** Append a formatted argument to `a`; a failure is kept in `a->failed`. */
+static void add_arg(struct args *a, const char *format, ...)
+{
+    va_list ap;
+    char *s;
+    int n;
+
+    if (a->failed)
+        return;
+    if (a->n + 2 > a->cap) {
+        size_t cap = 2 * a->cap + 16;
+        char **v = realloc(a->v, cap * sizeof(*v));
+
+        if (v == NULL) {
+            a->failed = 1;
+            return;
+        }
+        a->v = v;
+        a->cap = cap;
+    }
+    va_start(ap, format);
+    n = vsnprintf(NULL, 0, format, ap);
+    va_end(ap);
+    if (n < 0 || (s = malloc((size_t)n + 1)) == NULL) {
+        a->failed = 1;
+        return;
+    }
+    va_start(ap, format);
+    vsnprintf(s, (size_t)n + 1, format, ap);
+    va_end(ap);
+    a->v[a->n++] = s;
+    a->v[a->n] = NULL;
+}
+
+/** Run the program of arguments `a`, as run_program does, and free them. */
+static int run_args(const struct etude_tooling_site *site, struct args *a, char *why, size_t whylen)
+{
+    int rc =
+        a->failed ? failure(why, whylen, "out of memory") : run_program(site, a->v, why, whylen);
+
+    while (a->n > 0)
+        free(a->v[--a->n]);
+    free(a->v);
+    return rc;
 }
 
 /** Double each comma of `s` into `out`, as QEMU's option values need. */
@@ -840,27 +897,25 @@ static int download(const struct etude_tooling_site *site, const struct etude_to
     return 0;
 }
 
-/** Make the seed volume of the first boot, DIR/seed.img, from the recipe. */
+/**
+ * Make the seed volume of the first boot, DIR/seed.img, from the recipe: the
+ * FAT volume labelled CIDATA that cloud-init's NoCloud source looks for.
+ */
 static int make_seed(const struct etude_tooling_site *site, const char *dir, char *why,
                      size_t whylen)
 {
     static const char *const files[] = ETUDE_TOOLING_RECIPE;
-    char img[PATH_LEN], src[PATH_LEN];
-    char *mformat[] = {"mformat", "-C", "-i", img, "-T", "16384", "-v", "CIDATA", "::", NULL};
-    char *mcopy[] = {"mcopy", "-i", img, src, "::", NULL};
+    struct args a = {NULL, 0, 0, 0};
     size_t i;
 
-    if (fmt(img, sizeof(img), "%s/seed.img", dir) != 0)
-        return failure(why, whylen, "the path is too long");
-    if (run_program(site, mformat, why, whylen) != 0)
-        return -1;
-    for (i = 0; files[i] != NULL; i++) {
-        if (fmt(src, sizeof(src), "%s/%s", site->recipe, files[i]) != 0)
-            return failure(why, whylen, "the path is too long");
-        if (run_program(site, mcopy, why, whylen) != 0)
-            return -1;
-    }
-    return 0;
+    add_arg(&a, "%s", site->volume);
+    add_arg(&a, "seed");
+    add_arg(&a, "%s/seed.img", dir);
+    add_arg(&a, "CIDATA");
+    add_arg(&a, "%s", site->recipe);
+    for (i = 0; files[i] != NULL; i++)
+        add_arg(&a, "%s", files[i]);
+    return run_args(site, &a, why, whylen);
 }
 
 /** Give an executor's measurement as a history measurement. */
@@ -1018,23 +1073,33 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     return res->outcome == ETUDE_TOOLING_ENDED ? 0 : -1;
 }
 
-/** Make the job volume DIR/job.img: the script, the inputs and the outputs. */
+/** Give the last name of `path`, which may end in separators. */
+static const char *last_name(const char *path, char *out, size_t size)
+{
+    size_t end = strlen(path), start;
+
+    while (end > 0 && is_sep(path[end - 1]))
+        end--;
+    for (start = end; start > 0 && !is_sep(path[start - 1]); start--)
+        ;
+    snprintf(out, size, "%.*s", (int)(end - start), path + start);
+    return out;
+}
+
+/**
+ * Make the job volume DIR/job.img: an archive of the script as job.sh, the
+ * list of outputs, DIR/outputs, as outputs, and in/ with each input under
+ * its last name.
+ */
 static int make_volume(const struct etude_tooling_site *site, const struct etude_tooling_job *job,
                        const char *dir, char *why, size_t whylen)
 {
-    char img[PATH_LEN], src[PATH_LEN], sectors[32], names[PATH_LEN];
-    char *mformat[] = {"mformat", "-C", "-i", img, "-T", sectors, "-v", "ETUDEJOB", "::", NULL};
-    char *mmd[] = {"mmd", "-i", img, "::in", "::out", NULL};
-    char *script[] = {"mcopy", "-i", img, (char *)job->script, "::job.sh", NULL};
-    char *list[] = {"mcopy", "-i", img, names, "::outputs", NULL};
-    char *input[] = {"mcopy", "-s", "-i", img, src, "::in/", NULL};
+    struct args a = {NULL, 0, 0, 0};
+    char names[PATH_LEN], base[PATH_LEN];
     const char *const *p;
     FILE *f;
 
-    if (fmt(img, sizeof(img), "%s/job.img", dir) != 0 ||
-        fmt(names, sizeof(names), "%s/outputs", dir) != 0 ||
-        fmt(sectors, sizeof(sectors), "%lu",
-            (unsigned long)(job->volume_mib > 0 ? job->volume_mib : 64) * 2048ul) != 0)
+    if (fmt(names, sizeof(names), "%s/outputs", dir) != 0)
         return failure(why, whylen, "the path is too long");
     if ((f = fopen(names, "wb")) == NULL)
         return failure(why, whylen, "%s cannot be written", names);
@@ -1042,39 +1107,57 @@ static int make_volume(const struct etude_tooling_site *site, const struct etude
         fprintf(f, "%s\n", *p);
     if (fclose(f) != 0)
         return failure(why, whylen, "%s cannot be written", names);
-    if (run_program(site, mformat, why, whylen) != 0 || run_program(site, mmd, why, whylen) != 0 ||
-        run_program(site, script, why, whylen) != 0 || run_program(site, list, why, whylen) != 0)
-        return -1;
+    add_arg(&a, "%s", site->volume);
+    add_arg(&a, "job");
+    add_arg(&a, "%s/job.img", dir);
+    add_arg(&a, "%u", job->volume_mib > 0 ? job->volume_mib : 64);
+    add_arg(&a, "job.sh");
+    add_arg(&a, "%s", job->script);
+    add_arg(&a, "outputs");
+    add_arg(&a, "%s", names);
+    add_arg(&a, "-d");
+    add_arg(&a, "in");
     for (p = job->inputs; p != NULL && *p != NULL; p++) {
-        if (fmt(src, sizeof(src), "%s", *p) != 0)
-            return failure(why, whylen, "the path is too long");
-        if (run_program(site, input, why, whylen) != 0)
-            return -1;
+        add_arg(&a, "in/%s", last_name(*p, base, sizeof(base)));
+        add_arg(&a, "%s", *p);
     }
-    return 0;
+    return run_args(site, &a, why, whylen);
 }
 
-/** Read the job's volume back: its status, its output and its outputs. */
+/**
+ * Read the job's volume back: its status, its output, and its outputs, each
+ * of which it must have, into the job's directory of outputs.
+ */
 static int read_volume(const struct etude_tooling_site *site, const struct etude_tooling_job *job,
                        const char *dir, struct etude_tooling_result *res)
 {
-    char img[PATH_LEN], from[PATH_LEN], to[PATH_LEN], *data;
-    char *get[] = {"mcopy", "-n", "-i", img, from, to, NULL};
-    char *out[] = {"mcopy", "-s", "-n", "-i", img, from, (char *)job->outdir, NULL};
     static const char *const names[] = {"status", "stdout", "stderr"};
+    struct args a = {NULL, 0, 0, 0};
+    char from[PATH_LEN], base[PATH_LEN], *data;
     size_t i, len;
     int status;
 
-    if (fmt(img, sizeof(img), "%s/job.img", dir) != 0)
-        return failure(res->why, sizeof(res->why), "the path is too long");
+    add_arg(&a, "%s", site->volume);
+    add_arg(&a, "read");
+    add_arg(&a, "%s/job.img", dir);
     for (i = 0; i < 3; i++) {
-        if (fmt(from, sizeof(from), "::%s", names[i]) != 0 ||
-            fmt(to, sizeof(to), "%s/%s", dir, names[i]) != 0)
+        add_arg(&a, "%s", names[i]);
+        add_arg(&a, "%s/%s", dir, names[i]);
+    }
+    for (i = 0; job->outputs != NULL && job->outputs[i] != NULL; i++) {
+        last_name(job->outputs[i], base, sizeof(base));
+        add_arg(&a, "out/%s", base);
+        add_arg(&a, "%s/%s", job->outdir, base);
+    }
+    add_arg(&a, "out");
+    add_arg(&a, "%s", job->outdir);
+    if (run_args(site, &a, res->why, sizeof(res->why)) != 0)
+        return -1;
+    for (i = 0; i < 3; i++) {
+        if (fmt(from, sizeof(from), "%s/%s", dir, names[i]) != 0)
             return failure(res->why, sizeof(res->why), "the path is too long");
-        if (run_program(site, get, res->why, sizeof(res->why)) != 0)
-            return -1;
-        if ((data = slurp(to, JOB_OUTPUT_MAX, &len)) == NULL)
-            return failure(res->why, sizeof(res->why), "%s cannot be read", to);
+        if ((data = slurp(from, JOB_OUTPUT_MAX, &len)) == NULL)
+            return failure(res->why, sizeof(res->why), "%s cannot be read", from);
         if (i == 0) {
             if (sscanf(data, "%d", &status) != 1 || status != res->status) {
                 free(data);
@@ -1089,12 +1172,6 @@ static int read_volume(const struct etude_tooling_site *site, const struct etude
             res->err = data;
             res->err_len = len;
         }
-    }
-    for (i = 0; job->outputs != NULL && job->outputs[i] != NULL; i++) {
-        if (fmt(from, sizeof(from), "::out/%s", job->outputs[i]) != 0)
-            return failure(res->why, sizeof(res->why), "the path is too long");
-        if (run_program(site, out, res->why, sizeof(res->why)) != 0)
-            return -1;
     }
     return 0;
 }

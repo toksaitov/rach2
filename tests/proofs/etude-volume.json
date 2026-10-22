@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "proof": "etude-volume",
+  "summary": "etude_volume_hosttest.c's rows on the tooling machine's seed volume and job volume with one fault in a private copy of tools/etude/volume/volume.c; the test prints each failed check and exits 1",
+  "tree": "private",
+  "sources": [
+    "tools/etude/volume/volume.c"
+  ],
+  "artifacts": [
+    "${WORK}/etude_volume_hosttest"
+  ],
+  "build": {
+    "argv": [
+      "/bin/sh",
+      "-c",
+      "exec ${CC:-cc} -std=c99 -D_DEFAULT_SOURCE -D_FORTIFY_SOURCE=0 -DRACH2_HOSTTEST -g -O1 -Wno-empty-body -ffreestanding -fsanitize=address,undefined -fno-sanitize-recover=all -I tests/host/compat -I tools/etude/volume tests/host/etude_volume_hosttest.c ${SRC}/tools/etude/volume/volume.c -o ${WORK}/etude_volume_hosttest"
+    ],
+    "bound_s": 120
+  },
+  "test": {
+    "argv": [
+      "${WORK}/etude_volume_hosttest"
+    ],
+    "bound_s": 60
+  },
+  "faults": [
+    {
+      "name": "lfn-checksum",
+      "summary": "a long name's entries have no checksum of the short name",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        l[13] = sum;\n",
+          "replace": "        l[13] = 0;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "seed: the long name's checksum is its short name's"
+        ]
+      }
+    },
+    {
+      "name": "one-cluster-chains",
+      "summary": "every cluster of a seed file ends its chain",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "            put_le(fat1 + 2 * c, c + 1 < next + n ? c + 1 : 0xffff, 2);\n",
+          "replace": "            put_le(fat1 + 2 * c, 0xffff, 2);\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "seed: a chain ends at the file's end"
+        ]
+      }
+    },
+    {
+      "name": "no-room-check",
+      "summary": "the writer does not check that the archive fits its disk",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "    if (v->used + n + 2 * BLOCK > v->size)\n",
+          "replace": "    if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "writer: files that do not fit are refused"
+        ]
+      }
+    },
+    {
+      "name": "no-pax-path",
+      "summary": "a name of more than 100 bytes gets no pax header",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        (strlen(full) > 100 && pax_record(pax, sizeof(pax), &len, \"path\", full) != 0))\n",
+          "replace": "        (strlen(full) > 1000 && pax_record(pax, sizeof(pax), &len, \"path\", full) != 0))\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "writer: the tree, by the host's tar"
+        ]
+      }
+    },
+    {
+      "name": "mode-lost",
+      "summary": "an executable file is written as mode 0644",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        return header(v, name, '0', (st.st_mode & S_IXUSR) ? 0755 : 0644, (uint64_t)st.st_size,\n",
+          "replace": "        return header(v, name, '0', 0644, (uint64_t)st.st_size,\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "writer: the tree, by the host's tar"
+        ]
+      }
+    },
+    {
+      "name": "checksum-ignored",
+      "summary": "the reader does not check a header's checksum",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        if (!checksum_ok(h) || memcmp(h + 257, \"ustar\", 5) != 0 || number(h + 124, 12, &size)) {\n",
+          "replace": "        if (memcmp(h + 257, \"ustar\", 5) != 0 || number(h + 124, 12, &size)) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "refusals: a damaged header"
+        ]
+      }
+    },
+    {
+      "name": "gnu-long-name-dropped",
+      "summary": "the reader drops a GNU long name",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "                long_name = data;\n                data = NULL;\n",
+          "replace": ""
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "reader: tar --format=gnu"
+        ]
+      }
+    },
+    {
+      "name": "dotdot-taken",
+      "summary": "a name with .. is taken",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        if (p == c || (p - c == 1 && c[0] == '.') || (p - c == 2 && c[0] == '.' && c[1] == '.'))\n",
+          "replace": "        if (p == c || (p - c == 1 && c[0] == '.'))\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "refusals: a name with .."
+        ]
+      }
+    },
+    {
+      "name": "truncation-unseen",
+      "summary": "data cut short is not noticed",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        if (fread(b, 1, BLOCK, r->f) != BLOCK) {\n",
+          "replace": "        if (fread(b, 1, BLOCK, r->f) == 0 && 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "refusals: data cut short"
+        ]
+      }
+    },
+    {
+      "name": "pair-unused",
+      "summary": "a pair that takes no entry is not refused",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        if (!used[i])\n",
+          "replace": "        if (0)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "refusals: a pair that takes no entry"
+        ]
+      }
+    },
+    {
+      "name": "pair-prefix",
+      "summary": "a pair takes every entry whose name begins with its own",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        if (strncmp(name, map[i], n) == 0 && (name[n] == '\\0' || name[n] == '/')) {\n",
+          "replace": "        if (strncmp(name, map[i], n) == 0) {\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "refusals: a pair takes a name only up to a slash"
+        ]
+      }
+    },
+    {
+      "name": "first-pair-not-first",
+      "summary": "an entry goes by the last pair that takes it",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "            used[i / 2] = 1;\n",
+          "replace": "            used[i / 2] = 1;\n            if (map[i + 2] != NULL && strncmp(name, map[i + 2], strlen(map[i + 2])) == 0)\n                continue;\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "reader: an entry goes by the first pair that takes it"
+        ]
+      }
+    },
+    {
+      "name": "links-taken",
+      "summary": "a symbolic link is read as a file",
+      "edits": [
+        {
+          "file": "tools/etude/volume/volume.c",
+          "find": "        case '7':\n",
+          "replace": "        case '7':\n        case '2':\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "refusals: a symbolic link"
+        ]
+      }
+    }
+  ]
+}
