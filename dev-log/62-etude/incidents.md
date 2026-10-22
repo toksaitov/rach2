@@ -19,6 +19,22 @@ The faults that the process showed while phase #589 converted the suites to etud
 * Its required check passed at 18:42. The session then ran the proof of the whole legacy set, 51 faults, which no rule asked for, for two hours, and the lifecycle proof under the emulator after it. Its final check started at 22:22, and then waited in the testing host's queue behind ci's core runs and other workers' runs. The coordinating session cleared the queue for it only at 23:05, after the owner had demanded it again, by cancelling two of ci's core runs and stopping a queued run of worker a's. #672 landed at 23:11, four and a half hours after its required check first passed.
 * The manager reported "no worker stuck" at every check, since the session always had a run going; nothing it checks asks whether the task that others wait on has landed. The coordinating session, which had the task under incident #798, did not watch it either.
 
+## The last conversion, #654
+
+* From 12:35 on the 22nd, when #670 closed, #654, the conversion of the GNU checks, was the last open blocker of #677, and every remaining task that a worker could do waited on #677. Worker s had taken #654 at 05:44, and its push was expected near 14:45, nine hours later.
+* The family has 70 cases, and one run of it takes 25 to 50 minutes. The task's trial run, its check on both architectures and its proofs ran the whole family one run after another for most of those nine hours. Every phase of a proof, the unchanged one, each fault and each restored one, boots all 70 cases, though two of the catalogue's three faults touch only the ntpd case.
+* The chromium case failed three of those runs, with 203, 208 and 234 disk commands against a limit of 200, because its count included the writes of the browser's second start; it now counts the completed reads of `disk0` in `/proc/diskstats`. Each failure was found only at the end of a run, and each fix cost another run. The first session reached the six-hour limit at 11:44 in the middle of a proof.
+* Five loops were idle behind it: the owner's Claude Code loop from 10:30, the owner's Codex loop from 10:42, m from 12:01, a from 12:18 and d from 13:03. The other open tasks waited on #677 or on the owner. v built #677 on its own branch from 12:24, ahead of its blocker, to push once #654 lands. More workers on #654 would not have made it faster, since its time went to test runs of one tree in series.
+
+Proposed for the next phase, none of it built yet:
+
+* A proof runs its fault phases side by side, each in a copy of its own, once the unchanged phase has passed. #654's last proof would have taken about an hour instead of two.
+* A fault's phase runs only the cases that its fault touches.
+* A worker may build a task whose only open blocker is in progress, as v did with #677, and push it after the blocker lands. One level only, since work further down the chain is likely to be redone.
+* The manager finds the open task that blocks the most work and the loops idle behind it, and then asks that task's worker to split what is left into issues that others take from the queue. Each issue keeps one writer.
+* When a worker struggles, by three sessions on one issue or the same check failing twice, a second agent reads the issue and its evidence without changing anything and posts a diagnosis to the issue. The worker decides what to do with it.
+* Several agents do not write one issue at once: they would edit the same files and wait for the same testing host.
+
 ## Core on master
 
 * From b32524c4, pushed at 19:26, the guest cases `disk`, `disk-ahci`, `pools` and then `authority` failed now and then in ci's core runs as incomplete: the test machine booted to the debug shell and etude never started the test. The kernel's `serial_out` dropped a byte after 100000 polls of a busy transmitter, and QEMU's UART stays busy while the socket to etude is full, which with one-byte writes is after a few hundred unread bytes. On a loaded runner etude read the console late, the debug shell's greeting lost letters (`Type 'help' for avble commands.`), and etude, which waits for that line, never saw it. The scripted suites wrote the console to a file, which never fills, so the failure came with the guest cases. faff8ae43, pushed at 22:29, waits seconds for the port before it drops a byte.
