@@ -78,9 +78,11 @@ extern unsigned long etude_store_hashed, etude_store_copied;
 /* The size of each half of a file copied from a FIFO. */
 #define HALF (1u << 20)
 
-/* The size of the sparse file, the offset of its data and their length. */
-#define SPARSE_BYTES (32u << 20)
-#define SPARSE_AT    ((3u << 20) + 7u)
+/* The size of the sparse file, the offset of its data and their length. The
+ * data begin past 16 MiB, since APFS fills with zeros a shorter gap that a
+ * write past the end of a file leaves. */
+#define SPARSE_BYTES (128u << 20)
+#define SPARSE_AT    ((32u << 20) + 7u)
 #define SPARSE_DATA  ((1u << 20) + 100u)
 
 /* A list of a recipe's arguments, ended by NULL. */
