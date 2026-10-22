@@ -99,10 +99,13 @@ static const struct row rows[] = {
 };
 
 /* What case `busy` types before its poweroff: three loops that each write a
- * file of the root and sync, and a wait until the third has written. */
+ * file of the root and sync, and a wait until one read of the third's file
+ * finds what it wrote, since the writer truncates the file before each
+ * write. */
 static const char busy_line[] =
     "for i in 1 2 3; do (while :; do echo $i > /root/busy$i; sync; done) & done; "
-    "until [ -s /root/busy3 ]; do :; done; echo BUSY=$(cat /root/busy3); echo BUSY\"\"END\r";
+    "until b=$(cat /root/busy3 2>/dev/null); [ -n \"$b\" ]; do :; done; echo BUSY=$b; "
+    "echo BUSY\"\"END\r";
 
 /* What the mkfs step types: mke2fs and mkfs.vfat make a volume each in a
  * file on the second partition, which a loop device mounts writable. */
