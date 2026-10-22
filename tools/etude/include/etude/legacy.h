@@ -145,11 +145,12 @@ struct etude_legacy_set_opts {
  * first member that does not pass does so at once.
  *
  * Each case runs in a workspace of its own under `o->evidence`, under the
- * case's initial bounds: a host case's program with ETUDE_TREE naming the
- * tree, a guest case's program on a machine of its QEMU profile, through
- * etude-guest, with the memory the launcher reserves for the machine as its
- * claim, and a machine case's scenario with its invocation, after its
- * artifacts are published to the run's store. The invocation permits the
+ * case's bounds as etude_bound_fix fixes them without history, their
+ * ceilings: a host case's program with ETUDE_TREE naming the tree, a guest
+ * case's program on a machine of its QEMU profile, through etude-guest,
+ * with the memory the launcher reserves for the machine as its claim, and a
+ * machine case's scenario with its invocation, after its artifacts are
+ * published to the run's store. The invocation permits the
  * lazy boundary memory profile only when the policy `o->site` has the line
  * `boundary_lazy bigmem-boundary-v1`; a machine case that declares such a
  * machine ends before its scenario starts when the policy lacks it, or when

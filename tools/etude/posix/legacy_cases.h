@@ -40,9 +40,11 @@ struct legacy_case {
     size_t program;    /* the index of the goal its program names */
     const char **args; /* the workload's arguments */
     size_t nargs;
-    uint64_t case_us, gap_us; /* the initial bounds of the case and the gap */
-    /* A guest or machine case's initial bound of each stage the manifest
-     * bounds, by enum etude_stage; 0 for one bounded by the case alone. */
+    uint64_t case_us, gap_us; /* the bounds of the case and the gap, fixed
+                                 without history: their ceilings */
+    uint64_t expected_us;     /* the case's `initial_us`, its expected time */
+    /* A guest or machine case's bound of each stage the manifest bounds, by
+     * enum etude_stage, fixed so; 0 for one bounded by the case alone. */
     uint64_t stage_us[ETUDE_WATCH_STAGES];
     unsigned ports;          /* a machine case's local ports */
     const struct json *qemu; /* a guest case's QEMU profile, or NULL */

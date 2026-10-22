@@ -367,12 +367,12 @@ static const char machine_form[] =
     "ended\",\n"
     "  \"limit\": 1}],\n"
     " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 30000000, \"ceiling_us\": "
-    "600000000},\n"
-    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 600000000},\n"
+    "30000000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 20000000},\n"
     "  \"stages\": {\"boot\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": "
-    "600000000},\n"
+    "20000000},\n"
     "  \"cleanup\": {\"floor_us\": 100000, \"initial_us\": 7000000, \"ceiling_us\": "
-    "600000000}}},\n"
+    "7000000}}},\n"
     " \"resources\": {\"cpu_millis\": 100, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
     "268435456,\n"
     "  \"disk_bytes\": 0, \"locks\": [], \"ports\": %u, \"loop_devices\": 0},\n"
@@ -429,12 +429,12 @@ static const char boundary_manifest[] =
     "ended\",\n"
     "  \"limit\": 1}],\n"
     " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 30000000, \"ceiling_us\": "
-    "600000000},\n"
-    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 600000000},\n"
+    "30000000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 20000000},\n"
     "  \"stages\": {\"boot\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": "
-    "600000000},\n"
+    "20000000},\n"
     "  \"cleanup\": {\"floor_us\": 100000, \"initial_us\": 7000000, \"ceiling_us\": "
-    "600000000}}},\n"
+    "7000000}}},\n"
     " \"resources\": {\"cpu_millis\": 100, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
     "4294967296,\n"
     "  \"disk_bytes\": 0, \"guest_memory\": {\"configured_bytes\": 77309411328,\n"
@@ -482,8 +482,8 @@ static const char case_form[] =
     "passed\",\n"
     "  \"limit\": 1000}],\n"
     " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": %u000, \"ceiling_us\": "
-    "600000000},\n"
-    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": %u000, \"ceiling_us\": 600000000},\n"
+    "%u000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": %u000, \"ceiling_us\": %u000},\n"
     "  \"stages\": {}},\n"
     " \"resources\": {\"cpu_millis\": 100, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
     "16777216,\n"
@@ -600,10 +600,10 @@ static const char guest_form[] =
     "[\"closed-urandom\", \"closed-random\", \"closed-insecure\"]}]}],\n"
     " \"termination\": {\"end\": \"exited\", \"value\": 0}, \"progress\": [],\n"
     " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 120000000, \"ceiling_us\": "
-    "600000000},\n"
-    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 60000000, \"ceiling_us\": 300000000},\n"
+    "120000000},\n"
+    "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 60000000, \"ceiling_us\": 60000000},\n"
     "  \"stages\": {\"boot\": {\"floor_us\": 100000, \"initial_us\": %u000, \"ceiling_us\": "
-    "300000000}}},\n"
+    "%u000}}},\n"
     " \"resources\": {\"cpu_millis\": 1000, \"cpu_ceiling_millis\": 1000, \"memory_bytes\": "
     "268435456,\n"
     "  \"disk_bytes\": 0, \"locks\": [], \"ports\": 1, \"loop_devices\": 1},\n"
@@ -1027,7 +1027,7 @@ static int manifest_text(char *buf, size_t size, const char *family, const struc
         len = (size_t)k;
         k = snprintf(buf + len, size - len, case_form, c[i].id, c[i].archs, c[i].args, c[i].reps,
                      c[i].seed, c[i].scratch ? "{\"fixture\": \"scratch\"}" : "", c[i].case_ms,
-                     c[i].gap_ms, c[i].per_arch ? "true" : "false");
+                     c[i].case_ms, c[i].gap_ms, c[i].gap_ms, c[i].per_arch ? "true" : "false");
         k = k < 0 ? k : (int)len + k;
         if (k >= 0 && (size_t)k < size && i + 1 < n)
             k += snprintf(buf + k, size - (size_t)k, ",\n");
@@ -1050,7 +1050,8 @@ static int guest_text(char *buf, size_t size, const char *family, const struct g
                  family);
     for (i = 0; k >= 0 && (size_t)k < size && i < n; i++) {
         len = (size_t)k;
-        k = snprintf(buf + len, size - len, guest_form, c[i].id, c[i].cpu, c[i].boot_ms, c[i].node);
+        k = snprintf(buf + len, size - len, guest_form, c[i].id, c[i].cpu, c[i].boot_ms,
+                     c[i].boot_ms, c[i].node);
         k = k < 0 ? k : (int)len + k;
         if (k >= 0 && (size_t)k < size && i + 1 < n)
             k += snprintf(buf + k, size - (size_t)k, ",\n");

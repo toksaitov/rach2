@@ -2837,7 +2837,7 @@ static int case_command(struct set *x, struct member *m)
     x->jobs[m - x->mem].id = c->id;
     x->jobs[m - x->mem].case_id = m->case_id;
     x->jobs[m - x->mem].arch = k->arch;
-    x->jobs[m - x->mem].cost_us = k->case_us;
+    x->jobs[m - x->mem].cost_us = k->expected_us;
     x->jobs[m - x->mem].res = c->res;
     x->jobs[m - x->mem].nres = c->nres;
     return 0;

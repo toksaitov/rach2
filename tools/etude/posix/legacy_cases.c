@@ -147,12 +147,23 @@ static long long count_of(const struct json *o, const char *name)
     return v != NULL ? v->integer : -1;
 }
 
-/** Give the initial value of bound `b`, or 0 when it has none. */
-static uint64_t initial_of(const struct json *b)
+/**
+ * Give bound `b` as etude_bound_fix fixes it without history, which is its
+ * ceiling, or 0 when it is absent or malformed.
+ */
+static uint64_t fixed_of(const struct json *b)
 {
-    long long v = count_of(b, "initial_us");
+    long long floor = count_of(b, "floor_us"), initial = count_of(b, "initial_us"),
+              ceiling = count_of(b, "ceiling_us");
+    struct etude_bound bound;
+    struct etude_bound_fixed f;
 
-    return v > 0 ? (uint64_t)v : 0;
+    if (floor <= 0 || initial <= 0 || ceiling <= 0)
+        return 0;
+    bound.floor_us = (uint64_t)floor;
+    bound.initial_us = (uint64_t)initial;
+    bound.ceiling_us = (uint64_t)ceiling;
+    return etude_bound_fix(&bound, NULL, 0, &f) == 0 ? f.us : 0;
 }
 
 /** Write why manifest `m` is refused into `m->why`, after its path; -1. */
@@ -476,7 +487,8 @@ static int witness_kind(const char *kind)
 }
 
 /** Take the bounds of case `k`, its stages' for a guest or machine case, and
- * its witnesses of progress; 0, or -1 after a refusal. */
+ * its witnesses of progress, each fixed without history; 0, or -1 after a
+ * refusal. */
 static int bounds_of(struct legacy_manifest *m, struct legacy_case *k)
 {
     const struct json *b = typed(k->json, "bounds", JSON_OBJECT);
@@ -486,13 +498,16 @@ static int bounds_of(struct legacy_manifest *m, struct legacy_case *k)
     size_t i;
     int kind, s;
 
-    k->case_us = initial_of(typed(b, "case", JSON_OBJECT));
-    k->gap_us = initial_of(typed(b, "gap", JSON_OBJECT));
+    k->case_us = fixed_of(typed(b, "case", JSON_OBJECT));
+    k->gap_us = fixed_of(typed(b, "gap", JSON_OBJECT));
     for (i = 0; (k->guest || k->machine) && stages != NULL && i < stages->count; i++)
-        if ((s = stage_of(stages->item[i]->name)) >= 0)
-            k->stage_us[s] = initial_of(stages->item[i]);
+        if ((s = stage_of(stages->item[i]->name)) >= 0 &&
+            (k->stage_us[s] = fixed_of(stages->item[i])) == 0)
+            return refuse(m, "%s: the case's %s bound is malformed", k->case_id,
+                          stages->item[i]->name);
     if (k->case_us == 0 || k->gap_us == 0 || p == NULL)
         return refuse(m, "%s: the case lacks its bounds or its progress", k->case_id);
+    k->expected_us = (uint64_t)count_of(typed(b, "case", JSON_OBJECT), "initial_us");
     if ((k->witnesses = calloc(p->count + 1, sizeof(*k->witnesses))) == NULL)
         return refuse(m, "memory ran out");
     for (i = 0; i < p->count; i++) {
@@ -501,7 +516,7 @@ static int bounds_of(struct legacy_manifest *m, struct legacy_case *k)
         wb->witness_id = json_text(w, "witness_id");
         kind = witness_kind(json_text(w, "kind"));
         wb->limit = count_of(w, "limit") > 0 ? (uint64_t)count_of(w, "limit") : 0;
-        wb->bound_us = kind == ETUDE_WITNESS_QUIET ? initial_of(typed(w, "bound", JSON_OBJECT)) : 0;
+        wb->bound_us = kind == ETUDE_WITNESS_QUIET ? fixed_of(typed(w, "bound", JSON_OBJECT)) : 0;
         if (wb->witness_id == NULL || kind < 0 ||
             (kind == ETUDE_WITNESS_QUIET && wb->bound_us == 0))
             return refuse(m, "%s: a witness of the case's progress is malformed", k->case_id);
