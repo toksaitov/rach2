@@ -537,6 +537,21 @@ for the rest; the inode in decimal; and the name, if it has one, an abstract
 name written with
 .Ql @
 for its leading NUL byte.
+.It Pa /proc/net/packet
+Linux's heading and a row for each bound
+.Dv AF_PACKET
+socket, which
+.Ql ss -0
+reads: the socket's address, which is zeros as wide as a pointer; the
+reference count; the type, 2 for
+.Dv SOCK_DGRAM ;
+the protocol, a four-digit hexadecimal EtherType or 0000; the interface
+index, 0 for every interface; 1 when the socket has a protocol and is
+offered frames, else 0; the bytes queued to be read; the owner's user ID;
+and the inode.
+Linux also lists a packet socket that is not bound; here a socket has a row
+only from its bind to its close, the time it is in the table the receive
+path delivers from.
 .It Pa /proc/net/sockstat
 The sockets in use, the lines Linux has:
 .Ql sockets: used ,

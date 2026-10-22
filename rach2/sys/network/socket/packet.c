@@ -146,6 +146,49 @@ void packet_unbind(struct socket *sock)
     net_unlock(flags);
 }
 
+int packet_snapshot(struct packet_row **rows)
+{
+    const struct packet_binding *b;
+    struct packet_row *out;
+    uint32_t flags;
+    int n, room, i;
+
+    *rows = NULL;
+    if (!net_ns_seen()) {
+        return 0;
+    }
+    room = 0;
+    flags = net_lock();
+    for (b = packets; b; b = b->next) {
+        room++;
+    }
+    net_unlock(flags);
+    if (room == 0) {
+        return 0;
+    }
+    out = kmalloc(sizeof(*out) * (size_t)room);
+    if (!out) {
+        return -1;
+    }
+    n = 0;
+    flags = net_lock();
+    for (b = packets; b && n < room; b = b->next) {
+        out[n].refs = b->sock->refcount;
+        out[n].protocol = b->sock->protocol;
+        out[n].ifindex = b->ifindex;
+        out[n].rmem = 0;
+        for (i = 0; i < b->q.count; i++) {
+            out[n].rmem += b->q.len[(b->q.head + i) % PACKET_QUEUE_SLOTS];
+        }
+        out[n].uid = b->sock->uid;
+        out[n].inode = b->sock->inode;
+        n++;
+    }
+    net_unlock(flags);
+    *rows = out;
+    return n;
+}
+
 /**
  * Which of PACKET_HOST/BROADCAST/MULTICAST/OTHERHOST a destination MAC is.
  *

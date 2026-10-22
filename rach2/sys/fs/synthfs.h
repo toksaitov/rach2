@@ -111,8 +111,9 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_SYSCTL      28
 #define SYNTH_PROC_PIDMOUNTS   29
 #define SYNTH_PROC_LOADAVG     30
-/* The files of /proc/net after the first four, in the order they are listed
- * (`synth_net_name`). */
+/* The files of /proc/net after the first four, SYNTH_PROC_NETUDP to
+ * SYNTH_PROC_NETSNMP and SYNTH_PROC_NETPACKET, in the order they are listed
+ * (`synth_net_file`). */
 #define SYNTH_PROC_NETUDP      31
 #define SYNTH_PROC_NETRAW      32
 #define SYNTH_PROC_NETUNIX     33
@@ -142,6 +143,7 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_LOCKS       54
 /* /proc/<pid>/task/<tid>/children, which a thread's directory alone has. */
 #define SYNTH_PROC_CHILDREN    55
+#define SYNTH_PROC_NETPACKET   56
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -235,10 +237,13 @@ int synth_sys_parent(int entry);
 /** The text of a file entry, NULL for a directory. */
 const char *synth_sys_text(int entry);
 
-/** The path in /proc/net of the file of origin `origin`: SYNTH_PROC_NETUDP
- * to SYNTH_PROC_NETSNMP, SYNTH_PROC_NETSTAT_RT or SYNTH_PROC_NETSTAT_ARP,
+/** The path in /proc/net of the file of origin `origin`: one that
+ * `synth_net_file` gives, or SYNTH_PROC_NETSTAT_RT or SYNTH_PROC_NETSTAT_ARP,
  * whose two are under stat; NULL for another. */
 const char *synth_net_name(int origin);
+/** The origin of file `n`, from 0, of /proc/net after the first four, or 0
+ * past the last. */
+int synth_net_file(int n);
 /** The name of the /proc/sysvipc file of origin `origin`, or NULL. */
 const char *synth_sysvipc_name(int origin);
 

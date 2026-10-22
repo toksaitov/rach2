@@ -11936,10 +11936,10 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
 /**
  * Entry `n` of /proc/net, or with `stat` of /proc/net/stat: 1 with its name,
  * inode and type, or 0 past the last. /proc/net has dev, route, arp and tcp,
- * then the files `synth_net_name` names from SYNTH_PROC_NETUDP on, then the
- * directory `stat`, which has rt_cache and arp_cache. There is no tcp6: the
- * kernel has no IPv6, and a file that existed and was empty would tell
- * netstat the family is present with nothing on it.
+ * then the files `synth_net_file` gives, then the directory `stat`, which
+ * has rt_cache and arp_cache. There is no tcp6: the kernel has no IPv6, and
+ * a file that existed and was empty would tell netstat the family is
+ * present with nothing on it.
  */
 static int synth_net_dirent(int stat, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
@@ -11956,8 +11956,8 @@ static int synth_net_dirent(int stat, int n, char *name, uint64_t *ino, uint8_t 
         *ino = procfs_ino_net(n == 0 ? SYNTH_PROC_NETSTAT_RT : SYNTH_PROC_NETSTAT_ARP);
         return 1;
     }
-    entry = n < count ? netfiles[n] : synth_net_name(SYNTH_PROC_NETUDP + n - count);
-    if (!entry && n == count + SYNTH_PROC_NETSNMP - SYNTH_PROC_NETUDP + 1) {
+    entry = n < count ? netfiles[n] : synth_net_name(synth_net_file(n - count));
+    if (!entry && n > count && synth_net_file(n - count - 1)) {
         k_strncpy(name, "stat", 31);
         *dtype = DT_DIR;
         *ino = procfs_ino_netstatdir();
@@ -11977,7 +11977,7 @@ static int synth_net_dirent(int stat, int n, char *name, uint64_t *ino, uint8_t 
     } else if (n == 3) {
         *ino = procfs_ino_nettcp();
     } else {
-        *ino = procfs_ino_net(SYNTH_PROC_NETUDP + n - count);
+        *ino = procfs_ino_net(synth_net_file(n - count));
     }
     return 1;
 }

@@ -73,6 +73,26 @@ int packet_ifindex(struct socket *sock);
  */
 int packet_bind(struct socket *sock, int ifindex);
 
+/* One binding, copied out for /proc/net/packet. */
+struct packet_row {
+    int refs;          /* the socket's references */
+    uint16_t protocol; /* the EtherType, in host order, or 0 for none */
+    int ifindex;       /* the interface, or 0 for every one */
+    uint32_t rmem;     /* bytes queued to be read */
+    uint32_t uid;
+    uint32_t inode;
+};
+
+/**
+ * Copy the delivery table into an array from the heap at `*rows`, one row
+ * for each bound socket, and return the row count. With no binding `*rows`
+ * is NULL and the count 0; otherwise the caller frees the array, even with
+ * no rows. A caller outside the first network namespace is given none, since
+ * a socket made there binds to nothing. Returns -1 when the array cannot be
+ * allocated. Takes `net_lock` itself.
+ */
+int packet_snapshot(struct packet_row **rows);
+
 /** Remove a socket from the delivery table and free its queue, when its last
  * reference goes (`socket_unref`). Takes `net_lock` itself. */
 void packet_unbind(struct socket *sock);

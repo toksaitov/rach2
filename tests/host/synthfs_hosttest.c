@@ -242,6 +242,9 @@ static void past_a_name(void)
     CHECK(synth_classify("proc/net/udp", &vp) == VNODE_PROC_NET_FILE &&
           vp.procfile == SYNTH_PROC_NETUDP);
     CHECK(synth_classify("proc/net/tcp", &vp) == VNODE_PROC_NET_TCP);
+    CHECK(synth_classify("proc/net/packet", &vp) == VNODE_PROC_NET_FILE &&
+          vp.procfile == SYNTH_PROC_NETPACKET);
+    CHECK(synth_classify("proc/net/stat/rt_cache", &vp) == VNODE_PROC_NET_FILE);
     CHECK(synth_classify("proc/net/udp/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/net/tcp/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/net/bogus", &vp) == VNODE_ENOENT);

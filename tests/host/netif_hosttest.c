@@ -277,6 +277,12 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
+/** The caller is in the first network namespace. */
+int net_ns_seen(void)
+{
+    return 1;
+}
+
 /** Return interface `n`, counted from 0, or NULL for any `n` past the two. */
 struct netdev *netdev_at(int n)
 {

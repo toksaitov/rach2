@@ -211,15 +211,37 @@ int synth_sys_writable(int entry)
            entry == SYNTH_SYS_IP_FORWARD;
 }
 
+/* The files of /proc/net after the first four, by origin and name. */
+static const struct {
+    int origin;
+    const char *name;
+} netfiles[] = {{SYNTH_PROC_NETUDP, "udp"},
+                {SYNTH_PROC_NETRAW, "raw"},
+                {SYNTH_PROC_NETUNIX, "unix"},
+                {SYNTH_PROC_NETSOCKSTAT, "sockstat"},
+                {SYNTH_PROC_NETSNMP, "snmp"},
+                {SYNTH_PROC_NETPACKET, "packet"},
+                {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
+                {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
+
+/* The files of `netfiles` directly in /proc/net, the ones before stat's. */
+#define SYNTH_NET_FILES 6
+
 const char *synth_net_name(int origin)
 {
-    static const char *const names[] = {"udp", "raw", "unix", "sockstat", "snmp"};
+    unsigned i;
 
-    if (origin == SYNTH_PROC_NETSTAT_RT || origin == SYNTH_PROC_NETSTAT_ARP) {
-        return origin == SYNTH_PROC_NETSTAT_RT ? "stat/rt_cache" : "stat/arp_cache";
+    for (i = 0; i < sizeof(netfiles) / sizeof(netfiles[0]); i++) {
+        if (netfiles[i].origin == origin) {
+            return netfiles[i].name;
+        }
     }
-    origin -= SYNTH_PROC_NETUDP;
-    return origin >= 0 && origin < (int)(sizeof(names) / sizeof(names[0])) ? names[origin] : 0;
+    return 0;
+}
+
+int synth_net_file(int n)
+{
+    return n >= 0 && n < SYNTH_NET_FILES ? netfiles[n].origin : 0;
 }
 
 const char *synth_sys_name(int entry)
@@ -1125,7 +1147,7 @@ static int synth_classify_net(const struct comp *c, int n, struct vpath *vp)
                  {"route", VNODE_PROC_NET_ROUTE},
                  {"arp", VNODE_PROC_NET_ARP},
                  {"tcp", VNODE_PROC_NET_TCP}};
-    int f = SYNTH_PROC_NETUDP;
+    int f = 0;
     unsigned i;
 
     if (n == 0) {
@@ -1135,13 +1157,13 @@ static int synth_classify_net(const struct comp *c, int n, struct vpath *vp)
     if (comp_eq(c[0], "stat")) {
         return synth_classify_net_stat(c + 1, n - 1, vp);
     }
-    while (synth_net_name(f) && !comp_eq(c[0], synth_net_name(f))) {
+    while (synth_net_file(f) && !comp_eq(c[0], synth_net_name(synth_net_file(f)))) {
         f++;
     }
     vp->kind = VNODE_ENOENT;
-    if (synth_net_name(f)) {
+    if (synth_net_file(f)) {
         vp->kind = VNODE_PROC_NET_FILE;
-        vp->procfile = f;
+        vp->procfile = synth_net_file(f);
     }
     for (i = 0; i < sizeof(files) / sizeof(files[0]); i++) {
         if (comp_eq(c[0], files[i].name)) {

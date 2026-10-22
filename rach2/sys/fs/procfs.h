@@ -188,8 +188,8 @@ uint32_t procfs_ino_netroute(void);
 uint32_t procfs_ino_netarp(void);
 uint32_t procfs_ino_nettcp(void);
 /** The inode of the /proc/net file of origin `origin`, one with a name from
- * `synth_net_name`: SYNTH_PROC_NETUDP to SYNTH_PROC_NETSNMP and the two
- * files of /proc/net/stat. */
+ * `synth_net_name`: those `synth_net_file` gives and the two files of
+ * /proc/net/stat. */
 uint32_t procfs_ino_net(int origin);
 struct vfs_mount;
 /** The device stat gives the files of the mount `m`, entry `i` of the

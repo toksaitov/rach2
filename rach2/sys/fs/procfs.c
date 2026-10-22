@@ -55,6 +55,7 @@
 #include "../network/netconf.h"
 #include "../network/net.h"
 #include "../network/socket/socket.h"
+#include "../network/socket/packet.h"
 #include "../ipc/unix.h"
 #include "../proc/suspend.h"
 #include "../rtc.h"
@@ -3678,12 +3679,73 @@ static int procfs_gen_netstat(struct procfs_text *t, int origin)
     return t->len;
 }
 
+/** Append `v` in decimal and spaces after it to `width` places: printf's
+ * "%-Nu" for a column of N. */
+static void ap_u32_left(struct procfs_text *t, uint32_t v, int width)
+{
+    uint32_t w = 1, rest;
+
+    for (rest = v; rest >= 10u; rest /= 10u) {
+        w++;
+    }
+    ap_u32(t, v);
+    while ((int)w++ < width) {
+        ap_ch(t, ' ');
+    }
+}
+
+/**
+ * Render /proc/net/packet: Linux's heading and a row for each bound packet
+ * socket (`packet_snapshot`), in Linux's columns, which `ss -0` reads.
+ *
+ * The socket's kernel address is zeros, as Linux shows it to a reader
+ * without privilege, as wide as a pointer. The type is SOCK_DGRAM, the only
+ * one; the protocol is the EtherType in hexadecimal; R, running, is 1 for a
+ * socket with a protocol, which is offered frames, and 0 for one without;
+ * and Rmem is the bytes queued to be read. A socket not yet bound is not
+ * listed, where Linux lists every packet socket.
+ */
+static int procfs_gen_netpacket(struct procfs_text *t)
+{
+    struct packet_row *rows;
+    int n = packet_snapshot(&rows);
+    int i;
+
+    if (n < 0) {
+        return -ENOMEM;
+    }
+    ap_left(t, "sk", (int)sizeof(void *) * 2 + 1);
+    ap_str(t, "RefCnt Type Proto  Iface R Rmem   User   Inode\n");
+    for (i = 0; i < n; i++) {
+        ap_xlow(t, 0, (int)sizeof(void *) * 2);
+        ap_ch(t, ' ');
+        ap_u32_left(t, (uint32_t)rows[i].refs, 6);
+        ap_ch(t, ' ');
+        ap_u32_left(t, SOCK_DGRAM, 4);
+        ap_ch(t, ' ');
+        ap_xlow(t, rows[i].protocol, 4);
+        ap_str(t, "   ");
+        ap_u32_left(t, (uint32_t)rows[i].ifindex, 5);
+        ap_str(t, rows[i].protocol != 0 ? " 1 " : " 0 ");
+        ap_u32_left(t, rows[i].rmem, 6);
+        ap_ch(t, ' ');
+        ap_u32_left(t, rows[i].uid, 6);
+        ap_ch(t, ' ');
+        ap_u32_left(t, rows[i].inode, 6);
+        ap_ch(t, '\n');
+    }
+    kfree(rows);
+    return t->len;
+}
+
 /** Render the /proc/net file of origin `origin`, one with a name from
- * `synth_net_name`: SYNTH_PROC_NETUDP to SYNTH_PROC_NETSNMP and the two
- * files of /proc/net/stat. */
+ * `synth_net_name`: those `synth_net_file` gives and the two files of
+ * /proc/net/stat. */
 static int procfs_gen_net(struct procfs_text *t, int origin)
 {
     switch (origin) {
+    case SYNTH_PROC_NETPACKET:
+        return procfs_gen_netpacket(t);
     case SYNTH_PROC_NETSTAT_RT:
     case SYNTH_PROC_NETSTAT_ARP:
         return procfs_gen_netstat(t, origin);
