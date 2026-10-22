@@ -24,8 +24,9 @@
 # with its inputs, a disk and its outputs, recorded; a job that exits 3; a
 # run before the machine is made; a hang past the deadline; a hang stopped by
 # SIGTERM, which must stop QEMU, remove the job's directory and exit 143;
-# QEMU's crash; a runner whose status disagrees with the volume's; and QEMU's
-# command line.
+# QEMU's crash; a runner whose status disagrees with the volume's; QEMU's
+# command line; and the arm64 machine, made apart from the amd64 one and
+# booted on QEMU's virt board with its UEFI firmware.
 #
 # Usage: sh tests/system/etude_tooling_test.sh
 #
@@ -47,11 +48,13 @@ cp -R "$repo/tools/etude" "$TREE/tools/" || exit 1
 cp "$repo/utils/sha256.c" "$repo/utils/sha256.h" "$TREE/utils/" || exit 1
 command -v tar > /dev/null 2>&1 || { echo 'etude-tooling-test: no tar on this host' >&2; exit 1; }
 
-# The fixture's image and its recipe, whose image line names it.
+# The fixture's image and its recipe, whose image lines name it for both
+# architectures.
 printf 'the cloud image\n' > "$FIX/image"
 sum=$(shasum -a 256 "$FIX/image" | cut -c1-64) || exit 1
 RECIPE=$TREE/tools/etude/tooling
-printf 'amd64 https://images.example/fixture.img %s\n' "$sum" > "$RECIPE/image"
+printf 'amd64 https://images.example/fixture.img %s\narm64 https://images.example/arm.img %s\n' \
+    "$sum" "$sum" > "$RECIPE/image"
 
 cat > "$work/bin/curl" <<'EOF'
 #!/bin/sh
@@ -70,8 +73,8 @@ printf 'overlay of %s\n' "$base" > "$out"
 EOF
 cat > "$work/bin/qemu-system-x86_64" <<'EOF'
 #!/bin/sh
-# The machine. It keeps its arguments in FIX/qemu.args.
-printf '%s\n' "$@" > "$FIX/qemu.args"
+# The machine. It keeps its name and arguments in FIX/qemu.args.
+printf '%s\n' "${0##*/}" "$@" > "$FIX/qemu.args"
 serials=0 seed= job=
 while [ $# -gt 0 ]; do
     case $1 in
@@ -133,6 +136,7 @@ echo "etude-job: end $rc" >> "$chan"
 exit 0
 EOF
 chmod +x "$work/bin/curl" "$work/bin/qemu-img" "$work/bin/qemu-system-x86_64" || exit 1
+cp "$work/bin/qemu-system-x86_64" "$work/bin/qemu-system-aarch64" || exit 1
 PATH=$work/bin:$PATH
 export PATH
 
@@ -321,14 +325,32 @@ row() {
             grep -qx 'virtio-blk-pci,drive=job,serial=etude-job' "$a" &&
             grep -qx 'virtio-blk-pci,drive=d1,serial=etude-d1' "$a" ||
             { echo 'the disks' > "$work/why"; return 1; }
+        grep -qx qemu-system-x86_64 "$a" && ! grep -qx virt "$a" ||
+            { echo 'the amd64 machine is not the default PC' > "$work/why"; return 1; }
         tooling run "$work/job.sh" > /dev/null 2>&1
         grep -qx none "$a" || { echo 'a job without -n has a network' > "$work/why"; return 1; }
+        ;;
+    arm64)
+        arm() { "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -p arm64 -a hvf "$@"; }
+        made || { echo 'not made' > "$work/why"; return 1; }
+        arm check > /dev/null && { echo 'the arm64 machine is the amd64 one' > "$work/why"; return 1; }
+        arm prepare > "$work/out.log" 2>&1 || { cat "$work/out.log" > "$work/why"; return 1; }
+        [ "$(find "$CACHE" -maxdepth 1 -name 'tooling-*.qcow2' | wc -l)" -eq 2 ] || { echo 'the two machines share a disk' > "$work/why"; return 1; }
+        arm run "$work/job.sh" > /dev/null 2>&1 || { echo 'the arm64 job failed' > "$work/why"; return 1; }
+        a=$FIX/qemu.args
+        [ "$(sed -n 1p "$a")" = qemu-system-aarch64 ] || { echo 'the arm64 machine is not qemu-system-aarch64' > "$work/why"; return 1; }
+        for want in virt edk2-aarch64-code.fd hvf max 'virtio-blk-pci,drive=root,bootindex=0'; do
+            grep -qx -- "$want" "$a" || { echo "no argument $want" > "$work/why"; return 1; }
+        done
+        "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -p sparc check > "$work/out.log" 2>&1 &&
+            { echo 'an unknown architecture was taken' > "$work/why"; return 1; }
+        grep -q 'not amd64 or arm64' "$work/out.log" || { cat "$work/out.log" > "$work/why"; return 1; }
         ;;
     esac
     return 0
 }
 
-rows='made digest provision job status unmade late stop crash lie line'
+rows='made digest provision job status unmade late stop crash lie line arm64'
 
 # rows: build the copy and run every row, print `etude-tooling-test: failed:
 # NAME` for each that fails, and fail when any did.
@@ -347,4 +369,4 @@ rows() {
 }
 
 rows >&2 || exit 1
-echo 'etude-tooling-test: result: pass: 11 rows'
+echo 'etude-tooling-test: result: pass: 12 rows'

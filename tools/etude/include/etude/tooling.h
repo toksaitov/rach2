@@ -22,12 +22,14 @@
      "runner.sh", "etude-job.service", "tools",     NULL}
 
 /* Where the machine is made and run. Programs are found on the PATH of
- * `envp`: qemu-system-x86_64, qemu-img and curl, and etude-volume where
- * `volume` is a name without a directory. */
+ * `envp`: qemu-system-x86_64 or qemu-system-aarch64, qemu-img and curl, and
+ * etude-volume where `volume` is a name without a directory. */
 struct etude_tooling_site {
     const char *recipe;          /* the recipe's directory */
     const char *volume;          /* etude-volume, which makes and reads the volumes */
     const char *cache;           /* the image, the made machine and the jobs' copies */
+    const char *arch;            /* the machine's architecture, amd64 or arm64;
+                                    NULL gives amd64 */
     const char *accel;           /* QEMU's accelerator: kvm, hvf, whpx or tcg */
     char *const *envp;           /* the environment of every program run */
     volatile sig_atomic_t *stop; /* nonzero once a signal asks the boot to
@@ -107,7 +109,10 @@ struct etude_tooling_result {
 };
 
 /**
- * Read the recipe at `site->recipe` and name its machine in `m`.
+ * Read the recipe at `site->recipe` and name its machine of the architecture
+ * `site->arch` in `m`. The recipe's image file has one line for each
+ * architecture it makes a machine of, and the key digests the architecture
+ * with the recipe, so the machines of one recipe have keys of their own.
  *
  * @return 0, or -1 with `why` saying what is wrong with the recipe.
  */

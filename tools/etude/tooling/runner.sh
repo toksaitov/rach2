@@ -15,13 +15,14 @@
 # It then writes over the volume an archive of out/, with the outputs, and of
 # stdout, stderr and status, the job's output and exit status, in that order.
 #
-# On the second serial port it writes `etude-job: start` before the job,
-# `etude-job: ran STATUS` after it, and `etude-job: end STATUS` once the
-# volume is written; or `etude-job: failed: WHY` when the runner itself
-# cannot go on.
+# On the second serial port, ttyS1 on amd64 and ttyAMA1 on arm64, it writes
+# `etude-job: start` before the job, `etude-job: ran STATUS` after it, and
+# `etude-job: end STATUS` once the volume is written; or `etude-job: failed:
+# WHY` when the runner itself cannot go on.
 #
 set -u
 CHAN=/dev/ttyS1
+[ ! -c /dev/ttyAMA1 ] || CHAN=/dev/ttyAMA1
 VOL=/dev/disk/by-id/virtio-etude-job
 STAGE=/var/tmp/etude-job
 WORK=/var/tmp/etude-work

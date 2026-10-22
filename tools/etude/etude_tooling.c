@@ -39,11 +39,11 @@ static int usage(void)
 {
     fprintf(
         stderr,
-        "usage: etude-tooling [-r RECIPE] [-C CACHE] [-a ACCEL] prepare [-c CPUS] [-t SECONDS] "
-        "[HISTORY]\n"
-        "       etude-tooling [-r RECIPE] [-C CACHE] check\n"
-        "       etude-tooling [-r RECIPE] [-C CACHE] [-a ACCEL] run [-n] [-k] [-c CPUS] [-m MIB] "
-        "[-s MIB] [-t SECONDS]\n"
+        "usage: etude-tooling [-r RECIPE] [-C CACHE] [-p ARCH] [-a ACCEL] prepare [-c CPUS] "
+        "[-t SECONDS] [HISTORY]\n"
+        "       etude-tooling [-r RECIPE] [-C CACHE] [-p ARCH] check\n"
+        "       etude-tooling [-r RECIPE] [-C CACHE] [-p ARCH] [-a ACCEL] run [-n] [-k] [-c CPUS] "
+        "[-m MIB] [-s MIB] [-t SECONDS]\n"
         "                     [-i PATH]... [-d DISK]... [-o NAME]... [-O DIR] [HISTORY] SCRIPT\n"
         "HISTORY: -H STREAM -j STREAM_ID -R RUN -P PLAN [-I ITEM] [-A ATTEMPT] -M MACHINE "
         "-B BOOT -b STORE [-S SCHEMA]\n");
@@ -296,6 +296,7 @@ static int read_options(int argc, char **argv, struct options *op, int *rest)
     op->site.recipe = "tools/etude/tooling";
     op->site.volume = find_volume(argv[0]);
     op->site.cache = cache != NULL && *cache != '\0' ? cache : "build/tooling";
+    op->site.arch = getenv("ETUDE_TOOLING_ARCH");
     op->site.accel = getenv("RACH2_QEMU_ACCEL");
     op->site.envp = environ;
     op->job.outdir = ".";
@@ -306,6 +307,8 @@ static int read_options(int argc, char **argv, struct options *op, int *rest)
             op->site.recipe = argv[i + 1];
         else if (argv[i][1] == 'C')
             op->site.cache = argv[i + 1];
+        else if (argv[i][1] == 'p')
+            op->site.arch = argv[i + 1];
         else if (argv[i][1] == 'a')
             op->site.accel = argv[i + 1];
         else

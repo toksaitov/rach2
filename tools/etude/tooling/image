@@ -1,6 +1,8 @@
-# image: the Ubuntu cloud image the tooling machine is made from, which
-# etude-tooling downloads once and checks by its SHA-256. One line: the image's
-# architecture, its URL and its digest. A new image is a new line in place of
-# this one, from the SHA256SUMS of the same release directory; every machine
-# then makes its tooling machine again.
+# image: the Ubuntu cloud images the tooling machine is made from, which
+# etude-tooling downloads once and checks by their SHA-256. One line for each
+# architecture: the machine's architecture, amd64 or arm64, the image's URL
+# and its digest. A new image is a new line in place of the old one, from the
+# SHA256SUMS of the same release directory; every machine of that
+# architecture is then made again.
 amd64 https://cloud-images.ubuntu.com/releases/resolute/release-20260927/ubuntu-26.04-server-cloudimg-amd64.img 8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
+arm64 https://cloud-images.ubuntu.com/releases/resolute/release-20260927/ubuntu-26.04-server-cloudimg-arm64.img 63a93bd5a8d76e33b15ceb5daa3657bd79be804748051ab178e643b0f5da22e7

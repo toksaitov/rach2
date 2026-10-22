@@ -486,6 +486,7 @@ int etude_tooling_machine(const struct etude_tooling_site *site, struct etude_to
                           char *why, size_t whylen)
 {
     static const char *const files[] = ETUDE_TOOLING_RECIPE;
+    const char *arch = site->arch != NULL && *site->arch != '\0' ? site->arch : "amd64";
     char path[PATH_LEN], line[2048], *bytes;
     unsigned char digest[32];
     struct sha256 s;
@@ -494,23 +495,39 @@ int etude_tooling_machine(const struct etude_tooling_site *site, struct etude_to
     int found = 0;
 
     memset(m, 0, sizeof(*m));
+    if (strcmp(arch, "amd64") != 0 && strcmp(arch, "arm64") != 0)
+        return failure(why, whylen, "the machine's architecture is %s, not amd64 or arm64", arch);
     if (fmt(path, sizeof(path), "%s/image", site->recipe) != 0 || (f = fopen(path, "r")) == NULL)
         return failure(why, whylen, "the recipe has no image file: %s", path);
     while (fgets(line, sizeof(line), f) != NULL) {
+        struct etude_tooling_machine l;
+
+        memset(&l, 0, sizeof(l));
         if (line[0] == '#' || line[0] == '\n')
             continue;
-        if (found || sscanf(line, "%15s %1023s %64s", m->arch, m->url, m->image_sha256) != 3 ||
-            strlen(m->image_sha256) != 64 || strspn(m->image_sha256, "0123456789abcdef") != 64) {
+        if (sscanf(line, "%15s %1023s %64s", l.arch, l.url, l.image_sha256) != 3 ||
+            strlen(l.image_sha256) != 64 || strspn(l.image_sha256, "0123456789abcdef") != 64) {
             fclose(f);
             return failure(why, whylen, "%s: the image line is not ARCH URL SHA256", path);
         }
+        if (strcmp(l.arch, arch) != 0)
+            continue;
+        if (found) {
+            fclose(f);
+            return failure(why, whylen, "%s names two images for %s", path, arch);
+        }
+        memcpy(m->arch, l.arch, sizeof(m->arch));
+        memcpy(m->url, l.url, sizeof(m->url));
+        memcpy(m->image_sha256, l.image_sha256, sizeof(m->image_sha256));
         found = 1;
     }
     fclose(f);
     if (!found)
-        return failure(why, whylen, "%s names no image", path);
+        return failure(why, whylen, "%s names no image for %s", path, arch);
     sha256_init(&s);
-    sha256_update(&s, (const unsigned char *)"etude-tooling 1\n", 16);
+    sha256_update(&s, (const unsigned char *)"etude-tooling 2\n", 16);
+    snprintf(line, sizeof(line), "arch %s\n", m->arch);
+    sha256_update(&s, (const unsigned char *)line, strlen(line));
     for (i = 0; files[i] != NULL; i++) {
         if (fmt(path, sizeof(path), "%s/%s", site->recipe, files[i]) != 0 ||
             (bytes = slurp(path, 1u << 20, &len)) == NULL)
@@ -826,16 +843,30 @@ struct shape {
     int network;
 };
 
-/** Start QEMU's command line: the machine, its root disk and its consoles. */
-static int qemu_line(struct line *l, const struct etude_tooling_site *site, const char *dir,
-                     const char *root, const struct shape *shape)
+/**
+ * Start QEMU's command line: the machine, its root disk and its consoles. An
+ * amd64 machine is QEMU's default PC; an arm64 one is its `virt` board with
+ * the UEFI firmware QEMU installs, which gives the guest a second PL011
+ * serial port, ttyAMA1, for the second `-serial`.
+ */
+static int qemu_line(struct line *l, const struct etude_tooling_site *site,
+                     const struct etude_tooling_machine *m, const char *dir, const char *root,
+                     const struct shape *shape)
 {
+    int arm = strcmp(m->arch, "arm64") == 0;
     char path[PATH_LEN], v[PATH_LEN * 2];
 
     memset(l, 0, sizeof(*l));
-    if (find_program(site->envp, "qemu-system-x86_64", path, sizeof(path)) != 0)
+    if (find_program(site->envp, arm ? "qemu-system-aarch64" : "qemu-system-x86_64", path,
+                     sizeof(path)) != 0)
         return -1;
     arg(l, "%s", path);
+    if (arm) {
+        arg(l, "-M");
+        arg(l, "virt");
+        arg(l, "-bios");
+        arg(l, "edk2-aarch64-code.fd");
+    }
     arg(l, "-accel");
     arg(l, "%s", site->accel);
     arg(l, "-cpu");
@@ -972,7 +1003,7 @@ static int prepare_line(const struct etude_tooling_site *site, struct work *w, u
         return failure(why, whylen, "the path is too long");
     if (make_seed(site, w->dir, why, whylen) != 0 || run_program(site, create, why, whylen) != 0)
         return -1;
-    if (qemu_line(&w->l, site, w->dir, w->root, &shape) != 0 ||
+    if (qemu_line(&w->l, site, &w->m, w->dir, w->root, &shape) != 0 ||
         (disk(&w->l, "seed", seed, "raw", NULL, ""), w->l.failed))
         return failure(why, whylen, "QEMU's command line cannot be made");
     return 0;
@@ -1197,7 +1228,7 @@ static int job_line(const struct etude_tooling_site *site, const struct etude_to
     if (run_program(site, create, why, whylen) != 0 ||
         make_volume(site, job, w->dir, why, whylen) != 0)
         return -1;
-    if (qemu_line(&w->l, site, w->dir, w->root, &shape) != 0)
+    if (qemu_line(&w->l, site, &w->m, w->dir, w->root, &shape) != 0)
         return failure(why, whylen, "QEMU's command line cannot be made");
     disk(&w->l, "job", w->img, "raw", "etude-job", "");
     for (i = 0; job->disks != NULL && job->disks[i] != NULL; i++) {

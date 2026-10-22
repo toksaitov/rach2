@@ -6,7 +6,7 @@
 users: []
 ssh_pwauth: false
 runcmd:
-  - [sh, -c, 'mkdir -p /run/etude-seed && if mount -o ro LABEL=CIDATA /run/etude-seed; then sh /run/etude-seed/provision.sh /run/etude-seed; else echo "etude-tooling: provision: failed: the seed volume does not mount" > /dev/ttyS1; fi']
+  - [sh, -c, 'mkdir -p /run/etude-seed && if mount -o ro LABEL=CIDATA /run/etude-seed; then sh /run/etude-seed/provision.sh /run/etude-seed; else echo "etude-tooling: provision: failed: the seed volume does not mount" > $(ls /dev/ttyAMA1 2>/dev/null || echo /dev/ttyS1); fi']
 power_state:
   mode: poweroff
   condition: true
