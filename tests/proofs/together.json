@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "proof": "together",
+  "summary": "together_test.sh against private copies of tests/system/suites.mk whose makers of several files are explicit or grouped rules",
+  "tree": "private",
+  "sources": [
+    "tests/system/suites.mk"
+  ],
+  "artifacts": [
+    "${WORK}/suites.mk"
+  ],
+  "build": {
+    "argv": [
+      "/bin/cp",
+      "${SRC}/tests/system/suites.mk",
+      "${WORK}/suites.mk"
+    ],
+    "bound_s": 10
+  },
+  "test": {
+    "argv": [
+      "/usr/bin/env",
+      "TOGETHER_SUITES_MK=${WORK}/suites.mk",
+      "sh",
+      "tests/system/together_test.sh"
+    ],
+    "bound_s": 300,
+    "fail_prefix": "together-test: result: fail: "
+  },
+  "faults": [
+    {
+      "name": "explicit",
+      "summary": "the USB sticks made by an explicit rule with five targets, which runs the maker once for each",
+      "edits": [
+        {
+          "file": "tests/system/suites.mk",
+          "find": "$(call together,$(USB_CASE_STICKS)): ",
+          "replace": "$(USB_CASE_STICKS): "
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "makers: usbdisk_sticks.sh: rules that run it: 0 pattern, 5 explicit",
+          "usbdisk_sticks.sh: ran 5 times"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "grouped",
+      "summary": "the metal sticks made by a rule with grouped targets, which GNU Make 3.81 reads as a target named &",
+      "edits": [
+        {
+          "file": "tests/system/suites.mk",
+          "find": "$(call together,$(METAL_STICKS)): ",
+          "replace": "$(METAL_STICKS) &: "
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "no-grouped-targets: grouped targets in the makefiles: ",
+          "makers: metal_sticks.sh: rules that run it: 0 pattern, 3 explicit"
+        ],
+        "only": true
+      }
+    },
+    {
+      "name": "all-explicit",
+      "summary": "together giving each maker's files as the targets of an explicit rule",
+      "edits": [
+        {
+          "file": "tests/system/suites.mk",
+          "find": "together = $(addprefix %/,$(patsubst build/%,%,$(1)))\n",
+          "replace": "together = $(1)\n"
+        }
+      ],
+      "fails": {
+        "status": 1,
+        "lines": [
+          "rules that run it: 0 pattern, ",
+          " times; makers run twice: "
+        ],
+        "only": true
+      }
+    }
+  ]
+}
