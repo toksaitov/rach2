@@ -14,6 +14,10 @@
 # shellcheck disable=SC2034 # agents_rows.sh's pane reads it
 PANE=muse
 
+# The mark Muse puts before the answer a question has selected, U+27E9, in
+# UTF-8.
+SELECTED=$(printf '\342\237\251')
+
 row() {
     output "muse --version" env HOME="$WORK/home" muse --version
     same "the version" "$OUT" "Muse Code ${VERSION%%-*} ($VERSION)"
@@ -52,15 +56,53 @@ row_cleanup() {
     tmux -L muse kill-server 2>/dev/null || true
 }
 
+# muse_quit: end Muse in its window as a person does, with Ctrl-C twice, and
+# wait until the window shows that Muse ended. Muse takes the first press as
+# a request to quit and shows "Press Ctrl-C again to quit" for three seconds;
+# a second press while the notice shows quits. While local work, such as a
+# background command, is still active, Muse asks first whether to exit, and
+# the row answers Exit anyway. The row reads the screen once a second and
+# presses the keys that the screen's state calls for each time the state
+# changes: both presses on the prompt, the second on the notice, and Up and
+# then Enter on the question. A press that Muse has yet to read leaves the
+# state as it was and is not repeated; a notice that ends before the second
+# press is read leaves the prompt, where the row presses twice again.
+muse_quit() {
+    local n=0 screen state seen=''
+    while :; do
+        screen=$(tmux -u -L muse capture-pane -p -t muse)
+        case "$screen" in
+            *"muse ended with status"*) return 0 ;;
+            *"$SELECTED 1. Exit anyway"*"Enter to confirm"*)
+                keys Enter
+                pane "the session exit" "muse ended with status" 120
+                return
+                ;;
+            *"Exit anyway"*) state=Up ;;
+            *"Press Ctrl-C again to quit"*) state=C-c ;;
+            *) state="C-c C-c" ;;
+        esac
+        if [ "$state" != "$seen" ]; then
+            # shellcheck disable=SC2086 # a state calls for one key or two
+            keys $state
+            seen=$state
+        fi
+        if [ "$n" -ge 120 ]; then
+            pane "the session exit" "muse ended with status" 0
+            return 1
+        fi
+        n=$((n + 1))
+        sleep 1
+    done
+}
+
 # Run the shared script in headless mode or in the terminal, in a fresh home.
-# In the terminal the row ends Muse with Ctrl-C, which ends it or has it ask
-# for a second. The row reads the screen until it changes, a fifth of a
-# second apart so that a brief question is seen, and sends the second Ctrl-C
-# unless the screen shows Muse ended. The script that runs Muse ignores
-# Ctrl-C once Muse has ended, so a second one that comes then does not end
-# the window.
+# In the terminal the row ends Muse with muse_quit. The script that runs Muse
+# runs a handler of its own on SIGINT while Muse runs, which Muse does not
+# inherit, and ignores SIGINT once Muse has ended, so a Ctrl-C that comes
+# after the end does not end the window.
 muse_session() {
-    local began screen before end
+    local began screen
     mkdir -p "$WORK/session/home/.config/muse" "$WORK/session/repo" /tmp/agents/results
     cp /tmp/agents/fixture/* "$WORK/session/repo/"
     cat > "$WORK/session/home/.gitconfig" <<'EOF'
@@ -109,6 +151,7 @@ EOF
         cat > "$WORK/session/start.sh" <<EOF
 #!/bin/bash
 cd '$WORK/session/repo' || exit 1
+trap : INT
 env -i PATH='$PATH' HOME='$WORK/session/home' TMPDIR='$WORK/session' \\
     LANG=C.UTF-8 TERM=xterm-256color META_API_KEY=meta-fakeapi-dummy \\
     muse --yolo --model muse-spark-1.2 \\
@@ -122,21 +165,7 @@ EOF
             "/bin/bash '$WORK/session/start.sh'" || fail "the tmux session"
         pane "the completed session" "the change is committed." 300
         tmux -L muse capture-pane -p -S - -t muse > "$WORK/session/screen.txt"
-        before=$(tmux -L muse capture-pane -p -t muse)
-        tmux -L muse send-keys -t muse C-c
-        end=$((SECONDS + 60))
-        while screen=$(tmux -L muse capture-pane -p -t muse) && [ "$screen" = "$before" ]; do
-            if [ "$SECONDS" -ge "$end" ]; then
-                fail "the first Ctrl-C: in 60 s the screen did not change"
-                break
-            fi
-            sleep 0.2
-        done
-        case "$screen" in
-            *"muse ended with status"*) ;;
-            *) tmux -L muse send-keys -t muse C-c ;;
-        esac
-        pane "the session exit" "muse ended with status" 60
+        muse_quit
         screen=$(tmux -L muse capture-pane -p -t muse)
         case "$screen" in
             *"muse ended with status 0"*|*"muse ended with status 130"*) ;;
