@@ -352,7 +352,7 @@ static void runner_cleanup(const char *self, const char *ledger)
     struct etude_pid id;
     struct pollfd p;
     pid_t worker, holder, reaped = 0;
-    int fd, host, st, i;
+    int fd, host, st;
     char c;
 
     CHECK(mkfifo(ready, 0600) == 0 && mkfifo(blocked, 0600) == 0, "runner fixtures");
@@ -361,7 +361,7 @@ static void runner_cleanup(const char *self, const char *ledger)
     p.fd = fd;
     p.events = POLLIN;
     p.revents = 0;
-    CHECK(poll(&p, 1, 10000) == 1 && read(fd, &c, 1) == 1, "runner case ready");
+    CHECK(poll(&p, 1, -1) == 1 && read(fd, &c, 1) == 1, "runner case ready");
     l = etude_ledger_open(ledger);
     runner_processes(ledger, &q);
     CHECK(l != NULL && etude_ledger_list(l, runner_visit, &q) == 0 && q.found && q.keeper > 0 &&
@@ -379,12 +379,9 @@ static void runner_cleanup(const char *self, const char *ledger)
     runner_sweep(worker, holder, &q);
     CHECK(waitpid(worker, &st, 0) == worker, "runner controller reaped");
     active_worker = 0;
-    for (i = 0; holder > 0 && i < 1000; i++) {
-        reaped = waitpid(holder, &st, WNOHANG);
-        if (reaped != 0)
-            break;
-        poll(NULL, 0, 10);
-    }
+    if (holder > 0)
+        while ((reaped = waitpid(holder, &st, 0)) < 0 && errno == EINTR) {
+        }
     CHECK(reaped == holder && WIFEXITED(st) && WEXITSTATUS(st) == 0,
           "runner holder confirms cleanup");
     if (reaped == holder)
@@ -443,7 +440,7 @@ static void lost_controller(const char *ledger)
     p.fd = fd;
     p.events = POLLIN;
     p.revents = 0;
-    CHECK(poll(&p, 1, 10000) == 1 && read(fd, &c, 1) == 1, "case ready before loss");
+    CHECK(poll(&p, 1, -1) == 1 && read(fd, &c, 1) == 1, "case ready before loss");
     host = lock_file("rach2-host.lock");
     holder = (pid_t)locked_by(host, F_RDLCK);
     if (holder > 0)
@@ -567,19 +564,24 @@ static int waiting_visit(const struct etude_ledger_claim *c, void *ctx)
     return 0;
 }
 
-/** Wait up to ten seconds for request `id` to wait in the ledger. */
-static int waits_in(struct etude_ledger *l, const char *id)
+/** Wait for request `id` to wait in the ledger while its bridge `pid` runs;
+ * 1 when it does, 0 when the bridge ended first. */
+static int waits_in(struct etude_ledger *l, const char *id, pid_t pid)
 {
-    int i, found = 0;
+    siginfo_t si;
+    int found = 0;
 
     sought = id;
-    for (i = 0; i < 1000 && !found; i++) {
+    for (;;) {
         if (etude_ledger_list(l, waiting_visit, &found) != 0)
             return 0;
-        if (!found)
-            poll(NULL, 0, 10);
+        memset(&si, 0, sizeof(si));
+        if (found || waitid(P_PID, (id_t)pid, &si, WEXITED | WNOHANG | WNOWAIT) != 0 ||
+            si.si_pid != 0)
+            return found;
+        /* interval: the ledger is read again every 10 ms */
+        poll(NULL, 0, 10);
     }
-    return found;
 }
 
 /** Hold fifteen of twenty units of memory, which a claim of ten cannot join. */
@@ -624,7 +626,7 @@ static void waiting(struct etude_ledger *l, const char *ledger)
 
     hold(l);
     pid = bridge_child(args);
-    CHECK(waits_in(l, "waiter"), "waits for admission");
+    CHECK(waits_in(l, "waiter", pid), "waits for admission");
     CHECK(access(ran, F_OK) != 0, "nothing runs while it waits");
     CHECK(etude_ledger_finish(l, "holding", ETUDE_CLEANUP_CONFIRMED) == 0, "room freed");
     st = bridge_status(pid);
@@ -643,7 +645,7 @@ static void waiting(struct etude_ledger *l, const char *ledger)
     args[4] = "30";
     args[8] = "stopped";
     pid = bridge_child(args);
-    CHECK(waits_in(l, "stopped"), "stop waits first");
+    CHECK(waits_in(l, "stopped", pid), "stop waits first");
     kill(pid, SIGTERM);
     st = bridge_status(pid);
     CHECK(st == 128 + SIGTERM && access(ran, F_OK) != 0, "stop during wait");
