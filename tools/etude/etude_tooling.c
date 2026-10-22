@@ -4,6 +4,7 @@
  * tools/etude/Readme.md gives its usage.
  */
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,9 @@ extern char **environ;
 
 /* The most files, disks and outputs a job names. */
 #define LIST_MAX 64
+
+/* The signal that asked the command to stop, or 0. */
+static volatile sig_atomic_t stop_signal;
 
 /* The history's options. */
 struct record {
@@ -41,6 +45,37 @@ static int usage(void)
         "HISTORY: -H STREAM -j STREAM_ID -R RUN -P PLAN [-I ITEM] [-A ATTEMPT] -M MACHINE "
         "-B BOOT -b STORE [-S SCHEMA]\n");
     return 2;
+}
+
+/** Note the signal that asks the command to stop. */
+static void on_signal(int sig)
+{
+#ifdef _WIN32
+    /* Windows sets the handler back to its default before it calls it. */
+    signal(sig, on_signal);
+#endif
+    stop_signal = sig;
+}
+
+/**
+ * Catch the signals that stop a boot, so that its QEMU is stopped and its
+ * files are removed before the command exits.
+ */
+static void catch_signals(void)
+{
+#ifdef _WIN32
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+#else
+    struct sigaction sa;
+
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = on_signal;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+#endif
 }
 
 /** Read a count of at least 1 and at most `max`; 0 when it is not one. */
@@ -283,7 +318,8 @@ static int prepare(struct options *op, const struct etude_tooling_machine *m)
         printf("etude-tooling: result: %s %s %s\n", res.reused ? "reused" : "made", m->key,
                m->disk);
     else
-        printf("etude-tooling: result: failed: %s%s%s\n", res.why,
+        printf("etude-tooling: result: %s: %s%s%s\n",
+               res.outcome == ETUDE_TOOLING_STOPPED ? "stopped" : "failed", res.why,
                res.dir[0] != '\0' ? "; its logs are in " : "", res.dir);
     return rc == 0 ? 0 : 1;
 }
@@ -308,8 +344,10 @@ static int run(struct options *op, const struct etude_tooling_machine *m, const 
         rc = -1, res.outcome = ETUDE_TOOLING_FAILED;
     if (res.outcome != ETUDE_TOOLING_ENDED)
         fprintf(stderr, "etude-tooling: result: %s: %s%s%s\n",
-                res.outcome == ETUDE_TOOLING_LATE ? "late" : "failed", res.why,
-                res.dir[0] != '\0' ? "; its files are in " : "", res.dir);
+                res.outcome == ETUDE_TOOLING_LATE      ? "late"
+                : res.outcome == ETUDE_TOOLING_STOPPED ? "stopped"
+                                                       : "failed",
+                res.why, res.dir[0] != '\0' ? "; its files are in " : "", res.dir);
     else if (res.dir[0] != '\0')
         fprintf(stderr, "etude-tooling: the job's files are in %s\n", res.dir);
     etude_tooling_result_free(&res);
@@ -326,7 +364,7 @@ int main(int argc, char **argv)
     struct etude_tooling_machine m;
     const char *command;
     char why[512];
-    int i, rest, made;
+    int i, rest, made, rc;
     FILE *f;
 
 #ifdef _WIN32
@@ -354,9 +392,13 @@ int main(int argc, char **argv)
         fprintf(stderr, "etude-tooling: name QEMU's accelerator with -a or RACH2_QEMU_ACCEL\n");
         return usage();
     }
+    catch_signals();
+    op.site.stop = &stop_signal;
     if (strcmp(command, "prepare") == 0 && rest == argc)
-        return prepare(&op, &m);
-    if (strcmp(command, "run") == 0 && rest + 1 == argc)
-        return run(&op, &m, argv[rest]);
-    return usage();
+        rc = prepare(&op, &m);
+    else if (strcmp(command, "run") == 0 && rest + 1 == argc)
+        rc = run(&op, &m, argv[rest]);
+    else
+        return usage();
+    return stop_signal != 0 ? 128 + stop_signal : rc;
 }

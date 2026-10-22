@@ -9,6 +9,7 @@
 #ifndef ETUDE_TOOLING_H
 #define ETUDE_TOOLING_H
 
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -24,10 +25,12 @@
  * `envp`: qemu-system-x86_64, qemu-img, curl, and mtools' mformat, mmd and
  * mcopy. */
 struct etude_tooling_site {
-    const char *recipe; /* the recipe's directory */
-    const char *cache;  /* the image, the made machine and the jobs' copies */
-    const char *accel;  /* QEMU's accelerator: kvm, hvf, whpx or tcg */
-    char *const *envp;  /* the environment of every program run */
+    const char *recipe;          /* the recipe's directory */
+    const char *cache;           /* the image, the made machine and the jobs' copies */
+    const char *accel;           /* QEMU's accelerator: kvm, hvf, whpx or tcg */
+    char *const *envp;           /* the environment of every program run */
+    volatile sig_atomic_t *stop; /* nonzero once a signal asks the boot to
+                                    stop, or NULL */
 };
 
 /* The machine a recipe makes: its key, the digest of the recipe and the
@@ -59,7 +62,8 @@ struct etude_tooling_job {
 enum etude_tooling_outcome {
     ETUDE_TOOLING_ENDED,  /* the job ran and the runner wrote its volume */
     ETUDE_TOOLING_FAILED, /* the machine, the runner or the host's side failed */
-    ETUDE_TOOLING_LATE    /* the deadline passed, and QEMU was stopped */
+    ETUDE_TOOLING_LATE,   /* the deadline passed, and QEMU was stopped */
+    ETUDE_TOOLING_STOPPED /* a signal asked it to stop, and QEMU was stopped */
 };
 
 /* The steps of a boot: from QEMU's start to the job's start, the job, and
@@ -113,7 +117,9 @@ int etude_tooling_machine(const struct etude_tooling_site *site, struct etude_to
  * Make the machine unless the cache has it: download and check the image,
  * boot a copy of it with the seed volume and the network, wait until
  * provision.sh reports, and publish the copy, read-only, under its key.
- * `deadline_us` bounds the boot, 0 giving two hours.
+ * `deadline_us` bounds the boot, 0 giving two hours. When `site->stop` is
+ * set before the machine is published, the program running is stopped and
+ * the boot's files are removed.
  *
  * @return 0 when the machine is there, made now or before; -1 otherwise,
  *         with the reason in `res->why`.
@@ -124,10 +130,14 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
 /**
  * Run `job` in a private copy of the made machine and bring its outputs back.
  *
+ * When `site->stop` is set before the job's outputs are back, the program
+ * running, QEMU or a tool, is stopped, and the job's directory is removed
+ * unless `job->keep` asks to keep it.
+ *
  * @return 0 when the job ran to its end, whatever its status; -1 when the
- *         machine is not made, it failed, or the deadline passed. `res` has
- *         the outcome, the job's output and the cost either way, and the
- *         caller frees it with etude_tooling_result_free.
+ *         machine is not made, it failed, the deadline passed, or a signal
+ *         stopped it. `res` has the outcome, the job's output and the cost
+ *         either way, and the caller frees it with etude_tooling_result_free.
  */
 int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_tooling_job *job,
                       struct etude_tooling_result *res);

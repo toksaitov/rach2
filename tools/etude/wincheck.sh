@@ -56,8 +56,8 @@ text-stdout|etude_tooling.c|    _setmode(_fileno(stdout), _O_BINARY);|    (void)
 unchecked-digest|tooling.c|    if (file_sha256(part, hex) != 0 \|\| strcmp(hex, m->image_sha256) != 0) {|    if (file_sha256(part, hex) != 0) {|tooling-digest
 unprovisioned|tooling.c|    if (!b->provisioned \|\| b->failed[0] != '\0')|    if (b->failed[0] == 'x')|tooling-provision
 status-unchecked|tooling.c|            if (sscanf(data, "%d", \&status) != 1 \|\| status != res->status) {|            if (sscanf(data, "%d", \&status) != 1) {|tooling-lie
-no-outputs|tooling.c|        if (run_program(site->envp, out, res->why, sizeof(res->why)) != 0)|        if (0)|tooling-job
-no-deadline|tooling.c|            etude_exec_cancel(b->p);|            (void)b;|tooling-late
+no-outputs|tooling.c|        if (run_program(site, out, res->why, sizeof(res->why)) != 0)|        if (0)|tooling-job
+no-deadline|tooling.c|            end = BOOT_LATE;|            continue;|tooling-late
 no-bootindex|tooling.c|    disk(l, "root", root, "qcow2", NULL, ",bootindex=0");|    disk(l, "root", root, "qcow2", NULL, "");|tooling-line
 status-passes|tooling.c|    if (s->done \&\& !res->making \&\& i == ETUDE_TOOLING_JOB \&\& res->status != 0) {|    if (0) {|tooling-status
 EOF

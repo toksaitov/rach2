@@ -20,8 +20,10 @@
 # The rows: a machine made, recorded and reused; an image with another
 # digest, refused; a provision that fails, which publishes nothing; a job
 # with its inputs, a disk and its outputs, recorded; a job that exits 3; a
-# run before the machine is made; a hang past the deadline; QEMU's crash; a
-# runner whose status disagrees with the volume's; and QEMU's command line.
+# run before the machine is made; a hang past the deadline; a hang stopped by
+# SIGTERM, which must stop QEMU, remove the job's directory and exit 143;
+# QEMU's crash; a runner whose status disagrees with the volume's; and QEMU's
+# command line.
 #
 # With --mutate each fault below is put into the copy and must fail exactly
 # its expected rows; the copy is restored and the rows run again at the end.
@@ -273,6 +275,32 @@ row() {
             { echo 'the late job is not incomplete' > "$work/why"; return 1; }
         ls -d "$CACHE"/job-* > /dev/null 2>&1 || { echo "the evidence was not kept" > "$work/why"; return 1; }
         ;;
+    stop)
+        made || { echo 'not made' > "$work/why"; return 1; }
+        echo hang > "$FIX/qemu"
+        # shellcheck disable=SC2046 # the options are words
+        "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -a tcg run $(history stop) "$work/job.sh" \
+            > /dev/null 2> "$work/stderr" &
+        pid=$!
+        n=0
+        until grep -q '^etude-job: start$' "$CACHE"/job-*/channel.log 2> /dev/null; do
+            n=$((n + 1))
+            if [ "$n" -gt 20 ]; then
+                kill -KILL "$pid"; wait "$pid"
+                echo 'the job did not start' > "$work/why"
+                return 1
+            fi
+            sleep 1
+        done
+        kill -TERM "$pid"
+        wait "$pid"; rc=$?
+        [ "$rc" = 143 ] && grep -q 'result: stopped: a signal stopped the job$' "$work/stderr" ||
+            { echo "status $rc" > "$work/why"; cat "$work/stderr" >> "$work/why"; return 1; }
+        [ ! -e "$FIX/woke" ] || { echo 'QEMU was not stopped by the signal' > "$work/why"; return 1; }
+        ls -d "$CACHE"/job-* > /dev/null 2>&1 && { echo "the job's directory was left" > "$work/why"; return 1; }
+        grep -q '"stage":"execute".*"outcome":"cancelled"' "$work/stop.jsonl" ||
+            { echo 'the stopped job is not cancelled' > "$work/why"; return 1; }
+        ;;
     crash)
         made || { echo 'not made' > "$work/why"; return 1; }
         echo crash > "$FIX/qemu"
@@ -306,7 +334,7 @@ row() {
     return 0
 }
 
-rows='made digest provision job status unmade late crash lie line'
+rows='made digest provision job status unmade late stop crash lie line'
 
 # rows: build the copy and run every row, print `etude-tooling-test: failed:
 # NAME` for each that fails, and fail when any did.
@@ -330,8 +358,10 @@ faults() {
 unchecked-digest~    if (file_sha256(part, hex) != 0 || strcmp(hex, m->image_sha256) != 0) {~    if (file_sha256(part, hex) != 0) {
 unprovisioned~    if (!b->provisioned || b->failed[0] != '\0')~    if (b->failed[0] == 'x')
 status-unchecked~            if (sscanf(data, "%d", &status) != 1 || status != res->status) {~            if (sscanf(data, "%d", &status) != 1) {
-no-outputs~        if (run_program(site->envp, out, res->why, sizeof(res->why)) != 0)~        if (0)
-no-deadline~            etude_exec_cancel(b->p);~            (void)b;
+no-outputs~        if (run_program(site, out, res->why, sizeof(res->why)) != 0)~        if (0)
+no-deadline~            end = BOOT_LATE;~            continue;
+no-stop~            end = BOOT_STOPPED;~            continue;
+stop-kept~    if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) || job->keep)~    if (res->outcome != ETUDE_TOOLING_ENDED || job->keep)
 no-bootindex~    disk(l, "root", root, "qcow2", NULL, ",bootindex=0");~    disk(l, "root", root, "qcow2", NULL, "");
 status-passes~    if (s->done && !res->making && i == ETUDE_TOOLING_JOB && res->status != 0) {~    if (0) {
 EOF
@@ -378,10 +408,12 @@ if [ "$mode" = mutate ]; then
     expect_fault status-unchecked 'lie' || exit 1
     expect_fault no-outputs 'job' || exit 1
     expect_fault no-deadline 'late' || exit 1
+    expect_fault no-stop 'stop' || exit 1
+    expect_fault stop-kept 'stop' || exit 1
     expect_fault no-bootindex 'line' || exit 1
     expect_fault status-passes 'status' || exit 1
     fault none
     rows >&2 || exit 1
-    echo 'etude-tooling-test: result: pass: seven faults caught and restored'
+    echo 'etude-tooling-test: result: pass: nine faults caught and restored'
 fi
-echo 'etude-tooling-test: result: pass: 10 rows'
+echo 'etude-tooling-test: result: pass: 11 rows'

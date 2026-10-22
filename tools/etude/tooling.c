@@ -344,18 +344,26 @@ static int find_program(char *const *envp, const char *name, char *out, size_t s
     return -1;
 }
 
+/** Say whether a signal has asked the boot to stop. */
+static int stopped(const struct etude_tooling_site *site)
+{
+    return site->stop != NULL && *site->stop != 0;
+}
+
 /**
- * Run a program to its end. `argv[0]` is a name found on the PATH.
+ * Run a program to its end, or until a signal asks the boot to stop.
+ * `argv[0]` is a name found on the PATH of `site->envp`.
  *
- * @return its exit status, or -1 when it did not run or did not exit, with
- *         `why` saying so; a status other than 0 also sets `why`, with the
- *         program's standard error.
+ * @return its exit status, or -1 when it did not run, did not exit or was
+ *         stopped, with `why` saying so; a status other than 0 also sets
+ *         `why`, with the program's standard error.
  */
-static int run_program(char *const *envp, char *const *argv, char *why, size_t whylen)
+static int run_program(const struct etude_tooling_site *site, char *const *argv, char *why,
+                       size_t whylen)
 {
     struct etude_exec *ex;
     struct etude_exec_spec spec;
-    struct etude_proc *p;
+    struct etude_proc *p, *done;
     const struct etude_exec_result *r;
     char path[PATH_LEN], *args[64];
     const char *name = argv[0];
@@ -368,7 +376,7 @@ static int run_program(char *const *envp, char *const *argv, char *why, size_t w
         args[n] = argv[n];
     }
     args[n] = NULL;
-    if (find_program(envp, name, path, sizeof(path)) != 0)
+    if (find_program(site->envp, name, path, sizeof(path)) != 0)
         return failure(why, whylen, "%s is not found on the PATH", name);
     if ((ex = etude_exec_new()) == NULL)
         return failure(why, whylen, "out of memory");
@@ -376,7 +384,7 @@ static int run_program(char *const *envp, char *const *argv, char *why, size_t w
     spec.attempt_id = name;
     args[0] = path;
     spec.argv = args;
-    spec.envp = envp;
+    spec.envp = site->envp;
     spec.output_max = OUTPUT_MAX;
     spec.grace_us = 5000000;
     if (etude_exec_start(ex, &spec, &p) != 0) {
@@ -384,12 +392,15 @@ static int run_program(char *const *envp, char *const *argv, char *why, size_t w
         etude_exec_free(ex);
         return -1;
     }
-    while (etude_exec_wait(ex, -1) != p)
-        ;
+    while ((done = etude_exec_wait(ex, POLL_MS)) != p)
+        if (done == NULL && stopped(site))
+            etude_exec_cancel(p);
     r = etude_proc_result(p);
     if (r->end == ETUDE_END_EXITED)
         status = r->value;
-    if (status != 0)
+    if (r->end == ETUDE_END_STOPPED)
+        failure(why, whylen, "%s was stopped by a signal", name);
+    else if (status != 0)
         failure(why, whylen, "%s %s %d: %.300s", name,
                 r->end == ETUDE_END_EXITED ? "exited with status" : "ended by signal", r->value,
                 r->err.data != NULL ? r->err.data : "");
@@ -624,26 +635,29 @@ static void read_channel(struct boot *b)
     }
 }
 
+/* How a boot ended: by itself, at its deadline, or by a signal's request. */
+enum { BOOT_ENDED, BOOT_LATE, BOOT_STOPPED };
+
 /**
  * Boot QEMU with `argv` and serve it until it ends: read its channel, sample
- * it, and stop it when `deadline_us` passes.
+ * it, and stop it when `deadline_us` passes or a signal asks it to stop.
  *
- * @return 0 when it ended by itself, 1 when the deadline stopped it, -1 when
- *         it did not start.
+ * @return BOOT_ENDED, BOOT_LATE or BOOT_STOPPED, or -1 when it did not
+ *         start.
  */
-static int boot_run(struct boot *b, char **argv, char *const *envp, uint64_t deadline_us, char *why,
-                    size_t whylen)
+static int boot_run(struct boot *b, const struct etude_tooling_site *site, char **argv,
+                    uint64_t deadline_us, char *why, size_t whylen)
 {
     struct etude_exec_spec spec;
     struct etude_reading now;
     const struct etude_exec_result *r;
     uint64_t begin;
-    int late = 0;
+    int end = BOOT_ENDED;
 
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = "tooling";
     spec.argv = argv;
-    spec.envp = envp;
+    spec.envp = site->envp;
     spec.output_max = OUTPUT_MAX;
     spec.grace_us = 10000000;
     if ((b->ex = etude_exec_new()) == NULL)
@@ -665,21 +679,26 @@ static int boot_run(struct boot *b, char **argv, char *const *envp, uint64_t dea
         }
         if (done == b->p)
             break;
-        if (etude_history_now(&now) == 0 && now.monotonic_us - begin > deadline_us && !late) {
-            late = 1;
-            etude_exec_cancel(b->p);
-        }
+        if (end != BOOT_ENDED)
+            continue;
+        if (stopped(site))
+            end = BOOT_STOPPED;
+        else if (etude_history_now(&now) == 0 && now.monotonic_us - begin > deadline_us)
+            end = BOOT_LATE;
+        else
+            continue;
+        etude_exec_cancel(b->p);
     }
     r = etude_proc_result(b->p);
     b->cost->cpu_us = r->cpu_us;
     b->cost->peak_bytes = r->peak_bytes;
     b->cost->cleanup = r->cleanup;
-    if (!late && r->end == ETUDE_END_EXITED && r->value != 0 && b->failed[0] == '\0')
+    if (end == BOOT_ENDED && r->end == ETUDE_END_EXITED && r->value != 0 && b->failed[0] == '\0')
         failure(b->failed, sizeof(b->failed), "QEMU exited with status %d: %.300s", r->value,
                 r->err.data != NULL ? r->err.data : "");
-    else if (!late && r->end != ETUDE_END_EXITED && b->failed[0] == '\0')
+    else if (end == BOOT_ENDED && r->end != ETUDE_END_EXITED && b->failed[0] == '\0')
         failure(b->failed, sizeof(b->failed), "QEMU ended by signal %d", r->value);
-    return late;
+    return end;
 }
 
 /** Free a boot's executor. */
@@ -800,7 +819,7 @@ static int download(const struct etude_tooling_site *site, const struct etude_to
     if (fmt(part, sizeof(part), "%s.%ld.part", m->image, (long)getpid()) != 0)
         return failure(why, whylen, "the cache's path is too long");
     fprintf(stderr, "etude-tooling: prepare: downloading %s\n", m->url);
-    if (run_program(site->envp, argv, why, whylen) != 0) {
+    if (run_program(site, argv, why, whylen) != 0) {
         remove(part);
         return -1;
     }
@@ -829,12 +848,12 @@ static int make_seed(const struct etude_tooling_site *site, const char *dir, cha
 
     if (fmt(img, sizeof(img), "%s/seed.img", dir) != 0)
         return failure(why, whylen, "the path is too long");
-    if (run_program(site->envp, mformat, why, whylen) != 0)
+    if (run_program(site, mformat, why, whylen) != 0)
         return -1;
     for (i = 0; files[i] != NULL; i++) {
         if (fmt(src, sizeof(src), "%s/%s", site->recipe, files[i]) != 0)
             return failure(why, whylen, "the path is too long");
-        if (run_program(site->envp, mcopy, why, whylen) != 0)
+        if (run_program(site, mcopy, why, whylen) != 0)
             return -1;
     }
     return 0;
@@ -892,13 +911,25 @@ static int prepare_line(const struct etude_tooling_site *site, struct work *w, u
         fmt(seed, sizeof(seed), "%s/seed.img", w->dir) != 0 ||
         fmt(w->b.channel, sizeof(w->b.channel), "%s/channel.log", w->dir) != 0)
         return failure(why, whylen, "the path is too long");
-    if (make_seed(site, w->dir, why, whylen) != 0 ||
-        run_program(site->envp, create, why, whylen) != 0)
+    if (make_seed(site, w->dir, why, whylen) != 0 || run_program(site, create, why, whylen) != 0)
         return -1;
     if (qemu_line(&w->l, site, w->dir, w->root, &shape) != 0 ||
         (disk(&w->l, "seed", seed, "raw", NULL, ""), w->l.failed))
         return failure(why, whylen, "QEMU's command line cannot be made");
     return 0;
+}
+
+/**
+ * Make the outcome of a boot that had not ended STOPPED when a signal asked
+ * it to stop, with `what` the part that the signal stopped.
+ */
+static void note_stop(const struct etude_tooling_site *site, struct etude_tooling_result *res,
+                      const char *what)
+{
+    if (res->outcome == ETUDE_TOOLING_ENDED || !stopped(site))
+        return;
+    res->outcome = ETUDE_TOOLING_STOPPED;
+    failure(res->why, sizeof(res->why), "a signal stopped %s", what);
 }
 
 /** Judge a provisioning boot, and publish its disk and its report. */
@@ -938,7 +969,7 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     static const char *const scratch[] = {"seed.img", "console.log", "channel.log", NULL};
     struct work w;
     struct etude_reading now;
-    int late;
+    int end;
 
     memset(res, 0, sizeof(*res));
     memset(&w, 0, sizeof(w));
@@ -960,18 +991,20 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     step_begin(&w.b, ETUDE_TOOLING_START, &now);
     if (prepare_line(site, &w, cpus, res->why, sizeof(res->why)) == 0) {
         fprintf(stderr, "etude-tooling: prepare: provisioning %s\n", w.m.key);
-        late = boot_run(&w.b, w.l.argv, site->envp, deadline_us > 0 ? deadline_us : 7200000000u,
-                        res->why, sizeof(res->why));
-        if (late >= 0)
-            prepare_publish(&w, late, res);
+        end = boot_run(&w.b, site, w.l.argv, deadline_us > 0 ? deadline_us : 7200000000u, res->why,
+                       sizeof(res->why));
+        if (end == BOOT_ENDED || end == BOOT_LATE)
+            prepare_publish(&w, end == BOOT_LATE, res);
     }
+    note_stop(site, res, "the provisioning");
     res->cost.disk_bytes = used_bytes(w.m.disk) + used_bytes(w.m.image);
     if (w.root[0] != '\0' && exists(w.root)) {
         res->cost.disk_bytes += used_bytes(w.root);
         remove(w.root);
     }
     boot_free(&w.b);
-    if (w.dir[0] != '\0' && res->outcome != ETUDE_TOOLING_ENDED)
+    if (w.dir[0] != '\0' && res->outcome != ETUDE_TOOLING_ENDED &&
+        res->outcome != ETUDE_TOOLING_STOPPED)
         snprintf(res->dir, sizeof(res->dir), "%s", w.dir);
     else if (w.dir[0] != '\0' && remove_dir(w.dir, scratch) != 0)
         res->cost.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
@@ -1005,15 +1038,13 @@ static int make_volume(const struct etude_tooling_site *site, const struct etude
         fprintf(f, "%s\n", *p);
     if (fclose(f) != 0)
         return failure(why, whylen, "%s cannot be written", names);
-    if (run_program(site->envp, mformat, why, whylen) != 0 ||
-        run_program(site->envp, mmd, why, whylen) != 0 ||
-        run_program(site->envp, script, why, whylen) != 0 ||
-        run_program(site->envp, list, why, whylen) != 0)
+    if (run_program(site, mformat, why, whylen) != 0 || run_program(site, mmd, why, whylen) != 0 ||
+        run_program(site, script, why, whylen) != 0 || run_program(site, list, why, whylen) != 0)
         return -1;
     for (p = job->inputs; p != NULL && *p != NULL; p++) {
         if (fmt(src, sizeof(src), "%s", *p) != 0)
             return failure(why, whylen, "the path is too long");
-        if (run_program(site->envp, input, why, whylen) != 0)
+        if (run_program(site, input, why, whylen) != 0)
             return -1;
     }
     return 0;
@@ -1036,7 +1067,7 @@ static int read_volume(const struct etude_tooling_site *site, const struct etude
         if (fmt(from, sizeof(from), "::%s", names[i]) != 0 ||
             fmt(to, sizeof(to), "%s/%s", dir, names[i]) != 0)
             return failure(res->why, sizeof(res->why), "the path is too long");
-        if (run_program(site->envp, get, res->why, sizeof(res->why)) != 0)
+        if (run_program(site, get, res->why, sizeof(res->why)) != 0)
             return -1;
         if ((data = slurp(to, JOB_OUTPUT_MAX, &len)) == NULL)
             return failure(res->why, sizeof(res->why), "%s cannot be read", to);
@@ -1058,7 +1089,7 @@ static int read_volume(const struct etude_tooling_site *site, const struct etude
     for (i = 0; job->outputs != NULL && job->outputs[i] != NULL; i++) {
         if (fmt(from, sizeof(from), "::out/%s", job->outputs[i]) != 0)
             return failure(res->why, sizeof(res->why), "the path is too long");
-        if (run_program(site->envp, out, res->why, sizeof(res->why)) != 0)
+        if (run_program(site, out, res->why, sizeof(res->why)) != 0)
             return -1;
     }
     return 0;
@@ -1082,7 +1113,7 @@ static int job_line(const struct etude_tooling_site *site, const struct etude_to
         fmt(w->img, sizeof(w->img), "%s/job.img", w->dir) != 0 ||
         fmt(w->b.channel, sizeof(w->b.channel), "%s/channel.log", w->dir) != 0)
         return failure(why, whylen, "the path is too long");
-    if (run_program(site->envp, create, why, whylen) != 0 ||
+    if (run_program(site, create, why, whylen) != 0 ||
         make_volume(site, job, w->dir, why, whylen) != 0)
         return -1;
     if (qemu_line(&w->l, site, w->dir, w->root, &shape) != 0)
@@ -1125,7 +1156,7 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
     struct work w;
     struct etude_reading now;
     size_t i;
-    int late, whole;
+    int end, whole;
 
     memset(res, 0, sizeof(*res));
     memset(&w, 0, sizeof(w));
@@ -1143,17 +1174,17 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
         return failure(res->why, sizeof(res->why), "a directory in %s cannot be made: %s",
                        site->cache, strerror(errno));
     if (job_line(site, job, &w, res->why, sizeof(res->why)) == 0) {
-        late = boot_run(&w.b, w.l.argv, site->envp,
-                        job->deadline_us > 0 ? job->deadline_us : 1800000000u, res->why,
-                        sizeof(res->why));
-        if (late >= 0)
-            job_judge(site, job, &w, late, res);
+        end = boot_run(&w.b, site, w.l.argv, job->deadline_us > 0 ? job->deadline_us : 1800000000u,
+                       res->why, sizeof(res->why));
+        if (end == BOOT_ENDED || end == BOOT_LATE)
+            job_judge(site, job, &w, end == BOOT_LATE, res);
     }
+    note_stop(site, res, w.b.started ? "the job" : "the job before it started");
     res->cost.disk_bytes = used_bytes(w.root) + used_bytes(w.img);
     for (i = 0; job->disks != NULL && job->disks[i] != NULL; i++)
         res->cost.disk_bytes += used_bytes(job->disks[i]);
     boot_free(&w.b);
-    if (res->outcome != ETUDE_TOOLING_ENDED || job->keep)
+    if ((res->outcome != ETUDE_TOOLING_ENDED && res->outcome != ETUDE_TOOLING_STOPPED) || job->keep)
         snprintf(res->dir, sizeof(res->dir), "%s", w.dir);
     else if (remove_dir(w.dir, scratch) != 0 && res->cost.cleanup == ETUDE_CLEANUP_CONFIRMED)
         res->cost.cleanup = ETUDE_CLEANUP_UNCONFIRMED;
@@ -1279,7 +1310,9 @@ static const char *step_outcome(const struct etude_tooling_result *res, unsigned
     *reason = res->why[0] != '\0' ? res->why
               : s->done           ? "the cleanup of QEMU's processes is not confirmed"
                                   : "the step did not reach its witness";
-    return res->outcome == ETUDE_TOOLING_LATE ? "incomplete" : "failure";
+    return res->outcome == ETUDE_TOOLING_LATE      ? "incomplete"
+           : res->outcome == ETUDE_TOOLING_STOPPED ? "cancelled"
+                                                   : "failure";
 }
 
 int etude_tooling_record(struct etude_history *h, const struct etude_tooling_ids *ids,
