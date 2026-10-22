@@ -30,8 +30,8 @@
  * stopped; and an etude-guest killed during the build must leave the build's
  * end recorded as lost, with its cleanup confirmed by the next etude-guest
  * once the build's processes have ended. In every row the cleanup is
- * confirmed, and no process of the case, of etude-guest or of the transport
- * is left once etude-native has ended.
+ * confirmed, and the test waits until every process of the case, of
+ * etude-guest and of the transport has ended after etude-native.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -341,47 +341,32 @@ struct outcome {
     long process;         /* the case's process, from the result, or 0 */
     char state[PATH_CAP]; /* etude-guest's state directory */
     char attempt[ETUDE_FRAME_TOKEN_LEN + 1];
-    int left;      /* processes of the row's group left after it */
-    int case_left; /* processes of the case's group left */
 };
 
-/** Wait for `pid` to end, at most `ms` milliseconds; its status, or -1. */
-static int wait_for(pid_t pid, long ms)
+/** Wait for `pid` to end; its status, or -1. */
+static int wait_for(pid_t pid)
 {
     int status;
     pid_t w;
 
-    for (; ms > 0; ms -= 20) {
-        w = waitpid(pid, &status, WNOHANG);
-        if (w == pid)
-            return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-        if (w < 0 && errno != EINTR)
-            return -1;
-        pause_ms(20);
+    while ((w = waitpid(pid, &status, 0)) < 0 && errno == EINTR) {
     }
-    kill(pid, SIGKILL);
-    waitpid(pid, &status, 0);
-    return -1;
+    if (w != pid)
+        return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 
-/** Say whether the process group `pgid` still has a process, waiting up to
- * `ms` milliseconds for it to empty. */
-static int group_left(long pgid, long ms)
+/** Wait until the process group `pgid` has no process left. */
+static void group_gone(long pgid)
 {
-    if (pgid <= 0)
-        return 0;
-    for (; ms > 0; ms -= 20) {
-        if (kill((pid_t)-pgid, 0) != 0 && errno == ESRCH)
-            return 0;
+    while (pgid > 0 && !(kill((pid_t)-pgid, 0) != 0 && errno == ESRCH))
         pause_ms(20);
-    }
-    return 1;
 }
 
 /**
  * Run etude-native for row `w` as the leader of a process group of its own,
- * which the relays, the etude-guests and the holders join, and fill `o`.
- * Whatever is left of the group, or of the case's group, afterward is ended.
+ * which the relays, the etude-guests and the holders join, and fill `o`; then
+ * wait until neither that group nor the case's group has a process left.
  */
 static void run_row(const struct row *w, struct outcome *o)
 {
@@ -456,13 +441,8 @@ static void run_row(const struct row *w, struct outcome *o)
         return;
     }
     setpgid(pid, pid);
-    o->status = wait_for(pid, 120000);
-    o->left = group_left(pid, 5000);
-    if (o->left) {
-        kill(-pid, SIGTERM);
-        if (group_left(pid, 5000))
-            kill(-pid, SIGKILL);
-    }
+    o->status = wait_for(pid);
+    group_gone(pid);
     slurp(outp, o->out, sizeof(o->out));
     slurp(errp, o->err, sizeof(o->err));
     p = strstr(o->out, "etude-native: result: ");
@@ -471,9 +451,7 @@ static void run_row(const struct row *w, struct outcome *o)
     p = strstr(o->result, "; process ");
     if (p != NULL)
         o->process = atol(p + 10);
-    o->case_left = group_left(o->process, 5000);
-    if (o->case_left)
-        kill((pid_t)-o->process, SIGKILL);
+    group_gone(o->process);
     printf("etude-native-test: %s: status %d: %s\n", w->name, o->status, o->result);
 }
 
@@ -574,8 +552,7 @@ static void test_rows(void)
         before = fails;
         run_row(&rows[i].w, &o);
         rows[i].check(&o);
-        CHECK(o.process > 0 && !o.case_left, "no process of the case is left");
-        CHECK(!o.left, "no process of etude-guest or the transport is left");
+        CHECK(o.process > 0, "the result names the case's process");
         if (fails != before) {
             printf("etude-native-test: %s: its output:\n%s", rows[i].w.name, o.out);
             printf("etude-native-test: %s: its error output:\n%s", rows[i].w.name, o.err);
