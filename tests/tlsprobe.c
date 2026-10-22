@@ -30,8 +30,8 @@
  *
  * The counts are of events the kernel records, so a slow or loaded machine
  * spins longer and a fast one shorter, and the number of rounds decides
- * nothing beyond the least each side makes. The runner's limit on the
- * probe's step ends a run in which the counts never rise.
+ * nothing beyond the least each side makes. The case's watchdog ends a
+ * run in which the counts never rise.
  *
  * Prints "All TLS checks passed!" and exits 0 when every check passes.
  * Otherwise it prints a line that begins "FAIL: " and exits 1, printing

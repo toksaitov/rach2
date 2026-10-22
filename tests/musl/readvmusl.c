@@ -379,7 +379,7 @@ static int check_file(void)
  * first buffer takes and its writer is still open, so a further read would
  * have nothing to return and would wait until something wrote again. The
  * kernel checks whether there is more before it reads on, so it stops. A
- * fault there makes the probe hang, not fail, and the suite's time limit
+ * fault there makes the probe hang, not fail, and the case's watchdog
  * reports it.
  */
 static int check_stream(void)

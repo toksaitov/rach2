@@ -1004,12 +1004,13 @@ static void wait_replacement(void)
  * its sync for ever. The row writes until a write or the open before it
  * fails, which is the removal witnessed, however many writes that takes;
  * `KRFFSPROBE HOLDING` is said after the first write, so the pull the suite
- * makes on the word lands on a process writing, and the suite's limit ends
- * a run whose writes never fail. The mount stays while the stick is plugged
- * back in: the driver finds a second device with the first still held, and
- * a machine that gave the new one the old one's slot would be handing this
- * mount a pointer into it, so the mount over the device that went must read
- * nothing of the new stick, for which `wait_replacement` waits.
+ * makes on the word lands on a process writing, and the case's watchdog
+ * ends a run whose writes never fail. The mount stays while the stick is
+ * plugged back in: the driver finds a second device with the first still
+ * held, and a machine that gave the new one the old one's slot would be
+ * handing this mount a pointer into it, so the mount over the device that
+ * went must read nothing of the new stick, for which `wait_replacement`
+ * waits.
  *
  * `crash` rewrites the same bytes until the machine is killed: a volume
  * that filled up would say nothing about what a stop leaves behind, and the

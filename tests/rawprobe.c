@@ -33,7 +33,7 @@
  *
  * An echo reply is taken once the kernel's own ping has returned with it,
  * and a time-exceeded message is waited for in poll with no timeout; the
- * suite's limit ends a run in which it never comes.
+ * case's watchdog ends a run in which it never comes.
  *
  * Runs on the test image with QEMU's user network, where 10.0.2.2 is the
  * gateway and answers. A native run (probe_args.h) gives the addresses of
@@ -339,7 +339,7 @@ static int take_icmp(unsigned long *args, int fd, uint8_t *buf, int cap, int wan
  *
  * Returns its length, with the datagram in `buf`, or 0 when poll ends with
  * nothing to read. A message that never comes leaves the probe waiting, and
- * the suite's limit ends the run.
+ * the case's watchdog ends the run.
  */
 static int wait_for_icmp(unsigned long *args, int fd, uint8_t *buf, int cap, int want)
 {

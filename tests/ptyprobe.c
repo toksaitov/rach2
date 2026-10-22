@@ -32,7 +32,7 @@
  * that it cannot come: the readiness line or the child's exit, a reader's
  * state S in /proc/PID/stat or its exit, a released reader's exit or its
  * sleep again after the hangup. No wait counts its looks or its time; the
- * runner's limit on the probe's step ends a run that stalls. Prints
+ * case's watchdog ends a run that stalls. Prints
  * "PTYPROBE START", then "PTYPROBE OK" or "PTYPROBE FAIL (why)".
  * Freestanding; direct system calls (probe.h).
  *

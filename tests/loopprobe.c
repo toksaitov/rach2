@@ -22,8 +22,8 @@
  * sockets that dial each other at once open one connection.
  *
  * A row that waits for a datagram or a connection blocks in the receive or
- * in poll(2) until it comes, and judges what came; the suite's limit on the
- * probe's run ends one that never does.
+ * in poll(2) until it comes, and judges what came; the case's watchdog ends
+ * one that never does.
  *
  * The probe uses UDP ports 7100 to 7102 and TCP ports 7200 to 7207 and 7300
  * to 7325, and 7300 is the closed port until its rows listen on it. A native

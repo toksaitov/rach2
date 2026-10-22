@@ -811,7 +811,7 @@ static void tcp_names(void)
  * frame left by the second card, since the first card's network has no host
  * at that address, and every datagram the socket is given must say that it
  * arrived on the second interface. The receive blocks until a frame comes,
- * and the suite's limit ends a run in which none does. A second socket,
+ * and the case's watchdog ends a run in which none does. A second socket,
  * bound to the first interface, may be given nothing that arrived on the
  * other. `raw_fd` is the descriptor for the interface ioctls.
  */

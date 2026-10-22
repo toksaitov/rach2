@@ -345,8 +345,8 @@ static char state_of(int pid)
  * Wait until the child `pid` is asleep, `S` in its stat: 1. Returns 0 once
  * it is a zombie or its stat cannot be read, since it can then no longer
  * fall asleep. The probe yields between looks, and their number decides
- * nothing; the runner's limit on the probe's step ends a run whose child
- * neither sleeps nor ends.
+ * nothing; the case's watchdog ends a run whose child neither sleeps nor
+ * ends.
  */
 static int seen_asleep(int pid)
 {

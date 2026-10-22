@@ -48,7 +48,8 @@ typedef unsigned char uint8_t;
 
 /* How long a wait for the echo lasts, in milliseconds, before the message is
  * sent again. It paces the resends and decides nothing: the row waits for as
- * many as it takes, and the suite's limit ends a run whose echo never comes. */
+ * many as it takes, and the case's watchdog ends a run whose echo never
+ * comes. */
 #define RESEND_MS 1000
 
 #define POLLIN 0x001

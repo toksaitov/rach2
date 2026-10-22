@@ -27,7 +27,7 @@
  * stick, and the harness pulls the stick while the image is mounted. The
  * row reads a file of the image, yielding between reads, until a read or
  * the open before it fails, which is the removal witnessed, however many
- * reads that takes; the suite's limit ends a run whose reads never fail.
+ * reads that takes; the case's watchdog ends a run whose reads never fail.
  * The row then requires an error from the read in flight, an unmount of the
  * mount over the device that has gone, and an unmount of the volume the
  * file was on, since the attachment let go of it when its medium went.
