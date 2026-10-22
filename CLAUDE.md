@@ -10,3 +10,8 @@
 * Where it is not, as in the team's accounts on the testing host, there is no Codex review: do the work without one, and leave a review the work needs to the owner.
 * When work is handed to a helper or to Codex, give it the phase, the files, the claims the work must make true, and what would prove it done, and check every claim in what comes back against the code before applying it.
 * Never report that a delegated job is running without reading its state in the same turn.
+* While the owner discusses options, change nothing: no install, no setting on a machine, no board change, until the owner says to do it.
+* Tell the owner in the same turn of a delay of a day or more, a cost the owner has not seen, or anything that goes against what the owner asked.
+* Read a plan or a list of tasks that a worker or helper writes against the owner's requests and the plan's rules before giving out its tasks.
+* Show the owner research that the owner asked for whole, and say in the plan which of its findings it follows and which it sets aside, with the reason.
+* Answer each question of the owner's plainly, as the last thing in the reply, and ask for one decision at a time with the interactive question tool.

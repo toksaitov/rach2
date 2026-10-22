@@ -1,4 +1,4 @@
-# Incidents of phase #589, 2026-10-20 to 22
+# Incidents of phase #589, 2026-10-20 to 23
 
 The faults that the process showed while phase #589 converted the suites to etude's cases, each with its cause, what it cost and its fix. Times are UTC+6, the owner's local time.
 
@@ -66,6 +66,16 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * The owner asked many times during the day that the tasks others wait on come first. The coordinating session agreed each time and still let #672 wait: for runs its check did not need, for a push stop it did not examine for an hour, and in the testing host's queue, which it treated as the normal order of things instead of clearing it.
 * A time given to the owner for #672 to land, 23:30, was missed, because the push stop applied to every push and its cause was not examined until an hour later.
 * Helpers waited on proofs of commits whose result was already known, and were told to stop them.
+* On the 21st at 23:23 the owner found the board showing one task in progress while eight were being worked. Tasks given out by hand were assigned and written to the loop's `STATE/issue`, but their Status was not set, since only `board.sh take` sets it. The coordinating session said that every hand-out would set it from then on. The step lived only in its conversation and was lost when the conversation was compacted; at 03:30 on the 23rd the owner found five tasks being worked shown as Ready. The rule is now in the takeover paragraph of `AGENTS.md`.
+* The Mac's GNU build for #680 ran in etude's tooling machine, an x86-64 Linux under TCG, at 15 to 27 times the native time, for an estimated 2 to 4 days. The coordinating session took 20 to 30 hours as normal and told the owner nothing until the owner found the task on the board at 01:03 on the 23rd. The research of 18 October had said that an Apple Silicon Mac cannot accelerate an x86 guest and should send that work to an x86 machine; the plan did not use it. At 02:20 the owner chose an ARM Linux machine under the Mac's own hypervisor (#873). The TCG build was stopped at 02:24 and lost about 75 minutes of finished ports (#911).
+* While the owner was discussing the options for that build, the coordinating session installed eleven Homebrew packages on the Mac and lowered the priority of a running QEMU, which nobody had asked for. The packages were removed; the priority needs the owner's `sudo` to restore.
+* #875's plan for removing the old runner's programs, `dev-log/62-etude/old-programs.md`, and its tasks #898 to #908 were filed at 01:08 on the 23rd and given out within twenty minutes, without being read against the owner's requests or the plan's rules. They kept fixed time limits in a new helper, `etude-deadline` (#898), and moved the old runner's mutation proofs to etude (#904 to #906, #909), though the owner had asked on 8 and 18 October for fewer proofs and no time limits tied to a machine. The owner found both. At 02:20 the owner dropped mutation proofs and the scripts' fixed time limits: aaf6dbc1c changed the rules, #898 and the proof tasks were closed, and #914 and #915 remove the rest. Etude's own learned bounds stay, by the owner's decision.
+* The research that the owner asked for on 18 October, 82 searches and 62 sources by Codex, reached the owner only as two summaries, and the plan set aside several of its findings without saying so: the Mac above; merging 53 of the 101 suites, where the registry now lists 143; a task count it already called too large at 43, where the phase made 154; and a small random sample of the tests for each agent in place of whole runs.
+* Answers to the owner's questions were written between tool calls and buried under the reports that followed, two of the owner's questions were taken as decisions, and replies swung between long lists and single lines.
+
+## GitHub
+
+* From 21:12 on the 22nd, during GitHub's incident "Errors loading Issues, Pull Requests, and search results", the list of the board's items stopped growing. Issues filed after #891 are on the board when read one at a time but missing from the list, so `board.sh next` and `take` refuse them and no loop can take new work by itself. Tasks are given out by hand meanwhile; #918 makes `board.sh` read an issue's item directly.
 
 ## Disk
 
@@ -85,3 +95,7 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * `AGENTS.md`, Resources: a session removes a worktree or copy once its branch has landed, and writes its scratch and logs under `build/tests` or `$TMPDIR`.
 * #892: one GNU build per architecture shared by every copy on the testing host, and the manager's cleanup extended to failed-test directories and home directories, are proposed there.
 * Admission to the testing host still has no priority for the critical task or for a repair of core.
+* aaf6dbc1c: no rule requires a mutation proof, and a suite sets no time limit of its own.
+* `AGENTS.md`, The manager: a task that the coordinating session writes to a loop's `STATE/issue` is set In progress in the same step.
+* `CLAUDE.md`: the coordinating session changes nothing while the owner discusses options, reports a delay of a day or more when it finds it, reads a plan that a worker or helper writes against the owner's requests before giving out its tasks, and shows the owner research whole.
+* #914 removes the proofs, #915 the scripts' fixed time limits, and #918 the board's dependence on GitHub's item list.
