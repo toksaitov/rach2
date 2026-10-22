@@ -237,13 +237,13 @@ static long ended_pid(void)
  */
 static void test_hold(int run_hold)
 {
-    const char *row = run_hold ? "run hold" : "fault hold";
+    const char *row = run_hold ? "run hold" : "script hold";
     char tree[1024], cmd[4096], owner[1200], seen[1200], rec[4096], field_buf[256], want[64];
     char *argv[8];
     struct ran r;
     int n = 0;
 
-    make_tree(run_hold ? "hold-run" : "hold-fault", tree, sizeof tree);
+    make_tree(run_hold ? "hold-run" : "hold-script", tree, sizeof tree);
     fix_format(seen, sizeof seen, "%s/seen", tree);
     lock_path(tree, "owner", owner, sizeof owner);
     fix_format(cmd, sizeof cmd, "{ echo \"held $RACH2_TREE_HELD\"; cat %s; } > %s; exit 3", owner,
@@ -252,7 +252,7 @@ static void test_hold(int run_hold)
     if (run_hold)
         argv[n++] = "-r";
     argv[n++] = tree;
-    argv[n++] = "proof";
+    argv[n++] = "script";
     argv[n++] = "sh";
     argv[n++] = "-c";
     argv[n++] = cmd;
@@ -267,13 +267,14 @@ static void test_hold(int run_hold)
     CHECK(strncmp(line_of(rec, "identity", field_buf, sizeof field_buf), want, strlen(want)) == 0 &&
               field_buf[strlen(want)] == ' ',
           row);
-    CHECK(strncmp(line_of(rec, "args", field_buf, sizeof field_buf), "proof sh -c ", 12) == 0, row);
+    CHECK(strncmp(line_of(rec, "args", field_buf, sizeof field_buf), "script sh -c ", 13) == 0,
+          row);
     CHECK(line_of(rec, "since", field_buf, sizeof field_buf)[0] != '\0', row);
     CHECK(strtol(line_of(rec, "job", field_buf, sizeof field_buf), NULL, 10) > 0 &&
               strcmp(field_buf, want) != 0,
           row);
     CHECK(line_of(rec, "pgid", field_buf, sizeof field_buf)[0] != '\0', row);
-    CHECK((strstr(rec, "\nheld fault script\n") != NULL) == !run_hold, row);
+    CHECK((strstr(rec, "\nheld script\n") != NULL) == !run_hold, row);
     CHECK(!exists(lock_path(tree, NULL, cmd, sizeof cmd)), row);
     fix_format(cmd, sizeof cmd, "%s/build/.run.guard", tree);
     CHECK(exists(cmd), row);
@@ -287,11 +288,11 @@ static void test_hold(int run_hold)
 static void test_ancestor(void)
 {
     char tree[1024], record[256], before[512], after[512], path[1200], self[32];
-    char *argv[] = {"etude-hold", tree, "proof", "sh", "-c", "exit 6", NULL};
+    char *argv[] = {"etude-hold", tree, "script", "sh", "-c", "exit 6", NULL};
     struct ran r;
 
     make_tree("ancestor", tree, sizeof tree);
-    fix_format(record, sizeof record, "pid %ld\nheld fault script\n", (long)getpid());
+    fix_format(record, sizeof record, "pid %ld\nheld script\n", (long)getpid());
     leave(tree, record);
     fix_format(self, sizeof self, "%ld", (long)getpid());
     setenv("RACH2_TREE_HELD", self, 1);
@@ -306,7 +307,7 @@ static void test_ancestor(void)
 
     fix_format(self, sizeof self, "%ld", ended_pid());
     setenv("RACH2_TREE_HELD", self, 1);
-    fix_format(record, sizeof record, "pid %s\nheld fault script\n", self);
+    fix_format(record, sizeof record, "pid %s\nheld script\n", self);
     put(lock_path(tree, "owner", path, sizeof path), record);
     run(argv, &r);
     CHECK(r.status == 1 && strstr(r.err, "result: refused: the tree is not free") != NULL,
@@ -365,7 +366,7 @@ static void refused(const char *row, const char *record, const char *says)
     CHECK(exists(lock_path(tree, NULL, path, sizeof path)) && strcmp(before, after) == 0, row);
 }
 
-/** The refusals of a lock directory that a run or a fault script left. */
+/** The refusals of a lock directory that a run or a script left. */
 static void test_refusals(void)
 {
     struct hold_proc me;
@@ -375,10 +376,9 @@ static void test_refusals(void)
     int go[2];
     char byte;
 
-    fix_format(record, sizeof record,
-               "pid %ld\npgid %ld\nsince then\nargs left\nheld fault script\n", ended_pid(),
-               (long)getpgrp());
-    refused("left-fault", record, "a fault script's hold on this tree was left: left, since then");
+    fix_format(record, sizeof record, "pid %ld\npgid %ld\nsince then\nargs left\nheld script\n",
+               ended_pid(), (long)getpgrp());
+    refused("left-held", record, "a script's hold on this tree was left: left, since then");
 
     CHECK(hold_read(getpid(), &me) == 1, "refusals: the test reads its own identity");
     fix_format(record, sizeof record,

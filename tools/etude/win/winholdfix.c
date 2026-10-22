@@ -329,7 +329,7 @@ static int open_gate(void)
 
 /**
  * Write the owner record of process `h` to the lock's directory, with the
- * line `held fault script` when `held` is set.
+ * line `held script` when `held` is set.
  */
 static int record(HANDLE h, int held)
 {
@@ -339,7 +339,7 @@ static int record(HANDLE h, int held)
     snprintf(text, sizeof text,
              "pid %lu\npgid 0\nidentity %lu 0 %llu 0\njob 0\nsince 2026-10-23 00:00:00\n"
              "args fixture\n%s",
-             pid, pid, created(h), held ? "held fault script\n" : "");
+             pid, pid, created(h), held ? "held script\n" : "");
     if (!exists(build) && !CreateDirectoryA(build, NULL))
         return failed("%s cannot be made", build);
     if (!exists(lock) && !CreateDirectoryA(lock, NULL))
@@ -462,13 +462,13 @@ static int fixture(int (*row)(void))
 /**
  * Hold the tree for a `wintarget gate` command, as a run's hold when `run`
  * is set, and judge it while it runs and after: RACH2_TREE_HELD and the
- * record name the helper, the record says `held` only for a fault script's
+ * record name the helper, the record says `held` only for a script's
  * hold, and once the command has ended its copy has ended too, the lock's
  * directory is gone and the guard's file stays.
  */
 static int gate_run(int run)
 {
-    const char *const fault[] = {tree, "fixture", "wintarget", "gate", ready, go, NULL};
+    const char *const script[] = {tree, "fixture", "wintarget", "gate", ready, go, NULL};
     const char *const runs[] = {"-r", tree, "fixture", "wintarget", "gate", ready, go, NULL};
     char line[128];
     struct run r;
@@ -477,7 +477,7 @@ static int gate_run(int run)
 
     DeleteFileA(ready);
     DeleteFileA(go);
-    if (hold(&r, run ? "run" : "fault", run ? runs : fault) != 0 || gated(&r, &g) != 0)
+    if (hold(&r, run ? "run" : "script", run ? runs : script) != 0 || gated(&r, &g) != 0)
         return 1;
     snprintf(line, sizeof line, "%lu", (unsigned long)r.pid);
     if (strcmp(g.held, line) != 0)
@@ -488,8 +488,8 @@ static int gate_run(int run)
     snprintf(line, sizeof line, "identity %lu 0 %llu 0", (unsigned long)r.pid, created(r.process));
     if (!has_line(owner, line))
         return failed("the owner record has no line %s", line);
-    if (has_line(owner, "held fault script") == run)
-        return failed("a %s hold's record %s `held`", run ? "run's" : "fault script's",
+    if (has_line(owner, "held script") == run)
+        return failed("a %s hold's record %s `held`", run ? "run's" : "script's",
                       run ? "says" : "does not say");
     if (open_gate() != 0 || finish(&r, &status) != 0)
         return 1;
@@ -588,7 +588,7 @@ static int moved_left(void)
 static const char *const left_run[] = {"-r", tree, "fixture", "wintarget", "exit", "0", NULL};
 
 /**
- * Locks left with no holder that runs: a fault script's is refused, as is
+ * Locks left with no holder that runs: a script's is refused, as is
  * one with no record that a run may be taking now; one with no record that
  * is old is taken over.
  */
@@ -599,11 +599,11 @@ static int left_unheld(void)
 
     if (record(GetCurrentProcess(), 1) != 0)
         return 1;
-    if ((st = run_hold(&r, "fault", left_run)) < 0)
+    if ((st = run_hold(&r, "script", left_run)) < 0)
         return 1;
-    if (st != 1 || !said(&r, "a fault script's hold on this tree was left") ||
-        !has_line(owner, "held fault script"))
-        return failed("a fault script's hold left: the helper exits %ld: %s", st, errors(&r));
+    if (st != 1 || !said(&r, "a script's hold on this tree was left") ||
+        !has_line(owner, "held script"))
+        return failed("a script's hold left: the helper exits %ld: %s", st, errors(&r));
     if (!DeleteFileA(owner))
         return failed("%s cannot be removed", owner);
     if ((st = run_hold(&r, "taking", left_run)) < 0)

@@ -1,7 +1,7 @@
 /*
  * etude_hold.c: etude-hold, which holds a tree's run lock while one command
- * runs, so that no suite builds or boots the tree, and no proof saves a
- * source, while a fault is in it. tools/etude/Readme.md gives its usage.
+ * runs, so that no suite builds or boots the tree while the command changes
+ * it. tools/etude/Readme.md gives its usage.
  */
 #include <errno.h>
 #include <stdarg.h>
@@ -30,7 +30,7 @@ struct record {
     long pgid;      /* the holder's process group */
     long job;       /* the command's process group; 0 when none is given */
     int identified; /* it has an `identity` line, in `id` */
-    int held;       /* it has a `held` line: a fault script's hold */
+    int held;       /* it has a `held` line: a script's hold */
     struct hold_proc id;
     char since[64];
     char args[ARGS_MAX + 1];
@@ -174,7 +174,7 @@ static int take_over(const struct hold *h)
 
 /**
  * Make the lock directory for this process, the guard being held. A
- * directory left by a fault script, whose record says `held`, is never taken
+ * directory left by a script, whose record says `held`, is never taken
  * over; one left by a run is taken over when its owner and every process of
  * its group have ended; and one with no owner record, or a record with no
  * pid, once it is ten seconds old, since a younger one may be a run's that
@@ -204,9 +204,8 @@ static int take(const struct hold *h)
     }
     if (r.held)
         return refuse(h,
-                      "a fault script's hold on this tree was left: %s, since %s; its fault may be "
-                      "in the sources and its work may still run; restore them, stop its work and "
-                      "remove %s",
+                      "a script's hold on this tree was left: %s, since %s; its work may still "
+                      "run; stop its work and remove %s",
                       r.args, r.since, h->lock);
     runs = owner_runs(&r);
     if (runs > 0)
@@ -267,7 +266,7 @@ static int write_record(const struct hold *h, long job)
     fprintf(f, "pid %ld\npgid %ld\nidentity %ld %ld %llu %llu\njob %ld\nsince %s\nargs %s\n",
             me.pid, me.group, me.pid, me.group, me.start, me.fraction, job, since, args);
     if (!h->run)
-        fprintf(f, "held fault script\n");
+        fprintf(f, "held script\n");
     bad = ferror(f);
     if (fclose(f) != 0 || bad)
         return -1;
@@ -354,8 +353,8 @@ static int hold_tree(struct hold *h)
                     h->name, h->lock);
         else
             fprintf(stderr,
-                    "%s: the command was killed; its work may still run and its fault may be in "
-                    "the sources; %s stays until a person has looked\n",
+                    "%s: the command was killed; its work may still run; %s stays until a "
+                    "person has looked\n",
                     h->name, h->lock);
         return status;
     }

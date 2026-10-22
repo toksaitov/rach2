@@ -2,9 +2,8 @@
 # hold.sh: the hold of this tree for a script that changes its sources in
 # place or builds in it, through etude-hold.
 #
-# A fault script puts a fault into the tree's sources and builds and boots
-# it, so no suite may build or boot the tree, and no other proof may save a
-# source, while it runs. A script sources this file and calls
+# No suite may build or boot the tree while such a script runs. A script
+# sources this file and calls
 #
 #   etude_hold "$repo" NAME "$repo/PATH/OF/THE/SCRIPT" "$@"
 #

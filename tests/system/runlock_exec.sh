@@ -108,8 +108,8 @@ while :; do
     [ -n "$signalled" ] || break
 done
 if [ "$status" -eq 137 ]; then
-    echo "$name: the script was killed; its work may still run and its fault may be" \
-        "in the sources; $lock stays until a person has looked" >&2
+    echo "$name: the script was killed; its work may still run;" \
+        "$lock stays until a person has looked" >&2
     rm -rf "$helper"
     exit "$status"
 fi
