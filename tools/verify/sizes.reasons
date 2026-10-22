@@ -639,7 +639,6 @@ tests/system/checkers/pcapcheck.c:cmd_netconsole lines 158 an inspector's check,
 tests/system/checkers/pcapcheck.c:cmd_rawwire complexity 26 an inspector's check, one walk over the format it reads
 
 
-tests/system/fixtures/runutil_owned.c:main complexity 35 a fixture builder, the volume written in on-disk order
 
 tests/system/fixtures/vfs_unmount.c:main complexity 39 a fixture builder, the volume written in on-disk order
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order

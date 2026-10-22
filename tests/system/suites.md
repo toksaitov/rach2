@@ -95,7 +95,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire, the cases of tests/cases/machine.netconsole.json.
 * `crash` (core tier; needs qemu; 128 MiB): prove the dirty-mount flag detects an unclean shutdown.
 * `pools` (core tier; needs qemu; 128 MiB): many pipes, ptys, sockets and processes live at once, and the kernel heap back where it started after a thousand each of pipes, ptys and sockets (see tests/poolprobe.c).
-* `runner` (core tier; needs python3; no machine): the harness's selftest, then the runner's own, tests/run driven against a registry and a makefile of its own in a temporary directory (tests/system/selftest.sh).
+* `runner` (core tier; needs python3; no machine): the self-tests of the old runner's programs that tests/run and the old drivers still use: the harness's, runutil's process groups and processor time, and the test status reader's.
 * `diskfull` (core tier; needs qemu; 128 MiB): a file system with no room left.
 * `fault` (core tier; needs qemu; 128 MiB): the three probes whose whole claim is that the kernel killed them.
 * `imagerace` (full tier; needs nothing beyond the build; no machine): two builds of one image at the same moment, as a parallel run of the suites can make them, and builds stopped at each step of publishing one, none of which may leave an image mixed with another build's files or out of date.

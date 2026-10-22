@@ -1602,23 +1602,16 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 	$(MKDISK) krffs/manifests/etude-scenario.manifest $@.tmp 8 6 >/dev/null
 	mv $@.tmp $@
 
-# `tests/run runner`: the harness's selftest, then the runner's own, tests/run
-# driven against a registry and a makefile of its own in a temporary
-# directory (tests/system/selftest.sh). It boots no machine and reads nothing
-# from the product, so it needs only the harness, runtests, the two helpers,
-# and the set driver and the formatter, which the fixture's runs take from
-# this tree.
-run-runner: $(HARNESS) $(RUNTESTS) $(PTYDRIVE) $(HOSTPEER) $(ETUDELEGACY) $(ETUDELINES)
-	@$(HARNESS) --selftest
-	@./tests/system/selftest.sh
+# `tests/run runner`: the self-tests of the old runner's programs that
+# tests/run and the old drivers still use: the harness's, runutil's process
+# groups and processor time, and the test status reader's. No machine is
+# booted. They are the cases of tests/cases/host.runner.json, which etude
+# runs, and have no target here.
 
-# The drivers' suite (see tests/system/drivetest.sh): drive.sh and the
-# harness's waits against fake machines that choose when they are ready. It
-# needs the harness and nothing that boots.
 # `tests/run drive`: the drivers' waits, drive.sh and the harness against fake
-# machines that choose when they are ready, booting nothing.
-run-drive: $(HARNESS)
-	@./tests/system/drivetest.sh
+# machines that choose when they are ready, booting nothing. They are the
+# case of tests/cases/host.drive.json, which etude runs, and have no target
+# here.
 
 # `tests/run krffscheck`: what the offline checker says about images broken on
 # purpose. No machine is booted. They are the cases of

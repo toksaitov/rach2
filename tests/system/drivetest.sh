@@ -1,33 +1,53 @@
 #!/usr/bin/env sh
 #
-# drivetest.sh: the drivers type when the machine is ready, not by the clock.
+# drivetest.sh: the test of the drive case, tests/cases/host.drive.json: the
+# old drivers type when the machine is ready, not by the clock.
 #
 # Two fake machines stand in for QEMU, each a shell script that reads what is
-# typed and writes a console: one behind a fifo and a log for `drive.sh`, one
-# on PATH as `qemu-system-i386` for the harness. Each row chooses when the
-# fake prints its prompt or its token, and the checks are about time: a
-# machine ready later than a clock-typed feeder would have allowed still
-# gets its line; one that never becomes ready fails the step within its
-# bound; a token printed before the step began does not satisfy it; the
-# harness's `until=` ends when the run's token arrives; and a `wait=` step,
-# which would sleep for a number of seconds, is refused as unknown.
+# typed and writes a console: one behind a fifo and a log for
+# tests/system/drive.sh, one on PATH as `qemu-system-i386` for the harness.
+# Each row chooses when the fake prints its prompt or its token, and the
+# checks are about time: a machine ready later than a clock-typed feeder
+# would have allowed still gets its line; one that never becomes ready fails
+# the step within its bound; a token printed before the step began does not
+# satisfy it; the harness's `until=` ends when the run's token arrives; and a
+# `wait=` step, which would sleep for a number of seconds, is refused as
+# unknown.
 #
-# `tests/run drive` runs this. It boots nothing.
+# The program writes the case's report records on its standard output
+# (tools/etude/Readme.md, Report records), one assertion for each check, and
+# exits 0 when every check passed and 1 otherwise. etude runs it with
+# ETUDE_TREE naming the root of the tree and TMPDIR the case's workspace;
+# the harness is the artifact the manifest's `prepare` lists.
+#
+# Usage, in the root of a built tree, or anywhere with ETUDE_TREE set to it:
+#     sh tests/system/drivetest.sh
 #
 set -u
-# The checks time the harness's and drive.sh's bounds as written, so the
-# set's deadline factor, which scales them, is unset here.
+# The checks time the harness's and drive.sh's bounds as written, so a
+# deadline factor, which scales them, is unset here.
 unset RACH2_DEADLINES RACH2_DEADLINE_FACTOR
 # The harness's fake machine is named qemu-system-i386, the emulator the
 # harness runs when RACH2_QEMU is unset, so an architecture's is dropped.
 unset RACH2_QEMU
 
-REPO=$(cd "$(dirname "$0")/../.." && pwd)
+if [ -n "${ETUDE_TREE-}" ]; then
+    cd "$ETUDE_TREE" || exit 2
+fi
+unset ETUDE_TREE
+[ -f tests/system/drive.sh ] || { echo "drive: run it in the root of the tree" >&2; exit 2; }
+REPO=$(pwd -P)
+ID=host.drive.drivers
+if [ -n "${ETUDE_CASE:-}" ] && [ "$ETUDE_CASE" != "$ID" ]; then
+    echo "drive: ETUDE_CASE is $ETUDE_CASE, and the program runs $ID" >&2
+    exit 2
+fi
 WORK=
 HARNESS="$REPO/build/tests/system/harness"
 PIDS=""
 # Kill the fake machines and feeders, wait for them, and remove the scratch
 # directory.
+# shellcheck disable=SC2329 # run from the traps
 cleanup() {
     for p in $PIDS; do kill "$p" 2>/dev/null; done
     for p in $PIDS; do wait "$p" 2>/dev/null; done
@@ -38,17 +58,24 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 trap 'cleanup; exit 129' HUP
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-drive.XXXXXX")
-[ -d "$WORK" ] || { echo "drivetest: no scratch directory" >&2; exit 1; }
+[ -d "$WORK" ] || { echo "drive: no scratch directory" >&2; exit 1; }
 
 fails=0
 total=0
-# check NAME EXPECTED ACTUAL: one check, which passes when the two are equal.
+# record WORDS: one report record, which fits in one write of 255 bytes.
+record() {
+    printf '@etude 1 %s\n' "$*"
+}
+# check ID TEXT EXPECTED ACTUAL: the assertion ID, which passes when the two
+# are equal; TEXT says what it checks.
 check() {
     total=$((total + 1))
-    if [ "$2" = "$3" ]; then
-        echo "  PASS: $1"
+    if [ "$3" = "$4" ]; then
+        echo "  PASS: $2"
+        record "assert $1 pass"
     else
-        echo "  FAIL: $1: expected [$2], got [$3]"
+        echo "  FAIL: $2: expected [$3], got [$4]"
+        record "assert $1 fail expected [$3], got [$4]"
         fails=$((fails + 1))
     fi
 }
@@ -117,6 +144,7 @@ stop() {
     wait "$CPID" 2>/dev/null
 }
 
+record "begin $ID"
 # shellcheck source=tests/system/drive.sh
 . "$REPO/tests/system/drive.sh"
 
@@ -126,16 +154,16 @@ boot 4
 t0=$(date +%s)
 drive_login root secret 20; rc=$?
 took=$(( $(date +%s) - t0 ))
-check "a machine ready later than a clock feeder would allow logs in" 0 "$rc"
-check "and the login waited for the prompt" 1 "$([ "$took" -ge 4 ] && echo 1 || echo 0)"
+check late-login "a machine ready later than a clock feeder would allow logs in" 0 "$rc"
+check late-waited "and the login waited for the prompt" 1 "$([ "$took" -ge 4 ] && echo 1 || echo 0)"
 drive_type 'echo MARK""ER'
 drive_expect 'MARKER' 10; rc=$?
-check "a marker printed for a typed line is found" 0 "$rc"
-check "and the prompt printed with it in one write is still there for the next step" 0 "$(drive_prompt 5; echo $?)"
+check marker "a marker printed for a typed line is found" 0 "$rc"
+check marker-prompt "and the prompt printed with it in one write is still there for the next step" 0 "$(drive_prompt 5; echo $?)"
 drive_type 'echo MARK""ER'
 drive_type 'echo MARK""ER'
 drive_expect 'MARKER' 10 && drive_expect 'MARKER' 10; rc=$?
-check "two lines typed back to back are both typed, in order" 0 "$rc"
+check back-to-back "two lines typed back to back are both typed, in order" 0 "$rc"
 drive_prompt 5 > /dev/null 2>&1
 # The first line's answer is in the log before the second line is typed, as
 # it is when the feeder wakes between two calls of drive_type.
@@ -148,27 +176,27 @@ while [ "$(tr -d '\r' < "$WORK/log" | grep -cx 'MARKER')" -le "$answers" ] &&
 done
 drive_type 'echo MARK""ER'
 drive_expect 'MARKER' 10 && drive_expect 'MARKER' 10; rc=$?
-check "a line answered before the next is typed has its answer found after both" 0 "$rc"
+check answered-first "a line answered before the next is typed has its answer found after both" 0 "$rc"
 drive_prompt 5 > /dev/null 2>&1
 t0=$(date +%s)
 drive_type 'printf x > /tmp/a'
 drive_prompt 10; rc=$?
 took=$(( $(date +%s) - t0 ))
-check "a command's echo paused at a redirection is not taken for a prompt" 0 "$rc"
-check "and the prompt after it is waited for" 1 "$([ "$took" -ge 2 ] && echo 1 || echo 0)"
+check paused-echo "a command's echo paused at a redirection is not taken for a prompt" 0 "$rc"
+check paused-prompt "and the prompt after it is waited for" 1 "$([ "$took" -ge 2 ] && echo 1 || echo 0)"
 stop
 
 # A machine ready at once: the answer that comes before the step looks is
 # not skipped, since the cursor was set before the line was published.
 boot 0
 drive_login root secret 20; rc=$?
-check "a machine ready at once logs in" 0 "$rc"
+check ready-login "a machine ready at once logs in" 0 "$rc"
 stop
 
 # A missing prompt fails the real console exchange.
 boot 60
 drive_expect 'login:' 3 2>/dev/null; rc=$?
-check "a prompt that never comes fails the step" 1 "$rc"
+check no-prompt "a prompt that never comes fails the step" 1 "$rc"
 stop
 
 # The deadline is checked on a clock the row supplies, so the host's
@@ -203,7 +231,7 @@ for clock_end in 3 9; do
 
         drive_expect 'login:' 3 2>/dev/null
     ); rc=$?
-    check "the wait expires at clock value $clock_end" \
+    check "clock-$clock_end" "the wait expires at clock value $clock_end" \
         "1:$clock_end" "$rc:$(cat "$WORK/wait.clock")"
 done
 
@@ -214,10 +242,10 @@ boot 1
 drive_login root secret 20 > /dev/null 2>&1
 drive_type 'true'
 drive_expect 'MARKER' 2 2>/dev/null; rc=$?
-check "a token printed before the step is not accepted" 1 "$rc"
+check stale-token "a token printed before the step is not accepted" 1 "$rc"
 drive_type 'echo MARK""ER'
 drive_expect 'MARKER' 10; rc=$?
-check "and the same token printed after it is" 0 "$rc"
+check fresh-token "and the same token printed after it is" 0 "$rc"
 stop
 
 # The harness: `until=60` ends when the run's token arrives; a `wait=` step
@@ -230,18 +258,24 @@ harness() {
 t0=$(date +%s)
 QEMU_TOKEN_AT=2 harness "expect=Type 'help'" "send=exec /fake" until=60; rc=$?
 took=$(( $(date +%s) - t0 ))
-check "an until ends when the run's token arrives" 0 "$rc"
-check "well before its time" 1 "$([ "$took" -lt 8 ] && echo 1 || echo 0)"
+check until-token "an until ends when the run's token arrives" 0 "$rc"
+check until-early "well before its time" 1 "$([ "$took" -lt 8 ] && echo 1 || echo 0)"
 QEMU_TOKEN_AT=1 harness "expect=Type 'help'" "send=exec /fake" wait=4; rc=$?
-check "a wait= step is refused" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
+check wait-refused "a wait= step is refused" 1 "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 t0=$(date +%s)
 QEMU_TOKEN_AT=0 harness "expect=Type 'help'" "send=exec /fake" "expect=FAKE OK" until=4; rc=$?
 took=$(( $(date +%s) - t0 ))
-check "a token printed before the until began does not end it" 1 "$([ "$took" -ge 4 ] && echo 1 || echo 0)"
+check until-stale "a token printed before the until began does not end it" 1 "$([ "$took" -ge 4 ] && echo 1 || echo 0)"
 t0=$(date +%s)
 ( cd "$WORK" && PATH="$WORK/bin:$PATH" QEMU_TOKEN_AT=60 "$HARNESS" --kernel none --timeout 3 --grace 0.2 --ok "FAKE OK" "expect=Type 'help'" "send=exec /fake" until=60 > /dev/null 2>&1 ); rc=$?
 took=$(( $(date +%s) - t0 ))
-check "an until never runs past the run's timeout" 1 "$([ "$took" -le 6 ] && echo 1 || echo 0)"
+check until-timeout "an until never runs past the run's timeout" 1 "$([ "$took" -le 6 ] && echo 1 || echo 0)"
 
-echo "drivetest: $((total - fails)) of $total checks passed"
-[ "$fails" -eq 0 ] || exit 1
+record "end $total"
+echo "drive: $((total - fails)) of $total checks passed"
+if [ "$fails" -eq 0 ]; then
+    echo "drive: result: passed: $ID"
+    exit 0
+fi
+echo "drive: result: failed: $ID"
+exit 1
