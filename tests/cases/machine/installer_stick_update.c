@@ -217,9 +217,13 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "&& echo old-root > /old/stick-before && umount /old && echo ROOT\"\"CHANGED || "
                    "{ echo STICK\"\"FAIL: root setup; poweroff -f; }");
     drive_expect(&d, "ROOTCHANGED");
+    if (!d.failed)
+        etude_progress(c, "update", 0);
     drive_send(&d, "rach2-install --update /stick/" ROOT_NAME " /dev/disk0 && echo UPDATE\"\"OK || "
                    "{ echo STICK\"\"FAIL: update; poweroff -f; }");
     drive_expect(&d, "UPDATEOK");
+    if (!d.failed)
+        etude_progress(c, "update", 1);
     drive_send(&d, "mount -t ext2 /dev/disk0p3 /old && test ! -e /old/stick-before && "
                    "grep -qx stickproof:x:1234: /old/etc/group && umount /old && "
                    "echo ROOT\"\"CHECKED || { echo STICK\"\"FAIL: root check; poweroff -f; }");
