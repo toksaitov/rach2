@@ -85,9 +85,9 @@ static int run_waiter(void *arg)
 }
 
 /**
- * Run as the program the child becomes: wait up to 5 s for the byte the
- * parent writes on `fd` once it runs again. Returns 5 when the byte came and
- * 6 when it did not, the exit status the parent reads.
+ * Run as the program the child becomes: wait for the byte the parent writes
+ * on `fd` once it runs again. Returns 5 when the byte came and 6 when the
+ * poll or the read failed, the exit status the parent reads.
  */
 static int wait_for_parent(int fd)
 {
@@ -96,7 +96,7 @@ static int wait_for_parent(int fd)
 
     pfd.fd = fd;
     pfd.events = POLLIN;
-    return poll(&pfd, 1, 5000) == 1 && read(fd, &c, 1) == 1 ? 5 : 6;
+    return poll(&pfd, 1, -1) == 1 && read(fd, &c, 1) == 1 ? 5 : 6;
 }
 
 /**
