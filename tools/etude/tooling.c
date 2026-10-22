@@ -742,7 +742,11 @@ static void arg(struct line *l, const char *format, ...)
     l->used += (size_t)n + 1;
 }
 
-/** Append a virtio disk of image `file` in `format`, with `serial` or none. */
+/**
+ * Append a virtio disk of image `file` in `format`, with `serial` or none.
+ * `format` may be followed by the drive's options, and `extra` has the
+ * device's.
+ */
 static void disk(struct line *l, const char *id, const char *file, const char *format,
                  const char *serial, const char *extra)
 {
@@ -1122,7 +1126,7 @@ static int job_line(const struct etude_tooling_site *site, const struct etude_to
     for (i = 0; job->disks != NULL && job->disks[i] != NULL; i++) {
         snprintf(id, sizeof(id), "d%lu", (unsigned long)i + 1);
         snprintf(serial, sizeof(serial), "etude-d%lu", (unsigned long)i + 1);
-        disk(&w->l, id, job->disks[i], "raw", serial, "");
+        disk(&w->l, id, job->disks[i], "raw,discard=unmap", serial, "");
     }
     return w->l.failed ? failure(why, whylen, "QEMU's command line cannot be made") : 0;
 }
