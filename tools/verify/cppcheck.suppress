@@ -216,6 +216,13 @@ unusedStructMember:*tools/etude/include/etude/scenario.h
 unusedStructMember:*tools/etude/history_json.h
 unusedStructMember:*tools/etude/include/etude/history.h
 
+# The context and load headers are also checked alone. Their C implementations
+# and collection callers read these fields when preparing and observing a run.
+unusedStructMember:*tools/etude/measurement_context.h
+unusedStructMember:*tools/etude/observe_history.h
+unusedStructMember:*tools/etude/observe_scope.h
+unusedStructMember:*tools/etude/observe_system.h
+
 # The headers of the executor, the QEMU launcher, the watchdog, the ledger,
 # the schedule, the artifact store and the serial controller declare the
 # structures that their sources and their callers fill and read. cppcheck judges each header as a

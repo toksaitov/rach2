@@ -363,9 +363,10 @@ collection_tools=$(make -s -C "$REPO" print-collection-tools) || exit 1
 # shellcheck disable=SC2086
 unit collection-tools "$REPO" collection make -Bn -o vendor/musl/.stamp \
     -o build/vendor/host-openssl/ready $collection_tools
-# shellcheck disable=SC2086
+native_musl_files=$(printf '%s\n' "$MUSL_FILES" | sed 's#\.\./vendor/#../../vendor/#g')
+# shellcheck disable=SC2086 # native_musl_files is a list of make options
 unit native-collection "$REPO/tests/native" cross make -Bn \
-    $(printf '%s\n' "$MUSL_FILES" | sed 's#\.\./vendor/#../../vendor/#g')
+    $native_musl_files
 
 # Print the same recipes preparation uses, including tools and GNU-routed
 # fixtures. Print mode never compiles a check or publishes an inventory.

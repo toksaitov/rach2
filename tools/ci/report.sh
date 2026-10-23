@@ -24,8 +24,8 @@
 # has one history and store. The strict C verdict validates that complete
 # history and its charged budget before projecting this architecture's result.
 # Missing native history cannot use the old result-lines fallback.
-# An older architecture directory may also have `history/`, the history streams of
-# etude's run, and `store/`, the blobs they refer to, each named by its SHA-256.
+# An older architecture directory may also have `history/`, etude's history
+# streams, and `store/`, the blobs they refer to, each named by its SHA-256.
 # The script reads them with `etude show failures`, of build/tools/etude/etude,
 # which it asks make for, or of the program that ETUDE names. An architecture
 # passes only when that reader finds that every attempt of the run passed as

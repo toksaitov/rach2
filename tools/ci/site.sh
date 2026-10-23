@@ -11,7 +11,7 @@
 # the machine that runs the checks, lowercase letters, digits and
 # hyphens; the core and release workflows select a runner that has it. NAME
 # is the accelerator, lowercase letters, which the workflow puts in
-# RACH2_QEMU_ACCEL. The native runner validates its availability. The script prints
+# RACH2_QEMU_ACCEL. The native runner checks it. The script prints
 #
 #   runner=LABEL
 #   labels=["self-hosted","LABEL"]

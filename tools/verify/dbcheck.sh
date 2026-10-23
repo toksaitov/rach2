@@ -90,7 +90,7 @@ windows() {
             grep -qF "'$1'" tests/cases/host/windows.py ;;
         tools/setup/mandoc-win/main.c|tools/setup/mandoc-win/mmap.c)
             mapped=batch_${1##*/}
-            grep -qF 'compat=$TREE/tools/setup/mandoc-win' tools/setup/build_host_tool.sh &&
+            grep -qF "compat=\$TREE/tools/setup/mandoc-win" tools/setup/build_host_tool.sh &&
             grep -qF "cp \"\$compat/${1##*/}\" \"\$m/$mapped\"" tools/setup/build_host_tool.sh &&
             grep -qF "${mapped%.c}.o" tools/setup/mandoc-batch.mk ;;
         *) return 1 ;;

@@ -10,9 +10,9 @@ out=$(cd "$out" && pwd -P)
 [ ! -e "$out/start" ] || { echo "ci: refused: result directory was already used: $out" >&2; exit 2; }
 (set -C; : > "$out/start")
 sha=$(git rev-parse HEAD)
-git diff --quiet && git diff --cached --quiet || {
+if ! git diff --quiet || ! git diff --cached --quiet; then
     echo 'ci: refused: routine collection requires a clean committed tree' >&2; exit 2;
-}
+fi
 case ${ARCH:-i686} in
     i686) arches=i686; selected=i686 ;;
     x86_64) arches=x86_64; selected=x86_64 ;;
@@ -59,7 +59,8 @@ if [ "$kind" = full ]; then
     set -- all
     if [ -n "${SUITES:-}" ]; then
         set -f
-        # shellcheck disable=SC2086 # SUITES is a list of public ARCH:SUITE operands
+        # SUITES is a list of public ARCH:SUITE operands.
+        # shellcheck disable=SC2086
         set -- $SUITES
         set +f
         for suite do

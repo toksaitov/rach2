@@ -9,12 +9,12 @@
 set -eu
 set -C
 
-finished=0
+finished=
 finish()
 {
     status=$?
     trap - 0
-    if [ "$status" -eq 0 ] && [ "$finished" -ne 1 ]; then status=1; fi
+    [ -n "$finished" ] || [ "$status" -ne 0 ] || status=1
     exit "$status"
 }
 trap finish 0

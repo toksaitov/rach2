@@ -37,7 +37,7 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-style-scope.XXXXXX")
 tree=$work/tree
 for d in rach2/sys/arch/i686 krffs/manifests krffs/vendor utils ish tests/host tests/system/fixtures \
     tools/verify tools/setup mk man ports/doom/src vendor/busybox/busybox-9.9 \
-    vendor/musl/install build/tools/verify saved; do
+    vendor/musl/install vendor/mtools/mtools-9.9 build/tools/verify saved; do
     mkdir -p "$tree/$d"
 done
 for f in scripts.sh textcheck.sh pyprose.py; do
@@ -68,12 +68,13 @@ rm -f -- "$1"
 print("gen: writing the script")
 EOF
 for f in vendor/busybox/busybox-9.9/v.sh vendor/musl/install/w.sh ports/doom/src/u.sh \
-    krffs/vendor/t.sh; do
+    krffs/vendor/t.sh vendor/mtools/mtools-9.9/m.sh; do
     printf '#!/bin/sh\necho vendored\n' >"$tree/$f"
 done
 printf '# mk\n\nA summary.\n\n## Interfaces\n\n## Tests\n' >"$tree/mk/Readme.md"
 printf '# man\n\nA summary.\n\n## Use\n' >"$tree/man/Readme.md"
 printf '# busybox\n\n## Notes\n' >"$tree/vendor/busybox/busybox-9.9/Readme.md"
+printf '# mtools\n\n## Notes\n' >"$tree/vendor/mtools/mtools-9.9/Readme.md"
 for f in tests/run utils/tool tests/registry krffs/manifests/x.manifest \
     tools/verify/cppcheck.suppress rach2/sys/arch/i686/loader.s mk/Readme.md \
     man/Readme.md utils/gen.py; do

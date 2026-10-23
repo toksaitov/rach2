@@ -348,7 +348,8 @@ native_tested() {
     [ "$kind" = core ] || native_purpose=release
     selected=
     if [ -z "$run_kind" ] && [ "$test_set" != all ] && [ "$test_set" != core ]; then
-        # shellcheck disable=SC2086 # registry suite names are individual operands
+        # Registry suite names are individual operands.
+        # shellcheck disable=SC2086
         for suite in $test_items $test_set; do
             selected="$selected $ARCH:$suite"
         done
