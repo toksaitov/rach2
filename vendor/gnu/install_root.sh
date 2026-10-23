@@ -147,6 +147,9 @@ install_part()
 
 install_part root
 if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
+    # The manifest assigns this disk-backed workspace to the test account.
+    mkdir -p "$TREE/host-work"
+    chmod 0700 "$TREE/host-work"
     mkdir "$TREE/host-products"
     cp -a "$OUT/host-products/." "$TREE/host-products/"
     if [ "$RACH2_ARCH" = x86_64 ]; then

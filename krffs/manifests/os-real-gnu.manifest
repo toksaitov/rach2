@@ -207,6 +207,7 @@ dir 0700 /root/.ssh
 file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
 
 dir 1777 /tmp
+dir 0700:1000:1000 /host-work
 dir 0755 /home
 dir 0700:1000:1000 /home/test
 dir 0700:1000:1000 /home/test/.ssh

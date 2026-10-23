@@ -52,11 +52,13 @@ static int workspace(const char *path)
 
 static int environment(const char *root)
 {
-    char tools[4096];
+    char tools[4096], scratch[4096];
     int n = snprintf(tools, sizeof(tools), "%s/build/tests/host-suite/tools", root);
-    return n < 0 || n >= (int)sizeof(tools) || chdir(root) || setenv("ETUDE_TREE", root, 1) ||
-                   setenv("HOST_TEST_TOOLS", tools, 1) || unsetenv("ETUDE_CASE") ||
-                   unsetenv("RUNNER_TRACKING_ID")
+    int size = snprintf(scratch, sizeof(scratch), "%s/.checks", root);
+    return n < 0 || n >= (int)sizeof(tools) || size < 0 || size >= (int)sizeof(scratch) ||
+                   !fx_mkdir(scratch) || setenv("HOST_TEST_WORKDIR", scratch, 1) || chdir(root) ||
+                   setenv("ETUDE_TREE", root, 1) || setenv("HOST_TEST_TOOLS", tools, 1) ||
+                   unsetenv("ETUDE_CASE") || unsetenv("RUNNER_TRACKING_ID")
                ? -1
                : 0;
 }
@@ -65,15 +67,12 @@ int main(int argc, char **argv)
 {
     char root[4096];
     char *args[] = {"/host-products/host", "--one", NULL, NULL, NULL, NULL};
-    const char *tmp = getenv("TMPDIR");
     int n;
 
     if (argc != 4 || !valid_group(argv[1]) ||
         (strcmp(argv[3], "i686") && strcmp(argv[3], "x86_64")))
         return 2;
-    if (!tmp || !*tmp)
-        tmp = "/tmp";
-    n = snprintf(root, sizeof(root), "%s/rach2-host-checks.%s.%s", tmp, argv[1], argv[3]);
+    n = snprintf(root, sizeof(root), "/host-work/host-checks.%s.%s", argv[1], argv[3]);
     if (n < 0 || n >= (int)sizeof(root) || ordinary() != 0)
         goto failed;
     if (!strcmp(argv[2], "--cleanup"))

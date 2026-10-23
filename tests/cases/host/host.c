@@ -755,12 +755,14 @@ static int host_options(struct host *h, int argc, char **argv, const char **sele
 int main(int argc, char **argv)
 {
     struct host h;
-    const char *group, *arch, *tmp = getenv("TMPDIR");
+    const char *group, *arch, *tmp = getenv("HOST_TEST_WORKDIR");
     unsigned width = 4;
     int rc = 2;
     memset(&h, 0, sizeof h);
     if (host_options(&h, argc, argv, &group, &arch, &width) != 0)
         return 2;
+    if (!tmp || !*tmp)
+        tmp = getenv("TMPDIR");
     if (load_inventory(&h, group, arch) != 0) {
         fputs("host: missing, invalid or stale prepared inventory; prepare the host suite again\n",
               stderr);
