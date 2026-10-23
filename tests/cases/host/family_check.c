@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "family_check.h"
 #include "family_image.h"
+#include "family_metal.h"
 #include "sha256.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -173,6 +174,8 @@ int main(int argc, char **argv)
     int ok;
     name = name ? name + 1 : argv[0];
     if (strcmp(name, "host-family-check")) {
+        if (getenv("FAMILY_METAL"))
+            return family_metal_mock(argc, argv);
         if (getenv("FAMILY_IMAGE"))
             return family_image_mock(argc, argv);
         return family_grow_mock(argc, argv);
@@ -188,7 +191,11 @@ int main(int argc, char **argv)
     fx_mkdir(getenv("TMPDIR"));
     printf("@etude 1 begin %s\n", argv[1]);
     fflush(stdout);
-    if (!strcmp(argv[1], "machine.diskpolicy.check"))
+    if (!strcmp(argv[1], "machine.metal.password"))
+        ok = family_metal_password(&f);
+    else if (!strcmp(argv[1], "machine.metal.transport"))
+        ok = family_metal_transport(&f);
+    else if (!strcmp(argv[1], "machine.diskpolicy.check"))
         ok = family_diskpolicy(&f);
     else if (!strncmp(argv[1], "host.imagerace.", 15))
         ok = family_image(&f, argv[1]);

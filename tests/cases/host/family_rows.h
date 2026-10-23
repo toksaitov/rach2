@@ -29,6 +29,10 @@ static const char *family_rows(const char *id)
         return "staged";
     if (!strcmp(id, "machine.diskpolicy.check"))
         return "read-write read-only read-write-refused read-only-refused empty-refused";
+    if (!strcmp(id, "machine.metal.transport"))
+        return "transport";
+    if (!strcmp(id, "machine.metal.password"))
+        return "password";
     return NULL;
 }
 #endif
