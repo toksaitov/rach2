@@ -323,7 +323,8 @@ The legacy adapter smoke script `sh tools/etude/win-tooling-smoke.sh [ARCH]`, in
 | [`include/etude/artifact.h`](include/etude/artifact.h) | The artifact store and the preparation graph: objects by digest, private copies, nodes and their products |
 | [`posix/store.c`](posix/store.c), [`posix/prepare.c`](posix/prepare.c) | The store and the graph on POSIX systems |
 | [`include/etude/legacy.h`](include/etude/legacy.h) | The preparation adapter and the set driver: the preparation of suites of `tests/run`, the check of its record, and the run of a set of suites by their cases |
-| [`posix/legacy.c`](posix/legacy.c), [`posix/run_suites.c`](posix/run_suites.c), [`held.sh`](held.sh) | The preparation adapter on POSIX systems; `etude prepare`, `etude check record` and `etude run suites`; and their run with the tree held |
+| [`posix/legacy.c`](posix/legacy.c), [`posix/run_suites.c`](posix/run_suites.c), [`held.sh`](held.sh) | The preparation adapter; `etude prepare` and `etude run suites`; and their run with the tree held |
+| [`preparation_record.c`](preparation_record.c) | The common artifact-record reader and `etude check record`, linked independently of build orchestration |
 | [`hold.h`](hold.h), [`lock_tree.c`](lock_tree.c), [`posix/hold.c`](posix/hold.c), [`win/hold.c`](win/hold.c), [`hold.sh`](hold.sh) | `etude lock tree`, the hold of a tree's run lock while one command runs: its protocol, its halves on POSIX systems and Windows, and the hold of a script |
 | [`win/winexec.h`](win/winexec.h) | The Windows adapter: processes in Job Objects, their output, usage and end, and paths, clocks and sockets |
 | [`win/exec.c`](win/exec.c) | The executor of host processes on Windows, on the adapter |
