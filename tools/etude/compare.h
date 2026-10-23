@@ -107,8 +107,8 @@ struct cmp_text {
 
 extern const char *const cmp_field_names[CMP_FIELDS];
 extern const char cmp_policy[];
-/* The program named at the start of the library's diagnostics; a program
- * other than history_compare that links the library sets it in main. */
+/* The command named at the start of the library's diagnostics, `etude
+ * compare` unless the command that runs it sets another. */
 extern const char *cmp_program;
 
 int cmp_load(struct cmp_history *history, const char *schema, char **paths, int count);

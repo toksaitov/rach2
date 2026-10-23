@@ -1,7 +1,8 @@
 #!/bin/sh
 # test_status_check.sh: run tests/system/test_status_test.py, the test of the
 # status reader tools/flow/test_status.py against live and stale claims of a
-# tree, with etude-ports compiled from the tree into a scratch directory. The
+# tree, with an etude of its `lock` verb alone compiled from the tree into a
+# scratch directory, by etude_lock_build of tools/etude/hold.sh. The
 # reader reads /proc/locks, so on a host that is not Linux the test runs in
 # etude's tooling machine (tests/system/tooling.sh), as an ordinary user.
 #
@@ -21,9 +22,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-test-status.XXXXXX") || exit 2
 
-# The sources of etude-ports, and the headers they include.
-programs='tools/etude/etude_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c'
-headers='tools/etude/win/winfmt.h tools/etude/include/etude/portlock.h'
+# The sources of an etude of the `lock` verb alone, the headers they include,
+# and the script that compiles them.
+programs='tools/etude/etude.c tools/etude/lock_tree.c tools/etude/posix/hold.c
+    tools/etude/lock_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c'
+headers='tools/etude/verbs.h tools/etude/hold.h tools/etude/win/winfmt.h
+    tools/etude/include/etude/portlock.h tools/etude/hold.sh'
 
 # judge OUT STATUS: report the test's output OUT and its status.
 judge() {
@@ -41,14 +45,14 @@ judge() {
 }
 
 if [ "$(uname -s)" = Linux ]; then
-    # shellcheck disable=SC2086 # the sources are a list
-    cc -std=c99 -D_DEFAULT_SOURCE -O2 -Wall -Wextra -I tools/etude/include -I tools/etude \
-        -o "$work/etude-ports" $programs || {
-        echo 'test-status-check: result: not run: etude-ports did not compile'
+    # shellcheck source=tools/etude/hold.sh
+    . "$repo/tools/etude/hold.sh"
+    etude_lock_build "$repo" "$work/etude" cc -D_DEFAULT_SOURCE -Wall -Wextra posix/hold.c || {
+        echo 'test-status-check: result: not run: etude did not compile'
         exit 2
     }
     status=0
-    python3 tests/system/test_status_test.py "$work/etude-ports" > "$work/out" 2>&1 || status=$?
+    python3 tests/system/test_status_test.py "$work/etude" > "$work/out" 2>&1 || status=$?
     judge "$work/out" "$status"
 fi
 
@@ -70,9 +74,9 @@ set -u
 mkdir tree && tar -x -f status.tar -C tree && chmod -R a+rX tree &&
     useradd --create-home --user-group status || exit 3
 cd tree && exec setpriv --reuid=status --regid=status --init-groups env -i PATH="$PATH" \
-    HOME=/home/status sh -c 'cc -std=c99 -D_DEFAULT_SOURCE -O2 -I tools/etude/include -I tools/etude \
-        -o "$HOME/etude-ports" tools/etude/etude_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c &&
-        python3 tests/system/test_status_test.py "$HOME/etude-ports"'
+    HOME=/home/status sh -c '. tools/etude/hold.sh &&
+        etude_lock_build "$PWD" "$HOME/etude" cc -D_DEFAULT_SOURCE posix/hold.c &&
+        python3 tests/system/test_status_test.py "$HOME/etude"'
 JOB
 status=0
 tooling run -i "$work/status.tar" "$work/job.sh" > "$work/out" 2>&1 || status=$?

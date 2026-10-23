@@ -1,9 +1,9 @@
 /*
- * casecheck.h: the parts of casecheck, the validator of etude's case
+ * check.h: the parts of `etude check`, the validator of etude's case
  * manifests, report records, results and runs, that its files share.
  */
-#ifndef ETUDE_CASECHECK_H
-#define ETUDE_CASECHECK_H
+#ifndef ETUDE_CHECK_H
+#define ETUDE_CHECK_H
 
 #include <stddef.h>
 

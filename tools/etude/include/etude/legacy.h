@@ -86,7 +86,7 @@ struct etude_legacy_set_opts {
     const char *tree;    /* the root of the tree, which the caller holds */
     const char *arch;    /* i686 or x86_64 */
     const char *kernel;  /* as for a preparation, or NULL */
-    const char *program; /* the path of etude-legacy, which runs the steps */
+    const char *program; /* the path of etude, which runs the steps and judges */
     const struct etude_legacy_member *members;
     size_t nmembers;
     const char *ledger;          /* the absolute directory of the machine's ledger */
@@ -105,7 +105,6 @@ struct etude_legacy_set_opts {
                                     `store/`, and of each command's output in
                                     `output/` */
     const char *schemas;         /* the directory of etude's schemas */
-    const char *casecheck;       /* casecheck's path, which judges a case's attempt */
     const char *record;          /* the file of the preparation's record, or NULL for
                                     `prepare.record` under `results` */
     const char *evidence;        /* the directory under which each case has its
@@ -145,20 +144,19 @@ struct etude_legacy_set_opts {
  * first member that does not pass does so at once.
  *
  * Each case runs in a workspace of its own under `o->evidence`, under the
- * case's bounds as etude_bound_fix fixes them without history, their
- * ceilings: a host case's program with ETUDE_TREE naming the tree, a guest
- * case's program on a machine of its QEMU profile, through etude-guest,
- * with the memory the launcher reserves for the machine as its claim, and a
- * machine case's scenario with its invocation, after its artifacts are
- * published to the run's store. The invocation permits the
- * lazy boundary memory profile only when the policy `o->site` has the line
- * `boundary_lazy bigmem-boundary-v1`; a machine case that declares such a
- * machine ends before its scenario starts when the policy lacks it, or when
- * the ledger's memory limit is less than the case's `memory_bytes`.
- * `o->casecheck` judges each attempt, a guest's placed `qemu` with the
- * machine's console and a machine case's with the consoles its scenario
- * kept. A member with no manifest is refused, and so is a manifest that
- * cannot be read, of another suite's family, with no case on the
+ * case's bounds as etude_bound_fix fixes them without history, their ceilings:
+ * a host case's program with ETUDE_TREE naming the tree, a guest case's program
+ * on a machine of its QEMU profile, through etude-guest, with the memory the
+ * launcher reserves for the machine as its claim, and a machine case's scenario
+ * with its invocation, after its artifacts are published to the run's store.
+ * The invocation permits the lazy boundary memory profile only when the policy
+ * `o->site` has the line `boundary_lazy bigmem-boundary-v1`; a machine case
+ * that declares such a machine ends before its scenario starts when the policy
+ * lacks it, or when the ledger's memory limit is less than the case's
+ * `memory_bytes`. `o->program check attempt` judges each attempt, a guest's
+ * placed `qemu` with the machine's console and a machine case's with the
+ * consoles its scenario kept. A member with no manifest is refused, and so is a
+ * manifest that cannot be read, of another suite's family, with no case on the
  * architecture, or with a case that the set driver cannot run
  * (legacy_manifest_read), and a request whose `o->site` cannot be read.
  *

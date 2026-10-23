@@ -1,13 +1,13 @@
 #!/bin/sh
 #
-# etude_tooling_test.sh: etude-tooling makes the tooling machine once from a
-# recipe whose image it checks by digest, runs a job in a private copy of it
-# with the job's files, disks and outputs, tells a job that failed from a
-# machine that failed or ran out of time, and records each boot's steps in
-# the history.
+# etude_tooling_test.sh: `etude provision tooling` makes the tooling machine
+# once from a recipe whose image it checks by digest, runs a job in a private
+# copy of it with the job's files, disks and outputs, tells a job that failed
+# from a machine that failed or ran out of time, and records each boot's steps
+# in the history.
 #
-# The rows build a private etude-tooling and etude-volume from a copy of
-# tools/etude and run them against stand-ins for curl, qemu-img and QEMU.
+# The rows build a private etude and etude-volume from a copy of tools/etude
+# and run them against stand-ins for curl, qemu-img and QEMU.
 # The `curl` stand-in copies a fixture image; `qemu-img` writes an overlay
 # that names its backing file, which must be found from the overlay's
 # directory; and QEMU plays the machine: on a boot with the seed volume,
@@ -146,19 +146,19 @@ sources() {
         on { more = sub(/\\$/, ""); print; if (!more) exit }' "$TREE/tools/etude/sources.mk"
 }
 
-# build: compile the copy's etude-tooling into work/etude-tooling, and
-# etude-volume beside it.
+# build: compile the copy's etude into work/etude by the recipe of a version,
+# tools/etude/version.mk, and etude-volume beside it.
 build() {
-    # shellcheck disable=SC2046 # the lists are words
-    (cd "$TREE" && cc -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -o "$work/etude-tooling" \
-        $(sources ETUDE_TOOLING_SRC) && cc -std=c99 -o "$work/etude-volume" \
-        $(sources ETUDE_VOLUME_SRC)) > "$work/build.log" 2>&1
+    # shellcheck disable=SC2046 # the list is words
+    (cd "$TREE" && unset MAKEFLAGS MFLAGS MAKELEVEL &&
+        make -f tools/etude/version.mk OUT="$work" CC=cc CFLAGS=-std=c99 &&
+        cc -std=c99 -o "$work/etude-volume" $(sources ETUDE_VOLUME_SRC)) > "$work/build.log" 2>&1
 }
 
 # tooling ARG...: run the copy with the fixture's recipe and cache.
 CACHE=$work/cache
 tooling() {
-    "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -a tcg "$@"
+    "$work/etude" provision tooling -r "$RECIPE" -C "$CACHE" -a tcg "$@"
 }
 
 # history STREAM: the history options of a stream at work/STREAM.jsonl.
@@ -199,7 +199,7 @@ row() {
     made)
         # shellcheck disable=SC2046 # the options are words
         tooling prepare $(history made) > "$work/out.log" 2>&1 || { cat "$work/out.log" > "$work/why"; return 1; }
-        grep -q '^etude-tooling: result: made ' "$work/out.log" || { echo 'no result line' > "$work/why"; return 1; }
+        grep -q '^etude provision: result: made ' "$work/out.log" || { echo 'no result line' > "$work/why"; return 1; }
         disk=$(ls "$CACHE"/tooling-*.qcow2 2>/dev/null)
         [ -n "$disk" ] && [ ! -w "$disk" ] || { echo 'no read-only disk was published' > "$work/why"; return 1; }
         grep -q 'overlay of image-' "$disk" || { echo 'the disk does not name its image from the cache' > "$work/why"; return 1; }
@@ -208,7 +208,7 @@ row() {
         grep -q '"stage":"one_time_setup".*"outcome":"pass"' "$work/made.jsonl" ||
             { echo 'no passing one_time_setup step' > "$work/why"; return 1; }
         tooling check > /dev/null || { echo 'check does not find it' > "$work/why"; return 1; }
-        tooling prepare 2>&1 | grep -q '^etude-tooling: result: reused ' || { echo 'not reused' > "$work/why"; return 1; }
+        tooling prepare 2>&1 | grep -q '^etude provision: result: reused ' || { echo 'not reused' > "$work/why"; return 1; }
         ;;
     digest)
         printf 'another image\n' > "$FIX/image.real"
@@ -236,7 +236,7 @@ row() {
             -O "$work/out" $(history job) "$work/job.sh" > "$work/stdout" 2> "$work/stderr"; rc=$?
         [ "$rc" = 0 ] || { echo "status $rc" > "$work/why"; cat "$work/stderr" >> "$work/why"; return 1; }
         [ "$(cat "$work/stdout")" = "$(printf 'the note\nthe inner file')" ] || { echo 'stdout' > "$work/why"; return 1; }
-        grep -q '^disks 1$' "$work/stderr" && grep -q '^etude-tooling: cost: start ' "$work/stderr" ||
+        grep -q '^disks 1$' "$work/stderr" && grep -q '^etude provision: cost: start ' "$work/stderr" ||
             { cat "$work/stderr" > "$work/why"; return 1; }
         [ "$(cat "$work/disk.img")" = 'written in the machine' ] || { echo 'the disk' > "$work/why"; return 1; }
         [ "$(cat "$work/out/result.txt" 2>/dev/null)" = made ] && [ "$(cat "$work/out/tree/leaf.txt" 2>/dev/null)" = deep ] ||
@@ -277,14 +277,14 @@ row() {
         made || { echo 'not made' > "$work/why"; return 1; }
         echo hang > "$FIX/qemu"
         # shellcheck disable=SC2046 # the options are words
-        "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -a tcg run $(history stop) "$work/job.sh" \
+        "$work/etude" provision tooling -r "$RECIPE" -C "$CACHE" -a tcg run $(history stop) "$work/job.sh" \
             > /dev/null 2> "$work/stderr" &
         pid=$!
         until grep -q '^etude-job: start$' "$CACHE"/job-*/channel.log 2> /dev/null; do
             case $(ps -o stat= -p "$pid" 2> /dev/null) in
                 '' | Z*)
                     wait "$pid"
-                    echo 'etude-tooling ended before the job started' > "$work/why"
+                    echo 'etude provision tooling ended before the job started' > "$work/why"
                     return 1 ;;
             esac
             sleep 1
@@ -330,7 +330,7 @@ row() {
         grep -qx none "$a" || { echo 'a job without -n has a network' > "$work/why"; return 1; }
         ;;
     arm64)
-        arm() { "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -p arm64 -a hvf "$@"; }
+        arm() { "$work/etude" provision tooling -r "$RECIPE" -C "$CACHE" -p arm64 -a hvf "$@"; }
         made || { echo 'not made' > "$work/why"; return 1; }
         arm check > /dev/null && { echo 'the arm64 machine is the amd64 one' > "$work/why"; return 1; }
         arm prepare > "$work/out.log" 2>&1 || { cat "$work/out.log" > "$work/why"; return 1; }
@@ -341,7 +341,7 @@ row() {
         for want in virt edk2-aarch64-code.fd hvf max 'virtio-blk-pci,drive=root,bootindex=0'; do
             grep -qx -- "$want" "$a" || { echo "no argument $want" > "$work/why"; return 1; }
         done
-        "$work/etude-tooling" -r "$RECIPE" -C "$CACHE" -p sparc check > "$work/out.log" 2>&1 &&
+        "$work/etude" provision tooling -r "$RECIPE" -C "$CACHE" -p sparc check > "$work/out.log" 2>&1 &&
             { echo 'an unknown architecture was taken' > "$work/why"; return 1; }
         grep -q 'not amd64 or arm64' "$work/out.log" || { cat "$work/out.log" > "$work/why"; return 1; }
         ;;

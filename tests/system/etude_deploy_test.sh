@@ -1,7 +1,8 @@
 #!/bin/sh
 #
-# etude_deploy_test.sh: tools/etude/deploy.sh makes a machine ready to run
-# etude, and a repeated deployment, or one cut short and run again, finishes
+# etude_deploy_test.sh: `etude provision machine`, which
+# tools/etude/provision_machine.sh is, makes a machine ready to run etude,
+# and a repeated deployment, or one cut short and run again, finishes
 # without changing a clone, a key, a running test's ledger or its version.
 #
 # The rows run a private copy of tools/etude and tools/setup, whose recipe of
@@ -273,13 +274,13 @@ state()
     ovmf_code=$FIX/firmware\ code.fd
 }
 
-# run ARGS...: run the copy of deploy.sh with the stand-ins first on the
-# path and the cache FIX/cache, its output in work/out, its errors in
+# run ARGS...: run the copy of provision_machine.sh with the stand-ins first
+# on the path and the cache FIX/cache, its output in work/out, its errors in
 # work/err, its status in work/status. Its own scratch must be gone after.
 run()
 {
     PATH="$work/bin:$work/mbin:$PATH" TMPDIR="$work/ctl" RACH2_OVMF_CODE="$ovmf_code" \
-        sh "$TREE/tools/etude/deploy.sh" -c fakecc -C "$FIX/cache" "$@" > "$work/out" 2> "$work/err"
+        sh "$TREE/tools/etude/provision_machine.sh" -c fakecc -C "$FIX/cache" "$@" > "$work/out" 2> "$work/err"
     echo "$?" > "$work/status"
     # shellcheck disable=SC2012 # the names are the scripts' own
     [ -z "$(ls -A "$work/ctl")" ] || echo "the controller left $(ls -A "$work/ctl")" >> "$work/why"
@@ -294,21 +295,21 @@ why()
     return 1
 }
 
-# deployed: require the last run to have exited 0 with `etude-deploy:
+# deployed: require the last run to have exited 0 with `etude provision:
 # result: deployed KEY` last, and no scratch left. Sets key and dir from the
 # version it reports.
 deployed()
 {
     [ ! -s "$work/why" ] || { why 'scratch was left'; return 1; }
     [ "$(cat "$work/status")" = 0 ] || { why "status $(cat "$work/status"), wanted 0"; return 1; }
-    key=$(sed -n 's/^etude-version: result: [a-z]* \([0-9a-f]*\) .*/\1/p' "$work/out")
-    dir=$(sed -n 's/^etude-version: result: [a-z]* [0-9a-f]* //p' "$work/out")
-    [ -n "$key" ] && [ "$(tail -n 1 "$work/out")" = "etude-deploy: result: deployed $key" ] ||
+    key=$(sed -n 's/^etude provision: result: [a-z]* \([0-9a-f]*\) .*/\1/p' "$work/out")
+    dir=$(sed -n 's/^etude provision: result: [a-z]* [0-9a-f]* //p' "$work/out")
+    [ -n "$key" ] && [ "$(tail -n 1 "$work/out")" = "etude provision: result: deployed $key" ] ||
         { why 'no result deployed'; return 1; }
 }
 
-# incomplete WHY: require the last run to have exited 1 with `etude-deploy:
-# result: incomplete: WHY` last, and no scratch left.
+# incomplete WHY: require the last run to have exited 1 with `etude
+# provision: result: incomplete: WHY` last, and no scratch left.
 incomplete()
 {
     [ ! -s "$work/why" ] || { why 'scratch was left'; return 1; }
@@ -316,7 +317,7 @@ incomplete()
     last=$(tail -n 1 "$work/out")
     # shellcheck disable=SC2254 # WHY is a pattern
     case $last in
-        "etude-deploy: result: incomplete: "$1) ;;
+        "etude provision: result: incomplete: "$1) ;;
         *) why "the last line is not incomplete: $1"; return 1 ;;
     esac
 }
@@ -416,10 +417,10 @@ row()
             snapshot "$FIX/home" "$FIX/cache" "$FIX/have" > "$work/before"
             run machine
             deployed || return 1
-            { grep -q '^etude-version: result: reused ' "$work/out" &&
-                grep -qx "etude-deploy: machine: unchanged $home_state/machine" "$work/out"; } ||
+            { grep -q '^etude provision: result: reused ' "$work/out" &&
+                grep -qx "etude provision: machine: unchanged $home_state/machine" "$work/out"; } ||
                 { why 'the second deployment was not a reuse'; return 1; }
-            [ "$(wc -l < "$FIX/cc.log")" -eq 7 ] || { why 'the second deployment compiled'; return 1; }
+            [ "$(wc -l < "$FIX/cc.log")" -eq 1 ] || { why 'the second deployment compiled'; return 1; }
             snapshot "$FIX/home" "$FIX/cache" "$FIX/have" > "$work/after"
             cmp -s "$work/before" "$work/after" || {
                 why 'the second deployment changed the machine:'
@@ -473,7 +474,7 @@ row()
             run machine
             restore
             deployed || return 1
-            { [ "$key $dir" != "$old" ] && grep -q '^etude-version: result: built ' "$work/out"; } ||
+            { [ "$key $dir" != "$old" ] && grep -q '^etude provision: result: built ' "$work/out"; } ||
                 { why 'no new version was built'; return 1; }
             record "$home_state/machine" "$home_state/ledger" || return 1
             snapshot "$home_state/ledger" "$FIX/cache/versions/${old%% *}" "${old#* }" > "$work/after"
@@ -497,7 +498,7 @@ row()
             run machine
             restore
             incomplete 'the record of machine was not written: status 1' || return 1
-            grep -q "^etude-deploy: the ledger $home_state/ledger is of the format 'etude-ledger 2', and version [0-9a-f]* admits by 'etude-ledger 1'; the machine keeps its version$" "$work/err" ||
+            grep -q "^etude provision: the ledger $home_state/ledger is of the format 'etude-ledger 2', and version [0-9a-f]* admits by 'etude-ledger 1'; the machine keeps its version$" "$work/err" ||
                 { why 'no report of the format'; return 1; }
             snapshot "$home_state" > "$work/after"
             cmp -s "$work/before" "$work/after" || { why 'the machine'\''s state changed'; return 1; } ;;
@@ -507,7 +508,7 @@ row()
             mkdir "$FIX/shared" && chmod 555 "$FIX/shared" || exit 1
             run -L "$FIX/shared" machine
             incomplete 'the record of machine was not written: status 1' || return 1
-            { grep -q "^etude-deploy: this account cannot use the ledger $FIX/shared; its owner or an administrator runs:$" "$work/err" &&
+            { grep -q "^etude provision: this account cannot use the ledger $FIX/shared; its owner or an administrator runs:$" "$work/err" &&
                 grep -qx "    chmod a+rwx '$FIX/shared'" "$work/err"; } ||
                 { why 'the command that gives the right was not printed'; return 1; }
             [ -z "$(ls -A "$FIX/shared")" ] && [ ! -e "$home_state/machine" ] ||
@@ -590,9 +591,9 @@ row()
         kvm-open|kvm-unavailable|kvm-missing)
             (
                 begin
-                cp "$TREE/tools/etude/deploy.sh" "$work/deploy.kvm" || exit 1
-                trap 'cp "$work/deploy.kvm" "$TREE/tools/etude/deploy.sh"' EXIT
-                sed "s#/dev/kvm#$FIX/kvm#g" "$work/deploy.kvm" > "$TREE/tools/etude/deploy.sh" || exit 1
+                cp "$TREE/tools/etude/provision_machine.sh" "$work/machine.kvm" || exit 1
+                trap 'cp "$work/machine.kvm" "$TREE/tools/etude/provision_machine.sh"' EXIT
+                sed "s#/dev/kvm#$FIX/kvm#g" "$work/machine.kvm" > "$TREE/tools/etude/provision_machine.sh" || exit 1
                 wanted=tcg
                 case $1 in
                     kvm-open)

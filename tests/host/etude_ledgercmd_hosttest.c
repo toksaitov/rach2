@@ -1,6 +1,7 @@
 /**
- * Check etude-ledger (tools/etude/posix/etude_ledger.c), which lists the
- * claims of a ledger and drops one, against a ledger of real processes.
+ * Check `etude status` and `etude release` (tools/etude/posix/claims.c),
+ * which list the claims of a ledger and drop one, against a ledger of real
+ * processes.
  *
  * host-deps: tools/etude/ledger.c tools/etude/posix/process.c utils/sha256.c
  * host-cflags: -I tools/etude/include -Wall -Wextra -Werror
@@ -28,17 +29,16 @@
 #include "compat/fixdir_host.c"
 #include "etude/ledger.h"
 
-#define main ledger_main
-#include "../../tools/etude/posix/etude_ledger.c"
-#undef main
+#include "../../tools/etude/verbs.h"
+#include "../../tools/etude/posix/claims.c"
 
 static int fails;
-#define CHECK(c, row)                                                \
-    do {                                                             \
-        if (!(c)) {                                                  \
-            printf("etude-ledgercmd-test: fail: %s: %s\n", row, #c); \
-            fails++;                                                 \
-        }                                                            \
+#define CHECK(c, row)                                             \
+    do {                                                          \
+        if (!(c)) {                                               \
+            printf("etude-claims-test: fail: %s: %s\n", row, #c); \
+            fails++;                                              \
+        }                                                         \
     } while (0)
 
 #if defined(__linux__)
@@ -143,13 +143,14 @@ static void slurp(const char *path, char *buf, size_t size)
 }
 
 /**
- * Run the command with the arguments `a1` to `a3`, of which the last ones
- * may be NULL, in a child of this process, and give what it did in `r`.
+ * Run `etude VERB`, `status` or `release`, with the arguments `a1` and
+ * `a2`, of which the last ones may be NULL, in a child of this process, and
+ * give what it did in `r`.
  */
-static void run(struct ran *r, const char *a1, const char *a2, const char *a3)
+static void run(struct ran *r, const char *verb, const char *a1, const char *a2)
 {
-    char *argv[] = {"etude-ledger", (char *)a1, (char *)a2, (char *)a3, NULL};
-    int argc = a2 == NULL ? 2 : a3 == NULL ? 3 : 4, out, err, st;
+    char *argv[] = {"etude", (char *)a1, (char *)a2, NULL};
+    int argc = a1 == NULL ? 1 : a2 == NULL ? 2 : 3, out, err, st;
     pid_t pid;
 
     fflush(stdout);
@@ -160,7 +161,8 @@ static void run(struct ran *r, const char *a1, const char *a2, const char *a3)
         err = open(fix_path("err"), O_WRONLY | O_CREAT | O_TRUNC, 0600);
         if (out < 0 || err < 0 || dup2(out, 1) < 0 || dup2(err, 2) < 0)
             _exit(99);
-        st = ledger_main(argc, argv);
+        st = strcmp(verb, "status") == 0 ? etude_status_main(argc, argv)
+                                         : etude_release_main(argc, argv);
         fflush(stdout);
         fflush(stderr);
         _exit(st);
@@ -227,7 +229,7 @@ static void check_list(const char *dir, long lost, long silent, long held)
     char line[512];
     long me = (long)getpid();
 
-    run(&r, "list", dir, NULL);
+    run(&r, "status", dir, NULL);
     CHECK(r.status == 0 && r.err[0] == '\0', "the listing");
     snprintf(line, sizeof(line),
              "claim owned: owned; state reserved, system " SYSTEM
@@ -254,10 +256,10 @@ static void check_list(const char *dir, long lost, long silent, long held)
              ", owner %ld, account tester; asks cpu_millis 500",
              me);
     CHECK(has_line(r.out, line), "a request is listed");
-    CHECK(has_line(r.out, "etude-ledger: result: owned 2, live 1, uncertain 2"),
+    CHECK(has_line(r.out, "etude status: result: owned 2, live 1, uncertain 2"),
           "the listing counts each status");
     if (fails != 0)
-        printf("etude-ledgercmd-test: the listing:\n%s%s", r.out, r.err);
+        printf("etude-claims-test: the listing:\n%s%s", r.out, r.err);
 }
 
 /** Check the drops of an owned, a live, a missing and an uncertain claim. */
@@ -266,28 +268,28 @@ static void check_drop(struct etude_ledger *l, const char *dir)
     struct ran r;
     char line[512];
 
-    run(&r, "drop", dir, "owned");
+    run(&r, "release", dir, "owned");
     snprintf(line, sizeof(line),
-             "etude-ledger: result: refused: owned: its owner, process %ld, runs", (long)getpid());
+             "etude release: result: refused: owned: its owner, process %ld, runs", (long)getpid());
     CHECK(r.status == 1 && r.out[0] == '\0' && has_line(r.err, line), "an owned claim is refused");
     CHECK(kept(l, "owned"), "an owned claim is refused");
-    run(&r, "drop", dir, "held");
-    snprintf(line, sizeof(line), "etude-ledger: result: refused: held: its process %ld runs",
+    run(&r, "release", dir, "held");
+    snprintf(line, sizeof(line), "etude release: result: refused: held: its process %ld runs",
              (long)holder);
     CHECK(r.status == 1 && r.out[0] == '\0' && has_line(r.err, line), "a live claim is refused");
     CHECK(kept(l, "held"), "a live claim is refused");
-    run(&r, "drop", dir, "absent");
-    snprintf(line, sizeof(line), "etude-ledger: result: refused: absent: %s",
+    run(&r, "release", dir, "absent");
+    snprintf(line, sizeof(line), "etude release: result: refused: absent: %s",
              "the ledger has no such claim");
     CHECK(r.status == 1 && r.out[0] == '\0' && has_line(r.err, line), "a missing claim is refused");
-    run(&r, "drop", dir, "lost");
+    run(&r, "release", dir, "lost");
     CHECK(r.status == 0 && r.err[0] == '\0' &&
-              has_line(r.out, "etude-ledger: result: dropped: lost"),
+              has_line(r.out, "etude release: result: dropped: lost"),
           "an uncertain claim is dropped");
     CHECK(!kept(l, "lost") && kept(l, "silent") && kept(l, "held") && kept(l, "asking"),
           "an uncertain claim is dropped");
-    run(&r, "list", dir, NULL);
-    CHECK(r.status == 0 && has_line(r.out, "etude-ledger: result: owned 2, live 1, uncertain 1"),
+    run(&r, "status", dir, NULL);
+    CHECK(r.status == 0 && has_line(r.out, "etude status: result: owned 2, live 1, uncertain 1"),
           "an uncertain claim is dropped");
 }
 
@@ -313,17 +315,17 @@ static void check_refused(void)
     char text[64];
     struct stat st;
 
-    run(&r, "drop", fix_path("ledger"), NULL);
-    CHECK(r.status == 2 && has_line(r.err, "etude-ledger: usage: etude-ledger drop LEDGER ID"),
+    run(&r, "release", fix_path("ledger"), NULL);
+    CHECK(r.status == 2 && has_line(r.err, "usage: etude release LEDGER ID"),
           "a wrong usage is refused");
-    run(&r, "list", fix_path("nothing"), NULL);
+    run(&r, "status", fix_path("nothing"), NULL);
     CHECK(r.status == 2 && strstr(r.err, ": not a ledger: it has no verdicts directory\n") &&
               stat(fix_path("nothing"), &st) != 0,
           "a path that is not a ledger is refused");
     CHECK(mkdir(fix_path("damaged"), 0700) == 0 && mkdir(fix_path("damaged/verdicts"), 0700) == 0 &&
               put(fix_path("damaged/claims"), damaged) == 0,
           "a damaged ledger is refused");
-    run(&r, "list", fix_path("damaged"), NULL);
+    run(&r, "status", fix_path("damaged"), NULL);
     CHECK(r.status == 2 && strstr(r.err, ": its claims file does not parse; nothing was changed\n"),
           "a damaged ledger is refused");
     slurp(fix_path("damaged/claims"), text, sizeof(text));

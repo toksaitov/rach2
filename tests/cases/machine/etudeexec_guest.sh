@@ -1,7 +1,7 @@
 #!/bin/sh
 # etudeexec_guest.sh: build etude on Rach2 by its TinyCC recipe and run what
-# it built: the programs of the version, and the test of the POSIX executor,
-# built with the version's compiler and flags.
+# it built: the version's program, and the test of the POSIX executor, built
+# with the version's compiler and flags.
 #
 # Usage: sh etudeexec_guest.sh DIR
 #
@@ -30,10 +30,10 @@ bad()
 # require the result WORD, `built` or `reused`; print the version's key.
 version()
 {
-    out=$(sh tools/etude/version.sh -l -C "$cache" 2>"$dir/$1.err")
+    out=$(sh tools/etude/provision_version.sh -l -C "$cache" 2>"$dir/$1.err")
     case $out in
-        "etude-version: result: $2 "*)
-            out=${out#"etude-version: result: $2 "}
+        "etude provision: result: $2 "*)
+            out=${out#"etude provision: result: $2 "}
             echo "${out%% *}" ;;
         *)
             sed 's/^/etudeexec: stderr: /' "$dir/$1.err" >&2
@@ -44,7 +44,7 @@ version()
 if key=$(version built built); then
     ok built
 else
-    bad built 'version.sh -l built no version'
+    bad built 'provision_version.sh -l built no version'
 fi
 if again=$(version reused reused) && [ "$again" = "$key" ]; then
     ok reused
@@ -67,26 +67,26 @@ case $flags in
     *) bad recipe "the record's flags are '$flags'" ;;
 esac
 
-if "$bin/casecheck" --selftest tools/etude/fixtures >"$dir/selftest.out" 2>&1; then
-    ok casecheck
+if "$bin/etude" check --selftest tools/etude/fixtures >"$dir/selftest.out" 2>&1; then
+    ok check
 else
-    sed 's/^/etudeexec: casecheck: /' "$dir/selftest.out"
-    bad casecheck 'casecheck --selftest failed'
+    sed 's/^/etudeexec: check: /' "$dir/selftest.out"
+    bad check 'etude check --selftest failed'
 fi
 
 schema=tools/etude/schemas/history.schema.json
-if "$bin/history_check" "$schema" tools/etude/schemas/history.example.jsonl >/dev/null 2>&1; then
+if "$bin/etude" check history "$schema" tools/etude/schemas/history.example.jsonl >/dev/null 2>&1; then
     ok history
 else
-    bad history 'history_check refused a whole stream'
+    bad history 'etude check history refused a whole stream'
 fi
 printf '%s' "$(cat tools/etude/schemas/history.example.jsonl)" >"$dir/cut.jsonl"
-"$bin/history_check" "$schema" "$dir/cut.jsonl" >/dev/null 2>&1
+"$bin/etude" check history "$schema" "$dir/cut.jsonl" >/dev/null 2>&1
 status=$?
 if [ "$status" -eq 2 ]; then
     ok history-lost
 else
-    bad history-lost "history_check gave $status, not 2, for a lost last record"
+    bad history-lost "etude check history gave $status, not 2, for a lost last record"
 fi
 
 test=tests/host/etude_exec_hosttest.c

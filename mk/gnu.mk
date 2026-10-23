@@ -12,7 +12,7 @@
 # of sources.txt and the link GNU_LINK asks for, shared unless it says static,
 # which a file keeps.
 #
-# Each step runs through etude-step with the layer's tree as its root
+# Each step runs through `etude build` with the layer's tree as its root
 # (`-r`): with the host's store it is built in the store, at the path of its
 # entry, which the script takes as RACH2_GNU_OUT, and the tree has links to
 # its outputs, since the compilers keep the paths they were built at; without
@@ -63,7 +63,7 @@ ifneq ($(GNU_IN_COPY),)
 $(GNU_TOOLCHAIN_STAMP): gnu-in-copy
 endif
 
-$(GNU_TOOLCHAIN_STAMP): $(GNU_TOOLCHAIN_SOURCES) $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL) $(ETUDESTEP)
+$(GNU_TOOLCHAIN_STAMP): $(GNU_TOOLCHAIN_SOURCES) $(GNU_TOOLCHAIN_PINS) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	@if [ -n "$(GNU_IN_COPY)" ]; then \
 	    echo "gnu: removing the layer built in $(GNU_OUT), which the store replaces"; \
@@ -83,7 +83,7 @@ $(GNU_PORTS_LINK): gnu-link-check
 	@t=$@.$$$$; echo "$(or $(GNU_LINK),shared)" >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) $(GNU_PORTS_SOURCES) $(GNU_PORTS_LINK) | $(ETUDESTEP)
+$(GNU_PORTS_STAMP): $(GNU_TOOLCHAIN_STAMP) $(GNU_PORTS_SOURCES) $(GNU_PORTS_LINK) | $(ETUDE)
 	@rm -f $@
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else \
 	    $(GNU_STEP) -n gnu-ports -t $@ $(STEP_INPUTS) -u cross -u sysroot \

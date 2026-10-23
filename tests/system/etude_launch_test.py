@@ -66,7 +66,7 @@ def rows(root, repo):
                 "RACH2_RUN_WORK", "RACH2_RUN_STATUS", "MAKEFLAGS", "MFLAGS",
                 "MAKELEVEL", "MAKEOVERRIDES", "ETUDE_BUILD_JOBS", "JOBS"):
         env.pop(key, None)
-    bridge = repo / "build/tools/etude/etude-bridge"
+    etude = repo / "build/tools/etude/etude"
     ledger = root / "ledger"
     locks = root / "locks"
     tree = root / "tree"
@@ -81,8 +81,8 @@ def rows(root, repo):
     shutil.copyfile(repo / "tools/etude/launch.sh", launcher)
     launcher.chmod(0o755)
     write(root / "etude-bin/make", (repo / "tools/etude/make.sh").read_text(), executable=True)
-    policy = (f"etude-site 1\nendpoint {'macos' if sys.platform == 'darwin' else 'linux'}\n"
-              f"launcher {launcher}\nledger {ledger}\nlocks {locks}\nbridge {bridge}\n"
+    policy = (f"etude-site 2\nendpoint {'macos' if sys.platform == 'darwin' else 'linux'}\n"
+              f"launcher {launcher}\nledger {ledger}\nlocks {locks}\netude {etude}\n"
               "capacity 24000,103079215104,171798691840\nwait 3\nseconds 30\n")
     write(site, policy)
     env.update(ETUDE_SITE=str(site), ETUDE_LAUNCH_LEDGER=str(ledger),
@@ -176,9 +176,11 @@ with Path(os.environ["ETUDE_LAUNCH_OBSERVED"]).open("a") as f:
     run([str(root / "etude-bin/make"), "all"], job_env, tree)
     assert job_args.read_text().splitlines() == ["all"]
 
-    # The real worker entry must claim before even its helper compilation.
+    # The real worker entry must claim before even its compilation of the
+    # lock, which tools/etude/hold.sh gives it.
     stage = "worker"
     shutil.copyfile(repo / "tests/run", tree / "tests/run")
+    shutil.copyfile(repo / "tools/etude/hold.sh", tree / "tools/etude/hold.sh")
     write(bin / "cc", f"#!/bin/sh\n{observe}\nexit 19\n", executable=True)
     run(["sh", "tests/run", "style"], env, tree, status=1)
     saw()
@@ -226,8 +228,8 @@ exec bash -c "$4"
 
     # An old checkout is admitted from outside its source, with no nested
     # port claim. The stand-in for an older checkout's claim, which
-    # tests/host/etude_ports_hosttest.c checks against etude-ports, attempts
-    # the same lock an older tests/run takes.
+    # tests/host/etude_ports_hosttest.c checks against `etude lock ports`,
+    # attempts the same lock an older tests/run takes.
     standin = repo / "tests/system/fixtures/old_ports.py"
     program = root / "old-run"
     stage = "legacy"
@@ -273,7 +275,7 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     write(tree / "tools/ci/core.env", "# The settings of a core run.\nRACH2_WORKERS=2\n")
     core_env = dict(env)
     core_env.pop("RACH2_WORKERS")
-    run(["sh", str(repo / "tools/ci/bisect.sh"), "-e", str(bridge),
+    run(["sh", str(repo / "tools/ci/bisect.sh"), "-e", str(etude),
          "core", "i686", "good", "bad", "1", "default"],
         core_env, tree)
     saw(2, same=False)
@@ -304,9 +306,9 @@ case $1 in rev-parse) echo bad ;; rev-list) echo good ;; log) echo 'bad fixture'
     # selected policy and inherited port settings that would bypass locks.
     stage = "refusals"
     for name, bad_policy in (
-        ("format", policy.replace("etude-site 1", "etude-site 2")),
+        ("format", policy.replace("etude-site 2", "etude-site 1")),
         ("endpoint", policy.replace("endpoint linux", "endpoint windows").replace("endpoint macos", "endpoint windows")),
-        ("bridge", policy.replace(str(bridge), str(root / "missing-bridge"))),
+        ("etude", policy.replace(str(etude), str(root / "missing-etude"))),
         ("capacity", policy.replace("24000,103079215104,171798691840", "24000,0,171798691840")),
         ("duplicate", policy + "capacity 1,1,1\n"),
     ):

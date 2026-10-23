@@ -1,11 +1,11 @@
 /*
- * wintoolfix.c: the tooling fixtures of winfixture. Each runs etude-tooling,
- * beside winfixture.exe, through etude/exec.h, with copies of winstand.exe
- * in place of curl, qemu-img and QEMU, and judges a row of
- * tests/system/etude_tooling_test.sh by the command's status and output,
- * the cache, the stand-ins' files and the history it wrote. One more row
- * requires a job's steps to have QEMU's processor time and working set,
- * sampled through its job.
+ * wintoolfix.c: the tooling fixtures of winfixture. Each runs `etude
+ * provision tooling`, from etude.exe beside winfixture.exe, through
+ * etude/exec.h, with copies of winstand.exe in place of curl, qemu-img and
+ * QEMU, and judges a row of tests/system/etude_tooling_test.sh by the
+ * command's status and output, the cache, the stand-ins' files and the
+ * history it wrote. One more row requires a job's steps to have QEMU's
+ * processor time and working set, sampled through its job.
  */
 #include <direct.h>
 #include <stdarg.h>
@@ -32,7 +32,7 @@ static const char *const stand_ins[] = {"curl", "qemu-img", "qemu-system-x86_64"
 static char base[PATH], bin[PATH], fix[PATH], cache[PATH], recipe[PATH], outdir[PATH], store[PATH],
     schema[PATH], tool[PATH];
 
-/* What one run of etude-tooling gave. */
+/* What one run of `etude provision tooling` gave. */
 struct ran {
     int status; /* its exit status, or -1 when it did not exit */
     char *out;
@@ -196,16 +196,16 @@ static char *history(const char *stream, char *path)
 }
 
 /**
- * Run etude-tooling with the fixture's recipe and cache, the command
- * `command` and the arguments after it, which end in NULL, and wait up to
- * BOUND for its end. A `stream` other than NULL gives the command the
+ * Run `etude provision tooling` with the fixture's recipe and cache, the
+ * command `command` and the arguments after it, which end in NULL, and wait
+ * up to BOUND for its end. A `stream` other than NULL gives the command the
  * history options of that stream, in base\STREAM.jsonl.
  *
  * @return 0, or 1 when it did not start or end.
  */
 static int tooling(struct ran *r, const char *stream, const char *command, ...)
 {
-    char *argv[64] = {tool, "-r", recipe, "-C", cache, "-a", "tcg", (char *)command};
+    char *argv[64] = {tool, "provision", "tooling", "-r", recipe, "-C", cache, "-a", "tcg"};
     char path[PATH];
     const struct etude_exec_result *res;
     struct etude_exec_spec spec;
@@ -213,9 +213,10 @@ static int tooling(struct ran *r, const char *stream, const char *command, ...)
     struct etude_exec *ex;
     ULONGLONG t0 = GetTickCount64();
     char **env = environment();
-    size_t n = 8;
+    size_t n = 10;
     va_list ap;
 
+    argv[9] = (char *)command;
     if (stream != NULL) {
         char *h[] = {"-H", history(stream, path),
                      "-j", (char *)stream,
@@ -248,7 +249,7 @@ static int tooling(struct ran *r, const char *stream, const char *command, ...)
     if (etude_exec_start(ex, &spec, &p) != 0) {
         etude_exec_free(ex);
         free_environment(env);
-        return failed("etude-tooling does not start");
+        return failed("etude provision tooling does not start");
     }
     while (done != p && GetTickCount64() - t0 < BOUND)
         done = etude_exec_wait(ex, 1000);
@@ -260,7 +261,7 @@ static int tooling(struct ran *r, const char *stream, const char *command, ...)
     etude_exec_free(ex);
     free_environment(env);
     if (done != p)
-        return failed("etude-tooling did not end");
+        return failed("etude provision tooling did not end");
     return r->out == NULL || r->err == NULL ? failed("out of memory") : 0;
 }
 
@@ -308,7 +309,7 @@ static int fresh(void)
     join(store, base, "store");
     snprintf(cache, sizeof cache, "%s\\cache\\deep", base);
     snprintf(schema, sizeof schema, "%s\\..\\schemas\\history.schema.json", scratch);
-    join(tool, scratch, "etude-tooling.exe");
+    join(tool, scratch, "etude.exe");
     if (_mkdir(base) != 0 || _mkdir(bin) != 0 || _mkdir(fix) != 0 || _mkdir(recipe) != 0 ||
         _mkdir(outdir) != 0 || _mkdir(store) != 0)
         return failed("%s cannot be made", base);
@@ -364,7 +365,7 @@ static int row_made(void)
     if (tooling(&r, "made", "prepare", END) != 0)
         return 1;
     disk = cached("tooling-*.qcow2");
-    if (r.status != 0 || strstr(r.out, "etude-tooling: result: made ") == NULL)
+    if (r.status != 0 || strstr(r.out, "etude provision: result: made ") == NULL)
         rc = failed("prepare gave %d: %s%s", r.status, r.out, r.err);
     else if (disk == NULL || !(GetFileAttributesA(disk) & FILE_ATTRIBUTE_READONLY))
         rc = failed("no read-only disk was published");
@@ -385,7 +386,7 @@ static int row_made(void)
     ran_free(&r);
     if (rc != 0 || tooling(&r, NULL, "prepare", END) != 0)
         return rc != 0 ? rc : 1;
-    if (strstr(r.out, "etude-tooling: result: reused ") == NULL)
+    if (strstr(r.out, "etude provision: result: reused ") == NULL)
         rc = failed("not reused: %s", r.out);
     ran_free(&r);
     return rc;
@@ -462,7 +463,7 @@ static int row_job(void)
     else if (strcmp(r.out, "the note\nthe inner file\n") != 0)
         rc = failed("the output is %s", r.out);
     else if (strstr(r.err, "disks 1\n") == NULL ||
-             strstr(r.err, "etude-tooling: cost: start ") == NULL)
+             strstr(r.err, "etude provision: cost: start ") == NULL)
         rc = failed("the error is %s", r.err);
     else if (!has(disk, "written in the machine\n"))
         rc = failed("the disk was not written");

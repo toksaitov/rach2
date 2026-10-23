@@ -24,17 +24,16 @@
 #include "etude/bridge.h"
 #include "etude/ledger.h"
 
-#define main bridge_main
-#include "../../tools/etude/posix/etude_bridge.c"
-#undef main
+#include "../../tools/etude/verbs.h"
+#include "../../tools/etude/posix/admit.c"
 
 static int fails;
-#define CHECK(c, row)                                                      \
-    do {                                                                   \
-        if (!(c)) {                                                        \
-            fprintf(stderr, "etude-bridge-test: fail: %s: %s\n", row, #c); \
-            fails++;                                                       \
-        }                                                                  \
+#define CHECK(c, row)                                                     \
+    do {                                                                  \
+        if (!(c)) {                                                       \
+            fprintf(stderr, "etude-admit-test: fail: %s: %s\n", row, #c); \
+            fails++;                                                      \
+        }                                                                 \
     } while (0)
 
 /* Only these fixture processes belong to this test. */
@@ -103,7 +102,7 @@ static int lock_file(const char *name)
     return open(path, O_RDWR | O_CREAT, 0666);
 }
 
-/** Try a whole-file lock, as etude-ports does. */
+/** Try a whole-file lock, as `etude lock ports` does. */
 static int lock_try(int fd, short type)
 {
     struct flock fl;
@@ -283,7 +282,7 @@ static int runner_tracks(long pid)
     if (f == NULL)
         return -1;
     while (getdelim(&entry, &cap, '\0', f) >= 0)
-        if (strcmp(entry, "RUNNER_TRACKING_ID=etude-bridge-fixture") == 0)
+        if (strcmp(entry, "RUNNER_TRACKING_ID=etude-admit-fixture") == 0)
             found = 1;
     if (ferror(f))
         found = -1;
@@ -300,12 +299,12 @@ static pid_t runner_worker(const char *self, const char *ledger, const char *rea
 
     if (worker == 0) {
         close(fd);
-        setenv("RUNNER_TRACKING_ID", "etude-bridge-fixture", 1);
+        setenv("RUNNER_TRACKING_ID", "etude-admit-fixture", 1);
         unsetenv("RACH2_PORT_OFFSET");
         unsetenv("SSH_TEST_PORT");
         execl(self, self, "--runner-worker", "-p", "-d", fix_dir(), ledger, "runner-cleanup",
               "test", "shared", "1,15,1", "10,20,10", "20", "/bin/sh", "-c",
-              "test \"$RUNNER_TRACKING_ID\" = etude-bridge-fixture || exit 90; "
+              "test \"$RUNNER_TRACKING_ID\" = etude-admit-fixture || exit 90; "
               "printf . > \"$1\"; cat \"$2\"",
               "sh", ready, blocked, (char *)NULL);
         _exit(99);
@@ -412,7 +411,7 @@ static void lost_controller(const char *ledger)
     fd = open(ready, O_RDWR | O_NONBLOCK);
     worker = fork();
     if (worker == 0) {
-        char *args[] = {"etude-bridge",
+        char *args[] = {"etude",
                         "-p",
                         "-d",
                         (char *)fix_dir(),
@@ -434,7 +433,7 @@ static void lost_controller(const char *ledger)
         unsetenv("RACH2_PORT_OFFSET");
         unsetenv("SSH_TEST_PORT");
         optind = 1;
-        _exit(bridge_main(17, args));
+        _exit(etude_admit_main(17, args));
     }
     active_worker = worker;
     p.fd = fd;
@@ -518,7 +517,7 @@ static pid_t bridge_child(char **args)
         unsetenv("RACH2_PORT_OFFSET");
         unsetenv("SSH_TEST_PORT");
         optind = 1;
-        _exit(bridge_main(n, args));
+        _exit(etude_admit_main(n, args));
     }
     active_worker = pid;
     return pid;
@@ -601,7 +600,7 @@ static void waiting(struct etude_ledger *l, const char *ledger)
 {
     const char *rec = fix_path("result");
     const char *ran = fix_path("ran");
-    char *args[] = {"etude-bridge",
+    char *args[] = {"etude",
                     "-d",
                     (char *)fix_dir(),
                     "-w",
@@ -667,10 +666,10 @@ static void busy(struct etude_ledger *l)
  */
 static void processors(struct etude_ledger *l, const char *ledger)
 {
-    char *args[] = {"etude-bridge", "-d",   (char *)fix_dir(), (char *)ledger,
-                    "beside-busy",  "test", "shared",          "5,1,5",
-                    "10,20,10",     "5",    "/bin/sh",         "-c",
-                    "exit 0",       NULL};
+    char *args[] = {"etude",       "-d",   (char *)fix_dir(), (char *)ledger,
+                    "beside-busy", "test", "shared",          "5,1,5",
+                    "10,20,10",    "5",    "/bin/sh",         "-c",
+                    "exit 0",      NULL};
 
     busy(l);
     CHECK(bridge_status(bridge_child(args)) == 0, "processors and disk not judged");
@@ -681,9 +680,9 @@ static void processors(struct etude_ledger *l, const char *ledger)
 static void incomplete(const char *ledger)
 {
     const char *rec = fix_path("result");
-    char *args[] = {"etude-bridge", "-d",   (char *)fix_dir(), "-r",    (char *)rec, (char *)ledger,
-                    "killed",       "test", "shared",          "1,1,1", "10,20,10",  "5",
-                    "/bin/sh",      "-c",   "kill -KILL $$",   NULL};
+    char *args[] = {"etude",   "-d",   (char *)fix_dir(), "-r",    (char *)rec, (char *)ledger,
+                    "killed",  "test", "shared",          "1,1,1", "10,20,10",  "5",
+                    "/bin/sh", "-c",   "kill -KILL $$",   NULL};
 
     CHECK(bridge_status(bridge_child(args)) == 2, "killed command fails");
     CHECK(recorded(rec, "incomplete"), "incomplete recorded");
@@ -693,7 +692,7 @@ static void incomplete(const char *ledger)
 static void wrapper(const char *ledger)
 {
     const char *rec = fix_path("result");
-    char *args[] = {"etude-bridge",
+    char *args[] = {"etude",
                     "-p",
                     "-d",
                     (char *)fix_dir(),
@@ -734,14 +733,14 @@ static void missing_program(const char *ledger)
     pid = fork();
     CHECK(pid >= 0, "missing program fork");
     if (pid == 0) {
-        char *args[] = {"etude-bridge",    "-d",   (char *)fix_dir(), (char *)ledger,
+        char *args[] = {"etude",           "-d",   (char *)fix_dir(), (char *)ledger,
                         "missing-program", "test", "shared",          "1,1,1",
                         "10,20,10",        "5",    (char *)program,   NULL};
         if (dup2(fileno(err), STDERR_FILENO) < 0)
             _exit(99);
         fclose(err);
         optind = 1;
-        _exit(bridge_main(11, args));
+        _exit(etude_admit_main(11, args));
     }
     if (pid > 0) {
         active_worker = pid;
@@ -751,7 +750,7 @@ static void missing_program(const char *ledger)
         rewind(err);
         n = fread(actual, 1, sizeof(actual) - 1, err);
         actual[n] = '\0';
-        snprintf(expected, sizeof(expected), "etude-bridge: start: %s: %s\n", program,
+        snprintf(expected, sizeof(expected), "etude admit: start: %s: %s\n", program,
                  strerror(ENOENT));
         CHECK(!ferror(err) && strcmp(actual, expected) == 0, "missing program diagnostic");
     }
@@ -766,7 +765,7 @@ int main(int argc, char **argv)
     struct etude_bridge *b;
 
     if (argc > 1 && strcmp(argv[1], "--runner-worker") == 0)
-        return bridge_main(argc - 1, argv + 1);
+        return etude_admit_main(argc - 1, argv + 1);
     atexit(cleanup_test);
     signal(SIGTERM, interrupted);
     signal(SIGINT, interrupted);

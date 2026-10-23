@@ -4,11 +4,12 @@
 # for the host checks that run in it, as the host suite's preparation does
 # through `make build/tests/host/tooling_machine`.
 #
-# When the machine of the tree's recipe is not made, `etude-tooling prepare`
-# makes it, which downloads the image and provisions it once. FILE then has
-# etude-tooling's line `etude-tooling: result: made KEY DISK`, and is written
-# only when that line changes, so that the preparation's record of FILE stays
-# the same. The exit status is 0, or 1 when the machine cannot be made.
+# When the machine of the tree's recipe is not made, `etude provision tooling
+# prepare` makes it, which downloads the image and provisions it once. FILE then
+# has the line `etude provision: result: made KEY DISK` of `etude provision
+# tooling check`, and is written only when that line changes, so that the
+# preparation's record of FILE stays the same. The exit status is 0, or 1 when
+# the machine cannot be made.
 #
 # Usage: sh tests/system/tooling_ready.sh FILE
 #

@@ -191,7 +191,7 @@ unusedStructMember:*krffs/krffs_node.h
 unusedStructMember:*krffs/krffs_file_system.h
 unusedStructMember:*tests/system/fixtures/vfs_unmount.c
 
-# The interface of etude's remote execution: etude_remote.c, checked alone,
+# The interface of etude's remote execution: posix/responder.c, checked alone,
 # fills the responder's configuration and reads none of the structures that
 # serve.c and remote.c read.
 unusedStructMember:*tools/etude/include/etude/remote.h
@@ -238,7 +238,7 @@ unusedStructMember:*tools/etude/include/etude/repeat.h
 
 # The options of the preparation adapter and the set driver: cppcheck checks
 # legacy.h alone, and its members are read in posix/legacy.c,
-# posix/legacy_set.c, posix/etude_legacy.c and their host tests.
+# posix/legacy_set.c, posix/run_suites.c and their host tests.
 unusedStructMember:*tools/etude/include/etude/legacy.h
 
 # The set driver's cases: cppcheck checks legacy_cases.h alone, and its
@@ -249,9 +249,9 @@ unusedStructMember:*tools/etude/posix/legacy_cases.h
 # its members are read in posix/legacy_guest.c and posix/legacy_set.c.
 unusedStructMember:*tools/etude/posix/legacy_guest.h
 
-# casecheck's shared structures: cppcheck checks each header alone, and the
-# members are read in the validator's .c files and the QEMU launcher.
-unusedStructMember:*tools/etude/casecheck.h
+# The shared structures of `etude check`: cppcheck checks each header alone,
+# and the members are read in the validator's .c files and the QEMU launcher.
+unusedStructMember:*tools/etude/check.h
 unusedStructMember:*tools/etude/json.h
 unusedStructMember:*tools/etude/include/etude/processor.h
 
@@ -277,15 +277,15 @@ unusedStructMember:*tools/etude/guest/wire.h
 unusedStructMember:*tools/etude/guest/fixture.h
 
 # The bridge's request is a public structure read in posix/bridge.c and
-# posix/etude_bridge.c, beyond the header's own analysis unit.
+# posix/admit.c, beyond the header's own analysis unit.
 unusedStructMember:*tools/etude/include/etude/bridge.h
 
 # The host and port locks' structures: cppcheck checks portlock.h alone, and
-# its members are read in portlock.c, posix/bridge.c and etude_ports.c.
+# its members are read in portlock.c, posix/bridge.c and lock_ports.c.
 unusedStructMember:*tools/etude/include/etude/portlock.h
 
 # The tooling machine's structures: cppcheck checks tooling.h alone, and its
-# members are read in tooling.c, etude_tooling.c and their test.
+# members are read in tooling.c, provision_tooling.c and their test.
 unusedStructMember:*tools/etude/include/etude/tooling.h
 
 # The status record's structures: cppcheck checks status.h alone, and its
@@ -293,7 +293,7 @@ unusedStructMember:*tools/etude/include/etude/tooling.h
 unusedStructMember:*tools/etude/include/etude/status.h
 
 # The hold's process identity: cppcheck checks hold.h alone, and its members
-# are read in etude_hold.c, posix/hold.c and win/hold.c.
+# are read in lock_tree.c, posix/hold.c and win/hold.c.
 unusedStructMember:*tools/etude/hold.h
 
 # The native file-status and directory records are public across translation

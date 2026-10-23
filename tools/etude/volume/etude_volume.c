@@ -1,7 +1,8 @@
 /*
  * etude_volume.c: etude-volume, the helper that makes the tooling machine's
- * seed and job volumes and reads the job volume back, which etude-tooling
- * runs from its own directory. tools/etude/Readme.md gives its usage.
+ * seed and job volumes and reads the job volume back, which `etude provision
+ * tooling` runs from its own directory. tools/etude/Readme.md gives its
+ * usage.
  */
 #include <stdio.h>
 #include <stdlib.h>

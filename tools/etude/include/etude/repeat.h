@@ -28,7 +28,7 @@
 
 /* The line a load fixture writes on its standard output once its load is in
  * effect. */
-#define ETUDE_LOAD_READY "etude-load: ready\n"
+#define ETUDE_LOAD_READY "etude stress: ready\n"
 
 /* The generator of a plan: splitmix64. */
 struct etude_rng {
@@ -291,7 +291,7 @@ int etude_repeat_run(const struct etude_repeat_spec *spec, const struct etude_re
 void etude_repeat_result_free(struct etude_repeat_result *r);
 
 /**
- * Be the load fixture: `argv` is `etude-load KIND AMOUNT`, KIND `cpu`,
+ * Be the load fixture: `argv` is `etude stress KIND AMOUNT`, KIND `cpu`,
  * `memory` or `disk`. It applies the load, writes ETUDE_LOAD_READY on its
  * standard output with one write(2), and keeps the load until it is killed.
  * A disk load writes a file it has unlinked in its working directory.

@@ -1,6 +1,6 @@
 #!/bin/sh
-# tccbuild.sh: a TinyCC build, run as one case by etude-native on a Rach2
-# machine that is already up. Its argument chooses the build: `pass`
+# tccbuild.sh: a TinyCC build, run as one case by `etude run native` on a
+# Rach2 machine that is already up. Its argument chooses the build: `pass`
 # compiles a program, runs it and checks what it prints; `fail` compiles a
 # source with an #error, so that the build fails on purpose and the case
 # exits with the compiler's status; and `loop` builds the program again and

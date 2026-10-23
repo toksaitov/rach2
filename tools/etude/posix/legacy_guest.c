@@ -701,9 +701,9 @@ static void boot_lost(struct legacy_guest *g, const struct etude_machine_result 
         f = fopen(path, "wb");
         if (f != NULL) {
             if (fwrite(output[i]->data, 1, output[i]->kept, f) != output[i]->kept)
-                fprintf(stderr, "etude-legacy: could not keep %s\n", path);
+                fprintf(stderr, "etude run: could not keep %s\n", path);
             if (fclose(f) != 0)
-                fprintf(stderr, "etude-legacy: could not close %s\n", path);
+                fprintf(stderr, "etude run: could not close %s\n", path);
         }
     }
     line = r->qemu->err.data != NULL ? strcspn(r->qemu->err.data, "\r\n") : 0;

@@ -1,7 +1,7 @@
 /*
- * etude_ports.c: run a command holding the host lock and the lowest free
- * block of host ports, so that two runs on one host never forward the same
- * port and a run that needs the host alone runs alone.
+ * lock_ports.c: `etude lock ports`, which runs a command holding the host
+ * lock and the lowest free block of host ports, so that two runs on one host
+ * never forward the same port and a run that needs the host alone runs alone.
  */
 #include <errno.h>
 #include <signal.h>
@@ -98,13 +98,13 @@ static int run(char **argv, struct etude_portlock *l)
 
     (void)l;
     if ((e = etude_win_cmdline(argv[0], (const char *const *)argv + 1, &line)) != 0) {
-        fprintf(stderr, "etude-ports: start: %s: %s\n", argv[0], strerror(e));
+        fprintf(stderr, "etude lock: start: %s: %s\n", argv[0], strerror(e));
         return 127;
     }
     n = MultiByteToWideChar(CP_UTF8, 0, line, -1, NULL, 0);
     wide = n > 0 ? malloc((size_t)n * sizeof(*wide)) : NULL;
     if (wide == NULL || MultiByteToWideChar(CP_UTF8, 0, line, -1, wide, n) == 0) {
-        fprintf(stderr, "etude-ports: start: %s: the command line is not UTF-8\n", argv[0]);
+        fprintf(stderr, "etude lock: start: %s: the command line is not UTF-8\n", argv[0]);
         free(wide);
         free(line);
         return 127;
@@ -120,7 +120,7 @@ static int run(char **argv, struct etude_portlock *l)
     inherit(si.hStdOutput);
     inherit(si.hStdError);
     if (!CreateProcessW(NULL, wide, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        fprintf(stderr, "etude-ports: start: %s: Windows error %lu\n", argv[0],
+        fprintf(stderr, "etude lock: start: %s: Windows error %lu\n", argv[0],
                 (unsigned long)GetLastError());
         free(wide);
         return 127;
@@ -218,7 +218,7 @@ static int run(char **argv, struct etude_portlock *l)
             fcntl(l->file[i], F_SETFD, 0);
     sigprocmask(SIG_UNBLOCK, &stops, NULL);
     execvp(argv[0], argv);
-    fprintf(stderr, "etude-ports: start: %s: %s\n", argv[0], strerror(errno));
+    fprintf(stderr, "etude lock: start: %s: %s\n", argv[0], strerror(errno));
     return 127;
 }
 
@@ -257,10 +257,10 @@ static int pause_take(void *ctx, const struct etude_portlock_wait *w)
     if (w->first)
         record(q, w);
     if (!*said && w->count == 0)
-        fprintf(stderr, "etude-ports: host: waiting for %s\n",
+        fprintf(stderr, "etude lock: host: waiting for %s\n",
                 q->alone ? "the runs in progress to end" : "a run that needs the host alone");
     else if (!*said)
-        fprintf(stderr, "etude-ports: ports: every block is held by another run; waiting\n");
+        fprintf(stderr, "etude lock: ports: every block is held by another run; waiting\n");
     *said = 1;
     if (!stopped)
         nap();
@@ -274,7 +274,7 @@ static int pause_take(void *ctx, const struct etude_portlock_wait *w)
 /** Print the usage and return its status. */
 static int usage(void)
 {
-    fprintf(stderr, "etude-ports: usage: etude-ports DIR COUNT COMMAND [ARG...]\n");
+    fprintf(stderr, "etude lock: usage: etude lock ports DIR COUNT COMMAND [ARG...]\n");
     return 2;
 }
 
@@ -287,7 +287,7 @@ static int usage(void)
  * cannot be started, and 128 plus the signal's number for a stop during the
  * wait, after which the command does not start.
  */
-int main(int argc, char **argv)
+int etude_lock_ports_main(int argc, char **argv)
 {
     struct etude_portlock_spec s;
     struct etude_portlock l;
@@ -315,7 +315,7 @@ int main(int argc, char **argv)
     else if (strcmp(mode, "alone") == 0)
         s.host = ETUDE_PORTLOCK_ALONE;
     else {
-        fprintf(stderr, "etude-ports: result: refused: RACH2_HOST_LOCK must be shared or alone\n");
+        fprintf(stderr, "etude lock: result: refused: RACH2_HOST_LOCK must be shared or alone\n");
         return 2;
     }
     q.alone = s.host == ETUDE_PORTLOCK_ALONE;
@@ -329,13 +329,13 @@ int main(int argc, char **argv)
     if (rc != 0 && stopped)
         return 128 + stopped;
     if (rc != 0) {
-        fprintf(stderr, "etude-ports: result: refused: the locks under %s cannot be taken: %s\n",
+        fprintf(stderr, "etude lock: result: refused: the locks under %s cannot be taken: %s\n",
                 s.dir, strerror(errno));
         return 2;
     }
     snprintf(offset, sizeof(offset), "%d", l.block * 1000);
     if (l.block > 0)
-        fprintf(stderr, "etude-ports: ports: block %d, %s above the table's\n", l.block, offset);
+        fprintf(stderr, "etude lock: ports: block %d, %s above the table's\n", l.block, offset);
     environment(offset);
     return run(argv + 3, &l);
 }

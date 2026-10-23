@@ -1,6 +1,6 @@
 /*
- * winholdfix.c: the fixtures of etude-hold on Windows. Each runs
- * etude-hold.exe, beside winfixture.exe, on a tree under scratch\hold with
+ * winholdfix.c: the fixtures of `etude lock tree` on Windows. Each runs
+ * etude.exe, beside winfixture.exe, on a tree under scratch\hold with
  * wintarget.exe as its command, and judges the helper's status and
  * messages, the lock's directory and owner record, and the command's
  * processes.
@@ -22,6 +22,9 @@
 
 /* How long a command may outlive the helper killed under it, in ms. */
 #define KILLED_BOUND 10000
+
+/* The most arguments the fixtures give `etude lock tree`. */
+#define ARGS 16
 
 /* The fixture's directory, the tree and its lock, and the command's files. */
 static char base[PATH], tree[PATH], build[PATH], lock[PATH], owner[PATH], guard[PATH], helper[PATH],
@@ -264,10 +267,20 @@ static int start(struct run *r, const char *tag, const char *program, const char
     return 0;
 }
 
-/** Start etude-hold with `argv`, as start() does. */
+/** Start `etude lock tree` with `argv`, as start() does. */
 static int hold(struct run *r, const char *tag, const char *const *argv)
 {
-    return start(r, tag, helper, argv);
+    const char *args[ARGS];
+    int n = 0;
+
+    args[n++] = "lock";
+    args[n++] = "tree";
+    while (*argv != NULL && n < ARGS - 1)
+        args[n++] = *argv++;
+    if (*argv != NULL)
+        return failed("more than %d arguments for etude lock tree", ARGS - 3);
+    args[n] = NULL;
+    return start(r, tag, helper, args);
 }
 
 /**
@@ -364,7 +377,10 @@ static const char *errors(const struct run *r)
     return buf;
 }
 
-/** Run etude-hold with `argv` to its end; its status, or -1 on a failure. */
+/**
+ * Run `etude lock tree` with `argv` to its end; its status, or -1 on a
+ * failure.
+ */
 static long run_hold(struct run *r, const char *tag, const char *const *argv)
 {
     DWORD status;
@@ -411,7 +427,7 @@ static int fresh(void)
     join(lock, build, ".run.lock");
     join(owner, lock, "owner");
     join(guard, build, ".run.guard");
-    join(helper, scratch, "etude-hold.exe");
+    join(helper, scratch, "etude.exe");
     join(ready, base, "ready");
     join(go, base, "go");
     nlive = 0;

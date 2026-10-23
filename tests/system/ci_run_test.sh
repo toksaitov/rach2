@@ -5,17 +5,17 @@
 # nothing from the lines that the runner suite's own runs print.
 # From etude's history: core run as one run of style, host and the core
 # tier's suites of the registry, its history left in DIR/history and
-# DIR/store, where history_failures, report.sh's reader, reads it as well; a
-# pass only when casecheck's verdict and tests/run's status both pass; the
-# suites the verdict fails, a failure or an unfinished attempt before a retry
-# that passed among them; and `runner`, once, for a history that is missing,
-# cut off or inconsistent, a verdict that gave no result, and a status that
-# disagrees with the verdict. In both, DIR/err has tests/run's standard
-# error and none of its standard output. When a step is killed as GitHub's
-# cleanup of a cancelled job kills it, or the run's parent is, run.sh starts
-# no further step and ends without `done`. run.sh runs in a private tree with
-# stand-ins for git, make and tests/run, and with the built casecheck over
-# the history fixtures of tools/etude/fixtures/verdict.
+# DIR/store, where `etude show failures`, report.sh's reader, reads it as
+# well; a pass only when the verdict of `etude check verdict` and tests/run's
+# status both pass; the suites the verdict fails, a failure or an unfinished
+# attempt before a retry that passed among them; and `runner`, once, for a
+# history that is missing, cut off or inconsistent, a verdict that gave no
+# result, and a status that disagrees with the verdict. In both, DIR/err has
+# tests/run's standard error and none of its standard output. When a step is
+# killed as GitHub's cleanup of a cancelled job kills it, or the run's parent
+# is, run.sh starts no further step and ends without `done`. run.sh runs in a
+# private tree with stand-ins for git, make and tests/run, and with the built
+# etude over the history fixtures of tools/etude/fixtures/verdict.
 #
 # Usage: sh tests/system/ci_run_test.sh
 
@@ -42,11 +42,8 @@ install()
     ! cmp -s "$work/run.sh" "$work/tree/tools/ci/run.sh"
 }
 
-casecheck=$repo/build/tools/etude/casecheck
-failures=$repo/build/tools/etude/history_failures
-for program in "$casecheck" "$failures"; do
-    [ -x "$program" ] || { echo "ci-run-test: $program is not built; make builds it" >&2; exit 1; }
-done
+etude=$repo/build/tools/etude/etude
+[ -x "$etude" ] || { echo "ci-run-test: $etude is not built; make builds it" >&2; exit 1; }
 work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-ci-run-test.XXXXXX")
 tree=$work/tree
 mkdir -p "$work/bin" "$tree/tools/ci" "$tree/tools/etude/schemas" "$tree/tests/cases" \
@@ -54,7 +51,7 @@ mkdir -p "$work/bin" "$tree/tools/ci" "$tree/tools/etude/schemas" "$tree/tests/c
 cp "$repo/tools/etude/schemas/case.schema.json" "$repo/tools/etude/schemas/results.schema.json" \
     "$repo/tools/etude/schemas/history.schema.json" "$tree/tools/etude/schemas/"
 cp "$fixtures/cases/fixture.default.json" "$fixtures/cases/fixture.host.json" "$tree/tests/cases/"
-cp "$casecheck" "$tree/build/tools/etude/casecheck"
+cp "$etude" "$tree/build/tools/etude/etude"
 cat > "$tree/tests/registry" <<'EOF'
 style|-|full
 host|-|full
@@ -216,24 +213,24 @@ lines_rows()
     row 'lines: the build' lines core core 0 build || return 1
 }
 
-# agrees STATUS: require history_failures, which report.sh reads a run's
+# agrees STATUS: require `etude show failures`, which report.sh reads a run's
 # history with, to give STATUS for the history and store the last row left in
 # DIR: 0 when every attempt passed and 1 when one did not.
 agrees()
 {
-    if "$failures" -s "$repo/tools/etude/schemas" -b "$out/store" "$out"/history/* \
+    if "$etude" show failures -s "$repo/tools/etude/schemas" -b "$out/store" "$out"/history/* \
         > "$work/failures.log" 2>&1; then
         got=0
     else
         got=$?
     fi
     [ "$got" -ne "$1" ] || return 0
-    sed 's/^/ci-run-test: history_failures: /' "$work/failures.log" >&2
-    echo "ci-run-test: history_failures gave $got for the history of row $rows, not $1" >&2
+    sed 's/^/ci-run-test: show failures: /' "$work/failures.log" >&2
+    echo "ci-run-test: etude show failures gave $got for the history of row $rows, not $1" >&2
     return 1
 }
 
-# etude's history, judged by casecheck.
+# etude's history, judged by `etude check verdict`.
 history_rows()
 {
     suites='i686:default i686:host'
@@ -268,11 +265,11 @@ history_rows()
     streams=$pass
     row 'history: a suite left out' history full default 0 'runner shutdown' || return 1
     suites='i686:default i686:host'
-    rm "$tree/build/tools/etude/casecheck"
+    rm "$tree/build/tools/etude/etude"
     streams=$pass
     row 'history: no verdict' history full default 0 runner
     status=$?
-    cp "$casecheck" "$tree/build/tools/etude/casecheck"
+    cp "$etude" "$tree/build/tools/etude/etude"
     [ "$status" -eq 0 ] || return 1
     suites=
     streams=$pass

@@ -138,7 +138,7 @@ SETIDCHECK      = build/tools/inspect/setidcheck
 CFGCHECK        = build/tools/inspect/cfgcheck
 PROSECHECK      = build/tools/verify/prosecheck
 SIZECHECK       = build/tools/verify/sizecheck
-CASECHECK       = build/tools/etude/casecheck
+ETUDE           = build/tools/etude/etude
 GUESTCHECK      = build/tools/verify/guestcheck
 SHA256TOOL      = build/tools/verify/sha256
 MKDISK          = krffs/mkdisk.sh
@@ -147,13 +147,12 @@ MKDISK          = krffs/mkdisk.sh
 # (tools/etude/Readme.md, The step store): /var/cache/rach2-store where that
 # directory exists, and none where it does not or where RACH2_STORE is set
 # empty, as a release's full run sets it. Each stamped step runs through
-# etude-step: the vendored projects here, and the GNU layer in mk/gnu*.mk.
+# `etude build`: the vendored projects here, and the GNU layer in mk/gnu*.mk.
 # STEP_INPUTS gives it the rule's prerequisites, a stamp of another step with
 # -d and every other file with -i; order-only prerequisites are not inputs,
 # nor is gnu-in-copy, the phony target mk/gnu.mk gives to rebuild a step.
 RACH2_STORE ?= $(wildcard /var/cache/rach2-store)
-ETUDESTEP       = build/tools/etude/etude-step
-STEP            = $(ETUDESTEP) -s '$(RACH2_STORE)' -a $(ARCH)
+STEP            = $(ETUDE) build -s '$(RACH2_STORE)' -a $(ARCH)
 STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp,$f),-d,-i) $f)
 
 .PHONY: all clean distclean images musl-programs test preflight check-sources \
@@ -196,9 +195,9 @@ e2fsprogs: $(E2FSPROGS_STAMP)
 include mk/dryrun.mk
 
 # --- The stamp rules. Each removes the stamp and the binary it expects,
-#     runs its build script through etude-step, which takes the outputs from
-#     the store instead when it has them and writes the stamp, and then
-#     requires a binary that is not empty. The command etude-step runs
+#     runs its build script through `etude build`, which takes the outputs
+#     from the store instead when it has them and writes the stamp, and then
+#     requires a binary that is not empty. The command `etude build` runs
 #     checks that binary too, so that the store takes no build without it.
 #     With the binary gone first, a script that exits 0 without staging one
 #     cannot pass on an old one; with the stamp gone first, any failure leaves
@@ -215,7 +214,7 @@ include mk/dryrun.mk
 # exists.
 LIBC_PATCHES = vendor/musl/patches/series $(wildcard vendor/musl/patches/*.patch)
 
-$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES) | $(SHA256TOOL) $(ETUDESTEP)
+$(LIBC_STAMP): vendor/musl/build_libc.sh mk/arch.sh $(LIBC_TARBALL) $(LIBC_PATCHES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(LIBC_A)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
 	    $(STEP) -n libc -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) \
@@ -236,7 +235,7 @@ BUSYBOX_PATCHES = vendor/busybox/patches $(wildcard vendor/busybox/patches/*.pat
 
 $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
                   vendor/busybox/rach2-suid.config $(VENDOR_COMMON) \
-                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
+                  $(BUSYBOX_TARBALL) $(BUSYBOX_PATCHES) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(BUSYBOX_BIN) $(BUSYBOX_SUID_BIN) \
 	    $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    $(BUSYBOX_STAGE)/applet_tables-suid.h \
@@ -249,7 +248,7 @@ $(BUSYBOX_STAMP): vendor/busybox/build_busybox.sh vendor/busybox/rach2.config \
 	@test -s $(BUSYBOX_BIN) || { echo "busybox: build produced no $(BUSYBOX_BIN)" >&2; exit 1; }
 
 $(TCC_STAMP): vendor/tcc/build_tcc.sh $(wildcard vendor/tcc/rach2-*.patch) \
-              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
+              $(VENDOR_COMMON) $(TCC_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(TCC_BIN) $(TCC_STAGE)/libtcc1.a \
 	    $(TCC_STAGE)/include/stdarg.h
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
@@ -264,7 +263,7 @@ $(TCC_STAMP): vendor/tcc/build_tcc.sh $(wildcard vendor/tcc/rach2-*.patch) \
 # predates one would keep a make whose built-in rules name a compiler this image
 # does not have and whose default link this system's compiler refuses.
 $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
-                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ELFCHECK) $(ETUDESTEP)
+                  $(VENDOR_COMMON) $(PDPMAKE_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ELFCHECK) $(ETUDE)
 	@rm -f $@ $(PDPMAKE_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
 	    $(STEP) -n pdpmake -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(PDPMAKE_STAGE) \
@@ -281,7 +280,7 @@ $(PDPMAKE_STAMP): vendor/pdpmake/build_pdpmake.sh $(PDPMAKE_PATCHES) \
 E2FSPROGS_LIB = $(ARCH_VENDOR)/e2fsprogs/$(notdir $(E2FSPROGS_TARBALL:.tar.gz=))/lib
 $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
                     vendor/e2fsprogs/mke2fs.conf \
-                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
+                    $(E2FSPROGS_PATCHES) $(E2FSPROGS_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(E2FSCK_BIN) $(RESIZE2FS_BIN) $(MKE2FS_BIN) $(TUNE2FS_BIN) $(DUMPE2FS_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
 	    $(STEP) -n e2fsprogs -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) \
@@ -300,7 +299,7 @@ $(E2FSPROGS_STAMP): vendor/e2fsprogs/build_e2fsprogs.sh $(VENDOR_COMMON) \
 DROPBEAR_PATCHES = vendor/dropbear/patches/series $(wildcard vendor/dropbear/patches/*.patch)
 
 $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoptions.h $(VENDOR_COMMON) \
-                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDESTEP)
+                   $(DROPBEAR_PATCHES) $(DROPBEAR_TARBALL) $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(DROPBEAR_BIN)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
 	    $(STEP) -n dropbear -t $@ -c $(CROSS_PREFIX)gcc -c cc $(STEP_INPUTS) -o $(DROPBEAR_STAGE) \
@@ -491,31 +490,57 @@ $(SIZECHECK): tools/verify/sizecheck.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 
-# etude's validator (tools/etude/casecheck.c): the case manifests, report
-# records, results and runs against their contracts, which suitecheck.sh and
-# tools/ci/run.sh run. Etude is hosted C99, so the validator is compiled as
-# C99. sources.mk lists the sources of etude's programs, for this build and
-# for a cached version's.
+# etude (tools/etude/etude.c), the test runner's one command, which `make`
+# compiles under the host flags: every verb on Linux and macOS, and those with
+# a Windows implementation on Windows, with etude-volume beside it, which
+# makes and reads the tooling machine's volumes for `etude provision tooling`.
+# Etude is hosted C99. sources.mk lists the sources of etude, for this build
+# and for a cached version's.
 ETUDE_LINK = $(HOST_LINK)
 include tools/etude/sources.mk
 ifeq ($(OS),Windows_NT)
-ETUDE_LEGACY_SRC = $(ETUDE_LEGACY_WIN_SRC)
-ETUDE_BRIDGE_SRC = $(ETUDE_BRIDGE_WIN_SRC)
+ETUDE_SRC = $(ETUDE_WIN_SRC)
 ETUDE_CASE_LIB_SRC = $(ETUDE_CASE_LIB_WIN_SRC)
-ETUDE_HOST_SRC = $(ETUDE_HOST_WIN_SRC)
-ETUDE_TOOLING_SRC = $(ETUDE_TOOLING_WIN_SRC)
-ETUDE_HOLD_SRC = $(ETUDE_HOLD_WIN_SRC)
 ETUDECC ?= /ucrt64/bin/gcc
 ETUDE_LINK = sh tools/etude/compile.sh $(ETUDECC) $@ $(HOSTCFLAGS) $(ETUDE_PLATFORM_FLAGS) $(filter %.c,$^) $(ETUDE_PLATFORM_LIBS)
 ETUDE_PLATFORM_FLAGS = -D_WIN32_WINNT=0x0A00 -static
 ETUDE_PLATFORM_LIBS = -lws2_32 -lbcrypt
 endif
-$(CASECHECK): $(ETUDE_CASECHECK_SRC) tools/etude/casecheck.h tools/etude/digest.h tools/etude/json.h \
-              tools/etude/schema.h tools/etude/include/etude/processor.h \
-              tools/etude/include/etude/history.h tools/etude/include/etude/qemu.h \
-              tools/etude/history_json.h utils/sha256.h
+ETUDEVOLUME = build/tools/etude/etude-volume
+ETUDE_HDRS = $(wildcard tools/etude/*.h tools/etude/include/etude/*.h tools/etude/posix/*.h \
+                        tools/etude/guest/*.h tools/etude/volume/*.h) utils/sha256.h
+$(ETUDE): $(ETUDE_SRC) $(ETUDE_HDRS) | $(ETUDEVOLUME)
 	@mkdir -p $(dir $@)
-	$(ETUDE_LINK) -std=c99 -Itools/etude -Itools/etude/include -Iutils
+	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
+	    -Itools/etude/posix -Iutils
+$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99
+
+# The writer of the exFAT volume another implementation made, which
+# exfat_hosttest.c reads: hdiutil on macOS, and elsewhere the tooling
+# machine, made here when it is not (tests/host/mkexfat_external.sh -p). The
+# host case's preparation names it. The script runs every time, since the
+# machine's key follows its recipe, and rewrites the file only when the
+# writer changes.
+.PHONY: build/tests/host/exfat_writer
+build/tests/host/exfat_writer: tests/host/mkexfat_external.sh | $(ETUDE)
+	@mkdir -p $(@D)
+	sh tests/host/mkexfat_external.sh -p $@
+
+# The tooling machine itself, for the host suite's scripted checks that run a
+# program the host lacks in it (tests/system/tooling_ready.sh): the scripts
+# case's preparation names it, and it runs every time for the same reason.
+.PHONY: build/tests/host/tooling_machine
+build/tests/host/tooling_machine: tests/system/tooling_ready.sh | $(ETUDE)
+	@mkdir -p $(@D)
+	sh tests/system/tooling_ready.sh $@
+# The stand-in for a command that a Windows host runs in the tooling machine
+# (tools/etude/collection-windows.sh).
+build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win/hold.c \
+                               tools/etude/win/winfmt.c tools/etude/hold.h tools/etude/win/winfmt.h
+	@mkdir -p $(@D)
+	$(ETUDE_LINK) -std=c99
 
 # The programs of etude's host cases (tests/cases/host), which the cases'
 # preparation names, one for both architectures.
@@ -568,176 +593,6 @@ build/tests/cases/machine/test-password: krffs/shadow
 # built here so that `make` compiles them under the host flags and the
 # compilation database lists them.
 ASCIISCAN  = build/tools/verify/asciiscan
-ETUDEHISTORY = build/tools/etude/history_check
-$(ETUDEHISTORY): $(ETUDE_HISTORY_CHECK_SRC) tools/etude/history_json.h \
-                 tools/etude/include/etude/history.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99
-
-# The comparison of a run's cases with their timing history
-# (tools/etude/compare.c).
-ETUDECOMPARE = build/tools/etude/history_compare
-$(ETUDECOMPARE): $(ETUDE_HISTORY_COMPARE_SRC) tools/etude/compare.h tools/etude/history_json.h \
-                 tools/etude/include/etude/history.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99
-
-# The attempts of a run that did not pass, read from its history
-# (tools/etude/failures.c), which tools/ci/report.sh gives in ci's issues.
-ETUDEFAILURES = build/tools/etude/history_failures
-$(ETUDEFAILURES): $(ETUDE_HISTORY_FAILURES_SRC) tools/etude/failures.h tools/etude/history_json.h \
-                  tools/etude/include/etude/history.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99
-
-# The compatible formatter (tools/etude/lines.c), which prints a run's history
-# as the lines of tests/run.
-ETUDELINES = build/tools/etude/history_lines
-$(ETUDELINES): $(ETUDE_HISTORY_LINES_SRC) tools/etude/lines.h tools/etude/history_json.h \
-               tools/etude/include/etude/history.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99
-
-# The forecast and the check of a run's budget (tools/etude/budget.c).
-ETUDEBUDGET = build/tools/etude/history_budget
-$(ETUDEBUDGET): $(ETUDE_HISTORY_BUDGET_SRC) tools/etude/budget.h tools/etude/compare.h \
-                tools/etude/cost.h tools/etude/digest.h tools/etude/history_json.h \
-                tools/etude/json.h tools/etude/schema.h tools/etude/include/etude/sched.h \
-                tools/etude/include/etude/ledger.h tools/etude/include/etude/history.h \
-                utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude -Itools/etude/include -Iutils
-
-# etude's responder of remote execution (tools/etude/posix/etude_remote.c),
-# built here so that `make` compiles it under the host flags.
-ETUDEREMOTE = build/tools/etude/etude-remote
-$(ETUDEREMOTE): $(ETUDE_REMOTE_SRC) tools/etude/include/etude/remote.h \
-                tools/etude/include/etude/frame.h tools/etude/include/etude/exec.h \
-                tools/etude/guest/wire.h tools/etude/posix/posix.h tools/etude/capture.h \
-                tools/etude/json.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
-
-# etude-native (tools/etude/posix/etude_native.c), which runs a case on a
-# Rach2 machine that is already up through etude-guest over SSH.
-ETUDENATIVE = build/tools/etude/etude-native
-$(ETUDENATIVE): $(ETUDE_NATIVE_SRC) tools/etude/include/etude/remote.h \
-                tools/etude/include/etude/frame.h tools/etude/include/etude/exec.h \
-                tools/etude/guest/wire.h tools/etude/posix/posix.h tools/etude/json.h \
-                utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
-
-# The external bridge to the old runner's host and port locks.
-ETUDEBRIDGE = build/tools/etude/etude-bridge
-$(ETUDEBRIDGE): $(ETUDE_BRIDGE_SRC) tools/etude/include/etude/bridge.h \
-                tools/etude/include/etude/ledger.h tools/etude/include/etude/portlock.h \
-                tools/etude/posix/posix.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
-
-# etude-ports (tools/etude/etude_ports.c), which runs a command holding the
-# host lock and a block of host ports.
-ETUDEPORTS = build/tools/etude/etude-ports
-$(ETUDEPORTS): $(ETUDE_PORTS_SRC) tools/etude/include/etude/portlock.h tools/etude/win/winfmt.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude
-
-# The listing of a ledger's claims, and the drop of one whose processes a
-# person has found ended (tools/etude/posix/etude_ledger.c).
-ETUDELEDGER = build/tools/etude/etude-ledger
-$(ETUDELEDGER): $(ETUDE_LEDGER_SRC) tools/etude/include/etude/ledger.h \
-                tools/etude/include/etude/exec.h tools/etude/posix/posix.h utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Iutils
-
-# etude-hold (tools/etude/etude_hold.c), which holds a tree's run lock while
-# one command runs.
-ETUDEHOLD = build/tools/etude/etude-hold
-$(ETUDEHOLD): $(ETUDE_HOLD_SRC) tools/etude/hold.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
-
-# etude's tooling machine (tools/etude/tooling.c), which runs on a host the
-# commands it lacks, built here so that `make` compiles it under the host
-# flags, with etude-volume beside it, which makes and reads its volumes.
-ETUDETOOLING = build/tools/etude/etude-tooling
-ETUDEVOLUME = build/tools/etude/etude-volume
-build/tools/etude/image-command: tools/etude/win/image_command.c tools/etude/win/hold.c \
-                               tools/etude/win/winfmt.c tools/etude/hold.h tools/etude/win/winfmt.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99
-$(ETUDETOOLING): $(ETUDE_TOOLING_SRC) tools/etude/include/etude/tooling.h \
-                 tools/etude/include/etude/exec.h tools/etude/include/etude/history.h \
-                 tools/etude/posix/posix.h tools/etude/capture.h tools/etude/history_json.h \
-                 utils/sha256.h | $(ETUDEVOLUME)
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
-$(ETUDEVOLUME): $(ETUDE_VOLUME_SRC) tools/etude/volume/volume.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99
-
-# The writer of the exFAT volume another implementation made, which
-# exfat_hosttest.c reads: hdiutil on macOS, and elsewhere the tooling
-# machine, made here when it is not (tests/host/mkexfat_external.sh -p). The
-# host case's preparation names it. The script runs every time, since the
-# machine's key follows its recipe, and rewrites the file only when the
-# writer changes.
-.PHONY: build/tests/host/exfat_writer
-build/tests/host/exfat_writer: tests/host/mkexfat_external.sh | $(ETUDETOOLING)
-	@mkdir -p $(@D)
-	sh tests/host/mkexfat_external.sh -p $@
-
-# The tooling machine itself, for the host suite's scripted checks that run a
-# program the host lacks in it (tests/system/tooling_ready.sh): the scripts
-# case's preparation names it, and it runs every time for the same reason.
-.PHONY: build/tests/host/tooling_machine
-build/tests/host/tooling_machine: tests/system/tooling_ready.sh | $(ETUDETOOLING)
-	@mkdir -p $(@D)
-	sh tests/system/tooling_ready.sh $@
-
-# etude-step (tools/etude/step/etude_step.c), which runs each stamped step of
-# the build through the host's store of step outputs.
-$(ETUDESTEP): $(ETUDE_STEP_SRC) utils/sha256.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) -std=c99 -D_DEFAULT_SOURCE -Iutils
-
-# etude's load fixture (tools/etude/posix/load.c), which a run of repetitions
-# starts beside a case, built here so that `make` compiles it under the host
-# flags.
-ETUDELOAD = build/tools/etude/etude-load
-$(ETUDELOAD): $(ETUDE_LOAD_SRC) tools/etude/include/etude/repeat.h
-	@mkdir -p $(@D)
-	$(HOST_LINK) $(ETUDE_PLATFORM_LIBS) $(ETUDE_PLATFORM_FLAGS) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
-
-# etude-host (tools/etude/posix/etude_host.c), which runs the host checks of
-# `tests/run host` several at once.
-ETUDEHOST = build/tools/etude/etude-host
-$(ETUDEHOST): $(ETUDE_HOST_SRC) tools/etude/include/etude/exec.h tools/etude/posix/posix.h \
-              tools/etude/capture.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include
-
-# etude-legacy (tools/etude/posix/etude_legacy.c), the preparation adapter
-# that builds what the suites of tests/run read before one starts:
-# `components` and the goals it is given; and the set driver, which tests/run
-# runs, over the supervisor, the ledger, the old runner's locks and the
-# history.
-ETUDELEGACY = build/tools/etude/etude-legacy
-$(ETUDELEGACY): $(ETUDE_LEGACY_SRC) tools/etude/include/etude/legacy.h \
-                tools/etude/include/etude/exec.h tools/etude/posix/posix.h \
-                tools/etude/include/etude/watchdog.h tools/etude/include/etude/ledger.h \
-                tools/etude/include/etude/sched.h tools/etude/include/etude/bridge.h \
-                tools/etude/include/etude/portlock.h tools/etude/include/etude/status.h tools/etude/include/etude/history.h \
-                tools/etude/include/etude/qemu.h tools/etude/compare.h \
-                tools/etude/history_json.h tools/etude/capture.h utils/sha256.h \
-                tools/etude/posix/legacy_cases.h tools/etude/digest.h tools/etude/json.h \
-                tools/etude/posix/legacy_guest.h tools/etude/serial.h \
-                tools/etude/include/etude/artifact.h tools/etude/include/etude/frame.h \
-                tools/etude/guest/wire.h tools/etude/posix/store.h
-	@mkdir -p $(@D)
-	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE -Itools/etude/include -Itools/etude \
-	    -Itools/etude/posix -Iutils
 
 # The machine scenarios of etude's cases (tests/cases/machine/), each linked
 # with libetude-case, the library that gives it its `main`. They are host
@@ -1633,7 +1488,7 @@ include tests/system/suites.mk
 # stand: the stamp of each step whose outputs came from the store, or are
 # links into it, is removed as make reads this file, so that the step is
 # built again in this copy before anything uses it. With the store, so is the
-# stamp of such a step whose entry `etude-step -e` has removed.
+# stamp of such a step whose entry `etude build -e` has removed.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
               $(E2FSPROGS_STAMP) $(GNU_STEP_STAMPS)
 ifeq ($(DRY_RUN),)
@@ -1652,14 +1507,11 @@ endif
 # after the includes that define them. The KRFFS programs and the host tests
 # have rules of their own, and the generator collects them separately.
 HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) $(SIZECHECK) \
-             $(CASECHECK) $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
+             $(ETUDE) $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(PTYDRIVE) \
              $(MKGPT) $(GROWSET) $(ASCIISCAN) $(HOSTCHECK) $(MACHINENET) $(SCREENTEXT) \
-             $(ETUDEHISTORY) $(ETUDECOMPARE) $(ETUDEFAILURES) $(ETUDELINES) $(ETUDEBUDGET) \
-             $(ETUDEREMOTE) $(ETUDETOOLING) $(ETUDEVOLUME) $(ETUDELOAD) $(ETUDEHOST) \
-             $(ETUDEBRIDGE) $(ETUDEPORTS) $(ETUDELEDGER) $(ETUDEHOLD) $(PECHECK) $(ETUDELEGACY) $(ETUDENATIVE) \
-             $(ETUDESTEP) \
+             $(ETUDEVOLUME) $(PECHECK) \
              $(MACHINE_SCENARIOS) $(PROBE_SCENARIOS) $(NET_SCENARIOS) $(NETPROBE_SCENARIOS) \
              $(USB_SCENARIOS) $(CONSOLE_SCENARIOS) \
              build/tests/cases/machine/sshpeer build/tests/cases/machine/clockpeer
@@ -1706,8 +1558,7 @@ distclean: clean
 
 
 ifeq ($(OS),Windows_NT)
-$(ETUDELEGACY) $(ETUDEBRIDGE) $(ETUDEHOST) $(ETUDETOOLING) \
-$(LIFECYCLE_SCENARIOS) $(ETUDEGUEST_SCENARIO) $(DISK_SCENARIOS): \
+$(ETUDE) $(LIFECYCLE_SCENARIOS) $(ETUDEGUEST_SCENARIO) $(DISK_SCENARIOS): \
     tools/etude/win/files.h tools/etude/win/sockets.h tools/etude/win/winexec.h \
     tools/etude/win/winfmt.h tools/etude/compile.sh
 endif

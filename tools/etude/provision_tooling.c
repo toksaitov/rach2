@@ -1,5 +1,5 @@
 /*
- * etude_tooling.c: etude-tooling, the command that makes the local Linux
+ * provision_tooling.c: `etude provision tooling`, which makes the local Linux
  * tooling machine, says whether it is made, and runs a job in it.
  * tools/etude/Readme.md gives its usage.
  */
@@ -39,11 +39,11 @@ static int usage(void)
 {
     fprintf(
         stderr,
-        "usage: etude-tooling [-r RECIPE] [-C CACHE] [-p ARCH] [-a ACCEL] prepare [-c CPUS] "
-        "[-t SECONDS] [HISTORY]\n"
-        "       etude-tooling [-r RECIPE] [-C CACHE] [-p ARCH] check\n"
-        "       etude-tooling [-r RECIPE] [-C CACHE] [-p ARCH] [-a ACCEL] run [-n] [-k] [-c CPUS] "
-        "[-m MIB] [-s MIB] [-t SECONDS]\n"
+        "usage: etude provision tooling [-r RECIPE] [-C CACHE] [-p ARCH] [-a ACCEL] prepare\n"
+        "                     [-c CPUS] [-t SECONDS] [HISTORY]\n"
+        "       etude provision tooling [-r RECIPE] [-C CACHE] [-p ARCH] check\n"
+        "       etude provision tooling [-r RECIPE] [-C CACHE] [-p ARCH] [-a ACCEL] run [-n] [-k]\n"
+        "                     [-c CPUS] [-m MIB] [-s MIB] [-t SECONDS]\n"
         "                     [-i PATH]... [-d DISK]... [-o NAME]... [-O DIR] [HISTORY] SCRIPT\n"
         "HISTORY: -H STREAM -j STREAM_ID -R RUN -P PLAN [-I ITEM] [-A ATTEMPT] -M MACHINE "
         "-B BOOT -b STORE [-S SCHEMA]\n");
@@ -160,12 +160,12 @@ static int write_record(struct record *r, const struct etude_tooling_machine *m,
     r->ids.key = m->key;
     h = etude_history_open(r->path, schema, r->stream, r->run, (uint64_t)1 << 24);
     if (h == NULL) {
-        fprintf(stderr, "etude-tooling: %s: %s\n", r->path, strerror(errno));
+        fprintf(stderr, "etude provision: %s: %s\n", r->path, strerror(errno));
         return -1;
     }
     rc = etude_tooling_record(h, &r->ids, res);
     if (etude_history_close(h) != 0 || rc != 0) {
-        fprintf(stderr, "etude-tooling: %s: the steps could not be recorded\n", r->path);
+        fprintf(stderr, "etude provision: %s: the steps could not be recorded\n", r->path);
         return -1;
     }
     return 0;
@@ -191,7 +191,7 @@ static void print_cost(const struct etude_tooling_result *res)
 
     if (c->nsteps == 0)
         return;
-    fprintf(stderr, "etude-tooling: cost:");
+    fprintf(stderr, "etude provision: cost:");
     for (i = 0; i < c->nsteps; i++) {
         const struct etude_tooling_step *s = &c->steps[i];
 
@@ -345,10 +345,10 @@ static int prepare(struct options *op, const struct etude_tooling_machine *m)
     if (write_record(&op->rec, m, &res, op->site.recipe) != 0)
         rc = -1;
     if (res.outcome == ETUDE_TOOLING_ENDED)
-        printf("etude-tooling: result: %s %s %s\n", res.reused ? "reused" : "made", m->key,
+        printf("etude provision: result: %s %s %s\n", res.reused ? "reused" : "made", m->key,
                m->disk);
     else
-        printf("etude-tooling: result: %s: %s%s%s\n",
+        printf("etude provision: result: %s: %s%s%s\n",
                res.outcome == ETUDE_TOOLING_STOPPED ? "stopped" : "failed", res.why,
                res.dir[0] != '\0' ? "; its logs are in " : "", res.dir);
     return rc == 0 ? 0 : 1;
@@ -373,13 +373,13 @@ static int run(struct options *op, const struct etude_tooling_machine *m, const 
     if (write_record(&op->rec, m, &res, op->site.recipe) != 0 && rc == 0)
         rc = -1, res.outcome = ETUDE_TOOLING_FAILED;
     if (res.outcome != ETUDE_TOOLING_ENDED)
-        fprintf(stderr, "etude-tooling: result: %s: %s%s%s\n",
+        fprintf(stderr, "etude provision: result: %s: %s%s%s\n",
                 res.outcome == ETUDE_TOOLING_LATE      ? "late"
                 : res.outcome == ETUDE_TOOLING_STOPPED ? "stopped"
                                                        : "failed",
                 res.why, res.dir[0] != '\0' ? "; its files are in " : "", res.dir);
     else if (res.dir[0] != '\0')
-        fprintf(stderr, "etude-tooling: the job's files are in %s\n", res.dir);
+        fprintf(stderr, "etude provision: the job's files are in %s\n", res.dir);
     etude_tooling_result_free(&res);
     if (rc == 0)
         return res.status;
@@ -388,7 +388,7 @@ static int run(struct options *op, const struct etude_tooling_machine *m, const 
     return strstr(res.why, "is not made") != NULL ? 126 : 125;
 }
 
-int main(int argc, char **argv)
+int etude_tooling_main(int argc, char **argv)
 {
     static struct options op;
     struct etude_tooling_machine m;
@@ -405,7 +405,7 @@ int main(int argc, char **argv)
         return usage();
     command = argv[i];
     if (etude_tooling_machine(&op.site, &m, why, sizeof(why)) != 0) {
-        fprintf(stderr, "etude-tooling: %s\n", why);
+        fprintf(stderr, "etude provision: %s\n", why);
         return strcmp(command, "run") == 0 ? 125 : 1;
     }
     if (strcmp(command, "check") == 0) {
@@ -415,11 +415,11 @@ int main(int argc, char **argv)
         made = f != NULL;
         if (made)
             fclose(f);
-        printf("etude-tooling: result: %s %s %s\n", made ? "made" : "not made", m.key, m.disk);
+        printf("etude provision: result: %s %s %s\n", made ? "made" : "not made", m.key, m.disk);
         return made ? 0 : 1;
     }
     if (op.site.accel == NULL || *op.site.accel == '\0') {
-        fprintf(stderr, "etude-tooling: name QEMU's accelerator with -a or RACH2_QEMU_ACCEL\n");
+        fprintf(stderr, "etude provision: name QEMU's accelerator with -a or RACH2_QEMU_ACCEL\n");
         return usage();
     }
     catch_signals();

@@ -44,13 +44,13 @@
 # file fails when its count differs from the entry, so that the list only
 # falls.
 #
-# The check also runs tools/etude/casecheck over the manifests
-# tests/cases/*.json and the examples of tools/etude/schemas: their shape and
-# rules, the lines their `where` names, and the examples of the results, the
-# invocation, the scenario invocation, the reproduce commands, the repetition
-# record, the budget policy and the history against their schemas and
-# cases. Make builds it:
-# `make build/tools/etude/casecheck`.
+# The check also runs `etude check` over the manifests tests/cases/*.json and
+# the examples of tools/etude/schemas: their shape and rules, the lines their
+# `where` names, and the examples of the results, the invocation, the scenario
+# invocation, the reproduce commands, the repetition record, the budget policy
+# and the history against their schemas and cases. ETUDE is the program,
+# build/tools/etude/etude unless given, which `make build/tools/etude/etude`
+# builds.
 #
 #   sh tools/verify/suitecheck.sh             check the tree
 #   sh tools/verify/suitecheck.sh --selftest  run the check on fixtures
@@ -64,15 +64,15 @@ SELF=$(cd "$(dirname "$0")/../.." && pwd)
 REPO=${SUITECHECK_ROOT:-$SELF}
 REASONS="$REPO/tests/system/intervals"
 UNCONVERTED="$REPO/tests/system/unconverted"
-CASECHECK=${CASECHECK:-$SELF/build/tools/etude/casecheck}
+ETUDE=${ETUDE:-$SELF/build/tools/etude/etude}
 SCHEMAS="$SELF/tools/etude/schemas"
 
 # scan FILE KIND DECLARED: print the findings of one file, KIND `suite` for
 # a script or `probe` for C code, on stdout as `FILE:LINE: RULE: WHAT`, RULE
 # `sleep`, `bound` or `skip` for a finding tests/system/unconverted may count,
-# and `fixed` for one it may not. DECLARED is the output of `casecheck timing`,
-# which reaches awk through the environment, since BSD awk refuses a newline
-# in the value of -v.
+# and `fixed` for one it may not. DECLARED is the output of `etude check
+# timing`, which reaches awk through the environment, since BSD awk refuses a
+# newline in the value of -v.
 scan() {
     SUITECHECK_DECLARED=$3 awk -v file="${1#"$REPO/"}" -v kind="$2" -v reasons="$REASONS" '
     BEGIN {
@@ -230,7 +230,7 @@ judge() {
     }'
 }
 
-# validate: run casecheck over the manifests and the examples; print the
+# validate: run `etude check` over the manifests and the examples; print the
 # timing it declares on stdout, its findings on stderr, and return its
 # status. The manifests and the examples are checked apart, since an
 # example may declare a case that a manifest also declares.
@@ -243,28 +243,28 @@ validate() {
     for f in "$REPO"/tests/cases/*.json; do
         [ -e "$f" ] && set -- "$@" "${f#"$REPO/"}"
     done
-    [ $# -eq 0 ] && [ -z "$examples" ] || [ -x "$CASECHECK" ] ||
-        { echo "suitecheck: $CASECHECK: not built; make build/tools/etude/casecheck" >&2; return 2; }
+    [ $# -eq 0 ] && [ -z "$examples" ] || [ -x "$ETUDE" ] ||
+        { echo "suitecheck: $ETUDE: not built; make build/tools/etude/etude" >&2; return 2; }
     (
         cd "$REPO" || exit 2
         status=0
         if [ $# -gt 0 ]; then
-            "$CASECHECK" -s "$SCHEMAS" -r . timing "$@" || status=$?
+            "$ETUDE" check -s "$SCHEMAS" -r . timing "$@" || status=$?
         fi
         if [ -n "$examples" ]; then
             # shellcheck disable=SC2086 # the examples' paths have no spaces
-            "$CASECHECK" -s "$SCHEMAS" -r . timing $examples || status=$?
+            "$ETUDE" check -s "$SCHEMAS" -r . timing $examples || status=$?
         fi
         ex=tools/etude/schemas
         if [ -e "$ex/results.example.jsonl" ]; then
-            "$CASECHECK" -s "$SCHEMAS" results "$ex/results.example.jsonl" "$ex/case.guest.example.json" \
+            "$ETUDE" check -s "$SCHEMAS" results "$ex/results.example.jsonl" "$ex/case.guest.example.json" \
                 >/dev/null || status=$?
-            "$CASECHECK" -s "$SCHEMAS" schema invocation "$ex/invocation.example.json" || status=$?
-            "$CASECHECK" -s "$SCHEMAS" schema scenario "$ex/scenario.example.json" || status=$?
-            "$CASECHECK" -s "$SCHEMAS" schema reproduce "$ex/reproduce.example.json" || status=$?
-            "$CASECHECK" -s "$SCHEMAS" schema repeat "$ex/repeat.example.json" || status=$?
-            "$CASECHECK" -s "$SCHEMAS" schema budget "$ex/budget.example.json" || status=$?
-            "$CASECHECK" -s "$SCHEMAS" schema history "$ex/history.example.jsonl" \
+            "$ETUDE" check -s "$SCHEMAS" schema invocation "$ex/invocation.example.json" || status=$?
+            "$ETUDE" check -s "$SCHEMAS" schema scenario "$ex/scenario.example.json" || status=$?
+            "$ETUDE" check -s "$SCHEMAS" schema reproduce "$ex/reproduce.example.json" || status=$?
+            "$ETUDE" check -s "$SCHEMAS" schema repeat "$ex/repeat.example.json" || status=$?
+            "$ETUDE" check -s "$SCHEMAS" schema budget "$ex/budget.example.json" || status=$?
+            "$ETUDE" check -s "$SCHEMAS" schema history "$ex/history.example.jsonl" \
                 "$ex/history.incomplete.example.jsonl" || status=$?
         fi
         exit "$status"

@@ -40,20 +40,20 @@
 # started with, and starts nothing otherwise.
 #
 # `results` below says how this tree's tests/run gives its results. With
-# `lines`, the runner's last `run: result: failed:` line on its standard
-# error names the suites that failed, and a pass is its status 0.
-# With `history`, the suites of a kind run as one run of tests/run, core's
-# as `tests/run style host core` and full's with `bigmem` among them, since
-# report.sh reads the history of one run. tests/run writes etude's history
-# of it under DIR, which RACH2_RESULTS names: its streams in `history/` and
-# the blobs they refer to, each named by its SHA-256, in `store/`, where
-# report.sh reads them. `casecheck verdict` judges that history against the
-# case manifests of tests/cases. The run passes only when the history shows
-# every suite asked for planned whole and every attempt of every item
-# passed, with its results in the store, and tests/run's status is 0. A
-# suite with an item that did not pass fails, a failed retry among them, the
-# set fails for a failed preparation, and `runner` for a history that is
-# missing, cut off or inconsistent, or a status that disagrees with it.
+# `lines`, the runner's last `run: result: failed:` line on its standard error
+# names the suites that failed, and a pass is its status 0. With `history`, the
+# suites of a kind run as one run of tests/run, core's as `tests/run style host
+# core` and full's with `bigmem` among them, since report.sh reads the history
+# of one run. tests/run writes etude's history of it under DIR, which
+# RACH2_RESULTS names: its streams in `history/` and the blobs they refer to,
+# each named by its SHA-256, in `store/`, where report.sh reads them. `etude
+# check verdict` judges that history against the case manifests of tests/cases.
+# The run passes only when the history shows every suite asked for planned whole
+# and every attempt of every item passed, with its results in the store, and
+# tests/run's status is 0. A suite with an item that did not pass fails, a
+# failed retry among them, the set fails for a failed preparation, and `runner`
+# for a history that is missing, cut off or inconsistent, or a status that
+# disagrees with it.
 #
 # Each build and tests/run enters the installed site policy separately.
 set -u
@@ -140,12 +140,11 @@ step() {
 }
 
 # Run tests/run with ARGS as one run, its history going to DIR/history and
-# DIR/store and its standard error to DIR/err as well, and append to
-# DIR/failed the names of casecheck's verdict on that history, with `runner`
-# when the verdict gave no result or tests/run's status disagrees with it,
-# each name once; return 0 when both passed and 1 otherwise. The suites
-# asked for are ARGS, with `core` standing for the core tier's suites of
-# ARCH, as tests/run takes it.
+# DIR/store and its standard error to DIR/err as well, and append to DIR/failed
+# the names of etude's verdict on that history, with `runner` when the verdict
+# gave no result or tests/run's status disagrees with it, each name once; return
+# 0 when both passed and 1 otherwise. The suites asked for are ARGS, with `core`
+# standing for the core tier's suites of ARCH, as tests/run takes it.
 run_history() { # run_history NAME ARGS...
     name=$1; shift
     rm -rf "$out/history" "$out/store"
@@ -165,13 +164,13 @@ run_history() { # run_history NAME ARGS...
         fi
     done | awk '!seen[$0]++' | tr '\n' , | sed 's/,$//')
     rm -f "$out/rc"
-    started build/tools/etude/casecheck verdict -b "$out/store" -c "$(git rev-parse HEAD)" \
+    started build/tools/etude/etude check verdict -b "$out/store" -c "$(git rev-parse HEAD)" \
         "$ARCH" "$name" "$suites" "$out/history" 2>&1 | copy "$out/verdict" | copy -a "$out/log"
     ended
     verdict=$rc
     rc=$ran
-    failed=$(sed -n 's/^casecheck: result: failed: //p' "$out/verdict")
-    if [ "$verdict" = 0 ] && grep -qx 'casecheck: result: passed' "$out/verdict"; then
+    failed=$(sed -n 's/^etude check: result: failed: //p' "$out/verdict")
+    if [ "$verdict" = 0 ] && grep -qx 'etude check: result: passed' "$out/verdict"; then
         [ "$rc" != 0 ] || return 0
         failed=runner
     elif [ "$verdict" != 1 ] || [ -z "$failed" ] || [ "$rc" = 0 ]; then

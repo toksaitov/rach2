@@ -1,124 +1,67 @@
-# sources.mk: the sources of etude's programs, which the top-level Makefile
+# sources.mk: the sources of etude and its helpers, which the top-level Makefile
 # and version.mk, the build of a cached version on the machine it is for,
 # both include, so that one file lists them. Paths are relative to the root
 # of the tree.
 
-# casecheck, the validator of manifests, reports, results and runs.
-ETUDE_CASECHECK_SRC = tools/etude/casecheck.c tools/etude/cases.c \
-                      tools/etude/digest.c tools/etude/judge.c tools/etude/json.c \
-                      tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c \
-                      tools/etude/verdict.c tools/etude/history.c \
-                      tools/etude/history_json.c utils/sha256.c
+# The sources of etude, the one command, for each platform. ETUDE_SRC is
+# that of Linux and macOS, which has every verb; ETUDE_WIN_SRC that of
+# Windows, ETUDE_RACH2_SRC that of Rach2, which has `check` alone, and
+# ETUDE_LOCK_SRC that of the build of `lock` alone, with ETUDE_LOCK_ONLY
+# defined, which the first process of tests/run makes for itself. etude.c
+# chooses the verbs by the same platform.
 
-# history_check, the checker of a closed history stream.
-ETUDE_HISTORY_CHECK_SRC = tools/etude/history_check.c tools/etude/history.c \
-                          tools/etude/history_json.c \
-                          tools/etude/history_collect.c utils/sha256.c
+# `etude check`, the validator of manifests, reports, results, runs and
+# histories, and the parts every platform shares.
+ETUDE_CHECK_SRC = tools/etude/etude.c tools/etude/check.c tools/etude/cases.c \
+                  tools/etude/digest.c tools/etude/judge.c tools/etude/json.c \
+                  tools/etude/processor.c tools/etude/qemu_profile.c tools/etude/schema.c \
+                  tools/etude/verdict.c tools/etude/history.c tools/etude/history_json.c \
+                  tools/etude/history_collect.c utils/sha256.c
+ETUDE_RACH2_SRC = $(ETUDE_CHECK_SRC)
 
-# history_compare, the comparison of a run's cases with their timing history.
-ETUDE_HISTORY_COMPARE_SRC = tools/etude/history_compare.c tools/etude/compare.c \
-                            tools/etude/baseline.c tools/etude/compare_report.c \
-                            tools/etude/compare_run.c tools/etude/history.c \
-                            tools/etude/history_json.c \
-                            tools/etude/history_collect.c utils/sha256.c
+# `etude lock`: the holder of a tree's run lock, on Linux and macOS, and the
+# holder of the host lock and a block of host ports, whose winfmt.c gives it
+# a Windows command line.
+ETUDE_LOCK_SRC = tools/etude/etude.c tools/etude/lock_tree.c tools/etude/posix/hold.c \
+                 tools/etude/lock_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c
+ETUDE_LOCK_WIN_SRC = tools/etude/etude.c tools/etude/lock_tree.c tools/etude/win/hold.c \
+                     tools/etude/lock_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c
 
-# history_failures, the attempts of a run that did not pass, which
-# tools/ci/report.sh gives in ci's issues.
-ETUDE_HISTORY_FAILURES_SRC = tools/etude/history_failures.c tools/etude/failures.c \
-                             tools/etude/history.c tools/etude/history_json.c \
-                             tools/etude/history_collect.c utils/sha256.c
+# `etude run suites`, `etude prepare` and `etude check record`: the
+# preparation adapter of the suites of tests/run and their set driver, over
+# the supervisor, the ledger, the old runner's locks and the history, beside
+# `etude show lines`, the compatible formatter, and `etude admit`, the
+# external admission wrapper for old checkouts and new runs. These are the
+# parts with Windows sources as well.
+ETUDE_RUN_SRC = tools/etude/posix/run_suites.c tools/etude/posix/legacy.c \
+                tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
+                tools/etude/posix/legacy_guest.c tools/etude/serial.c \
+                tools/etude/guest/wire.c tools/etude/posix/store.c \
+                tools/etude/watchdog.c tools/etude/supervise.c tools/etude/ledger.c \
+                tools/etude/sched.c tools/etude/portlock.c tools/etude/posix/status.c \
+                tools/etude/compare.c tools/etude/baseline.c tools/etude/compare_report.c \
+                tools/etude/compare_run.c tools/etude/lines.c tools/etude/posix/admit.c \
+                tools/etude/posix/run_host.c tools/etude/lock_tree.c tools/etude/lock_ports.c \
+                tools/etude/provision_tooling.c tools/etude/tooling.c
 
-# history_lines, the compatible formatter, which prints a run's history as the
-# lines of tests/run.
-ETUDE_HISTORY_LINES_SRC = tools/etude/history_lines.c tools/etude/lines.c \
-                          tools/etude/history.c tools/etude/history_json.c \
-                          tools/etude/history_collect.c utils/sha256.c
+# The verbs of Linux and macOS alone: `etude run native`, `etude show
+# failures`, `etude estimate`, `etude status` and `etude release`, `etude
+# serve`, `etude stress` and `etude build`, with the host executor, which
+# ETUDE_WIN_EXEC_SRC replaces on Windows.
+ETUDE_POSIX_SRC = tools/etude/posix/run_native.c tools/etude/posix/remote.c \
+                  tools/etude/failures.c tools/etude/budget_run.c tools/etude/budget.c \
+                  tools/etude/cost.c tools/etude/posix/claims.c tools/etude/posix/responder.c \
+                  tools/etude/posix/serve.c tools/etude/posix/load.c tools/etude/step/step.c \
+                  tools/etude/posix/exec.c tools/etude/posix/keeper.c \
+                  tools/etude/posix/process.c tools/etude/posix/qemu.c \
+                  tools/etude/posix/bridge.c tools/etude/posix/hold.c \
+                  tools/etude/capture.c tools/etude/win/winfmt.c
 
-# history_budget, the forecast and the check of a run's budget. The cost of a
-# case takes its processor reservation from the schedule, which links the
-# ledger.
-ETUDE_HISTORY_BUDGET_SRC = tools/etude/history_budget.c tools/etude/budget.c \
-                           tools/etude/budget_run.c tools/etude/digest.c \
-                           tools/etude/cost.c tools/etude/sched.c tools/etude/ledger.c \
-                           tools/etude/posix/process.c tools/etude/compare.c \
-                           tools/etude/compare_report.c tools/etude/history.c \
-                           tools/etude/history_json.c tools/etude/history_collect.c \
-                           tools/etude/json.c tools/etude/schema.c utils/sha256.c
-
-# etude-remote, the responder of remote execution on Linux and macOS.
-ETUDE_REMOTE_SRC = tools/etude/posix/etude_remote.c tools/etude/posix/serve.c \
-                   tools/etude/posix/exec.c tools/etude/posix/keeper.c \
-                   tools/etude/posix/process.c tools/etude/capture.c \
-                   tools/etude/guest/wire.c tools/etude/json.c utils/sha256.c
-
-# etude-native, which runs one case on a Rach2 machine that is already up,
-# through etude-guest over a transport such as ssh(1).
-ETUDE_NATIVE_SRC = tools/etude/posix/etude_native.c tools/etude/posix/remote.c \
-                   tools/etude/posix/process.c tools/etude/guest/wire.c \
-                   tools/etude/json.c utils/sha256.c
-
-# etude-host, which runs the host checks of `tests/run host` at once on Linux
-# and macOS.
-ETUDE_HOST_SRC = tools/etude/posix/etude_host.c tools/etude/posix/exec.c \
-                 tools/etude/posix/keeper.c tools/etude/posix/process.c \
-                 tools/etude/capture.c
-
-# etude-tooling, the local Linux tooling machine, on Linux and macOS.
-ETUDE_TOOLING_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
-                    tools/etude/posix/exec.c tools/etude/posix/keeper.c \
-                    tools/etude/posix/process.c tools/etude/capture.c \
-                    tools/etude/history.c tools/etude/history_json.c \
-                    tools/etude/history_collect.c utils/sha256.c
+ETUDE_SRC = $(ETUDE_CHECK_SRC) $(ETUDE_RUN_SRC) $(ETUDE_POSIX_SRC)
 
 # etude-volume, the helper that makes and reads the tooling machine's
-# volumes for etude-tooling, on every platform etude-tooling runs on.
+# volumes for `etude provision tooling`, on every platform that has it.
 ETUDE_VOLUME_SRC = tools/etude/volume/etude_volume.c tools/etude/volume/volume.c
-
-# etude-step, which runs a step of the build through the host's store of step
-# outputs, on Linux and macOS.
-ETUDE_STEP_SRC = tools/etude/step/etude_step.c utils/sha256.c
-
-# etude-legacy, the preparation adapter of the suites of tests/run and their
-# set driver, on Linux and macOS.
-ETUDE_LEGACY_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
-                   tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
-                   tools/etude/posix/legacy_guest.c tools/etude/serial.c \
-                   tools/etude/guest/wire.c tools/etude/posix/store.c \
-                   tools/etude/digest.c tools/etude/json.c tools/etude/posix/exec.c \
-                   tools/etude/posix/keeper.c tools/etude/posix/process.c \
-                   tools/etude/capture.c tools/etude/watchdog.c \
-                   tools/etude/supervise.c tools/etude/qemu_profile.c \
-                   tools/etude/posix/qemu.c tools/etude/processor.c \
-                   tools/etude/ledger.c tools/etude/sched.c \
-                   tools/etude/posix/bridge.c tools/etude/portlock.c tools/etude/posix/status.c \
-                   tools/etude/compare.c tools/etude/baseline.c \
-                   tools/etude/compare_report.c tools/etude/compare_run.c \
-                   tools/etude/history.c tools/etude/history_json.c \
-                   tools/etude/history_collect.c utils/sha256.c
-
-# etude-load, the load fixture of shuffled and loaded repetitions on Linux
-# and macOS.
-ETUDE_LOAD_SRC = tools/etude/posix/etude_load.c tools/etude/posix/load.c
-
-# etude-bridge, the external admission wrapper for old checkouts and new runs.
-ETUDE_BRIDGE_SRC = tools/etude/posix/etude_bridge.c tools/etude/posix/bridge.c \
-                   tools/etude/portlock.c tools/etude/ledger.c tools/etude/posix/exec.c \
-                   tools/etude/posix/keeper.c tools/etude/posix/process.c \
-                   tools/etude/capture.c utils/sha256.c
-
-# etude-hold, which holds a tree's run lock while one command runs, on Linux
-# and macOS, and on Windows.
-ETUDE_HOLD_SRC = tools/etude/etude_hold.c tools/etude/posix/hold.c
-ETUDE_HOLD_WIN_SRC = tools/etude/etude_hold.c tools/etude/win/hold.c tools/etude/win/winfmt.c
-
-# etude-ports, which runs a command holding the host lock and a block of host
-# ports, on Linux, macOS and Windows; winfmt.c gives it a Windows command line.
-ETUDE_PORTS_SRC = tools/etude/etude_ports.c tools/etude/portlock.c tools/etude/win/winfmt.c
-
-# etude-ledger, which lists a ledger's claims and drops one whose processes a
-# person has found ended.
-ETUDE_LEDGER_SRC = tools/etude/posix/etude_ledger.c tools/etude/ledger.c \
-                   tools/etude/posix/process.c utils/sha256.c
 
 # libetude-case, the library of machine scenarios on POSIX systems, with the
 # `main` it gives them, which each scenario of tests/cases/machine/ links.
@@ -130,34 +73,14 @@ ETUDE_CASE_LIB_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c 
                      tools/etude/capture.c tools/etude/history_json.c \
                      tools/etude/guest/wire.c utils/sha256.c
 
-# Native Windows implementations used by the collection and its scenarios.
+# The native Windows executor, which etude and the scenarios link there.
 ETUDE_WIN_EXEC_SRC = tools/etude/win/exec.c tools/etude/win/winexec.c \
                      tools/etude/win/winsys.c tools/etude/win/winfmt.c \
                      tools/etude/win/files.c tools/etude/capture.c
-ETUDE_LEGACY_WIN_SRC = tools/etude/posix/etude_legacy.c tools/etude/posix/legacy.c \
-                       tools/etude/posix/legacy_set.c tools/etude/posix/legacy_cases.c \
-                       tools/etude/posix/legacy_guest.c tools/etude/serial.c \
-                       tools/etude/guest/wire.c tools/etude/posix/store.c \
-                       tools/etude/digest.c tools/etude/json.c $(ETUDE_WIN_EXEC_SRC) \
-                       tools/etude/watchdog.c tools/etude/supervise.c \
-                       tools/etude/qemu_profile.c tools/etude/posix/qemu.c \
-                       tools/etude/processor.c tools/etude/ledger.c tools/etude/sched.c \
-                       tools/etude/win/bridge.c tools/etude/portlock.c tools/etude/posix/status.c \
-                       tools/etude/compare.c tools/etude/baseline.c \
-                       tools/etude/compare_report.c tools/etude/compare_run.c \
-                       tools/etude/history.c tools/etude/history_json.c \
-                       tools/etude/history_collect.c utils/sha256.c
+ETUDE_WIN_SRC = $(ETUDE_CHECK_SRC) $(ETUDE_RUN_SRC) $(ETUDE_WIN_EXEC_SRC) \
+                tools/etude/posix/qemu.c tools/etude/win/bridge.c tools/etude/win/hold.c
 ETUDE_CASE_LIB_WIN_SRC = tools/etude/posix/scenario.c tools/etude/posix/case_main.c \
                          tools/etude/serial.c tools/etude/processor.c \
                          tools/etude/posix/qemu.c tools/etude/qemu_profile.c \
                          $(ETUDE_WIN_EXEC_SRC) tools/etude/posix/store.c \
                          tools/etude/history_json.c tools/etude/guest/wire.c utils/sha256.c
-
-ETUDE_HOST_WIN_SRC = tools/etude/posix/etude_host.c $(ETUDE_WIN_EXEC_SRC)
-ETUDE_TOOLING_WIN_SRC = tools/etude/etude_tooling.c tools/etude/tooling.c \
-                        $(ETUDE_WIN_EXEC_SRC) tools/etude/history.c \
-                        tools/etude/history_json.c tools/etude/history_collect.c utils/sha256.c
-
-# Native admission command and its independently held compatibility locks.
-ETUDE_BRIDGE_WIN_SRC = tools/etude/posix/etude_bridge.c tools/etude/win/bridge.c \
-                       tools/etude/portlock.c tools/etude/ledger.c $(ETUDE_WIN_EXEC_SRC) utils/sha256.c

@@ -3,7 +3,7 @@
  * the set driver runs them. It reads the manifest, gives each case that runs
  * on the run's architecture its program, its arguments, its bounds, its
  * claim and the canonical documents of its item, and judges an attempt by
- * `casecheck attempt`.
+ * `etude check attempt`.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -666,7 +666,7 @@ void legacy_manifest_free(struct legacy_manifest *m)
 
 #ifndef _WIN32
 /**
- * Start `argv`, casecheck, with its input from /dev/null, its output to
+ * Start `argv`, the judge, with its input from /dev/null, its output to
  * `j->results` and its errors to `j->errors`, and no other descriptor.
  *
  * @return its process, or -1 with errno set.
@@ -778,10 +778,10 @@ static void judge_take(const struct legacy_judge *j, int status, struct legacy_j
     if (code != 0 && code != 1 && code != 3) {
         first_line(j->errors, err, sizeof(err));
         if (code < 0)
-            snprintf(out->reason, sizeof(out->reason), "casecheck was killed by signal %d", sig);
+            snprintf(out->reason, sizeof(out->reason), "etude check was killed by signal %d", sig);
         else
-            snprintf(out->reason, sizeof(out->reason), "casecheck exited with status %d%s%s", code,
-                     err[0] != '\0' ? ": " : "", err);
+            snprintf(out->reason, sizeof(out->reason), "etude check exited with status %d%s%s",
+                     code, err[0] != '\0' ? ": " : "", err);
         return;
     }
     out->doc = read_file(j->results, RESULTS_BYTES, &out->len);
@@ -790,7 +790,7 @@ static void judge_take(const struct legacy_judge *j, int status, struct legacy_j
                  strerror(errno));
     else if (json_parse(out->doc, out->len, 1, &doc, err, sizeof(err)) != 0 ||
              doc->type != JSON_OBJECT)
-        snprintf(out->reason, sizeof(out->reason), "casecheck gave no results document: %s",
+        snprintf(out->reason, sizeof(out->reason), "etude check gave no results document: %s",
                  doc == NULL ? err : "not an object");
     else
         out->outcome = (enum legacy_judged)code;
@@ -828,11 +828,12 @@ static void windows_judge(const struct legacy_judge *j, char *const *argv,
     const struct etude_exec_result *r;
     uint64_t until = posix_now_us() + (uint64_t)LEGACY_JUDGE_S * 1000000u;
     memset(&spec, 0, sizeof spec);
-    spec.attempt_id = "casecheck";
+    spec.attempt_id = "check";
     spec.argv = argv;
     spec.output_max = RESULTS_BYTES;
     if (ex == NULL || etude_exec_start(ex, &spec, &proc) != 0) {
-        snprintf(out->reason, sizeof out->reason, "casecheck could not start: %s", strerror(errno));
+        snprintf(out->reason, sizeof out->reason, "etude check could not start: %s",
+                 strerror(errno));
         goto done;
     }
     while (etude_exec_wait(ex, JUDGE_POLL_MS) != proc && posix_now_us() < until) {
@@ -842,16 +843,16 @@ static void windows_judge(const struct legacy_judge *j, char *const *argv,
         etude_exec_cancel(proc);
         while (etude_exec_wait(ex, -1) != proc) {
         }
-        snprintf(out->reason, sizeof out->reason, "casecheck did not end within %u s",
+        snprintf(out->reason, sizeof out->reason, "etude check did not end within %u s",
                  LEGACY_JUDGE_S);
         goto done;
     }
     if (r->end != ETUDE_END_EXITED || r->cleanup != ETUDE_CLEANUP_CONFIRMED) {
-        snprintf(out->reason, sizeof out->reason, "casecheck did not end cleanly");
+        snprintf(out->reason, sizeof out->reason, "etude check did not end cleanly");
         goto done;
     }
     if (judge_output(j->results, &r->out) != 0 || judge_output(j->errors, &r->err) != 0) {
-        snprintf(out->reason, sizeof out->reason, "casecheck's output could not be kept: %s",
+        snprintf(out->reason, sizeof out->reason, "etude check's output could not be kept: %s",
                  strerror(errno));
         goto done;
     }
@@ -874,7 +875,8 @@ void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out
 
     memset(out, 0, sizeof(*out));
     out->outcome = LEGACY_UNJUDGED;
-    argv[k++] = (char *)j->casecheck;
+    argv[k++] = (char *)j->etude;
+    argv[k++] = "check";
     argv[k++] = "-s";
     argv[k++] = (char *)j->schemas;
     argv[k++] = "attempt";
@@ -901,10 +903,10 @@ void legacy_judge_run(const struct legacy_judge *j, struct legacy_judgement *out
     windows_judge(j, argv, out);
 #else
     if ((pid = judge_start(j, argv)) < 0)
-        snprintf(out->reason, sizeof(out->reason), "casecheck could not start: %s",
+        snprintf(out->reason, sizeof(out->reason), "etude check could not start: %s",
                  strerror(errno));
     else if (judge_wait(pid, &status) != 0)
-        snprintf(out->reason, sizeof(out->reason), "casecheck did not end within %u s",
+        snprintf(out->reason, sizeof(out->reason), "etude check did not end within %u s",
                  LEGACY_JUDGE_S);
     else
         judge_take(j, status, out);

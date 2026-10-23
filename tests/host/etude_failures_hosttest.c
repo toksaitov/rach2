@@ -1,6 +1,6 @@
-/* Check that history_failures lists each attempt of a run that did not pass,
- * keeps a failure that a passing retry follows, and refuses a history it
- * cannot read whole.
+/* Check that `etude show failures` lists each attempt of a run that did not
+ * pass, keeps a failure that a passing retry follows, and refuses a history
+ * it cannot read whole.
  * host-deps: tools/etude/failures.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: utils/sha256.c
@@ -305,15 +305,15 @@ static void write_spec(const struct run_spec *r, const char *file)
 }
 
 /**
- * Run history_failures with stdout in a file; return its status and output.
- * A word of ARGUMENTS that begins with `@` names a fixture file.
+ * Run `etude show failures` with stdout in a file; return its status and
+ * output. A word of ARGUMENTS that begins with `@` names a fixture file.
  */
 static int run(char *output, size_t size, const char *arguments)
 {
     char *argv[64], copy[4096], *word;
     int argc = 0, saved, file, status;
     ssize_t got;
-    snprintf(copy, sizeof(copy), "history_failures %s", arguments);
+    snprintf(copy, sizeof(copy), "etude %s", arguments);
     for (word = strtok(copy, " "); word && argc < 63; word = strtok(NULL, " "))
         argv[argc++] = word[0] == '@' ? (char *)path(word + 1) : word;
     argv[argc] = NULL;

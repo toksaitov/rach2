@@ -100,8 +100,9 @@ def choose_rows(selector, scratch):
                f"status {p.returncode}, wrote {wrote}, said {p.stderr.strip()!r}")
 
 
-TREE_FILES = ["tools/etude/hold.sh", "tools/etude/hold.h", "tools/etude/etude_hold.c",
-              "tools/etude/posix/hold.c", "tools/etude/etude_ports.c",
+TREE_FILES = ["tools/etude/hold.sh", "tools/etude/hold.h", "tools/etude/verbs.h",
+              "tools/etude/etude.c", "tools/etude/lock_tree.c",
+              "tools/etude/posix/hold.c", "tools/etude/lock_ports.c",
               "tools/etude/portlock.c", "tools/etude/include/etude/portlock.h",
               "tools/etude/win/winfmt.c", "tools/etude/win/winfmt.h",
               "tools/setup/e2fsprogs_path.sh",

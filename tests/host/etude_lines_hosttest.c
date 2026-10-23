@@ -703,7 +703,7 @@ static void check_maps(void)
     for (i = 0; i < sizeof(maps) / sizeof(maps[0]); i++) {
         put("bad.map", maps[i], 0644);
         if (format(NULL, path("bad.map"), path("pass.jsonl"), out, err, sizeof(out)) != 2 ||
-            !strstr(err, "history_lines: ")) {
+            !strstr(err, "etude show: ")) {
             fprintf(stderr, "etude_lines_hosttest: map \"%s\": %s%s", maps[i], out, err);
             CHECK(0, "a map that names an identity twice or no case is refused");
         }
@@ -957,7 +957,7 @@ static void check_reader(const char *root, const char *ledger, const char *owner
         "a claim its owner found unconfirmed is uncertain");
     snprintf(text, sizeof(text),
              "fault: a person must establish that nothing of it runs and drop it with "
-             "build/tools/etude/etude-ledger drop %s A1\n",
+             "build/tools/etude/etude release %s A1\n",
              ledger);
     has(out, text, "an uncertain claim names the command that drops it");
     has(out, "claim E1: live: its owner has ended and a process of it runs; holds cpu_millis 100",

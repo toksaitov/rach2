@@ -2,17 +2,17 @@
  * Check etude's set driver (etude_legacy_set in tools/etude/posix/legacy_set.c)
  * on the suites of a fixture tree: case manifests, a Makefile that builds
  * their programs and artifacts, and a stand-in for QEMU first on the path.
- * This program holds the tree's run lock and is the driver's etude-legacy:
- * run as `prepare` or `check`, it does what etude-legacy does. Each set runs
+ * This program holds the tree's run lock, and the driver's program is the
+ * built etude, build/tools/etude/etude, whose `prepare` prepares the
+ * fixture's artifacts and whose `check` judges each attempt. Each set runs
  * in a child of its own, with a private ledger, and with `locks` a private
  * directory of the old runner's locks. The fixture's host cases run one
  * shell script of the tree's, which its arguments make pass, fail, end its
  * report early, outrun its bound, meet another case, note its start and end,
- * or wait, and the built casecheck judges them. Its
- * guest cases run the tree's rngprobe on the real QEMU, booting the tree's
- * kernel and test image of the architecture ARCH names, i686 when it is
- * unset, which the fixture's preparation links into the fixture tree; their
- * evidence goes under the tree's build/tests.
+ * or wait. Its guest cases run the tree's rngprobe on the real QEMU, booting
+ * the tree's kernel and test image of the architecture ARCH names, i686 when
+ * it is unset, which the fixture's preparation links into the fixture tree;
+ * their evidence goes under the tree's build/tests.
  *
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
@@ -61,23 +61,23 @@
  * environment, less the driver's own ARCH and ETUDE_SEED, and the tree, the
  * case's identity, seed, architecture and, with scratch, the workspace as
  * TMPDIR; a case whose progress keeps its gap bound passes. Its attempt has
- * casecheck's outcome and the reason of the assertion that decided it, an
- * attempt that runs past its case bound is incomplete, and `casecheck
- * verdict` passes a run of passing cases and fails the suite of failing ones.
+ * the outcome of `etude check attempt` and the reason of the assertion that
+ * decided it, an attempt that runs past its case bound is incomplete, and
+ * `etude check verdict` passes a run of passing cases and fails the suite of
+ * failing ones.
  * A failed case of a suite that `stops` leaves the suite's other cases to run
  * before the set stops. A manifest that cannot be read, of another suite's
  * family, with a case of a
  * domain other than host, guest and machine, that reads its input, needs
  * loop devices or a fixture other than scratch, or has no case on the
- * architecture is refused, and so is a host case that needs ports, a case
- * suite without casecheck, a guest case of the init role, booted by OVMF,
- * ending other than by an exit, or with a disk of no disk fixture, and a
- * machine case with arguments.
+ * architecture is refused, and so is a host case that needs ports, a guest
+ * case of the init role, booted by OVMF, ending other than by an exit, or
+ * with a disk of no disk fixture, and a machine case with arguments.
  *
  * A guest case boots its own machine of its profile, its program stored to
  * etude-guest from the image and run there: rngprobe passes on the processor
  * `max`, with its branch `trusted` decided by the profile's features, with the
- * program's output, the console kept for casecheck and the plan's domain
+ * program's output, the console kept for `etude check` and the plan's domain
  * `qemu`; rngprobe passes on `qemu64` with its branch `fail-closed`; a boot
  * past its stage's bound is stopped and incomplete;
  * each machine is given its profile's processor, which a wrapper of QEMU
@@ -195,10 +195,9 @@ static int fails;
  * weak, so a test built without it links. */
 extern int __lsan_do_recoverable_leak_check(void) __attribute__((weak));
 
-/* This program, the fixture tree, etude's schemas, the built casecheck, and
- * the fixtures' ledger and lock directory. */
-static char self[PATH_MAX];
-static char casecheck[PATH_MAX];
+/* The built etude, the fixture tree, etude's schemas, and the fixtures'
+ * ledger and lock directory. */
+static char etude[PATH_MAX];
 static char tree[PATH_LEN];
 static char schemas[PATH_MAX];
 static char ledger[PATH_LEN];
@@ -428,9 +427,9 @@ static const char boundary_manifest[] =
 
 /* The site policies a set may be given: one that permits the lazy boundary
  * profile, and one whose permission names no profile the driver knows. */
-static const char site_permits[] = "etude-site 1\nendpoint linux\n"
+static const char site_permits[] = "etude-site 2\nendpoint linux\n"
                                    "boundary_lazy bigmem-boundary-v1\nwait 3\n";
-static const char site_other[] = "etude-site 1\nendpoint linux\nboundary_lazy yes\nwait 3\n";
+static const char site_other[] = "etude-site 2\nendpoint linux\nboundary_lazy yes\nwait 3\n";
 
 /* One case of a fixture manifest, which manifest_text writes. */
 struct fcase {
@@ -444,7 +443,7 @@ struct fcase {
     int per_arch; /* its program is built for each architecture */
 };
 
-/* The form of a case of a fixture manifest, which casecheck accepts. */
+/* The form of a case of a fixture manifest, which `etude check` accepts. */
 static const char case_form[] =
     "{\"case_id\": \"%s\", \"behavior\": \"The fixture's program reports as its arguments say\",\n"
     " \"units\": [\"tests/host/etude_legacyset_hosttest.c\"], \"domain\": \"host\",\n"
@@ -539,7 +538,7 @@ static const struct {
 
 /* The form of a guest case of a fixture manifest: the tree's rngprobe on
  * the test image, under the processor profile `cpu`, with its boot stage
- * bounded in milliseconds and its kernel built as a node, which casecheck
+ * bounded in milliseconds and its kernel built as a node, which `etude check`
  * accepts. It reserves a port and a loop device for its native run, which
  * the driver allows a guest case whose profile forwards no port. */
 static const char guest_form[] =
@@ -659,7 +658,6 @@ struct run {
     const char *kernel; /* the NAME of `-n NAME`, or NULL */
     const char *site;   /* the site's policy, or NULL for none */
     unsigned limit_mib; /* the ledger's memory limit, or 0 for MEMORY_MIB */
-    int nojudge;        /* the driver is given no casecheck */
     int guest;          /* it runs guest cases, on the real QEMU */
     enum put_fault put; /* the fault of the driver's copies */
     pid_t pid;
@@ -903,10 +901,9 @@ static int item_is(const struct run *r, const char *id, const char *want)
     return strcmp(item_of(r, id, got, sizeof(got)), want) == 0;
 }
 
-/* ---- This program as etude-legacy. ---- */
+/* ---- Stops. ---- */
 
-/* The stop signal this process received, as etude-legacy or as a set's
- * driver. */
+/* The stop signal this process received as a set's driver. */
 static volatile sig_atomic_t stop_signal;
 
 /** Note a stop signal. */
@@ -916,7 +913,7 @@ static void note_stop(int sig)
 }
 
 /** Catch the stop signals without restarting the executor's waits, as
- * etude-legacy does. */
+ * `etude run suites` does. */
 static void catch_stops(void)
 {
     static const int sigs[] = {SIGTERM, SIGINT, SIGHUP};
@@ -928,64 +925,6 @@ static void catch_stops(void)
     sigemptyset(&sa.sa_mask);
     for (i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
         sigaction(sigs[i], &sa, NULL);
-}
-
-/** Read a whole number of seconds from 1 to a week; 0 when `s` is not one. */
-static unsigned seconds_of(const char *s)
-{
-    char *end;
-    unsigned long v;
-
-    if (*s < '0' || *s > '9')
-        return 0;
-    v = strtoul(s, &end, 10);
-    return *end == '\0' && v >= 1 && v <= 604800ul ? (unsigned)v : 0;
-}
-
-/**
- * Do what etude-legacy does with `argv`, its arguments from `prepare` or
- * `check` on: the options the set driver gives it, parsed as
- * tools/etude/posix/etude_legacy.c parses them.
- *
- * @return its status, or 2 for a wrong usage.
- */
-static int as_legacy(int argc, char **argv)
-{
-    static char *goals[64];
-    struct etude_legacy_opts p;
-    int opt;
-
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    catch_stops();
-    if (strcmp(argv[0], "check") == 0)
-        return argc == 2 ? etude_legacy_check(argv[1], 0, stdout) : 2;
-    memset(&p, 0, sizeof(p));
-    p.tree = ".";
-    p.seconds = ETUDE_LEGACY_SECONDS;
-    p.out = stdout;
-    p.stop = &stop_signal;
-    p.goals = goals;
-    while ((opt = getopt(argc, argv, "t:a:n:w:o:s:b:")) != -1) {
-        if (opt == 'b' && p.ngoals < sizeof(goals) / sizeof(goals[0]))
-            goals[p.ngoals++] = optarg;
-        else if (opt == 't')
-            p.tree = optarg;
-        else if (opt == 'a')
-            p.arch = optarg;
-        else if (opt == 'n')
-            p.kernel = optarg;
-        else if (opt == 'w')
-            p.work = optarg;
-        else if (opt == 'o')
-            p.record = optarg;
-        else if (opt == 's' && (p.seconds = seconds_of(optarg)) != 0)
-            continue;
-        else
-            return 2;
-    }
-    if (strcmp(argv[0], "prepare") == 0 && optind == argc && p.ngoals > 0)
-        return etude_legacy_prepare(&p);
-    return 2;
 }
 
 /* ---- The fixture tree. ---- */
@@ -1074,7 +1013,7 @@ static int replaced(char *out, size_t size, const char *text, const char *from, 
 
 /** Write the program of the fixture's cases and their manifests under
  * cases/: `good`, `mixed` and `guest` in directories of their own, as
- * casecheck's verdict reads them, the families of one case in cases/one,
+ * `etude check verdict` reads them, the families of one case in cases/one,
  * the family `tooling` of one case with tooling memory, a machine and a
  * guest family with tooling memory beside it, and the refused ones of `bad`
  * and `badguest`; 0, or -1. */
@@ -1258,8 +1197,7 @@ static void opts_for(struct etude_legacy_set_opts *o, const struct run *r)
     o->tree = tree;
     o->arch = r->arch != NULL ? r->arch : "i686";
     o->kernel = r->kernel;
-    o->program = self;
-    o->casecheck = r->nojudge ? NULL : casecheck;
+    o->program = etude;
     o->members = r->members;
     o->nmembers = r->n;
     o->ledger = r->ledger != NULL ? r->ledger : ledger;
@@ -1471,7 +1409,7 @@ static int output_has(const struct run *r, const char *name, const char *line)
     return read_text(path, text, sizeof(text)) >= 0 && (line == NULL || has_line(text, line));
 }
 
-/** Say whether casecheck's results of the attempt of case member `tail`,
+/** Say whether the judge's results of the attempt of case member `tail`,
  * `CASE.rR`, of run `r` have the text `text`. */
 static int results_has(const struct run *r, const char *tail, const char *text)
 {
@@ -1537,7 +1475,7 @@ static int plan_has(const struct run *r, const char *text)
     return 0;
 }
 
-/** Run casecheck's verdict on the history of run `r` for suite `suite`,
+/** Run `etude check verdict` on the history of run `r` for suite `suite`,
  * with the manifests of the tree's directory `cases`, and give what it
  * printed in `out`; its status, or -1. */
 static int verdict(const struct run *r, const char *cases, const char *suite, char *out,
@@ -1556,7 +1494,7 @@ static int verdict(const struct run *r, const char *cases, const char *suite, ch
         fd = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd < 0 || dup2(fd, 1) < 0 || dup2(fd, 2) < 0)
             _exit(127);
-        execl(casecheck, "casecheck", "-s", schemas, "verdict", "-b", store, "-m", dir,
+        execl(etude, "etude", "check", "-s", schemas, "verdict", "-b", store, "-m", dir,
               r->arch != NULL ? r->arch : "i686", "fixture", suite, history, (char *)NULL);
         _exit(127);
     }
@@ -1612,7 +1550,7 @@ static void test_mixed(void)
         fix_format(line, sizeof(line), "run: %s: fixture.%s.one: starting", names[i], names[i]);
         CHECK(count_line(r.out, line) == 1, "mixed: one line of each case's start");
     }
-    CHECK(has_line(r.out, "etude-legacy: result: ran: 3 suites, 2 passed"), "mixed: the result");
+    CHECK(has_line(r.out, "etude run: result: ran: 3 suites, 2 passed"), "mixed: the result");
     show(&r, before);
 }
 
@@ -1817,7 +1755,7 @@ static void test_signal(void)
     at = line_start(r.out,
                     "run: hold: fixture.hold.one: stopped before its end; its output so far:");
     CHECK(at != NULL && has_line(at, "holding"), "signal: its output so far printed");
-    CHECK(has_line(r.out, "etude-legacy: result: stopped by signal 15"), "signal: the result");
+    CHECK(has_line(r.out, "etude run: result: stopped by signal 15"), "signal: the result");
     CHECK(r.claims == 0, "signal: the ledger has no claim");
     if (fails != before)
         printf("etude-legacyset-test: signal: the status record:\n%s", status);
@@ -1846,7 +1784,7 @@ static void test_prepare(void)
     CHECK(item_is(&r, "fixture.plain.one", "cancelled") &&
               item_is(&r, "fixture.fail.one", "cancelled"),
           "prepare: every item cancelled");
-    CHECK(has_start(r.out, "etude-legacy: result: preparation failed: "), "prepare: the result");
+    CHECK(has_start(r.out, "etude run: result: preparation failed: "), "prepare: the result");
     CHECK(r.claims == 0, "prepare: the ledger has no claim");
     show(&r, before);
 }
@@ -1909,7 +1847,7 @@ static void good_ran(struct run *r)
     CHECK(!kept(r, "fixture.good.pass.r0") && !kept(r, "fixture.good.tick.r0"),
           "scratch: removed after a pass");
     CHECK(results_has(r, "fixture.good.pass.r0", "\"report\":{\"state\":\"complete\""),
-          "cases: casecheck's results kept");
+          "cases: the judge's results kept");
     CHECK(has_line(r->out, "run: good: fixture.good.pass: starting") &&
               has_line(r->out, "run: good: fixture.good.pass r1: starting"),
           "cases: a line of each start");
@@ -1935,11 +1873,11 @@ static void test_cases(void)
     CHECK(count_kind(&r.h, "attempt") == 4, "cases: an attempt of each repetition of each case");
     good_ran(&r);
     CHECK(!recorded(&r, "build/x86_64/cases/probe"), "prepare: no program of another architecture");
-    CHECK(has_line(r.out, "etude-legacy: result: ran: 1 suites, 1 passed"), "cases: the result");
+    CHECK(has_line(r.out, "etude run: result: ran: 1 suites, 1 passed"), "cases: the result");
     CHECK(r.claims == 0, "cases: the ledger has no claim");
     CHECK(!r.leaks, "cases: the driver leaks nothing");
     CHECK(verdict(&r, "cases/good", "good", text, sizeof(text)) == 0 &&
-              has_line(text, "casecheck: result: passed"),
+              has_line(text, "etude check: result: passed"),
           "verdict: the run of passing cases passes");
     if (fails != before)
         printf("etude-legacyset-test: cases: the verdict:\n%s", text);
@@ -2010,7 +1948,7 @@ static void test_cases_mixed(void)
     CHECK(case_is(&r, "fixture.mixed.cut", "i686", 0, "incomplete", "etude.report is missing"),
           "casesmixed: a report with no end is incomplete");
     CHECK(results_has(&r, "fixture.mixed.cut.r0", "\"report\":{\"state\":\"truncated\""),
-          "casesmixed: casecheck's results of a report with no end");
+          "casesmixed: the judge's results of a report with no end");
     CHECK(case_is(&r, "fixture.mixed.slow", "i686", 0, "incomplete",
                   "it ran past its case bound of 3000 ms: "),
           "casesmixed: a case past its case bound is incomplete");
@@ -2024,12 +1962,11 @@ static void test_cases_mixed(void)
     fix_format(line, sizeof(line), "run: mixed: fixture.mixed.fail: evidence: %s/%s.%s", r.evidence,
                r.run_id, "fixture.mixed.fail.r0");
     CHECK(has_line(r.out, line), "scratch: a kept scratch directory named");
-    CHECK(has_line(r.out, "etude-legacy: result: ran: 1 suites, 0 passed"),
-          "casesmixed: the result");
+    CHECK(has_line(r.out, "etude run: result: ran: 1 suites, 0 passed"), "casesmixed: the result");
     CHECK(r.claims == 0, "casesmixed: the ledger has no claim");
     CHECK(!r.leaks, "casesmixed: the driver leaks nothing");
     CHECK(verdict(&r, "cases/mixed", "mixed", text, sizeof(text)) == 1 &&
-              has_line(text, "casecheck: result: failed: mixed"),
+              has_line(text, "etude check: result: failed: mixed"),
           "verdict: the suite of failing cases fails");
     if (fails != before)
         printf("etude-legacyset-test: casesmixed: the verdict:\n%s", text);
@@ -2070,7 +2007,7 @@ static void refused(struct run *r, const char *name, const char *row, const char
     r->name = name;
     set_run(r);
     CHECK(r->status == 2, row);
-    CHECK(has_start(r->out, "etude-legacy: result: refused: "), row);
+    CHECK(has_start(r->out, "etude run: result: refused: "), row);
     CHECK(why == NULL || strstr(r->out, why) != NULL, row);
     CHECK(!exists(r->results), row);
     show(r, before);
@@ -2109,8 +2046,7 @@ static void test_cases_refused(void)
          "fixture.badguest.one: the disk etude-guest is in no disk fixture"},
         {"badguest", "cases/badguest/forwards.json",
          "fixture.badguest.one: the case needs loop devices or host locks, which the set driver "
-         "does not give"},
-        {"good", "cases/good/good.json", "a suite run by its cases needs casecheck's path"}};
+         "does not give"}};
     static struct etude_legacy_member m[sizeof(rows) / sizeof(rows[0])];
     static struct run r[sizeof(rows) / sizeof(rows[0])];
     static char names[sizeof(rows) / sizeof(rows[0])][32];
@@ -2121,7 +2057,6 @@ static void test_cases_refused(void)
         m[i].cases = rows[i].cases;
         r[i].members = &m[i];
         r[i].n = 1;
-        r[i].nojudge = i == n - 1;
         fix_format(names[i], sizeof(names[i]), "caserefused%lu", (unsigned long)i);
         refused(&r[i], names[i], rows[i].why, rows[i].why);
     }
@@ -2241,7 +2176,7 @@ static void test_machine(void)
     CHECK(case_is(&r, "fixture.machine.lost", "i686", 0, "failure", NULL),
           "machine: a report cut short with status 1 fails");
     CHECK(case_is(&r, "fixture.machine.noconsole", "i686", 0, "incomplete",
-                  "etude.kernel is missing: casecheck attempt was given no console"),
+                  "etude.kernel is missing: etude check attempt was given no console"),
           "machine: no console is incomplete");
     fix_format(text, sizeof(text),
                "scenario: %s/build/cases/scenario %s/output/"
@@ -2824,19 +2759,17 @@ static int guest_site(void)
     return 0;
 }
 
-int main(int argc, char **argv)
+int main(void)
 {
     char held[32];
 
-    if (argc >= 2 && (strcmp(argv[1], "prepare") == 0 || strcmp(argv[1], "check") == 0))
-        return as_legacy(argc - 1, argv + 1);
     signal(SIGPIPE, SIG_IGN);
-    if (realpath(argv[0], self) == NULL || realpath("tools/etude/schemas", schemas) == NULL) {
-        printf("etude-legacyset-test: fail: this program or etude's schemas cannot be found\n");
+    if (realpath("tools/etude/schemas", schemas) == NULL) {
+        printf("etude-legacyset-test: fail: etude's schemas cannot be found\n");
         return 1;
     }
-    if (realpath("build/tools/etude/casecheck", casecheck) == NULL) {
-        printf("etude-legacyset-test: fail: build/tools/etude/casecheck is not built\n");
+    if (realpath("build/tools/etude/etude", etude) == NULL) {
+        printf("etude-legacyset-test: fail: build/tools/etude/etude is not built\n");
         return 1;
     }
     if (guest_site() != 0)

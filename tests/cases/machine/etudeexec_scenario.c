@@ -12,12 +12,12 @@
 
 /* The results etudeexec_guest.sh gives, each a line `etudeexec: NAME: ok`
  * when it passes; each is the assertion of its name. */
-static const char *const rows[] = {"built",   "reused",       "platform", "recipe",  "casecheck",
+static const char *const rows[] = {"built",   "reused",       "platform", "recipe",  "check",
                                    "history", "history-lost", "compile",  "executor"};
 
-/* The programs of etude's whose missing system calls the boot's trace names
- * with `(asked for by NAME)`. */
-static const char *const programs[] = {"execcheck", "casecheck", "history_check"};
+/* The programs whose missing system calls the boot's trace names with
+ * `(asked for by NAME)`: the executor's test and the version's etude. */
+static const char *const programs[] = {"execcheck", "etude"};
 
 /**
  * Read the first line of artifact `demo-password` into `buf` of `size` bytes,
@@ -164,9 +164,9 @@ static void build(struct lc *l, struct etude_case_machine *m, uint64_t *at)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const ids[] = {
-        "login",   "unpacked",     "built",   "reused",   "platform", "recipe", "casecheck",
-        "history", "history-lost", "compile", "executor", "enosys",   NULL};
+    static const char *const ids[] = {"login",    "unpacked", "built",   "reused",       "platform",
+                                      "recipe",   "check",    "history", "history-lost", "compile",
+                                      "executor", "enosys",   NULL};
     struct etude_case_machine *m;
     uint64_t at;
     struct lc l;

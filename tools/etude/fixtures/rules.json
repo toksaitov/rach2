@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "fixture.rules",
-  "summary": "Cases that each break one rule of casecheck",
+  "summary": "Cases that each break one rule of `etude check`",
   "cases": [
     {
       "case_id": "fixture.rules.scenario-source",

@@ -1,5 +1,5 @@
 /*
- * budget_run.c: history_budget, which forecasts a selection's charge from
+ * budget_run.c: `etude estimate`, which forecasts a selection's charge from
  * recorded costs, and checks the budget of a run from its records.
  */
 #include "budget.h"
@@ -9,8 +9,8 @@
 #include <string.h>
 
 static const char usage_text[] =
-    "usage: history_budget [-s SCHEMAS] forecast POLICY CLASS MANIFEST... [-- HISTORY...]\n"
-    "       history_budget [-s SCHEMAS] check POLICY RUN [MANIFEST...] -- HISTORY...\n";
+    "usage: etude estimate [-s SCHEMAS] forecast POLICY CLASS MANIFEST... [-- HISTORY...]\n"
+    "       etude estimate [-s SCHEMAS] check POLICY RUN [MANIFEST...] -- HISTORY...\n";
 
 /* What one invocation works with. */
 struct command {
@@ -62,18 +62,18 @@ static int load(struct command *c)
     int i;
 
     if (etude_budget_policy_read(c->schemas, c->policy_path, &c->policy, err, sizeof(err)) != 0) {
-        fprintf(stderr, "history_budget: %s\n", err);
+        fprintf(stderr, "etude estimate: %s\n", err);
         return -1;
     }
     c->manifests = calloc((size_t)c->manifest_count + 1, sizeof(*c->manifests));
     if (c->manifests == NULL) {
-        fprintf(stderr, "history_budget: out of memory\n");
+        fprintf(stderr, "etude estimate: out of memory\n");
         return -1;
     }
     for (i = 0; i < c->manifest_count; i++) {
         if (etude_budget_manifest_read(c->schemas, c->manifest_paths[i], &c->manifests[i], err,
                                        sizeof(err)) != 0) {
-            fprintf(stderr, "history_budget: %s\n", err);
+            fprintf(stderr, "etude estimate: %s\n", err);
             return -1;
         }
     }
@@ -90,7 +90,7 @@ static int print_report(const struct etude_budget_report *r, int agreed)
     if (r->lines.data != NULL) {
         fputs(r->lines.data, stdout);
     }
-    printf("history_budget: result: %s%s\n", etude_budget_verdict_name(r->verdict),
+    printf("etude estimate: result: %s%s\n", etude_budget_verdict_name(r->verdict),
            agreed ? "" : "; the run records another budget");
     return agreed && (r->verdict == ETUDE_BUDGET_PASS || r->verdict == ETUDE_BUDGET_EXEMPT) ? 0 : 1;
 }
@@ -104,12 +104,12 @@ static int forecast(struct command *c)
     int cls = etude_budget_class_of(c->subject), status;
 
     if (cls < 0) {
-        fprintf(stderr, "history_budget: %s: not a class of run\n", c->subject);
+        fprintf(stderr, "etude estimate: %s: not a class of run\n", c->subject);
         return 2;
     }
     if (etude_budget_forecast(&c->policy, (enum etude_budget_class)cls, &c->history, c->manifests,
                               (size_t)c->manifest_count, &f) != 0) {
-        fprintf(stderr, "history_budget: the forecast failed: out of memory\n");
+        fprintf(stderr, "etude estimate: the forecast failed: out of memory\n");
         etude_budget_report_free(&f.report);
         return 2;
     }
@@ -135,7 +135,7 @@ static int check(struct command *c)
 
     if (etude_budget_judge(&c->history, &c->policy, c->subject, c->manifests,
                            (size_t)c->manifest_count, &j) != 0) {
-        fprintf(stderr, "history_budget: %s\n", j.error);
+        fprintf(stderr, "etude estimate: %s\n", j.error);
         etude_budget_report_free(&j.report);
         return 2;
     }
@@ -153,7 +153,7 @@ static int check(struct command *c)
 }
 
 /**
- * Run history_budget, as usage_text gives it. `forecast` forecasts the
+ * Run `etude estimate`, as usage_text gives it. `forecast` forecasts the
  * charge of a run of CLASS that selects every case of the manifests, from
  * the costs the histories record on the policy's site. `check` judges the
  * budget of run RUN from its records, and, with the manifests of its cases,

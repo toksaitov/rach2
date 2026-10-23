@@ -17,8 +17,10 @@ sh "$repo/tests/run" inventory > "$work/inventory"
 cmp "$repo/tests/system/suites.md" "$work/inventory"
 echo 'win-run-smoke: inventory passed'
 
-mkdir -p "$work/tree's path/build" "$work/tree's path/tools/etude/win"
-for file in hold.h etude_hold.c win/hold.c win/winfmt.c win/winfmt.h; do
+mkdir -p "$work/tree's path/build" "$work/tree's path/tools/etude/win" \
+    "$work/tree's path/tools/etude/include/etude"
+for file in etude.c verbs.h lock_tree.c hold.h lock_ports.c portlock.c include/etude/portlock.h \
+    win/hold.c win/winfmt.c win/winfmt.h; do
     cp "$repo/tools/etude/$file" "$work/tree's path/tools/etude/$file"
 done
 cat > "$work/tree's path/check.sh" <<'SCRIPT'
@@ -51,8 +53,9 @@ tree="$work/run's path"
 mkdir -p "$tree/tests/cases" "$tree/tools/setup" "$tree/tools/etude/win" \
     "$tree/tools/etude/include/etude" "$work/bin"
 cp "$repo/tests/run" "$tree/tests/"
-for file in hold.h hold.sh etude_hold.c etude_ports.c portlock.c include/etude/portlock.h \
-    win/hold.c win/winfmt.c win/winfmt.h collection-windows.sh collection_tools.py; do
+for file in etude.c verbs.h lock_tree.c hold.h hold.sh lock_ports.c portlock.c \
+    include/etude/portlock.h win/hold.c win/winfmt.c win/winfmt.h collection-windows.sh \
+    collection_tools.py; do
     cp "$repo/tools/etude/$file" "$tree/tools/etude/$file"
 done
 for file in hostcheck.c e2fsprogs_path.sh ovmf_path.sh space.sh; do

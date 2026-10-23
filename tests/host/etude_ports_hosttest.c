@@ -1,6 +1,7 @@
 /**
- * Check etude-ports against the host lock and the port blocks of the old
- * runner's protocol, and against a stand-in for an older checkout's claim.
+ * Check `etude lock ports` against the host lock and the port blocks of the
+ * old runner's protocol, and against a stand-in for an older checkout's
+ * claim.
  * host-deps: tools/etude/portlock.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  */
@@ -17,9 +18,8 @@
 
 #include "compat/fixdir_host.c"
 
-#define main ports_main
-#include "../../tools/etude/etude_ports.c"
-#undef main
+#include "verbs.h"
+#include "../../tools/etude/lock_ports.c"
 
 /* The stand-in for an older checkout's claim, from the root of the tree. */
 #define STAND_IN "tests/system/fixtures/old_ports.py"
@@ -28,12 +28,12 @@
 #define WATCH_MS 600
 
 static int fails;
-#define CHECK(c, row)                                                     \
-    do {                                                                  \
-        if (!(c)) {                                                       \
-            fprintf(stderr, "etude-ports-test: fail: %s: %s\n", row, #c); \
-            fails++;                                                      \
-        }                                                                 \
+#define CHECK(c, row)                                                          \
+    do {                                                                       \
+        if (!(c)) {                                                            \
+            fprintf(stderr, "etude-lock-ports-test: fail: %s: %s\n", row, #c); \
+            fails++;                                                           \
+        }                                                                      \
     } while (0)
 
 /* The fixture processes this test has started and not yet reaped. */
@@ -296,7 +296,7 @@ static pid_t launch(const struct run *r)
     snprintf(name, sizeof(name), "%s.err", r->name);
     pid = fork();
     if (pid == 0) {
-        char *argv[] = {"etude-ports", (char *)dir, count, "/bin/sh", "-c", script, NULL};
+        char *argv[] = {"etude", (char *)dir, count, "/bin/sh", "-c", script, NULL};
         close_releases();
         signal(SIGTERM, SIG_DFL);
         signal(SIGINT, SIG_DFL);
@@ -320,7 +320,7 @@ static pid_t launch(const struct run *r)
                    (char *)NULL);
             _exit(126);
         }
-        _exit(ports_main(6, argv));
+        _exit(etude_lock_ports_main(6, argv));
     }
     if (pid > 0)
         remember(pid);
@@ -405,7 +405,7 @@ static void blocks(void)
     CHECK(runs("a") && strcmp(seen("a", buf, sizeof(buf)), "1000 unset\n") == 0,
           "lowest free block");
     CHECK(locked_by(fix_dir(), "rach2-ports.1", F_WRLCK) == (long)pa, "block kept while running");
-    CHECK(said("a", "etude-ports: ports: block 1, 1000 above the table's"), "lowest free block");
+    CHECK(said("a", "etude lock: ports: block 1, 1000 above the table's"), "lowest free block");
     let_go(&h);
     pb = launch(&b);
     CHECK(runs("b") && strcmp(seen("b", buf, sizeof(buf)), "0 unset\n") == 0, "lowest free block");
@@ -443,7 +443,7 @@ static void alone(void)
     slurp("claim.wait", buf, sizeof(buf));
     CHECK(strncmp(buf, "reason host\nsince ", 18) == 0 && strstr(buf, want) != NULL,
           "wait recorded");
-    CHECK(said("e", "etude-ports: host: waiting for the runs in progress to end"),
+    CHECK(said("e", "etude lock: host: waiting for the runs in progress to end"),
           "alone excludes shared");
     let_go(&h);
     starts("e");
@@ -478,7 +478,7 @@ static void order(void)
     nap_ms(WATCH_MS / 2);
     pj = launch(&j);
     CHECK(waits("i") && !runs("j"), "alone waits ahead of later shared");
-    CHECK(said("j", "etude-ports: host: waiting for a run that needs the host alone"),
+    CHECK(said("j", "etude lock: host: waiting for a run that needs the host alone"),
           "alone waits ahead of later shared");
     /* A j that went ahead holds the host lock that i needs. */
     if (started("j"))
@@ -524,7 +524,7 @@ static void stops_wait(void)
           "wait recorded");
     nap_ms(1200);
     CHECK(strcmp(slurp("claim.wait", again, sizeof(again)), first) == 0, "wait recorded");
-    CHECK(said("n", "etude-ports: ports: every block is held by another run; waiting"),
+    CHECK(said("n", "etude lock: ports: every block is held by another run; waiting"),
           "stop during the wait");
     kill(pn, SIGTERM);
     st = reap(pn);
@@ -556,7 +556,7 @@ static int status_of(int argc, char **argv, const char *host)
             setenv("RACH2_HOST_LOCK", host, 1);
         else
             unsetenv("RACH2_HOST_LOCK");
-        _exit(ports_main(argc, argv));
+        _exit(etude_lock_ports_main(argc, argv));
     }
     if (pid > 0)
         remember(pid);
@@ -568,12 +568,12 @@ static int status_of(int argc, char **argv, const char *host)
 static void refusals(void)
 {
     char dir[4096], bad[4096], path[4096], target[4096];
-    char *good[] = {"etude-ports", dir, "1", "true", NULL};
-    char *none[] = {"etude-ports", dir, "0", "true", NULL};
-    char *many[] = {"etude-ports", dir, "11", "true", NULL};
-    char *word[] = {"etude-ports", dir, "1x", "true", NULL};
-    char *lost[] = {"etude-ports", dir, "1", "/nonexistent/command", NULL};
-    char *odd[] = {"etude-ports", bad, "1", "true", NULL};
+    char *good[] = {"etude", dir, "1", "true", NULL};
+    char *none[] = {"etude", dir, "0", "true", NULL};
+    char *many[] = {"etude", dir, "11", "true", NULL};
+    char *word[] = {"etude", dir, "1x", "true", NULL};
+    char *lost[] = {"etude", dir, "1", "/nonexistent/command", NULL};
+    char *odd[] = {"etude", bad, "1", "true", NULL};
 
     in(dir, fix_dir(), "refusals");
     in(bad, fix_dir(), "bad");
@@ -653,7 +653,7 @@ int main(void)
     old_checkout();
     if (!fails) {
         fix_passed();
-        printf("etude-ports-test: pass\n");
+        printf("etude-lock-ports-test: pass\n");
     }
     return fails != 0;
 }

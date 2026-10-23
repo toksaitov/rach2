@@ -90,7 +90,7 @@ def rows(reader, helper, root):
     path = ports / "rach2-ports.0"
     with command([sys.executable, "-c", lock_script, str(path), "write"]) as holder:
         assert holder.stdout.readline() == b"ready\n"
-        with command([helper, str(ports), "1", "true"], env) as waiter:
+        with command([helper, "lock", "ports", str(ports), "1", "true"], env) as waiter:
             until(claim.exists, [waiter])
             before = claim.read_text()
             output = report()
@@ -108,7 +108,7 @@ def rows(reader, helper, root):
         with command([sys.executable, "-c", lock_script, str(path), kind]) as holder:
             assert holder.stdout.readline() == b"ready\n"
             host_env = dict(env, RACH2_HOST_LOCK=mode)
-            with command([helper, str(ports), "1", "true"], host_env) as waiter:
+            with command([helper, "lock", "ports", str(ports), "1", "true"], host_env) as waiter:
                 until(claim.exists, [waiter])
                 output = report()
                 assert "waits for host since " in output and str(path) in output, output
@@ -123,7 +123,7 @@ def rows(reader, helper, root):
         assert a.stdout.readline() == b"ready\n"
         with command([sys.executable, "-c", lock_script, str(path), "read"]) as b:
             assert b.stdout.readline() == b"ready\n"
-            with command([helper, str(ports), "1", "true"],
+            with command([helper, "lock", "ports", str(ports), "1", "true"],
                          dict(env, RACH2_HOST_LOCK="alone")) as waiter:
                 until(claim.exists, [waiter])
                 output = report()
@@ -175,7 +175,8 @@ def stop(signum, frame):
 
 def main():
     """Run the rows against a private copy of the tree's reader; usage:
-    test_status_test.py HELPER, HELPER being the built etude-ports."""
+    test_status_test.py HELPER, HELPER being an etude built with its `lock`
+    verb, whose `lock ports` claims the host lock and a port block."""
     if len(sys.argv) != 2:
         sys.exit("test-status-test: usage: test_status_test.py HELPER")
     source = Path(__file__).resolve().parents[2] / "tools/flow/test_status.py"

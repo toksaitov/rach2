@@ -1,21 +1,23 @@
 #!/bin/sh
 #
-# deploy.sh: make a machine ready to run etude: check its prerequisites and
-# install those this account may, build etude there, prepare the ledger of
-# its resource claims, and record what the machine can do. Running it again,
+# provision_machine.sh: `etude provision machine`, which makes a machine
+# ready to run etude: it checks the machine's prerequisites and installs
+# those this account may, builds etude there, prepares the ledger of its
+# resource claims, and records what the machine can do. Running it again,
 # after a deployment that finished or one that was cut short, changes only
 # what the first left undone.
 #
-# Usage: sh tools/etude/deploy.sh [-n] [-r REV] [-c CC] [-C CACHE] [-S STATE]
+# Usage: etude provision machine [-n] [-r REV] [-c CC] [-C CACHE] [-S STATE]
 #            [-L LEDGER] [-w] HOST
-#        sh tools/etude/deploy.sh [-n] [-r REV] [-c CC] [-C CACHE] [-S STATE]
+#        etude provision machine [-n] [-r REV] [-c CC] [-C CACHE] [-S STATE]
 #            [-L LEDGER] -l
 #
-# HOST is a destination of ssh(1), a Windows machine with -w, and -l deploys
-# on this machine. -n checks the prerequisites and installs none. -r, -c and
-# -C are version.sh's. STATE is the directory of the machine's record and
-# LEDGER the ledger's, each a path on the machine, by default the platform's
-# (tools/etude/Readme.md, The machine record).
+# etude runs it from the root of the tree; sh runs it alone the same way. HOST
+# is a destination of ssh(1), a Windows machine with -w, and -l deploys on this
+# machine. -n checks the prerequisites and installs none. -r, -c and -C are
+# those of `etude provision version`. STATE is the directory of the machine's
+# record and LEDGER the ledger's, each a path on the machine, by default the
+# platform's (tools/etude/Readme.md, The machine record).
 #
 # Deployment creates no account or key, changes no clone, deletes nothing of
 # the machine's, writes no raw disk, restarts nothing and stops no test. The
@@ -23,8 +25,8 @@
 # machine, removed afterwards, and through PowerShell for Windows. A ledger
 # is made where it is missing, and files that exist in it are never written.
 #
-# It prints the steps and their output, and last `etude-deploy: result:
-# deployed KEY` or `etude-deploy: result: incomplete: WHY`. Exit 0 when the
+# It prints the steps and their output, and last `etude provision: result:
+# deployed KEY` or `etude provision: result: incomplete: WHY`. Exit 0 when the
 # machine is deployed and has every prerequisite, 1 when something is left
 # undone, 2 on a usage error.
 #
@@ -32,7 +34,7 @@ set -u
 
 usage()
 {
-    echo 'usage: deploy.sh [-n] [-r REV] [-c CC] [-C CACHE] [-S STATE] [-L LEDGER] [-w] HOST | -l' >&2
+    echo 'usage: etude provision machine [-n] [-r REV] [-c CC] [-C CACHE] [-S STATE] [-L LEDGER] [-w] HOST | -l' >&2
     exit 2
 }
 
@@ -76,12 +78,12 @@ trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-deploy.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-provision.XXXXXX") || exit 1
 
 # incomplete WHY: report the deployment unfinished and exit 1.
 incomplete()
 {
-    echo "etude-deploy: result: incomplete: $*"
+    echo "etude provision: result: incomplete: $*"
     exit 1
 }
 
@@ -92,7 +94,7 @@ quote()
 }
 
 # machine_sh: run the script on standard input with the machine's POSIX sh,
-# as version.sh does.
+# as provision_version.sh does.
 machine_sh()
 {
     if [ "$mode" = local ]; then
@@ -105,13 +107,13 @@ machine_sh()
 }
 
 nonce=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
-[ "${#nonce}" -eq 16 ] || { echo 'etude-deploy: cannot read /dev/urandom' >&2; exit 1; }
+[ "${#nonce}" -eq 16 ] || { echo 'etude provision: cannot read /dev/urandom' >&2; exit 1; }
 end=@etude-$nonce
 
 # The prerequisites. A POSIX machine gets prereq.sh and the files its probes
 # and install lines read, each the body of a quoted here-document, and runs
 # them in a scratch tree, since a probe runs in the tree's root.
-echo "etude-deploy: prerequisites of $host"
+echo "etude provision: prerequisites of $host"
 if [ "$windows" = 1 ]; then
     RACH2_PREREQ_POWERSHELL="ssh -T -o BatchMode=yes -- $host powershell -NoProfile -NonInteractive -EncodedCommand"
     export RACH2_PREREQ_POWERSHELL
@@ -131,8 +133,8 @@ else
         echo "    trap 'exit 143' TERM"
         echo '    mkdir -p "$d/tools/setup" || return 2'
         for f in prereq.sh prereqs e2fsprogs_path.sh ovmf_path.sh elfwrap.sh; do
-            [ -z "$(tail -c 1 "$tree/tools/setup/$f")" ] || { echo "etude-deploy: $f: the last line has no newline" >&2; exit 1; }
-            ! grep -qx -- "$end" "$tree/tools/setup/$f" || { echo "etude-deploy: $f: a line is $end" >&2; exit 1; }
+            [ -z "$(tail -c 1 "$tree/tools/setup/$f")" ] || { echo "etude provision: $f: the last line has no newline" >&2; exit 1; }
+            ! grep -qx -- "$end" "$tree/tools/setup/$f" || { echo "etude provision: $f: a line is $end" >&2; exit 1; }
             echo "    cat > \"\$d/tools/setup/$f\" <<'$end' || return 2"
             cat "$tree/tools/setup/$f"
             echo "$end"
@@ -150,7 +152,7 @@ case $prereq in
     *) incomplete "the prerequisites of $host were not checked: status $prereq" ;;
 esac
 
-echo "etude-deploy: etude on $host"
+echo "etude provision: etude on $host"
 set --
 [ -z "$rev" ] || set -- "$@" -r "$rev"
 [ -z "$cc" ] || set -- "$@" -c "$cc"
@@ -162,11 +164,11 @@ elif [ "$windows" = 1 ]; then
 else
     set -- "$@" "$host"
 fi
-sh "$here/version.sh" "$@" > "$work/version" || incomplete "etude was not built on $host"
+sh "$here/provision_version.sh" "$@" > "$work/version" || incomplete "etude was not built on $host"
 cat "$work/version"
-key=$(sed -n 's/^etude-version: result: [a-z]* \([0-9a-f]*\) .*/\1/p' "$work/version")
-dir=$(sed -n 's/^etude-version: result: [a-z]* [0-9a-f]* //p' "$work/version")
-[ -n "$key" ] && [ -n "$dir" ] || incomplete "version.sh gave no version"
+key=$(sed -n 's/^etude provision: result: [a-z]* \([0-9a-f]*\) .*/\1/p' "$work/version")
+dir=$(sed -n 's/^etude provision: result: [a-z]* [0-9a-f]* //p' "$work/version")
+[ -n "$key" ] && [ -n "$dir" ] || incomplete "etude provision version gave no version"
 
 if [ -n "$rev" ]; then
     git -C "$tree" show "$rev:tools/etude/ledger.c" > "$work/ledger.c" || exit 1
@@ -174,13 +176,13 @@ else
     cp "$tree/tools/etude/ledger.c" "$work/ledger.c" || exit 1
 fi
 admission=$(sed -n 's/^#define LEDGER_MAGIC "\(.*\)"$/\1/p' "$work/ledger.c")
-[ -n "$admission" ] || { echo 'etude-deploy: ledger.c gives no format' >&2; exit 1; }
+[ -n "$admission" ] || { echo 'etude provision: ledger.c gives no format' >&2; exit 1; }
 whpx=0
 ! grep -q '^  \[PASS\]  *whpx$' "$work/prereq" || whpx=1
 
 # The record and the ledger, by a script that, as bootstrap.sh's, defines
 # functions until its last line.
-echo "etude-deploy: the machine record of $host"
+echo "etude provision: the machine record of $host"
 {
     echo "ETUDE_NONCE=$nonce"
     echo "ETUDE_STATE=$(quote "$state")"
@@ -199,7 +201,7 @@ echo "etude-deploy: the machine record of $host"
 # deploy_fail WHAT: report WHAT on stderr and end with status 1.
 deploy_fail()
 {
-    printf 'etude-deploy: %s\n' "$*" >&2
+    printf 'etude provision: %s\n' "$*" >&2
     exit 1
 }
 
@@ -332,7 +334,7 @@ deploy_cleanup()
 
 # deploy_main: prepare the ledger, and write the machine's record when it
 # differs from the one there, so that a deployment that changes nothing
-# writes nothing. Prints `@etude-deploy NONCE recorded|unchanged
+# writes nothing. Prints `@etude-provision NONCE recorded|unchanged
 # PATH`.
 deploy_main()
 {
@@ -376,14 +378,14 @@ admission $ETUDE_ADMISSION
 ledger $shown
 version $ETUDE_KEY $ETUDE_DIR"
     if [ -f "$root/machine" ] && [ "$(cat "$root/machine")" = "$record" ]; then
-        echo "@etude-deploy $ETUDE_NONCE unchanged $root/machine"
+        echo "@etude-provision $ETUDE_NONCE unchanged $root/machine"
         return
     fi
     tmp=$(mktemp "$root/machine.XXXXXX") || deploy_fail "cannot write in $root"
     printf '%s\n' "$record" > "$tmp" || deploy_fail "cannot write the record in $root"
     mv -f "$tmp" "$root/machine" || deploy_fail "cannot write $root/machine"
     tmp=
-    echo "@etude-deploy $ETUDE_NONCE recorded $root/machine"
+    echo "@etude-provision $ETUDE_NONCE recorded $root/machine"
 }
 
 deploy_main < /dev/null
@@ -391,12 +393,12 @@ EOF
 } > "$work/machine.sh" || exit 1
 machine_sh < "$work/machine.sh" > "$work/machine"
 status=$?
-grep -v "^@etude-deploy $nonce " "$work/machine" >&2
-result=$(sed -n "s/^@etude-deploy $nonce //p" "$work/machine")
+grep -v "^@etude-provision $nonce " "$work/machine" >&2
+result=$(sed -n "s/^@etude-provision $nonce //p" "$work/machine")
 [ "$status" -eq 0 ] || incomplete "the record of $host was not written: status $status"
 case $result in
-    recorded\ *|unchanged\ *) echo "etude-deploy: machine: $result" ;;
+    recorded\ *|unchanged\ *) echo "etude provision: machine: $result" ;;
     *) incomplete "the machine gave no record" ;;
 esac
 [ "$prereq" = 0 ] || incomplete "$key is deployed on $host, and a prerequisite is missing"
-echo "etude-deploy: result: deployed $key"
+echo "etude provision: result: deployed $key"

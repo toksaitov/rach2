@@ -780,7 +780,7 @@ static int check_keywords(struct checker *c, const struct json *s, const struct 
             }
         }
         if (k == sizeof KEYWORDS / sizeof KEYWORDS[0]) {
-            bad += fault(c, v, 0, "the schema uses %s, which casecheck does not read",
+            bad += fault(c, v, 0, "the schema uses %s, which etude check does not read",
                          s->item[i]->name);
         }
     }

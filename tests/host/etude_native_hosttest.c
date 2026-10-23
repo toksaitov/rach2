@@ -1,15 +1,15 @@
 /**
- * Check etude-native (tools/etude/posix/etude_native.c) running the TinyCC
- * build of tests/native/tccbuild.sh through `etude-guest --stdio`
+ * Check `etude run native` (tools/etude/posix/run_native.c) running the
+ * TinyCC build of tests/native/tccbuild.sh through `etude-guest --stdio`
  * (tools/etude/guest/guest.c) over the controller's side of remote
- * execution (tools/etude/posix/remote.c). This program is etude-native, run
- * with `--native`; etude-guest, run with `--guest`; and the transport
- * between them, run with `--relay`, which passes the frames on and, on the
- * first connection of a row, cuts the connection, holds it open on the
- * machine's side, or kills etude-guest. The build's compiler is the host's
- * cc, which tccbuild.sh takes from TCC.
+ * execution (tools/etude/posix/remote.c). This program is `etude run
+ * native`, run with `--native`; etude-guest, run with `--guest`; and the
+ * transport between them, run with `--relay`, which passes the frames on
+ * and, on the first connection of a row, cuts the connection, holds it open
+ * on the machine's side, or kills etude-guest. The build's compiler is the
+ * host's cc, which tccbuild.sh takes from TCC.
  *
- * host-deps: tools/etude/posix/etude_native.c tools/etude/posix/remote.c
+ * host-deps: tools/etude/posix/run_native.c tools/etude/posix/remote.c
  * host-deps: tools/etude/posix/process.c tools/etude/json.c
  * host-deps: tools/etude/guest/guest.c tools/etude/guest/fixture.c
  * host-deps: tools/etude/guest/wire.c tools/etude/history_json.c
@@ -31,7 +31,7 @@
  * end recorded as lost, with its cleanup confirmed by the next etude-guest
  * once the build's processes have ended. In every row the cleanup is
  * confirmed, and the test waits until every process of the case, of
- * etude-guest and of the transport has ended after etude-native.
+ * etude-guest and of the transport has ended after `etude run native`.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -57,12 +57,13 @@ int etude_native_main(int argc, char **argv);
 static int fails;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
-#define CHECK(cond, row)                                                                          \
-    do {                                                                                          \
-        if (!(cond)) {                                                                            \
-            printf("etude-native-test: fail: %s:%d: %s: %s\n", __FILE__, __LINE__, (row), #cond); \
-            fails++;                                                                              \
-        }                                                                                         \
+#define CHECK(cond, row)                                                                      \
+    do {                                                                                      \
+        if (!(cond)) {                                                                        \
+            printf("etude-run-native-test: fail: %s:%d: %s: %s\n", __FILE__, __LINE__, (row), \
+                   #cond);                                                                    \
+            fails++;                                                                          \
+        }                                                                                     \
     } while (0)
 
 /* The case's script, from the root of the tree. */
@@ -324,17 +325,17 @@ static int relay_main(const char *mode, const char *marker, char **argv)
 
 /* ---- The rows. ---- */
 
-/* One row: a run of etude-native through the relay. */
+/* One row: a run of `etude run native` through the relay. */
 struct row {
     const char *name;   /* the row, and its run's identity */
     const char *mode;   /* the relay's fault */
     const char *build;  /* tccbuild.sh's argument */
-    const char *cancel; /* etude-native's -x, or NULL */
+    const char *cancel; /* the command's -x, or NULL */
 };
 
 /* What a row gave. */
 struct outcome {
-    int status;           /* etude-native's exit status, or -1 */
+    int status;           /* the command's exit status, or -1 */
     char out[1 << 16];    /* what it printed on its standard output */
     char err[1 << 16];    /* and on its standard error */
     char result[1024];    /* its result line */
@@ -364,9 +365,9 @@ static void group_gone(long pgid)
 }
 
 /**
- * Run etude-native for row `w` as the leader of a process group of its own,
- * which the relays, the etude-guests and the holders join, and fill `o`; then
- * wait until neither that group nor the case's group has a process left.
+ * Run `etude run native` for row `w` as the leader of a process group of its
+ * own, which the relays, the etude-guests and the holders join, and fill `o`;
+ * then wait until neither that group nor the case's group has a process left.
  */
 static void run_row(const struct row *w, struct outcome *o)
 {
@@ -445,14 +446,14 @@ static void run_row(const struct row *w, struct outcome *o)
     group_gone(pid);
     slurp(outp, o->out, sizeof(o->out));
     slurp(errp, o->err, sizeof(o->err));
-    p = strstr(o->out, "etude-native: result: ");
+    p = strstr(o->out, "etude run: result: ");
     if (p != NULL)
         snprintf(o->result, sizeof(o->result), "%.*s", (int)strcspn(p, "\n"), p);
     p = strstr(o->result, "; process ");
     if (p != NULL)
         o->process = atol(p + 10);
     group_gone(o->process);
-    printf("etude-native-test: %s: status %d: %s\n", w->name, o->status, o->result);
+    printf("etude-run-native-test: %s: status %d: %s\n", w->name, o->status, o->result);
 }
 
 /** Say whether the row's result line has `text`. */
@@ -554,8 +555,8 @@ static void test_rows(void)
         rows[i].check(&o);
         CHECK(o.process > 0, "the result names the case's process");
         if (fails != before) {
-            printf("etude-native-test: %s: its output:\n%s", rows[i].w.name, o.out);
-            printf("etude-native-test: %s: its error output:\n%s", rows[i].w.name, o.err);
+            printf("etude-run-native-test: %s: its output:\n%s", rows[i].w.name, o.out);
+            printf("etude-run-native-test: %s: its error output:\n%s", rows[i].w.name, o.err);
         }
     }
 }
@@ -576,11 +577,11 @@ int main(int argc, char **argv)
     if (argc >= 2 && strcmp(argv[1], "--native") == 0)
         return etude_native_main(argc - 1, argv + 1);
     if (realpath(argv[0], self) == NULL) {
-        printf("etude-native-test: fail: %s cannot be found\n", argv[0]);
+        printf("etude-run-native-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
     if (!exists(CASE_SCRIPT)) {
-        printf("etude-native-test: fail: %s is not here; run from the root of the tree\n",
+        printf("etude-run-native-test: fail: %s is not here; run from the root of the tree\n",
                CASE_SCRIPT);
         return 1;
     }

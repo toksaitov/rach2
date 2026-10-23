@@ -1,5 +1,5 @@
 /*
- * hold.h: the system half of etude-hold, which etude_hold.c calls and
+ * hold.h: the system half of `etude lock tree`, which lock_tree.c calls and
  * posix/hold.c and win/hold.c give: the processes, the record lock, the
  * files of the lock's directory, and the command run under the hold.
  */

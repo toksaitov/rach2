@@ -45,7 +45,7 @@ extern char **environ;
 #define TAIL_BYTES 8192
 
 /* The first line of a record. */
-#define RECORD_HEAD "etude-legacy 1"
+#define RECORD_HEAD "etude-prepare 1"
 
 /* A build step's output, and its errors, go to the log $1. */
 static const char script_log[] = "exec >\"$1\" 2>&1; shift; exec \"$@\"";
@@ -183,7 +183,7 @@ static int refuse(struct prep *p, const char *fmt, ...)
 {
     va_list ap;
 
-    fprintf(p->out, "etude-legacy: result: refused: ");
+    fprintf(p->out, "etude prepare: result: refused: ");
     va_start(ap, fmt);
     vfprintf(p->out, fmt, ap);
     va_end(ap);
@@ -213,7 +213,7 @@ static int failed(struct prep *p, const char *fmt, ...)
 /** Report an error of the system and give the status 2. */
 static int sys_error(struct prep *p, const char *what, int err)
 {
-    fprintf(p->out, "etude-legacy: result: error: %s: %s\n", what, strerror(err));
+    fprintf(p->out, "etude prepare: result: error: %s: %s\n", what, strerror(err));
     return 2;
 }
 
@@ -477,7 +477,7 @@ static char **step_argv(const struct step *s, const char *log)
     argv[k++] = (char *)ETUDE_SHELL;
     argv[k++] = "-c";
     argv[k++] = (char *)s->script;
-    argv[k++] = "etude-legacy";
+    argv[k++] = "etude";
     argv[k++] = (char *)log;
     for (i = 0; i < n; i++)
         argv[k++] = s->cmd[i];
@@ -567,7 +567,7 @@ static int judge(struct prep *p, struct step *s, const struct etude_exec_result 
              r->cleanup == ETUDE_CLEANUP_CONFIRMED && r->out.total == r->out.kept;
 
     if (ended == ENDED_STOP) {
-        fprintf(p->out, "etude-legacy: step: %s: stopped by signal %d\n", s->name,
+        fprintf(p->out, "etude prepare: step: %s: stopped by signal %d\n", s->name,
                 (int)*p->o->stop);
         return 128 + (int)*p->o->stop;
     }
@@ -578,7 +578,7 @@ static int judge(struct prep *p, struct step *s, const struct etude_exec_result 
     if (ok)
         return 0;
     describe(p, r, ended, why, sizeof(why));
-    fprintf(p->out, "etude-legacy: step: %s: failed: %s; see %s\n", s->name, why, log);
+    fprintf(p->out, "etude prepare: step: %s: failed: %s; see %s\n", s->name, why, log);
     if (r->err.kept > 0)
         fprintf(p->out, "    | %s%s", r->err.data,
                 r->err.data[r->err.kept - 1] == '\n' ? "" : "\n");
@@ -610,7 +610,7 @@ static int run_step(struct prep *p, struct step *s)
         free(log);
         return 128 + (int)*p->o->stop;
     }
-    fprintf(p->out, "etude-legacy: step: %s\n", s->name);
+    fprintf(p->out, "etude prepare: step: %s\n", s->name);
     fflush(p->out);
     memset(&spec, 0, sizeof(spec));
     spec.attempt_id = s->name;
@@ -793,7 +793,7 @@ static int hash_artifacts(struct prep *p, FILE *f)
             fprintf(f, "file %s %llu %llu %lld %s\n", hex, (unsigned long long)st.st_size,
                     (unsigned long long)st.st_ino, mtime_ns(&st), p->required.v[i]);
         } else if (errno != EISDIR) {
-            fprintf(p->out, "etude-legacy: missing: %s: %s\n", p->required.v[i],
+            fprintf(p->out, "etude prepare: missing: %s: %s\n", p->required.v[i],
                     errno == EINVAL ? "not a regular file" : strerror(errno));
             missing++;
         }
@@ -801,7 +801,7 @@ static int hash_artifacts(struct prep *p, FILE *f)
     }
     free(cache);
     if (stopped(p)) {
-        fprintf(p->out, "etude-legacy: artifacts: stopped by signal %d\n", (int)*p->o->stop);
+        fprintf(p->out, "etude prepare: artifacts: stopped by signal %d\n", (int)*p->o->stop);
         return 128 + (int)*p->o->stop;
     }
     return missing == 0 ? 0
@@ -943,9 +943,9 @@ static void release(struct prep *p, int keep)
     if (p->ex != NULL)
         etude_exec_free(p->ex);
     if (p->work != NULL && keep)
-        fprintf(p->out, "etude-legacy: evidence: %s\n", p->work);
+        fprintf(p->out, "etude prepare: evidence: %s\n", p->work);
     else if (p->work != NULL && remove_tree(p->work) != 0)
-        fprintf(p->out, "etude-legacy: %s: not removed\n", p->work);
+        fprintf(p->out, "etude prepare: %s: not removed\n", p->work);
     fflush(p->out);
     for (i = 0; p->env != NULL && p->env[i] != NULL; i++)
         free(p->env[i]);
@@ -956,13 +956,13 @@ static void release(struct prep *p, int keep)
 static void conclude(struct prep *p, int status)
 {
     if (status == 0)
-        fprintf(p->out, "etude-legacy: result: prepared: %lu goals, %lu files\n",
+        fprintf(p->out, "etude prepare: result: prepared: %lu goals, %lu files\n",
                 (unsigned long)p->o->ngoals, (unsigned long)p->files);
     else if (status == 1)
-        fprintf(p->out, "etude-legacy: result: failed: %s\n",
+        fprintf(p->out, "etude prepare: result: failed: %s\n",
                 p->why != NULL ? p->why : "memory ran out");
     else if (status > 128)
-        fprintf(p->out, "etude-legacy: result: stopped by signal %d\n", status - 128);
+        fprintf(p->out, "etude prepare: result: stopped by signal %d\n", status - 128);
     release(p, status == 1);
 }
 
@@ -976,8 +976,8 @@ int etude_legacy_prepare(const struct etude_legacy_opts *o)
     p.out = o->out != NULL ? o->out : stdout;
     status = admit(&p);
     if (status == 0) {
-        fprintf(p.out, "etude-legacy: preparing %lu goals for %s in %s\n", (unsigned long)o->ngoals,
-                p.arch_var + 5, p.tree);
+        fprintf(p.out, "etude prepare: preparing %lu goals for %s in %s\n",
+                (unsigned long)o->ngoals, p.arch_var + 5, p.tree);
         status = open_work(&p);
     }
     if (status == 0)
@@ -1037,7 +1037,7 @@ static int compare(const char *tree, const struct entry *e, int digests, FILE *o
     free(path);
     free(cache);
     if (r != 0) {
-        fprintf(out, "etude-legacy: missing: %s: %s\n", e->path,
+        fprintf(out, "etude check: missing: %s: %s\n", e->path,
                 errno == EINVAL || errno == EISDIR ? "not a regular file" : strerror(errno));
         return 1;
     }
@@ -1047,7 +1047,7 @@ static int compare(const char *tree, const struct entry *e, int digests, FILE *o
     else
         changed = changed || (unsigned long long)st.st_ino != e->inode || mtime_ns(&st) != e->mtime;
     if (changed)
-        fprintf(out, "etude-legacy: changed: %s\n", e->path);
+        fprintf(out, "etude check: changed: %s\n", e->path);
     return changed;
 }
 
@@ -1068,7 +1068,7 @@ static const char *check_line(struct reading *rd, char *line, size_t lineno)
     struct entry e;
 
     if (lineno == 1)
-        return strcmp(line, RECORD_HEAD) == 0 ? NULL : "not a record of etude-legacy";
+        return strcmp(line, RECORD_HEAD) == 0 ? NULL : "not a record of etude prepare";
     if (strncmp(line, "tree ", 5) == 0 && rd->tree == NULL)
         return (rd->tree = strdup(line + 5)) == NULL ? "memory ran out" : NULL;
     if (strncmp(line, "file ", 5) == 0) {
@@ -1105,7 +1105,7 @@ static int check_lines(FILE *f, const char *record, struct reading *rd)
         why = "the record cannot be read whole";
     free(line);
     if (why != NULL) {
-        fprintf(rd->out, "etude-legacy: %s:%lu: %s\n", record, (unsigned long)lineno, why);
+        fprintf(rd->out, "etude check: %s:%lu: %s\n", record, (unsigned long)lineno, why);
         return 2;
     }
     return rd->changed != 0;
@@ -1121,7 +1121,7 @@ int etude_legacy_check(const char *record, int digests, FILE *out)
     rd.digests = digests;
     rd.out = out != NULL ? out : stdout;
     if (f == NULL) {
-        fprintf(rd.out, "etude-legacy: %s: %s\n", record, strerror(errno));
+        fprintf(rd.out, "etude check: %s: %s\n", record, strerror(errno));
         return 2;
     }
     status = check_lines(f, record, &rd);
@@ -1130,9 +1130,9 @@ int etude_legacy_check(const char *record, int digests, FILE *out)
     free(rd.arch);
     free(rd.kernel);
     if (status == 0)
-        fprintf(rd.out, "etude-legacy: result: unchanged: %lu files\n", (unsigned long)rd.files);
+        fprintf(rd.out, "etude check: result: unchanged: %lu files\n", (unsigned long)rd.files);
     else if (status == 1)
-        fprintf(rd.out, "etude-legacy: result: changed: %lu of %lu files\n",
+        fprintf(rd.out, "etude check: result: changed: %lu of %lu files\n",
                 (unsigned long)rd.changed, (unsigned long)rd.files);
     return status;
 }

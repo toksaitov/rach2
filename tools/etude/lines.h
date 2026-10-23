@@ -6,7 +6,7 @@
 #define ETUDE_LINES_H
 
 /**
- * Run `history_lines [-s SCHEMAS] MAP STREAM...`, as tools/etude/Readme.md
+ * Run `etude show lines [-s SCHEMAS] MAP STREAM...`, as tools/etude/Readme.md
  * says: read the run in the history streams, judge each suite of the suite
  * map by its cases, and print the lines of tests/run.
  *

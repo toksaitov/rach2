@@ -1,7 +1,7 @@
 /*
- * etude_hold.c: etude-hold, which holds a tree's run lock while one command
- * runs, so that no suite builds or boots the tree while the command changes
- * it. tools/etude/Readme.md gives its usage.
+ * lock_tree.c: `etude lock tree`, which holds a tree's run lock while one
+ * command runs, so that no suite builds or boots the tree while the command
+ * changes it. tools/etude/Readme.md gives its usage.
  */
 #include <errno.h>
 #include <stdarg.h>
@@ -48,8 +48,8 @@ struct hold {
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: etude-hold [-r] [-s SCRATCH] TREE NAME COMMAND [ARG...]\n       "
-                    "etude-hold -q TREE\n");
+    fprintf(stderr, "usage: etude lock tree [-r] [-s SCRATCH] TREE NAME COMMAND [ARG...]\n       "
+                    "etude lock tree -q TREE\n");
     return 2;
 }
 
@@ -364,7 +364,7 @@ static int hold_tree(struct hold *h)
     return status;
 }
 
-int main(int argc, char **argv)
+int etude_lock_tree_main(int argc, char **argv)
 {
     struct hold h;
     const char *scratch = NULL, *tree;
@@ -388,7 +388,7 @@ int main(int argc, char **argv)
         (!query && argv[i + 1][0] == '\0'))
         return usage();
     tree = argv[i];
-    h.name = query ? "etude-hold" : argv[i + 1];
+    h.name = query ? "etude lock" : argv[i + 1];
     h.argv = argv + i + 2;
     if (scratch != NULL)
         hold_remove(scratch);

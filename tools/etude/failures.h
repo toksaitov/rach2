@@ -6,7 +6,7 @@
 #define ETUDE_FAILURES_H
 
 /**
- * Run `history_failures [-s SCHEMAS] [-b STORE] HISTORY...`.
+ * Run `etude show failures [-s SCHEMAS] [-b STORE] HISTORY...`.
  *
  * Read the history streams HISTORY, which must hold one plan and at most
  * one run record of it, and print, for each item of the plan that did not

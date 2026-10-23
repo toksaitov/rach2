@@ -23,7 +23,7 @@
 /* The bytes between two writes that keep an allocation resident. */
 #define LOAD_PAGE 4096
 
-static const char usage_text[] = "usage: etude-load cpu|memory|disk AMOUNT\n";
+static const char usage_text[] = "usage: etude stress cpu|memory|disk AMOUNT\n";
 
 /** Say that the load is in effect, with one write(2). */
 static int ready(void)
@@ -53,7 +53,7 @@ static int load_cpu(uint64_t count)
         if (pids[i] == 0)
             spin();
         if (pids[i] < 0) {
-            fprintf(stderr, "etude-load: fork: %s\n", strerror(errno));
+            fprintf(stderr, "etude stress: fork: %s\n", strerror(errno));
             while (--i > 0)
                 kill(pids[i], SIGKILL);
             return 1;
@@ -72,7 +72,7 @@ static int load_memory(uint64_t bytes)
     uint64_t at;
 
     if (m == NULL) {
-        fprintf(stderr, "etude-load: cannot allocate %llu bytes\n", (unsigned long long)bytes);
+        fprintf(stderr, "etude stress: cannot allocate %llu bytes\n", (unsigned long long)bytes);
         return 1;
     }
     for (at = 0; at < bytes; at += LOAD_PAGE)
@@ -95,10 +95,10 @@ static int load_disk(uint64_t bytes)
     size_t n;
     int fd;
 
-    snprintf(name, sizeof(name), "etude-load.%ld", (long)getpid());
+    snprintf(name, sizeof(name), "etude-stress.%ld", (long)getpid());
     fd = open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
     if (fd < 0 || unlink(name) != 0) {
-        fprintf(stderr, "etude-load: %s: %s\n", name, strerror(errno));
+        fprintf(stderr, "etude stress: %s: %s\n", name, strerror(errno));
         return 1;
     }
     memset(chunk, 0xa5, sizeof(chunk));
@@ -108,12 +108,12 @@ static int load_disk(uint64_t bytes)
         for (at = 0; at < bytes; at += n) {
             n = bytes - at < LOAD_CHUNK ? (size_t)(bytes - at) : LOAD_CHUNK;
             if (pwrite(fd, chunk, n, (off_t)at) != (ssize_t)n) {
-                fprintf(stderr, "etude-load: write: %s\n", strerror(errno));
+                fprintf(stderr, "etude stress: write: %s\n", strerror(errno));
                 return 1;
             }
         }
         if (fsync(fd) != 0) {
-            fprintf(stderr, "etude-load: fsync: %s\n", strerror(errno));
+            fprintf(stderr, "etude stress: fsync: %s\n", strerror(errno));
             return 1;
         }
     }

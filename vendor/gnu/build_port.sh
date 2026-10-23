@@ -40,7 +40,7 @@
 # every port depends on the runtime, the toolchain's glibc, and on pkgconf,
 # whose copy for the build host answers configure's questions about the
 # root's libraries. --all builds every recipe into an empty root. Under
-# etude-step, which gives it the key of the step's inputs as ETUDE_STEP_KEY,
+# `etude build`, which gives it the key of the step's inputs as ETUDE_STEP_KEY,
 # it writes the key to work/ports.done and adds each port as it finishes,
 # and an --all with the same key, as when make runs the step again after a
 # stop, keeps the ports the list has, makes the root again from their stages
@@ -94,7 +94,7 @@ case "$GNU_LINK" in
 esac
 
 # A wrapper runs its compiler through the ccache that ETUDE_STEP_CCACHE
-# names when it is set, as etude-step sets it where the host has ccache.
+# names when it is set, as `etude build` sets it where the host has ccache.
 mkdir -p "$WRAP"
 for tool in gcc g++ c++ cpp; do
     # shellcheck disable=SC2016 # "$@" and the ccache belong to the wrapper

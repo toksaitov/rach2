@@ -1,8 +1,8 @@
 /*
- * etude_legacy.c: etude-legacy, which builds and records the goals that the
- * suites of tests/run read before one starts, checks a preparation's record,
- * and runs a set of suites by their cases through the machine's ledger as
- * one run of etude.
+ * run_suites.c: `etude prepare`, which builds and records the goals that the
+ * suites of tests/run read before one starts, `etude check record`, which
+ * checks a preparation's record, and `etude run suites`, which runs a set of
+ * suites by their cases through the machine's ledger as one run of etude.
  */
 #include <errno.h>
 #include <limits.h>
@@ -66,17 +66,19 @@ static void catch_stops(void)
 #endif
 }
 
-/** Print the usage and give the status of a wrong usage. */
-static int usage(void)
+/* The usages of the three commands, which `usage` prints. */
+static const char prepare_usage[] = "usage: etude prepare [-t TREE] [-a ARCH] [-n KERNEL] "
+                                    "[-w WORK] [-o RECORD] [-s SECONDS] -b GOAL [-b GOAL]...\n";
+static const char record_usage[] = "usage: etude check record [-d] RECORD\n";
+static const char suites_usage[] =
+    "usage: etude run suites -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE -S SCHEMAS "
+    "[-d LOCKS] [-t TREE] [-a ARCH] [-n KERNEL] [-p RECORD] [-W WAIT] [-s SECONDS] [-j WIDTH] "
+    "[-k] [-r STATUS] [-m STAMP] [-g COMMIT] [-q ARGS] [-P SITE] SELECTION\n";
+
+/** Print the usage `text` and give the status of a wrong usage. */
+static int usage(const char *text)
 {
-    fprintf(stderr,
-            "usage: etude-legacy prepare [-t TREE] [-a ARCH] [-n KERNEL] [-w WORK] "
-            "[-o RECORD] [-s SECONDS] -b GOAL [-b GOAL]...\n"
-            "       etude-legacy check [-d] RECORD\n"
-            "       etude-legacy set -l LEDGER -c CPU,MEMORY,DISK -o RESULTS -e EVIDENCE "
-            "-S SCHEMAS [-K CASECHECK] [-d LOCKS] [-t TREE] [-a ARCH] [-n KERNEL] [-p RECORD] "
-            "[-W WAIT] [-s SECONDS] [-j WIDTH] [-k] [-r STATUS] [-m STAMP] "
-            "[-g COMMIT] [-q ARGS] [-P SITE] SELECTION\n");
+    fputs(text, stderr);
     return 2;
 }
 
@@ -93,8 +95,8 @@ static unsigned number_of(const char *s, unsigned long max)
     return *end == '\0' && v >= 1 && v <= max ? (unsigned)v : 0;
 }
 
-/** Run `prepare` with the arguments after it. */
-static int prepare_main(int argc, char **argv)
+/** Run `etude prepare` with the arguments after it. */
+int etude_prepare_main(int argc, char **argv)
 {
     static char *goals[GOALS_MAX];
     struct etude_legacy_opts o;
@@ -106,6 +108,7 @@ static int prepare_main(int argc, char **argv)
     o.out = stdout;
     o.stop = &stop_signal;
     o.goals = goals;
+    json_program = "etude prepare";
     while ((opt = getopt(argc, argv, "t:a:n:w:o:s:b:")) != -1) {
         if (opt == 'b' && o.ngoals < GOALS_MAX)
             goals[o.ngoals++] = optarg;
@@ -122,27 +125,27 @@ static int prepare_main(int argc, char **argv)
         else if (opt == 's' && (o.seconds = number_of(optarg, SECONDS_MAX)) != 0)
             continue;
         else
-            return usage();
+            return usage(prepare_usage);
     }
     if (optind != argc)
-        return usage();
+        return usage(prepare_usage);
     setvbuf(stdout, NULL, _IOLBF, 0);
     catch_stops();
     return etude_legacy_prepare(&o);
 }
 
-/** Run `check` with the arguments after it. */
-static int check_main(int argc, char **argv)
+/** Run `etude check record` with the arguments after it. */
+int etude_record_main(int argc, char **argv)
 {
     int digests = 0, opt;
 
     while ((opt = getopt(argc, argv, "d")) != -1) {
         if (opt != 'd')
-            return usage();
+            return usage(record_usage);
         digests = 1;
     }
     if (optind != argc - 1)
-        return usage();
+        return usage(record_usage);
     return etude_legacy_check(argv[optind], digests, stdout);
 }
 
@@ -180,7 +183,7 @@ static long selection_of(const char *path, struct etude_legacy_member *m, char n
     long n = 0, no = 0;
 
     if (f == NULL) {
-        fprintf(stderr, "etude-legacy: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "etude run: %s: %s\n", path, strerror(errno));
         return -1;
     }
     while (fgets(line, sizeof(line), f) != NULL) {
@@ -210,8 +213,8 @@ static long selection_of(const char *path, struct etude_legacy_member *m, char n
     fclose(f);
     return n;
 bad:
-    fprintf(stderr, "etude-legacy: %s:%ld: not a suite, serial or stops, and cases=MANIFEST\n",
-            path, no);
+    fprintf(stderr, "etude run: %s:%ld: not a suite, serial or stops, and cases=MANIFEST\n", path,
+            no);
     fclose(f);
     return -1;
 }
@@ -229,8 +232,6 @@ static const char **text_option(struct etude_legacy_set_opts *o, int opt)
         return &o->evidence;
     case 'S':
         return &o->schemas;
-    case 'K':
-        return &o->casecheck;
     case 'd':
         return &o->locks;
     case 't':
@@ -262,7 +263,7 @@ static int set_options(int argc, char **argv, struct etude_legacy_set_opts *o)
     const char **text;
     int opt, have_cap = 0;
 
-    while ((opt = getopt(argc, argv, "l:c:o:e:S:K:d:t:a:n:p:W:s:j:kr:m:g:q:P:")) != -1) {
+    while ((opt = getopt(argc, argv, "l:c:o:e:S:d:t:a:n:p:W:s:j:kr:m:g:q:P:")) != -1) {
         if ((text = text_option(o, opt)) != NULL)
             *text = optarg;
         else if (opt == 'c' && limits_of(optarg, o->cap) == 0)
@@ -276,16 +277,19 @@ static int set_options(int argc, char **argv, struct etude_legacy_set_opts *o)
         else if (opt == 'k')
             o->stop_on_fail = 1;
         else
-            return usage();
+            return usage(suites_usage);
     }
     if (optind != argc - 1 || !have_cap || o->ledger == NULL || o->results == NULL ||
         o->evidence == NULL || o->schemas == NULL)
-        return usage();
+        return usage(suites_usage);
     return 0;
 }
 
-/** Run `set` with the arguments after it; `self` is etude-legacy's path. */
-static int set_main(int argc, char **argv, const char *self)
+/**
+ * Run `etude run suites` with the arguments after it; `argv[0]` is the path
+ * of etude, which the set runs again for its preparation and its judgements.
+ */
+int etude_suites_main(int argc, char **argv)
 {
     static struct etude_legacy_member members[MEMBERS_MAX];
     static char names[MEMBERS_MAX][72];
@@ -293,7 +297,7 @@ static int set_main(int argc, char **argv, const char *self)
     struct etude_legacy_set_opts o;
     char program[PATH_MAX], account[64];
     const char *cpus = getenv("RACH2_CPUS");
-    const char *separator = strrchr(self, '/');
+    const char *self = argv[0], *separator = strrchr(self, '/');
 #ifndef _WIN32
     struct passwd *pw = getpwuid(getuid());
 #endif
@@ -306,6 +310,7 @@ static int set_main(int argc, char **argv, const char *self)
     o.wait = (unsigned)WAIT_MAX;
     o.out = stdout;
     o.stop = &stop_signal;
+    json_program = "etude run";
     if (set_options(argc, argv, &o) != 0)
         return 2;
 #ifdef _WIN32
@@ -313,12 +318,12 @@ static int set_main(int argc, char **argv, const char *self)
         separator = strrchr(self, '\\');
 #endif
     if (separator == NULL || realpath(self, program) == NULL) {
-        fprintf(stderr, "etude-legacy: set: run etude-legacy by its path\n");
+        fprintf(stderr, "etude run: run etude by its path\n");
         return 2;
     }
     o.program = program;
     if ((o.accel = getenv("RACH2_QEMU_ACCEL")) == NULL || *o.accel == '\0') {
-        fprintf(stderr, "etude-legacy: set: RACH2_QEMU_ACCEL must name the accelerator\n");
+        fprintf(stderr, "etude run: RACH2_QEMU_ACCEL must name the accelerator\n");
         return 2;
     }
     o.cpus = cpus == NULL || *cpus == '\0' ? 2u : number_of(cpus, 64);
@@ -340,22 +345,4 @@ static int set_main(int argc, char **argv, const char *self)
     setvbuf(stdout, NULL, _IOLBF, 0);
     catch_stops();
     return etude_legacy_set(&o);
-}
-
-int main(int argc, char **argv)
-{
-#ifdef _WIN32
-    extern int etude_win_bridge_main(int argc, char **argv);
-    if (argc > 1 && strcmp(argv[1], "--bridge-holder") == 0)
-        return etude_win_bridge_main(argc, argv);
-#endif
-
-    json_program = "etude-legacy";
-    if (argc >= 2 && strcmp(argv[1], "prepare") == 0)
-        return prepare_main(argc - 1, argv + 1);
-    if (argc >= 2 && strcmp(argv[1], "check") == 0)
-        return check_main(argc - 1, argv + 1);
-    if (argc >= 2 && strcmp(argv[1], "set") == 0)
-        return set_main(argc - 1, argv + 1, argv[0]);
-    return usage();
 }

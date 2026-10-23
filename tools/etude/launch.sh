@@ -24,7 +24,7 @@ if [ ! -e "$site" ] && [ ! -L "$site" ] && [ "${ETUDE_SITE+x}" != x ]; then
     exec "$@"
 fi
 [ -r "$site" ] || refuse "cannot read $site"
-header="" endpoint="" launcher="" ledger="" locks="" bridge="" capacity="" wait="" seconds=""
+header="" endpoint="" launcher="" ledger="" locks="" etude="" capacity="" wait="" seconds=""
 boundary=""
 seen=" "
 while IFS=' ' read -r key value || [ -n "$key$value" ]; do
@@ -37,7 +37,7 @@ while IFS=' ' read -r key value || [ -n "$key$value" ]; do
         launcher) [ -z "$launcher" ] || refuse 'duplicate launcher'; launcher=$value ;;
         ledger) [ -z "$ledger" ] || refuse 'duplicate ledger'; ledger=$value ;;
         locks) [ -z "$locks" ] || refuse 'duplicate locks'; locks=$value ;;
-        bridge) [ -z "${bridge:-}" ] || refuse 'duplicate bridge'; bridge=$value ;;
+        etude) [ -z "$etude" ] || refuse 'duplicate etude'; etude=$value ;;
         capacity) [ -z "$capacity" ] || refuse 'duplicate capacity'; capacity=$value ;;
         wait) [ -z "$wait" ] || refuse 'duplicate wait'; wait=$value ;;
         seconds) [ -z "$seconds" ] || refuse 'duplicate seconds'; seconds=$value ;;
@@ -45,14 +45,14 @@ while IFS=' ' read -r key value || [ -n "$key$value" ]; do
         *) refuse "unknown field $key" ;;
     esac
 done < "$site"
-[ "$header" = 1 ] || refuse 'incompatible site format'
+[ "$header" = 2 ] || refuse 'incompatible site format'
 # The optional boundary_lazy permits the lazy 72 GiB boundary profile it names.
 case $boundary in ''|bigmem-boundary-v1) ;; *) refuse 'boundary_lazy must be bigmem-boundary-v1' ;; esac
 case $(uname -s)/$endpoint in Linux/linux|Darwin/macos|MINGW*/windows|MSYS*/windows|UCRT*/windows|CLANG*/windows) ;; *) refuse 'endpoint is disabled or incompatible' ;; esac
-for path in "$site" "$launcher" "$ledger" "$locks" "${bridge:-}"; do
+for path in "$site" "$launcher" "$ledger" "$locks" "$etude"; do
     case $path in /*|[A-Za-z]:/*) ;; *) refuse "not an absolute path: $path" ;; esac
 done
-[ -x "$bridge" ] && [ -x "$launcher" ] && [ -d "$locks" ] && [ -d "$ledger" ] ||
+[ -x "$etude" ] && [ -x "$launcher" ] && [ -d "$locks" ] && [ -d "$ledger" ] ||
     refuse 'installed endpoint is unavailable'
 [ "$(head -n 1 "$ledger/claims" 2>/dev/null)" = 'etude-ledger 1' ] ||
     refuse 'ledger is unavailable or incompatible'
@@ -246,8 +246,8 @@ nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 [ "${#nonce}" -eq 32 ] || refuse 'cannot make an attempt identity'
 environment=$(command -v env) || refuse 'env is unavailable'
 if [ -n "$result" ]; then
-    exec "$bridge" -i -p -d "$locks" -w "$wait" -r "$result" "$ledger" \
+    exec "$etude" admit -i -p -d "$locks" -w "$wait" -r "$result" "$ledger" \
         "launch:$nonce" "$(id -un)" "$mode" "$resources" "$capacity" "$seconds" "$environment" "$@"
 fi
-exec "$bridge" -i -p -d "$locks" -w "$wait" "$ledger" \
+exec "$etude" admit -i -p -d "$locks" -w "$wait" "$ledger" \
     "launch:$nonce" "$(id -un)" "$mode" "$resources" "$capacity" "$seconds" "$environment" "$@"

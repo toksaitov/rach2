@@ -20,18 +20,17 @@
 # architecture whose directory has `skipped`, where it had nothing to run,
 # gets no status and counts as passed.
 #
-# An architecture's directory may also have `history/`, the history streams
-# of etude's run, and `store/`, the blobs they refer to, each named by its
-# SHA-256. The script reads them with build/tools/etude/history_failures,
-# which it asks make for, or with the program that HISTORY_FAILURES names. An
-# architecture passes only when that reader finds that every attempt of the
-# run passed as well; when it finds one that did not, or cannot read the
-# history, and `failed` is empty, the failure is the test runner's, `runner`.
-# The attempts that did not pass go into the issue, its comment and the
-# summary, a failure that a later attempt of its case passed among them, so
-# that a passing retry does not hide the failure it followed. A directory
-# without `history/`, as from every run before etude's, is reported as
-# before.
+# An architecture's directory may also have `history/`, the history streams of
+# etude's run, and `store/`, the blobs they refer to, each named by its SHA-256.
+# The script reads them with `etude show failures`, of build/tools/etude/etude,
+# which it asks make for, or of the program that ETUDE names. An architecture
+# passes only when that reader finds that every attempt of the run passed as
+# well; when it finds one that did not, or cannot read the history, and `failed`
+# is empty, the failure is the test runner's, `runner`. The attempts that did
+# not pass go into the issue, its comment and the summary, a failure that a
+# later attempt of its case passed among them, so that a passing retry does not
+# hide the failure it followed. A directory without `history/`, as from every
+# run before etude's, is reported as before.
 #
 # A failure is filed as an issue with the labels `bug` and `ci`, titled
 # `Core tests fail on ARCH: ITEMS` or `Release tests fail on ARCH: ITEMS`,
@@ -203,16 +202,16 @@ read_history() { # read_history RESULT
     history=
     hstatus=0
     [ -d "$1/history" ] || return 0
-    reader=${HISTORY_FAILURES:-build/tools/etude/history_failures}
-    if [ -z "${HISTORY_FAILURES:-}" ] && ! make -s "$reader" >&2; then
+    reader=${ETUDE:-build/tools/etude/etude}
+    if [ -z "${ETUDE:-}" ] && ! make -s "$reader" >&2; then
         history="ci: report: $reader could not be built"
         hstatus=2
         return 0
     fi
     if [ -d "$1/store" ]; then
-        history=$("$reader" -b "$1/store" "$1"/history/* 2>&1) || hstatus=$?
+        history=$("$reader" show failures -b "$1/store" "$1"/history/* 2>&1) || hstatus=$?
     else
-        history=$("$reader" "$1"/history/* 2>&1) || hstatus=$?
+        history=$("$reader" show failures "$1"/history/* 2>&1) || hstatus=$?
     fi
     [ "$hstatus" -le 1 ] || hstatus=2
     history=$(printf '%s\n' "$history" | tr '\140' "'")

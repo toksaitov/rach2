@@ -337,13 +337,13 @@ static void make_repository(void)
     }
 }
 
-/** Run history_compare with stdout in a file; return its status and output. */
+/** Run `etude compare` with stdout in a file; return its status and output. */
 static int compare(char *output, size_t size, const char *arguments)
 {
     char *argv[64], copy[4096], *word;
     int argc = 0, saved, file, status;
     ssize_t got;
-    snprintf(copy, sizeof(copy), "history_compare %s", arguments);
+    snprintf(copy, sizeof(copy), "etude %s", arguments);
     for (word = strtok(copy, " "); word && argc < 63; word = strtok(NULL, " "))
         argv[argc++] = word[0] == '@' ? (char *)path(word + 1) : word;
     argv[argc] = NULL;

@@ -1,7 +1,7 @@
 /*
  * processor.h: the processor profiles of etude's QEMU machines, each a QEMU
  * processor model and the features it declares present or absent, which
- * casecheck reads to decide a case's branches and the QEMU launcher gives
+ * `etude check` reads to decide a case's branches and the QEMU launcher gives
  * QEMU. tools/etude/Readme.md lists the profiles.
  */
 #ifndef ETUDE_PROCESSOR_H

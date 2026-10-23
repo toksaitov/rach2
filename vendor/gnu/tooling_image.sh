@@ -25,11 +25,11 @@
 # stamps the disk has; the machine trims it, so the file holds the blocks the
 # volume uses. One job at a time uses it: a second waits, by a lock beside
 # the disk, until the first ends. While the job runs, each line the machine's
-# make writes is printed here as it comes, and at its end etude-tooling's
-# account of the boot, its `etude-tooling: cost:` line.
+# make writes is printed here as it comes, and at its end etude's account of
+# the boot, its `etude provision: cost:` line.
 #
 # SIGHUP, SIGINT or SIGTERM, whether it reaches the script's process group or
-# the script alone, stops the job: etude-tooling is given SIGTERM, and once
+# the script alone, stops the job: etude is given SIGTERM, and once
 # it has ended the script removes its stage directory beside the disk and the
 # lock, and exits with 128 plus the signal's number. A script killed outright
 # leaves both, and the next one removes them.
@@ -74,7 +74,7 @@ DISK_GIB="${GNU_TOOLING_DISK_GIB:-80}"
 DEADLINE="${GNU_TOOLING_SECONDS:-345600}"
 DRY="${GNU_TOOLING_DRY_RUN:-}"
 CACHE="${ETUDE_TOOLING_CACHE:-$REPO/build/tooling}"
-TOOLING="$REPO/build/tools/etude/etude-tooling"
+ETUDE="$REPO/build/tools/etude/etude"
 SHA="$REPO/build/tools/verify/sha256"
 DISK="$GNU_OUT/tooling.disk"
 LOCK="$DISK.lock"
@@ -98,7 +98,7 @@ if [ -z "${MUSL_CRYPT_SRC:-}" ]; then
     echo "gnu: tooling: MUSL_CRYPT_SRC is not set; make sets it" >&2
     exit 2
 fi
-for t in "$TOOLING" "$SHA" "$REPO/$MUSL_CRYPT_SRC"; do
+for t in "$ETUDE" "$SHA" "$REPO/$MUSL_CRYPT_SRC"; do
     [ -f "$t" ] || { echo "gnu: tooling: $t is missing; run make first" >&2; exit 1; }
 done
 
@@ -111,10 +111,10 @@ LOCKED=
 
 # cleanup: stop the follower and the job, then remove the stage and the lock.
 # A signal that reached this script alone, as make sends one, is passed on to
-# etude-tooling, and the lock is kept until etude-tooling has ended, since
-# its machine writes the build disk until then. etude-tooling removes its
-# job's directory when a signal stops it, but not when it is killed
-# outright, so the directory of a job that had not ended is removed here.
+# etude, and the lock is kept until etude has ended, since its machine
+# writes the build disk until then. etude removes its job's directory when a
+# signal stops it, but not when it is killed outright, so the directory of a
+# job that had not ended is removed here.
 # Each step is taken even when one before it failed.
 cleanup()
 {
@@ -141,10 +141,11 @@ trap 'stop 129' HUP
 trap 'stop 130' INT
 trap 'stop 143' TERM
 
-# tooling ARG...: run etude-tooling with the tree's recipe and cache.
+# tooling ARG...: run `etude provision tooling` with the tree's recipe and
+# cache.
 tooling()
 {
-    "$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" "$@"
+    "$ETUDE" provision tooling -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" "$@"
 }
 
 # take_lock: wait until no other job uses the build disk, and take it. The
@@ -169,7 +170,7 @@ take_lock()
 }
 
 # sweep: remove the stages that jobs killed outright left, with the job
-# directories they name whose etude-tooling has gone. Only the lock's holder
+# directories they name whose etude has gone. Only the lock's holder
 # has a stage, so once the lock is taken every stage here is such a one.
 sweep()
 {
@@ -241,9 +242,9 @@ sparse()
 }
 
 # follow: print the lines the job marked as the build's, from the channel of
-# the job whose etude-tooling's process ID is in STAGE/pid, until
+# the job whose etude's process ID is in STAGE/pid, until
 # STAGE/ended exists. The channel's file is read through a link in STAGE,
-# which keeps it after etude-tooling removes the job's directory, so the
+# which keeps it after etude removes the job's directory, so the
 # lines of a job's last seconds are printed too.
 follow()
 {
@@ -287,7 +288,7 @@ volume=$(($(wc -c < "$STAGE/tree.tar.gz") / 1048576 + 64))
 echo "gnu: tooling: $RACH2_ARCH: the job runs in the $ETUDE_TOOLING_ARCH tooling machine under $RACH2_QEMU_ACCEL with $CPUS processors and $MIB MiB, on $DISK"
 follow &
 FOLLOWER=$!
-"$TOOLING" -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" run -n \
+"$ETUDE" provision tooling -r "$REPO/tools/etude/tooling" -C "$CACHE" -p "$ETUDE_TOOLING_ARCH" -a "$RACH2_QEMU_ACCEL" run -n \
     -c "$CPUS" -m "$MIB" -s "$volume" -t "$DEADLINE" -i "$STAGE/tree.tar.gz" -i "$STAGE/job.env" \
     "$@" -O "$STAGE" "$DIR/tooling_job.sh" &
 JOB=$!

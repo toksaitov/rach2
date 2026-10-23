@@ -1,12 +1,12 @@
 /*
- * verdict.c: casecheck's verdict on one run from its history, for ci: the
- * suites whose items did not pass, and `runner` when the records cannot show
- * that every planned item ran and passed.
+ * verdict.c: the verdict of `etude check` on one run from its history, for
+ * ci: the suites whose items did not pass, and `runner` when the records
+ * cannot show that every planned item ran and passed.
  */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
-#include "casecheck.h"
+#include "check.h"
 
 #include <dirent.h>
 #include <stdint.h>
@@ -101,7 +101,7 @@ static void *grow(void *p, size_t used, size_t *cap, size_t size)
     *cap = *cap ? *cap * 2 : 16;
     bigger = realloc(p, *cap * size);
     if (bigger == NULL) {
-        fprintf(stderr, "casecheck: out of memory\n");
+        fprintf(stderr, "etude check: out of memory\n");
         exit(2);
     }
     return bigger;
@@ -969,7 +969,7 @@ static void add_name(struct jbuf *b, const char *name)
 }
 
 /**
- * Prints the result line, `casecheck: result: passed`, or `casecheck:
+ * Prints the result line, `etude check: result: passed`, or `etude check:
  * result: failed:` with the names of what failed: `runner` first when
  * `runner` is set, then the suites in the order asked, then the set. Returns
  * 0 for a pass and 1 for anything else.
@@ -994,7 +994,7 @@ static int conclude(const struct verdict *v, int runner)
         add_name(&names, v->name);
     }
     failed = names.len > 0;
-    say(failed ? "casecheck: result: failed:" : "casecheck: result: passed\n");
+    say(failed ? "etude check: result: failed:" : "etude check: result: passed\n");
     for (p = names.data; *p != '\0'; p = end) {
         end = strchr(p + 1, ' ');
         end = end != NULL ? end : p + strlen(p);

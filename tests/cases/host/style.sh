@@ -66,7 +66,7 @@ ASCIISCAN="$REPO/build/tools/verify/asciiscan"
 GUESTCHECK="$REPO/build/tools/verify/guestcheck"
 PROSECHECK="$REPO/build/tools/verify/prosecheck"
 SIZECHECK="$REPO/build/tools/verify/sizecheck"
-CASECHECK="$REPO/build/tools/etude/casecheck"
+ETUDE="$REPO/build/tools/etude/etude"
 ELFCHECK="$REPO/build/tools/inspect/elfcheck"
 CFGCHECK="$REPO/build/tools/inspect/cfgcheck"
 PECHECK="$REPO/build/tools/etude/win/pecheck"
@@ -533,7 +533,7 @@ case_repro() {
 # describing two network setups; pecheck accepts PE images that import only
 # Windows's own libraries; the compilation-database generator joins wrapped
 # recipes and does not publish an invalid database; suitecheck.sh fails each
-# form of a guessed duration and of a skip reported as a pass; casecheck
+# form of a guessed duration and of a skip reported as a pass; etude check
 # refuses each fault its fixtures plant; and the scripts check the recovery
 # credentials, the vendor stamps' dry-run guard, the build rules in a private
 # tree, the scope of the ShellCheck and text cases, and this program's
@@ -544,13 +544,13 @@ case_checkers() {
     built pecheck "$PECHECK" && check pecheck verify_pecheck.log "$PECHECK" --selftest
     check compile-db-generator verify_compdb.log sh "$REPO/tools/dev/gen_compile_commands.sh" --selftest
     check suitecheck-selftest verify_suitecheck.log sh "$REPO/tools/verify/suitecheck.sh" --selftest
-    built casecheck-selftest "$CASECHECK" &&
-        check casecheck-selftest verify_casecheck.log "$CASECHECK" --selftest "$REPO/tools/etude/fixtures"
+    built check-selftest "$ETUDE" &&
+        check check-selftest verify_check.log "$ETUDE" check --selftest "$REPO/tools/etude/fixtures"
     check recovery-key verify_recovery_key.log sh "$REPO/tests/system/recovery_key_test.sh"
     check dryrun verify_dryrun.log sh "$REPO/tests/system/dryrun_test.sh"
     check build-rules verify_build_rules.log sh "$REPO/tests/system/build_rules_test.sh"
     check style-scope verify_style_scope.log sh "$REPO/tests/system/style_scope_test.sh"
-    built style-cases "$CASECHECK" && built style-cases "$ASCIISCAN" &&
+    built style-cases "$ETUDE" && built style-cases "$ASCIISCAN" &&
         check style-cases verify_style_cases.log sh "$REPO/tests/system/style_cases_test.sh"
     check verify-temp verify_temp.log sh "$REPO/tests/system/verify_temp_test.sh"
 }
@@ -573,10 +573,10 @@ case_devlog() {
 case_registry() {
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$REPO/tests/registry" | sort >"$VDIR/_reg.txt"
     found names-once "a suite is named twice in tests/registry" "$(uniq -d "$VDIR/_reg.txt")"
-    if built families "$CASECHECK"; then
-        if ! "$CASECHECK" -s "$REPO/tools/etude/schemas" families "$REPO"/tests/cases/*.json \
+    if built families "$ETUDE"; then
+        if ! "$ETUDE" check -s "$REPO/tools/etude/schemas" families "$REPO"/tests/cases/*.json \
             >"$VDIR/_families.txt" 2>"$VDIR/verify_families.log"; then
-            fail families "casecheck could not read the case manifests; see $VDIR/verify_families.log"
+            fail families "etude check could not read the case manifests; see $VDIR/verify_families.log"
         else
             sed 's/ .*//; s/.*\.//' "$VDIR/_families.txt" | sort -u >"$VDIR/_cases.txt"
             found families "a suite with no family of cases, a family with no row, or a run- target" \
@@ -624,7 +624,7 @@ case_registry() {
 # at a machine's speed, and a skip printed in a passing test reports the skip
 # as a pass; each fails the check unless an interval with a reason that
 # tests/system/intervals lists marks it, tests/system/unconverted counts it in
-# an older test, or a case's manifest declares its timing. casecheck checks
+# an older test, or a case's manifest declares its timing. etude check checks
 # the manifests.
 case_waits() {
     check waits-and-criteria verify_suites.log sh "$REPO/tools/verify/suitecheck.sh"
@@ -769,7 +769,7 @@ in_tooling() {
         export ETUDE_TOOLING_ARCH RACH2_QEMU_ACCEL
     fi
     if ! tooling_made; then
-        echo "style: $CASE: no tooling machine is made to judge it under the recorded version; etude-tooling prepare makes one"
+        echo "style: $CASE: no tooling machine is made to judge it under the recorded version; etude provision tooling prepare makes one"
         return 0
     fi
     echo "style: $CASE: the case runs in etude's tooling machine"
@@ -798,8 +798,8 @@ EOF
         echo "style: $CASE: the logs of the job are under $VDIR/scratch"
     ! grep -q '^@etude 1 end ' "$VDIR/job.out" || exit "$_status"
     case $_status in
-        125) unrun "the tooling machine failed; etude-tooling's lines say why" ;;
-        126) unrun "the tooling machine is not made; etude-tooling prepare makes it" ;;
+        125) unrun "the tooling machine failed; the lines of etude provision tooling say why" ;;
+        126) unrun "the tooling machine is not made; etude provision tooling prepare makes it" ;;
         *) unrun "the tooling machine's job ended with status $_status before its report did" ;;
     esac
 }

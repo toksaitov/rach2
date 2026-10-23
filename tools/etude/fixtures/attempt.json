@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "fixture.attempt",
-  "summary": "A host case whose reports the fixtures of casecheck attempt judge",
+  "summary": "A host case whose reports the fixtures of `etude check attempt` judge",
   "cases": [
     {
       "case_id": "fixture.attempt.scan",

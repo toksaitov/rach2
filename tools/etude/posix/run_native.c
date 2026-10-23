@@ -1,8 +1,8 @@
 /*
- * etude_native.c: etude-native, which runs one case on a Rach2 machine that
- * is already up, such as the Lenovo, through `etude-guest --stdio` started by
- * a transport command such as ssh(1), and prints the case's output and its
- * verdict.
+ * run_native.c: `etude run native`, which runs one case on a Rach2 machine
+ * that is already up, such as the Lenovo, through `etude-guest --stdio`
+ * started by a transport command such as ssh(1), and prints the case's output
+ * and its verdict.
  */
 #include <stdarg.h>
 #include <stdio.h>
@@ -55,7 +55,7 @@ struct text {
 /** Print the usage and return EXIT_USAGE. */
 static int usage(void)
 {
-    fputs("usage: etude-native -R RUN -a ATTEMPT -c CASE -j JOURNAL -t TRANSPORT -f FILE...\n"
+    fputs("usage: etude run native -R RUN -a ATTEMPT -c CASE -j JOURNAL -t TRANSPORT -f FILE...\n"
           "                    [-d MS] [-g MS] [-o BYTES] [-x MS] [-s MS] [-r N]\n"
           "                    [-e EVIDENCE] [-E NAME=VALUE]... [-k] -- PROGRAM [ARGUMENT...]\n",
           stderr);
@@ -276,13 +276,13 @@ static int read_case_file(const char *path, struct file *f)
 
     f->name = slash != NULL ? slash + 1 : path;
     if (!good_name(f->name)) {
-        fprintf(stderr, "etude-native: %s: not a name a workspace may have\n", path);
+        fprintf(stderr, "etude run: %s: not a name a workspace may have\n", path);
         return -1;
     }
     in = fopen(path, "rb");
     if (in == NULL || fstat(fileno(in), &st) != 0 || !S_ISREG(st.st_mode) ||
         (uint64_t)st.st_size > ETUDE_REMOTE_FILE_MAX) {
-        fprintf(stderr, "etude-native: %s: not a regular file that can be read\n", path);
+        fprintf(stderr, "etude run: %s: not a regular file that can be read\n", path);
         if (in != NULL)
             fclose(in);
         return -1;
@@ -290,7 +290,7 @@ static int read_case_file(const char *path, struct file *f)
     f->size = (size_t)st.st_size;
     f->data = malloc(f->size + 1);
     if (f->data == NULL || fread(f->data, 1, f->size, in) != f->size) {
-        fprintf(stderr, "etude-native: %s: cannot be read\n", path);
+        fprintf(stderr, "etude run: %s: cannot be read\n", path);
         fclose(in);
         return -1;
     }
@@ -467,7 +467,7 @@ static void print_output(const struct etude_remote_result *res)
         if (o[i]->data[o[i]->kept - 1] != '\n')
             fputc('\n', to[i]);
         if (o[i]->total > o[i]->kept)
-            fprintf(stderr, "etude-native: the case's %s had %llu bytes, of which %lu were kept\n",
+            fprintf(stderr, "etude run: the case's %s had %llu bytes, of which %lu were kept\n",
                     i == 0 ? "output" : "error output", (unsigned long long)o[i]->total,
                     (unsigned long)o[i]->kept);
     }
@@ -499,7 +499,7 @@ static int run_case(const struct options *o, const struct file *files)
     invocation(&inv, o, files, token);
     if (inv.bad) {
         free(inv.p);
-        fputs("etude-native: out of memory\n", stderr);
+        fputs("etude run: out of memory\n", stderr);
         return EXIT_INCOMPLETE;
     }
     argv[0] = "/bin/sh";
@@ -517,18 +517,17 @@ static int run_case(const struct options *o, const struct file *files)
     st = etude_remote_open(&conf, &r, why, sizeof(why));
     if (st != ETUDE_REMOTE_OK) {
         free(inv.p);
-        printf(
-            "etude-native: result: incomplete: case %s: not run: the connection failed (%s: %s)\n",
-            o->case_id, etude_remote_status_text(st), why);
+        printf("etude run: result: incomplete: case %s: not run: the connection failed (%s: %s)\n",
+               o->case_id, etude_remote_status_text(st), why);
         return EXIT_INCOMPLETE;
     }
     for (i = 0; i < o->npaths && st == ETUDE_REMOTE_OK; i++) {
-        fprintf(stderr, "etude-native: put: %s: %lu bytes\n", files[i].name,
+        fprintf(stderr, "etude run: put: %s: %lu bytes\n", files[i].name,
                 (unsigned long)files[i].size);
         st = etude_remote_put(r, files[i].name, files[i].data, files[i].size, files[i].mode);
     }
     if (st == ETUDE_REMOTE_OK) {
-        fprintf(stderr, "etude-native: run: case %s, attempt %s\n", o->case_id, token);
+        fprintf(stderr, "etude run: run: case %s, attempt %s\n", o->case_id, token);
         st = etude_remote_run(r, inv.p, inv.len, o->cancel_ms * 1000, &res);
     } else {
         memcpy(res.attempt, token, sizeof(token));
@@ -540,17 +539,17 @@ static int run_case(const struct options *o, const struct file *files)
         snprintf(process, sizeof(process), "%ld", res.process.pid);
     else
         snprintf(process, sizeof(process), "-");
-    printf("etude-native: result: %s: case %s, attempt %s: %s; process %s, cleanup %s, "
+    printf("etude run: result: %s: case %s, attempt %s: %s; process %s, cleanup %s, "
            "reconnections %u\n",
            verdict, o->case_id, token, why, process,
            res.cleanup == ETUDE_CLEANUP_CONFIRMED ? "confirmed" : "unconfirmed", res.reconnects);
     if (st != ETUDE_REMOTE_OK)
-        printf("etude-native: why: %s\n", etude_remote_why(r));
+        printf("etude run: why: %s\n", etude_remote_why(r));
     fflush(stdout);
     if (code == EXIT_PASS && !o->keep) {
         st = etude_remote_remove(r, token);
         if (st != ETUDE_REMOTE_OK)
-            fprintf(stderr, "etude-native: remove: %s: %s\n", etude_remote_status_text(st),
+            fprintf(stderr, "etude run: remove: %s: %s\n", etude_remote_status_text(st),
                     etude_remote_why(r));
     }
     etude_remote_result_free(&res);
@@ -558,28 +557,28 @@ static int run_case(const struct options *o, const struct file *files)
     return code;
 }
 
-/** etude-native's main: the options, the files, the run. */
+/** Run `etude run native`: the options, the files, the run. */
 int etude_native_main(int argc, char **argv)
 {
     struct options o;
     struct file files[FILES_MAX];
     int i, j, code;
 
-    json_program = "etude-native";
+    json_program = "etude run";
     if (parse(argc, argv, &o) != 0)
         return usage();
     if (!ascii(o.run) || !ascii(o.attempt) || !ascii(o.case_id) || !good_name(o.argv[0])) {
-        fputs("etude-native: the ids must be ASCII and the program a file's name\n", stderr);
+        fputs("etude run: the ids must be ASCII and the program a file's name\n", stderr);
         return EXIT_USAGE;
     }
     for (i = 0; o.argv[i] != NULL; i++)
         if (!ascii(o.argv[i])) {
-            fprintf(stderr, "etude-native: argument %d is not ASCII\n", i);
+            fprintf(stderr, "etude run: argument %d is not ASCII\n", i);
             return EXIT_USAGE;
         }
     for (i = 0; i < o.nenv; i++)
         if (!ascii(o.env[i])) {
-            fprintf(stderr, "etude-native: %s is not ASCII\n", o.env[i]);
+            fprintf(stderr, "etude run: %s is not ASCII\n", o.env[i]);
             return EXIT_USAGE;
         }
     memset(files, 0, sizeof(files));
@@ -589,14 +588,14 @@ int etude_native_main(int argc, char **argv)
             goto out;
         for (j = 0; j < i; j++)
             if (strcmp(files[j].name, files[i].name) == 0) {
-                fprintf(stderr, "etude-native: two files are named %s\n", files[i].name);
+                fprintf(stderr, "etude run: two files are named %s\n", files[i].name);
                 goto out;
             }
     }
     for (i = 0; i < o.npaths && strcmp(files[i].name, o.argv[0]) != 0; i++) {
     }
     if (i == o.npaths) {
-        fprintf(stderr, "etude-native: the program %s is not one of the files\n", o.argv[0]);
+        fprintf(stderr, "etude run: the program %s is not one of the files\n", o.argv[0]);
         goto out;
     }
     code = run_case(&o, files);
@@ -605,10 +604,3 @@ out:
         free(files[i].data);
     return code;
 }
-
-#ifndef RACH2_HOSTTEST
-int main(int argc, char **argv)
-{
-    return etude_native_main(argc, argv);
-}
-#endif

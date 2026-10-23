@@ -25,7 +25,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 mkdir -p build/tests
 work=$(mktemp -d "$REPO/build/tests/rach2-win-tooling.XXXXXX")
-make build/tools/etude/etude-legacy build/tools/etude/casecheck
+make build/tools/etude/etude
 . "$REPO/tools/etude/collection-windows.sh"
 collection_windows
 mkdir "$work/ledger" "$work/locks" "$work/results" "$work/evidence"
@@ -36,11 +36,10 @@ printf 'parts cases=%s\nstyle cases=%s\n' "$(cygpath -m "$work/chosen/parts.json
 RACH2_QEMU_ACCEL=whpx
 MSYS2_ARG_CONV_EXCL='*'
 export RACH2_QEMU_ACCEL MSYS2_ARG_CONV_EXCL
-"$(cygpath -m "$REPO/build/tools/etude/etude-legacy")" set -a "$arch" -j 1 -s 7200 \
+"$(cygpath -m "$REPO/build/tools/etude/etude")" run suites -a "$arch" -j 1 -s 7200 \
     -t "$(cygpath -m "$REPO")" -c 4000,8589934592,171798691840 \
     -l "$(cygpath -m "$work/ledger")" -d "$(cygpath -m "$work/locks")" \
     -o "$(cygpath -m "$work/results")" -e "$(cygpath -m "$work/evidence")" \
-    -S "$(cygpath -m "$REPO/tools/etude/schemas")" \
-    -K "$(cygpath -m "$REPO/build/tools/etude/casecheck")" "$(cygpath -m "$work/selection")"
+    -S "$(cygpath -m "$REPO/tools/etude/schemas")" "$(cygpath -m "$work/selection")"
 finished=1
 echo 'win-tooling-smoke: result: passed: guest preparation, disk readback and manual analysis'

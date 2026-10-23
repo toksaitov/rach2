@@ -43,12 +43,12 @@
 static int fails;
 
 /** Count a failure when `cond` is false, and print its file, line and row. */
-#define CHECK(cond, row)                                                                          \
-    do {                                                                                          \
-        if (!(cond)) {                                                                            \
-            printf("etude-legacy-test: fail: %s:%d: %s: %s\n", __FILE__, __LINE__, (row), #cond); \
-            fails++;                                                                              \
-        }                                                                                         \
+#define CHECK(cond, row)                                                                           \
+    do {                                                                                           \
+        if (!(cond)) {                                                                             \
+            printf("etude-prepare-test: fail: %s:%d: %s: %s\n", __FILE__, __LINE__, (row), #cond); \
+            fails++;                                                                               \
+        }                                                                                          \
     } while (0)
 
 /* The room for a path: a fixture's are under a $TMPDIR of at most 100
@@ -233,7 +233,7 @@ static void make_tree(const char *name, char *tree, size_t size)
     bad |= mkfifo(in(path, sizeof(path), tree, "hang.fifo"), 0644) != 0;
     bad |= mkfifo(in(path, sizeof(path), tree, "started.fifo"), 0644) != 0;
     if (bad) {
-        printf("etude-legacy-test: fail: the fixture tree %s was not made\n", tree);
+        printf("etude-prepare-test: fail: the fixture tree %s was not made\n", tree);
         exit(1);
     }
 }
@@ -268,7 +268,7 @@ static void run(struct etude_legacy_opts *o, struct outcome *r)
 
     r->out[0] = '\0';
     if (f == NULL) {
-        printf("etude-legacy-test: fail: no file for the output: %s\n", strerror(errno));
+        printf("etude-prepare-test: fail: no file for the output: %s\n", strerror(errno));
         exit(1);
     }
     o->out = f;
@@ -283,7 +283,7 @@ static void run(struct etude_legacy_opts *o, struct outcome *r)
 static void show(const struct outcome *r, int before)
 {
     if (fails != before)
-        printf("etude-legacy-test: its output:\n%s", r->out);
+        printf("etude-prepare-test: its output:\n%s", r->out);
 }
 
 /* ---- Rows. ---- */
@@ -305,7 +305,7 @@ static void test_alone(void)
     read_text(o.record, record, sizeof(record));
     record_files(record, files, sizeof(files));
     CHECK(r.status == 0, "alone: prepared");
-    CHECK(has_line(r.out, "etude-legacy: result: prepared: 3 goals, 3 files"), "alone: result");
+    CHECK(has_line(r.out, "etude prepare: result: prepared: 3 goals, 3 files"), "alone: result");
     CHECK(line_at(calls, "recovery-key i686 build/rach2/kernel C") == 0, "alone: key first");
     CHECK(line_at(calls, "components i686 build/rach2/kernel C") >
               line_at(calls, "build/rach2/kernel i686 build/rach2/kernel C"),
@@ -320,7 +320,7 @@ static void test_alone(void)
     sha_text("src\n", hex);
     fix_format(want, sizeof(want), "file %s 4 ", hex);
     CHECK(strstr(record, want) != NULL, "alone: a file's digest and size");
-    CHECK(has_line(record, "etude-legacy 1") && has_line(record, "arch i686") &&
+    CHECK(has_line(record, "etude-prepare 1") && has_line(record, "arch i686") &&
               has_line(record, "kernel build/rach2/kernel"),
           "alone: the record's head");
     CHECK(exists(in(path, sizeof(path), tree, "krffs/recovery_authorized_keys")),
@@ -400,7 +400,7 @@ static void refused(const char *tree, const char *row, char *const *goals, const
     o.arch = arch;
     o.kernel = kernel;
     run(&o, &r);
-    fix_format(line, sizeof(line), "etude-legacy: result: refused: %s", why);
+    fix_format(line, sizeof(line), "etude prepare: result: refused: %s", why);
     CHECK(r.status == 2, row);
     CHECK(has_line(r.out, line), row);
     CHECK(!exists(in(path, sizeof(path), tree, "calls")), row);
@@ -450,10 +450,10 @@ static void test_failed(void)
     fix_format(path, sizeof(path), "%s/3-components.log", o.work);
     read_text(path, log, sizeof(log));
     CHECK(r.status == 1, "failed: failed");
-    CHECK(has_line(r.out, "etude-legacy: result: failed: components: it exited 2"),
+    CHECK(has_line(r.out, "etude prepare: result: failed: components: it exited 2"),
           "failed: the result names the step");
     work = realpath(o.work, NULL);
-    fix_format(line, sizeof(line), "etude-legacy: evidence: %s", work != NULL ? work : o.work);
+    fix_format(line, sizeof(line), "etude prepare: evidence: %s", work != NULL ? work : o.work);
     free(work);
     CHECK(has_line(r.out, line) && strstr(log, "components") != NULL, "failed: its log kept");
     CHECK(strstr(r.out, "step: artifacts") == NULL && strstr(calls, "a.img") == NULL,
@@ -475,9 +475,9 @@ static void test_missing(void)
     opts_for(&o, tree, "missing", goals);
     run(&o, &r);
     CHECK(r.status == 1, "missing: failed");
-    CHECK(has_line(r.out, "etude-legacy: missing: build/images/d.img: No such file or directory"),
+    CHECK(has_line(r.out, "etude prepare: missing: build/images/d.img: No such file or directory"),
           "missing: the goal named");
-    CHECK(has_line(r.out, "etude-legacy: result: failed: 1 of 2 artifacts are missing"),
+    CHECK(has_line(r.out, "etude prepare: result: failed: 1 of 2 artifacts are missing"),
           "missing: the result");
     CHECK(!exists(o.record), "missing: no record");
     show(&r, before);
@@ -509,7 +509,7 @@ static void test_bound(void)
     o.seconds = 1;
     run(&o, &r);
     CHECK(r.status == 1, "bound: failed");
-    CHECK(has_line(r.out, "etude-legacy: result: failed: artifacts: it ran past its bound of 1 s"),
+    CHECK(has_line(r.out, "etude prepare: result: failed: artifacts: it ran past its bound of 1 s"),
           "bound: the result");
     CHECK(no_reader(in(path, sizeof(path), tree, "hang.fifo")), "bound: its recipe ended");
     show(&r, before);
@@ -647,28 +647,28 @@ static void test_check(void)
     fix_format(record, sizeof(record), "%s/alone.record", fix_dir());
     in(img, sizeof(img), tree, "build/images/a.img");
     CHECK(check(record, 0, out, sizeof(out)) == 0 && check(record, 1, out, sizeof(out)) == 0 &&
-              has_line(out, "etude-legacy: result: unchanged: 3 files"),
+              has_line(out, "etude check: result: unchanged: 3 files"),
           "check: unchanged");
     overwrite(img, "SRC\n");
     CHECK(check(record, 0, out, sizeof(out)) == 0, "check: same size and time pass by status");
     CHECK(check(record, 1, out, sizeof(out)) == 1 &&
-              has_line(out, "etude-legacy: changed: build/images/a.img"),
+              has_line(out, "etude check: changed: build/images/a.img"),
           "check: a changed content found by digest");
     fix_format(tmp, sizeof(tmp), "%s.new", img);
     write_text(tmp, "src\n", 0644);
     rename(tmp, img);
     CHECK(check(record, 0, out, sizeof(out)) == 1 &&
-              has_line(out, "etude-legacy: result: changed: 1 of 3 files"),
+              has_line(out, "etude check: result: changed: 1 of 3 files"),
           "check: a new file found by status");
     CHECK(check(record, 1, out, sizeof(out)) == 0, "check: the same content passes by digest");
     unlink(in(tmp, sizeof(tmp), tree, "krffs/shadow"));
     CHECK(check(record, 1, out, sizeof(out)) == 1 &&
-              has_line(out, "etude-legacy: missing: krffs/shadow: No such file or directory"),
+              has_line(out, "etude check: missing: krffs/shadow: No such file or directory"),
           "check: a missing file");
     fix_format(tmp, sizeof(tmp), "%s.bad", record);
-    write_text(tmp, "etude-legacy 1\ntree /\nfile 00 1 2 3 x\n", 0644);
+    write_text(tmp, "etude-prepare 1\ntree /\nfile 00 1 2 3 x\n", 0644);
     CHECK(check(tmp, 0, out, sizeof(out)) == 2, "check: a malformed record");
-    write_text(tmp, "etude-legacy 2\n", 0644);
+    write_text(tmp, "etude-prepare 2\n", 0644);
     CHECK(check(tmp, 0, out, sizeof(out)) == 2, "check: another record");
 }
 
@@ -722,11 +722,11 @@ static void test_graph(void)
     CHECK(res != NULL && res->state == ETUDE_PREP_BUILT &&
               etude_store_path(s, res->digest, obj, sizeof(obj)) == 0 &&
               read_text(obj, text, sizeof(text)) > 0 &&
-              strncmp(text, "etude-legacy 1\n", 15) == 0 && has_line(text, "arch i686") &&
+              strncmp(text, "etude-prepare 1\n", 16) == 0 && has_line(text, "arch i686") &&
               strstr(text, " build/images/a.img\n") != NULL,
           "graph: the record published");
     if (res != NULL && res->state != ETUDE_PREP_BUILT)
-        printf("etude-legacy-test: the recipe's errors: %s\n", res->why);
+        printf("etude-prepare-test: the recipe's errors: %s\n", res->why);
     etude_exec_free(ex);
     etude_prep_free(g);
     if (s != NULL)
@@ -740,7 +740,7 @@ int main(int argc, char **argv)
     if (argc >= 5 && strcmp(argv[1], "--legacy") == 0)
         return recipe(argc, argv);
     if (realpath(argv[0], self) == NULL) {
-        printf("etude-legacy-test: fail: %s cannot be found\n", argv[0]);
+        printf("etude-prepare-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
     signal(SIGPIPE, SIG_IGN);

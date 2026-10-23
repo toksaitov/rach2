@@ -1,8 +1,8 @@
 /*
- * judge.c: casecheck's judgement of the report records of a program or a
- * machine scenario, its check of an attempt's results document against the
- * case, and the results document it writes for an attempt from the report
- * and the program's end.
+ * judge.c: the judgement by `etude check` of the report records of a program or
+ * a machine scenario, its check of an attempt's results document against the
+ * case, and the results document it writes for an attempt from the report and
+ * the program's end.
  *
  * All follow the Readme's Report records and Results: an assertion that
  * nothing reported is missing, one the program could not evaluate is not
@@ -13,7 +13,7 @@
  * calls a skipped assertion passed, is refused. A document written here is
  * given that check before it is printed.
  */
-#include "casecheck.h"
+#include "check.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -1845,7 +1845,7 @@ static int fault_outcome(const struct judging *j, const char *state, char *out, 
                 snprintf(out, size, "%s ended %s, where the case expects %s", r->id, r->alt, want);
                 return OUTCOME_FAIL;
             } else if ((k = console_of(j, r->id)) < 0) {
-                snprintf(missing, sizeof missing, "casecheck attempt was given no console of %s",
+                snprintf(missing, sizeof missing, "etude check attempt was given no console of %s",
                          r->id);
             } else if (!fault_shown(j, k, fault, r->id, out, size)) {
                 return OUTCOME_FAIL;
@@ -1943,7 +1943,7 @@ static int declared_outcome(const struct judging *j, const struct json *a, const
         return OUTCOME_FAIL;
     }
     if (same(json_text(a, "source"), "executor")) {
-        *detail = "casecheck attempt was given no console";
+        *detail = "etude check attempt was given no console";
         return OUTCOME_MISSING;
     }
     if (g >= 0 && j->decided[g] == NULL) {
@@ -1994,8 +1994,9 @@ static void put_assertions(struct jbuf *b, const struct judging *j, const struct
         put_assertion(b, "etude.kernel", "executor", outcome ? OUTCOME_FAIL : OUTCOME_PASS,
                       outcome ? fault : NULL);
     } else if (kernel_read(j->c, placement)) {
-        put_assertion(b, "etude.kernel", "executor", OUTCOME_MISSING,
-                      "casecheck attempt was given no console and does not read the kernel's log");
+        put_assertion(
+            b, "etude.kernel", "executor", OUTCOME_MISSING,
+            "etude check attempt was given no console and does not read the kernel's log");
     }
     if (fault_judged(j->c, placement)) {
         outcome = fault_outcome(j, state, fault, sizeof fault);
@@ -2165,7 +2166,7 @@ static void write_document(struct jbuf *b, const struct judging *j, const struct
 /**
  * Checks the results document `text` as `results` checks one: by the
  * results schema, and against its case in `set`. Returns the outcome its
- * assertions give, or -1 after a finding, which is a fault of casecheck.
+ * assertions give, or -1 after a finding, which is a fault of `etude check`.
  */
 static int recheck(const struct cases *set, const char *text)
 {
@@ -2183,7 +2184,7 @@ static int recheck(const struct cases *set, const char *text)
         result = judge_document(set, doc, "attempt", why, sizeof why);
     }
     if (findings() > before) {
-        finding(NULL, 0, "attempt: casecheck wrote a results document that fails its own check");
+        finding(NULL, 0, "attempt: etude check wrote a results document that fails its own check");
         result = -1;
     }
     json_free(doc);

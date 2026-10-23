@@ -1,19 +1,20 @@
 # bootstrap.sh: build a version of etude on the machine it is for, from its
 # source, into that machine's cache of versions, or find it built there.
 #
-# version.sh sends this file to a POSIX sh that reads it on its standard
-# input, after the assignments of ETUDE_NONCE, ETUDE_SOURCE, ETUDE_CC and
-# ETUDE_CACHE and before the definitions of etude_files and etude_unpack, and
-# ends the script with the call of etude_main. The file defines functions and
-# runs nothing, so a script cut short anywhere runs nothing but assignments,
-# and version.sh reads it as well, for the functions both ends share.
+# provision_version.sh sends this file to a POSIX sh that reads it on its
+# standard input, after the assignments of ETUDE_NONCE, ETUDE_SOURCE, ETUDE_CC
+# and ETUDE_CACHE and before the definitions of etude_files and etude_unpack,
+# and ends the script with the call of etude_main. The file defines functions
+# and runs nothing, so a script cut short anywhere runs nothing but
+# assignments, and provision_version.sh reads it as well, for the functions
+# both ends share.
 # tools/etude/Readme.md describes the cache.
 # shellcheck shell=sh
 
 # etude_fail WHAT: report WHAT on stderr and end with status 1.
 etude_fail()
 {
-    echo "etude-version: $*" >&2
+    echo "etude provision: $*" >&2
     exit 1
 }
 
@@ -59,7 +60,7 @@ etude_select()
 etude_list()
 {
     while read -r path; do
-        sum=$(etude_hash "$1/$path") || { echo "etude-version: cannot read $path" >&2; return 1; }
+        sum=$(etude_hash "$1/$path") || { echo "etude provision: cannot read $path" >&2; return 1; }
         printf '%s  %s\n' "$sum" "$path"
     done
 }
@@ -132,45 +133,29 @@ etude_main()
     cc=${ETUDE_CC:-cc}
     exe=
     flags='-std=c99 -O2'
-    targets=all
     # shellcheck disable=SC2016 # make expands the variable
-    hold='HOLD_SRC=$(ETUDE_HOLD_SRC)'
-    hold_flags=-D_DEFAULT_SOURCE
-    # shellcheck disable=SC2016 # make expands the variable
-    legacy='LEGACY_SRC=$(ETUDE_LEGACY_SRC)'
-    legacy_flags=-D_DEFAULT_SOURCE
-    legacy_libs=
-    # shellcheck disable=SC2016 # make expands the variable
-    bridge='BRIDGE_SRC=$(ETUDE_BRIDGE_SRC)'
-    bridge_flags=-D_DEFAULT_SOURCE
-    bridge_libs=
+    src='SRC=$(ETUDE_SRC)'
+    defs=-D_DEFAULT_SOURCE
+    libs=
     root=${ETUDE_CACHE:-}
     case $platform in
-        linux*|macos*)
-            targets='all remote bridge hold ports step' ;;
         windows*)
             cc=${ETUDE_CC:-/ucrt64/bin/gcc}
             exe=.exe
-            targets='all bridge hold ports collection'
             flags='-std=c99 -O2 -static'
             # shellcheck disable=SC2016 # make expands the variable
-            legacy='LEGACY_SRC=$(ETUDE_LEGACY_WIN_SRC)'
-            legacy_flags=-D_WIN32_WINNT=0x0A00
-            legacy_libs='-lws2_32 -lbcrypt'
-            # shellcheck disable=SC2016 # make expands the variable
-            bridge='BRIDGE_SRC=$(ETUDE_BRIDGE_WIN_SRC)'
-            bridge_flags=$legacy_flags
-            bridge_libs=$legacy_libs
-            # shellcheck disable=SC2016 # make expands the variable
-            hold='HOLD_SRC=$(ETUDE_HOLD_WIN_SRC)'
-            hold_flags=-D_WIN32_WINNT=0x0A00
+            src='SRC=$(ETUDE_WIN_SRC)'
+            defs=-D_WIN32_WINNT=0x0A00
+            libs='-lws2_32 -lbcrypt'
             if [ -z "$root" ]; then
                 [ -n "${LOCALAPPDATA:-}" ] || etude_fail 'LOCALAPPDATA is not set'
                 root=$(cygpath -u "$LOCALAPPDATA") || etude_fail "cygpath cannot read $LOCALAPPDATA"
                 root=$root/etude
             fi ;;
         rach2*)
-            flags='-std=c99 -static -D__rach2__' ;;
+            flags='-std=c99 -static -D__rach2__'
+            # shellcheck disable=SC2016 # make expands the variable
+            src='SRC=$(ETUDE_RACH2_SRC)' ;;
     esac
     if [ -z "$root" ]; then
         [ -n "${HOME:-}" ] || etude_fail 'HOME is not set'
@@ -207,9 +192,7 @@ flags $flags"
     etude_files | etude_list "$build/src" > "$build/sources" || etude_fail 'cannot read the source'
     [ "$(etude_hash "$build/sources")" = "$ETUDE_SOURCE" ] ||
         etude_fail "the source arrived damaged: its digest is not $ETUDE_SOURCE"
-    # shellcheck disable=SC2086 # CC is a command line
-    # shellcheck disable=SC2086 # TARGETS is a list of targets
-    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" "$hold" HOLD_FLAGS="$hold_flags" "$legacy" LEGACY_FLAGS="$legacy_flags" LEGACY_LIBS="$legacy_libs" "$bridge" BRIDGE_FLAGS="$bridge_flags" BRIDGE_LIBS="$bridge_libs" $targets) >&2 ||
+    (cd "$build/src" && unset MAKEFLAGS MFLAGS MAKELEVEL && make -f tools/etude/version.mk OUT=../bin EXE="$exe" CC="$cc" CFLAGS="$flags" "$src" FLAGS="$defs" LIBS="$libs") >&2 ||
         etude_fail "the build of $key failed"
     {
         printf '%s\n' "$identity"

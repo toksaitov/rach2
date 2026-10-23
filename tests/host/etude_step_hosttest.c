@@ -1,11 +1,11 @@
 /**
- * Check etude-step: the key of a step and what changes it, a copy-mode step
+ * Check `etude build`: the key of a step and what changes it, a copy-mode step
  * stored by one copy and taken by another, a link-mode step built in the
  * store with the links of its uses, the build without the store, the key a
  * command is given, the steps that are not shared, a failed and an
  * unfinished build, ccache's names, two builds of one key at once, the
  * removal of entries nobody uses, and the refusals. Each row runs the
- * program's main in a child of the test, in copies and a store of its own.
+ * command's entry in a child of the test, in copies and a store of its own.
  * host-deps: utils/sha256.c
  * host-cflags: -I utils -Wall -Wextra -Werror
  */
@@ -23,18 +23,17 @@
 
 #include "compat/fixdir_host.c"
 
-#define main step_main
-#include "../../tools/etude/step/etude_step.c"
-#undef main
+#include "../../tools/etude/verbs.h"
+#include "../../tools/etude/step/step.c"
 
 static int fails;
 
-#define CHECK(c, row)                                                    \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            fprintf(stderr, "etude-step-test: fail: %s: %s\n", row, #c); \
-            fails++;                                                     \
-        }                                                                \
+#define CHECK(c, row)                                                     \
+    do {                                                                  \
+        if (!(c)) {                                                       \
+            fprintf(stderr, "etude-build-test: fail: %s: %s\n", row, #c); \
+            fails++;                                                      \
+        }                                                                 \
     } while (0)
 
 /* What one run of the program gave. */
@@ -68,7 +67,7 @@ static void put(const char *path, const char *text)
     make_parents(path);
     f = fopen(path, "w");
     if (f == NULL || fputs(text, f) == EOF || fclose(f) != 0) {
-        fprintf(stderr, "etude-step-test: cannot write %s\n", path);
+        fprintf(stderr, "etude-build-test: cannot write %s\n", path);
         exit(1);
     }
 }
@@ -113,7 +112,7 @@ static pid_t start(const char *dir, char **argv, const char *out)
         close(fd);
         while (argv[argc])
             argc++;
-        exit(step_main(argc, argv));
+        exit(etude_build_main(argc, argv));
     }
     return pid;
 }
@@ -139,7 +138,7 @@ static void make_copy(const char *name, char *copy, size_t size, const char *tex
     fix_format(p, sizeof p, "%s/%s", fix_dir(), name);
     mkdir(p, 0700);
     if (realpath(p, copy) == NULL || strlen(copy) >= size) {
-        fprintf(stderr, "etude-step-test: cannot make %s\n", p);
+        fprintf(stderr, "etude-build-test: cannot make %s\n", p);
         exit(1);
     }
     fix_format(p, sizeof p, "%s/src/in.txt", copy);
@@ -163,16 +162,16 @@ static void key_of(const char *dir, char **argv, char key[65])
 static void test_key(void)
 {
     char k1[65], k2[65], k3[65], k4[65], k5[65], k6[65], p[1200];
-    char *one[] = {"etude-step", "-p",  "-n", "demo",       "-t", "st/demo.stamp", "-a", "i686",
-                   "-i",         "src", "-i", "src/in.txt", "-o", "out",           NULL};
-    char *order[] = {"etude-step", "-p",         "-n", "demo", "-t", "st/demo.stamp", "-a", "i686",
-                     "-i",         "src/in.txt", "-i", "src",  "-o", "out",           NULL};
-    char *arch[] = {"etude-step", "-p",  "-n", "demo", "-t", "st/demo.stamp", "-a", "x86_64",
-                    "-i",         "src", "-o", "out",  NULL};
-    char *outs[] = {"etude-step", "-p",  "-n", "demo", "-t", "st/demo.stamp", "-a", "i686",
-                    "-i",         "src", "-o", "out",  "-o", "more",          NULL};
-    char *dep[] = {"etude-step", "-p",  "-n", "demo",     "-t", "st/demo.stamp", "-a", "i686",
-                   "-i",         "src", "-d", "up.stamp", "-o", "out",           NULL};
+    char *one[] = {"etude", "-p",  "-n", "demo",       "-t", "st/demo.stamp", "-a", "i686",
+                   "-i",    "src", "-i", "src/in.txt", "-o", "out",           NULL};
+    char *order[] = {"etude", "-p",         "-n", "demo", "-t", "st/demo.stamp", "-a", "i686",
+                     "-i",    "src/in.txt", "-i", "src",  "-o", "out",           NULL};
+    char *arch[] = {"etude", "-p",  "-n", "demo", "-t", "st/demo.stamp", "-a", "x86_64",
+                    "-i",    "src", "-o", "out",  NULL};
+    char *outs[] = {"etude", "-p",  "-n", "demo", "-t", "st/demo.stamp", "-a", "i686",
+                    "-i",    "src", "-o", "out",  "-o", "more",          NULL};
+    char *dep[] = {"etude", "-p",  "-n", "demo",     "-t", "st/demo.stamp", "-a", "i686",
+                   "-i",    "src", "-d", "up.stamp", "-o", "out",           NULL};
     struct ran r;
 
     key_of(copy_a, one, k1);
@@ -208,7 +207,7 @@ static void test_key(void)
 static void test_copy(void)
 {
     char buf[512], p[1200], want[1200];
-    char *argv[] = {"etude-step",
+    char *argv[] = {"etude",
                     "-s",
                     store,
                     "-n",
@@ -280,7 +279,7 @@ static void entry_path(const char *copy, const char *stamp, const char *rel, cha
 static void test_link(void)
 {
     char buf[PATH_LEN], p[1200], q[1200];
-    char *tc[] = {"etude-step",
+    char *tc[] = {"etude",
                   "-s",
                   store,
                   "-n",
@@ -300,7 +299,7 @@ static void test_link(void)
                   "echo \"$ETUDE_STEP_ROOT\" > \"$ETUDE_STEP_ROOT/cross/where\" && "
                   "echo built >> ../ran-tc",
                   NULL};
-    char *ports[] = {"etude-step",
+    char *ports[] = {"etude",
                      "-s",
                      store,
                      "-n",
@@ -369,7 +368,7 @@ static void test_here(void)
 {
     char buf[1200], p[1200];
     char *off[] = {
-        "etude-step",
+        "etude",
         "-s",
         "",
         "-n",
@@ -388,7 +387,7 @@ static void test_here(void)
         "mkdir -p \"$ETUDE_STEP_ROOT/cross\" && echo here > \"$ETUDE_STEP_ROOT/cross/where\"",
         NULL};
     char *ports[] = {
-        "etude-step",
+        "etude",
         "-s",
         store,
         "-n",
@@ -408,9 +407,9 @@ static void test_here(void)
         "-c",
         "mkdir -p \"$ETUDE_STEP_ROOT/root\" && echo local > \"$ETUDE_STEP_ROOT/root/w\"",
         NULL};
-    char *nokey[] = {"etude-step", "-s", store, "-n", "nokey", "-t", "st/nokey.stamp", "-d",
-                     "old.stamp",  "-o", "nk",  "--", "sh",    "-c", "echo x > nk",    NULL};
-    char *leak[] = {"etude-step",
+    char *nokey[] = {"etude",     "-s", store, "-n", "nokey", "-t", "st/nokey.stamp", "-d",
+                     "old.stamp", "-o", "nk",  "--", "sh",    "-c", "echo x > nk",    NULL};
+    char *leak[] = {"etude",
                     "-s",
                     store,
                     "-n",
@@ -461,23 +460,12 @@ static void test_here(void)
 static void test_key_env(void)
 {
     char buf[512], stamp[512];
-    char *keyed[] = {"etude-step",
-                     "-s",
-                     "",
-                     "-n",
-                     "env",
-                     "-t",
-                     "st/env.stamp",
-                     "-i",
-                     "src",
-                     "-o",
-                     "ek",
-                     "--",
-                     "sh",
-                     "-c",
-                     "echo \"etude-step 1 $ETUDE_STEP_KEY here\" > ek",
-                     NULL};
-    char *unkeyed[] = {"etude-step",
+    char *keyed[] = {
+        "etude", "-s",           "",   "-n",  "env",
+        "-t",    "st/env.stamp", "-i", "src", "-o",
+        "ek",    "--",           "sh", "-c",  "echo \"etude-step 1 $ETUDE_STEP_KEY here\" > ek",
+        NULL};
+    char *unkeyed[] = {"etude",
                        "-s",
                        "",
                        "-n",
@@ -510,15 +498,24 @@ static void test_key_env(void)
 static void test_failures(void)
 {
     char buf[256], p[1200];
-    char *fail[] = {"etude-step", "-s", store, "-n", "fail", "-t", "st/fail.stamp",      "-i",
-                    "src",        "-o", "f",   "--", "sh",   "-c", "echo x > f; exit 3", NULL};
-    char *none[] = {"etude-step", "-s",  store, "-n",      "none", "-t",   "st/none.stamp",
-                    "-i",         "src", "-o",  "missing", "--",   "true", NULL};
-    char *lost[] = {
-        "etude-step",           "-s", "", "-n", "lost", "-t", "st/lost.stamp", "-o", "x", "--",
-        "/nonexistent/command", NULL};
+    char *fail[] = {"etude", "-s", store, "-n", "fail", "-t", "st/fail.stamp",      "-i",
+                    "src",   "-o", "f",   "--", "sh",   "-c", "echo x > f; exit 3", NULL};
+    char *none[] = {"etude", "-s",  store, "-n",      "none", "-t",   "st/none.stamp",
+                    "-i",    "src", "-o",  "missing", "--",   "true", NULL};
+    char *lost[] = {"etude",
+                    "-s",
+                    "",
+                    "-n",
+                    "lost",
+                    "-t",
+                    "st/lost.stamp",
+                    "-o",
+                    "x",
+                    "--",
+                    "/nonexistent/command",
+                    NULL};
     char *cut[] = {
-        "etude-step",
+        "etude",
         "-s",
         store,
         "-n",
@@ -570,7 +567,7 @@ static void test_failures(void)
 static void test_ccache(void)
 {
     char buf[4096], fake[1200], cmd[2400];
-    char *argv[] = {"etude-step",
+    char *argv[] = {"etude",
                     "-s",
                     store,
                     "-n",
@@ -590,7 +587,7 @@ static void test_ccache(void)
                     "-c",
                     cmd,
                     NULL};
-    char *off[] = {"etude-step",
+    char *off[] = {"etude",
                    "-s",
                    "",
                    "-n",
@@ -619,7 +616,7 @@ static void test_ccache(void)
     CHECK(r.status == 0 && strstr(buf, "ccache as cc\n") != NULL &&
               strstr(buf, "ccache as i686-linux-gnu-gcc\n") != NULL,
           "ccache: the compilers' names run ccache");
-    CHECK(strstr(buf, "path ") != NULL && strstr(buf, "/etude-step.") != NULL &&
+    CHECK(strstr(buf, "path ") != NULL && strstr(buf, "/etude-build.") != NULL &&
               strstr(buf, "cc /") != NULL && strstr(buf, "hash true\n") != NULL &&
               strstr(buf, copy_a) != NULL,
           "ccache: the command has the names first on its path, and ccache's variables");
@@ -636,8 +633,8 @@ static void test_ccache(void)
 static void test_together(void)
 {
     char buf[4096], cmd[1200], started[1200], go[1200];
-    char *argv[] = {"etude-step", "-s", store, "-n", "two", "-t", "st/two.stamp", "-i", "src", "-o",
-                    "t",          "--", "sh",  "-c", cmd,   NULL};
+    char *argv[] = {"etude", "-s", store, "-n", "two", "-t", "st/two.stamp", "-i", "src", "-o",
+                    "t",     "--", "sh",  "-c", cmd,   NULL};
     const char *first = fix_path("first.out"), *second = fix_path("second.out");
     pid_t a, b;
     int sa, sb, n;
@@ -723,7 +720,7 @@ static void key_path(const char *shelf, const char *stamp, const char *what, cha
 
 /* The store of the removal's rows, its entries, and the commands they run. */
 static char shelf[PATH_LEN], tc_e[1200], ports_e[1200], demo_e[1200];
-static char *ex_tc[] = {"etude-step",
+static char *ex_tc[] = {"etude",
                         "-s",
                         shelf,
                         "-n",
@@ -741,7 +738,7 @@ static char *ex_tc[] = {"etude-step",
                         "-c",
                         "mkdir -p \"$ETUDE_STEP_ROOT/cross\"",
                         NULL};
-static char *ex_ports[] = {"etude-step",
+static char *ex_ports[] = {"etude",
                            "-s",
                            shelf,
                            "-n",
@@ -761,13 +758,13 @@ static char *ex_ports[] = {"etude-step",
                            "-c",
                            "mkdir -p \"$ETUDE_STEP_ROOT/root\"",
                            NULL};
-static char *ex_demo[] = {"etude-step", "-s", shelf, "-n", "demo", "-t",          "e/demo.stamp",
-                          "-o",         "dm", "--",  "sh", "-c",   "echo d > dm", NULL};
-static char *ex_go[] = {"etude-step", "-s", shelf, "-e", "2", NULL};
-static char *ex_list[] = {"etude-step", "-p", "-s", shelf, "-e", "2", NULL};
-static char *ex_named[] = {"etude-step", "-s", shelf, "-e", "2", "-n", "x", NULL};
-static char *ex_word[] = {"etude-step", "-s", shelf, "-e", "two", NULL};
-static char *ex_nostore[] = {"etude-step", "-e", "2", NULL};
+static char *ex_demo[] = {"etude", "-s", shelf, "-n", "demo", "-t",          "e/demo.stamp",
+                          "-o",    "dm", "--",  "sh", "-c",   "echo d > dm", NULL};
+static char *ex_go[] = {"etude", "-s", shelf, "-e", "2", NULL};
+static char *ex_list[] = {"etude", "-p", "-s", shelf, "-e", "2", NULL};
+static char *ex_named[] = {"etude", "-s", shelf, "-e", "2", "-n", "x", NULL};
+static char *ex_word[] = {"etude", "-s", shelf, "-e", "two", NULL};
+static char *ex_nostore[] = {"etude", "-e", "2", NULL};
 
 /** The removal of entries, what stays: what a recorded stamp names, what a
  * kept entry uses, and an entry used recently or whose lock is held, each
@@ -870,15 +867,12 @@ static void test_expire_removal(void)
 /** The usage errors. */
 static void test_refusals(void)
 {
-    char *noname[] = {"etude-step", "-t", "s", "-o", "x", "--", "true", NULL};
-    char *nested[] = {"etude-step", "-n", "x",   "-t", "s",    "-o",
-                      "a",          "-o", "a/b", "--", "true", NULL};
-    char *dots[] = {"etude-step", "-n", "x", "-t", "s", "-o", "../a", "--", "true", NULL};
-    char *useless[] = {"etude-step", "-n", "x", "-t", "s",    "-u",
-                       "c",          "-o", "a", "--", "true", NULL};
-    char *nostore[] = {
-        "etude-step", "-s", "/nonexistent/store", "-n", "x", "-t", "s", "-o", "a", "--",
-        "true",       NULL};
+    char *noname[] = {"etude", "-t", "s", "-o", "x", "--", "true", NULL};
+    char *nested[] = {"etude", "-n", "x", "-t", "s", "-o", "a", "-o", "a/b", "--", "true", NULL};
+    char *dots[] = {"etude", "-n", "x", "-t", "s", "-o", "../a", "--", "true", NULL};
+    char *useless[] = {"etude", "-n", "x", "-t", "s", "-u", "c", "-o", "a", "--", "true", NULL};
+    char *nostore[] = {"etude", "-s", "/nonexistent/store", "-n", "x", "-t", "s", "-o", "a", "--",
+                       "true",  NULL};
     struct ran r;
 
     run(copy_a, noname, &r);
@@ -904,7 +898,7 @@ int main(void)
     fix_format(p, sizeof p, "%s/store", fix_dir());
     mkdir(p, 0700);
     if (realpath(p, store) == NULL) {
-        fprintf(stderr, "etude-step-test: cannot make %s\n", p);
+        fprintf(stderr, "etude-build-test: cannot make %s\n", p);
         return 1;
     }
     make_copy("copy-a", copy_a, sizeof copy_a, "one\n");
@@ -923,10 +917,10 @@ int main(void)
     fix_format(p, sizeof p, "%s", store);
     remove_tree(p);
     if (fails != 0) {
-        fprintf(stderr, "etude-step-test: %d checks failed\n", fails);
+        fprintf(stderr, "etude-build-test: %d checks failed\n", fails);
         return 1;
     }
     fix_passed();
-    printf("etude-step-test: pass\n");
+    printf("etude-build-test: pass\n");
     return 0;
 }

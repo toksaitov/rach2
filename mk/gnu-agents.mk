@@ -11,8 +11,8 @@
 # recipe, each rewritten only when the list changes, so that the root image
 # that installs them is built again then. Each rule writes a temporary named
 # by the shell's process ID, as mk/gnu.mk says. A package's stamp runs
-# through etude-step as the steps of mk/gnu.mk do, with the package's stage
-# as its output.
+# through `etude build` as the steps of mk/gnu.mk do, with the package's
+# stage as its output.
 GNU_AGENTS_ALL = $(sort $(patsubst vendor/gnu/agents/packages/%.sh,%,$(wildcard vendor/gnu/agents/packages/*.sh)))
 GNU_AGENTS_ON = $(if $(filter all,$(GNU_AGENTS)),$(GNU_AGENTS_ALL),$(sort $(GNU_AGENTS)))
 GNU_AGENTS_LIST = $(GNU_OUT)/agents.list
@@ -42,7 +42,7 @@ $(GNU_AGENTS_ALL_LIST): gnu-agents-check
 	@t=$@.$$$$; echo "$(GNU_AGENTS_ALL)" >$$t && \
 	    if cmp -s $$t $@; then rm -f $$t; else mv $$t $@; fi
 
-$(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES) | $(SHA256TOOL) $(ETUDESTEP)
+$(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
 	@$(STEP) -r $(GNU_OUT) -n gnu-agents-$* -t $@ $(STEP_INPUTS) -o agents/$* \
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/agents/fetch_agents.sh $*'

@@ -127,14 +127,14 @@ $(PTYDRIVE): tests/system/runner/ptydrive.c
 # exec whose exit the kernel records as the designated init's.
 # `tests/run etudeexec`: Rach2 builds etude by its TinyCC recipe, and the POSIX
 # executor, built the same way, passes its test there. It is the case of
-# tests/cases/machine.etudeexec.json, which etude runs, and has no target
-# here: it boots os-real from ETUDEEXEC_DISK with ETUDEEXEC_ARCHIVE as its
-# second disk, a tar archive of etude's source, the executor's test and the
-# files they need, and requires a built and then a reused version, the built
-# casecheck and history_check to pass, and every row of the executor's test,
-# the subreaper's among them, to run and pass. The archive's files are copied
-# with one fixed time and archived in the order of their names, so that the
-# same sources make the same bytes. COPYFILE_DISABLE and the ustar format
+# tests/cases/machine.etudeexec.json, which etude runs, and has no target here:
+# it boots os-real from ETUDEEXEC_DISK with ETUDEEXEC_ARCHIVE as its second
+# disk, a tar archive of etude's source, the executor's test and the files they
+# need, and requires a built and then a reused version, the built etude's check
+# of its fixtures and of a history to pass, and every row of the executor's
+# test, the subreaper's among them, to run and pass. The archive's files are
+# copied with one fixed time and archived in the order of their names, so that
+# the same sources make the same bytes. COPYFILE_DISABLE and the ustar format
 # keep macOS's tar from adding a `._NAME` file or a header of each file's
 # extended attributes.
 ETUDEEXEC_DISK = $(IMAGES_DIR)/etudeexec-test.disk

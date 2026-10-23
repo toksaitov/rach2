@@ -22,19 +22,19 @@
 #   scripts   the scripted checks that host.list, beside this file, names
 #
 # The program writes the case's selection, one line for each check, and
-# etude-host runs them several at once, each with a scratch directory of its
-# own as its TMPDIR, and prints a result line for every one. No check is
-# ended for its time: as each ends, etude-host writes the report record
+# `etude run host` runs them several at once, each with a scratch directory
+# of its own as its TMPDIR, and prints a result line for every one. No check
+# is ended for its time: as each ends, etude writes the report record
 # `progress checks N`, N the checks ended so far, which this program passes
 # to its standard output as it comes, so that the case's watchdog ends a run
 # only when no check has ended for longer than its gap bound. The program
 # then writes the case's other report records on its standard output
 # (tools/etude/Readme.md, Report records): an assertion for each check, which
-# passes when etude-host's line for it is a PASS, and `listed`. The manifest
-# is the list of a case's checks: an assertion that names a check the tree
-# does not have fails, and `listed` fails for a check of the tree that the
-# case does not name, which is not run. The program exits 0 when every
-# assertion passed and 1 when one failed.
+# passes when the line etude prints for it is a PASS, and `listed`. The
+# manifest is the list of a case's checks: an assertion that names a check
+# the tree does not have fails, and `listed` fails for a check of the tree
+# that the case does not name, which is not run. The program exits 0 when
+# every assertion passed and 1 when one failed.
 #
 # etude runs it in the case's workspace, with ETUDE_TREE naming the root of
 # the tree, to which it changes first, ARCH naming the architecture of the
@@ -74,7 +74,7 @@ unset ETUDE_TREE
 }
 REPO=$(pwd -P)
 MANIFEST="$REPO/tests/cases/host.host.json"
-ETUDE_HOST="$REPO/build/tools/etude/etude-host"
+ETUDE="$REPO/build/tools/etude/etude"
 
 CC="${CC:-cc}"
 SAN="-fsanitize=address,undefined -fno-sanitize-recover=all"
@@ -408,28 +408,28 @@ else
     fail listed "checks the case does not name: $unlisted; checks the tree does not have: $absent"
 fi
 
-# Each label is a check's name in etude-host's result lines.
+# Each label is a check's name in the result lines of `etude run host`.
 dup=$(cut -f2 "$W/ids" | sort | uniq -d | head -1)
 [ -z "$dup" ] || { echo "host: two checks have the label $dup" >&2; exit 1; }
 
-noresult="etude-host gave no result for it"
+noresult="etude run host gave no result for it"
 : >"$W/out"
 if [ ! -s "$SELECTION" ]; then
     :
-elif [ ! -x "$ETUDE_HOST" ]; then
-    noresult="$ETUDE_HOST is not built; etude's preparation builds it"
+elif [ ! -x "$ETUDE" ]; then
+    noresult="$ETUDE is not built; etude's preparation builds it"
     echo "host: $noresult" >&2
 else
-    # tee ignores the stop signals, so that it passes on what etude-host
-    # prints while it ends the running checks, and the trap above removes the
-    # private directory only once etude-host has ended them.
-    { "$ETUDE_HOST" ${RACH2_WORKERS:+-j "$RACH2_WORKERS"} -p checks -l "$W" -s "$W/scratch" "$SELECTION"
+    # tee ignores the stop signals, so that it passes on what etude prints
+    # while it ends the running checks, and the trap above removes the
+    # private directory only once etude has ended them.
+    { "$ETUDE" run host ${RACH2_WORKERS:+-j "$RACH2_WORKERS"} -p checks -l "$W" -s "$W/scratch" "$SELECTION"
       echo $? >"$W/status"; } | (trap '' HUP INT TERM; exec tee "$W/out")
-    [ "$(cat "$W/status" 2>/dev/null)" != 2 ] || noresult="etude-host refused the selection"
+    [ "$(cat "$W/status" 2>/dev/null)" != 2 ] || noresult="etude run host refused the selection"
 fi
 
 # Each check's result, `ID TAB pass`, `ID TAB fail TAB WHY` or `ID TAB none`,
-# from the PASS and FAIL lines etude-host prints with the check's label.
+# from the PASS and FAIL lines etude prints with the check's label.
 awk -F'\t' '
     NR == FNR { id[$2] = $1; order[++n] = $1; next }
     substr($0, 1, 8) == "  PASS: " {

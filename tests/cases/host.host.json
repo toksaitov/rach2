@@ -174,7 +174,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 4294967296, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false},
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "e2fsck", "node": "vendor/e2fsprogs/e2fsck", "per_architecture": true},
         {"name": "exfat-writer", "node": "tests/host/exfat_writer", "per_architecture": false}
       ],
@@ -223,7 +223,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 4294967296, "disk_bytes": 2147483648, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -251,12 +251,11 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 2147483648, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false},
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test.krffs", "node": "images/test.krffs", "per_architecture": true},
         {"name": "host-etude-scenario.disk", "node": "images/host-etude-scenario.disk", "per_architecture": true},
-        {"name": "hello", "node": "tests/hello", "per_architecture": true},
-        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
+        {"name": "hello", "node": "tests/hello", "per_architecture": true}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -285,7 +284,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 1073741824, "disk_bytes": 268435456, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -318,7 +317,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 1073741824, "disk_bytes": 1073741824, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -387,7 +386,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 16000, "memory_bytes": 6576668672, "tooling_memory_bytes": 9932111872, "disk_bytes": 4294967296, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "host", "node": "tests/cases/host/host", "per_architecture": false},
-        {"name": "etude-host", "node": "tools/etude/etude-host", "per_architecture": false},
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "stageimage.krffs", "node": "krffs/stageimage.krffs", "per_architecture": false},
         {"name": "tooling-machine", "node": "tests/host/tooling_machine", "per_architecture": false}
       ],

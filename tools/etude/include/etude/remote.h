@@ -1,7 +1,7 @@
 /*
  * remote.h: remote execution over frames. The responder runs attempts for a
  * controller that reaches it on its standard input and output, as
- * `etude-remote --stdio` does through SSH; the controller's side starts the
+ * `etude serve --stdio` does through SSH; the controller's side starts the
  * responder through a command, stores files, runs an attempt and reads its
  * end, across lost connections. tools/etude/Readme.md gives the protocol.
  */
@@ -81,7 +81,7 @@ enum etude_remote_status {
 struct etude_remote_conf {
     char *const *argv;    /* the command whose standard input and output are
                              the responder's, such as ssh(1) running
-                             `etude-remote --stdio` */
+                             `etude serve --stdio` */
     const char *run_id;   /* the run, whose digest is the session */
     const char *journal;  /* a file where each command is recorded before it
                              is sent, so that a later controller of the run

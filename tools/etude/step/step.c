@@ -1,5 +1,5 @@
 /*
- * etude_step.c: etude-step, which runs one step of the build, such as a
+ * step.c: `etude build`, which runs one step of the build, such as a
  * vendored project's build script, through the host's store of step outputs.
  * tools/etude/Readme.md gives its usage and the store's layout.
  */
@@ -81,12 +81,12 @@ static void on_signal(int sig)
 
 static int usage(void)
 {
-    fprintf(stderr, "usage: etude-step [-p] [-s STORE] -n NAME -t STAMP [-a ARCH] [-c CC]... "
+    fprintf(stderr, "usage: etude build [-p] [-s STORE] -n NAME -t STAMP [-a ARCH] [-c CC]... "
                     "[-w CC]...\n"
                     "                  [-i FILE]... [-d STAMP]... [-r ROOT [-u PATH]...] "
                     "[-x NAME]...\n"
                     "                  -o PATH... -- COMMAND [ARG...]\n"
-                    "       etude-step [-p] -s STORE -e DAYS\n");
+                    "       etude build [-p] -s STORE -e DAYS\n");
     return 2;
 }
 
@@ -94,7 +94,7 @@ static void say(const struct step *s, const char *fmt, ...)
 {
     va_list ap;
 
-    fprintf(stderr, "etude-step: %s: ", s->name);
+    fprintf(stderr, "etude build: %s: ", s->name);
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
@@ -869,7 +869,7 @@ static int make_shims(struct step *s)
     char name[256], p[PATH_LEN];
     int k;
 
-    if (path_fmt(s->shims, "%s/etude-step.XXXXXX", tmp && *tmp ? tmp : "/tmp") != 0 ||
+    if (path_fmt(s->shims, "%s/etude-build.XXXXXX", tmp && *tmp ? tmp : "/tmp") != 0 ||
         mkdtemp(s->shims) == NULL) {
         say(s, "cannot make a directory for ccache's names: %s", strerror(errno));
         s->shims[0] = '\0';
@@ -938,7 +938,7 @@ static int run_command(struct step *s, const char *root, const char *basedir, in
         if (shared)
             umask(002);
         execvp(s->argv[0], s->argv);
-        fprintf(stderr, "etude-step: %s: %s: %s\n", s->name, s->argv[0], strerror(errno));
+        fprintf(stderr, "etude build: %s: %s: %s\n", s->name, s->argv[0], strerror(errno));
         _exit(127);
     }
     while (waitpid(pid, &status, 0) < 0)
@@ -1221,7 +1221,7 @@ static int run_here(struct step *s)
         return command_exit(status);
     if (check_outputs(s, s->root ? s->root : ".") != 0 || write_stamp(s, "here") != 0)
         return 1;
-    printf("etude-step: %s: result: built here, %.12s\n", s->name, s->key);
+    printf("etude build: %s: result: built here, %.12s\n", s->name, s->key);
     return 0;
 }
 
@@ -1239,7 +1239,7 @@ static int build_in_store(struct step *s, const char *entry)
     chmod(tree, 02775);
     if (link_uses(s, tree, 1) != 0)
         return 1;
-    printf("etude-step: %s: building in the store, %s\n", s->name, entry);
+    printf("etude build: %s: building in the store, %s\n", s->name, entry);
     status = run_command(s, tree, tree, 1);
     if (status == 0 && stop_signal)
         return 128 + stop_signal;
@@ -1256,14 +1256,14 @@ static int build_in_store(struct step *s, const char *entry)
     }
     if (place(s, tree) != 0 || write_stamp(s, "store") != 0)
         return 1;
-    printf("etude-step: %s: result: built in the store, %.12s\n", s->name, s->key);
+    printf("etude build: %s: result: built in the store, %.12s\n", s->name, s->key);
     return 0;
 }
 
 /**
  * Open the lock of `key` and take it, waiting for another process that holds
  * it when `wait` is 1: its descriptor; -2 when `wait` is 0 and the lock is
- * held; -1 on an error or a stop. A lock file that `etude-step -e` removed
+ * held; -1 on an error or a stop. A lock file that `etude build -e` removed
  * while this process waited for it is opened again, so that every holder
  * holds the file the path names. `made` is 1 when this process made the file.
  */
@@ -1294,7 +1294,7 @@ static int lock_key(const struct step *s, const char *key, int wait, int *made)
                 close(fd);
                 return -2;
             }
-            printf("etude-step: %s: waiting for another build of %.12s\n", s->name, key);
+            printf("etude build: %s: waiting for another build of %.12s\n", s->name, key);
             fflush(stdout);
             while (flock(fd, LOCK_EX) != 0)
                 if (errno != EINTR || stop_signal) {
@@ -1329,7 +1329,7 @@ static int hold_key(const struct step *s, int *rc)
 /**
  * Record in the store's stamps/ that the step's stamp names its key: a link
  * `stamps/KEY.HASH` to the stamp's absolute path, HASH being the SHA-256 of
- * the path. `etude-step -e` keeps each entry whose key a stamp so recorded
+ * the path. `etude build -e` keeps each entry whose key a stamp so recorded
  * still names. A failure is reported and does not fail the step.
  */
 static void record_stamp(const struct step *s)
@@ -1365,9 +1365,9 @@ static int build_and_add(struct step *s, const char *entry)
     if (check_outputs(s, ".") != 0 || write_stamp(s, "here") != 0)
         return 1;
     if (!stop_signal && add_copies(s, entry) == 0)
-        printf("etude-step: %s: result: built and stored, %.12s\n", s->name, s->key);
+        printf("etude build: %s: result: built and stored, %.12s\n", s->name, s->key);
     else
-        printf("etude-step: %s: result: built here, %.12s\n", s->name, s->key);
+        printf("etude build: %s: result: built here, %.12s\n", s->name, s->key);
     return 0;
 }
 
@@ -1394,7 +1394,7 @@ static int run_shared(struct step *s)
     if (stat(record, &st) == 0) {
         rc = place(s, tree) == 0 && write_stamp(s, "store") == 0 ? 0 : 1;
         if (rc == 0)
-            printf("etude-step: %s: result: taken from the store, %.12s\n", s->name, s->key);
+            printf("etude build: %s: result: taken from the store, %.12s\n", s->name, s->key);
     } else if (lstat(entry, &st) == 0 && discard(s, entry) != 0) {
         rc = 1;
     } else if (s->root) {
@@ -1550,7 +1550,7 @@ static void entry_what(const char *entry, char *what, size_t size)
     snprintf(what, size, "%s%s", step, arch);
 }
 
-/* An entry that `etude-step -e` may remove: its key, the time a step last
+/* An entry that `etude build -e` may remove: its key, the time a step last
  * used it, and the descriptor of its lock while this process holds it. */
 struct doomed {
     char key[65];
@@ -1605,7 +1605,7 @@ static int drop_entry(const struct step *s, const struct doomed *d, double *free
         unlink(lock);
     }
     *freed += bytes;
-    printf("etude-step: %s: %s %.12s, %s, %.0f MiB, unused for %ld days\n", s->name,
+    printf("etude build: %s: %s %.12s, %s, %.0f MiB, unused for %ld days\n", s->name,
            s->print ? "would remove" : "removed", d->key, what, bytes / 1048576,
            (long)((time(NULL) - d->used) / 86400));
     return 0;
@@ -1639,7 +1639,7 @@ static void drop_locks(const struct step *s, time_t before)
     closedir(d);
 }
 
-/* What `etude-step -e` works out: the keys it keeps, and the entries it may
+/* What `etude build -e` works out: the keys it keeps, and the entries it may
  * remove. */
 struct sweep {
     struct lines live; /* the keys kept: named, recent, or used by one kept */
@@ -1761,7 +1761,7 @@ static int expire(struct step *s)
         drop_locks(s, w.before);
         clear_stale(s);
     }
-    printf("etude-step: %s: result: %s %d entries, %.1f GiB, and %d links of stamps that are "
+    printf("etude build: %s: result: %s %d entries, %.1f GiB, and %d links of stamps that are "
            "gone; kept %d entries\n",
            s->name, s->print ? "would remove" : "removed", removed, freed / 1073741824.0, dropped,
            w.entries - removed);
@@ -1891,7 +1891,7 @@ static int parse(struct step *s, int argc, char **argv)
     return check_placed(s);
 }
 
-int main(int argc, char **argv)
+int etude_build_main(int argc, char **argv)
 {
     static struct step step;
     struct step *s = &step;

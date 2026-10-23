@@ -18,8 +18,8 @@
 # on. The job runs master's copy of the script from outside the tree, since
 # the script checks out each commit it tests, and builds master's etude in
 # the cache of etude's versions, also outside the tree, so that a machine
-# where etude admits tests runs each test through that version's
-# etude-bridge. The run's title names the issue, by which the manager finds
+# where etude admits tests runs each test through that version's `etude
+# admit`. The run's title names the issue, by which the manager finds
 # and cancels the run of an issue that has been closed.
 name: Bisect a failure
 run-name: 'Bisect #${{ inputs.issue }}: ${{ inputs.items }} on ${{ inputs.arch }}'
@@ -94,8 +94,8 @@ jobs:
           case "$ITEMS" in *[!a-z0-9\ -]*) echo "bisect: refused: items '$ITEMS'" >&2; exit 2 ;; esac
           case "$CONFIRMED" in '') set -- ;; yes) set -- -c ;; *) echo "bisect: refused: confirmed '$CONFIRMED'" >&2; exit 2 ;; esac
           case "$RUN" in '') ;; *[!0-9]*) echo "bisect: refused: run '$RUN'" >&2; exit 2 ;; *) set -- "$@" -r "$RUN" ;; esac
-          if version=$(sh tools/etude/version.sh -l); then
-              set -- "$@" -e "${version##* }/bin/etude-bridge"
+          if version=$(sh tools/etude/provision_version.sh -l); then
+              set -- "$@" -e "${version##* }/bin/etude"
           else
               echo "bisect: etude could not be built, so a machine where etude admits tests cannot bisect" >&2
           fi

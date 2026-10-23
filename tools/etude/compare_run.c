@@ -1,4 +1,4 @@
-/* compare_run.c: history_compare, which compares a run with its history. */
+/* compare_run.c: `etude compare`, which compares a run with its history. */
 #include "compare.h"
 #include "include/etude/history.h"
 #include <stdio.h>
@@ -18,7 +18,7 @@ const char cmp_policy[] =
     "by no more than the sum of the bands, and otherwise regression or improved.\n";
 
 static const char usage_text[] =
-    "usage: history_compare [-n] [-s SCHEMAS] [-b STORE] [-g REPO] [-o STREAM -i ID] RUN "
+    "usage: etude compare [-n] [-s SCHEMAS] [-b STORE] [-g REPO] [-o STREAM -i ID] RUN "
     "HISTORY...\n";
 
 /* A group of the run's items that share a key, and their first attempts. */
@@ -100,8 +100,8 @@ static int find_plan(struct session *s)
         }
     }
     if (plans != 1)
-        fprintf(stderr, "history_compare: run %s has %lu plan records, not one\n",
-                s->options.run_id, (unsigned long)plans);
+        fprintf(stderr, "etude compare: run %s has %lu plan records, not one\n", s->options.run_id,
+                (unsigned long)plans);
     return plans == 1 ? 0 : -1;
 }
 
@@ -267,7 +267,7 @@ static int record(struct session *s, const struct cmp_result *r, const struct cm
     char path[4200], hex[65], id[300];
     int status = -1;
     if (cmp_store(s->options.store, report->data, report->length, path, sizeof(path), hex)) {
-        fprintf(stderr, "history_compare: %s: cannot keep the report\n", s->options.store);
+        fprintf(stderr, "etude compare: %s: cannot keep the report\n", s->options.store);
         return -1;
     }
     record_data(&data, s, r, hex, report->length, path);
@@ -275,7 +275,7 @@ static int record(struct session *s, const struct cmp_result *r, const struct cm
         !etude_history_record_id(s->stream, id, sizeof(id)))
         status = etude_history_append(s->stream, id, now.utc, "comparison", data.data);
     if (status)
-        fprintf(stderr, "history_compare: %s: cannot append the comparison of %s\n",
+        fprintf(stderr, "etude compare: %s: cannot append the comparison of %s\n",
                 s->options.output, r->candidates[0]->key.value[0]);
     free(data.data);
     return status;
@@ -316,13 +316,13 @@ static int open_output(struct session *s)
     snprintf(schema, sizeof(schema), "%s/history.schema.json", s->options.schemas);
     if (cmp_store(s->options.store, cmp_policy, sizeof(cmp_policy) - 1, s->policy_path,
                   sizeof(s->policy_path), s->policy_hex)) {
-        fprintf(stderr, "history_compare: %s: cannot keep the policy\n", s->options.store);
+        fprintf(stderr, "etude compare: %s: cannot keep the policy\n", s->options.store);
         return -1;
     }
     s->stream = etude_history_open(s->options.output, schema, s->options.stream_id,
                                    s->options.run_id, CMP_STREAM_LIMIT);
     if (!s->stream)
-        fprintf(stderr, "history_compare: %s: cannot create the stream\n", s->options.output);
+        fprintf(stderr, "etude compare: %s: cannot create the stream\n", s->options.output);
     return s->stream ? 0 : -1;
 }
 
@@ -333,7 +333,7 @@ static int compare_all(struct session *s)
     for (i = 0; i < s->group_count; i++)
         if (compare_group(s, &s->groups[i]))
             return -1;
-    printf("history_compare: result: %lu regression, %lu improved, %lu within noise, "
+    printf("etude compare: result: %lu regression, %lu improved, %lu within noise, "
            "%lu insufficient history, %lu not comparable\n",
            s->verdicts[0], s->verdicts[1], s->verdicts[2], s->verdicts[3], s->verdicts[4]);
     return 0;
@@ -364,7 +364,7 @@ int cmp_main(int argc, char **argv)
         !compare_all(&s))
         status = 0;
     if (s.stream && etude_history_close(s.stream)) {
-        fprintf(stderr, "history_compare: %s: cannot close the stream\n", s.options.output);
+        fprintf(stderr, "etude compare: %s: cannot close the stream\n", s.options.output);
         status = 2;
     }
     for (i = 0; i < s.group_count; i++)

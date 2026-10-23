@@ -286,7 +286,7 @@
     },
     {
       "case_id": "host.style.checkers",
-      "behavior": "the checkers and the build rules pass their own tests: elfcheck, cfgcheck, pecheck, the compilation-database generator, suitecheck, casecheck, the recovery key, the dry-run guard, the build rules, the scope of the style checks, the faults the style cases must fail and the private log directory of this program",
+      "behavior": "the checkers and the build rules pass their own tests: elfcheck, cfgcheck, pecheck, the compilation-database generator, suitecheck, etude check, the recovery key, the dry-run guard, the build rules, the scope of the style checks, the faults the style cases must fail and the private log directory of this program",
       "units": ["style", "`elfcheck --selftest` and `cfgcheck --selftest`", "`tools/dev/gen_compile_commands.sh --selftest`", "`tests/system/recovery_key_test.sh`", "`tests/system/dryrun_test.sh`", "`tests/system/build_rules_test.sh`", "`tests/system/style_scope_test.sh`", "`tests/system/style_cases_test.sh`", "`tests/system/verify_temp_test.sh`"],
       "domain": "host",
       "architectures": "none",
@@ -299,7 +299,7 @@
         {"assertion_id": "pecheck", "checks": "pecheck --selftest passes", "source": "program"},
         {"assertion_id": "compile-db-generator", "checks": "tools/dev/gen_compile_commands.sh --selftest passes", "source": "program"},
         {"assertion_id": "suitecheck-selftest", "checks": "tools/verify/suitecheck.sh --selftest passes", "source": "program"},
-        {"assertion_id": "casecheck-selftest", "checks": "casecheck --selftest passes over tools/etude/fixtures", "source": "program"},
+        {"assertion_id": "check-selftest", "checks": "etude check --selftest passes over tools/etude/fixtures", "source": "program"},
         {"assertion_id": "recovery-key", "checks": "tests/system/recovery_key_test.sh passes", "source": "program"},
         {"assertion_id": "dryrun", "checks": "tests/system/dryrun_test.sh passes", "source": "program"},
         {"assertion_id": "build-rules", "checks": "tests/system/build_rules_test.sh passes", "source": "program"},
@@ -317,7 +317,7 @@
         {"name": "elfcheck", "node": "tools/inspect/elfcheck", "per_architecture": false},
         {"name": "cfgcheck", "node": "tools/inspect/cfgcheck", "per_architecture": false},
         {"name": "pecheck", "node": "tools/etude/win/pecheck", "per_architecture": false},
-        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false},
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false},
         {"name": "asciiscan", "node": "tools/verify/asciiscan", "per_architecture": false}
       ],
       "timing": [],
@@ -371,7 +371,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}
@@ -395,7 +395,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 4000, "memory_bytes": 1073741824, "tooling_memory_bytes": 3221225472, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "style", "node": "tests/cases/host/style", "per_architecture": false},
-        {"name": "casecheck", "node": "tools/etude/casecheck", "per_architecture": false}
+        {"name": "etude", "node": "tools/etude/etude", "per_architecture": false}
       ],
       "timing": [],
       "native": {"plan": "host"}

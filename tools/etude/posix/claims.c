@@ -1,7 +1,7 @@
 /*
- * etude_ledger.c: etude-ledger, which lists the claims of a machine's ledger
- * as recovery judges them, and drops a claim whose processes a person has
- * found ended.
+ * claims.c: `etude status`, which lists the claims of a machine's ledger as
+ * recovery judges them, and `etude release`, which drops a claim whose
+ * processes a person has found ended.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -27,13 +27,8 @@ struct lookup {
     long group;
 };
 
-/** Print the usage and return its status. */
-static int usage(void)
-{
-    fprintf(stderr, "etude-ledger: usage: etude-ledger list LEDGER\n"
-                    "etude-ledger: usage: etude-ledger drop LEDGER ID\n");
-    return 2;
-}
+/* The command that runs, `etude status` or `etude release`. */
+static const char *command;
 
 /**
  * Say whether `dir` is a ledger: a directory with the `verdicts` directory
@@ -59,10 +54,10 @@ static int is_ledger(const char *dir)
 static int failed(const char *dir)
 {
     if (errno == EBADMSG)
-        fprintf(stderr, "etude-ledger: %s: its claims file does not parse; nothing was changed\n",
+        fprintf(stderr, "%s: %s: its claims file does not parse; nothing was changed\n", command,
                 dir);
     else
-        fprintf(stderr, "etude-ledger: %s: %s\n", dir, strerror(errno));
+        fprintf(stderr, "%s: %s: %s\n", command, dir, strerror(errno));
     return 2;
 }
 
@@ -101,7 +96,7 @@ static int list(struct etude_ledger *l, const char *dir)
 
     if (etude_ledger_list(l, show, count) != 0)
         return failed(dir);
-    printf("etude-ledger: result: owned %lu, live %lu, uncertain %lu\n", (unsigned long)count[0],
+    printf("etude status: result: owned %lu, live %lu, uncertain %lu\n", (unsigned long)count[0],
            (unsigned long)count[1], (unsigned long)count[2]);
     return 0;
 }
@@ -125,13 +120,13 @@ static int find(const struct etude_ledger_claim *c, void *ctx)
 static int refuse_live(const char *id, const struct lookup *k)
 {
     if (k->running != 0)
-        fprintf(stderr, "etude-ledger: result: refused: %s: its process %ld runs\n", id,
+        fprintf(stderr, "etude release: result: refused: %s: its process %ld runs\n", id,
                 k->running);
     else if (k->group != 0)
-        fprintf(stderr, "etude-ledger: result: refused: %s: its process group %ld has a member\n",
+        fprintf(stderr, "etude release: result: refused: %s: its process group %ld has a member\n",
                 id, k->group);
     else
-        fprintf(stderr, "etude-ledger: result: refused: %s: a process of it runs\n", id);
+        fprintf(stderr, "etude release: result: refused: %s: a process of it runs\n", id);
     return 1;
 }
 
@@ -156,40 +151,72 @@ static int drop(struct etude_ledger *l, const char *dir, const char *id)
     if (k.found && k.status == ETUDE_CLAIM_LIVE)
         return refuse_live(id, &k);
     if (etude_ledger_drop(l, id) == 0) {
-        printf("etude-ledger: result: dropped: %s\n", id);
+        printf("etude release: result: dropped: %s\n", id);
         return 0;
     }
     if (errno == ENOENT) {
-        fprintf(stderr, "etude-ledger: result: refused: %s: the ledger has no such claim\n", id);
+        fprintf(stderr, "etude release: result: refused: %s: the ledger has no such claim\n", id);
         return 1;
     }
     if (errno != EBUSY)
         return failed(dir);
     if (k.found)
-        fprintf(stderr, "etude-ledger: result: refused: %s: its owner, process %ld, runs\n", id,
+        fprintf(stderr, "etude release: result: refused: %s: its owner, process %ld, runs\n", id,
                 k.owner);
     else
-        fprintf(stderr, "etude-ledger: result: refused: %s: its owner runs\n", id);
+        fprintf(stderr, "etude release: result: refused: %s: its owner runs\n", id);
     return 1;
 }
 
-/** List the ledger's claims, or drop one, as the first argument says. */
-int main(int argc, char **argv)
+/**
+ * Open the ledger `dir` for `etude status` or `etude release`, refusing a
+ * path that is not a ledger; NULL after a message.
+ */
+static struct etude_ledger *open_ledger(const char *dir)
+{
+    struct etude_ledger *l;
+
+    if (!is_ledger(dir)) {
+        fprintf(stderr, "%s: %s: not a ledger: it has no verdicts directory\n", command, dir);
+        return NULL;
+    }
+    if ((l = etude_ledger_open(dir)) == NULL)
+        failed(dir);
+    return l;
+}
+
+/** List the claims of the ledger `argv[1]`. */
+int etude_status_main(int argc, char **argv)
 {
     struct etude_ledger *l;
     int rc;
 
-    if (!(argc == 3 && strcmp(argv[1], "list") == 0) &&
-        !(argc == 4 && strcmp(argv[1], "drop") == 0))
-        return usage();
-    if (!is_ledger(argv[2])) {
-        fprintf(stderr, "etude-ledger: %s: not a ledger: it has no verdicts directory\n", argv[2]);
+    command = "etude status";
+    if (argc != 2) {
+        fputs("usage: etude status LEDGER\n", stderr);
         return 2;
     }
-    l = etude_ledger_open(argv[2]);
-    if (l == NULL)
-        return failed(argv[2]);
-    rc = argc == 3 ? list(l, argv[2]) : drop(l, argv[2], argv[3]);
+    if ((l = open_ledger(argv[1])) == NULL)
+        return 2;
+    rc = list(l, argv[1]);
+    etude_ledger_close(l);
+    return rc;
+}
+
+/** Drop the claim `argv[2]` of the ledger `argv[1]`. */
+int etude_release_main(int argc, char **argv)
+{
+    struct etude_ledger *l;
+    int rc;
+
+    command = "etude release";
+    if (argc != 3) {
+        fputs("usage: etude release LEDGER ID\n", stderr);
+        return 2;
+    }
+    if ((l = open_ledger(argv[1])) == NULL)
+        return 2;
+    rc = drop(l, argv[1], argv[2]);
     etude_ledger_close(l);
     return rc;
 }

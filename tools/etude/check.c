@@ -1,26 +1,27 @@
 /*
- * casecheck: the validator of etude's case manifests, report records,
- * results and runs, tools/etude/Readme.md's contracts.
+ * check.c: `etude check`, the validator of etude's case manifests, report
+ * records, results, runs and histories, tools/etude/Readme.md's contracts.
  *
- * casecheck [-s SCHEMAS] [-r ROOT] manifest FILE...
+ * etude check [-s SCHEMAS] [-r ROOT] manifest FILE...
  *     checks each case manifest: its shape by schemas/case.schema.json, and
  *     the rules of cases.c that relate its values; with -r, each `where`
  *     names a file and line of the tree at ROOT.
- * casecheck [-s SCHEMAS] [-r ROOT] timing FILE...
+ * etude check [-s SCHEMAS] [-r ROOT] timing FILE...
  *     checks the manifests as `manifest` does and prints each line a timing
  *     assumption declares, as `FILE:LINE KIND CASE`; suitecheck.sh accepts a
  *     sleep or a bound on a duration only at such a line.
- * casecheck [-s SCHEMAS] [-r ROOT] families FILE...
+ * etude check [-s SCHEMAS] [-r ROOT] families FILE...
  *     checks the manifests as `manifest` does and, when nothing is found,
  *     prints each one's family as `FAMILY_ID FILE`, in the order given.
- * casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... MANIFEST CASE
- *         ARCH PLACEMENT [OUTPUT]
+ * etude check [-s SCHEMAS] report [-f FEATURE=present|absent]... MANIFEST
+ *         CASE ARCH PLACEMENT [OUTPUT]
  *     judges a program's output, standard input without OUTPUT, as the
  *     report of CASE run on ARCH (i686, x86_64 or none) and placed host,
  *     qemu or native, with the processor's features that a branch group is
  *     decided by; prints each assertion's outcome and the outcome they give.
- * casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... [-k CONSOLE]...
- *         MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END [VALUE]
+ * etude check [-s SCHEMAS] attempt [-f FEATURE=present|absent]...
+ *         [-k CONSOLE]... MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM
+ *         END [VALUE]
  *     judges OUTPUT, a file or `-`, as `report` does, and prints the results
  *     document of the attempt ATTEMPT of the item ITEM of the run RUN, whose
  *     program ended as END: `exited` or `signaled` with VALUE, or `stopped`
@@ -28,42 +29,47 @@
  *     qemu, and the consoles decide the executor's assertions. The status is
  *     0 for a pass, 1 for a failure and 3 for an incomplete attempt; with 2,
  *     no document is printed.
- * casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
+ * etude check [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...
  *     checks each results document of the JSON Lines file RESULTS against
  *     its schema and its case, and prints each attempt's outcome; with -o,
  *     the outcome a history records for them, refuses one that differs.
- * casecheck [-s SCHEMAS] schema NAME FILE...
+ * etude check [-s SCHEMAS] schema NAME FILE...
  *     checks each document of FILE, or each line of a FILE whose name ends
  *     in .jsonl, against schemas/NAME.schema.json.
- * casecheck [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] ARCH SET
- *         SUITES HISTORY...
+ * etude check [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] ARCH
+ *         SET SUITES HISTORY...
  *     reads the history of one run, its streams or directories of them, as
  *     ci does: prints each item that did not pass and a last line,
- *     `casecheck: result: passed` or `casecheck: result: failed: NAME...`,
- *     each NAME a suite of SUITES, SET, or `runner` when the records cannot
- *     show what ran; verdict.c says how.
- * casecheck processor NAME
+ *     `etude check: result: passed` or `etude check: result: failed:
+ *     NAME...`, each NAME a suite of SUITES, SET, or `runner` when the
+ *     records cannot show what ran; verdict.c says how.
+ * etude check processor NAME
  *     prints the QEMU `-cpu` value of the processor profile NAME, which a
  *     script that boots QEMU itself passes, as the QEMU launcher does.
- * casecheck --selftest DIR
+ * etude check history SCHEMA STREAM
+ *     checks a closed history stream, each record by the history schema
+ *     SCHEMA and the order of its records, and exits 2 for a stream that is
+ *     invalid or whose last record was lost.
+ * etude check --selftest DIR
  *     runs the commands DIR/expect lists over the fixtures of DIR, with the
  *     schemas of DIR/../schemas, and compares each one's exit status and
  *     output with what the line expects.
  *
- * A finding goes to stderr as `casecheck: FILE:LINE: WHAT`. The exit status
- * is 0 when nothing is found (for `report`, when the report gives a pass;
- * for `verdict`, when the run passed), 1 after a finding, and 2 for a wrong
- * usage or a file that cannot be read, which for `verdict` is only the
+ * A finding goes to stderr as `etude check: FILE:LINE: WHAT`. The exit
+ * status is 0 when nothing is found (for `report`, when the report gives a
+ * pass; for `verdict`, when the run passed), 1 after a finding, and 2 for a
+ * wrong usage or a file that cannot be read, which for `verdict` is only the
  * results schema; `attempt` gives its own, above.
  * SCHEMAS is tools/etude/schemas by default.
  */
-#include "casecheck.h"
+#include "check.h"
 
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "etude/history.h"
 #include "etude/processor.h"
 #include "schema.h"
 
@@ -102,10 +108,10 @@ void finding(const char *file, int line, const char *fmt, ...)
     }
     va_start(ap, fmt);
     if (capture != NULL) {
-        jbuf_puts(capture, "casecheck: ");
+        jbuf_puts(capture, "etude check: ");
         jbuf_puts(capture, where);
     } else {
-        fprintf(stderr, "casecheck: %s", where);
+        fprintf(stderr, "etude check: %s", where);
     }
     emit(stderr, fmt, ap);
     va_end(ap);
@@ -363,7 +369,8 @@ static int command_processor(char **args, int n)
 }
 
 /**
- * Runs one command line of casecheck, as main does; returns its exit status.
+ * Runs one command line of `etude check`, as its main does; returns its exit
+ * status.
  */
 static int run(int argc, char **argv)
 {
@@ -417,18 +424,19 @@ static int run(int argc, char **argv)
 /** Prints the usage. */
 static void usage(void)
 {
-    fprintf(stderr, "usage: casecheck [-s SCHEMAS] [-r ROOT] manifest|timing|families FILE...\n"
-                    "       casecheck [-s SCHEMAS] report [-f FEATURE=present|absent]... "
+    fprintf(stderr, "usage: etude check [-s SCHEMAS] [-r ROOT] manifest|timing|families FILE...\n"
+                    "       etude check [-s SCHEMAS] report [-f FEATURE=present|absent]... "
                     "MANIFEST CASE ARCH PLACEMENT [OUTPUT]\n"
-                    "       casecheck [-s SCHEMAS] attempt [-f FEATURE=present|absent]... "
+                    "       etude check [-s SCHEMAS] attempt [-f FEATURE=present|absent]... "
                     "[-k CONSOLE]... MANIFEST CASE ARCH PLACEMENT OUTPUT RUN ATTEMPT ITEM END "
                     "[VALUE]\n"
-                    "       casecheck [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...\n"
-                    "       casecheck [-s SCHEMAS] schema NAME FILE...\n"
-                    "       casecheck [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] "
+                    "       etude check [-s SCHEMAS] results [-o OUTCOME] RESULTS MANIFEST...\n"
+                    "       etude check [-s SCHEMAS] schema NAME FILE...\n"
+                    "       etude check [-s SCHEMAS] verdict [-b STORE] [-c COMMIT] [-m CASES] "
                     "ARCH SET SUITES HISTORY...\n"
-                    "       casecheck processor NAME\n"
-                    "       casecheck --selftest DIR\n");
+                    "       etude check processor NAME\n"
+                    "       etude check history SCHEMA STREAM\n"
+                    "       etude check --selftest DIR\n");
 }
 
 /**
@@ -455,7 +463,7 @@ static int split_expect(char *line, const char *dir, char **argv, int *owned, ch
         return -1;
     }
     *expect = word[0] - '0';
-    argv[0] = "casecheck";
+    argv[0] = "check";
     while ((word = strtok(NULL, " ")) != NULL && argc < 64) {
         owned[argc] = 0;
         if (strncmp(word, "./", 2) == 0 || strncmp(word, "../", 3) == 0) {
@@ -484,7 +492,7 @@ static int selftest_line(char *line, int number, const char *dir)
     strcpy(copy, line);
     argc = split_expect(line, dir, argv, owned, &text, &expect);
     if (argc < 0) {
-        fprintf(stderr, "casecheck selftest: line %d: no status\n", number);
+        fprintf(stderr, "etude check: selftest: line %d: no status\n", number);
         free(copy);
         return 1;
     }
@@ -496,8 +504,8 @@ static int selftest_line(char *line, int number, const char *dir)
     text = absent ? text + 1 : text;
     bad = status != expect || (text != NULL && (strstr(out.data, text) == NULL) != absent);
     if (bad) {
-        fprintf(stderr, "casecheck selftest: line %d: %s\n  exit %d, expected %d%s%s\n%s", number,
-                copy, status, expect,
+        fprintf(stderr, "etude check: selftest: line %d: %s\n  exit %d, expected %d%s%s\n%s",
+                number, copy, status, expect,
                 text == NULL ? ""
                 : absent     ? ", without the text: "
                              : ", with the text: ",
@@ -544,19 +552,47 @@ static int selftest(const char *dir)
     }
     free(text);
     if (bad) {
-        fprintf(stderr, "casecheck selftest: FAIL\n");
+        fprintf(stderr, "etude check: selftest: FAIL\n");
         return 1;
     }
-    printf("casecheck selftest: %d cases OK\n", cases);
+    printf("etude check: selftest: %d cases OK\n", cases);
     return 0;
 }
 
-int main(int argc, char **argv)
+/**
+ * Checks the closed history stream `stream` by the history schema `schema`;
+ * 0 for a whole stream, 2 for one that is invalid or lost its last record.
+ */
+static int check_history(const char *schema, const char *stream)
+{
+    uint64_t line;
+    int status;
+
+    status = etude_history_read(stream, schema, NULL, NULL, &line);
+    if (status) {
+        fprintf(stderr, "etude check: %s at line %llu\n",
+                status == 1 ? "lost final record" : "invalid stream", (unsigned long long)line);
+        return 2;
+    }
+    printf("etude check: result: valid stream\n");
+    return 0;
+}
+
+/** Run `etude check` with the arguments after it. */
+int etude_check_main(int argc, char **argv)
 {
     int status;
 
+    json_program = "etude check";
     if (argc == 3 && strcmp(argv[1], "--selftest") == 0) {
         return selftest(argv[2]);
+    }
+    if (argc >= 2 && strcmp(argv[1], "history") == 0) {
+        if (argc != 4) {
+            usage();
+            return 2;
+        }
+        return check_history(argv[2], argv[3]);
     }
     status = run(argc, argv);
     if (status == 2 && found == 0) {

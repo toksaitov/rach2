@@ -1,5 +1,5 @@
 /*
- * cases.c: casecheck's rules for case manifests, beyond the shape that
+ * cases.c: the rules of `etude check` for case manifests, beyond the shape that
  * tools/etude/schemas/case.schema.json gives them.
  *
  * A schema checks one value at a time; these rules relate values to each
@@ -10,7 +10,7 @@
  * has it, and a `where` that names a line of the tree. Each rule follows a
  * sentence of tools/etude/Readme.md.
  */
-#include "casecheck.h"
+#include "check.h"
 
 #include <stdio.h>
 #include <stdlib.h>

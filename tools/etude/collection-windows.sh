@@ -22,7 +22,7 @@ collection_windows()
 {
     case $(uname -s) in MINGW*|MSYS*|UCRT*|CLANG*) ;; *) return 0 ;; esac
     make -C "$collection_root" --no-print-directory build/tools/etude/image-command \
-        build/tools/etude/etude-tooling || return 1
+        build/tools/etude/etude || return 1
     commands=$collection_root/build/tools/etude/commands
     mkdir -p "$commands" || return 1
     for tool in $COLLECTION_IMAGE_TOOLS; do

@@ -172,16 +172,16 @@ static int load(struct fl_history *h, const char *schema, const char *path)
     uint64_t line = 0;
     int status = etude_history_read(path, schema, take, h, &line);
     if (h->failed) {
-        fprintf(stderr, "history_failures: %s: out of memory\n", path);
+        fprintf(stderr, "etude show: %s: out of memory\n", path);
         return -1;
     }
     if (status < 0) {
-        fprintf(stderr, "history_failures: %s: unreadable or invalid at line %llu\n", path,
+        fprintf(stderr, "etude show: %s: unreadable or invalid at line %llu\n", path,
                 (unsigned long long)line);
         return -1;
     }
     if (status == 1) {
-        fprintf(stderr, "history_failures: %s: the record at line %llu is incomplete\n", path,
+        fprintf(stderr, "etude show: %s: the record at line %llu is incomplete\n", path,
                 (unsigned long long)line);
         return -1;
     }
@@ -206,7 +206,7 @@ static int mark_replays(struct fl_history *h)
     size_t i;
     int status = 0;
     if (!index) {
-        fprintf(stderr, "history_failures: out of memory\n");
+        fprintf(stderr, "etude show: out of memory\n");
         return -1;
     }
     for (i = 0; i < h->count; i++)
@@ -217,7 +217,7 @@ static int mark_replays(struct fl_history *h)
         if (strcmp(last->id, r->id))
             continue;
         if (last->length != r->length || memcmp(last->digest, r->digest, 32)) {
-            fprintf(stderr, "history_failures: record %s has two different contents\n", r->id);
+            fprintf(stderr, "etude show: record %s has two different contents\n", r->id);
             status = -1;
         }
         r->replay = 1;
@@ -286,17 +286,17 @@ static int check_attempt(const struct fl_record *plan, const struct fl_record *r
     const char *attempt = text_of(r->data, "attempt_id");
     const struct eh_json *item = element_of(first_of(plan->data, "items"), "item_id", item_id);
     if (strcmp(text_of(r->data, "plan_id"), plan->id)) {
-        fprintf(stderr, "history_failures: attempt record %s names plan %s, not %s\n", r->id,
+        fprintf(stderr, "etude show: attempt record %s names plan %s, not %s\n", r->id,
                 text_of(r->data, "plan_id"), plan->id);
         return -1;
     }
     if (!item) {
-        fprintf(stderr, "history_failures: attempt record %s names item %s, which the plan lacks\n",
+        fprintf(stderr, "etude show: attempt record %s names item %s, which the plan lacks\n",
                 r->id, item_id);
         return -1;
     }
     if (!listed(first_of(item, "attempt_ids"), attempt)) {
-        fprintf(stderr, "history_failures: attempt %s is not one the plan gives item %s\n", attempt,
+        fprintf(stderr, "etude show: attempt %s is not one the plan gives item %s\n", attempt,
                 item_id);
         return -1;
     }
@@ -313,7 +313,7 @@ static int check_run(const struct fl_history *h, const struct fl_record *run)
             const struct fl_record *r = record_of(h, a->string);
             if (!r || strcmp(r->kind, "attempt") || strcmp(text_of(r->data, "item_id"), item_id)) {
                 fprintf(stderr,
-                        "history_failures: run record %s gives item %s the record %s, which is "
+                        "etude show: run record %s gives item %s the record %s, which is "
                         "not an attempt of it\n",
                         run->id, item_id, a->string);
                 return -1;
@@ -575,29 +575,28 @@ static int report(const struct fl_history *h, const char *store)
     int status;
     plan = find(h, "plan", NULL, &plans);
     if (plans != 1) {
-        fprintf(stderr, "history_failures: the history has %lu plan records, not one\n",
+        fprintf(stderr, "etude show: the history has %lu plan records, not one\n",
                 (unsigned long)plans);
         return 2;
     }
     run = find(h, "run", plan->id, &runs);
     find(h, "run", NULL, &all);
     if (runs > 1) {
-        fprintf(stderr, "history_failures: plan %s has %lu run records\n", plan->id,
-                (unsigned long)runs);
+        fprintf(stderr, "etude show: plan %s has %lu run records\n", plan->id, (unsigned long)runs);
         return 2;
     }
     if (all != runs) {
-        fprintf(stderr, "history_failures: a run record names a plan other than %s\n", plan->id);
+        fprintf(stderr, "etude show: a run record names a plan other than %s\n", plan->id);
         return 2;
     }
     if (check_references(h, plan, run))
         return 2;
     status = listing(&out, h, store, plan, run);
     if (status < 0) {
-        fprintf(stderr, "history_failures: out of memory\n");
+        fprintf(stderr, "etude show: out of memory\n");
         status = 2;
     } else if (out.data && (fputs(out.data, stdout) == EOF || fflush(stdout))) {
-        fprintf(stderr, "history_failures: cannot write the listing\n");
+        fprintf(stderr, "etude show: cannot write the listing\n");
         status = 2;
     }
     free(out.data);
@@ -629,13 +628,13 @@ int etude_failures_main(int argc, char **argv)
             break;
     }
     if (i >= argc || argv[i][0] == '-') {
-        fprintf(stderr, "usage: history_failures [-s SCHEMAS] [-b STORE] HISTORY...\n");
+        fprintf(stderr, "usage: etude show failures [-s SCHEMAS] [-b STORE] HISTORY...\n");
         return 2;
     }
     snprintf(schema, sizeof(schema), "%s/history.schema.json", schemas);
     file = fopen(schema, "rb");
     if (!file) {
-        fprintf(stderr, "history_failures: %s: cannot read the schema\n", schema);
+        fprintf(stderr, "etude show: %s: cannot read the schema\n", schema);
         return 2;
     }
     fclose(file);

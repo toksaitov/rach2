@@ -5,11 +5,12 @@
 # the cache ETUDE_TOOLING_CACHE names or build/tooling, and runs under the
 # accelerator RACH2_QEMU_ACCEL names, which tests/run sets.
 
-TOOLING_BIN=$REPO/build/tools/etude/etude-tooling
+TOOLING_BIN=$REPO/build/tools/etude/etude
 
-# tooling ARG...: run etude-tooling with the tree's recipe and cache.
+# tooling ARG...: run `etude provision tooling` with the tree's recipe and
+# cache.
 tooling() {
-    "$TOOLING_BIN" -r "$REPO/tools/etude/tooling" -C "${ETUDE_TOOLING_CACHE:-$REPO/build/tooling}" "$@"
+    "$TOOLING_BIN" provision tooling -r "$REPO/tools/etude/tooling" -C "${ETUDE_TOOLING_CACHE:-$REPO/build/tooling}" "$@"
 }
 
 # tooling_made: succeed when the tooling machine is made, so that a job can run.

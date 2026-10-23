@@ -1,7 +1,7 @@
 /*
  * legacy_cases.h: the host, guest and machine cases of a manifest as the set
- * driver runs them, and the judge of one attempt of such a case, `casecheck
- * attempt`.
+ * driver runs them, and the judge of one attempt of such a case, `etude
+ * check attempt`.
  */
 #ifndef ETUDE_LEGACY_CASES_H
 #define ETUDE_LEGACY_CASES_H
@@ -12,7 +12,7 @@
 #include "etude/watchdog.h"
 #include "json.h"
 
-/* The seconds casecheck may take to judge an attempt before it is killed. */
+/* The seconds the judge may take to judge an attempt before it is killed. */
 #define LEGACY_JUDGE_S 60u
 
 /* The most local ports that the machine cases of one set are given. */
@@ -110,20 +110,21 @@ void legacy_manifest_free(struct legacy_manifest *m);
  */
 uint64_t legacy_case_memory(const struct legacy_case *k, int tooling);
 
-/* The outcomes of a judgement, as casecheck's exit status gives them. */
+/* The outcomes of a judgement, as the judge's exit status gives them. */
 enum legacy_judged {
-    LEGACY_UNJUDGED = -1, /* casecheck could not judge the attempt */
+    LEGACY_UNJUDGED = -1, /* the judge could not judge the attempt */
     LEGACY_PASS = 0,
     LEGACY_FAILURE = 1,
     LEGACY_INCOMPLETE = 3
 };
 
-/* The most consoles of a machine case that casecheck is given. */
+/* The most consoles of a machine case that `etude check` is given. */
 #define LEGACY_CONSOLES 64
 
-/* One attempt of a case to judge, as casecheck's arguments give it. */
+/* One attempt of a case to judge, as the arguments of `etude check attempt`
+ * give it. */
 struct legacy_judge {
-    const char *casecheck; /* casecheck's path */
+    const char *etude; /* etude's path */
     const char *schemas;
     const char *manifest;
     const char *case_id;
@@ -136,21 +137,21 @@ struct legacy_judge {
     const char *run_id, *attempt_id, *item_id;
     const char *end;     /* exited, signaled, stopped or lost */
     int value;           /* the status or the signal, or -1 for none */
-    const char *results; /* the file of casecheck's standard output */
+    const char *results; /* the file of the judge's standard output */
     const char *errors;  /* the file of its standard error */
 };
 
-/* What casecheck gave. */
+/* What `etude check attempt` gave. */
 struct legacy_judgement {
     enum legacy_judged outcome;
     char *doc; /* the results document, from malloc, or NULL */
     size_t len;
     char reason[400]; /* the assertion that decides an attempt that did not
-                         pass, or why casecheck could not judge it */
+                         pass, or why it could not be judged */
 };
 
 /**
- * Judge the attempt `j` names by `casecheck attempt`, run with no input and
+ * Judge the attempt `j` names by `etude check attempt`, run with no input and
  * killed after LEGACY_JUDGE_S seconds, with a `-k` for each of its consoles.
  * Its document is kept only when it exited 0, 1 or 3 and the document
  * parses.

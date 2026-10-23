@@ -1,6 +1,7 @@
 /*
- * hold.c: the Windows half of etude-hold, as hold.h declares it: a LockFileEx
- * lock for the guard, a Job Object for the command's tree, wide file names.
+ * hold.c: the Windows half of `etude lock tree`, as hold.h declares it: a
+ * LockFileEx lock for the guard, a Job Object for the command's tree, wide
+ * file names.
  */
 #include <windows.h>
 #include <errno.h>

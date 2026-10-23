@@ -28,7 +28,7 @@ struct parser {
     int failed;
 };
 
-const char *json_program = "casecheck";
+const char *json_program = "etude";
 
 /** malloc that exits with status 2 when memory runs out; never NULL. */
 void *json_alloc(size_t n)

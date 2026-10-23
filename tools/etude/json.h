@@ -30,8 +30,8 @@ struct jbuf {
     size_t len, cap;
 };
 
-/* The program named at the start of the reader's diagnostics; a program
- * other than casecheck that links the reader sets it in main. */
+/* The command named at the start of the reader's diagnostics, which each
+ * verb of etude that reads JSON sets. */
 extern const char *json_program;
 
 int json_parse(const char *text, size_t len, int first_line, struct json **out, char *err,

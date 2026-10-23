@@ -1,5 +1,5 @@
 # image: the Ubuntu cloud images the tooling machine is made from, which
-# etude-tooling downloads once and checks by their SHA-256. One line for each
+# etude downloads once and checks by their SHA-256. One line for each
 # architecture: the machine's architecture, amd64 or arm64, the image's URL
 # and its digest. A new image is a new line in place of the old one, from the
 # SHA256SUMS of the same release directory; every machine of that

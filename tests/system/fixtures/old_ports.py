@@ -13,8 +13,8 @@ Its first failed try of the host lock prints runutil's line that says the
 claim waits, and so does its first pass over the blocks that finds every one
 held.
 An older tests/run that bisection runs takes the same files so, and
-tests/host/etude_ports_hosttest.c checks that etude-ports and this stand-in
-keep each other out.
+tests/host/etude_ports_hosttest.c checks that `etude lock ports` and this
+stand-in keep each other out.
 """
 
 import fcntl

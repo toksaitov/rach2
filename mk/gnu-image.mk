@@ -17,8 +17,8 @@
 # stamps are on that disk, where only the machine's make reads them, so the
 # image depends on what they depend on instead: the sources of each stamp,
 # ports.link, and the recipe of each agents' package it has. The host builds
-# the products the manifest stages, the machine's program etude-tooling and
-# the digest tool that checks the image the machine sends back.
+# the products the manifest stages, etude, which runs the machine, and the
+# digest tool that checks the image the machine sends back.
 GNU_TOOLING ?= $(if $(filter Linux_x86_64,$(shell uname -s)_$(shell uname -m)),,yes)
 OS_REAL_GNU_EXT2 = $(IMAGES_DIR)/os-real-gnu.ext2
 OS_REAL_GNU_AGENTS_EXT2 = $(IMAGES_DIR)/os-real-gnu-agents.ext2
@@ -47,7 +47,7 @@ GNU_TOOLING_DEPS = $(filter-out $(GNU_IMAGE_STAMPS),$(GNU_IMAGE_DEPS)) \
                    $(sort $(GNU_TOOLCHAIN_SOURCES) $(GNU_PORTS_SOURCES) $(GNU_NATIVE_SOURCES) \
                           $(GNU_GDB_SOURCES) $(GNU_JS_SOURCES) $(GNU_CHROMIUM_SOURCES)) \
                    $(GNU_PORTS_LINK) vendor/gnu/tooling_image.sh vendor/gnu/tooling_job.sh
-GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDETOOLING) $(SHA256TOOL)
+GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDE) $(SHA256TOOL)
 GNU_AGENTS_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(filter $(GNU_AGENTS_ALL),$(GNU_AGENTS_ON)))
 GNU_AGENTS_ALL_RECIPES = $(patsubst %,vendor/gnu/agents/packages/%.sh,$(GNU_AGENTS_ALL))
 

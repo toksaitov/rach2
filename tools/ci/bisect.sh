@@ -6,47 +6,46 @@
 #   tools/ci/bisect.sh [-c] [-e BRIDGE] [-m MINUTES] [-r RUN]
 #                      KIND ARCH GOOD BAD ISSUE ITEM...
 #
-# GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or
-# `full`, or `night`, which issues filed before full runs name and which is
-# taken as `full`. ITEM... is what failed, as tools/ci/run.sh names it:
-# `build`, `style`, `host`, a suite, or a set's name. The report's
-# `unfinished-core`, `unfinished-full` and `unfinished-night` repeat the
-# whole run through the tested commit's tools/ci/run.sh, including its build
-# and the full run's separate bigmem; a commit whose run.sh does not take
-# `full` runs the same set as `night`. A commit is tested by building it and
-# running those items, the build alone when `build` is among them. tests/run
-# takes a set only by itself, so `core` runs after the other items in a run
-# of its own, and `all` runs alone since it covers every suite. Each test
-# has the time limit of KIND's run step in ci.yml or full.yml, 170 or 340
-# minutes, so that a run too slow for ci is too slow here; timeout(1) stops
-# it as it stops ci's. A test passes, fails, or cannot be made. tests/run
-# fails a commit when it exits 1 with the result `run: result: failed`, its
-# last line that begins `run: result: ` apart from the
+# GOOD passed ci on ARCH and BAD failed it in a run of KIND, `core` or `full`,
+# or `night`, which issues filed before full runs name and which is taken as
+# `full`. ITEM... is what failed, as tools/ci/run.sh names it: `build`, `style`,
+# `host`, a suite, or a set's name. The report's `unfinished-core`,
+# `unfinished-full` and `unfinished-night` repeat the whole run through the
+# tested commit's tools/ci/run.sh, including its build and the full run's
+# separate bigmem; a commit whose run.sh does not take `full` runs the same set
+# as `night`. A commit is tested by building it and running those items, the
+# build alone when `build` is among them. tests/run takes a set only by itself,
+# so `core` runs after the other items in a run of its own, and `all` runs alone
+# since it covers every suite. Each test has the time limit of KIND's run step
+# in ci.yml or full.yml, 170 or 340 minutes, so that a run too slow for ci is
+# too slow here; timeout(1) stops it as it stops ci's. A test passes, fails, or
+# cannot be made. tests/run fails a commit when it exits 1 with the result `run:
+# result: failed`, its last line that begins `run: result: ` apart from the
 # `run: result: failed: NAMES` line, which names the suites that failed. The
-# result is on standard output and the names on standard error, and a
-# launcher that passes the two through pipes of their own may put either
-# last in the log. A commit that cannot be checked out, that does not build
-# when the failure is a suite's, or whose tests/run refuses, stops before its
-# result, gives another result, or passes without a `run: NAME: PASS in` line
-# for each suite asked for, a set's as the commit's tests/registry lists
-# them, is untestable, and an untestable commit ends the search with the
-# range unresolved. A `run: result: failed:` line that names `runner` where
-# no suite of that name was asked for is a fault of the runner, and the commit
-# untestable as well. A commit whose tools/ci/run.sh has `results=history`
-# reads etude's history: each run of tests/run writes it under the test's
-# log through RACH2_RESULTS, and the commit's `casecheck verdict` judges it
-# against the commit's tests/cases, as run.sh does. The run then passes only
-# when the verdict passes and tests/run exits 0, and fails only when an item
-# of a suite asked for failed, the verdict does not name `runner`, and
-# tests/run exits with a failure. Anything else is untestable: an item that
-# did not finish, a case left out of the plan, a failed preparation, a
-# history missing or in doubt, no verdict, or a status that disagrees with
-# it. So is an unfinished run of such a commit whose run.sh lists `runner`
-# among its failures. BAD is tested first, unless -c says that an earlier
-# run did so: a failure that does not repeat is labelled `intermittent` and
-# the issue stays open. Otherwise the first-parent commits between GOOD and
-# BAD are halved until one fails and its parent passes, and both are tested
-# once more; the commit is named only when both results repeat.
+# result is on standard output and the names on standard error, and a launcher
+# that passes the two through pipes of their own may put either last in the log.
+# A commit that cannot be checked out, that does not build when the failure is a
+# suite's, or whose tests/run refuses, stops before its result, gives another
+# result, or passes without a `run: NAME: PASS in` line for each suite asked
+# for, a set's as the commit's tests/registry lists them, is untestable, and an
+# untestable commit ends the search with the range unresolved. A `run: result:
+# failed:` line that names `runner` where no suite of that name was asked for is
+# a fault of the runner, and the commit untestable as well. A commit whose
+# tools/ci/run.sh has `results=history` reads etude's history: each run of
+# tests/run writes it under the test's log through RACH2_RESULTS, and the
+# commit's verdict, `etude check verdict` or, before etude was one command,
+# `casecheck verdict`, judges it against the commit's tests/cases, as run.sh
+# does. The run then passes only when the verdict passes and tests/run exits 0,
+# and fails only when an item of a suite asked for failed, the verdict does not
+# name `runner`, and tests/run exits with a failure. Anything else is
+# untestable: an item that did not finish, a case left out of the plan, a failed
+# preparation, a history missing or in doubt, no verdict, or a status that
+# disagrees with it. So is an unfinished run of such a commit whose run.sh lists
+# `runner` among its failures. BAD is tested first, unless -c says that an
+# earlier run did so: a failure that does not repeat is labelled `intermittent`
+# and the issue stays open. Otherwise the first-parent commits between GOOD and
+# BAD are halved until one fails and its parent passes, and both are tested once
+# more; the commit is named only when both results repeat.
 #
 # Every build and run of a core failure has the environment of a core run:
 # each NAME=VALUE line of tools/ci/core.env, which ci.yml's core jobs also
@@ -77,12 +76,12 @@
 # launcher, ledger and admitted capacity, with a legacy port block. A
 # refused or incomplete launch leaves the commit untestable.
 #
-# A machine that etude admits tests on has the record `machine` that
-# tools/etude/deploy.sh keeps in ETUDE_STATE, by default
+# A machine that etude admits tests on has the record `machine` that `etude
+# provision machine` keeps in ETUDE_STATE, by default
 # `${XDG_STATE_HOME:-$HOME/.local/state}/etude`. There each build and each run
-# of a test is a claim in the record's ledger, made through BRIDGE, the
-# etude-bridge of a version built outside the tree, which -e names; without
-# -e the bisection is unresolved. A claim is a quarter of the machine's
+# of a test is a claim in the record's ledger, made by `ETUDE admit`, ETUDE
+# being the etude of a version built outside the tree, which -e names;
+# without -e the bisection is unresolved. A claim is a quarter of the machine's
 # processors, memory and disk, the disk being the file system of the ledger.
 # The bridge waits for it and for the old runner's host lock, under
 # RACH2_PORT_DIR or /tmp, until the test's limit, and gives a run a port
@@ -101,15 +100,15 @@
 #
 set -u
 
-usage="usage: tools/ci/bisect.sh [-c] [-e BRIDGE] [-m MINUTES] [-r RUN] KIND ARCH GOOD BAD ISSUE ITEM..."
+usage="usage: tools/ci/bisect.sh [-c] [-e ETUDE] [-m MINUTES] [-r RUN] KIND ARCH GOOD BAD ISSUE ITEM..."
 confirmed=""
-bridge=""
+etude=""
 minutes=""
 run=""
 while getopts ce:m:r: opt; do
     case $opt in
         c) confirmed=yes ;;
-        e) bridge=$OPTARG ;;
+        e) etude=$OPTARG ;;
         m) minutes=$OPTARG ;;
         r) run=$OPTARG ;;
         *) echo "$usage" >&2; exit 2 ;;
@@ -317,7 +316,7 @@ admitted() { # admitted build|run COMMAND...
     [ "$left" -gt 0 ] || left=1
     rm -f "$log.bridge"
     # shellcheck disable=SC2086 # ports is empty or one option
-    limited "$bridge" $ports -d "$locks" -w "$left" -r "$log.bridge" "$ledger" \
+    limited "$etude" admit $ports -d "$locks" -w "$left" -r "$log.bridge" "$ledger" \
         "bisect:$GITHUB_RUN_ID:${GITHUB_RUN_ATTEMPT:-1}:$step" "$account" shared \
         "$share_cpu,$((guest * 1048576 * 4 / 3)),$share_disk" "$capacity" "$left" "$@"
     rc=$?
@@ -372,9 +371,10 @@ suites() { # suites ARGS...
 }
 
 # Run tests/run with ARGS as suites() does, with etude's history of the run
-# going to the directory LOG.history.N, the test's Nth run, and judge it
-# with the commit's `casecheck verdict` against its tests/cases and the
-# suites of ARGS: 0 when the verdict passed and tests/run exited 0; 1 when an
+# going to the directory LOG.history.N, the test's Nth run, and judge it with
+# the commit's verdict against its tests/cases and the suites of ARGS, `etude
+# check verdict` where the commit has etude as one command and `casecheck
+# verdict` before: 0 when the verdict passed and tests/run exited 0; 1 when an
 # item of a suite of ARGS failed, the verdict does not name `runner` and
 # tests/run failed; 2 for anything else, as the header says.
 judged() { # judged ARGS...
@@ -391,17 +391,23 @@ judged() { # judged ARGS...
         124|125|137) why="tests/run did not finish" ;;
     esac
     if [ -z "$why" ]; then
-        build/tools/etude/casecheck verdict -b "$results/store" -c "$(git rev-parse HEAD)" "$ARCH" bisect \
+        if [ -f tools/etude/etude.c ]; then
+            judge="build/tools/etude/etude check" judge_name="etude check"
+        else
+            judge=build/tools/etude/casecheck judge_name=casecheck
+        fi
+        # shellcheck disable=SC2086 # the judge is a program and its verb
+        $judge verdict -b "$results/store" -c "$(git rev-parse HEAD)" "$ARCH" bisect \
             "$(echo "$asked" | awk '!seen[$0]++' | tr '\n' , | sed 's/,$//')" "$results/history" \
             > "$results/verdict" 2>&1
         verdict=$?
         cat "$results/verdict" >> "$log.log"
-        names=$(sed -n 's/^casecheck: result: failed: //p' "$results/verdict")
-        if [ "$verdict" = 0 ] && grep -qx 'casecheck: result: passed' "$results/verdict"; then
+        names=$(sed -n "s/^$judge_name: result: failed: //p" "$results/verdict")
+        if [ "$verdict" = 0 ] && grep -qx "$judge_name: result: passed" "$results/verdict"; then
             [ "$rc" != 0 ] || return 0
             why="tests/run exited $rc, and the verdict on its history passed"
         elif [ "$verdict" != 1 ] || [ -z "$names" ]; then
-            why="casecheck gave no verdict on the history"
+            why="the commit's $judge_name gave no verdict on the history"
         elif [ "$rc" = 0 ]; then
             why="tests/run exited 0, and the verdict on its history failed"
         else
@@ -514,8 +520,8 @@ elif [ -f "$record" ]; then
         say "$on is unresolved: the machine's record $record does not give the ledger, processors, memory and disk that a test claims."
         exit 1
     fi
-    [ -n "$bridge" ] && [ -x "$bridge" ] || {
-        say "$on is unresolved: this machine admits tests through etude, and the bisection has no etude-bridge to run them with."
+    [ -n "$etude" ] && [ -x "$etude" ] || {
+        say "$on is unresolved: this machine admits tests through etude, and the bisection has no etude to run them with."
         exit 1
     }
     capacity=$((cpus * 1000)),$memory,$((kib * 1024))

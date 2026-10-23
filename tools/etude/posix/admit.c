@@ -1,4 +1,4 @@
-/* etude_bridge.c: admit an old checkout or a new command. */
+/* admit.c: `etude admit`, which admits an old checkout or a new command. */
 #include <errno.h>
 #include <signal.h>
 #include <stdio.h>
@@ -104,16 +104,16 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
 #endif
 
     if (ex == NULL) {
-        fprintf(stderr, "etude-bridge: executor: %s\n", strerror(errno));
+        fprintf(stderr, "etude admit: executor: %s\n", strerror(errno));
         goto done;
     }
     if (etude_ledger_verdict_path(l, id, verdict, sizeof(verdict)) != 0) {
-        fprintf(stderr, "etude-bridge: verdict: %s\n", strerror(errno));
+        fprintf(stderr, "etude admit: verdict: %s\n", strerror(errno));
         goto done;
     }
 #ifdef _WIN32
     if ((command = windows_command(argv)) == NULL) {
-        fprintf(stderr, "etude-bridge: start: %s: %s\n", argv[0], strerror(errno));
+        fprintf(stderr, "etude admit: start: %s: %s\n", argv[0], strerror(errno));
         goto done;
     }
 #endif
@@ -133,11 +133,11 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     spec.reg_ctx = l;
     spec.verdict = verdict;
     if (stopped) {
-        fprintf(stderr, "etude-bridge: start: cancelled by signal %d\n", (int)stopped);
+        fprintf(stderr, "etude admit: start: cancelled by signal %d\n", (int)stopped);
         goto done;
     }
     if (etude_exec_start(ex, &spec, &p) != 0) {
-        fprintf(stderr, "etude-bridge: start: %s: %s\n", argv[0], strerror(errno));
+        fprintf(stderr, "etude admit: start: %s: %s\n", argv[0], strerror(errno));
         goto done;
     }
     while (!done) {
@@ -152,25 +152,25 @@ static int execute(struct etude_ledger *l, const char *id, char **argv, unsigned
     *cleanup = r->cleanup;
     rc = r->end == ETUDE_END_EXITED ? r->value : -1;
     if (r->end == ETUDE_END_SIGNALED)
-        fprintf(stderr, "etude-bridge: end: signal %d\n", r->value);
+        fprintf(stderr, "etude admit: end: signal %d\n", r->value);
     else if (r->end == ETUDE_END_STOPPED) {
         if (stopped)
-            fprintf(stderr, "etude-bridge: end: cancelled by signal %d\n", (int)stopped);
+            fprintf(stderr, "etude admit: end: cancelled by signal %d\n", (int)stopped);
         else
-            fprintf(stderr, "etude-bridge: end: time limit exceeded: %u seconds\n", seconds);
+            fprintf(stderr, "etude admit: end: time limit exceeded: %u seconds\n", seconds);
     } else if (r->end != ETUDE_END_EXITED)
-        fprintf(stderr, "etude-bridge: end: lost\n");
+        fprintf(stderr, "etude admit: end: lost\n");
     if (r->cleanup != ETUDE_CLEANUP_CONFIRMED) {
-        fprintf(stderr, "etude-bridge: cleanup: %s\n",
+        fprintf(stderr, "etude admit: cleanup: %s\n",
                 r->cleanup == ETUDE_CLEANUP_PENDING ? "pending" : "unconfirmed");
         rc = -1;
     }
     if (r->out.total > r->out.kept) {
-        fprintf(stderr, "etude-bridge: output: stdout exceeded %zu bytes\n", spec.output_max);
+        fprintf(stderr, "etude admit: output: stdout exceeded %zu bytes\n", spec.output_max);
         rc = -1;
     }
     if (r->err.total > r->err.kept) {
-        fprintf(stderr, "etude-bridge: output: stderr exceeded %zu bytes\n", spec.output_max);
+        fprintf(stderr, "etude admit: output: stderr exceeded %zu bytes\n", spec.output_max);
         rc = -1;
     }
 done:
@@ -188,7 +188,7 @@ done:
 /** Print the command's arguments and return the usage status. */
 static int usage(void)
 {
-    fprintf(stderr, "etude-bridge: usage: etude-bridge [-i] [-p] [-d locks] [-w seconds] [-r file] "
+    fprintf(stderr, "etude admit: usage: etude admit [-i] [-p] [-d locks] [-w seconds] [-r file] "
                     "ledger id account shared|alone cpu,bytes,bytes capacity seconds "
                     "command [args...]\n");
     return 2;
@@ -220,7 +220,7 @@ static void result(const char *path, const char *word, int n)
     f = fopen(path, "w");
     if (f == NULL || (n >= 0 ? fprintf(f, "%s %d\n", word, n) : fprintf(f, "%s\n", word)) < 0 ||
         fclose(f) != 0)
-        fprintf(stderr, "etude-bridge: the result cannot be written to %s: %s\n", path,
+        fprintf(stderr, "etude admit: the result cannot be written to %s: %s\n", path,
                 strerror(errno));
 }
 
@@ -353,10 +353,10 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
 
     if (l == NULL || admit(l, q->id, q->account, q->res, q->cap, q->wait) != 0) {
         if (errno == ETIMEDOUT)
-            fprintf(stderr, "etude-bridge: result: refused: admission: no room in %u seconds\n",
+            fprintf(stderr, "etude admit: result: refused: admission: no room in %u seconds\n",
                     q->wait);
         else
-            fprintf(stderr, "etude-bridge: result: refused: admission: %s\n", strerror(errno));
+            fprintf(stderr, "etude admit: result: refused: admission: %s\n", strerror(errno));
         return NULL;
     }
     if (q->wait != 0) {
@@ -366,7 +366,7 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
     }
     b = etude_bridge_start(&bs);
     if (b == NULL) {
-        fprintf(stderr, "etude-bridge: result: refused: locks: %s\n", strerror(errno));
+        fprintf(stderr, "etude admit: result: refused: locks: %s\n", strerror(errno));
         etude_ledger_finish(l, q->id, ETUDE_CLEANUP_CONFIRMED);
         return NULL;
     }
@@ -384,7 +384,7 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
 }
 
 /** Admit one bounded command and retain its locks through confirmed cleanup. */
-int main(int argc, char **argv)
+int etude_admit_main(int argc, char **argv)
 {
     struct request q;
     struct etude_ledger *l;
@@ -395,16 +395,11 @@ int main(int argc, char **argv)
 #endif
     int rc;
 
-#ifdef _WIN32
-    extern int etude_win_bridge_main(int argc, char **argv);
-    if (argc > 1 && strcmp(argv[1], "--bridge-holder") == 0)
-        return etude_win_bridge_main(argc, argv);
-#endif
     if (parse(argc, argv, &q) != 0)
         return usage();
     if (q.legacy && (getenv("RACH2_PORT_OFFSET") != NULL || getenv("SSH_TEST_PORT") != NULL)) {
         fprintf(stderr,
-                "etude-bridge: result: refused: legacy port overrides bypass reservations\n");
+                "etude admit: result: refused: legacy port overrides bypass reservations\n");
         return refused(q.record);
     }
 #ifdef _WIN32
@@ -430,7 +425,7 @@ int main(int argc, char **argv)
     if (cleanup == ETUDE_CLEANUP_CONFIRMED)
         etude_bridge_join(b);
     else {
-        fprintf(stderr, "etude-bridge: result: incomplete: locks retained by process %ld\n",
+        fprintf(stderr, "etude admit: result: incomplete: locks retained by process %ld\n",
                 etude_bridge_pid(b));
         etude_bridge_detach(b);
         rc = -1;

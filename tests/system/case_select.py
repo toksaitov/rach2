@@ -39,7 +39,7 @@ def manifest_of(cases, suite):
 
 
 def runs_on(case, arch):
-    """Say whether CASE runs on ARCH, as etude-legacy decides it."""
+    """Say whether CASE runs on ARCH, as `etude run suites` decides it."""
     archs = case.get("architectures")
     return archs == "none" or (isinstance(archs, list) and arch in archs)
 

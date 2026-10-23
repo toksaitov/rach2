@@ -1,5 +1,5 @@
 /*
- * etude_host.c: etude-host, which runs the host checks of `tests/run host`
+ * run_host.c: `etude run host`, which runs the host checks of `tests/run host`
  * several at once on the host executor, each with a scratch directory of its
  * own, and prints one result for every check of its selection, with a report
  * record of progress as each ends.
@@ -221,7 +221,7 @@ static int read_selection(struct run *r, const char *path)
     const char *why = NULL;
 
     if (f == NULL) {
-        fprintf(stderr, "etude-host: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "etude run: %s: %s\n", path, strerror(errno));
         return -1;
     }
     while (why == NULL && (len = getline(&line, &cap, f)) >= 0) {
@@ -243,7 +243,7 @@ static int read_selection(struct run *r, const char *path)
     if (why == NULL && r->n == 0)
         why = "the selection has no check";
     if (why != NULL) {
-        fprintf(stderr, "etude-host: %s:%lu: %s\n", path, lineno, why);
+        fprintf(stderr, "etude run: %s:%lu: %s\n", path, lineno, why);
         return -1;
     }
     return 0;
@@ -363,7 +363,7 @@ static int start_step(struct run *r, struct check *c)
     char *argv[] = {(char *)ETUDE_SHELL,
                     "-c",
                     "exec >\"$1\" 2>&1; eval \"$2\"",
-                    "etude-host",
+                    "etude",
                     log,
                     c->step == STEP_COMPILE ? c->compile : c->run,
                     NULL};
@@ -566,7 +566,7 @@ static void start_check(struct run *r, struct check *c)
         free(dir);
     }
     if (err != 0) {
-        printf("etude-host: %s: %s\n", c->name, strerror(err));
+        printf("etude run: %s: %s\n", c->name, strerror(err));
         report(r, c, NULL, 0);
     }
 }
@@ -593,7 +593,7 @@ static int finish(struct run *r, struct check *c)
     c->step = STEP_RUN;
     err = start_step(r, c);
     if (err != 0) {
-        printf("etude-host: %s: %s\n", c->name, strerror(err));
+        printf("etude run: %s: %s\n", c->name, strerror(err));
         report(r, c, NULL, 0);
         return 1;
     }
@@ -718,12 +718,12 @@ static const char *dir_of(const char *path)
     char *abs;
 
     if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode)) {
-        fprintf(stderr, "etude-host: %s: not a directory\n", path);
+        fprintf(stderr, "etude run: %s: not a directory\n", path);
         return NULL;
     }
     abs = realpath(path, NULL);
     if (abs == NULL)
-        fprintf(stderr, "etude-host: %s: %s\n", path, strerror(errno));
+        fprintf(stderr, "etude run: %s: %s\n", path, strerror(errno));
     return abs;
 }
 
@@ -756,20 +756,20 @@ static int conclude(const struct run *r)
 
         for (i = 0; i < r->n; i++)
             done += r->checks[i].state == PASSED || r->checks[i].state == FAILED;
-        printf("etude-host: result: stopped by signal %d: %lu of %lu checks finished\n",
+        printf("etude run: result: stopped by signal %d: %lu of %lu checks finished\n",
                (int)stop_signal, (unsigned long)done, (unsigned long)r->n);
         return 128 + stop_signal;
     }
     if (r->reported != r->n) {
-        printf("etude-host: result: fail: %lu of %lu checks gave no result\n",
+        printf("etude run: result: fail: %lu of %lu checks gave no result\n",
                (unsigned long)(r->n - r->reported), (unsigned long)r->n);
         return 1;
     }
     if (r->failed == 0) {
-        printf("etude-host: result: pass: %lu checks\n", (unsigned long)r->n);
+        printf("etude run: result: pass: %lu checks\n", (unsigned long)r->n);
         return 0;
     }
-    printf("etude-host: result: fail: %lu of %lu checks:", (unsigned long)r->failed,
+    printf("etude run: result: fail: %lu of %lu checks:", (unsigned long)r->failed,
            (unsigned long)r->n);
     for (i = 0; i < r->n; i++) {
         if (r->checks[i].state == FAILED)
@@ -779,7 +779,7 @@ static int conclude(const struct run *r)
     return 1;
 }
 
-int main(int argc, char **argv)
+int etude_host_main(int argc, char **argv)
 {
     struct run r;
     unsigned jobs = processors();
@@ -801,7 +801,8 @@ int main(int argc, char **argv)
             break;
     }
     if (opt == '?' || optind != argc - 1 || r.logs == NULL || r.scratch == NULL) {
-        fprintf(stderr, "usage: etude-host [-j JOBS] [-p WITNESS] -l LOGS -s SCRATCH SELECTION\n");
+        fprintf(stderr,
+                "usage: etude run host [-j JOBS] [-p WITNESS] -l LOGS -s SCRATCH SELECTION\n");
         return 2;
     }
     r.logs = dir_of(r.logs);
@@ -811,12 +812,12 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     catch_stops();
     if (make_env(&r) != 0 || (r.ex = etude_exec_new()) == NULL) {
-        fprintf(stderr, "etude-host: memory ran out\n");
+        fprintf(stderr, "etude run: memory ran out\n");
         return 2;
     }
-    printf("etude-host: running %lu checks, %u at a time\n", (unsigned long)r.n, jobs);
+    printf("etude run: running %lu checks, %u at a time\n", (unsigned long)r.n, jobs);
     if (run_all(&r, jobs) != 0)
-        fprintf(stderr, "etude-host: memory ran out\n");
+        fprintf(stderr, "etude run: memory ran out\n");
     etude_exec_free(r.ex);
     status = conclude(&r);
     return status;

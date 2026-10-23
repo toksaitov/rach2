@@ -1,16 +1,15 @@
 #!/bin/sh
 # style_cases_test.sh: check that a deliberate fault stays fatal in the style
-# cases, which etude judges by `casecheck attempt`. A private tree with a fault
-# in its sources must fail the conventions case, and a manifest with a fault
-# must fail the judgment of a report that passes, or be refused by
-# `casecheck families`, which tests/run reads before any suite runs. The case
-# program is tests/cases/host/style.sh and its manifest
-# tests/cases/host.style.json; the build's casecheck and asciiscan must be
-# built.
+# cases, which etude judges by `etude check attempt`. A private tree with a
+# fault in its sources must fail the conventions case, and a manifest with a
+# fault must fail the judgment of a report that passes, or be refused by
+# `etude check families`, which tests/run reads before any suite runs. The
+# case program is tests/cases/host/style.sh and its manifest
+# tests/cases/host.style.json; the build's etude and asciiscan must be built.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 STYLE=$REPO/tests/cases/host/style.sh
-CASECHECK=$REPO/build/tools/etude/casecheck
+ETUDE=$REPO/build/tools/etude/etude
 ASCIISCAN=$REPO/build/tools/verify/asciiscan
 SCHEMAS=$REPO/tools/etude/schemas
 MANIFEST=$REPO/tests/cases/host.style.json
@@ -22,7 +21,7 @@ trap 'exit 143' TERM HUP
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/rach2-style-cases-test.XXXXXX")
 # Report $* and exit 1.
 fail() { echo "style-cases-test: $*" >&2; exit 1; }
-for f in "$CASECHECK" "$ASCIISCAN"; do
+for f in "$ETUDE" "$ASCIISCAN"; do
     [ -x "$f" ] || fail "$f is not built"
 done
 
@@ -54,10 +53,10 @@ conventions() {
     echo "$status" > "$WORK/$1.status"
 }
 # judge LABEL MANIFEST: judge the report of LABEL by MANIFEST, with the
-# document in WORK/LABEL.json, and print casecheck's exit status.
+# document in WORK/LABEL.json, and print the exit status of `etude check`.
 judge() {
     status=0
-    "$CASECHECK" -s "$SCHEMAS" attempt "$2" "$CASE" none host "$WORK/$1.out" \
+    "$ETUDE" check -s "$SCHEMAS" attempt "$2" "$CASE" none host "$WORK/$1.out" \
         run-1 attempt-1 item-1 exited "$(cat "$WORK/$1.status")" \
         > "$WORK/$1.json" 2>&1 || status=$?
     echo "$status"
@@ -126,14 +125,14 @@ manifest_fault undeclared '"undeclared":[{"assertion_id":"exit-flag","outcome":"
 edit unreported 'C["assertions"].append({"assertion_id": "extra", "checks": "nothing", "source": "program"})'
 manifest_fault unreported '{"assertion_id":"extra","source":"program","outcome":"missing"'
 
-# A manifest that its rules refuse refuses every run: `casecheck families`
+# A manifest that its rules refuse refuses every run: `etude check families`
 # prints no family for it, and tests/run stops on its status.
-"$CASECHECK" -s "$SCHEMAS" families "$MANIFEST" > "$WORK/families" ||
-    fail "casecheck families refused $MANIFEST"
-grep -qx "host.style $MANIFEST" "$WORK/families" || fail "casecheck families did not print host.style"
+"$ETUDE" check -s "$SCHEMAS" families "$MANIFEST" > "$WORK/families" ||
+    fail "etude check families refused $MANIFEST"
+grep -qx "host.style $MANIFEST" "$WORK/families" || fail "etude check families did not print host.style"
 edit duplicate 'm["cases"].append(dict(C))'
 status=0
-"$CASECHECK" -s "$SCHEMAS" families "$WORK/duplicate.manifest.json" > "$WORK/families" 2> "$WORK/families.err" || status=$?
-[ "$status" = 1 ] || fail "casecheck families exited $status on a manifest with a case twice"
-[ ! -s "$WORK/families" ] || fail "casecheck families printed a family of a manifest at fault"
+"$ETUDE" check -s "$SCHEMAS" families "$WORK/duplicate.manifest.json" > "$WORK/families" 2> "$WORK/families.err" || status=$?
+[ "$status" = 1 ] || fail "etude check families exited $status on a manifest with a case twice"
+[ ! -s "$WORK/families" ] || fail "etude check families printed a family of a manifest at fault"
 echo "style-cases-test: passed: four source faults and three manifest faults are fatal"

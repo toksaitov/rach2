@@ -5,23 +5,22 @@
 # outright on its next run.
 #
 # A private copy of the script runs in a scratch tree of its own, in a
-# process group of its own, against a stand-in for etude-tooling that makes
-# a job directory in the cache as etude-tooling does and then waits. On a
+# process group of its own, against a stand-in for `etude provision tooling`
+# that makes a job directory in the cache as etude does and then waits. On a
 # signal the stand-in takes FIX/delay seconds to end, one unless a row says
-# otherwise, as etude-tooling does while it stops QEMU, notes in FIX/held
-# whether the build disk's lock was still there by then, and removes its job
-# directory; FIX/mode `bare` makes it a program with no handler, as
-# etude-tooling was before it had one, and `pass` a job that ends at once
-# with its image. The rows: a job that passes and writes the image; SIGTERM,
-# SIGINT and SIGHUP to the group, as a terminal or the bridge sends them,
-# which end the script with 128 plus the signal's number; SIGTERM to the
-# group with the stand-in that has no handler; SIGTERM to the script alone,
-# as make passes one on, which must reach the job; SIGTERM to the group and
-# again to the script while it waits for a job that takes two seconds to
-# stop; and SIGTERM followed by SIGKILL two seconds later, as etude-bridge
-# sends them, with a job that takes four seconds to stop, after which the
-# next run must pass. After each, the tree must have no stage, no lock and no
-# job directory, and the lock must have outlived the job. Every
+# otherwise, as etude does while it stops QEMU, notes in FIX/held whether the
+# build disk's lock was still there by then, and removes its job directory;
+# FIX/mode `bare` makes it a program with no handler, and `pass` a job that
+# ends at once with its image. The rows: a job that passes and writes the
+# image; SIGTERM, SIGINT and SIGHUP to the group, as a terminal or `etude
+# admit` sends them, which end the script with 128 plus the signal's number;
+# SIGTERM to the group with the stand-in that has no handler; SIGTERM to the
+# script alone, as make passes one on, which must reach the job; SIGTERM to
+# the group and again to the script while it waits for a job that takes two
+# seconds to stop; and SIGTERM followed by SIGKILL two seconds later, as
+# `etude admit` sends them, with a job that takes four seconds to stop, after
+# which the next run must pass. After each, the tree must have no stage, no
+# lock and no job directory, and the lock must have outlived the job. Every
 # row runs under sh and, where the host has it, bash, which is the sh of
 # macOS.
 #
@@ -59,8 +58,10 @@ cat > "$tree/build/tools/verify/sha256" << 'EOF'
 #!/bin/sh
 echo "feed  $1"
 EOF
-cat > "$tree/build/tools/etude/etude-tooling" << 'EOF'
+cat > "$tree/build/tools/etude/etude" << 'EOF'
 #!/bin/sh
+[ "${1:-} ${2:-}" = 'provision tooling' ] || exit 2
+shift 2
 cache=
 while getopts r:C:p:a: o; do
     [ "$o" != C ] || cache=$OPTARG
@@ -100,7 +101,7 @@ waiter=$!
 : > "$FIX/running"
 wait "$waiter"
 EOF
-chmod +x "$tree/build/tools/etude/etude-tooling" "$tree/build/tools/verify/sha256" || exit 1
+chmod +x "$tree/build/tools/etude/etude" "$tree/build/tools/verify/sha256" || exit 1
 (cd "$tree" && git init -q .) || exit 1
 
 # run SHELL: start the copy under SHELL in a process group of its own whose

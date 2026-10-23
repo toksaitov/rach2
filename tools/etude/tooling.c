@@ -923,7 +923,7 @@ static int download(const struct etude_tooling_site *site, const struct etude_to
     }
     if (fmt(part, sizeof(part), "%s.%ld.part", m->image, (long)getpid()) != 0)
         return failure(why, whylen, "the cache's path is too long");
-    fprintf(stderr, "etude-tooling: prepare: downloading %s\n", m->url);
+    fprintf(stderr, "etude provision: tooling: downloading %s\n", m->url);
     if (run_program(site, argv, why, whylen) != 0) {
         remove(part);
         return -1;
@@ -1093,7 +1093,7 @@ int etude_tooling_prepare(const struct etude_tooling_site *site, unsigned cpus,
     res->making = 1;
     step_begin(&w.b, ETUDE_TOOLING_START, &now);
     if (prepare_line(site, &w, cpus, res->why, sizeof(res->why)) == 0) {
-        fprintf(stderr, "etude-tooling: prepare: provisioning %s\n", w.m.key);
+        fprintf(stderr, "etude provision: tooling: provisioning %s\n", w.m.key);
         end = boot_run(&w.b, site, w.l.argv, deadline_us > 0 ? deadline_us : 7200000000u, res->why,
                        sizeof(res->why));
         if (end == BOOT_ENDED || end == BOOT_LATE)
@@ -1291,7 +1291,8 @@ int etude_tooling_run(const struct etude_tooling_site *site, const struct etude_
         return -1;
     if (!exists(w.m.disk))
         return failure(res->why, sizeof(res->why),
-                       "the tooling machine %s is not made; run `etude-tooling prepare`", w.m.key);
+                       "the tooling machine %s is not made; run `etude provision tooling prepare`",
+                       w.m.key);
     if (etude_history_now(&now) != 0)
         return failure(res->why, sizeof(res->why), "the clock cannot be read");
     step_begin(&w.b, ETUDE_TOOLING_START, &now);
@@ -1496,7 +1497,7 @@ int etude_tooling_record(struct etude_history *h, const struct etude_tooling_ids
             tprintf(&t,
                     "{\"witness_id\":\"%s\",\"sequence\":0,\"offset_us\":%llu,"
                     "\"completed_units\":1}",
-                    prepare ? "etude-tooling.provisioned" : witnesses[i],
+                    prepare ? "tooling.provisioned" : witnesses[i],
                     (unsigned long long)(s->to.monotonic_us - s->from.monotonic_us));
         tprintf(&t, "],\"max_progress_gap_us\":");
         gap = etude_history_elapsed(&s->from, s->done ? &s->to : NULL);

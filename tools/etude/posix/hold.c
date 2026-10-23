@@ -1,5 +1,5 @@
 /*
- * hold.c: the POSIX half of etude-hold, on Linux and macOS: the process
+ * hold.c: the POSIX half of `etude lock tree`, on Linux and macOS: the process
  * table, the record lock, the lock's directory and the command's process
  * group.
  */

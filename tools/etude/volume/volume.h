@@ -1,11 +1,11 @@
 /*
  * volume.h: the two volumes of etude's tooling machine, which etude-volume
- * makes and reads for etude-tooling, so that a job needs no program on the
- * host but QEMU. The seed of the first boot is a FAT16 file system, which
- * cloud-init finds by its label. The job volume is a raw disk with a tar
- * archive at its start: the host writes the job's files there, and the
- * guest's runner reads them with tar(1) and writes the job's results over
- * them in the same form. tools/etude/Readme.md describes both.
+ * makes and reads for `etude provision tooling`, so that a job needs no program
+ * on the host but QEMU. The seed of the first boot is a FAT16 file system,
+ * which cloud-init finds by its label. The job volume is a raw disk with a tar
+ * archive at its start: the host writes the job's files there, and the guest's
+ * runner reads them with tar(1) and writes the job's results over them in the
+ * same form. tools/etude/Readme.md describes both.
  */
 #ifndef ETUDE_VOLUME_H
 #define ETUDE_VOLUME_H

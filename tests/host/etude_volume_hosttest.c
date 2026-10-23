@@ -368,9 +368,9 @@ static void has_tree(const char *dir, int modes, const char *row)
     CHECK(stat(path, &st) == 0 && (!modes || (st.st_mode & S_IXUSR)), row);
 }
 
-/* The pairs that place a job's results, as etude-tooling gives them: the
- * job's status and output in `dir`, out/tree in `tree`, and the rest of out/
- * in `outdir`. */
+/* The pairs that place a job's results, as `etude provision tooling` gives
+ * them: the job's status and output in `dir`, out/tree in `tree`, and the
+ * rest of out/ in `outdir`. */
 struct results {
     char status[600], out[600], err[600], tree[600], outdir[600];
     const char *map[13];

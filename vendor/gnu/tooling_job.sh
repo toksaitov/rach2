@@ -3,11 +3,11 @@
 # tooling_job.sh: the job that builds the GNU layer and its root image in
 # etude's tooling machine, which tooling_image.sh runs there.
 #
-# etude-tooling's job runner (tools/etude/tooling/runner.sh) runs it as root
-# in the job's working directory, which holds two inputs: tree.tar.gz, the
-# tree the host staged, and job.env, the shell assignments of RACH2_ARCH,
-# GNU_AGENTS, GNU_LINK, RACH2_PATH_MAP, MUSL_CRYPT_SRC, IMAGE (the image's
-# file name), SIZE (its size in MiB), JOBS (make's jobs) and DRY_RUN.
+# The job runner of `etude provision tooling` (tools/etude/tooling/runner.sh)
+# runs it as root in the job's working directory, which holds two inputs:
+# tree.tar.gz, the tree the host staged, and job.env, the shell assignments of
+# RACH2_ARCH, GNU_AGENTS, GNU_LINK, RACH2_PATH_MAP, MUSL_CRYPT_SRC, IMAGE (the
+# image's file name), SIZE (its size in MiB), JOBS (make's jobs) and DRY_RUN.
 # ETUDE_DISK1 is the layer's build disk, an ext4 volume labelled rach2-gnu
 # that persists between jobs; a disk on which blkid finds no signature, as a
 # new one, is formatted, and a disk with any other volume is refused. The
@@ -36,7 +36,7 @@
 # make's output and the scripts' go to a log of the job's own in /gnu/log,
 # which keeps the last 20, and to the machine's second serial port, ttyS1 on
 # amd64 and ttyAMA1 on arm64, each line after the prefix `gnu-vm: `. That
-# port is etude-tooling's channel, which passes over lines it does not know
+# port is etude's channel, which passes over lines it does not know
 # and keeps them in channel.log in the job's directory, where tooling_image.sh
 # reads them while the job runs; the console, the first port, is not used,
 # since its getty hangs up the port once it starts. The standard output has

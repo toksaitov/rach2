@@ -251,17 +251,18 @@ STORE_DAYS=3
 
 # store_expire [DAYS]: remove from STORE on the testing host the entries that
 # no copy's stamp names and that no step has used for DAYS days, STORE_DAYS
-# unless given, with `etude-step -e` (tools/etude/Readme.md, The step store).
+# unless given, with `etude build -e` (tools/etude/Readme.md, The step store).
 # An entry is read-only and its builder's, so root removes them, with the
-# etude of origin/master, which version.sh builds from this clone into root's
-# cache of versions on the host, or finds built there. Print the lines of
-# etude-step with the machine's name first, and nothing when the host has no
-# store.
+# etude of origin/master, which provision_version.sh builds from this clone
+# into root's cache of versions on the host, or finds built there; it runs
+# with sh, since this clone builds no etude of its own. Print the lines of
+# `etude build` with the machine's name first, and nothing when the host has
+# no store.
 store_expire()
 {
     ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         "MSYS_NO_PATHCONV=1 wsl.exe -u root -- test -d $STORE" < /dev/null 2> /dev/null || return 0
-    script=$(sh tools/etude/version.sh -r origin/master -s) ||
+    script=$(sh tools/etude/provision_version.sh -r origin/master -s) ||
         { echo "$TESTING: store: etude's build script cannot be made"; return 1; }
     nonce=$(printf '%s\n' "$script" | sed -n 's/^ETUDE_NONCE=//p')
     out=$(printf '%s\n' "$script" | perl -e 'alarm shift; exec @ARGV' 600 \
@@ -275,7 +276,7 @@ store_expire()
             return 1 ;;
     esac
     perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
-        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- $dir/bin/etude-step -s $STORE -e ${1:-$STORE_DAYS}" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- $dir/bin/etude build -s $STORE -e ${1:-$STORE_DAYS}" \
         < /dev/null 2>&1 | sed "s/^/$TESTING: /"
 }
 

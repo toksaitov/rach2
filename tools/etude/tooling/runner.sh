@@ -6,12 +6,12 @@
 # number is etude-job, as root, and powers the machine off.
 #
 # The volume is a raw disk with a tar archive at its start, which
-# etude-tooling writes: job.sh, the job's script; in/, which becomes the
+# etude writes: job.sh, the job's script; in/, which becomes the
 # job's workspace, /var/tmp/etude-work; and outputs, the names of the
 # workspace's files and directories to bring back, one per line. The runner
 # runs `sh job.sh` in the workspace with standard input from /dev/null and
 # in its environment ETUDE_WORK, the workspace, ETUDE_DISKS, the count of the
-# other disks etude-tooling attached, and ETUDE_DISK1 and on, their devices.
+# other disks etude attached, and ETUDE_DISK1 and on, their devices.
 # It then writes over the volume an archive of out/, with the outputs, and of
 # stdout, stderr and status, the job's output and exit status, in that order.
 #
@@ -33,7 +33,7 @@ say()
 }
 
 # end: write everything to the disks and power off at once; the machine's
-# own disk is a copy that etude-tooling discards.
+# own disk is a copy that etude discards.
 end()
 {
     sync

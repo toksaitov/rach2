@@ -224,7 +224,7 @@ in_tooling() {
     # shellcheck source=tests/system/tooling.sh
     . "$REPO/tests/system/tooling.sh"
     echo "agentapi: the case runs in etude's tooling machine"
-    tooling_made || unrun "the tooling machine is not made; etude-tooling prepare makes it"
+    tooling_made || unrun "the tooling machine is not made; etude provision tooling prepare makes it"
     COPYFILE_DISABLE=1 tar -c --format ustar -f "$LOGS/agentapi.tar" -C "$REPO" \
         tests/system/fakeapi -C "${SELF%/*}" "${SELF##*/}" ||
         unrun "the job's files could not be packed"
@@ -257,8 +257,8 @@ EOF
         echo "agentapi: the logs of the job are under $LOGS/scratch"
     ! grep -q '^@etude 1 end ' "$LOGS/job.out" || exit "$status"
     case $status in
-        125) unrun "the tooling machine failed; etude-tooling's lines say why" ;;
-        126) unrun "the tooling machine is not made; etude-tooling prepare makes it" ;;
+        125) unrun "the tooling machine failed; the lines of etude provision say why" ;;
+        126) unrun "the tooling machine is not made; etude provision tooling prepare makes it" ;;
         *) unrun "the tooling machine's job ended with status $status before its report did" ;;
     esac
 }

@@ -349,7 +349,7 @@ def claims(directory):
             rows.append(f"    request {claim['id']} of {claim.get('account', '?')}: {role}, "
                         f"for {asks(claim)}")
         else:
-            drop = (f"build/tools/etude/etude-ledger drop {shlex.quote(directory)} "
+            drop = (f"build/tools/etude/etude release {shlex.quote(directory)} "
                     f"{shlex.quote(claim['id'])}")
             fault = ("end its processes" if verdict[0] == "live"
                      else "a person must establish that nothing of it runs and drop it "

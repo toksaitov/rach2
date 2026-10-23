@@ -80,8 +80,8 @@ int fx_runtime_cut(void);
 int runtime_controller(const char *id, const char *gap);
 
 /*
- * The tooling fixtures. Each runs etude-tooling, beside winfixture.exe,
- * against the stand-ins of winstand.exe, as a row of
+ * The tooling fixtures. Each runs `etude provision tooling`, from etude.exe
+ * beside winfixture.exe, against the stand-ins of winstand.exe, as a row of
  * tests/system/etude_tooling_test.sh does: a machine made, recorded and
  * reused; an image of another digest; a provision that fails; a job with its
  * inputs, a disk and its outputs; a job that exits 3; a run before the
@@ -102,10 +102,10 @@ int fx_tooling_line(void);
 int fx_tooling_sample(void);
 
 /*
- * The fixtures of etude-hold, beside winfixture.exe, each on a tree of its
- * own: a command run under the hold and its record; a second helper on a
- * held tree; locks that were left, refused or taken over; the hold of an
- * ancestor; and a helper killed under its command.
+ * The fixtures of `etude lock tree`, from etude.exe beside winfixture.exe,
+ * each on a tree of its own: a command run under the hold and its record; a
+ * second helper on a held tree; locks that were left, refused or taken
+ * over; the hold of an ancestor; and a helper killed under its command.
  */
 int fx_hold_run(void);
 int fx_hold_busy(void);
@@ -114,10 +114,10 @@ int fx_hold_ancestor(void);
 int fx_hold_killed(void);
 
 /**
- * The fixture of etude-ports, beside winfixture.exe: a shared run takes
- * block 0 and the host lock shared and gives its command the offset, a second
- * takes block 1, a run that needs the host alone waits for both and gives
- * its command's status, and no lock outlives its run.
+ * The fixture of `etude lock ports`, from etude.exe beside winfixture.exe: a
+ * shared run takes block 0 and the host lock shared and gives its command
+ * the offset, a second takes block 1, a run that needs the host alone waits
+ * for both and gives its command's status, and no lock outlives its run.
  */
 int fx_ports(void);
 

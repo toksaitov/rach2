@@ -4,7 +4,7 @@
 # On macOS it is formatted by hdiutil (which runs newfs_exfat) and filled
 # through the mount hdiutil gives; on any other host, by exfatprogs'
 # mkfs.exfat and Linux's own driver, in etude's tooling machine
-# (build/tools/etude/etude-tooling, tools/etude/Readme.md), which runs under
+# (`etude provision tooling`, tools/etude/Readme.md), which runs under
 # the accelerator RACH2_QEMU_ACCEL names. Writes DIR/exfat_external.img,
 # DIR/exfat_external.manifest (name|size|mtime as an epoch second) and the
 # source files under DIR/exfat_src/. Exits 3 when the host has neither
@@ -18,9 +18,9 @@
 # it; on macOS FILE has `hdiutil`. FILE is written only when its line
 # changes, so that the preparation's record of it stays the same. Exits 0, 1
 # when the machine cannot be made, and 3 when the host has neither hdiutil
-# and newfs_exfat nor etude-tooling.
+# and newfs_exfat nor etude.
 set -u
-TOOLING=build/tools/etude/etude-tooling
+ETUDE=build/tools/etude/etude
 ACCENT="$(printf 'e\303\251t\303\251.txt')" # e-acute t e-acute, kept ASCII here
 LONG="A name of some length that takes more than one name entry.txt"
 
@@ -39,7 +39,7 @@ eval "$MAKE_SRC"
 
 if command -v hdiutil >/dev/null 2>&1 && command -v newfs_exfat >/dev/null 2>&1; then
     host=mac
-elif [ -x "$TOOLING" ]; then
+elif [ -x "$ETUDE" ]; then
     host=tooling
 else
     exit 3
@@ -54,7 +54,7 @@ fi
 DIR=${1:?directory}
 IMG="$DIR/exfat_external.img"
 SRC="$DIR/exfat_src"
-[ "$host" = mac ] || "$TOOLING" check >/dev/null 2>&1 || exit 3
+[ "$host" = mac ] || "$ETUDE" provision tooling check >/dev/null 2>&1 || exit 3
 rm -rf "$IMG" "$SRC" "$DIR/exfat_external.manifest" "$DIR/exfat_job.sh"
 make_src "$SRC" || exit 1
 if [ "$host" = mac ]; then
@@ -91,7 +91,7 @@ done) > exfat_external.manifest
 umount mnt
 EOF
 } > "$DIR/exfat_job.sh" || exit 1
-"$TOOLING" run -d "$IMG" -o exfat_external.manifest -O "$DIR" "$DIR/exfat_job.sh" >&2 || exit 1
+"$ETUDE" provision tooling run -d "$IMG" -o exfat_external.manifest -O "$DIR" "$DIR/exfat_job.sh" >&2 || exit 1
 rm -f "$DIR/exfat_job.sh"
 [ -s "$DIR/exfat_external.manifest" ] || exit 1
 exit 0

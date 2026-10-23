@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "fixture.machine",
-  "summary": "A machine case whose consoles the fixtures of casecheck attempt judge",
+  "summary": "A machine case whose consoles the fixtures of `etude check attempt` judge",
   "cases": [
     {
       "case_id": "fixture.machine.crash",

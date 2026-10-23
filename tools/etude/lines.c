@@ -22,7 +22,8 @@ enum rank { R_PASS, R_CANCELLED, R_INCOMPLETE, R_FAILURE };
 static const char *const rank_names[] = {"pass", "cancelled", "incomplete", "failure"};
 static const char *const suite_words[] = {"PASS", "CANCELLED", "INCOMPLETE", "FAIL"};
 
-static const char usage_text[] = "usage: history_lines [-s SCHEMAS] [-f NAME]... MAP STREAM...\n";
+static const char usage_text[] =
+    "usage: etude show lines [-s SCHEMAS] [-f NAME]... MAP STREAM...\n";
 
 /* The most failures outside the suites that a run may name with -f. */
 #define EXTRA_MAX 8
@@ -203,7 +204,7 @@ static int read_map(struct lines *l, const char *path)
     int bad = 0;
     FILE *f = fopen(path, "r");
     if (!f) {
-        fprintf(stderr, "history_lines: %s: cannot be read\n", path);
+        fprintf(stderr, "etude show: %s: cannot be read\n", path);
         return -1;
     }
     while (!bad && fgets(line, sizeof(line), f)) {
@@ -220,9 +221,9 @@ static int read_map(struct lines *l, const char *path)
     }
     fclose(f);
     if (bad)
-        fprintf(stderr, "history_lines: %s:%u: not a suite's name and its cases\n", path, n);
+        fprintf(stderr, "etude show: %s:%u: not a suite's name and its cases\n", path, n);
     else if (!l->nsuites)
-        fprintf(stderr, "history_lines: %s: names no suite\n", path);
+        fprintf(stderr, "etude show: %s: names no suite\n", path);
     return bad || !l->nsuites ? -1 : 0;
 }
 
@@ -753,7 +754,7 @@ int etude_lines_main(int argc, char **argv)
             check_run(&l, worst);
         }
         if (l.nomem)
-            fprintf(stderr, "history_lines: memory ran out\n");
+            fprintf(stderr, "etude show: memory ran out\n");
         else
             status = print(&l, worst);
     }

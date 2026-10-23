@@ -1,4 +1,4 @@
-# The self-test of casecheck: one command a line, as `STATUS ARGUMENTS |
+# The self-test of `etude check`: one command a line, as `STATUS ARGUMENTS |
 # TEXT`. The command must exit with STATUS and print TEXT among its output,
 # or, when TEXT begins with !, must not print the rest of it. A path that
 # begins ./ or ../ is relative to this directory, and -s is ../schemas
@@ -192,9 +192,9 @@
 3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-truncated.out run-1 attempt-1 item-1 lost | "termination":{"end":"lost","value":null,"observed_by":"executor","detail":"the executor did not observe its end"}
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 exited 1 | {"assertion_id":"etude.termination","source":"executor","outcome":"fail","detail":"exited 1, where the case expects exited 0"}
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-pass.out run-1 attempt-1 item-1 signaled 9 | "detail":"signaled 9, where the case expects exited 0"
-3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console and does not read the kernel's log"}
+3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"etude check attempt was given no console and does not read the kernel's log"}
 3 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 qemu ./report-pass.out run-1 attempt-1 item-1 exited 0 | "observed_by":"etude_guest"
-1 attempt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console"}
+1 attempt ../schemas/case.guest.example.json guest.default.survivorprobe i686 qemu ./attempt-survivor.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"shell-returned","source":"executor","outcome":"missing","detail":"etude check attempt was given no console"}
 # With -k, the console of the machine decides the executor's assertions:
 # etude.kernel fails for a record at level 2, a panic or a fault of the
 # kernel, at the start of a line, and passes without one; an executor
@@ -222,7 +222,7 @@
 0 attempt -k ./consoles/vm.1.console -k ./consoles/vm.2.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | "observed_by":"host_process"
 1 attempt -k ./consoles/vm.1.console -k ./consoles/vm.3.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"fail","detail":"the console has <2>[    0.500000] panic: page fault at 0x00000000"}
 1 attempt -k ./consoles/vm.3.console -k ./consoles/vm.2.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | "detail":"the console has <2>[    0.500000] panic: page fault
-3 attempt ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console and does not read the kernel's log"}
+3 attempt ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.kernel","source":"executor","outcome":"missing","detail":"etude check attempt was given no console and does not read the kernel's log"}
 2 attempt -k ./consoles/vm.1.console -k ./consoles/absent.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out run-1 attempt-1 item-1 exited 0 | cannot read
 2 attempt -k ./consoles/vm.1.console ./attempt.json fixture.attempt.scan none host ./attempt-fast.out run-1 attempt-1 item-1 exited 0 | -k gives a QEMU machine's console, and fixture.attempt.scan is placed host
 2 report -k ./consoles/vm.1.console ./machine.json fixture.machine.crash i686 qemu ./report-machine.out | -k is an option of attempt
@@ -246,7 +246,7 @@
 1 attempt -k ./consoles/fault/reset/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-reset.out run-1 attempt-1 item-1 exited 0 | "machines":[{"boot":"smp.1","end":"reset"}]
 1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-truncated.out run-1 attempt-1 item-1 stopped | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"no boot of smp was reported to end, and the report is truncated"}
 1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-truncated.out run-1 attempt-1 item-1 stopped | "detail":"the console has <2>[    1.200000] isr: hardware fault: non-maskable interrupt (vector 2, pc 0xc0101234)"
-3 attempt ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"casecheck attempt was given no console of smp.1"}
+3 attempt ./fault.json fixture.fault.nmi i686 qemu ./report-fault.out run-1 attempt-1 item-1 exited 0 | {"assertion_id":"etude.fault","source":"executor","outcome":"missing","detail":"etude check attempt was given no console of smp.1"}
 1 attempt -k ./consoles/fault/pass/smp.1.console ./fault.json fixture.fault.nmi i686 qemu ./report-fault-bad.out run-1 attempt-1 item-1 exited 0 | "errors":["line 6: the record \"@etude 1 machine\" does not parse","line 4: vm.1 is the boot of no machine of the case","line 5: the end of smp.1 is reported twice"]
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fault-guest.out run-1 attempt-1 item-1 exited 0 | "errors":["line 9: a machine record from a case that is not a machine case"]
 1 attempt ../schemas/case.guest.example.json guest.default.errnoprobe i686 native ./report-fault-guest.out run-1 attempt-1 item-1 exited 0 | !"machines"
@@ -276,15 +276,15 @@
 # run's summary agrees with the records. verdict/pass is a run that passes;
 # each other stream there takes the place of one of its streams, and plants
 # one fault. A fault of the records adds `runner`, which comes first.
-0 verdict -b ./verdict/store -c 0123456789abcdef0123456789abcdef01234567 -m ./verdict/cases i686 core default,host ./verdict/pass | casecheck: result: passed
-0 verdict -b ./verdict/store -m ./verdict/cases i686 core host ./verdict/pass | casecheck: result: passed
+0 verdict -b ./verdict/store -c 0123456789abcdef0123456789abcdef01234567 -m ./verdict/cases i686 core default,host ./verdict/pass | etude check: result: passed
+0 verdict -b ./verdict/store -m ./verdict/cases i686 core host ./verdict/pass | etude check: result: passed
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-failure.jsonl | item item-d0: fixture.default.errno on i686: failure, in default
-1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-failure.jsonl | casecheck: result: failed: default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-failure.jsonl | etude check: result: failed: default
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | the run's summary gives the item item-d0 pass, and its attempts give failure
-1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | casecheck: result: failed: runner default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-failure.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | etude check: result: failed: runner default
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-retry.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-retry.jsonl | item item-d0: fixture.default.errno on i686: failure, in default
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-unfinished.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-unfinished.jsonl | item item-d0: fixture.default.errno on i686: incomplete, in default
-1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-unfinished.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-unfinished.jsonl | casecheck: result: failed: default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/item-d0-unfinished.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-unfinished.jsonl | etude check: result: failed: default
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/item-d1-notrun.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | the attempt attempt-d1 is recorded as a pass, and its results give incomplete, as enosys is not_run
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/item-h-absent.jsonl ./verdict/pass/run.jsonl | the results of the attempt attempt-h, a pass, are not in the store
 1 verdict -m ./verdict/cases i686 core default,host ./verdict/pass | the results of the attempt attempt-h, a pass, are not in the store
@@ -292,10 +292,10 @@
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/item-h-step.jsonl ./verdict/pass/run.jsonl | the attempt attempt-h is recorded as a pass, and its step sha256_hosttest is failure
 1 verdict -b ./verdict/store -m ./verdict/absent i686 core default,host ./verdict/pass | fixture.host.vectors is no case of the manifests given
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-partial.jsonl | item item-d1: fixture.default.errno on i686: incomplete, in default
-1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-partial.jsonl | casecheck: result: failed: default
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-partial.jsonl | etude check: result: failed: default
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/item-d1-lost.jsonl ./verdict/pass/item-h.jsonl ./verdict/pass/run.jsonl | the last record is cut off, so its writer did not close the stream
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-short.jsonl | the run's summary leaves out the item item-d1
-1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-prepared.jsonl | casecheck: result: failed: core
+1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl ./verdict/run-prepared.jsonl | etude check: result: failed: core
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass ./verdict/stray.jsonl | the record stray/0 is of the run fixture-old-run, not fixture-run
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/pass/plan.jsonl ./verdict/pass/item-d0.jsonl ./verdict/pass/item-d1.jsonl ./verdict/pass/item-h.jsonl | the history has no run record, so the run did not finish
 1 verdict -b ./verdict/store -m ./verdict/cases i686 core default,host ./verdict/cases | the directory has no history stream

@@ -6,8 +6,9 @@
  * processes, the end of a tree by its job and by the death of its
  * controller, output, arguments, paths, the environment, sockets and clocks.
  * Others run the executor of etude/exec.h, the ledger, the supervisor with
- * both, etude-tooling, which must also be beside this program, with
- * winstand.exe, and etude-hold, beside it too.
+ * both, and etude.exe, which must also be beside this program: `etude
+ * provision tooling` with winstand.exe, `etude lock tree` and `etude lock
+ * ports`.
  *
  * Usage: winfixture [NAME...] runs the fixtures named, or all of them, and
  * prints `winfixture: result: pass: NAME` or `winfixture: result: fail: NAME:

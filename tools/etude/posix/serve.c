@@ -95,14 +95,14 @@ struct server {
     int done; /* the controller said bye */
 };
 
-/** Write a diagnostic as `etude-remote: WHAT`. */
+/** Write a diagnostic as `etude serve: WHAT`. */
 static void say(struct server *s, const char *fmt, ...)
 {
     va_list ap;
 
     if (s->conf->log == NULL)
         return;
-    fputs("etude-remote: ", s->conf->log);
+    fputs("etude serve: ", s->conf->log);
     va_start(ap, fmt);
     vfprintf(s->conf->log, fmt, ap);
     va_end(ap);

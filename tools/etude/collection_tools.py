@@ -91,12 +91,13 @@ class Job:
         script_path.write_text(script, encoding="utf-8")
         out = self.work / "out"
         out.mkdir()
-        tool = self.root / "build/tools/etude/etude-tooling"
+        etude = self.root / "build/tools/etude/etude"
         cache = local(os.environ.get("ETUDE_TOOLING_CACHE", str(self.root / "build/tooling")))
         accel = os.environ.get("RACH2_QEMU_ACCEL")
         if not accel:
             raise ValueError("RACH2_QEMU_ACCEL must name the requested accelerator")
-        args = [native(tool), "-r", native(self.root / "tools/etude/tooling"),
+        args = [native(etude), "provision", "tooling",
+                "-r", native(self.root / "tools/etude/tooling"),
                 "-C", native(cache), "-a", accel, "run", "-c", "1", "-m", str(memory),
                 "-s", str(volume), "-O", native(out)]
         for flag, paths in (("-i", self.inputs), ("-d", self.disks)):
@@ -123,7 +124,7 @@ class Job:
         if not os.environ.get("RACH2_QEMU_ACCEL"):
             raise ValueError("RACH2_QEMU_ACCEL must name the requested accelerator")
         return run_child([
-            native(self.root / "build/tools/etude/etude-tooling"),
+            native(self.root / "build/tools/etude/etude"), "provision", "tooling",
             "-r", native(self.root / "tools/etude/tooling"), "-C",
             native(local(os.environ.get("ETUDE_TOOLING_CACHE", str(self.root / "build/tooling")))),
             "-a", os.environ["RACH2_QEMU_ACCEL"], "prepare", "-c", "1"])

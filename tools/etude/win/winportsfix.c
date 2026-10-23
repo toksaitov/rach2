@@ -1,7 +1,7 @@
 /*
- * winportsfix.c: the fixture of etude-ports on Windows. It runs
- * etude-ports.exe, beside winfixture.exe, with wintarget.exe as its command,
- * and checks the blocks and the host lock it takes by LockFileEx on the same
+ * winportsfix.c: the fixture of `etude lock ports` on Windows. It runs
+ * etude.exe, beside winfixture.exe, with wintarget.exe as its command, and
+ * checks the blocks and the host lock it takes by LockFileEx on the same
  * files, as tests/host/etude_ports_hosttest.c checks them on POSIX systems.
  */
 #include <stdio.h>
@@ -10,7 +10,10 @@
 #include "winexec.h"
 #include "winfixture.h"
 
-/* One run of etude-ports, with the parent's ends of its standard streams. */
+/*
+ * One run of `etude lock ports`, with the parent's ends of its standard
+ * streams.
+ */
 struct run {
     HANDLE process; /* NULL until started */
     HANDLE in;      /* closing it ends the command's input */
@@ -19,16 +22,17 @@ struct run {
     size_t len;
 };
 
-/* etude-ports.exe, and the directory of its lock files. */
-static char ports[MAX_PATH * 4 + 32], dir[MAX_PATH * 4 + 32];
+/* etude.exe, and the directory of its lock files. */
+static char etude[MAX_PATH * 4 + 32], dir[MAX_PATH * 4 + 32];
 
 /* The runs of the fixture, which it ends whatever its result. */
 static struct run runs[3];
 
 /**
- * Start etude-ports with RACH2_HOST_LOCK set to `host` and two blocks, to
- * run `command`. Only the child's ends of the pipes are inheritable, and
- * only until it has started, so that no other run holds them open.
+ * Start `etude lock ports` with RACH2_HOST_LOCK set to `host` and two
+ * blocks, to run `command`. Only the child's ends of the pipes are
+ * inheritable, and only until it has started, so that no other run holds
+ * them open.
  */
 static int spawn(struct run *r, const char *host, const char *command)
 {
@@ -51,7 +55,7 @@ static int spawn(struct run *r, const char *host, const char *command)
     }
     SetHandleInformation(in, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
     SetHandleInformation(out, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT);
-    snprintf(text, sizeof text, "\"%s\" \"%s\" 2 %s", ports, dir, command);
+    snprintf(text, sizeof text, "\"%s\" lock ports \"%s\" 2 %s", etude, dir, command);
     MultiByteToWideChar(CP_UTF8, 0, text, -1, line, sizeof line / sizeof line[0]);
     memset(&si, 0, sizeof si);
     si.cb = sizeof si;
@@ -144,7 +148,7 @@ static int check(void)
 
     snprintf(envcat, sizeof envcat, "\"%s\" envcat RACH2_PORT_OFFSET RACH2_HOST_LOCK", target);
     snprintf(exit7, sizeof exit7, "\"%s\" exit 7", target);
-    CHECK(spawn(a, "shared", envcat) == 0, "etude-ports cannot be started: %lu",
+    CHECK(spawn(a, "shared", envcat) == 0, "etude lock ports cannot be started: %lu",
           (unsigned long)GetLastError());
     CHECK(lines(a, 2), "the first run's command did not report: %s", a->text);
     CHECK(strstr(a->text, "env RACH2_PORT_OFFSET=0\n") != NULL &&
@@ -153,10 +157,10 @@ static int check(void)
     CHECK(lockable("rach2-ports.0", 1) == 0, "block 0 is not held while its command runs");
     CHECK(lockable("rach2-host.lock", 1) == 0 && lockable("rach2-host.lock", 0) == 1,
           "the host lock is not held shared while the command runs");
-    CHECK(spawn(b, "shared", envcat) == 0, "etude-ports cannot be started again");
+    CHECK(spawn(b, "shared", envcat) == 0, "etude lock ports cannot be started again");
     CHECK(lines(b, 2) && strstr(b->text, "env RACH2_PORT_OFFSET=1000\n") != NULL,
           "the second run was not given block 1: %s", b->text);
-    CHECK(spawn(c, "alone", exit7) == 0, "etude-ports cannot be started alone");
+    CHECK(spawn(c, "alone", exit7) == 0, "etude lock ports cannot be started alone");
     CHECK(WaitForSingleObject(c->process, 600) == WAIT_TIMEOUT,
           "a run that needs the host alone did not wait for the shared runs");
     CHECK(finish(a) == 0 && finish(b) == 0, "the shared runs did not end with status 0");
@@ -172,7 +176,7 @@ int fx_ports(void)
     size_t i;
     int rc;
 
-    snprintf(ports, sizeof ports, "%s\\etude-ports.exe", scratch);
+    snprintf(etude, sizeof etude, "%s\\etude.exe", scratch);
     snprintf(dir, sizeof dir, "%s\\ports", scratch);
     CreateDirectoryA(dir, NULL);
     rc = check();

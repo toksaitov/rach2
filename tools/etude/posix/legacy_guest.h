@@ -82,7 +82,7 @@ void legacy_guest_serve(struct legacy_guest *g);
 void legacy_guest_cancel(struct legacy_guest *g);
 
 /**
- * Give the end of the case as casecheck takes it, from what the supervisor
+ * Give the end of the case as the judge takes it, from what the supervisor
  * gave in `r` and etude-guest reported: `stopped` after an expiry or a
  * cancellation, `exited` or `signaled` with its value in `*value`, or `lost`
  * when etude-guest did not report it.

@@ -1,14 +1,17 @@
 #!/bin/sh
 #
-# version.sh: build etude from this tree's source on a machine, over SSH,
-# into that machine's cache of versions, unless the cache has it already.
-# The machine needs a POSIX sh, make, a C compiler and a SHA-256 tool, and
-# nothing of etude.
+# provision_version.sh: `etude provision version`, which builds etude from
+# this tree's source on a machine, over SSH, into that machine's cache of
+# versions, unless the cache has it already. The machine needs a POSIX sh,
+# make, a C compiler and a SHA-256 tool, and nothing of etude.
 #
-# Usage: sh tools/etude/version.sh [-r REV] [-c CC] [-C CACHE] [-w] HOST
-#        sh tools/etude/version.sh [-r REV] [-c CC] [-C CACHE] -l
-#        sh tools/etude/version.sh [-r REV] [-c CC] [-C CACHE] -s
+# Usage: etude provision version [-r REV] [-c CC] [-C CACHE] [-w] HOST
+#        etude provision version [-r REV] [-c CC] [-C CACHE] -l
+#        etude provision version [-r REV] [-c CC] [-C CACHE] -s
 #
+# etude runs it from the root of the tree. Where no etude is built, sh runs
+# it alone the same way: `sh tools/etude/provision_version.sh -l` builds the
+# first etude of a machine.
 # The source is that of the working tree, or with -r that of the commit REV.
 # HOST is a destination of ssh(1), which runs `sh -s` there with the script
 # on its standard input; with -w the machine is Windows, whose account's
@@ -17,8 +20,8 @@
 # machine and CACHE the cache's directory, each by default the platform's
 # (tools/etude/Readme.md, The version cache).
 #
-# On success it prints `etude-version: result: built KEY DIR` or
-# `etude-version: result: reused KEY DIR`, DIR being the version's directory
+# On success it prints `etude provision: result: built KEY DIR` or
+# `etude provision: result: reused KEY DIR`, DIR being the version's directory
 # on the machine, and exits 0. Any other output of the machine's goes to
 # stderr. Exit 1 when the version is neither built nor found, 2 on a usage
 # error.
@@ -27,7 +30,7 @@ set -u
 
 usage()
 {
-    echo 'usage: version.sh [-r REV] [-c CC] [-C CACHE] [-w] HOST | -l | -s' >&2
+    echo 'usage: etude provision version [-r REV] [-c CC] [-C CACHE] [-w] HOST | -l | -s' >&2
     exit 2
 }
 
@@ -65,11 +68,11 @@ trap '[ -z "$work" ] || rm -rf "$work"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-work=$(mktemp -d "${TMPDIR:-/tmp}/etude-version.XXXXXX") || exit 1
+work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-etude-version.XXXXXX") || exit 1
 
 fail()
 {
-    echo "etude-version: $*" >&2
+    echo "etude provision: $*" >&2
     exit 1
 }
 
@@ -156,4 +159,4 @@ case $result in
     *) fail "the machine gave a result it should not: $result" ;;
 esac
 [ "$(printf '%s\n' "$result" | wc -l)" -eq 1 ] || fail 'the machine gave more than one result'
-echo "etude-version: result: $result"
+echo "etude provision: result: $result"

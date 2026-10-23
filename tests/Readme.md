@@ -62,7 +62,7 @@ Ten probes also run on an installed root, as `tests/run selfbuild-ext2` runs the
 * `orphanprobe` must be the kernel's init process, which `exec /orphanprobe` at the debug shell of a boot with `rach2.rescue` makes it; a process started over SSH cannot be.
 * `modeprobe` needs `/suidhelper`, root, and a writable working directory for its `mp_*` files. An argument gives the directory whose file system it tests.
 
-On an installed machine that is already up, such as the Lenovo, `etude-native` runs a probe as a case of its own over SSH, as [etude's Readme](../tools/etude/Readme.md#use) says.
+On an installed machine that is already up, such as the Lenovo, `etude run native` runs a probe as a case of its own over SSH, as [etude's Readme](../tools/etude/Readme.md#use) says.
 
 ## Results
 

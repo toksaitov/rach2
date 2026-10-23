@@ -1,8 +1,8 @@
 /**
- * Check etude-hold: the hold of a tree while a command runs, the hold of an
- * ancestor, the refusals, both takeovers, the stop passed to the command and
- * the hold a killed command leaves. Each row runs the helper's main in a
- * child of the test, in a private tree.
+ * Check `etude lock tree`: the hold of a tree while a command runs, the hold
+ * of an ancestor, the refusals, both takeovers, the stop passed to the
+ * command and the hold a killed command leaves. Each row runs the command's
+ * entry in a child of the test, in a private tree.
  * host-deps: tools/etude/posix/hold.c
  * host-cflags: -I tools/etude -Wall -Wextra -Werror
  */
@@ -20,18 +20,17 @@
 
 #include "compat/fixdir_host.c"
 
-#define main hold_main
-#include "../../tools/etude/etude_hold.c"
-#undef main
+#include "verbs.h"
+#include "../../tools/etude/lock_tree.c"
 
 static int fails;
 
-#define CHECK(c, row)                                                    \
-    do {                                                                 \
-        if (!(c)) {                                                      \
-            fprintf(stderr, "etude-hold-test: fail: %s: %s\n", row, #c); \
-            fails++;                                                     \
-        }                                                                \
+#define CHECK(c, row)                                                         \
+    do {                                                                      \
+        if (!(c)) {                                                           \
+            fprintf(stderr, "etude-lock-tree-test: fail: %s: %s\n", row, #c); \
+            fails++;                                                          \
+        }                                                                     \
     } while (0)
 
 /* What one run of the helper gave. */
@@ -85,7 +84,7 @@ static void put(const char *path, const char *text)
     FILE *f = fopen(path, "w");
 
     if (f == NULL || fputs(text, f) == EOF || fclose(f) != 0) {
-        fprintf(stderr, "etude-hold-test: cannot write %s\n", path);
+        fprintf(stderr, "etude-lock-tree-test: cannot write %s\n", path);
         exit(1);
     }
 }
@@ -152,7 +151,7 @@ static pid_t start(char **argv, const char *err)
     }
     for (argc = 0; argv[argc] != NULL; argc++)
         ;
-    _exit(hold_main(argc, argv));
+    _exit(etude_lock_tree_main(argc, argv));
 }
 
 /** Wait for `pid` to end; its status as a shell gives it, or -1 when it
@@ -248,7 +247,7 @@ static void test_hold(int run_hold)
     lock_path(tree, "owner", owner, sizeof owner);
     fix_format(cmd, sizeof cmd, "{ echo \"held $RACH2_TREE_HELD\"; cat %s; } > %s; exit 3", owner,
                seen);
-    argv[n++] = "etude-hold";
+    argv[n++] = "etude";
     if (run_hold)
         argv[n++] = "-r";
     argv[n++] = tree;
@@ -288,7 +287,7 @@ static void test_hold(int run_hold)
 static void test_ancestor(void)
 {
     char tree[1024], record[256], before[512], after[512], path[1200], self[32];
-    char *argv[] = {"etude-hold", tree, "script", "sh", "-c", "exit 6", NULL};
+    char *argv[] = {"etude", tree, "script", "sh", "-c", "exit 6", NULL};
     struct ran r;
 
     make_tree("ancestor", tree, sizeof tree);
@@ -319,8 +318,8 @@ static void test_ancestor(void)
 static void test_busy(void)
 {
     char tree[1024], ready[1200], cmd[1300], err[1200];
-    char *first[] = {"etude-hold", tree, "first", "sh", "-c", cmd, NULL};
-    char *second[] = {"etude-hold", tree, "second", "true", NULL};
+    char *first[] = {"etude", tree, "first", "sh", "-c", cmd, NULL};
+    char *second[] = {"etude", tree, "second", "true", NULL};
     struct ran r;
     int status;
 
@@ -352,7 +351,7 @@ static void test_busy(void)
 static void refused(const char *row, const char *record, const char *says)
 {
     char tree[1024], before[1024], after[1024], path[1200];
-    char *argv[] = {"etude-hold", "-r", tree, "next", "true", NULL};
+    char *argv[] = {"etude", "-r", tree, "next", "true", NULL};
     struct ran r;
 
     make_tree(row, tree, sizeof tree);
@@ -419,7 +418,7 @@ static void test_refusals(void)
 static void taken(const char *row, const char *record, int age, const char *says)
 {
     char tree[1024], path[1200], ran[1200];
-    char *argv[] = {"etude-hold", tree, "next", "touch", ran, NULL};
+    char *argv[] = {"etude", tree, "next", "touch", ran, NULL};
     struct timeval tv[2];
     struct ran r;
 
@@ -464,7 +463,7 @@ static void test_takeovers(void)
 static void test_stop(void)
 {
     char tree[1024], ready[1200], log[1200], cmd[4096], path[1200], text[256];
-    char *argv[] = {"etude-hold", tree, "stopped", "sh", "-c", cmd, NULL};
+    char *argv[] = {"etude", tree, "stopped", "sh", "-c", cmd, NULL};
     int status;
 
     make_tree("stop", tree, sizeof tree);
@@ -501,7 +500,7 @@ static void test_stop(void)
 static void test_killed(void)
 {
     char tree[1024], path[1200];
-    char *argv[] = {"etude-hold", tree, "killed", "sh", "-c", "kill -KILL $$", NULL};
+    char *argv[] = {"etude", tree, "killed", "sh", "-c", "kill -KILL $$", NULL};
     struct ran r;
 
     make_tree("killed", tree, sizeof tree);
@@ -518,13 +517,13 @@ static void test_killed(void)
 static void test_scratch(void)
 {
     char tree[1024], scratch[1200], path[1200];
-    char *argv[] = {"etude-hold", "-s", scratch, tree, "scratch", "/nonexistent/command", NULL};
+    char *argv[] = {"etude", "-s", scratch, tree, "scratch", "/nonexistent/command", NULL};
     struct ran r;
 
     make_tree("scratch", tree, sizeof tree);
     fix_format(scratch, sizeof scratch, "%s/scratch", tree);
     mkdir(scratch, 0700);
-    fix_format(path, sizeof path, "%s/scratch/etude-hold", tree);
+    fix_format(path, sizeof path, "%s/scratch/file", tree);
     put(path, "");
     run(argv, &r);
     CHECK(!exists(scratch), "scratch: the directory goes");
@@ -550,10 +549,10 @@ int main(void)
     test_killed();
     test_scratch();
     if (fails != 0) {
-        fprintf(stderr, "etude-hold-test: %d checks failed\n", fails);
+        fprintf(stderr, "etude-lock-tree-test: %d checks failed\n", fails);
         return 1;
     }
     fix_passed();
-    printf("etude-hold-test: pass\n");
+    printf("etude-lock-tree-test: pass\n");
     return 0;
 }

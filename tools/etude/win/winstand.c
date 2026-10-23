@@ -1,6 +1,6 @@
 /*
  * winstand.c: the stand-ins that the tooling fixtures of winfixture put on
- * etude-tooling's PATH for curl, qemu-img and QEMU, as
+ * the PATH of `etude provision tooling` for curl, qemu-img and QEMU, as
  * tests/system/etude_tooling_test.sh does with shell scripts on POSIX
  * systems. One program plays each, by the name it is run under.
  *

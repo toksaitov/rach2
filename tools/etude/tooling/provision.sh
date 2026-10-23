@@ -13,7 +13,7 @@
 # too; the GNU layer's build runs the programs it builds.
 #
 # It reports on the machine's second serial port, ttyS1 on amd64 and ttyAMA1
-# on arm64, which etude-tooling keeps:
+# on arm64, which etude keeps:
 # a line `etude-tooling: tool NAME PATH VERSION` for each command, and last
 # `etude-tooling: provision: ok`, or `etude-tooling: provision: failed: WHY`.
 #

@@ -24,7 +24,7 @@ const char *const cmp_field_names[CMP_FIELDS] = {"case",
                                                  "concurrency policy",
                                                  "timing method"};
 
-const char *cmp_program = "history_compare";
+const char *cmp_program = "etude compare";
 
 struct load_state {
     struct cmp_history *history;

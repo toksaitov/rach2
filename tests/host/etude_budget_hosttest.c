@@ -1256,7 +1256,7 @@ static void test_one_time(void)
 
 /* ---- The program. ---- */
 
-/** Run history_budget with `argv` in a child, output to `out`; its status. */
+/** Run `etude estimate` with `argv` in a child, output to `out`; its status. */
 static int program(char **argv, const char *out)
 {
     pid_t pid;
@@ -1294,9 +1294,9 @@ static int contains(const char *path, const char *text)
 }
 
 /**
- * history_budget's status is 0 for a pass, 1 for a verdict that is not one
- * or a record that differs, and 2 for a run it cannot judge or a wrong
- * usage; a forecast reads its manifests from files.
+ * `etude estimate` gives the status 0 for a pass, 1 for a verdict that is
+ * not one or a record that differs, and 2 for a run it cannot judge or a
+ * wrong usage; a forecast reads its manifests from files.
  */
 static void test_program(void)
 {
@@ -1324,18 +1324,14 @@ static void test_program(void)
     const char *policy_path = fix_path("policy.json"), *out = fix_path("program.out");
     const char *a = write_run(&ok), *b = write_run(&left), *c = write_run(&short_charge), *cases;
     struct jbuf text = {0};
-    char *check_ok[] = {"history_budget",    "-s",      SCHEMAS, "check",
-                        (char *)policy_path, "pok",     CASES,   "--",
-                        (char *)a,           (char *)b, NULL};
-    char *check_left[] = {"history_budget", "check", (char *)policy_path, "pleft", "--", (char *)a,
-                          (char *)b,        NULL};
-    char *check_short[] = {"history_budget", "check", (char *)policy_path, "pshort", "--",
-                           (char *)c,        NULL};
-    char *check_absent[] = {"history_budget", "check", (char *)policy_path, "none", "--",
-                            (char *)a,        NULL};
-    char *usage[] = {"history_budget", "check", (char *)policy_path, "pok", NULL};
-    char *fc[] = {"history_budget", "forecast", (char *)policy_path, "ci", NULL, "--",
-                  (char *)a,        NULL};
+    char *check_ok[] = {"etude", "-s",      SCHEMAS,   "check", (char *)policy_path, "pok", CASES,
+                        "--",    (char *)a, (char *)b, NULL};
+    char *check_left[] = {"etude", "check",   (char *)policy_path, "pleft",
+                          "--",    (char *)a, (char *)b,           NULL};
+    char *check_short[] = {"etude", "check", (char *)policy_path, "pshort", "--", (char *)c, NULL};
+    char *check_absent[] = {"etude", "check", (char *)policy_path, "none", "--", (char *)a, NULL};
+    char *usage[] = {"etude", "check", (char *)policy_path, "pok", NULL};
+    char *fc[] = {"etude", "forecast", (char *)policy_path, "ci", NULL, "--", (char *)a, NULL};
 
     json_canonical(manifest, &text);
     cases = put("cases.json", text.data);
@@ -1345,13 +1341,13 @@ static void test_program(void)
     if (a == NULL || b == NULL || c == NULL || cases == NULL) {
         return;
     }
-    CHECK(program(check_ok, out) == 0 && contains(out, "history_budget: result: pass"), "program");
+    CHECK(program(check_ok, out) == 0 && contains(out, "etude estimate: result: pass"), "program");
     CHECK(contains(out, "charge: 40.000000 s"), "program");
     CHECK(program(check_left, out) == 1 &&
-              contains(out, "history_budget: result: unknown; the run records another budget"),
+              contains(out, "etude estimate: result: unknown; the run records another budget"),
           "program");
     CHECK(program(check_short, out) == 1 &&
-              contains(out, "history_budget: result: pass; the run records another budget"),
+              contains(out, "etude estimate: result: pass; the run records another budget"),
           "program");
     CHECK(program(check_absent, out) == 2, "program");
     CHECK(program(usage, out) == 2, "program");
@@ -1386,8 +1382,7 @@ static void test_unjudged(void)
         struct cmp_history h;
         const char *out = fix_path("unjudged.out"), *path;
         char result[100], id[40];
-        char *args[] = {
-            "history_budget", "check", (char *)fix_path("policy.json"), id, "--", NULL, NULL};
+        char *args[] = {"etude", "check", (char *)fix_path("policy.json"), id, "--", NULL, NULL};
 
         snprintf(id, sizeof(id), "unjudged%zu", i);
         r.id = id;
@@ -1412,7 +1407,7 @@ static void test_unjudged(void)
         CHECK(j.report.verdict == rows[i].verdict && j.agrees == rows[i].agrees, "unjudged");
         etude_budget_report_free(&j.report);
         cmp_free(&h);
-        snprintf(result, sizeof(result), "history_budget: result: %s",
+        snprintf(result, sizeof(result), "etude estimate: result: %s",
                  etude_budget_verdict_name(rows[i].verdict));
         CHECK(program(args, out) == rows[i].status && contains(out, result), "unjudged");
         CHECK(contains(out, "the run records another budget") == !rows[i].agrees, "unjudged");

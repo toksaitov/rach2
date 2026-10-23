@@ -20,7 +20,9 @@
 #
 # A Windows program's source under tools/etude/win is compiled by
 # tools/etude/wincheck.sh with MinGW-w64, which the host's databases cannot
-# describe; such a source passes when that script names it.
+# describe; such a source passes when that script names it, or when
+# tools/etude/sources.mk lists it for the Windows etude that the script
+# builds.
 #
 # Usage: dbcheck.sh [DBDIR]
 set -u
@@ -69,10 +71,11 @@ fixture() {
     grep -rqF --include='*.sh' "fixtures/${1##*/}" "$tree"
 }
 # windows FILE: true when FILE is under tools/etude/win and
-# tools/etude/wincheck.sh names it.
+# tools/etude/wincheck.sh names it or tools/etude/sources.mk lists it.
 windows() {
     case $1 in
-        tools/etude/win/*) grep -qF "${1##*/}" tools/etude/wincheck.sh ;;
+        tools/etude/win/*) grep -qF "${1##*/}" tools/etude/wincheck.sh ||
+            grep -qF "$1" tools/etude/sources.mk ;;
         *) return 1 ;;
     esac
 }

@@ -74,7 +74,7 @@ extern char **environ;
 #define RESEND_US      UINT64_C(2000000)
 
 /* The seconds the watchdog of the preparation allows past the bound that
- * etude-legacy keeps itself, for it to end and report. */
+ * `etude prepare` keeps itself, for it to end and report. */
 #define MARGIN_S 120u
 
 /* The first local port of the machine cases, before the offset of the port
@@ -95,8 +95,8 @@ extern char **environ;
 #define EVIDENCE_BYTES ((size_t)16 << 20)
 #define TAIL_BYTES     ((size_t)65536)
 
-/* The start of the result line etude-legacy ends its output with. */
-#define RESULT "etude-legacy: result: "
+/* The start of the result line `etude prepare` ends its output with. */
+#define RESULT "etude prepare: result: "
 
 /* The most variables a case's program is given by its item. */
 #define CASE_VARS 7
@@ -187,8 +187,8 @@ struct member {
     char record_id[300];                            /* its attempt record, once written */
     char work[PATH_LEN];                            /* its workspace, kept when it does not pass */
     char program[PATH_LEN];                         /* a case's program */
-    char judged_out[PATH_LEN], judge_err[PATH_LEN]; /* casecheck's output */
-    char *judged; /* the results document casecheck gave, or NULL */
+    char judged_out[PATH_LEN], judge_err[PATH_LEN]; /* the judge's output */
+    char *judged; /* the results document the judge gave, or NULL */
     size_t njudged;
     char vars[CASE_VARS][PATH_LEN + 32]; /* the variables a case's program is
                                             given */
@@ -836,7 +836,7 @@ static int write_plan(struct set *x)
         cmp_printf(&d, "null");
     cmp_printf(&d, "}\n");
     rc |= part(x, &t, "source", &d);
-    cmp_printf(&d, "{\"schema_version\":1,\"runner\":\"etude-legacy set\",\"program\":");
+    cmp_printf(&d, "{\"schema_version\":1,\"runner\":\"etude run suites\",\"program\":");
     string(&d, o->program);
     cmp_printf(&d, ",\"wait_s\":%u,\"bound_s\":%s}\n", o->wait, x->seconds);
     rc |= part(x, &t, "runner", &d);
@@ -1041,7 +1041,7 @@ static void release(struct set *x, struct command *c, enum etude_cleanup cleanup
     if (c->claim && etude_ledger_finish(x->l, c->id, cleanup) != 0) {
         ok = 0;
         x->failed = 1;
-        say(x, "etude-legacy: set: the claim %s could not be ended: %s", c->id, strerror(errno));
+        say(x, "etude run: the claim %s could not be ended: %s", c->id, strerror(errno));
     }
     c->claim = 0;
     if (c->bridge != NULL) {
@@ -1161,7 +1161,7 @@ static void drain(struct set *x, struct command *c, int all)
     fflush(x->out);
 }
 
-/** Copy into `line` what follows the last result line of etude-legacy in
+/** Copy into `line` what follows the last result line of `etude prepare` in
  * the preparation `c`'s output, or "" when it wrote none. */
 static void last_result(const struct command *c, char *line, size_t size)
 {
@@ -1214,12 +1214,12 @@ static void judge_exit(struct command *c, const char *line, int v)
     else if (v == 2 && (rest = after(line, "refused: ")) != NULL)
         came_out(c, FAILURE, 0, "it was refused: %s", rest);
     else if (v > 128 && after(line, "stopped by signal ") != NULL)
-        came_out(c, INCOMPLETE, 1, "etude-legacy was stopped by signal %d", v - 128);
+        came_out(c, INCOMPLETE, 1, "etude prepare was stopped by signal %d", v - 128);
     else if (line[0] != '\0')
-        came_out(c, INCOMPLETE, 1, "etude-legacy exited with status %d after the result \"%s\"", v,
+        came_out(c, INCOMPLETE, 1, "etude prepare exited with status %d after the result \"%s\"", v,
                  line);
     else
-        came_out(c, INCOMPLETE, 1, "etude-legacy exited with status %d and no result", v);
+        came_out(c, INCOMPLETE, 1, "etude prepare exited with status %d and no result", v);
 }
 
 /** Take the end of command `c` from its result `r`: a host process's, or
@@ -1264,18 +1264,18 @@ static void judge_prep(struct set *x, struct command *c)
     took(c, r);
     last_result(c, line, sizeof(line));
     if (r->incomplete && r->expiry != ETUDE_EXPIRY_NONE)
-        came_out(c, INCOMPLETE, 1, "etude-legacy did not end within its %s bound of %llu s",
+        came_out(c, INCOMPLETE, 1, "etude prepare did not end within its %s bound of %llu s",
                  etude_expiry_name(r->expiry), (unsigned long long)(r->bound_us / 1000000u));
     else if (r->end == ETUDE_END_SIGNALED)
-        came_out(c, INCOMPLETE, 1, "etude-legacy was killed by signal %d", v);
+        came_out(c, INCOMPLETE, 1, "etude prepare was killed by signal %d", v);
     else if (r->end != ETUDE_END_EXITED)
-        came_out(c, INCOMPLETE, 1, "the end of etude-legacy was not observed");
+        came_out(c, INCOMPLETE, 1, "the end of etude prepare was not observed");
     else
         judge_exit(c, line, v);
     settle(x, c);
 }
 
-/** Give the end of a case as casecheck takes it from result `r`: stopped
+/** Give the end of a case as the judge takes it from result `r`: stopped
  * for a watchdog's expiry or a cancellation, lost when it was not observed,
  * and otherwise exited or signaled. */
 static const char *end_of(const struct etude_supervised_result *r)
@@ -1287,13 +1287,13 @@ static const char *end_of(const struct etude_supervised_result *r)
                                           : "lost";
 }
 
-/** Give the outcome of an attempt that casecheck judged `j`. */
+/** Give the outcome of an attempt that the judge judged `j`. */
 static enum outcome outcome_of(enum legacy_judged j)
 {
     return j == LEGACY_PASS ? PASS : j == LEGACY_FAILURE ? FAILURE : INCOMPLETE;
 }
 
-/** Give the end that casecheck's name `end` stands for. */
+/** Give the end that the judge's name `end` stands for. */
 static enum etude_end end_named(const char *end)
 {
     return strcmp(end, "exited") == 0     ? ETUDE_END_EXITED
@@ -1338,10 +1338,10 @@ static size_t consoles_of(const struct member *m, char **out)
 }
 
 /**
- * Judge the case of member `m`, which has finished, by casecheck's
+ * Judge the case of member `m`, which has finished, by `etude check`'s
  * judgement of its output and its end. A guest case is judged as placed
  * under QEMU, with the machine's console, by the end etude-guest reported;
- * a fault of its session is a disruption beside casecheck's reason. A
+ * a fault of its session is a disruption beside the judge's reason. A
  * machine case is judged as placed under QEMU too, by its scenario's end,
  * with the consoles its scenario kept.
  */
@@ -1357,7 +1357,7 @@ static void judge_case(struct set *x, struct member *m)
 
     took(c, r);
     memset(&j, 0, sizeof(j));
-    j.casecheck = x->o->casecheck;
+    j.etude = x->o->program;
     j.schemas = x->o->schemas;
     j.manifest = m->manifest->path;
     j.case_id = m->case_id;
@@ -1464,7 +1464,7 @@ static void status(struct set *x, int force)
     s.attempts = r.a;
     s.nattempts = r.n;
     if (etude_status_write(x->o->status, &s) != 0 && force)
-        say(x, "etude-legacy: set: %s: the status record could not be written: %s", x->o->status,
+        say(x, "etude run: %s: the status record could not be written: %s", x->o->status,
             strerror(errno));
     free(r.a);
 }
@@ -1481,7 +1481,7 @@ static const char *end_name(enum etude_end e)
 }
 
 /** Append the results document of member `m`, kept in the store, to `t`:
- * the one casecheck gave, or one of its termination alone. */
+ * the one the judge gave, or one of its termination alone. */
 static int results(const struct set *x, const struct member *m, struct cmp_text *t)
 {
     const struct command *c = &m->c;
@@ -1561,7 +1561,7 @@ static int write_attempt(struct set *x, struct member *m)
     free(t.data);
     if (rc != 0) {
         x->failed = 1;
-        say(x, "etude-legacy: set: the attempt record of %s could not be written: %s", c->name,
+        say(x, "etude run: the attempt record of %s could not be written: %s", c->name,
             strerror(errno != 0 ? errno : EIO));
     }
     return rc;
@@ -1593,7 +1593,7 @@ static int write_step(struct set *x)
     if (rc != 0) {
         x->failed = 1;
         x->prep_step[0] = '\0';
-        say(x, "etude-legacy: set: the step record of the preparation could not be written: %s",
+        say(x, "etude run: the step record of the preparation could not be written: %s",
             strerror(errno != 0 ? errno : EIO));
     }
     return rc;
@@ -1846,7 +1846,7 @@ static int write_run(struct set *x, enum outcome *worst)
 
 /**
  * Prepare the cases' artifacts: claim every limited resource of the machine
- * and the old host lock alone, run `etude-legacy prepare` with its output
+ * and the old host lock alone, run `etude prepare` with its output
  * printed as it comes, and write its step record.
  *
  * @return 0 when it passed, or 1.
@@ -1905,7 +1905,7 @@ static int prepare(struct set *x)
         return 1;
     }
     if (start(x, c, NULL, 0) != 0) {
-        came_out(c, INCOMPLETE, 1, "etude-legacy could not start: %s", strerror(errno));
+        came_out(c, INCOMPLETE, 1, "etude prepare could not start: %s", strerror(errno));
         not_run(x, c, INCOMPLETE, c->reason, 1);
         return 1;
     }
@@ -2529,7 +2529,7 @@ static void drive(struct set *x)
         if (!x->stopping &&
             etude_sched_admit(x->l, x->o->account, x->jobs, x->n, x->cap, x->ncap, NULL) != 0) {
             x->failed = 1;
-            say(x, "etude-legacy: set: the machine's ledger failed: %s", strerror(errno));
+            say(x, "etude run: the machine's ledger failed: %s", strerror(errno));
             stop_all(x, "the machine's ledger failed", NULL);
         }
         for (i = 0, busy = 0, left = 0; i < x->n; i++) {
@@ -2570,7 +2570,7 @@ static void drive(struct set *x)
 /** Print the refusal of the request for `why` and give its status, 2. */
 static int refuse(struct set *x, const char *why)
 {
-    say(x, "etude-legacy: result: refused: %s", why);
+    say(x, "etude run: result: refused: %s", why);
     return 2;
 }
 
@@ -2662,8 +2662,6 @@ static int check_cases(struct set *x)
     unsigned long long ports = 0;
     int machines = 0;
 
-    if (o->casecheck == NULL)
-        return refuse(x, "a suite run by its cases needs casecheck's path");
     if (realpath(o->tree, x->tree) == NULL) {
         snprintf(why, sizeof(why), "%s: %s", o->tree, strerror(errno));
         return refuse(x, why);
@@ -2741,7 +2739,7 @@ static int check(struct set *x)
 }
 
 /** Name the files of case member `m`, the repetition `m->rep` of its case:
- * its item, its attempt, its workspace, its output and casecheck's, its
+ * its item, its attempt, its workspace, its output and the judge's, its
  * program, a machine case's invocation, and the variables its program is
  * given; 0, or -1. */
 static int case_paths(struct set *x, struct member *m)
@@ -3008,7 +3006,7 @@ static int make_paths(struct set *x, char dir[PATH_LEN], char path[PATH_LEN])
         return refuse(x, "a path of the run is too long");
     if (make_dir(o->results) != 0 || make_dir(dir) != 0 || make_dir(x->store) != 0 ||
         make_dir(x->output) != 0 || make_dir(o->evidence) != 0) {
-        say(x, "etude-legacy: result: error: %s: %s", o->results, strerror(errno));
+        say(x, "etude run: result: error: %s: %s", o->results, strerror(errno));
         return 2;
     }
     return 0;
@@ -3048,11 +3046,11 @@ static int set_up(struct set *x)
     if (identify(x) != 0 || make_paths(x, dir, path) != 0)
         return 2;
     if ((x->h = etude_history_open(path, x->schema, x->run_id, x->run_id, HISTORY_BYTES)) == NULL) {
-        say(x, "etude-legacy: result: error: %s: %s", path, strerror(errno));
+        say(x, "etude run: result: error: %s: %s", path, strerror(errno));
         return 2;
     }
     if ((x->l = etude_ledger_open(o->ledger)) == NULL) {
-        say(x, "etude-legacy: result: error: %s: %s", o->ledger, strerror(errno));
+        say(x, "etude run: result: error: %s: %s", o->ledger, strerror(errno));
         return 2;
     }
     for (i = 0; i < 3; i++) {
@@ -3064,7 +3062,7 @@ static int set_up(struct set *x)
     x->jobs = calloc(x->n, sizeof(*x->jobs));
     x->sup = etude_supervisor_new();
     if (x->mem == NULL || x->jobs == NULL || x->sup == NULL || etude_history_now(&x->start) != 0) {
-        say(x, "etude-legacy: result: error: the run: %s", strerror(ENOMEM));
+        say(x, "etude run: result: error: the run: %s", strerror(ENOMEM));
         return 2;
     }
     for (i = 0; i < o->nmembers; i++)
@@ -3075,11 +3073,11 @@ static int set_up(struct set *x)
             k = take_members(x, i, k);
     for (i = 0; i < x->n; i++)
         if (case_command(x, &x->mem[i]) != 0) {
-            say(x, "etude-legacy: result: error: the run: %s", strerror(errno));
+            say(x, "etude run: result: error: the run: %s", strerror(errno));
             return 2;
         }
     if (prep_command(x) != 0) {
-        say(x, "etude-legacy: result: error: the run: %s", strerror(errno));
+        say(x, "etude run: result: error: the run: %s", strerror(errno));
         return 2;
     }
     return 0;
@@ -3126,7 +3124,7 @@ static void tear_down(struct set *x)
     if (x->objects != NULL) {
         etude_store_close(x->objects);
         if (legacy_remove_tree(x->objects_dir) != 0)
-            say(x, "etude-legacy: set: %s: not removed: %s", x->objects_dir, strerror(errno));
+            say(x, "etude run: %s: not removed: %s", x->objects_dir, strerror(errno));
     }
     if (x->l != NULL)
         etude_ledger_close(x->l);
@@ -3150,7 +3148,7 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
     if ((rc = check(&x)) != 0 || (rc = set_up(&x)) != 0)
         goto out;
     if (write_plan(&x) != 0) {
-        say(&x, "etude-legacy: result: error: the plan could not be written: %s",
+        say(&x, "etude run: result: error: the plan could not be written: %s",
             strerror(errno != 0 ? errno : EIO));
         rc = 2;
         goto out;
@@ -3166,19 +3164,19 @@ int etude_legacy_set(const struct etude_legacy_set_opts *o)
     status(&x, 1);
     if (write_run(&x, &worst) != 0) {
         x.failed = 1;
-        say(&x, "etude-legacy: set: the run record could not be written: %s",
+        say(&x, "etude run: the run record could not be written: %s",
             strerror(errno != 0 ? errno : EIO));
     }
     passed = suites_passed(&x);
     if (signalled(&x)) {
         rc = 128 + (int)*o->stop;
-        say(&x, "etude-legacy: result: stopped by signal %d", (int)*o->stop);
+        say(&x, "etude run: result: stopped by signal %d", (int)*o->stop);
     } else if (x.prep.outcome != PASS) {
         rc = 3;
-        say(&x, "etude-legacy: result: preparation failed: %s", x.prep.reason);
+        say(&x, "etude run: result: preparation failed: %s", x.prep.reason);
     } else {
         rc = worst == PASS && !x.failed ? 0 : 1;
-        say(&x, "etude-legacy: result: ran: %lu suites, %u passed%s", (unsigned long)o->nmembers,
+        say(&x, "etude run: result: ran: %lu suites, %u passed%s", (unsigned long)o->nmembers,
             passed, x.failed ? ", with an error of the history or the ledger" : "");
     }
 out:

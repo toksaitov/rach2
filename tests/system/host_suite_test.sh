@@ -1,10 +1,10 @@
 #!/bin/sh
 #
-# host_suite_test.sh: the host cases run their checks at once, and every check
-# a case selects gives a result and an assertion: tests/cases/host/host.sh
-# and etude-host, run for the cases tests, checkers and scripts in a private
-# tree whose tests/host has fixture tests, whose host.list has fixture
-# scripts, and whose manifest names the checks.
+# host_suite_test.sh: the host cases run their checks at once, and every check a
+# case selects gives a result and an assertion: tests/cases/host/host.sh and
+# `etude run host`, run for the cases tests, checkers and scripts in a private
+# tree whose tests/host has fixture tests, whose host.list has fixture scripts,
+# and whose manifest names the checks.
 #
 # Eight tests each make a file of one name in their TMPDIR, refusing one that
 # is there, and then wait until all eight have started, so they pass only
@@ -19,11 +19,11 @@
 # check's scratch directory beside theirs, though a test before them waits
 # up to ten seconds for one to start. Every check of a selection has one
 # result line, each followed by the report record `progress checks N`, N
-# counting the checks ended, the last line of etude-host's counts them, and
-# no scratch is left but the kept directory. Each check has an assertion of
-# its outcome in the case's report; a test the manifest does not name is not
-# run and fails `listed`, and so does an assertion the tree has no test for,
-# which fails too. A selection with a name given twice is refused and runs
+# counting the checks ended, etude's last line counts them, and no scratch
+# is left but the kept directory. Each check has an assertion of its outcome
+# in the case's report; a test the manifest does not name is not run and
+# fails `listed`, and so does an assertion the tree has no test for, which
+# fails too. A selection with a name given twice is refused and runs
 # nothing. A script that never ends is ended only by SIGTERM sent to the
 # process group of host.sh, which then exits 143 with the script's process
 # gone and its private directory removed.
@@ -332,8 +332,8 @@ PY
 # keeping the output of the three together in $work/out.
 run_suite()
 {
-    cp "$1" "$tree/build/tools/etude/etude-host" || exit 1
-    cp "$1" "$stop/build/tools/etude/etude-host" || exit 1
+    cp "$1" "$tree/build/tools/etude/etude" || exit 1
+    cp "$1" "$stop/build/tools/etude/etude" || exit 1
     rm -rf "$work/meet" && mkdir "$work/meet" || exit 1
     run_case tests
     status_tests=$rc
@@ -360,13 +360,13 @@ miss()
 }
 
 # results CASE N: succeed when the case CASE has N result lines, the last
-# line of etude-host's counts N checks, and its report ends with the count of
+# line of etude's counts N checks, and its report ends with the count of
 # its assertions.
 results()
 {
     [ "$(grep -cE '^  (PASS|FAIL)' "$work/out.$1")" -eq "$2" ] &&
-        grep '^etude-host: result: ' "$work/out.$1" | tail -n 1 |
-        grep -qE "^etude-host: result: (pass: $2 checks|fail: [0-9]+ of $2 checks:.*)\$" &&
+        grep '^etude run: result: ' "$work/out.$1" | tail -n 1 |
+        grep -qE "^etude run: result: (pass: $2 checks|fail: [0-9]+ of $2 checks:.*)\$" &&
         grep -qx "@etude 1 end $(grep -c '^@etude 1 assert ' "$work/out.$1")" "$work/out.$1"
 }
 
@@ -436,8 +436,8 @@ judge()
     [ "$status_stop" -eq 143 ] || miss 'the stopped case exits 143'
     grep -qx '  STOPPED: a script that never ends' "$work/out.stop" ||
         miss 'the endless script is reported stopped'
-    grep -qx 'etude-host: result: stopped by signal 15: 0 of 1 checks finished' "$work/out.stop" ||
-        miss 'etude-host reports the stop'
+    grep -qx 'etude run: result: stopped by signal 15: 0 of 1 checks finished' "$work/out.stop" ||
+        miss 'etude run host reports the stop'
     ! grep -q '^@etude 1 progress ' "$work/out.stop" || miss 'a stopped check gives no record of progress'
     stuck=$(cat "$work/meet/stuck" 2>/dev/null)
     if [ -z "$stuck" ] || kill -0 "$stuck" 2>/dev/null; then
@@ -465,14 +465,14 @@ refused()
     printf 'twice\tshared\tthe first\t\ttouch %s/ran\ntwice\tshared\tthe second\t\ttrue\n' \
         "$work" > "$work/twice"
     rc=0
-    "$1" -j 2 -l "$work" -s "$work/tmp" "$work/twice" > "$work/twice.out" 2>&1 || rc=$?
+    "$1" run host -j 2 -l "$work" -s "$work/tmp" "$work/twice" > "$work/twice.out" 2>&1 || rc=$?
     if [ "$rc" -ne 2 ] || [ -e "$work/ran" ]; then
         echo 'host-suite-test: failed: a name given twice refuses the selection'
         return 1
     fi
 }
 
-driver=${ETUDE_HOST:-$repo/build/tools/etude/etude-host}
+driver=${ETUDE:-$repo/build/tools/etude/etude}
 [ -x "$driver" ] || { echo "host-suite-test: $driver is not built"; exit 1; }
 run_suite "$driver"
 if ! judge || ! refused "$driver"; then
