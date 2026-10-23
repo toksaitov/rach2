@@ -98,9 +98,10 @@ static void context(const char *receipt_name)
 static int open_context(struct etude_measurement_context **c)
 {
     char error[256];
-    return etude_context_open(fix_path("context"), fix_dir(), fix_path("record"),
-                               fix_path("policy"), commit, fix_path("tool"), c,
-                               error, sizeof(error));
+    const struct etude_context_inputs inputs = {
+        fix_dir(), fix_path("record"), fix_path("policy"), commit, fix_path("tool")
+    };
+    return etude_context_open(fix_path("context"), &inputs, c, error, sizeof(error));
 }
 static void bad_receipt(const char *name, int kind)
 {

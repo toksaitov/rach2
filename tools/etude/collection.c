@@ -1146,9 +1146,14 @@ static int collection_main(int argc, char **argv, int production)
         goto done;
     if (!production && !r.dry && c->context_path) {
         char error[256];
-        if (site_policy(c) ||
-            etude_context_open(c->context_path, c->tree, c->record, c->site,
-                               c->commit, c->program, &c->context, error, sizeof(error))) {
+        if (site_policy(c)) {
+            refused("the measurement context or a bound input is invalid");
+            goto done;
+        }
+        const struct etude_context_inputs inputs = {
+            c->tree, c->record, c->site, c->commit, c->program
+        };
+        if (etude_context_open(c->context_path, &inputs, &c->context, error, sizeof(error))) {
             refused("the measurement context or a bound input is invalid");
             goto done;
         }

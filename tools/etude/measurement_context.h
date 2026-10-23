@@ -38,8 +38,10 @@ int etude_context_receipt_write(const char *path,
 
 /* Descriptors bind snapshots to actual bytes. Source inputs are relative to
  * tree; native tool inputs retain their actual absolute paths. */
-int etude_context_open(const char *path, const char *tree, const char *record,
-                       const char *site, const char *commit, const char *program,
+struct etude_context_inputs {
+    const char *tree, *record, *site, *commit, *program;
+};
+int etude_context_open(const char *path, const struct etude_context_inputs *inputs,
                        struct etude_measurement_context **context, char *error, size_t size);
 /* Return canonical JSON for purpose, source, artifacts, site_profile, tools,
  * cache_state, exemption, outer_observation, physical_observation or

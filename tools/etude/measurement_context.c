@@ -385,6 +385,21 @@ int etude_context_grant_read(const char *path, const char *claim,
     if (!ok) errno = EINVAL;
     return ok ? 0 : -1;
 }
+static int receipt_fields(const struct json *doc, struct etude_preparation_receipt *r)
+{
+    const char *outcome = json_text(doc, "outcome"), *cleanup = json_text(doc, "cleanup");
+    const char *format = json_text(doc, "format");
+    return doc && format && !strcmp(format, "etude-preparation-receipt") &&
+             outcome && cleanup && !strcmp(outcome, "pass") &&
+             !strcmp(cleanup, "confirmed") &&
+             !copy_field(doc, "run_id", r->run_id, sizeof(r->run_id)) &&
+             !copy_field(doc, "commit", r->commit, sizeof(r->commit)) &&
+             !copy_field(doc, "record_sha256", r->record_sha256, sizeof(r->record_sha256)) &&
+             !copy_field(doc, "machine_id", r->clock.machine_id, sizeof(r->clock.machine_id)) &&
+             !copy_field(doc, "boot_id", r->clock.boot_id, sizeof(r->clock.boot_id)) &&
+             !reading(json_member(doc, "start"), &r->start) &&
+             !reading(json_member(doc, "end"), &r->end);
+}
 static int preparation(struct etude_measurement_context *c, const struct json *root,
                        const char *commit, const char *record_hash)
 {
@@ -396,18 +411,7 @@ static int preparation(struct etude_measurement_context *c, const struct json *r
     struct etude_preparation_receipt *r = &c->preparation;
     struct etude_context_clock clock;
     struct etude_reading now;
-    const char *outcome = json_text(doc, "outcome"), *cleanup = json_text(doc, "cleanup");
-    const char *format = json_text(doc, "format");
-    int ok = doc && format && !strcmp(format, "etude-preparation-receipt") &&
-             outcome && cleanup && !strcmp(outcome, "pass") &&
-             !strcmp(cleanup, "confirmed") &&
-             !copy_field(doc, "run_id", r->run_id, sizeof(r->run_id)) &&
-             !copy_field(doc, "commit", r->commit, sizeof(r->commit)) &&
-             !copy_field(doc, "record_sha256", r->record_sha256, sizeof(r->record_sha256)) &&
-             !copy_field(doc, "machine_id", r->clock.machine_id, sizeof(r->clock.machine_id)) &&
-             !copy_field(doc, "boot_id", r->clock.boot_id, sizeof(r->clock.boot_id)) &&
-             !reading(json_member(doc, "start"), &r->start) &&
-             !reading(json_member(doc, "end"), &r->end);
+    int ok = receipt_fields(doc, r);
     r->passed = r->cleanup_confirmed = ok;
     ok = ok && valid_receipt(r) && !strcmp(c->run_id, r->run_id) &&
          !strcmp(commit, r->commit) && !strcmp(record_hash, r->record_sha256) &&
@@ -505,7 +509,7 @@ static int decimal(const char *s)
 {
     return s && *s && strspn(s, "0123456789") == strlen(s);
 }
-static int observer_identity(const struct json *h, const char *run_id, int physical)
+static int observer_start(const struct json *h, const char *run_id)
 {
     const char *kind = json_text(h, "kind"), *method = json_text(h, "method");
     const char *run = json_text(h, "run_id"), *platform = json_text(h, "platform");
@@ -521,6 +525,14 @@ static int observer_identity(const struct json *h, const char *run_id, int physi
         !decimal(json_text(h, "root_creation")) ||
         !decimal(json_text(h, "observer_creation")))
         return -1;
+    return 0;
+}
+static int observer_identity(const struct json *h, const char *run_id, int physical)
+{
+    if (observer_start(h, run_id))
+        return -1;
+    const char *platform = json_text(h, "platform");
+    const char *machine = json_text(h, "machine_id"), *boot = json_text(h, "boot_id");
     if (physical)
         return strcmp(platform, "windows-native-counters-v1") ? -1 : 0;
     struct etude_context_clock clock;
@@ -560,20 +572,13 @@ static int observation(struct etude_measurement_context *c, const struct json *r
     json_free(header);
     return ok ? 0 : -1;
 }
-int etude_context_open(const char *path, const char *tree, const char *record,
-                       const char *site, const char *commit, const char *program,
-                       struct etude_measurement_context **out, char *error, size_t size)
+static int context_header(struct etude_measurement_context *c, const struct json *doc,
+                          const char *commit)
 {
-    *out = NULL;
-    struct etude_measurement_context *c = calloc(1, sizeof(*c));
-    char original_hash[65];
-    uint64_t original_size;
-    int original_ok = !hash_file(path, original_hash, &original_size);
-    struct json *doc = original_ok ? document(path) : NULL;
     const char *id = json_text(doc, "run_id"), *purpose = json_text(doc, "purpose");
     const char *got = json_text(doc, "commit");
     const char *format = json_text(doc, "format");
-    int ok = c && original_ok && version(doc) && format &&
+    int ok = version(doc) && format &&
              !strcmp(format, "etude-measurement-context") && eh_identity(id) && purpose && got && commit &&
              !strcmp(got, commit);
     if (ok) {
@@ -585,10 +590,24 @@ int etude_context_open(const char *path, const char *tree, const char *record,
              !strcmp(purpose, "focused") || !strcmp(purpose, "phase_first_run");
         const struct json *exemption = json_member(doc, "exemption");
         c->text[6] = exemption ? canonical(exemption) : strdup("null");
-        ok = ok && c->run_id && !source_tools(c, doc, tree, commit, program) &&
-             !site_cache(c, doc, site) && !artifacts(c, doc, record) &&
-             !observation(c, doc, 0) && !observation(c, doc, 1);
+        ok = ok && c->run_id;
     }
+    return ok;
+}
+int etude_context_open(const char *path, const struct etude_context_inputs *inputs,
+                       struct etude_measurement_context **out, char *error, size_t size)
+{
+    *out = NULL;
+    struct etude_measurement_context *c = calloc(1, sizeof(*c));
+    char original_hash[65];
+    uint64_t original_size;
+    int original_ok = !hash_file(path, original_hash, &original_size);
+    struct json *doc = original_ok ? document(path) : NULL;
+    const char *purpose = json_text(doc, "purpose");
+    int ok = c && original_ok && context_header(c, doc, inputs->commit) &&
+             !source_tools(c, doc, inputs->tree, inputs->commit, inputs->program) &&
+             !site_cache(c, doc, inputs->site) && !artifacts(c, doc, inputs->record) &&
+             !observation(c, doc, 0) && !observation(c, doc, 1);
     if (ok) {
         struct json *check = NULL;
         char e[128];
