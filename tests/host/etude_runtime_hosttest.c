@@ -21,6 +21,7 @@
  * host-deps: tools/etude/history.c tools/etude/history_json.c
  * host-deps: tools/etude/history_collect.c utils/sha256.c
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
+ * host-tools: etude-workload
  * host-first: it runs for minutes
  *
  * Three accounts compete for a machine of four mebibytes: four cases hold
@@ -68,6 +69,7 @@
 #include "compat/pathmax_host.h"
 #include "compat/fixdir_host.c"
 #include "compat/directory_host.h"
+#include "compat/workload_host.h"
 #include "budget.h"
 #include "compare.h"
 #include "etude/remote.h"
@@ -1601,28 +1603,35 @@ static void test_stuck(void)
 /* ---- The remote case. ---- */
 
 /* The remote case's program: this one, ended only by its responder. */
-static const char prog[] = "#!/bin/sh\nexec \"$1\" --case hang\n";
+static char *prog;
+static size_t prog_size;
+
+static void free_workload(void)
+{
+    free(prog);
+}
 
 /** Make the invocation of attempt `attempt` of run `run` into `out`. */
 static void invocation(char *out, size_t size, const char *run, const char *attempt)
 {
     char sha[65], tok[65];
 
-    sha_hex(prog, strlen(prog), sha);
+    sha_hex(prog, prog_size, sha);
     sha_hex(attempt, strlen(attempt), tok);
     tok[16] = '\0';
     fix_format(out, size,
                "{\"schema_version\": 1, \"run_id\": \"%s\", \"attempt_id\": \"%s\", "
                "\"attempt_token\": \"%s\", \"case_id\": \"host.etude.runtime\", "
-               "\"program\": \"prog.sh\", \"arguments\": [\"%s\"], "
-               "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\"}, "
+               "\"program\": \"prog\", \"arguments\": [\"%s\"], "
+               "\"environment\": {\"PATH\": \"/bin:/usr/bin\", \"HOME\": \"${WORKSPACE}\", "
+               "\"ETUDE_WORKLOAD_ROLE\": \"runtime-exec\"}, "
                "\"stdin\": null, \"role\": \"ordinary\", "
-               "\"files\": [{\"name\": \"prog.sh\", \"sha256\": \"%s\", \"size_bytes\": %lu, "
+               "\"files\": [{\"name\": \"prog\", \"sha256\": \"%s\", \"size_bytes\": %lu, "
                "\"mode\": \"0755\"}], "
                "\"fixtures\": [{\"fixture\": \"workspace\", \"given\": []}], "
                "\"deadline_us\": 60000000, \"grace_us\": 1000000, "
                "\"output_max_bytes\": 65536}",
-               run, attempt, tok, self, sha, (unsigned long)strlen(prog));
+               run, attempt, tok, self, sha, (unsigned long)prog_size);
 }
 
 /** Ask a remote case to stop; the transport here is the controller's own. */
@@ -1699,7 +1708,7 @@ static void controller_main(const char *run, const char *mode)
     memset(&res, 0, sizeof(res));
     res.end = ETUDE_END_LOST;
     if (etude_remote_open(&conf, &conn, why, sizeof(why)) == ETUDE_REMOTE_OK &&
-        etude_remote_put(conn, "prog.sh", prog, strlen(prog), "0755") == ETUDE_REMOTE_OK) {
+        etude_remote_put(conn, "prog", prog, prog_size, "0755") == ETUDE_REMOTE_OK) {
         invocation(inv, sizeof(inv), run, remote_id);
         st = etude_remote_run(conn, inv, strlen(inv), 0, &res);
     }
@@ -1895,6 +1904,12 @@ int main(int argc, char **argv)
         printf("etude-runtime-test: fail: %s cannot be found\n", argv[0]);
         return 1;
     }
+    prog = host_workload_read(&prog_size);
+    if (!prog) {
+        fprintf(stderr, "etude-runtime-test: prepared etude-workload is missing or unreadable\n");
+        return 1;
+    }
+    atexit(free_workload);
     signal(SIGPIPE, SIG_IGN);
     if (fixtures() != 0) {
         printf("etude-runtime-test: fail: the fixtures cannot be made\n");
