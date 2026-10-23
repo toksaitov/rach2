@@ -881,7 +881,6 @@ CONSOLE_SCENARIOS = build/tests/cases/machine/grow_entry_at_end \
                     build/tests/cases/machine/installer_repair_restore \
                     build/tests/cases/machine/installer_repair_resume \
                     build/tests/cases/machine/installer_spoiled \
-                    build/tests/cases/machine/installer_stick \
                     build/tests/cases/machine/installer_stick_update
 CONSOLE_LIB = tests/cases/machine/netcase.c \
               tests/cases/machine/drive.c tests/cases/machine/lib_grow.c \

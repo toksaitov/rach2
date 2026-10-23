@@ -4,8 +4,9 @@
  * booted three times beside a copy of the sealed disk.
  *
  * The volume must have the root image byte for byte and a manifest that
- * describes the sealed disk. The first boot, by USB, mounts the volume and
- * sees both images. The second, by IDE, saves the disk's boot and recovery
+ * describes the sealed disk. The first boot, by USB, finds the stick as an
+ * MBR disk of three partitions, mounts the volume and sees both images at
+ * their lengths. The second, by IDE, saves the disk's boot and recovery
  * partitions to the volume, updates the disk's root from the stick with
  * `rach2-install --update`, which must keep the machine's groups, replace
  * its files and arm the candidate for the next boot, and then zeroes both
@@ -33,12 +34,13 @@
 
 /* What the steps share. */
 struct state {
-    char start[16];      /* the volume's first sector, in decimal */
-    char image[128];     /* the sealed disk's name on the volume */
-    uint64_t root_bytes; /* the root image's length */
-    uint64_t at[2];      /* the boot and recovery partitions' offsets in MiB */
-    char before[2][65];  /* their digests in the sealed disk */
-    int ready;           /* the volume and the disk were read */
+    char start[16];       /* the volume's first sector, in decimal */
+    char image[128];      /* the sealed disk's name on the volume */
+    uint64_t image_bytes; /* the sealed disk's length */
+    uint64_t root_bytes;  /* the root image's length */
+    uint64_t at[2];       /* the boot and recovery partitions' offsets in MiB */
+    char before[2][65];   /* their digests in the sealed disk */
+    int ready;            /* the volume and the disk were read */
 };
 
 /**
@@ -127,6 +129,7 @@ static void read_volume(struct etude_case *c, struct state *s)
              " bytes and hash %s",
              s->image, bytes, sum, name, (uint64_t)st.st_size, want);
     snprintf(got, sizeof(got), "%" PRIu64, (uint64_t)st.st_size);
+    s->image_bytes = (uint64_t)st.st_size;
     inst_assert(c, "manifest",
                 name[0] != '\0' && strcmp(s->image, name) == 0 && want[0] != '\0' &&
                     strcmp(bytes, got) == 0 && strcmp(sum, want) == 0,
@@ -144,11 +147,16 @@ static void read_volume(struct etude_case *c, struct state *s)
     s->ready = laid && s->image[0] != '\0' && s->root_bytes > 0;
 }
 
-/** Boot by USB, mount the volume and look for both images on it. */
+/** Boot by USB, find the stick's partitions, mount the volume and look for
+ * both images on it at their lengths. */
 static int boot_usb(struct etude_case *c, struct state *s)
 {
-    char why[200];
+    const char *stick = etude_artifact(c, "stick");
+    char why[200], want[80];
     struct drive d;
+    struct stat st;
+    char *text;
+    int ok;
 
     drive_boot(&d, c, "usb", NULL);
     if (!s->ready)
@@ -156,19 +164,36 @@ static int boot_usb(struct etude_case *c, struct state *s)
     drive_expect(&d, "recovery image");
     drive_expect(&d, "# ");
     drive_send(&d,
-               "mkdir -p /stick && mount -t exfat /dev/disk1p2 /stick && test -f /stick/%s && "
+               "mkdir -p /stick && mount -t exfat /dev/disk1p2 /stick && "
+               "test $(stat -c %%s /stick/%s) = %" PRIu64 " && "
                "test $(stat -c %%s /stick/" ROOT_NAME ") = %" PRIu64 " && echo USB\"\"FILES || "
                "{ echo STICK\"\"FAIL: usb files; poweroff -f; }",
-               s->image, s->root_bytes);
+               s->image, s->image_bytes, s->root_bytes);
     drive_expect(&d, "USBFILES");
     drive_send(&d, "umount /stick && echo USB\"\"DONE || "
                    "{ echo STICK\"\"FAIL: usb unmount; poweroff -f; }");
     drive_expect(&d, "USBDONE");
     stick_failure(&d, why, sizeof(why));
+    ok = !d.failed;
+    text = ok ? drive_console(&d) : NULL;
     drive_stop(&d);
-    if (drive_halted())
+    if (drive_halted()) {
+        free(text);
         return 1;
-    inst_assert(c, "usb", !d.failed, why);
+    }
+    if (ok) {
+        if (stick == NULL || stat(stick, &st) != 0)
+            snprintf(want, sizeof(want), "the stick's image cannot be read");
+        else
+            snprintf(want, sizeof(want), "usbdisk: disk1: mbr: %" PRIu64 " MiB, 3 partitions",
+                     (uint64_t)st.st_size / MIB);
+        if (text == NULL || strstr(text, want) == NULL) {
+            ok = 0;
+            snprintf(why, sizeof(why), "%s", want);
+        }
+    }
+    free(text);
+    inst_assert(c, "usb", ok, why);
     return 0;
 }
 
