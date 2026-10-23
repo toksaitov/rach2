@@ -1546,22 +1546,22 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 # build's files or out of date. They are the cases of
 # tests/cases/host.imagerace.json, which etude runs, and have no target here.
 
-# One network suite again on the second card, the family of etude's cases
-# whose machines have the e1000. The cases whose subject is above the driver
-# belong to the first card's family. The packet, ping, dgram, raw, netif, dhcp
-# and ssh suites are not repeated: the sockets, the interface ioctls, the DHCP
-# clients and the SSH server are above the driver, which builds no header and
-# sums no checksum, and an interface taken down is a flag the driver never
-# sees. The netif suite's `twocards` case runs those ioctls and pings, connects
-# and sends through a packet socket on two e1000s, and the dhcp suite's
-# `two-networks` case takes a lease through each of two and reaches the SSH
-# server through both. The probe suite is not repeated at all, since none of
-# its probes sends a frame.
+# One network suite again on the second card, the family of etude's cases whose
+# machines have the e1000. The cases whose subject is above the driver belong to
+# the first card's family, so `netconsole-e1000` has the power-off alone: the
+# driver's stop drains its ring, and the boot's records reach the card as any
+# frame does. The packet, ping, dgram, raw, netif, dhcp and ssh suites are not
+# repeated: the sockets, the interface ioctls, the DHCP clients and the SSH
+# server are above the driver, which builds no header and sums no checksum, and
+# an interface taken down is a flag the driver never sees. The netif suite's
+# `twocards` case runs those ioctls and pings, connects and sends through a
+# packet socket on two e1000s, and the dhcp suite's `two-networks` case takes a
+# lease through each of two and reaches the SSH server through both. The probe
+# suite is not repeated at all, since none of its probes sends a frame.
 
-# `tests/run netconsole-e1000`: the netconsole suite on the e1000 card, the
-# cases of tests/cases/machine.netconsole-e1000.json.
-
-
+# `tests/run netconsole-e1000`: the netconsole suite's power-off on the e1000
+# card, whose stop sends the frames it was given before it silences the card,
+# the case of tests/cases/machine.netconsole-e1000.json.
 
 
 # `tests/run textbusy`: executable files exclude writers until the last image
