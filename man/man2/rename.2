@@ -102,15 +102,12 @@ destination entry additionally requires effective user ID 0, ownership
 of the directory, or ownership of the affected entry.
 The KRFFS boot root is treated as mode 0755 and non-sticky.
 .Pp
-The KRFFS boot root refuses a directory source with
+KRFFS, the boot root and a mounted volume alike, refuses a directory
+source with
 .Er EPERM
 and a directory destination under a nondirectory source with
 .Er EISDIR ,
 so no rename there replaces a directory, one in use or not.
-A mounted KRFFS volume also refuses directory renames, generally with
-.Er EIO ;
-an open directory destination gives
-.Er EISDIR .
 Ext2, FAT32, and exFAT can rename directories.
 When one of them replaces a different directory, the destination must be
 empty.
@@ -244,12 +241,11 @@ was given a flag other than
 .It Er EIO
 File system data or metadata could not be read or written, or the
 device was removed.
-KRFFS also maps a refusal from its rename operation to this error.
+KRFFS also reports a rename its core fails after every other check with
+this error.
 .It Er EISDIR
-A nondirectory would replace a directory on the KRFFS boot root, ext2,
-FAT32, or exFAT.
-A mounted KRFFS volume also gives this error for an open directory
-destination.
+A nondirectory would replace a directory on KRFFS, ext2, FAT32, or
+exFAT.
 .It Er ELOOP
 Path resolution would follow more than 40 symbolic links.
 .It Er EMLINK
@@ -276,7 +272,7 @@ slash follows either final name and the source is not a directory.
 .It Er ENOTEMPTY
 A directory destination is not empty on ext2, FAT32, or exFAT.
 .It Er EPERM
-The source is a directory on the KRFFS boot root, a sticky-directory
+The source is a directory on KRFFS, a sticky-directory
 rule forbids removal or replacement, or an immutable or append-only flag
 forbids it: on the old directory, on the name moved, on a file the new
 name replaces, immutable on the new directory, or append-only on it when

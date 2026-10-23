@@ -839,19 +839,23 @@ static int cwd_at(struct vfs_mount *mnt, uint64_t at)
 }
 
 /**
- * Remove the directory `name` from `dir`.
+ * Remove the directory `name` from `dir`, with the boot root's answers
+ * (`rmdir_root_name`): -ENOENT for a name that is not there, -ENOTDIR for
+ * one that is not a directory, then -EBUSY and -ENOTEMPTY.
  *
  * A directory a descriptor has open or pinned, or that is a process's
  * working directory, stays, with -EBUSY: this file system has no name for a
  * directory nobody can reach, and freeing it would leave its offset in the
  * allocator's hands while the holder still refers to it. Otherwise 0,
- * -EROFS on a read-only mount, -ENAMETOOLONG, or -ENOTEMPTY for any
- * removal that fails in the core.
+ * -EROFS on a read-only mount, -ENAMETOOLONG, -EIO for a header that cannot
+ * be read, or -ENOTEMPTY for any removal that fails in the core.
  */
 static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct krffs_volume *vol = vol_of(mnt);
     char path[256];
+    krffs_node_t head;
+    uint64_t at;
     int rc;
 
     if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
@@ -861,25 +865,36 @@ static int kv_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    {
-        uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
-
-        if (at != KRFFS_NO_NODE && (open_at(vol, at) || cwd_at(mnt, at))) {
-            return -EBUSY;
-        }
+    at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+    if (at == KRFFS_NO_NODE) {
+        return -ENOENT;
+    }
+    if (krffs_head(&vol->fs, at, &head) != 0) {
+        return -EIO;
+    }
+    if (!KRFFS_IS_DIR(head.mode)) {
+        return -ENOTDIR;
+    }
+    if (open_at(vol, at) || cwd_at(mnt, at)) {
+        return -EBUSY;
     }
     return krffs_rmdir_at(&vol->fs, path) == 0 ? 0 : -ENOTEMPTY;
 }
 
 /**
- * Rename `oldname` in `olddir` to `newname` in `newdir`.
+ * Rename `oldname` in `olddir` to `newname` in `newdir`, with the boot
+ * root's answers (`rename_root_names`): -ENOENT for a source that is not
+ * there, -EPERM for a source that is a directory, whose children refer to
+ * it by an identifier made from its name, and -EISDIR for a destination
+ * that is one.
  *
  * A rename over a file somebody has open removes it as surely as an unlink
  * does, so the name comes off it here and the node stays for whoever has it
  * open, where the core would free it under them. As in `kv_unlink`, the
- * open record is looked up again after the writes, which sleep. A directory
- * that is open there answers -EISDIR. Otherwise 0, -EROFS on a read-only
- * mount, -ENAMETOOLONG, or -EIO for a rename that failed in the core.
+ * open record is looked up again after the writes, which sleep. A rename to
+ * the name the file has already does nothing. Otherwise 0, -EROFS on a
+ * read-only mount, -ENAMETOOLONG, or -EIO for a header that cannot be read
+ * or a rename that failed in the core.
  */
 static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                      const char *newname)
@@ -887,6 +902,9 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     struct krffs_volume *vol = vol_of(mnt);
     char from[256];
     char to[256];
+    krffs_node_t head;
+    uint64_t src;
+    uint64_t dst;
     int rc;
 
     if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
@@ -900,19 +918,27 @@ static int kv_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, v
     if (rc != 0) {
         return rc;
     }
-    {
-        uint64_t dst = krffs_child_at(&vol->fs, offset_of(mnt, newdir), newname);
+    src = krffs_child_at(&vol->fs, offset_of(mnt, olddir), oldname);
+    if (src == KRFFS_NO_NODE) {
+        return -ENOENT;
+    }
+    if (krffs_head(&vol->fs, src, &head) != 0) {
+        return -EIO;
+    }
+    if (KRFFS_IS_DIR(head.mode)) {
+        return -EPERM;
+    }
+    dst = krffs_child_at(&vol->fs, offset_of(mnt, newdir), newname);
+    if (dst != KRFFS_NO_NODE && dst != src) {
+        struct krffs_open *o;
 
-        if (dst != KRFFS_NO_NODE && open_at(vol, dst)) {
-            krffs_node_t head;
-            struct krffs_open *o;
-
-            if (krffs_head(&vol->fs, dst, &head) != 0) {
-                return -EIO;
-            }
-            if (KRFFS_IS_DIR(head.mode)) {
-                return -EISDIR;
-            }
+        if (krffs_head(&vol->fs, dst, &head) != 0) {
+            return -EIO;
+        }
+        if (KRFFS_IS_DIR(head.mode)) {
+            return -EISDIR;
+        }
+        if (open_at(vol, dst)) {
             krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, dst), KRFFS_STAMP_DATA);
             krffs_orphan_at(&vol->fs, dst);
             o = open_at(vol, dst);

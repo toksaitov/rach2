@@ -44,11 +44,14 @@
 
 #define MS_RDONLY 1
 
-#define ENOENT 2
-#define ENOMEM 12
-#define EINVAL 22
-#define EBUSY  16
-#define EROFS  30
+#define EPERM   1
+#define ENOENT  2
+#define ENOMEM  12
+#define EBUSY   16
+#define ENOTDIR 20
+#define EISDIR  21
+#define EINVAL  22
+#define EROFS   30
 
 static int fixture_owner;
 static int fixture_dirs; /* Bits 0 to 2 mark /k, /k2 and /k3. */
@@ -470,12 +473,44 @@ static void read_pattern(const char *path, unsigned bytes)
 }
 
 /**
+ * A rename or an rmdir the volume refuses answers the boot root's errno: a
+ * missing name, a directory moved, a file moved over a directory, and a
+ * file given to rmdir. The names are k/after.txt and k/made, which the write
+ * rows have made, and the refusals leave both as they were.
+ */
+static void refused_names(void)
+{
+    int rc = syscall2(SYS_RENAME, (long)"k/absent", (long)"k/new");
+
+    if (rc != -ENOENT) {
+        fail_with("a rename of a missing name is not ENOENT", rc);
+    }
+    rc = syscall2(SYS_RENAME, (long)"k/made", (long)"k/new");
+    if (rc != -EPERM) {
+        fail_with("a rename of a directory is not EPERM", rc);
+    }
+    rc = syscall2(SYS_RENAME, (long)"k/after.txt", (long)"k/made");
+    if (rc != -EISDIR) {
+        fail_with("a rename over a directory is not EISDIR", rc);
+    }
+    rc = syscall1(SYS_RMDIR, (long)"k/after.txt");
+    if (rc != -ENOTDIR) {
+        fail_with("an rmdir of a file is not ENOTDIR", rc);
+    }
+    rc = syscall1(SYS_RMDIR, (long)"k/absent");
+    if (rc != -ENOENT) {
+        fail_with("an rmdir of a missing name is not ENOENT", rc);
+    }
+}
+
+/**
  * What a write boot leaves behind, which the boot after it checks: a file
  * written and read back, a grow and a truncate, a directory, a rename and
- * removals, a file whose name went while it was open, a directory held open
- * and a rename over an open file, the truncation of a nameless file, a file
- * that moves under its descriptors as a write or ftruncate grows it, an
- * overwrite in place, and the modes chmod, creat and mkdir give.
+ * removals and the refusals of both, a file whose name went while it was
+ * open, a directory held open and a rename over an open file, the
+ * truncation of a nameless file, a file that moves under its descriptors as
+ * a write or ftruncate grows it, an overwrite in place, and the modes chmod,
+ * creat and mkdir give.
  *
  * The rows run twice in one suite: once on a volume nobody has written and
  * once on the volume a killed machine left, so they start by taking away
@@ -580,6 +615,7 @@ static void write_rows(void)
     if (syscall1(SYS_RMDIR, (long)"k/empty") != 0) {
         fail("rmdir on the volume");
     }
+    refused_names();
     fd = syscall3(SYS_OPEN, (long)"k/held.bin", O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd < 0) {
         fail_with("creating the file to hold open", fd);

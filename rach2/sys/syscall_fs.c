@@ -11063,11 +11063,11 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
  * a directory source is -EPERM, since a directory's children refer to its
  * id and a move would orphan them, and a directory destination under a
  * plain source is -EISDIR, the case that errno is for. A mounted KRFFS
- * volume answers -EIO for both, except -EISDIR for a directory destination
- * that is open, and ext2 moves directories. The root, refused before the
- * walks, never reaches the identity tests of `rename_root_names`; they keep
- * a replaced destination that is the root from being freed, which would
- * take the file system with it, whatever the path copy does.
+ * volume gives the same answers (`kv_rename`), and ext2 moves directories.
+ * The root, refused before the walks, never reaches the identity tests of
+ * `rename_root_names`; they keep a replaced destination that is the root
+ * from being freed, which would take the file system with it, whatever the
+ * path copy does.
  *
  * Both names are walked without the namespace lock, which is taken for the
  * lookups and the rename that follow. A walk takes the lock of each mount it

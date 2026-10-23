@@ -99,9 +99,6 @@ holds, as on Linux.
 A slash after the final name is allowed, and names the directory; a
 symbolic link so named is not followed and is refused as a
 non-directory.
-On a mounted KRFFS volume, a missing final entry or a final entry that
-is not a directory also returns
-.Er ENOTEMPTY .
 .Pp
 A directory in use is not removed:
 .Fn rmdir
@@ -263,8 +260,6 @@ The directory is not empty, or the last component of the path given to
 .Fn rmdir
 is
 .Pa \&.. .
-A mounted KRFFS volume also uses this error for a missing final entry
-or a final entry that is not a directory.
 .It Bq Er EPERM
 The sticky-directory rule forbids removal, or the directory or the entry
 to be removed is immutable or append-only.

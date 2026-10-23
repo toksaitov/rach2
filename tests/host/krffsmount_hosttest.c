@@ -725,6 +725,49 @@ static void working_directory(void)
     teardown();
 }
 
+/** Rename `from` to `to` in the volume's root under the mount's lock, as
+ * `do_rename` calls the type. */
+static int rename_name(const char *from, const char *to)
+{
+    int rc;
+
+    vfs_ns_lock(&mount);
+    rc = kv_rename(&mount, mount.root, from, mount.root, to);
+    vfs_ns_unlock(&mount);
+    return rc;
+}
+
+/**
+ * The refusals of rename and rmdir are the boot root's: a missing name is
+ * ENOENT, a directory source EPERM, a directory destination EISDIR and an
+ * rmdir of a file ENOTDIR. A rename of an open file to its own name leaves
+ * it named, where taking the name off a replaced file that is open would
+ * take it off the file that is moved.
+ */
+static void refusals(void)
+{
+    void *file;
+    void *found;
+    void *handle;
+
+    setup();
+    vfs_ns_lock(&mount);
+    check(kv_mkdir(&mount, mount.root, "dir", 0755) == 0, "a directory is made");
+    vfs_ns_unlock(&mount);
+    file = create("file");
+    check(remove_dir("absent") == -ENOENT, "an rmdir of a missing name is ENOENT");
+    check(remove_dir("file") == -ENOTDIR, "an rmdir of a file is ENOTDIR");
+    check(rename_name("absent", "new") == -ENOENT, "a rename of a missing name is ENOENT");
+    check(rename_name("dir", "new") == -EPERM, "a rename of a directory is EPERM");
+    check(rename_name("file", "dir") == -EISDIR, "a rename over a directory is EISDIR");
+    check(kv_open(&mount, file, 2, &handle) == 0, "open the file");
+    check(rename_name("file", "file") == 0, "a rename of an open file to its own name is 0");
+    check(kv_lookup(&mount, mount.root, "file", &found) == 0 && found == file,
+          "and the file keeps its name");
+    kv_release(&mount, handle);
+    teardown();
+}
+
 /**
  * Do nothing: fd.c reports a description's close to inotify, and no row
  * watches.
@@ -745,8 +788,8 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * Run every row: relocation by a write and by a truncate, a directory read,
  * an O_PATH pin, a failed relocation of each kind, the unmount's order of
  * writes, a failed clean flush, the errors of a creation, an owner across a
- * block, a taken identifier and a working directory. Returns 1 when a row
- * failed, else 0.
+ * block, a taken identifier, a working directory and the refusals of rename
+ * and rmdir. Returns 1 when a row failed, else 0.
  */
 int main(void)
 {
@@ -762,6 +805,7 @@ int main(void)
     owner_across();
     taken_identifier();
     working_directory();
+    refusals();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }
