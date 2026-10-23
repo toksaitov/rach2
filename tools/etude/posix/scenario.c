@@ -788,10 +788,25 @@ static int load_invocation(struct etude_case *c, const char *path, const char **
         c->case_id == NULL || c->arch == NULL || c->scratch == NULL || *manifest == NULL ||
         *store == NULL || c->grace_us == 0 || c->cleanup_us == 0 || c->console_max == 0 ||
         c->output_max == 0 || c->resend_us == 0 ||
-        (strcmp(c->arch, "i686") != 0 && strcmp(c->arch, "x86_64") != 0)) {
+        (strcmp(c->arch, "i686") != 0 && strcmp(c->arch, "x86_64") != 0 &&
+         strcmp(c->arch, "none") != 0)) {
         diag("%s: not a scenario invocation of version %d", path, ETUDE_CONTRACT_VERSION);
         return -1;
     }
+    return 0;
+}
+
+/** Match the invocation's identity to the case's declared architectures. */
+static int case_architecture(const struct etude_case *c)
+{
+    const struct eh_json *arches = eh_json_get(c->kase, "architectures"), *arch;
+
+    if (arches != NULL && arches->type == 's')
+        return !strcmp(arches->string, "none") && !strcmp(c->arch, "none");
+    for (arch = arches != NULL && arches->type == 'a' ? arches->child : NULL;
+         arch != NULL; arch = arch->next)
+        if (arch->type == 's' && !strcmp(arch->string, c->arch))
+            return 1;
     return 0;
 }
 
@@ -809,6 +824,10 @@ static int load(struct etude_case *c, const char *path)
     domain = jtext(c->kase, "domain");
     if (c->kase == NULL || domain == NULL || strcmp(domain, "machine") != 0) {
         diag("%s: no machine case %s", manifest, c->case_id);
+        return -1;
+    }
+    if (!case_architecture(c)) {
+        diag("%s: case %s does not declare architecture %s", manifest, c->case_id, c->arch);
         return -1;
     }
     if (load_artifacts(c) != 0 || load_tools(c) != 0 || load_steps(c) != 0 ||

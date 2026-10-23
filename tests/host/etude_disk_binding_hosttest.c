@@ -16,6 +16,7 @@
 #include "../../tools/etude/posix/scenario.c"
 
 static char fixture[4096], scratch[4096], disk_file[4096], immutable[4096], alias[4096];
+static char invocation[4096];
 static int failures;
 
 static void remove_fixture(void)
@@ -26,6 +27,8 @@ static void remove_fixture(void)
         unlink(disk_file);
     if (immutable[0])
         unlink(immutable);
+    if (invocation[0])
+        unlink(invocation);
     if (scratch[0])
         rmdir(scratch);
     if (fixture[0])
@@ -59,6 +62,52 @@ int etude_scenario(struct etude_case *c)
     return 1;
 }
 
+static void invocation_architectures(void)
+{
+    const char *manifest, *store;
+    struct etude_case c;
+    struct eh_json *declared, *helper_profile;
+    FILE *f;
+
+    path_of(invocation, fixture, "invocation.json");
+    f = fopen(invocation, "wb");
+    if (f == NULL ||
+        fputs("{\"schema_version\":1,\"run_id\":\"run\",\"attempt_id\":\"attempt\","
+              "\"case_id\":\"host.fixture\",\"architecture\":\"none\",\"scratch\":\"scratch\","
+              "\"manifest\":\"manifest\",\"store\":\"store\",\"grace_us\":1,\"cleanup_us\":1,"
+              "\"console_max_bytes\":1,\"output_max_bytes\":1,\"resend_us\":1}", f) < 0 ||
+        fclose(f) != 0)
+        exit(2);
+    memset(&c, 0, sizeof(c));
+    check_binding(load_invocation(&c, invocation, &manifest, &store) == 0 &&
+                      !strcmp(etude_case_architecture(&c), "none"),
+                  "architecture-none invocation refused or changed");
+    declared = eh_json_parse("{\"architectures\":\"none\"}");
+    c.kase = declared;
+    check_binding(case_architecture(&c), "architecture-none case refused");
+    c.arch = "i686";
+    check_binding(!case_architecture(&c), "architecture-none case accepted i686");
+    eh_json_free(declared);
+    declared = eh_json_parse("{\"architectures\":[\"i686\",\"x86_64\"]}");
+    c.kase = declared;
+    check_binding(case_architecture(&c), "i686 declaration refused");
+    c.arch = "x86_64";
+    check_binding(case_architecture(&c), "x86_64 declaration refused");
+    c.arch = "none";
+    check_binding(!case_architecture(&c), "architecture-specific case accepted none");
+    struct machine_decl helper;
+    memset(&helper, 0, sizeof(helper));
+    helper.helper = 1;
+    helper_profile = eh_json_parse("{\"architecture\":\"x86_64\"}");
+    helper.qemu = helper_profile;
+    check_binding(!strcmp(machine_architecture(&c, &helper), "x86_64"),
+                  "neutral case lost its helper architecture");
+    eh_json_free(helper_profile);
+    eh_json_free(declared);
+    c.kase = NULL;
+    case_free(&c);
+}
+
 int main(void)
 {
     struct etude_case c;
@@ -77,6 +126,7 @@ int main(void)
     path_of(fixture, tmp, "rach2-etude-bind.XXXXXX");
     if (mkdtemp(fixture) == NULL)
         return 2;
+    invocation_architectures();
     path_of(scratch, fixture, "attempt");
     path_of(disk_file, scratch, "disk");
     path_of(alias, scratch, "alias");
