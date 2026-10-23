@@ -1660,6 +1660,12 @@ COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
     build/tests/cases/gnu/sntpserver build/tests/system/fakeapi_test \
     build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture
+ifeq ($(OS),Windows_NT)
+# Native link outputs depend on the wrapper that publishes their stable paths.
+$(HOST_TOOLS) $(filter-out $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
+    $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture,$(COLLECTION_TOOLS)) \
+    build/tests/cases/host/host build/tools/etude/image-command: tools/etude/compile.sh
+endif
 .PHONY: print-collection-tools
 print-collection-tools:
 	@echo $(COLLECTION_TOOLS)

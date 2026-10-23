@@ -10,3 +10,9 @@
 HOSTCC ?= cc
 HOSTCFLAGS = -O2 -Wall -Wextra -Werror
 HOST_LINK = $(HOSTCC) $(HOSTCFLAGS) -o $@ $(filter %.c,$^)
+
+ifeq ($(OS),Windows_NT)
+# MinGW appends .exe to a suffixless output. Publish the declared goal so
+# preparation hashes the file that the native runner will open.
+HOST_LINK = sh $(if $(TOP),$(TOP)/)tools/etude/compile.sh $(HOSTCC) $@ $(HOSTCFLAGS) $(filter %.c,$^)
+endif
