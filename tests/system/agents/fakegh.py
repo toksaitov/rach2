@@ -36,6 +36,8 @@ import subprocess
 import sys
 
 PROJECT = "PVT_rach2"
+OWNER = "toksaitov"
+BOARD = 6
 FIELD = "PVTSSF_status"
 STATUSES = ("Backlog", "Ready", "In progress", "Done")
 CLOSING = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?) #([0-9]+)\b", re.I)
@@ -113,6 +115,13 @@ def graphql(board, flags):
                   "fieldValueByName": {"name": i["status"]} if i["status"] else None,
                   "content": node(i)} for i in board["issues"]]
         return {"data": {"user": {"projectV2": {"items": {"pageInfo": page, "nodes": nodes}}}}}
+    if "issues(first: 100" in query and "projectItems(first: 10, includeArchived: false)" in query:
+        states = re.search(r"states: \[([A-Z, ]*)\]", query).group(1).split(", ")
+        nodes = [dict(node(i), projectItems={"nodes": [
+                     {"id": item_id(i), "project": {"number": BOARD, "owner": {"login": OWNER}},
+                      "fieldValueByName": {"name": i["status"]} if i["status"] else None}]})
+                 for i in board["issues"] if i["state"] in states]
+        return {"data": {"repository": {"issues": {"pageInfo": page, "nodes": nodes}}}}
     if 'field(name: "Status")' in query:
         return {"data": {"user": {"projectV2": {"id": PROJECT, "field": {
             "id": FIELD, "options": [{"id": option_id(s), "name": s} for s in STATUSES]}}}}}
