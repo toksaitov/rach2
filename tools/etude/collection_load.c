@@ -1,6 +1,10 @@
 /* The case's claim includes its load, whose processes are registered first. */
 #include "collection_load.h"
+#ifdef _WIN32
+#include "win/winexec.h"
+#else
 #include "posix/posix.h"
+#endif
 #include "etude/ledger.h"
 #include <errno.h>
 #include <stdio.h>
@@ -16,6 +20,16 @@ struct etude_collection_load {
     int ended, failed, stopping;
     char output[4096], error[4096], record[2048];
 };
+
+/* Use the executor's clock, including the origin of its startup reading. */
+static uint64_t now_us(void)
+{
+#ifdef _WIN32
+    return etude_win_mono_us();
+#else
+    return posix_now_us();
+#endif
+}
 
 static const char *quality(enum etude_quality value)
 {
@@ -109,11 +123,11 @@ int etude_collection_load_wait(struct etude_collection_load *l, int milliseconds
         l->failed = 1;
     if (!l->ready_us && r->out.kept >= sizeof(ETUDE_LOAD_READY) - 1) {
         if (!memcmp(r->out.data, ETUDE_LOAD_READY, sizeof(ETUDE_LOAD_READY) - 1))
-            l->ready_us = posix_now_us();
+            l->ready_us = now_us();
         else
             l->failed = 1;
     }
-    if (!l->ready_us && posix_now_us() - r->started_us > READY_US)
+    if (!l->ready_us && now_us() - r->started_us > READY_US)
         l->failed = 1;
     return l->failed ? -1 : l->ready_us ? 1 : 0;
 }
