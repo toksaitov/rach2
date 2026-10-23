@@ -16,10 +16,7 @@
         "x86_64"
       ],
       "workload": {
-        "arguments": [
-          "muse",
-          "exchange"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tests/system/fakeapi/muse.json",
           "version": "1.4.10-R6427.1"
@@ -298,10 +295,7 @@
         "x86_64"
       ],
       "workload": {
-        "arguments": [
-          "muse",
-          "refusal"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tests/system/fakeapi/muse.json",
           "version": "1.4.10-R6427.1"

@@ -15,10 +15,7 @@
         "x86_64"
       ],
       "workload": {
-        "arguments": [
-          "codex",
-          "exchange"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tests/system/fakeapi/codex.json",
           "version": "0.162.1"
@@ -296,10 +293,7 @@
         "x86_64"
       ],
       "workload": {
-        "arguments": [
-          "codex",
-          "refusal"
-        ],
+        "arguments": [],
         "inputs": {
           "script": "tests/system/fakeapi/codex.json",
           "version": "0.162.1"
