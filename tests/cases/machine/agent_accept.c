@@ -534,6 +534,18 @@ static int session_start(struct acceptance *s)
     free(text);
     if (!i)
         return 0;
+    if (!strcmp(s->agent, "agy")) {
+        struct net_run r;
+        if (!remote(s, 0,
+                    "grep -F -c \"\\\"$HOME/rach2-accept/agy\\\"\" "
+                    "\"$HOME/.gemini/antigravity-cli/settings.json\"",
+                    NULL, &r))
+            return 0;
+        i = net_exited0(&r) && !strcmp(r.out, "1\n");
+        net_run_free(&r);
+        if (!i)
+            return 0;
+    }
     return 1;
 }
 static int session_work(struct acceptance *s)
