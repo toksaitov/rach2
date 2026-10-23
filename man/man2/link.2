@@ -242,12 +242,10 @@ was given a path whose last component is
 or the file system cannot supply required attributes.
 .It Bq Er EIO
 File system metadata could not be read or written, or the device was removed.
-A mounted KRFFS volume also returns this error when unlinking a missing
-entry or a directory.
 .It Bq Er EISDIR
 .Fn unlink
-selected the root or a directory on the KRFFS boot root, ext2, FAT32,
-or exFAT, or a path whose last component is
+selected the root or a directory on the KRFFS boot root, a mounted KRFFS
+volume, ext2, FAT32, or exFAT, or a path whose last component is
 .Pa \&.
 or
 .Pa \&.. .

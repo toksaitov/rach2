@@ -661,16 +661,38 @@ static uint32_t maker_uid(void)
     return current_proc ? current_proc->euid : 0;
 }
 
-/** The group a node is made with: the caller's effective group id, even in
- * a set-group-ID directory, and root's when there is no caller. */
-static uint32_t maker_gid(void)
+/**
+ * The group a node made in `dir` has, in `*gid`, and the set-group-ID bit a
+ * directory made there takes, in `*bit`, as Linux's `inode_init_owner` gives
+ * them: a set-group-ID directory's group and its bit, or else the caller's
+ * effective group id, root's when there is no caller, and no bit. The root
+ * directory's mode is the format's, which has no set-group-ID bit. 0, or
+ * -EIO when the directory's header cannot be read.
+ */
+static int maker_gid(struct vfs_mount *mnt, void *dir, uint32_t *gid, uint32_t *bit)
 {
-    return current_proc ? current_proc->egid : 0;
+    uint64_t at = offset_of(mnt, dir);
+    krffs_node_t head;
+
+    *gid = current_proc ? current_proc->egid : 0;
+    *bit = 0;
+    if (at == 0) {
+        return 0;
+    }
+    if (krffs_head(&vol_of(mnt)->fs, at, &head) != 0) {
+        return -EIO;
+    }
+    if (head.mode & 02000u) {
+        *gid = head.gid;
+        *bit = 02000u;
+    }
+    return 0;
 }
 
 /**
  * Create `name` in `dir`, with the caller's `mode`, already masked by its
- * umask, and the caller's identity, both on the medium before the name.
+ * umask, and the caller's identity, both on the medium before the name; its
+ * group is that of `maker_gid`.
  *
  * A name that is already there answers -EEXIST. The core would answer
  * success, which would make this a creation of somebody else's file: its
@@ -684,6 +706,7 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     struct krffs_volume *vol = vol_of(mnt);
     char path[256];
     uint64_t made;
+    uint32_t gid, bit;
     int rc;
 
     if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
@@ -696,7 +719,11 @@ static int kv_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_
     if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
         return -EEXIST;
     }
-    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(mode & 07777u), maker_uid(), maker_gid());
+    rc = maker_gid(mnt, dir, &gid, &bit);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(mode & 07777u), maker_uid(), gid);
     if (rc != 0) {
         return made_errno(rc);
     }
@@ -721,6 +748,7 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     uint32_t type = mode & KRFFS_S_IFMT;
     char path[256];
     uint64_t made;
+    uint32_t gid, bit;
     int rc;
 
     (void)rdev;
@@ -737,8 +765,11 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (krffs_child_at(&vol->fs, offset_of(mnt, dir), name) != KRFFS_NO_NODE) {
         return -EEXIST;
     }
-    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u)), maker_uid(),
-                              maker_gid());
+    rc = maker_gid(mnt, dir, &gid, &bit);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = krffs_create_node_at(&vol->fs, path, (uint16_t)(type | (mode & 07777u)), maker_uid(), gid);
     if (rc != 0) {
         return made_errno(rc);
     }
@@ -757,8 +788,8 @@ static int kv_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
  * that reader's file alive, and the last close frees it. The open record is
  * looked up again after the writes, which sleep: if a last close freed it
  * meanwhile, the node goes here. 0, -EROFS on a read-only mount,
- * -ENAMETOOLONG, or -EIO for a name that is not removed, a directory among
- * them.
+ * -ENAMETOOLONG, -ENOENT for a missing name, -EISDIR for a directory, as the
+ * boot root answers, or -EIO for a name the core does not remove.
  */
 static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
@@ -775,14 +806,20 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     }
     {
         uint64_t at = krffs_child_at(&vol->fs, offset_of(mnt, dir), name);
+        krffs_node_t head;
 
-        if (at != KRFFS_NO_NODE && open_at(vol, at)) {
-            krffs_node_t head;
+        if (at == KRFFS_NO_NODE) {
+            return -ENOENT;
+        }
+        if (krffs_head(&vol->fs, at, &head) != 0) {
+            return -EIO;
+        }
+        if (KRFFS_IS_DIR(head.mode)) {
+            return -EISDIR;
+        }
+        if (open_at(vol, at)) {
             struct krffs_open *o;
 
-            if (krffs_head(&vol->fs, at, &head) != 0 || KRFFS_IS_DIR(head.mode)) {
-                return -EIO;
-            }
             krffs_stamp_at(&vol->fs, krffs_parent_offset(&vol->fs, at), KRFFS_STAMP_DATA);
             krffs_orphan_at(&vol->fs, at);
             o = open_at(vol, at);
@@ -799,7 +836,8 @@ static int kv_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 
 /**
  * A directory `name` in `dir`, with the caller's `mode` and identity on the
- * medium before its name, as `kv_create` makes a file. A failure in the core
+ * medium before its name, as `kv_create` makes a file; in a set-group-ID
+ * directory it takes the bit as well as the group. A failure in the core
  * answers `made_errno`'s errno, -EINVAL among them for a name whose
  * directory identifier another directory has.
  */
@@ -807,6 +845,7 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
 {
     struct krffs_volume *vol = vol_of(mnt);
     char path[256];
+    uint32_t gid, bit;
     int rc;
 
     if (!vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
@@ -816,7 +855,11 @@ static int kv_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (rc != 0) {
         return rc;
     }
-    rc = krffs_mkdir_at(&vol->fs, path, (uint16_t)(mode & 07777u), maker_uid(), maker_gid());
+    rc = maker_gid(mnt, dir, &gid, &bit);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = krffs_mkdir_at(&vol->fs, path, (uint16_t)((mode & 07777u) | bit), maker_uid(), gid);
     return rc == 0 ? 0 : made_errno(rc);
 }
 

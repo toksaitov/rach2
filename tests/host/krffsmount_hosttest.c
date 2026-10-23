@@ -660,6 +660,51 @@ static void owner_across(void)
 }
 
 /**
+ * A node made in a set-group-ID directory has the directory's group, as
+ * Linux's `inode_init_owner` gives it, and a directory made there takes the
+ * bit too; in a directory without the bit a node has its maker's group.
+ */
+static void setgid_group(void)
+{
+    static process_t maker;
+    struct vfs_stat st;
+    void *dir = NULL, *node = NULL;
+
+    setup();
+    maker.euid = maker.egid = 1000;
+    current_proc = &maker;
+    vfs_ns_lock(&mount);
+    check(kv_mkdir(&mount, mount.root, "sg", 0775) == 0 &&
+              kv_lookup(&mount, mount.root, "sg", &dir) == 0,
+          "a directory is made");
+    vfs_ns_unlock(&mount);
+    st.gid = 4242;
+    st.mode = 02775;
+    check(kv_setattr(&mount, dir, VFS_SET_GID, &st) == 0 &&
+              kv_setattr(&mount, dir, VFS_SET_MODE, &st) == 0,
+          "the directory takes group 4242 and the set-group-ID bit");
+    vfs_ns_lock(&mount);
+    check(kv_create(&mount, dir, "f", 0644, &node) == 0, "a file is made in it");
+    vfs_ns_unlock(&mount);
+    check(kv_getattr(&mount, node, &st) == 0 && st.uid == 1000 && st.gid == 4242 &&
+              !(st.mode & 02000u),
+          "a file made in a set-group-ID directory has its group");
+    vfs_ns_lock(&mount);
+    check(kv_mkdir(&mount, dir, "d", 0755) == 0 && kv_lookup(&mount, dir, "d", &node) == 0,
+          "a directory is made in it");
+    vfs_ns_unlock(&mount);
+    check(kv_getattr(&mount, node, &st) == 0 && st.gid == 4242 && (st.mode & 02000u),
+          "a directory made in a set-group-ID directory has its group and the bit");
+    vfs_ns_lock(&mount);
+    check(kv_create(&mount, mount.root, "plain", 0644, &node) == 0, "a file is made in the root");
+    vfs_ns_unlock(&mount);
+    check(kv_getattr(&mount, node, &st) == 0 && st.gid == 1000,
+          "a file made elsewhere has its maker's group");
+    current_proc = NULL;
+    teardown();
+}
+
+/**
  * A directory whose identifier another directory has is `EINVAL`. `bC` and
  * `cb` hash alike, so the second in one directory would share the first
  * one's children, and the core fails it with `KRFFS_ETAKEN`, which the
@@ -738,11 +783,11 @@ static int rename_name(const char *from, const char *to)
 }
 
 /**
- * The refusals of rename and rmdir are the boot root's: a missing name is
- * ENOENT, a directory source EPERM, a directory destination EISDIR and an
- * rmdir of a file ENOTDIR. A rename of an open file to its own name leaves
- * it named, where taking the name off a replaced file that is open would
- * take it off the file that is moved.
+ * The refusals of unlink, rename and rmdir are the boot root's: a missing
+ * name is ENOENT, an unlink of a directory EISDIR, a directory source EPERM,
+ * a directory destination EISDIR and an rmdir of a file ENOTDIR. A rename of
+ * an open file to its own name leaves it named, where taking the name off a
+ * replaced file that is open would take it off the file that is moved.
  */
 static void refusals(void)
 {
@@ -755,6 +800,11 @@ static void refusals(void)
     check(kv_mkdir(&mount, mount.root, "dir", 0755) == 0, "a directory is made");
     vfs_ns_unlock(&mount);
     file = create("file");
+    vfs_ns_lock(&mount);
+    check(kv_unlink(&mount, mount.root, "absent") == -ENOENT,
+          "an unlink of a missing name is ENOENT");
+    check(kv_unlink(&mount, mount.root, "dir") == -EISDIR, "an unlink of a directory is EISDIR");
+    vfs_ns_unlock(&mount);
     check(remove_dir("absent") == -ENOENT, "an rmdir of a missing name is ENOENT");
     check(remove_dir("file") == -ENOTDIR, "an rmdir of a file is ENOTDIR");
     check(rename_name("absent", "new") == -ENOENT, "a rename of a missing name is ENOENT");
@@ -788,8 +838,9 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * Run every row: relocation by a write and by a truncate, a directory read,
  * an O_PATH pin, a failed relocation of each kind, the unmount's order of
  * writes, a failed clean flush, the errors of a creation, an owner across a
- * block, a taken identifier, a working directory and the refusals of rename
- * and rmdir. Returns 1 when a row failed, else 0.
+ * block, a taken identifier, a working directory, the refusals of unlink,
+ * rename and rmdir, and the group of a node made in a set-group-ID
+ * directory. Returns 1 when a row failed, else 0.
  */
 int main(void)
 {
@@ -806,6 +857,7 @@ int main(void)
     taken_identifier();
     working_directory();
     refusals();
+    setgid_group();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }
