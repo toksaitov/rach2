@@ -16,6 +16,7 @@ struct fx_child {
 };
 int fx_init(struct fixture *f, const char *root, const char *name, const char *self);
 void fx_destroy(struct fixture *f);
+void fx_reap_groups(struct fixture *f);
 int fx_external(const char *template, char *path, size_t size);
 int fx_mkdir(const char *path);
 int fx_write(const char *path, const void *data, size_t bytes, unsigned mode);

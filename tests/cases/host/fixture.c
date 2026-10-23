@@ -25,6 +25,24 @@ static volatile sig_atomic_t stopped;
 static struct fixture *owner;
 static char *external[256];
 static size_t nexternal;
+void fx_reap_groups(struct fixture *f)
+{
+    sigset_t block, previous;
+    size_t i, n = 0;
+    (void)f;
+    sigemptyset(&block);
+    sigaddset(&block, SIGTERM);
+    sigaddset(&block, SIGINT);
+    sigaddset(&block, SIGHUP);
+    sigprocmask(SIG_BLOCK, &block, &previous);
+    for (i = 0; i < ngroups; i++) {
+        if (kill(-groups[i], 0) < 0 && errno == ESRCH)
+            continue;
+        groups[n++] = groups[i];
+    }
+    ngroups = n;
+    sigprocmask(SIG_SETMASK, &previous, NULL);
+}
 static void signal_children(int sig)
 {
     size_t i;
@@ -373,6 +391,7 @@ int fx_start_io(struct fixture *f, struct fx_child *p, const char *const args[],
     int i;
     pid_t child;
     interrupted();
+    fx_reap_groups(f);
     if (ngroups == sizeof(groups) / sizeof(groups[0]))
         return 0;
     memset(p, 0, sizeof(*p));
@@ -441,6 +460,7 @@ int fx_poll(struct fx_child *p)
     }
     p->status = WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
     p->done = 1;
+    fx_reap_groups(NULL);
     return 1;
 }
 void fx_stop(struct fx_child *p, int sig)
