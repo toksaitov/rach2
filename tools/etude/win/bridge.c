@@ -34,6 +34,25 @@ static int visit(const struct etude_ledger_claim *c, void *ctx)
     return 0;
 }
 
+/* A collection keeps its block while any of its case claims remains. */
+struct collection_lookup {
+    const char *prefix;
+    int found;
+};
+static int collection_claim(const struct etude_ledger_claim *c, void *ctx)
+{
+    struct collection_lookup *q = ctx;
+    size_t n = strlen(q->prefix);
+    if (!strncmp(c->id, q->prefix, n) && c->id[n] == ':')
+        q->found = 1;
+    return 0;
+}
+static int collection_gone(struct etude_ledger *l, const char *prefix)
+{
+    struct collection_lookup q = {prefix, 0};
+    return prefix == NULL || (etude_ledger_list(l, collection_claim, &q) == 0 && !q.found);
+}
+
 /** Retry a compatibility lock within this acquisition's bound. */
 static int retry(void *ctx, const struct etude_portlock_wait *wait)
 {
@@ -58,7 +77,7 @@ int etude_win_bridge_main(int argc, char **argv)
     struct etude_portlock_spec spec;
     int taken = 0, offset = -1, error = 0;
     FILE *f;
-    if (argc != 10)
+    if (argc != 10 && argc != 11)
         return 2;
     q.id = argv[3];
     q.owner = strtol(argv[8], NULL, 10);
@@ -98,7 +117,8 @@ int etude_win_bridge_main(int argc, char **argv)
     if (!error)
         for (;;) {
             q.owner = q.found = q.error = 0;
-            if (etude_ledger_list(l, visit, &q) == 0 && !q.found)
+            if (etude_ledger_list(l, visit, &q) == 0 && !q.found &&
+                collection_gone(l, argc == 11 ? argv[10] : NULL))
                 break;
             Sleep(100);
         }
@@ -110,11 +130,12 @@ int etude_win_bridge_main(int argc, char **argv)
 }
 
 /** Start a holder and wait for its atomic acquisition result. */
-struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *s)
+struct etude_bridge *etude_bridge_collection_start(const struct etude_bridge_spec *s,
+                                                   const char *prefix)
 {
     wchar_t exe[32768], *line;
     char *program, *cmd, path[4096], alone[2], legacy[2], wait[32], owner[32];
-    const char *args[10];
+    const char *args[11];
     STARTUPINFOW si;
     PROCESS_INFORMATION pi;
     struct etude_bridge *b;
@@ -149,7 +170,8 @@ struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *s)
     args[6] = wait;
     args[7] = owner;
     args[8] = path;
-    args[9] = NULL;
+    args[9] = prefix;
+    args[10] = NULL;
     if (!GetModuleFileNameW(NULL, exe, 32768)) {
         free(b);
         return NULL;
@@ -233,4 +255,9 @@ void etude_bridge_detach(struct etude_bridge *b)
 int etude_bridge_native_port(unsigned port)
 {
     return port >= 25000 && port <= 65535;
+}
+
+struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *s)
+{
+    return etude_bridge_collection_start(s, NULL);
 }

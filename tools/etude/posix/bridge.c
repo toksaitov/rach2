@@ -51,6 +51,25 @@ static int visit(const struct etude_ledger_claim *c, void *ctx)
     return 0;
 }
 
+/* A collection keeps its block while any of its case claims remains. */
+struct collection_lookup {
+    const char *prefix;
+    int found;
+};
+static int collection_claim(const struct etude_ledger_claim *c, void *ctx)
+{
+    struct collection_lookup *q = ctx;
+    size_t n = strlen(q->prefix);
+    if (!strncmp(c->id, q->prefix, n) && c->id[n] == ':')
+        q->found = 1;
+    return 0;
+}
+static int collection_gone(struct etude_ledger *l, const char *prefix)
+{
+    struct collection_lookup q = {prefix, 0};
+    return prefix == NULL || (etude_ledger_list(l, collection_claim, &q) == 0 && !q.found);
+}
+
 /* The bound of a holder's waits, and the pipe whose closing ends them. */
 struct bound {
     int wake;
@@ -80,13 +99,13 @@ static int retry(void *ctx, const struct etude_portlock_wait *w)
 }
 
 /** Recover until the claim disappears; every doubt keeps its locks. */
-static void watch_claim(struct etude_ledger *l, const char *id, int wake)
+static void watch_claim(struct etude_ledger *l, const char *id, int wake, const char *prefix)
 {
     struct pollfd p = {wake, POLLIN, 0};
 
     for (;;) {
         struct lookup q = {id, 0, 0, 0};
-        if (etude_ledger_list(l, visit, &q) == 0 && !q.found)
+        if (etude_ledger_list(l, visit, &q) == 0 && !q.found && collection_gone(l, prefix))
             _exit(0);
         if (poll(&p, 1, 100) > 0) {
             close(p.fd);
@@ -96,7 +115,8 @@ static void watch_claim(struct etude_ledger *l, const char *id, int wake)
 }
 
 /** Own locks in a session apart, and publish readiness only for a claim. */
-static void holder(const struct etude_bridge_spec *s, int wake, int out, long owner)
+static void holder(const struct etude_bridge_spec *s, int wake, int out, long owner,
+                   const char *prefix)
 {
     struct etude_ledger *l;
     struct lookup q = {s->id, owner, 0, 0};
@@ -129,10 +149,11 @@ static void holder(const struct etude_bridge_spec *s, int wake, int out, long ow
     close(out);
     if (r.error != 0 || n != (ssize_t)sizeof(r))
         _exit(1);
-    watch_claim(l, s->id, wake);
+    watch_claim(l, s->id, wake, prefix);
 }
 
-struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *s)
+struct etude_bridge *etude_bridge_collection_start(const struct etude_bridge_spec *s,
+                                                   const char *prefix)
 {
     struct etude_bridge *b;
     struct ready r;
@@ -163,7 +184,7 @@ struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *s)
     fcntl(wake[1], F_SETFD, FD_CLOEXEC);
     b->pid = fork();
     if (b->pid == 0)
-        holder(s, wake[0], out[1], owner);
+        holder(s, wake[0], out[1], owner, prefix);
     close(wake[0]);
     close(out[1]);
     n = b->pid < 0 ? -1 : read(out[0], &r, sizeof(r));
@@ -216,4 +237,9 @@ void etude_bridge_detach(struct etude_bridge *b)
         close(b->wake);
         free(b);
     }
+}
+
+struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *s)
+{
+    return etude_bridge_collection_start(s, NULL);
 }

@@ -34,6 +34,10 @@ struct etude_bridge_spec {
  */
 struct etude_bridge *etude_bridge_start(const struct etude_bridge_spec *spec);
 
+/* Keep collection locks until ID and all PREFIX: claims are gone. */
+struct etude_bridge *etude_bridge_collection_start(const struct etude_bridge_spec *spec,
+                                                   const char *prefix);
+
 /** Give the legacy port offset, or -1 when no block was requested. */
 int etude_bridge_offset(const struct etude_bridge *b);
 

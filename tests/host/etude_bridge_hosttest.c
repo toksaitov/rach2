@@ -141,6 +141,40 @@ static void finish(struct etude_ledger *l, const char *id, struct etude_bridge *
     forget(pid);
 }
 
+/** A collection's child claim retains the block after its root is free. */
+static void collection(struct etude_ledger *l, const char *ledger)
+{
+    struct etude_bridge_spec s = {ledger, "collection:ports", fix_dir(), 0, 1, 0};
+    struct etude_bridge *b, *blocked;
+    int port = lock_file("rach2-ports.0");
+    reserve(l, s.id);
+    b = etude_bridge_collection_start(&s, "collection");
+    CHECK(b != NULL, "collection holder starts");
+    if (b == NULL) {
+        finish(l, s.id, NULL);
+        close(port);
+        return;
+    }
+    long pid = etude_bridge_pid(b);
+    remember(pid);
+    reserve(l, "collection:case");
+    CHECK(etude_ledger_finish(l, "collection:case", ETUDE_CLEANUP_UNCONFIRMED) == 0,
+          "collection case cleanup is uncertain");
+    CHECK(etude_ledger_finish(l, s.id, ETUDE_CLEANUP_CONFIRMED) == 0, "collection root has ended");
+    reserve(l, "collection-other");
+    blocked = start(ledger, "collection-other", fix_dir(), 1, 0, 200);
+    CHECK(blocked == NULL && errno == ETIMEDOUT,
+          "a surviving collection claim retains the host and port block");
+    finish(l, "collection-other", blocked);
+    CHECK(locked_by(port, F_WRLCK) == pid, "uncertain collection case retains its port block");
+    CHECK(etude_ledger_finish(l, "collection:case", ETUDE_CLEANUP_CONFIRMED) == 0,
+          "collection case cleanup is confirmed");
+    etude_bridge_join(b);
+    forget(pid);
+    CHECK(lock_try(port, F_WRLCK) == 0, "collection block is free after every claim ends");
+    close(port);
+}
+
 /** Shared old runs and new claims agree on host and distinct port locks. */
 static void shared(struct etude_ledger *l, const char *ledger)
 {
@@ -852,6 +886,7 @@ int main(int argc, char **argv)
         return 1;
     b = start(ledger, "absent", fix_dir(), 0, 0, 0);
     CHECK(b == NULL && errno == ENOENT, "absent claim refused");
+    collection(l, ledger);
     shared(l, ledger);
     exclusive(l, ledger);
     ports(l, ledger);
