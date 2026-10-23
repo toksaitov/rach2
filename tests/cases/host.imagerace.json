@@ -10,7 +10,7 @@
         "imagerace",
         "`tests/system/imagerace.sh`, two builds of one image at once"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -126,7 +126,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller runs concurrent mkimage products in a declared GNU Rach2 helper and checks their shared publication"
       },
       "steps": [
         {
@@ -185,7 +187,7 @@
       "units": [
         "imagerace"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -296,7 +298,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller interrupts the image publication products in a declared GNU Rach2 helper and checks recovery and cleanup"
       },
       "steps": [
         {
@@ -356,7 +360,7 @@
         "imagerace",
         "`tests/system/imagerace.sh`, the prerequisites of the shared images"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": [
         "i686",
         "x86_64"
@@ -470,7 +474,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller checks Make image prerequisites in a declared GNU Rach2 helper with the prepared build products"
       },
       "steps": [
         {
@@ -530,7 +536,7 @@
         "imagerace",
         "`tests/system/imagerace.sh`, the private tree"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -650,7 +656,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller exercises Make restaging of image inputs in a declared GNU Rach2 helper"
       },
       "steps": [
         {
@@ -710,7 +718,7 @@
         "imagerace",
         "`tests/system/imagerace_probe.sh`"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -800,7 +808,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller checks probe rebuilding through the complete Make image graph in a declared GNU Rach2 helper"
       },
       "steps": [
         {

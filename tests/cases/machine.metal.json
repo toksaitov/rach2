@@ -10,7 +10,7 @@
         "metal",
         "tests/system/accept/transport_test.sh"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -97,7 +97,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller exercises the complete metal acceptance product with compiled transport fixtures in a declared GNU Rach2 helper"
       },
       "steps": [
         {
@@ -157,7 +159,7 @@
         "metal",
         "tests/system/accept/password_test.sh"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -244,7 +246,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller runs the real su password product on a pseudo-terminal in a declared GNU Rach2 helper"
       },
       "steps": [
         {

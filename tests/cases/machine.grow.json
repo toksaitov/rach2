@@ -416,7 +416,7 @@
         "grow",
         "`tests/system/grow_measure_test.sh`"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -531,7 +531,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller checks grow measurement records with the original awk product in a declared GNU Rach2 helper"
       },
       "steps": [
         {
@@ -592,7 +594,7 @@
         "grow",
         "`tests/system/machine_grow_check.sh`"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -720,7 +722,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller checks grow plans and boot copies through the original grow products in a declared GNU Rach2 helper"
       },
       "steps": [
         {
@@ -781,7 +785,7 @@
         "grow",
         "`tests/system/machine_grow_boot.sh`"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -902,7 +906,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller exercises boot repair and recovery retention products against disk fixtures in a declared GNU Rach2 helper"
       },
       "steps": [
         {
@@ -963,7 +969,7 @@
         "grow",
         "the work directory, the logs and the plan check of `tools/dev/machine_grow.sh`"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -1099,7 +1105,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller checks storage selection, logging and failure behavior of the grow products in a declared GNU Rach2 helper"
       },
       "steps": [
         {
@@ -1160,7 +1168,7 @@
         "grow",
         "`tests/system/suites/grow.sh` row 4, too little memory"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -1255,7 +1263,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller runs the prepared growroot refusal fixture in a declared GNU Rach2 helper before any disk is read"
       },
       "steps": [
         {
@@ -1316,7 +1326,7 @@
         "grow",
         "the restore of `tools/dev/machine_grow.sh` at the Samsung's size"
       ],
-      "domain": "host",
+      "domain": "machine",
       "architectures": "none",
       "workload": {
         "arguments": [
@@ -1415,7 +1425,9 @@
       ],
       "timing": [],
       "native": {
-        "plan": "scenario"
+        "plan": "none",
+        "class": "system",
+        "reason": "the C controller restores every planned range through the actual grow products onto a sparse disk in a declared GNU Rach2 helper"
       },
       "steps": [
         {
