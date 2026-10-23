@@ -406,10 +406,12 @@ row_xz() {
 # route looked up, the rules, the queueing disciplines and the interfaces'
 # configuration. Then the sockets through the socket diagnostics, which ss
 # asks first and complains of when it cannot, a listener among them, and the
-# counts of ss -s; and lspci, which reads the PCI devices from /sys.
+# counts of ss -s; and lspci, which reads the PCI devices from /sys. A native
+# run takes the host bridge's class and vendor from its uevent, the one file
+# Rach2's /sys gives a device.
 row_iproute2() {
-    local pid line listen bridge="00:00.0 Class 0600: 8086:"
-    local sysfs=/sys/bus/pci/devices/0000:00:00.0
+    local pid line listen class vendor bridge="00:00.0 Class 0600: 8086:"
+    local uevent=/sys/bus/pci/devices/0000:00:00.0/uevent
     has "ip addr" "$(ip -4 addr show 2>&1)" "inet $ADDR"
     has "ip route" "$(ip route show 2>&1)" "default via $GATEWAY"
     has "ip link" "$(ip -o link show 2>&1)" "$IFNAME: <"
@@ -433,8 +435,11 @@ row_iproute2() {
     has "ss -s" "$(ss -s 2>&1)" "TCP:   "
     same "what ss -s says on stderr" "$(ss -s 2>&1 >/dev/null)" ""
     kill "$pid"
-    [ -z "$NATIVE" ] ||
-        bridge="00:00.0 Class $(cut -c3-6 "$sysfs/class"): $(cut -c3- "$sysfs/vendor"):"
+    if [ -n "$NATIVE" ]; then
+        class=$(sed -n 's/^PCI_CLASS=//p' "$uevent")
+        vendor=$(sed -n 's/^PCI_ID=\([0-9A-Fa-f]*\):.*/\1/p' "$uevent" | tr A-F a-f)
+        bridge="00:00.0 Class $(printf '%04x' $((0x${class:-0} >> 8))): $vendor:"
+    fi
     has "lspci, from /sys" "$(lspci 2>&1)" "$bridge"
 }
 
