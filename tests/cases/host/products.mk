@@ -14,7 +14,7 @@ PRODUCT_FAMILY = $(filter-out tests/cases/host/family_scenario.c,\
 PRODUCT_PROGRAMS = host-flow-check host-build-check host-family-check drive stageimage.krffs mkfs.krffs \
     setidcheck sha256 etude etude-volume host host-suite-probe doom_libc-i686 doom_libc-x86_64 \
     growset growboot growroot growroot-memory reflash diskctl bootctl mkfatfixture \
-    readfile.krffs binfind pty-secret
+    readfile.krffs binfind pty-secret image-fixture
 
 .PHONY: all
 all: $(addprefix $(PREFIX)/,$(PRODUCT_PROGRAMS))
@@ -29,6 +29,9 @@ $(PREFIX)/host-family-check: $(PRODUCT_FAMILY)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/drive: tests/cases/host/host_products_drive.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/image-fixture: tests/cases/host/image_fixture.c tests/cases/host/fixture.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/stageimage.krffs: $(PRODUCT_KRFFS) krffs/krffs_allocator.c krffs/stageimage.krffs.c

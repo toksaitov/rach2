@@ -155,3 +155,7 @@ The first Codex recovery check found no manager progress record. The coordinatin
 At 19:35 on 23 October, the coordinating check found six new files from a resumed Codex helper in the coordinating checkout. The helper had relied on the shell tool's default directory after resuming its task. No existing file was overwritten, staged or committed. The helper moved only its six files to its own worktree and checked its branch. Every helper shell call now supplies its worktree directory explicitly.
 
 The same check found the scheduled integration of the remaining flow controllers incomplete: two controllers still needed conversion after the completed batches had been imported. Their worker kept those two tasks; the idle worker took the independent grow and image cases. Long checks remained deferred until the implementation batch was complete, as the owner requested.
+
+## Image fixture control remained in shell commands
+
+The portable dependency audit found that the C image controllers still sent shell commands to their GNU helper for fixture creation, file inspection and cleanup. The earlier conversion changed the controller language without removing all shell control flow. Those operations must use a compiled fixture with explicit arguments. Only the product scripts whose behavior the assertions test may run as shell programs. The audit now distinguishes a tested program from fixture control at each execution call, including calls inside a declared helper. The repair precedes the combined check.

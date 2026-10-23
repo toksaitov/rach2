@@ -4,9 +4,8 @@
 #include <string.h>
 #include "host_image.h"
 
-char *image_command(struct image_check *t, const char *command, int *status)
+char *image_command(struct image_check *t, const char *const argv[], int *status)
 {
-    const char *argv[] = {"/bin/sh", "-c", command, NULL};
     struct net_run r;
     char evidence[128];
     char *out;
@@ -22,16 +21,43 @@ char *image_command(struct image_check *t, const char *command, int *status)
     return out != NULL ? out : strdup("");
 }
 
-int image_expect(struct image_check *t, const char *command, const char *expected)
+int image_expect(struct image_check *t, const char *const argv[], const char *expected)
 {
     int status, ok;
-    char *out = image_command(t, command, &status);
+    char *out = image_command(t, argv, &status);
     ok = status == 0 && out != NULL && strcmp(out, expected) == 0;
     if (!ok)
         fprintf(stderr, "%s: command status %d, output: %s\n", t->id, status,
                 out != NULL ? out : "(unavailable)");
     free(out);
     return ok;
+}
+
+int image_directory(struct image_check *t, const char *relative, int reset)
+{
+    char path[1024];
+    const char *argv[] = {IMAGE_FIXTURE, reset ? "reset" : "mkdir", path, NULL};
+    if (snprintf(path, sizeof(path), "%s/%s", t->dir, relative) >= (int)sizeof(path))
+        return 0;
+    return image_expect(t, argv, "");
+}
+
+int image_copy(struct image_check *t, const char *source, const char *relative)
+{
+    char path[1024];
+    const char *argv[] = {IMAGE_FIXTURE, "copy", source, path, NULL};
+    if (snprintf(path, sizeof(path), "%s/%s", t->dir, relative) >= (int)sizeof(path))
+        return 0;
+    return image_expect(t, argv, "");
+}
+
+int image_link(struct image_check *t, const char *source, const char *relative)
+{
+    char path[1024];
+    const char *argv[] = {IMAGE_FIXTURE, "link", source, path, NULL};
+    if (snprintf(path, sizeof(path), "%s/%s", t->dir, relative) >= (int)sizeof(path))
+        return 0;
+    return image_expect(t, argv, "");
 }
 
 int image_put(struct image_check *t, const char *relative, const void *bytes, size_t size,
@@ -92,7 +118,6 @@ int host_image_check(struct etude_case *c, struct etude_case_machine *products,
     struct image_check t;
     const char *argv[4];
     struct etude_guest_result r;
-    char command[512];
     int ok;
     memset(&t, 0, sizeof(t));
     t.u.c = c;
@@ -102,9 +127,12 @@ int host_image_check(struct etude_case *c, struct etude_case_machine *products,
         strcmp(assertion, "install_accounts") && strcmp(assertion, "tooling_image") &&
         strcmp(assertion, "collection_tools"))
         return 0;
-    snprintf(t.dir, sizeof(t.dir), "/tmp/etude-image-%s", assertion);
-    snprintf(command, sizeof(command), "mkdir -m 700 %s", t.dir);
-    ok = image_expect(&t, command, "");
+    snprintf(t.dir, sizeof(t.dir), "/host-work/etude-image-%s", assertion);
+    argv[0] = IMAGE_FIXTURE;
+    argv[1] = "mkdir";
+    argv[2] = t.dir;
+    argv[3] = NULL;
+    ok = image_expect(&t, argv, "");
     if (!ok)
         goto cleanup;
     if (strcmp(assertion, "install_accounts") == 0)
@@ -118,10 +146,9 @@ int host_image_check(struct etude_case *c, struct etude_case_machine *products,
     else
         ok = image_collection(&t);
 cleanup:
-    snprintf(command, sizeof(command), "rm -rf %s && test ! -e %s", t.dir, t.dir);
-    argv[0] = "/bin/sh";
-    argv[1] = "-c";
-    argv[2] = command;
+    argv[0] = IMAGE_FIXTURE;
+    argv[1] = "remove";
+    argv[2] = t.dir;
     argv[3] = NULL;
     if (etude_guest_command(products, argv, NULL, NULL, "image-check-cleanup", &r) != ETUDE_OK ||
         r.termination.end != ETUDE_END_EXITED || r.termination.value != 0 ||

@@ -269,41 +269,44 @@ static void magic(struct image_check *t, const char *file)
 /** The real build script must not publish a partially staged replacement. */
 static int replacement(struct image_check *t)
 {
-    char command[4096], *before, *after;
+    char disk[1024], old[1024], bad[1024], script[1024], directory[1024];
+    char *before, *after;
     int status, ok;
-    snprintf(command, sizeof(command), "mkdir -p %s/tree/krffs %s/tree/build/krffs %s/out", t->dir,
-             t->dir, t->dir);
-    ok = image_expect(t, command, "") &&
-         image_source(t, "krffs/mkimage.sh", "tree/krffs/mkimage.sh");
-    snprintf(
-        command, sizeof(command),
-        "cp /host-products/mkfs.krffs /host-products/stageimage.krffs %s/tree/build/krffs/; "
-        "truncate -s 1048576 %s/out/image.krffs && /host-products/mkfs.krffs %s/out/image.krffs",
-        t->dir, t->dir, t->dir);
-    before = image_command(t, command, &status);
-    free(before);
+    const char *truncate[] = {IMAGE_FIXTURE, "truncate", disk, "1048576", NULL};
+    const char *mkfs[] = {"/host-products/mkfs.krffs", disk, NULL};
+    const char *stage[] = {"/host-products/stageimage.krffs", old, disk, NULL};
+    const char *hash[] = {"/host-products/sha256", disk, NULL};
+    const char *build[] = {"/bin/sh", script, bad, disk, "1", NULL};
+    const char *list[] = {IMAGE_FIXTURE, "list", directory, NULL};
+    ok = image_directory(t, "tree/krffs", 0) && image_directory(t, "tree/build/krffs", 0) &&
+         image_directory(t, "out", 0) &&
+         image_source(t, "krffs/mkimage.sh", "tree/krffs/mkimage.sh") &&
+         image_copy(t, "/host-products/mkfs.krffs", "tree/build/krffs/mkfs.krffs") &&
+         image_copy(t, "/host-products/stageimage.krffs", "tree/build/krffs/stageimage.krffs");
+    snprintf(disk, sizeof(disk), "%s/out/image.krffs", t->dir);
+    snprintf(old, sizeof(old), "%s/old.manifest", t->dir);
+    snprintf(bad, sizeof(bad), "%s/bad.manifest", t->dir);
+    snprintf(script, sizeof(script), "%s/tree/krffs/mkimage.sh", t->dir);
+    snprintf(directory, sizeof(directory), "%s/out", t->dir);
+    ok = ok && image_expect(t, truncate, "");
+    after = image_command(t, mkfs, &status);
+    free(after);
     ok = ok && status == 0 && image_text(t, "old.manifest", "text 0644 /old.txt previous\n") &&
          image_text(t, "bad.manifest",
                     "text 0644 /new.txt next\nfile 0644 /missing.bin /not-present\n");
-    snprintf(command, sizeof(command),
-             "/host-products/stageimage.krffs %s/old.manifest %s/out/image.krffs >/dev/null; "
-             "/host-products/sha256 %s/out/image.krffs",
-             t->dir, t->dir, t->dir);
-    before = image_command(t, command, &status);
+    after = image_command(t, stage, &status);
+    free(after);
     ok = ok && status == 0;
-    snprintf(command, sizeof(command),
-             "/bin/sh %s/tree/krffs/mkimage.sh %s/bad.manifest %s/out/image.krffs 1", t->dir,
-             t->dir, t->dir);
-    after = image_command(t, command, &status);
+    before = image_command(t, hash, &status);
+    ok = ok && status == 0;
+    after = image_command(t, build, &status);
     free(after);
     ok = ok && status != 0;
-    snprintf(command, sizeof(command), "/host-products/sha256 %s/out/image.krffs", t->dir);
-    after = image_command(t, command, &status);
+    after = image_command(t, hash, &status);
     ok = ok && status == 0 && before && after && strcmp(before, after) == 0;
     free(before);
     free(after);
-    snprintf(command, sizeof(command), "ls -A %s/out", t->dir);
-    return ok && image_expect(t, command, "image.krffs\n");
+    return ok && image_expect(t, list, "image.krffs\n");
 }
 
 int image_krffs(struct image_check *t)

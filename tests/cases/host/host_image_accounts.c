@@ -46,11 +46,10 @@ static int account_files(struct image_check *t, const char *directory, const str
 {
     const char *values[] = {a->passwd, a->group, a->shadow};
     const char *names[] = {"passwd", "group", "shadow"};
-    char command[512], path[128];
+    char path[128];
     unsigned i;
-    snprintf(command, sizeof(command), "mkdir -p %s/%s/etc; rm -f %s/%s/etc/*", t->dir, directory,
-             t->dir, directory);
-    if (!image_expect(t, command, ""))
+    snprintf(path, sizeof(path), "%s/etc", directory);
+    if (!image_directory(t, path, 1))
         return 0;
     for (i = 0; i < 3; i++) {
         snprintf(path, sizeof(path), "%s/etc/%s", directory, names[i]);
@@ -63,22 +62,25 @@ static int account_files(struct image_check *t, const char *directory, const str
 /** Run only the extracted product operation; the controller judges its files. */
 static int keep(struct image_check *t)
 {
-    char command[1024];
-    snprintf(command, sizeof(command), ". %s/functions; keep_image_accounts %s/image %s/dest",
-             t->dir, t->dir, t->dir);
-    return image_expect(t, command, "");
+    char functions[1024], image_path[1024], dest[1024];
+    const char *argv[] = {"/bin/sh", functions, image_path, dest, NULL};
+    snprintf(functions, sizeof(functions), "%s/functions", t->dir);
+    snprintf(image_path, sizeof(image_path), "%s/image", t->dir);
+    snprintf(dest, sizeof(dest), "%s/dest", t->dir);
+    return image_expect(t, argv, "");
 }
 
 static int same_accounts(struct image_check *t, const struct accounts *want)
 {
     const char *values[] = {want->passwd, want->group, want->shadow};
     const char *names[] = {"passwd", "group", "shadow"};
-    char command[512];
+    char path[1024];
+    const char *argv[] = {IMAGE_FIXTURE, "read", path, NULL};
     unsigned i;
     int ok = 1;
     for (i = 0; i < 3; i++) {
-        snprintf(command, sizeof(command), "cat %s/dest/etc/%s", t->dir, names[i]);
-        if (!image_expect(t, command, values[i]))
+        snprintf(path, sizeof(path), "%s/dest/etc/%s", t->dir, names[i]);
+        if (!image_expect(t, argv, values[i]))
             ok = 0;
     }
     return ok;
@@ -102,8 +104,11 @@ static int source_functions(struct image_check *t)
     a = function(source, "add_lines");
     b = function(source, "keep_image_accounts");
     both = a != NULL && b != NULL ? append(a, b) : NULL;
-    if (both != NULL)
-        ok = image_text(t, "functions", both);
+    if (both != NULL) {
+        char *program = append(both, "\nkeep_image_accounts \"$1\" \"$2\"\n");
+        ok = program != NULL && image_text(t, "functions", program);
+        free(program);
+    }
     free(a);
     free(b);
     free(both);

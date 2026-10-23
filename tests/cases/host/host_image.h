@@ -16,8 +16,12 @@ struct image_check {
     char dir[160];
     unsigned commands, inputs, failed;
 };
-char *image_command(struct image_check *t, const char *command, int *status);
-int image_expect(struct image_check *t, const char *command, const char *expected);
+char *image_command(struct image_check *t, const char *const argv[], int *status);
+int image_expect(struct image_check *t, const char *const argv[], const char *expected);
+int image_directory(struct image_check *t, const char *relative, int reset);
+int image_copy(struct image_check *t, const char *source, const char *relative);
+int image_link(struct image_check *t, const char *source, const char *relative);
+#define IMAGE_FIXTURE "/host-products/image-fixture"
 int image_put(struct image_check *t, const char *relative, const void *bytes, size_t size,
               const char *mode);
 int image_text(struct image_check *t, const char *relative, const char *text);

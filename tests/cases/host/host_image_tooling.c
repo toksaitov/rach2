@@ -6,25 +6,28 @@
 
 static int prepare(struct image_check *t)
 {
-    char command[4096];
-    snprintf(command, sizeof(command),
-             "mkdir -p %s/tree/vendor/gnu %s/tree/mk %s/tree/krffs %s/tree/src %s/tree/bin "
-             "%s/tree/build/tools/etude %s/tree/build/tools/verify %s/tree/fix",
-             t->dir, t->dir, t->dir, t->dir, t->dir, t->dir, t->dir, t->dir);
-    if (!image_expect(t, command, "") ||
-        !image_source(t, "vendor/gnu/tooling_image.sh", "tree/vendor/gnu/tooling_image.sh") ||
+    static const char *const dirs[] = {"tree/vendor/gnu",
+                                       "tree/mk",
+                                       "tree/krffs",
+                                       "tree/src",
+                                       "tree/bin",
+                                       "tree/build/tools/etude",
+                                       "tree/build/tools/verify",
+                                       "tree/fix"};
+    unsigned i;
+    for (i = 0; i < sizeof(dirs) / sizeof(dirs[0]); i++)
+        if (!image_directory(t, dirs[i], 0))
+            return 0;
+    if (!image_source(t, "vendor/gnu/tooling_image.sh", "tree/vendor/gnu/tooling_image.sh") ||
         !image_source(t, "vendor/gnu/arch.sh", "tree/vendor/gnu/arch.sh") ||
         !image_source(t, "mk/arch.sh", "tree/mk/arch.sh") ||
         !image_text(t, "tree/src/crypt.c", "char crypt;\n") ||
         !image_text(t, "tree/vendor/gnu/tooling_job.sh", "") ||
         !image_put(t, "tree/krffs/manifest_deps.sh", "#!/bin/sh\nexit 0\n", 17, "0755"))
         return 0;
-    snprintf(command, sizeof(command),
-             "set -e; ln -s /host-products/drive %s/tree/bin/git; ln -s /host-products/drive "
-             "%s/tree/build/tools/etude/etude; ln -s /host-products/drive "
-             "%s/tree/build/tools/verify/sha256",
-             t->dir, t->dir, t->dir);
-    return image_expect(t, command, "");
+    return image_link(t, "/host-products/drive", "tree/bin/git") &&
+           image_link(t, "/host-products/drive", "tree/build/tools/etude/etude") &&
+           image_link(t, "/host-products/drive", "tree/build/tools/verify/sha256");
 }
 
 int image_tooling(struct image_check *t)
@@ -32,7 +35,8 @@ int image_tooling(struct image_check *t)
     static const char *const rows[] = {"pass", "term",  "int",   "hup",
                                        "bare", "alone", "twice", "kill"};
     static const char *const shells[] = {"/bin/sh", "/bin/bash"};
-    char command[4096], label[160];
+    char tree[1024], label[160], removed[1024];
+    const char *remove[] = {IMAGE_FIXTURE, "remove", removed, NULL};
     unsigned shell, row;
     if (!prepare(t))
         return 0;
@@ -40,16 +44,15 @@ int image_tooling(struct image_check *t)
         for (row = 0; row < sizeof(rows) / sizeof(rows[0]); row++) {
             int status;
             char *out;
-            snprintf(
-                command, sizeof(command),
-                "set -e; rm -rf %s/tree/build/vendor %s/tree/build/tooling %s/tree/build/images; "
-                "mkdir -p %s/tree/build/tooling",
-                t->dir, t->dir, t->dir, t->dir);
-            if (!image_expect(t, command, ""))
+            const char *argv[] = {"/host-products/drive", tree, shells[shell], rows[row], NULL};
+            snprintf(removed, sizeof(removed), "%s/tree/build/vendor", t->dir);
+            if (!image_expect(t, remove, ""))
                 return 0;
-            snprintf(command, sizeof(command), "/host-products/drive %s/tree %s %s", t->dir,
-                     shells[shell], rows[row]);
-            out = image_command(t, command, &status);
+            snprintf(removed, sizeof(removed), "%s/tree/build/images", t->dir);
+            if (!image_expect(t, remove, "") || !image_directory(t, "tree/build/tooling", 1))
+                return 0;
+            snprintf(tree, sizeof(tree), "%s/tree", t->dir);
+            out = image_command(t, argv, &status);
             free(out);
             snprintf(
                 label, sizeof(label),
