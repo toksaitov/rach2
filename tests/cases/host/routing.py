@@ -7,7 +7,7 @@ from pathlib import Path
 # These tests launch the collection host's QEMU and must stay there.
 BOOTS = {'etude_qemu', 'etude_scenario', 'etude_watchdog', 'etude_legacyset'}
 # Independent filesystem and archive implementations run on the GNU helper.
-PRODUCTS = {'ext2', 'fat32', 'etude_volume', 'etude_compare'}
+PRODUCTS = {'ext2', 'fat32', 'etude_volume', 'etude_compare', 'etude_step'}
 
 
 def windows_host():
