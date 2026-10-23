@@ -776,7 +776,7 @@ The statistics are those of `median-mad-v1`. The median of an even count is the 
 
 [`compare_report.c`](compare_report.c) writes the report: the verdict and its reason; the medians, deviations and bands of both sides; the commits the baseline tested, the newest of them and the candidate's, and the commits in between; each step of the candidate compared with the same step of the baseline's attempts, so that a slower boot shows apart from a slower execution; the processor time of the tree and the time queued on both sides, apart from the elapsed time; each sample with its commit, end and time, and each one left out with its reason; the candidate's source, runner and artifacts by digest; and the commands of the plan's reproduce blob, which run the item again and under a profiler. [`compare_run.c`](compare_run.c) runs the command and builds the comparison records, which the history store validates before it writes them.
 
-A blob of the store is named by the SHA-256 of its bytes. `cmp_store` of [`compare_report.c`](compare_report.c), which the repetition driver uses too, writes the bytes to a partial file of its own process, synchronizes it and renames it to that name, so that a write cut short, as on a full disk, leaves nothing under the name, and a file found there with other bytes is replaced.
+A blob of the store is named by the SHA-256 of its bytes. `cmp_store` of [`compare.c`](compare.c), which the repetition driver uses too, writes the bytes to a partial file of its own process, synchronizes it and renames it to that name, so that a write cut short, as on a full disk, leaves nothing under the name, and a file found there with other bytes is replaced.
 
 ### The POSIX executor
 

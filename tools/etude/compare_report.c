@@ -5,73 +5,18 @@
 #endif
 #include "compare.h"
 #include "../../utils/sha256.h"
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#include <process.h>
 #define popen  _popen
 #define pclose _pclose
-#define getpid _getpid
 #define QUIET  "2>NUL"
 #else
-#include <unistd.h>
 #define QUIET "2>/dev/null"
 #endif
 
 #define CMP_LISTED 200 /* the commits listed before the rest are counted */
-
-/** Append formatted text, growing the buffer. */
-void cmp_printf(struct cmp_text *t, const char *format, ...)
-{
-    va_list arguments;
-    int length;
-    va_start(arguments, format);
-    length = vsnprintf(NULL, 0, format, arguments);
-    va_end(arguments);
-    if (t->failed || length < 0) {
-        t->failed = 1;
-        return;
-    }
-    if (t->length + (size_t)length + 1 > t->capacity) {
-        size_t capacity = 2 * (t->length + (size_t)length + 1);
-        char *data = realloc(t->data, capacity);
-        if (!data) {
-            t->failed = 1;
-            return;
-        }
-        t->data = data;
-        t->capacity = capacity;
-    }
-    va_start(arguments, format);
-    vsnprintf(t->data + t->length, t->capacity - t->length, format, arguments);
-    va_end(arguments);
-    t->length += (size_t)length;
-}
-
-/** Read a whole file of at most limit bytes; return -1 if it cannot be. */
-int cmp_read_file(const char *path, size_t limit, char **bytes, size_t *length)
-{
-    FILE *file = fopen(path, "rb");
-    char *data;
-    size_t got;
-    *bytes = NULL;
-    if (!file)
-        return -1;
-    data = malloc(limit + 1);
-    got = data ? fread(data, 1, limit + 1, file) : 0;
-    if (!data || ferror(file) || got > limit) {
-        fclose(file);
-        free(data);
-        return -1;
-    }
-    fclose(file);
-    data[got] = 0;
-    *bytes = data;
-    *length = got;
-    return 0;
-}
 
 /** Return whether a blob file has exactly the bytes its digest names. */
 static int matches(const char *bytes, size_t length, const char *hex)
@@ -84,62 +29,6 @@ static int matches(const char *bytes, size_t length, const char *hex)
     sha256_final(&sha, digest);
     sha256_hex(digest, actual);
     return !strcmp(actual, hex);
-}
-
-/** Say whether the file `path` has exactly the `length` bytes `bytes`. */
-static int holds(const char *path, const char *bytes, size_t length)
-{
-    char *old;
-    size_t old_length;
-    int same;
-    if (cmp_read_file(path, length, &old, &old_length))
-        return 0;
-    same = old_length == length && !memcmp(old, bytes, length);
-    free(old);
-    return same;
-}
-
-/**
- * Keep bytes in the store as a file named by their SHA-256, unless the store
- * has them already; give the file's path and the digest. The bytes go to a
- * partial file of this process's, which is synchronized and renamed to the
- * name, so that a write cut short, as on a full disk, leaves nothing under
- * the name, and a file there with other bytes is replaced. Return -1 when the
- * file cannot be written.
- */
-int cmp_store(const char *store, const char *bytes, size_t length, char *path, size_t size,
-              char hex[65])
-{
-    static unsigned long made;
-    struct sha256 sha;
-    unsigned char digest[32];
-    char part[4200];
-    FILE *file;
-    int ok;
-    sha256_init(&sha);
-    sha256_update(&sha, (const unsigned char *)bytes, length);
-    sha256_final(&sha, digest);
-    sha256_hex(digest, hex);
-    if ((size_t)snprintf(path, size, "%s/%s", store, hex) >= size ||
-        (size_t)snprintf(part, sizeof(part), "%s.%ld.%lu.part", path, (long)getpid(), made++) >=
-            sizeof(part))
-        return -1;
-    if (holds(path, bytes, length))
-        return 0;
-    file = fopen(part, "wb");
-    if (!file)
-        return -1;
-    ok = fwrite(bytes, 1, length, file) == length && fflush(file) == 0;
-#ifndef _WIN32
-    ok = ok && fsync(fileno(file)) == 0;
-#endif
-    ok = fclose(file) == 0 && ok;
-    /* The C runtime of Windows renames to no name that exists. */
-    if (ok && rename(part, path) != 0)
-        ok = remove(path) == 0 && rename(part, path) == 0;
-    if (!ok)
-        remove(part);
-    return ok || holds(path, bytes, length) ? 0 : -1;
 }
 
 /** Write a word for a shell, quoted when it has a character the shell reads. */
