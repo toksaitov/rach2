@@ -4,118 +4,6 @@
   "summary": "Every guest probe of tests/, each in a boot of its own on the test image: as a child of etude-guest where it can be one, and otherwise run by the scenario tests/cases/machine/default_scenario.c from the debug shell as its transient init; and the kernel's record of its clock check at boot",
   "cases": [
     {
-      "case_id": "guest.default.hello",
-      "behavior": "A freestanding program started by exec writes a line to its standard output with one call",
-      "units": ["default", "hello"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "hello", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing to remove"},
-      "assertions": [
-        {"assertion_id": "write", "checks": "write puts every byte of the line on the standard output", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "hello", "node": "tests/hello", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
-    },
-    {
-      "case_id": "guest.default.filetest",
-      "behavior": "A file opened by its path reads and closes through the open, read and close system calls.",
-      "units": ["default", "filetest"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": ["hello=/hello.txt"], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "filetest", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "open", "checks": "open of the file named by `hello` returns a descriptor", "source": "program"},
-        {"assertion_id": "read", "checks": "read of that descriptor succeeds", "source": "program"},
-        {"assertion_id": "close", "checks": "close of the descriptor returns 0", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "filetest", "node": "tests/filetest", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "hello.txt", "node": "tests/native/hello.txt", "per_architecture": false}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "stage", "names": ["hello.txt"]}]}
-    },
-    {
-      "case_id": "guest.default.forktest",
-      "behavior": "fork makes a child that sees 0 and exits with a known status, and the parent's waitpid returns that child and its status.",
-      "units": ["default", "forktest"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "forktest", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "fork", "checks": "fork returns a positive pid in the parent", "source": "program"},
-        {"assertion_id": "waitpid", "checks": "waitpid of that pid returns the pid", "source": "program"},
-        {"assertion_id": "exit-status", "checks": "the status waitpid gives says the child exited normally with status 42", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "forktest", "node": "tests/forktest", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
-    },
-    {
-      "case_id": "guest.default.shelltest",
-      "behavior": "A shell's fork, exec and waitpid run a program: the child execs /hello and the parent reaps it with status 0.",
-      "units": ["default", "shelltest"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "shelltest", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "fork", "checks": "fork returns a child.", "source": "program"},
-        {"assertion_id": "wait", "checks": "waitpid returns the child without error.", "source": "program"},
-        {"assertion_id": "exit-zero", "checks": "The child's wait status is 0: execve of /hello ran it, and it exited 0.", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "shelltest", "node": "tests/shelltest", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
-        {"name": "hello", "node": "tests/hello", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "stage", "names": ["hello"]}]}
-    },
-    {
       "case_id": "guest.default.dirtest",
       "behavior": "getcwd reports the working directory, and chdir moves it to the root by \"/\", \".\" and \"..\", and refuses a missing name and a plain file.",
       "units": ["default", "dirtest"],
@@ -130,7 +18,7 @@
         {"assertion_id": "chdir-root", "checks": "chdir(\"/\") succeeds", "source": "program"},
         {"assertion_id": "chdir-dotdot", "checks": "chdir(\"..\") at the root succeeds", "source": "program"},
         {"assertion_id": "getcwd-root", "checks": "getcwd after the three chdirs returns \"/\"", "source": "program"},
-        {"assertion_id": "missing", "checks": "chdir of a missing name fails", "source": "program"},
+        {"assertion_id": "missing", "checks": "chdir of a missing name fails with ENOENT", "source": "program"},
         {"assertion_id": "enotdir", "checks": "chdir(\"hello.txt\") from the root fails with ENOTDIR", "source": "program"}
       ],
       "branches": [],
@@ -158,13 +46,13 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
       "execution": {"program": "stattest", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
-        {"assertion_id": "wide-file", "checks": "stat64 on i686, or stat on x86-64, of the existing file succeeds; the type is printed and not judged", "source": "program"},
-        {"assertion_id": "wide-root", "checks": "the same call on / succeeds; the type is printed and not judged", "source": "program"},
-        {"assertion_id": "wide-missing", "checks": "the same call on a missing path fails", "source": "program"},
-        {"assertion_id": "old-file", "checks": "the old stat (106) of the existing file succeeds", "source": "program"},
-        {"assertion_id": "old-root", "checks": "the old stat of / succeeds", "source": "program"},
-        {"assertion_id": "old-missing", "checks": "the old stat of a missing path fails", "source": "program"},
-        {"assertion_id": "old-absolute-file", "checks": "the old stat of /hello.txt succeeds", "source": "program"},
+        {"assertion_id": "wide-file", "checks": "stat64 on i686, or stat on x86-64, of /hello.txt gives a regular file of 13 bytes", "source": "program"},
+        {"assertion_id": "wide-root", "checks": "the same call on / gives a directory", "source": "program"},
+        {"assertion_id": "wide-missing", "checks": "the same call on a missing path fails with ENOENT", "source": "program"},
+        {"assertion_id": "old-file", "checks": "the old stat (106) of /hello.txt gives a regular file of 13 bytes", "source": "program"},
+        {"assertion_id": "old-root", "checks": "the old stat of / gives a directory", "source": "program"},
+        {"assertion_id": "old-missing", "checks": "the old stat of a missing path fails with ENOENT", "source": "program"},
+        {"assertion_id": "old-absolute-file", "checks": "the old stat of /hello.txt, named from the root, gives a regular file of 13 bytes", "source": "program"},
         {"assertion_id": "same-name-inodes", "checks": "two files of one name in two directories have different inode numbers", "source": "program"},
         {"assertion_id": "root-fixture", "checks": "the directory /statroot is made for the root rows", "source": "program"},
         {"assertion_id": "root-inode-slash", "checks": "stat64 of /, and on i686 the old stat too, reports inode 1, a directory", "source": "program"},
@@ -192,41 +80,6 @@
       ],
       "timing": [],
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "krffs"}]}
-    },
-    {
-      "case_id": "guest.default.touchtest",
-      "behavior": "creat makes and reopens files, utimensat sets a file's times now or to given values and refuses a missing name, and unlink removes the files, as touch and rm use them.",
-      "units": ["default", "touchtest"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "touchtest", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "creat", "checks": "Test 1: creat makes touchtest.tmp.", "source": "program"},
-        {"assertion_id": "open-created", "checks": "Test 2: open finds touchtest.tmp.", "source": "program"},
-        {"assertion_id": "creat-existing", "checks": "Test 3: creat of the existing touchtest.tmp succeeds.", "source": "program"},
-        {"assertion_id": "creat-second", "checks": "Test 4: creat makes touchtest2.tmp.", "source": "program"},
-        {"assertion_id": "utimensat-now", "checks": "Test 5: utimensat of touchtest.tmp with NULL times returns 0.", "source": "program"},
-        {"assertion_id": "utimensat-times", "checks": "Test 6: utimensat of touchtest.tmp with the times 1234 and 5678 returns 0.", "source": "program"},
-        {"assertion_id": "utimensat-missing", "checks": "Test 7: utimensat of a missing name fails.", "source": "program"},
-        {"assertion_id": "unlink", "checks": "Test 8: unlink removes touchtest.tmp.", "source": "program"},
-        {"assertion_id": "open-unlinked", "checks": "Test 9: open of touchtest.tmp then fails.", "source": "program"},
-        {"assertion_id": "unlink-second", "checks": "Test 10: unlink removes touchtest2.tmp.", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "touchtest", "node": "tests/touchtest", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
       "case_id": "guest.default.rmtest",
@@ -313,7 +166,7 @@
         {"assertion_id": "entries", "checks": "Test 4: the records read are walked, none has a length of 0, and there is at least one.", "source": "program"},
         {"assertion_id": "read-again", "checks": "Test 5: a second read gives the end or more entries, and does not fail.", "source": "program"},
         {"assertion_id": "count-zero-end", "checks": "Test 6: once reads reach the end, a read of 0 bytes gives 0.", "source": "program"},
-        {"assertion_id": "bad-fd", "checks": "Test 7: a read of descriptor 999, which is not open, fails.", "source": "program"},
+        {"assertion_id": "bad-fd", "checks": "Test 7: a read of descriptor 999, which is not open, fails with EBADF.", "source": "program"},
         {"assertion_id": "close", "checks": "Test 8: the directory's descriptor closes.", "source": "program"}
       ],
       "branches": [],
@@ -344,8 +197,8 @@
         {"assertion_id": "redirect", "checks": "dup2test.tmp is created, dup2 puts it on descriptor 1, and a write through descriptor 1 is whole", "source": "program"},
         {"assertion_id": "restore", "checks": "dup2(2, 1) returns 1", "source": "program"},
         {"assertion_id": "content", "checks": "dup2test.tmp opens and reads back the bytes written through descriptor 1", "source": "program"},
-        {"assertion_id": "bad-oldfd", "checks": "dup2(99, 5) fails", "source": "program"},
-        {"assertion_id": "bad-newfd", "checks": "dup2(1, 2000), past the 1024-descriptor table, fails", "source": "program"}
+        {"assertion_id": "bad-oldfd", "checks": "dup2(99, 5) fails with EBADF", "source": "program"},
+        {"assertion_id": "bad-newfd", "checks": "dup2(1, 2000), past the 1024-descriptor table, fails with EBADF", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -585,36 +438,6 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
-      "case_id": "guest.default.cowprobe",
-      "behavior": "A page written before fork is shared with the child, split on the first write, and freed when its last owner exits.",
-      "units": ["default", "cowprobe"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "cowprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "share", "checks": "The fork succeeds, and the child sees the value written before it, writes its own, and exits cleanly.", "source": "program"},
-        {"assertion_id": "isolation", "checks": "The parent's copy of the page is unchanged by the child's write.", "source": "program"},
-        {"assertion_id": "parent-write", "checks": "The parent's own write to the page then sticks.", "source": "program"},
-        {"assertion_id": "cycles", "checks": "64 cycles of fork, split and reap neither fail fork with the frames exhausted nor fail waitpid.", "source": "program"},
-        {"assertion_id": "memfree", "checks": "MemFree in /proc/meminfo can be read, and does not fall by more than the slack across the 64 cycles.", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "cowprobe", "node": "tests/cowprobe", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
-    },
-    {
       "case_id": "guest.default.cowregrant",
       "behavior": "Over 200 fork cycles, the copy-on-write fault that gives a sole owner its frame back leaks no frame and gives no frame that is still shared.",
       "units": ["default", "cowregrant"],
@@ -663,33 +486,6 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "usercopyfault", "node": "tests/usercopyfault", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
-    },
-    {
-      "case_id": "guest.default.forkleak",
-      "behavior": "Fork, exit and wait cycles do not leak the kernel memory a process takes.",
-      "units": ["default", "forkleak"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "forkleak", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "fork-reap", "checks": "every fork and waitpid of the warm-up and the 120 cycles succeeds", "source": "program"},
-        {"assertion_id": "free-memory", "checks": "sysinfo reads before and after the cycles, and the free memory does not fall by more than 64 KiB", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "forkleak", "node": "tests/forkleak", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
@@ -3216,7 +3012,7 @@
         {"assertion_id": "dgram-truncate", "checks": "A datagram longer than the buffers stops at their end.", "source": "program"},
         {"assertion_id": "dgram-truncated-bytes", "checks": "The truncated datagram's bytes are its first ones.", "source": "program"},
         {"assertion_id": "dgram-send-alias", "checks": "A datagram is sent for a buffer that aliases the vector list.", "source": "program"},
-        {"assertion_id": "dgram-alias", "checks": "A readv whose buffer aliases its vector list fills at least the first buffer.", "source": "program"},
+        {"assertion_id": "dgram-alias", "checks": "A readv whose buffer aliases its vector list returns the first buffer and the forged descriptor it wrote, and stops at the forged address.", "source": "program"},
         {"assertion_id": "dgram-send-3", "checks": "A third datagram is sent.", "source": "program"},
         {"assertion_id": "dgram-next", "checks": "A read after a truncated datagram returns the next message.", "source": "program"},
         {"assertion_id": "pty-master", "checks": "A pty master opens.", "source": "program"},
@@ -3242,34 +3038,6 @@
       ],
       "timing": [],
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "root", "type": "ext2-dir"}]}
-    },
-    {
-      "case_id": "guest.default.timemusl",
-      "behavior": "A sleep of 120 ms advances CLOCK_MONOTONIC by at least 100 ms, and two getrandom draws succeed and differ.",
-      "units": ["default", "musl/timemusl"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "timemusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
-      "assertions": [
-        {"assertion_id": "sleep", "checks": "clock_gettime of CLOCK_MONOTONIC works before and after a nanosleep of 120 ms, and the clock advances by at least 100 ms across it.", "source": "program"},
-        {"assertion_id": "getrandom", "checks": "Two getrandom calls each return the 16 bytes asked for.", "source": "program"},
-        {"assertion_id": "getrandom-differ", "checks": "The two 16-byte draws of getrandom differ.", "source": "program"}
-      ],
-      "branches": [],
-      "termination": {"end": "exited", "value": 0},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "timemusl", "node": "tests/musl/timemusl", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
       "case_id": "guest.default.clockmusl",

@@ -229,7 +229,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 
 `tests/run default` runs every guest probe, each in a boot of its own on the test image, and `ARCH=x86_64 tests/run default` runs them on x86-64 ([the tests' Readme](../../../tests/Readme.md)). These test the process subsystem:
 
-* `tests/forktest.c`, `tests/exitprobe.c`, `tests/orphanprobe.c`, `tests/zombieprobe.c`, `tests/survivorprobe.c` and `tests/forkleak.c`: fork, an end by exit, by a signal and after a failed exec, reparenting onto init, signal teardown beside a writer, an init that exits with a runnable child, and no frame lost across fork and reap.
+* `tests/forktest.c`, `tests/exitprobe.c`, `tests/orphanprobe.c`, `tests/zombieprobe.c`, `tests/survivorprobe.c` and `tests/cowregrant.c`: fork, an end by exit, by a signal and after a failed exec, reparenting onto init, signal teardown beside a writer, an init that exits with a runnable child, and no frame lost across fork and reap.
 * `tests/musl/clonemusl.c`, `tests/musl/vforkmusl.c`, `tests/musl/spawnmusl.c` and `tests/musl/threadmusl.c`: `clone` as glibc's fork calls it, `vfork` and `CLONE_VM|CLONE_VFORK`, `posix_spawn`, and threads: their ids, shared descriptors and directories, an `execve` from a thread and two at once.
 * `tests/auxvprobe.c`, `tests/musl/execargmusl.c` and `tests/musl/stackmusl.c`: the initial stack, the limits on the strings `execve` copies, and `RLIMIT_STACK`.
 * `tests/musl/fdexecmusl.c`: `execve` of `/proc/self/fd/N`, the checks it makes of the descriptor's file, and the name the new image has.

@@ -5,7 +5,7 @@
  * buffer too, reads its entries, of which the root has some, walks the
  * linux_dirent64 records and prints each, reads again, which gives the end of
  * the directory or more entries, requires a read of 0 bytes at the end to
- * give 0, and requires a descriptor that is not open to fail.
+ * give 0, and requires a descriptor that is not open to fail with EBADF.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
  * otherwise. Writes etude's report records (probe_report.h) for the case
@@ -25,6 +25,7 @@ typedef long long int64_t;
 
 #define STDOUT_FILENO 1
 
+#define EBADF  9
 #define EINVAL 22
 
 /* Open flags */
@@ -297,9 +298,10 @@ static void read_rest(int fd, char *buf, int size)
     verdict(COUNT_ZERO_END, nread == 0 && sys_getdents64(fd, buf, 0) == 0,
             "a read of 0 bytes at the end did not give 0");
 
-    /* Test 7: getdents64 on a descriptor that is not open fails. */
+    /* Test 7: getdents64 on a descriptor that is not open fails with EBADF. */
     print("Test 7: getdents64(999, ...)... ");
-    verdict(BAD_FD, sys_getdents64(999, buf, size) < 0, "a read of descriptor 999 succeeded");
+    verdict(BAD_FD, sys_getdents64(999, buf, size) == -EBADF,
+            "a read of descriptor 999 did not fail with EBADF");
 }
 
 void probe_main(unsigned long *sp);

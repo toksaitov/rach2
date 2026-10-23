@@ -1,7 +1,7 @@
 /**
  * clockmusl: check that the real-time clock reports the date and advances.
  *
- * `timemusl` checks that `nanosleep` suspends a thread; this program checks
+ * `timeprobe` checks that `nanosleep` suspends a thread; this program checks
  * the date. Each of its three checks catches a different fault:
  *
  * The date is later than `NOT_BEFORE`. A machine that reports the time since

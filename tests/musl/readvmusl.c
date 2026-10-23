@@ -151,7 +151,7 @@ static const struct {
     {"dgram-truncate", "a datagram past the end of the buffers did not stop there"},
     {"dgram-truncated-bytes", "the truncated datagram has the wrong bytes"},
     {"dgram-send-alias", "could not send the aliasing datagram"},
-    {"dgram-alias", "the aliasing readv did not even fill the first buffer"},
+    {"dgram-alias", "the aliasing readv did not stop at the forged descriptor"},
     {"dgram-send-3", "could not send the third datagram"},
     {"dgram-next", "a read after a truncated datagram saw the wrong message"},
     {"pty-master", "could not open a pty master"},
@@ -444,7 +444,8 @@ static int check_stream(void)
  * descriptor of an address in the user window that no mapping backs (8 bytes
  * on i386, 16 on x86-64), then bytes for the kernel to put there. The call
  * must return, not fault in kernel mode, with what it copied before it
- * stopped.
+ * stopped: the first buffer and the forged descriptor, since the kernel reads
+ * each descriptor as it reaches it and stops at the address it cannot write.
  *
  * The socket is on loopback, so the case needs no network device.
  */
@@ -525,7 +526,6 @@ static int check_datagram(void)
         memcpy(payload, "AAAA", 4);
         memcpy(payload + 4, &forged, sizeof(forged));
         memcpy(payload + 4 + sizeof(forged), "BBBBCCCC", 8);
-
         if (sendto(fd, payload, sizeof(payload), 0, (struct sockaddr *)&me, sizeof(me)) !=
             (ssize_t)sizeof(payload)) {
             close(fd);
@@ -539,7 +539,8 @@ static int check_datagram(void)
         alias[2].iov_base = sink;
         alias[2].iov_len = sizeof(sink);
         got = readv(fd, alias, 3);
-        if (got < 4) {
+        if (got != (ssize_t)(4 + sizeof(struct iovec)) || memcmp(sink, "AAAA", 4) != 0 ||
+            memcmp(&alias[2], &forged, sizeof(forged)) != 0) {
             close(fd);
 
             return fail(DGRAM_ALIAS);

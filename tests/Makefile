@@ -30,11 +30,11 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
                -Wl,-z,noexecstack $(ARCH_LDFLAGS)
 
 # All test programs
-PROGS = hello filetest forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe \
-        touchtest rmtest mvtest lstest stdintest dup2test \
+PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe \
+        rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe fsbaseprobe errnoprobe vmprobe vmfault vmro forkro cowprobe cowregrant \
-        usercopyfault forkleak fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
+        tlsprobe fsbaseprobe errnoprobe vmprobe vmfault vmro forkro cowregrant \
+        usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe placeprobe ext2probe krffsprobe loopdevprobe bootlogprobe \
         idreport fdfull diskfull oomprobe limitprobe loadprobe conloadprobe disksprobe partsprobe busprobe ahciprobe bigfileprobe

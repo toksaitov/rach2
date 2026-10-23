@@ -2,7 +2,7 @@
  * dup2test: dup2 for redirection. It creates a file, puts it on stdout with
  * dup2, writes through stdout, then reads the file back and checks the
  * content. It also covers dup2(fd, fd) and the refusal of invalid
- * descriptors.
+ * descriptors with EBADF.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names, with the assertions `identity`, `redirect` (the file put on
@@ -24,6 +24,8 @@
 #define O_RDWR   2
 
 #define F_DUPFD 0
+
+#define EBADF 9
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -333,14 +335,14 @@ static void invalid_rows(void)
     puts_stderr("");
     print_stderr("Test 4: dup2(99, 5) with invalid oldfd... ");
     result = sys_dup2(99, 5);
-    if (result < 0) {
-        puts_stderr("OK (failed as expected)");
+    if (result == -EBADF) {
+        puts_stderr("OK (EBADF)");
         passed++;
     } else {
         print_stderr("FAILED (should have failed, got ");
         print_num_stderr(result);
         puts_stderr(")");
-        report_miss("dup2(99, 5) succeeded");
+        report_miss("dup2(99, 5) did not fail with EBADF");
         failed++;
     }
 
@@ -348,14 +350,14 @@ static void invalid_rows(void)
     begin_row();
     print_stderr("Test 5: dup2(1, 2000) with invalid newfd... ");
     result = sys_dup2(STDOUT_FILENO, 2000);
-    if (result < 0) {
-        puts_stderr("OK (failed as expected)");
+    if (result == -EBADF) {
+        puts_stderr("OK (EBADF)");
         passed++;
     } else {
         print_stderr("FAILED (should have failed, got ");
         print_num_stderr(result);
         puts_stderr(")");
-        report_miss("dup2(1, 2000) succeeded");
+        report_miss("dup2(1, 2000) did not fail with EBADF");
         failed++;
     }
 }

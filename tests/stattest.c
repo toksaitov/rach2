@@ -3,8 +3,9 @@
  * stat (4), the only one, on x86-64, where the rows of the old narrow struct
  * are not built.
  *
- * Each is asked about an existing file, the root directory and a path that
- * does not exist, so that the success and the failure path are both run.
+ * Each is asked about an existing file, `hello.txt`, which must be a regular
+ * file of 13 bytes, the root directory, which must be a directory, and a path
+ * that does not exist, which must fail with ENOENT.
  * Then two files of one name in two directories have different inode
  * numbers, the root is inode 1 by every call and through `..`, and the
  * modification times of back-to-back writes and stamps do not go back and
@@ -48,6 +49,11 @@ typedef unsigned long long ino64_t;
 #define STDOUT_FILENO 1
 
 #define AT_FDCWD (-100)
+
+#define ENOENT 2
+
+/* The size of hello.txt, "hello, world\n", in the test image and natively. */
+#define HELLO_SIZE 13
 
 /* File type bits from mode */
 #define S_IFMT  0170000
@@ -565,15 +571,14 @@ static void wide_rows(int *passed, int *failed)
         print(", nlink=");
         print_num(st64.st_nlink);
         puts("");
+    }
+    if (result == 0 && (st64.st_mode & S_IFMT) == S_IFREG && st64.st_size == HELLO_SIZE) {
         (*passed)++;
         report_pass("wide-file");
-
-        print("        type: ");
-        if ((st64.st_mode & S_IFMT) == S_IFREG) {
-            puts("regular file (OK)");
-        } else {
-            puts("not a regular file (unexpected)");
-        }
+    } else if (result == 0) {
+        puts("        FAILED (not a regular file of 13 bytes)");
+        (*failed)++;
+        report_fail("wide-file", "stat of hello.txt gave another type or size");
     } else {
         puts("FAILED");
         (*failed)++;
@@ -590,15 +595,14 @@ static void wide_rows(int *passed, int *failed)
         print(", nlink=");
         print_num(st64.st_nlink);
         puts("");
+    }
+    if (result == 0 && (st64.st_mode & S_IFMT) == S_IFDIR) {
         (*passed)++;
         report_pass("wide-root");
-
-        print("        type: ");
-        if ((st64.st_mode & S_IFMT) == S_IFDIR) {
-            puts("directory (OK)");
-        } else {
-            puts("not a directory (unexpected)");
-        }
+    } else if (result == 0) {
+        puts("        FAILED (not a directory)");
+        (*failed)++;
+        report_fail("wide-root", "stat of / gave a type other than a directory");
     } else {
         puts("FAILED");
         (*failed)++;
@@ -608,14 +612,14 @@ static void wide_rows(int *passed, int *failed)
     /* Test A3: stat64 nonexistent file */
     print("Test A3: stat64(\"nonexistent\")... ");
     result = sys_stat64("nonexistent", &st64);
-    if (result < 0) {
-        puts("OK (failed as expected)");
+    if (result == -ENOENT) {
+        puts("OK (ENOENT)");
         (*passed)++;
         report_pass("wide-missing");
     } else {
-        puts("FAILED (should have failed)");
+        puts("FAILED (not ENOENT)");
         (*failed)++;
-        report_fail("wide-missing", "stat of a missing path succeeded");
+        report_fail("wide-missing", "stat of a missing path did not fail with ENOENT");
     }
 
     puts("");
@@ -647,15 +651,14 @@ static void old_rows(int *passed, int *failed)
         print(", nlink=");
         print_num(st.st_nlink);
         puts("");
+    }
+    if (result == 0 && (st.st_mode & S_IFMT) == S_IFREG && st.st_size == HELLO_SIZE) {
         (*passed)++;
         report_pass("old-file");
-
-        print("        type: ");
-        if ((st.st_mode & S_IFMT) == S_IFREG) {
-            puts("regular file (OK)");
-        } else {
-            puts("not a regular file (unexpected)");
-        }
+    } else if (result == 0) {
+        puts("        FAILED (not a regular file of 13 bytes)");
+        (*failed)++;
+        report_fail("old-file", "stat of hello.txt gave another type or size");
     } else {
         puts("FAILED");
         (*failed)++;
@@ -672,15 +675,14 @@ static void old_rows(int *passed, int *failed)
         print(", nlink=");
         print_num(st.st_nlink);
         puts("");
+    }
+    if (result == 0 && (st.st_mode & S_IFMT) == S_IFDIR) {
         (*passed)++;
         report_pass("old-root");
-
-        print("        type: ");
-        if ((st.st_mode & S_IFMT) == S_IFDIR) {
-            puts("directory (OK)");
-        } else {
-            puts("not a directory (unexpected)");
-        }
+    } else if (result == 0) {
+        puts("        FAILED (not a directory)");
+        (*failed)++;
+        report_fail("old-root", "stat of / gave a type other than a directory");
     } else {
         puts("FAILED");
         (*failed)++;
@@ -690,14 +692,14 @@ static void old_rows(int *passed, int *failed)
     /* Test B3: stat nonexistent file */
     print("Test B3: stat(\"nonexistent\")... ");
     result = sys_stat("nonexistent", &st);
-    if (result < 0) {
-        puts("OK (failed as expected)");
+    if (result == -ENOENT) {
+        puts("OK (ENOENT)");
         (*passed)++;
         report_pass("old-missing");
     } else {
-        puts("FAILED (should have failed)");
+        puts("FAILED (not ENOENT)");
         (*failed)++;
-        report_fail("old-missing", "stat of a missing path succeeded");
+        report_fail("old-missing", "stat of a missing path did not fail with ENOENT");
     }
 
     /* Test B4: stat with leading slash */
@@ -710,8 +712,14 @@ static void old_rows(int *passed, int *failed)
         print(" bytes, nlink=");
         print_num(st.st_nlink);
         puts("");
+    }
+    if (result == 0 && (st.st_mode & S_IFMT) == S_IFREG && st.st_size == HELLO_SIZE) {
         (*passed)++;
         report_pass("old-absolute-file");
+    } else if (result == 0) {
+        puts("        FAILED (not a regular file of 13 bytes)");
+        (*failed)++;
+        report_fail("old-absolute-file", "stat of /hello.txt gave another type or size");
     } else {
         puts("FAILED");
         (*failed)++;

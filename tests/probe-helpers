@@ -1,5 +1,6 @@
 # The built programs that no suite runs as a probe, each with its caller or its
 # use. tools/verify/probecheck.sh reads this file.
+hello program that other probes, suites and host tests run or open
 idreport identity and environment fixture for account probes
 musl/budgetmusl manual resource budget diagnostic
 musl/catfile manual file reader

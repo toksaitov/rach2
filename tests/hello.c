@@ -1,16 +1,12 @@
 /**
- * Minimal ELF probe: prints "Hello from ELF!" and exits.
+ * Minimal ELF probe: prints "Hello from ELF!" and exits 0.
  *
- * Exercises the ELF loader and the write and exit syscalls. Writes etude's
- * report records (probe_report.h) for its own case, guest.default.hello, with
- * one assertion, `write`: the write of the line returned its length. Other
- * cases and tests run it as a plain program, so unless ETUDE_CASE names its
- * case it writes no records.
- * Freestanding; direct system calls (probe.h).
+ * Other probes, suites and host tests run it as a plain program or open its
+ * file: shelltest execs it, the exitline and etude-guest cases run it, and
+ * fdfull and limitprobe open it. Freestanding; direct system calls (probe.h).
  */
 
 #include "probe.h"
-#include "probe_report.h"
 
 #define STDOUT_FILENO 1
 
@@ -27,58 +23,16 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/** The length of the string `s`. */
-static size_t strlen(const char *s)
-{
-    size_t len = 0;
-    while (s[len]) {
-        len++;
-    }
-    return len;
-}
-
-/** Write `s` and a newline to standard output; 1 when each write wrote all
- * its bytes. */
-static int puts(const char *s)
-{
-    int n = (int)strlen(s);
-
-    return (sys_write(STDOUT_FILENO, s, n) == n) & (sys_write(STDOUT_FILENO, "\n", 1) == 1);
-}
-
-/** Say whether the strings `a` and `b` are the same. */
-static int same(const char *a, const char *b)
-{
-    while (*a != '\0' && *a == *b) {
-        a++;
-        b++;
-    }
-    return *a == *b;
-}
-
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/**
- * The program's entry, which `_start` calls with the initial stack: it reads
- * the environment for the case's identity, prints a fixed line and exits 0.
- */
+/** The program's entry, which `_start` calls with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char own[] = "guest.default.hello";
-    const char *id = report_case((char **)(sp + 1) + sp[0] + 1, own);
+    static const char line[] = "Hello from ELF!\n";
 
-    if (id == own || !same(id, own)) {
-        puts("Hello from ELF!");
-        sys_exit(0);
-    }
-    report_begin(id);
-    if (puts("Hello from ELF!")) {
-        report_pass("write");
-    } else {
-        report_fail("write", "the write of the line fell short");
-    }
-    report_end();
+    (void)sp;
+    sys_write(STDOUT_FILENO, line, sizeof(line) - 1);
     sys_exit(0);
 }

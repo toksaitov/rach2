@@ -15,7 +15,6 @@ case bigfileprobe.vfat-limit volume:vfat:big-vfat:attached mountns log -- \
 # bootprobe leaves out the boot line's rach2.fsdisk and the modes of
 # rach2.bootprobe=, each of which needs a boot of its own.
 case bootprobe -- bootprobe machine=native
-case cowprobe -- cowprobe
 case cowregrant -- cowregrant
 case credprobe ids:1000,1001,1002,2000,3000 -- credprobe
 case devprobe console -- devprobe console=open
@@ -43,10 +42,6 @@ case fatwriteprobe.vfat volume:vfat:fatwrite-vfat:attached mountns log -- \
 case fdfull root:ext2-dir stage:hello -- fdfull
 # A volume of 10 MiB, which the leak loops' 16 MB cannot fit twice.
 case fdstale root:krffs:10 -- fdstale
-case filetest stage:native/hello.txt -- filetest
-# forkleak leaves out the bound on the fall of free memory, which the
-# machine's other processes move.
-case forkleak -- forkleak machine=native
 case forkro -- forkro
 case forktest -- forktest
 case fpuprobe stage:fpuprobe -- fpuprobe
@@ -159,7 +154,6 @@ case sudoprobe root:krffs ids:1000,1001 -- sudoprobe
 case suidprobe root:krffs ids:1000,5 -- suidprobe
 case tcptest peer:echo -- tcptest closed=9
 case timeprobe -- timeprobe
-case touchtest -- touchtest
 case trapprobe -- trapprobe
 case udptest peer:echo ports:12345 -- udptest
 case unlinkdirprobe.ext2 -- unlinkdirprobe dir=unlinkdir

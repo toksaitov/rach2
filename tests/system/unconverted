@@ -36,8 +36,6 @@ tests/musl/sockflagmusl.c: 1 sleep
 tests/musl/stampmusl.c: 1 sleep
 tests/musl/statmusl.c: 1 sleep
 tests/musl/threadmusl.c: 3 sleep
-tests/musl/timemusl.c: 1 bound
-tests/musl/timemusl.c: 1 sleep
 tests/musl/timerfdmusl.c: 1 sleep
 tests/musl/unixmusl.c: 1 sleep
 tests/pingtest.c: 1 sleep

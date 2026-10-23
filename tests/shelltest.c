@@ -10,7 +10,7 @@
  * names, an assertion for each step: `fork`, `wait` (waitpid returns the
  * child) and `exit-zero` (the program ran and exited 0); a failure leaves the
  * steps after it not run. The child execs the program with its standard
- * output on the probe's standard error, since the program writes report
+ * output on the probe's standard error, since the program may write report
  * records of its own, which must not enter this report. Freestanding; direct
  * system calls (probe.h).
  */

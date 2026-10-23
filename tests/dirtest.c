@@ -3,8 +3,8 @@
  *
  * getcwd reports the current directory; chdir to "/", "." and "..", whose
  * parent at the root is the root itself, all succeed and leave the working
- * directory at "/"; a name that does not exist fails, and a plain file
- * fails with ENOTDIR.
+ * directory at "/"; a name that does not exist fails with ENOENT, and a
+ * plain file with ENOTDIR.
  *
  * Prints a line for each test and exits 0 when every one passed, 1
  * otherwise. Writes etude's report records (probe_report.h) for the case
@@ -18,6 +18,7 @@
 
 #define STDOUT_FILENO 1
 
+#define ENOENT  2
 #define ENOTDIR 20
 
 /** write(2). */
@@ -146,16 +147,16 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 6: chdir to a name that does not exist fails. */
+    /* Test 6: chdir to a name that does not exist fails with ENOENT. */
     report_part("missing");
     print("Test 6: chdir(\"nonexistent\")... ");
     result = sys_chdir("nonexistent");
-    if (result < 0) {
-        puts("OK (failed as expected)");
+    if (result == -ENOENT) {
+        puts("OK (ENOENT: no such name)");
         passed++;
     } else {
-        puts("FAILED (should have failed)");
-        report_miss("chdir(\"nonexistent\") succeeded");
+        puts("FAILED (not ENOENT)");
+        report_miss("chdir(\"nonexistent\") did not fail with ENOENT");
         failed++;
     }
 

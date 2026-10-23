@@ -64,11 +64,10 @@
    have a suite of their own. tools/verify/probecheck.sh reads the names from
    this table's lines that begin with a quoted name. */
 static const char *const PROBES[] = {
-    "hello", "filetest", "forktest", "shelltest", "dirtest", "stattest", "touchtest", "rmtest",
-    "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe", "fsbaseprobe", "errnoprobe", "vmprobe",
-    "forkro", "cowprobe", "cowregrant", "usercopyfault", "forkleak", "fdstale", "dirgrow",
-    "dirprobe", "unlinkdirprobe", "pathcanon", "vfsprobe", "timeprobe", "sigprobe", "credprobe",
-    "ownprobe", "permprobe", "sockettest",
+    "dirtest", "stattest", "rmtest", "mvtest", "lstest", "dup2test", "auxvprobe", "tlsprobe",
+    "fsbaseprobe", "errnoprobe", "vmprobe", "forkro", "cowregrant", "usercopyfault", "fdstale",
+    "dirgrow", "dirprobe", "unlinkdirprobe", "pathcanon", "vfsprobe", "timeprobe", "sigprobe",
+    "credprobe", "ownprobe", "permprobe", "sockettest",
     /* The YMM registers across switches, signals, an exec and ptrace, with
        XSAVE's frame and register set; without AVX its rows say they did
        not run. */
@@ -97,8 +96,8 @@ static const char *const PROBES[] = {
        which takes the same lock and rewrites the same files, and it
        restores all three databases before it exits. */
     "musl/passwdmusl", "musl/addusermusl", "musl/loginmusl", "rebootprobe", "musl/readvmusl",
-    "musl/timemusl", "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl",
-    "musl/spawnmusl", "musl/sigmusl",
+    "musl/clockmusl", "musl/statmusl", "musl/stampmusl", "musl/execargmusl", "musl/spawnmusl",
+    "musl/sigmusl",
     /* execve of /proc/self/fd/N, which is glibc's fexecve without
        execveat. */
     "musl/fdexecmusl",

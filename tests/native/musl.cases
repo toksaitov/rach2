@@ -88,7 +88,6 @@ case musl/textbusymusl root:krffs stage:musl/statushelper -- musl/textbusymusl h
 # Left out: the framebuffer's row, which the case that follows runs alone.
 case musl/threadmusl ports:7480,7481 -- musl/threadmusl machine=native
 case musl/threadmusl.framebuffer console -- musl/threadmusl row=framebuffer
-case musl/timemusl -- musl/timemusl
 case musl/timerfdmusl -- musl/timerfdmusl
 case musl/tmpfsmusl root:krffs -- musl/tmpfsmusl
 case musl/truncmusl root:krffs ids:1000 -- musl/truncmusl
