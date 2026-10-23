@@ -26,6 +26,7 @@
         {"assertion_id": "bootctl", "checks": "tests/host/bootctl_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "bootslot", "checks": "tests/host/bootslot_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "bootverb", "checks": "tests/host/bootverb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
+        {"assertion_id": "clockref", "checks": "tests/host/clockref_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "coredump", "checks": "tests/host/coredump_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "corefile", "checks": "tests/host/corefile_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
         {"assertion_id": "debugreg", "checks": "tests/host/debugreg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0", "source": "program"},
