@@ -153,6 +153,8 @@ if [ "${GNU_TEST_PRODUCTS:-}" = 1 ]; then
     mkdir "$TREE/host-products"
     cp -a "$OUT/host-products/." "$TREE/host-products/"
     if [ "$RACH2_ARCH" = x86_64 ]; then
+        # The store's directory mode must permit the nested fixture copy.
+        chmod u+w "$TREE/host-products"
         mkdir "$TREE/host-products/host-checks"
         cp -a "$OUT/host-checks/." "$TREE/host-products/host-checks/"
     fi
