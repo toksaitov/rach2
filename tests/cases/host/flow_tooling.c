@@ -1,4 +1,4 @@
-/* flow_tooling.c: prepared tooling product with native process and disk mocks. */
+/* flow_tooling.c: prepared tooling with native process and disk mocks. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include "sha256.h"

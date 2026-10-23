@@ -56,7 +56,7 @@ struct etude_legacy_opts {
  * `build/x86_64/` being x86_64's and the others i686's, and writes one
  * record of both. An i686 request that includes a fixed `build/x86_64/`
  * artifact also prepares that architecture and records both. Shared goals
- * of a request for x86_64 alone still build with ARCH=x86_64. The work directory is
+ * a request for x86_64 alone still use ARCH=x86_64. The work directory is
  * removed after a success and after a stop, and kept after a failure.
  *
  * @return 0 when every artifact exists; 1 when a step failed or an artifact
@@ -151,7 +151,7 @@ struct etude_legacy_set_opts {
  * on the one its `arch` names, as one run with one preparation of both: a
  * case runs on each of its architectures, and a case of none runs once,
  * with the suite's first architecture; each name of a case's files and its
- * label give its architecture. Their artifacts are the goals of the preparation; with
+ * label give its architecture. Their artifacts are preparation goals; with
  * `o->kernel`, the kernel that a guest case boots from the node
  * `rach2/kernel` is `rach2-KERNEL/kernel` in its place. The preparation is a
  * claim of every limited resource of the ledger, with the old runner's host
@@ -168,7 +168,7 @@ struct etude_legacy_set_opts {
  * first member that does not pass does so at once.
  *
  * Each case runs in a workspace of its own under `o->evidence`, under the
- * case's bounds as etude_bound_fix fixes them without history, their initial values:
+ * case's initial bounds, as etude_bound_fix fixes them without history:
  * a host case's program with ETUDE_TREE naming the tree, a guest case's program
  * on a machine of its QEMU profile, through etude-guest, with the memory the
  * launcher reserves for the machine as its claim, and a machine case's scenario

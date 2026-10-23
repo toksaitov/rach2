@@ -1,4 +1,4 @@
-/* family_metal_password.c: real PTYs and all nine credential transcript cases. */
+/* family_metal_password.c: real PTYs and nine credential transcript cases. */
 #define _POSIX_C_SOURCE 200809L
 #include "family_metal.h"
 #include <stdio.h>

@@ -1,4 +1,4 @@
-/* tooling_cache.c: remove completed machines with no job or evidence reference. */
+/* tooling_cache.c: remove completed machines with no job or evidence. */
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
@@ -35,7 +35,7 @@ static int path_of(char path[CACHE_PATH], const char *cache, const char *name)
     return n >= 0 && n < CACHE_PATH;
 }
 
-/** Wait briefly for a short cache operation, unless cancellation was requested. */
+/** Wait for a short cache operation, unless cancellation was requested. */
 static int pause_lock(const struct etude_tooling_site *site)
 {
     if (site->stop && *site->stop)
@@ -211,7 +211,7 @@ static int regular(const char *path)
 #endif
 }
 
-/** Only a published pair with the successful provisioning witness is complete. */
+/** A complete pair has a successful provisioning witness. */
 static int completed(const char *disk, const char *tools)
 {
     char line[1024];
@@ -255,7 +255,7 @@ static int pinned(const struct catalog *c, const char *key)
     return 0;
 }
 
-/** Keep downloaded images, incomplete files, active jobs and retained evidence. */
+/** Keep downloads, incomplete files, active jobs and retained evidence. */
 void tooling_cache_prune(const struct etude_tooling_site *site, const char *current)
 {
     struct catalog *c = calloc(1, sizeof(*c));

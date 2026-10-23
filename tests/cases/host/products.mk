@@ -1,4 +1,4 @@
-# products.mk: compile the POSIX products and C fixtures before a collection run.
+# products.mk: compile POSIX products and C fixtures before collection runs.
 # The caller supplies a GNU cross compiler and an absolute output directory.
 include tools/etude/sources.mk
 

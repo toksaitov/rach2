@@ -1,4 +1,4 @@
-/* host_image_overlay.c: execute mkext2.sh with two build umasks and failures. */
+/* host_image_overlay.c: run mkext2.sh with two build umasks and failures. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,7 +31,7 @@ static int prepare(struct image_check *t)
            image_put(t, "outside", "", 0, "0666");
 }
 
-/** Make the overlay input as a build under MASK, then run the actual builder. */
+/** Make the overlay under MASK, then run the actual builder. */
 static char *volume(struct image_check *t, const char *mask, const char *name, int *ok)
 {
     char cwd[1024], layer_path[1024], outside[1024], overlay[1024], disk[1024], *text;
@@ -66,7 +66,7 @@ static char *volume(struct image_check *t, const char *mask, const char *name, i
     return text;
 }
 
-/** Compare the documented path, mode, owner and size fields, excluding inode. */
+/** Compare path, mode, owner and size fields, excluding inode. */
 static char *nodes(const char *text)
 {
     char *out = malloc(strlen(text) + 1);

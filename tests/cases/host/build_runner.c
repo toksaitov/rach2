@@ -206,7 +206,7 @@ static int select_run_rows(struct fixture *f, const char *tree)
     for (size_t i = 0; i < 3; i++)
         selection_row(f, tree, &refused[i], 1);
     /* Dry selection is the public preparation boundary of the native runner.
-     * It validates accepted cases without invoking make or a fixture compiler. */
+     * It validates cases without invoking make or a fixture compiler. */
     const char *env[] = {"RACH2_CASES=host.beta.d host.alpha.c host.alpha.a",
                          "RACH2_AGENTS_ROWS",
                          "RACH2_ACCEPT_AGENTS",

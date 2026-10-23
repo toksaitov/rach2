@@ -6,7 +6,7 @@
 # From etude's history: core run as one run of style, host and the core
 # tier's suites of the registry, its history left in DIR/history and
 # DIR/store, where etude show failures, report.sh's reader, reads it as well; a
-# pass only when etude check verdict's verdict and tests/run's status both pass; the
+# pass only when etude check verdict and tests/run's status both pass; the
 # suites the verdict fails, a failure or an unfinished attempt before a retry
 # that passed among them; and `runner`, once, for a history that is missing,
 # cut off or inconsistent, a verdict that gave no result, and a status that
@@ -21,7 +21,7 @@
 # failures, standard error and kept directories, `skipped` for one that
 # SUITES names nothing of, and `done` only when the run was not stopped.
 # run.sh runs in a private tree with
-# stand-ins for git, make and tests/run, and with the built etude check verdict over
+# stand-ins for git, make and tests/run, and the built etude check verdict over
 # the history fixtures of tools/etude/fixtures/verdict.
 #
 # Usage: sh tests/system/ci_run_test.sh

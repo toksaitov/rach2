@@ -27,7 +27,7 @@ void host_sleep_ms(unsigned long milliseconds);
 void host_wait_forever(void);
 /** Execute this fixture's quiet-child role and wait for its real exit code. */
 int host_quiet_child(const char *self, const char *mode);
-/** Check the platform's actual stopped status; HARD selects SIGKILL on POSIX. */
+/** Check actual stopped status; HARD selects SIGKILL on POSIX. */
 int host_process_stopped(const struct etude_exec_result *result, int hard);
 /** Resolve this executable, using its native module path on Windows. */
 int host_executable(const char *argument, char *out, size_t size);

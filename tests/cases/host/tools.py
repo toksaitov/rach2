@@ -115,7 +115,7 @@ def prepare(names, compiler, flags, dependencies, digest, print_commands=False):
         temporary = output + f'.{os.getpid()}.tmp'
         tool_flags = flags
         if name == 'etude-workload':
-            # This transferred payload has no test judge or sanitizer fault case.
+            # This payload has no test judge or sanitizer fault case.
             tool_flags = [f for f in flags if not f.startswith((
                 '-fsanitize=', '-fno-sanitize-recover=', '-g'))]
         command = [*tool_flags, '-Wall', '-Wextra', '-Werror', '-o', temporary, *sources]

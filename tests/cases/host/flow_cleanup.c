@@ -1,4 +1,4 @@
-/* flow_cleanup.c: cleanup preserves unlanded work, evidence and active files. */
+/* flow_cleanup.c: preserve unlanded work, evidence and active files. */
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
 #include "flow_check.h"

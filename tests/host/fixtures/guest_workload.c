@@ -71,7 +71,7 @@ static void guest_pause(void)
         pause();
 }
 
-/** Start a member, acknowledging its session change before publishing its PID. */
+/** Start a member; acknowledge its session change before publishing its PID. */
 static pid_t guest_member(int escape)
 {
     int ready[2];
@@ -100,7 +100,7 @@ static pid_t guest_member(int escape)
     return pid;
 }
 
-/** Make the same group, escaped child and FIFO ownership as the old workloads. */
+/** Make the group, escaped child and FIFO ownership of the old workloads. */
 static int guest_holding(const char *role)
 {
     pid_t member, escaped;

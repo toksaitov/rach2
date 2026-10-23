@@ -1,4 +1,4 @@
-/* Compiled commands used by etude_step_hosttest. Included after its file helpers. */
+/* Commands for etude_step_hosttest, included after its file helpers. */
 static char step_self[PATH_LEN];
 
 /** Build a role's path relative to the root supplied by the step. */

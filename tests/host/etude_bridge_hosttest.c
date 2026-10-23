@@ -334,7 +334,7 @@ struct runner_claim {
     char why[96]; /* what keeps the claim, when it is kept */
 };
 
-/** Note whether the fixture job still has an admission claim, and its status. */
+/** Record the fixture job's admission claim and status. */
 static int runner_visit(const struct etude_ledger_claim *c, void *ctx)
 {
     struct runner_claim *q = ctx;
@@ -465,7 +465,7 @@ static int runner_released(struct etude_ledger *l, pid_t holder, int *gone)
             fprintf(stderr, "etude-bridge-test: runner: the claim is left uncertain: %s\n", q.why);
             return 0;
         }
-        /* interval: the holder and the ledger are looked at again every 10 ms */
+        /* interval: the holder and ledger are read again every 10 ms */
         poll(NULL, 0, 10);
     }
 }

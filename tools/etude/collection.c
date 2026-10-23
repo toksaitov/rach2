@@ -1,4 +1,4 @@
-/* collection.c: native collection selection and execution on prepared artifacts. */
+/* collection.c: select and run native collections on prepared artifacts. */
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
@@ -1032,7 +1032,6 @@ static int hold_collection(struct collection *c, int argc, char **argv, int prod
 static void collection_free(struct collection *c)
 {
     if (c->work[0]) {
-        extern int legacy_remove_tree(const char *path);
         legacy_remove_tree(c->work);
     }
     for (size_t i = 0; i < c->nsuites; i++) {

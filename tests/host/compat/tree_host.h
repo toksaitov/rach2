@@ -27,7 +27,7 @@ static inline int host_remove_tree(const char *path)
         SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
         return DeleteFileA(path) ? 0 : -1;
     }
-    /* Reparse points are removed as entries; their targets are never visited. */
+    /* Remove reparse points as entries, without visiting their targets. */
     if (attributes & FILE_ATTRIBUTE_REPARSE_POINT)
         return RemoveDirectoryA(path) ? 0 : -1;
     if (snprintf(child, sizeof(child), "%s/*", path) >= (int)sizeof(child))

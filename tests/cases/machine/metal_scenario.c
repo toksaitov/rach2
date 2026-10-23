@@ -415,8 +415,8 @@ static long flushes(struct metal_case *s, const char *output)
 /**
  * The acceptance uses the release's authentication: the test account by
  * key, root's commands through su with root's password, and ACCEPT01 named.
- * An independent tool reads its FAT volume while the guest has it unmounted. The stick's flushes
- * are counted around it, since it must flush what it wrote to the stick before it unmounts. Its run
+ * An independent tool reads the unmounted FAT volume. The flush counts
+ * prove that the guest flushes its writes before unmounting. The run
  * is left in `r`.
  */
 static void accept_checks(struct metal_case *s, struct net_run *r)

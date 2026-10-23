@@ -1,4 +1,4 @@
-/* agent_accept.c: real SSH sessions, terminal changes and persistent sign-in. */
+/* agent_accept.c: SSH sessions, terminal changes, persistent sign-in. */
 #include "agent_accept.h"
 #include <ctype.h>
 #include <stdarg.h>

@@ -881,9 +881,10 @@ static int history_gap(const struct cmp_history *h, const struct cmp_sample *s, 
             continue;
         const char *attempt = cmp_text(r->data, "attempt_id");
         const char *plan = cmp_text(r->data, "plan_id");
-        const struct eh_json *result = eh_json_get(r->data, "result");
-        const char *outcome = cmp_text(result, "outcome"), *cleanup = cmp_text(result, "cleanup");
-        const struct eh_json *disruptions = eh_json_get(result, "disruptions");
+        const struct eh_json *step_result = eh_json_get(r->data, "result");
+        const char *outcome = cmp_text(step_result, "outcome"),
+                   *cleanup = cmp_text(step_result, "cleanup");
+        const struct eh_json *disruptions = eh_json_get(step_result, "disruptions");
         const struct eh_json *value =
             eh_json_get(eh_json_get(r->data, "max_progress_gap_us"), "value");
         if (!attempt || strcmp(attempt, cmp_text(s->attempt->data, "attempt_id")) || !plan ||
@@ -904,12 +905,12 @@ static int learn_bounds(struct set *x, const char *plan_text)
 {
     struct eh_json *plan = eh_json_parse(plan_text);
     const struct eh_json *items = eh_json_get(plan, "items"), *item;
-    uint64_t *elapsed = calloc(x->baseline.sample_count + 1, sizeof(*elapsed));
+    uint64_t *durations = calloc(x->baseline.sample_count + 1, sizeof(*durations));
     uint64_t *gaps = calloc(x->baseline.sample_count + 1, sizeof(*gaps));
     const char **runs = calloc(x->baseline.sample_count + 1, sizeof(*runs));
     size_t i = 0;
     int rc = -1;
-    if (!plan || !elapsed || !gaps || !runs)
+    if (!plan || !durations || !gaps || !runs)
         goto done;
     for (item = items ? items->child : NULL; item && i < x->n; item = item->next, i++) {
         struct cmp_key key;
@@ -934,13 +935,13 @@ static int learn_bounds(struct set *x, const char *plan_text)
             if (k < n)
                 continue;
             runs[n] = sample->attempt->run;
-            elapsed[n++] = sample->elapsed_us;
+            durations[n++] = sample->elapsed_us;
             uint64_t gap;
             if (history_gap(&x->baseline, sample, &gap))
                 gaps[ngaps++] = gap;
         }
         struct legacy_case *k = (struct legacy_case *)x->mem[i].k;
-        if (legacy_case_learn(k, elapsed, n, gaps, ngaps) != 0)
+        if (legacy_case_learn(k, durations, n, gaps, ngaps) != 0)
             goto done;
         x->mem[i].history_samples = n;
         x->mem[i].gap_samples = ngaps;
@@ -952,7 +953,7 @@ static int learn_bounds(struct set *x, const char *plan_text)
     }
     rc = i == x->n ? 0 : -1;
 done:
-    free(elapsed);
+    free(durations);
     free(gaps);
     free(runs);
     eh_json_free(plan);
@@ -1847,7 +1848,7 @@ static int recorded(const struct member *m)
     return m->record_id[0] != '\0';
 }
 
-/** Say whether member `i` is the first of its family, on either architecture. */
+/** Whether member `i` is the first of its family, on either architecture. */
 static int family_first(const struct set *x, size_t i)
 {
     size_t j;

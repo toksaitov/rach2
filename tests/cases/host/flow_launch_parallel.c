@@ -1,4 +1,4 @@
-/* flow_launch_parallel.c: shared launches overlap and exclusive launches wait. */
+/* flow_launch_parallel.c: shared launches overlap; exclusive ones wait. */
 #define _POSIX_C_SOURCE 200809L
 #define _DARWIN_C_SOURCE
 #include "flow_launch.h"

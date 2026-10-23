@@ -1,4 +1,4 @@
-/* Check grouped maker rules by running the actual make database and requests. */
+/* Check grouped maker rules with the actual make database and requests. */
 #include "build_support.h"
 #include <fnmatch.h>
 
@@ -227,7 +227,7 @@ static char **old_prereqs(struct fixture *f, const char *tree, const char *datab
 }
 
 /* A maker is a native command mock reached by the product make recipe's sh.
- * This narrow shebang wrapper only execs that mock; it contains no test logic. */
+ * This shebang wrapper only execs that mock; it contains no test logic. */
 static int write_makers(struct fixture *f, const char *tree)
 {
     for (size_t i = 0; i < nrules; i++) {

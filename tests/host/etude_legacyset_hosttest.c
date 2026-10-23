@@ -11,7 +11,8 @@
  * the tree's build/tests.
  *
  * host-deps: tests/host/compat/desktop_host.c tests/host/compat/command_host.c
- * host-deps: tests/host/compat/legacyset_fixture.c tests/host/compat/legacyset_process.c
+ * host-deps: tests/host/compat/legacyset_fixture.c
+ * host-deps: tests/host/compat/legacyset_process.c
  * host-deps: tools/etude/posix/legacy.c tools/etude/posix/legacy_set.c
  * host-deps: tools/etude/posix/legacy_cases.c tools/etude/digest.c
  * host-deps: tools/etude/posix/legacy_guest.c tools/etude/serial.c
@@ -54,7 +55,7 @@
  *
  * A suite run by its cases gives an item of each repetition of each case that
  * runs on the architecture, or on none, with its staged program recorded
- * by preparation as a goal: the tree's `build/NODE`, or `build/x86_64/NODE` for an
+ * by preparation: the tree's `build/NODE`, or `build/x86_64/NODE` for an
  * artifact of each architecture on x86_64. The program runs in its workspace,
  * which is removed after a pass and kept otherwise, with the driver's
  * environment, less the driver's own ARCH and ETUDE_SEED, and the tree, the
@@ -1278,7 +1279,7 @@ static int fixture_environment(int restore)
     return guest_arch ? 0 : -1;
 }
 
-/** Decode a description in this reexecuted process, then call the real driver. */
+/** Decode a description in the reexecuted process; call the real driver. */
 static int driver_role(const char *path)
 {
     static struct run_description d;

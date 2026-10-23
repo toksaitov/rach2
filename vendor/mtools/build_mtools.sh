@@ -2,8 +2,8 @@
 # Build the pinned mtools multicall program for the image helper.
 set -eu
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-REPO=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+REPO=$(CDPATH='' cd -- "$SCRIPT_DIR/../.." && pwd)
 . "$REPO/mk/arch.sh"
 VERSION=4.0.49
 TARBALL="$SCRIPT_DIR/mtools-$VERSION.tar.gz"

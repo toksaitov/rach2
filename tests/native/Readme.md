@@ -36,11 +36,7 @@ Each case has a workspace: a directory of its own, its working directory, remove
 
 A program learns its native values from its arguments, which `etude-guest` appends after the case's own, as [`probe_args.h`](../probe_args.h) reads them: `ids=OLD:NEW,...` and `ports=OLD:NEW,...` for its maps, `loops=DEVICE,...` for the devices of its volumes in order, `peer=ADDRESS:PORT`, and `root=PATH`, the private root's directory as the machine's `/proc/mounts` names it. A case whose program has checks that need the machine gives `machine=native`, and the program leaves those checks out; a comment above the case names them. The program starts with its absolute path as `argv[0]`. Run with none of these arguments, as the test image runs it, a program uses the ids, ports and paths of the test image and makes every check. The GNU and agents rows, `tests/system/gnu_rows.sh` and `tests/system/agents_rows.sh`, take arguments of the same kind, as their headers say.
 
-## Limits
-
-A case gives its program the init role never: a check that needs the designated init or a boot of its own stays in its suite under QEMU, as the inventory says. The ids and ports of `maps` are the same for every case, so two cases that name the same one do not run at once.
-
-## Local collection
+### Local collection
 
 The prepared public command `etude run native` runs on the already booted Rach2 system. It reads `probes.cases`, `musl.cases`, `rows.cases`, `maps` and the prepared `images/roots` index. It starts the declared `etude-guest` executable directly over pipes and uses the existing framed invocation, file, result and cleanup protocol. It invokes no host shell, SSH client or interpreter. The scripts named as GNU, agent and TinyCC workloads still run on Rach2 as the inventory declares them.
 
@@ -58,13 +54,13 @@ On Rach2, an invocation is:
 
 The external echo peer remains the Mac's prepared `hostpeer echo PORT 0`, bound with `HOSTPEER_ADDRESS` to the Mac's address. The datagram peer is `hostpeer send-repeat 47502 outside`, with `HOSTPEER_ADDRESS` set to the machine's address or the value that the port map gives 7502 in place of 47502. Its destination is the IPv4 address in `--network`, which may differ from the SSH host name. The deployment process owns both peer process identities, records them, and sends termination and waits for both on every exit, failure and interruption. The Rach2 driver never substitutes a local peer for either external peer and never signals an unowned process.
 
-## TinyCC proof
+### TinyCC proof
 
 `etude run native proof` takes the same tree, guest, state, stage and result options. It runs `tccbuild.sh` in four modes: a successful compile and execution, an intended compiler failure, cancellation of a repeated build, and a pipe connection cut after the first completed build. The cut uses a compiled transport entry of the driver; a new connection reads the attempt's recorded end and confirms cleanup. The proof keeps the raw result and checks the expected cancellation or connection-loss outcome separately, then removes the ended workspace. It supplies code for the four machine checks of issue 963; only a recorded run on the Lenovo supplies their hardware evidence.
 
 `make -f tests/native/local.mk CC=tcc`, from a private copy of the supplied source tree on Rach2, builds `build/tests/native/local/etude` locally with TinyCC, with the same public entry and validator as the cross-built command. It uses the same source list and framed library as the cross-built executable. The TinyCC build workload remains supplied as source in `tccbuild.sh`, including its deliberate `#error` and repeated-build cases.
 
-## Owner-side deployment
+### Owner-side deployment
 
 `make build/tools/dev/native-deploy build/tools/dev/native-hostpeer` builds the Mac's C deployment helper and its external peer. It starts only the configured SSH client and the prepared `native-hostpeer` executable, with structured arguments. It neither runs a host shell nor interprets test output. Deployment starts only after the reviewed candidate passes its complete virtual-machine run; this helper builds no candidate and changes no boot slot.
 
@@ -81,3 +77,7 @@ PAYLOAD is the prepared directory, such as `build/x86_64/tests/native/prepared`;
 Each remote command checks the Lenovo's station address, the booted slot, the absence of an armed trial and the SHA-256 of the named kernel's bytes in that slot, in the same process before writing or sending a signal. The run uses the public `etude run native` on Rach2, with direct local pipes to etude-guest. Its receipt has a random deployment owner token, the controller's PID, its kernel start identity and etude-guest's boot identity in `/dev/shm/etude-guest-boot`; cleanup checks them before sending termination. The two external peers stay alive until the remote controller has ended. Every local SSH client and peer has a registered keeper and confirmed cleanup on success, failure or an ordinary stop signal. A failed stage or failed remote cleanup is reported as unconfirmed, with the target and logs retained for inspection.
 
 The collection's status determines success. The deployment helper retrieves the whole results directory as a compressed archive in LOGS, preserving its JSON results and protocol evidence, then stops and reaps the peers. It leaves the immutable payload, account and recorded results on the machine; it removes neither an existing collection's state nor an unowned process.
+
+## Limits
+
+A case gives its program the init role never: a check that needs the designated init or a boot of its own stays in its suite under QEMU, as the inventory says. The ids and ports of `maps` are the same for every case, so two cases that name the same one do not run at once.

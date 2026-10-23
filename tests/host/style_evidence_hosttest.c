@@ -1,5 +1,7 @@
 /* Source evidence must cover the current files and every required assertion.
- * host-deps: tests/cases/host/source_snapshot.c tools/etude/json.c utils/sha256.c
+ * host-deps: tests/cases/host/source_snapshot.c
+ * host-deps: tools/etude/json.c
+ * host-deps: utils/sha256.c
  * host-cflags: -Itools/etude -Iutils
  */
 #include <unistd.h>

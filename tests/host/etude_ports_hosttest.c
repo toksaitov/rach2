@@ -633,7 +633,7 @@ static void old_checkout(void)
     CHECK(finish(b, "o4") == 0, "old checkout alone");
 }
 
-/** Write the child's observed environment atomically, then await its release. */
+/** Write the child's environment atomically, then await its release. */
 static int command(int argc, char **argv)
 {
     char pending[4096], ready[4096], go[4096];

@@ -1117,7 +1117,7 @@ The `etudeguest` case tests the framed command/file protocol on a Rach2 boot. Th
 
 Compatibility adapters retain focused regressions for their public forms and old checkout admission. The scripts beside the implementation are reference or explicit compatibility interfaces where the prepared C inventories have replaced their test control flow. [The system-case documentation](../../tests/system/Readme.md) describes the suites without repeating their assertion lists here.
 
-## Image checks
+### Image checks
 
 A machine case that checks or changes an image declares `image-helper`, its recovery kernel and `etude-image.krffs`, and reserves the helper's resources. `etude_host` then runs mtools and e2fsprogs commands in that helper. The command's arguments, exit status and output retain their meaning; the host needs neither program installed. The helper mounts none of the tested volumes. It uses the independent upstream programs on the raw disk and exits before the scenario boots that disk again.
 

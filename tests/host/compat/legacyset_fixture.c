@@ -300,7 +300,7 @@ static int previous_goal(char **argv, int before, const char *goal)
     return 0;
 }
 
-/** A preparation fixture, with the same actual artifact identities and goals. */
+/** A preparation fixture with the same artifact identities and goals. */
 static int prepare_role(int argc, char **argv)
 {
     const char *tree = NULL, *arches = NULL, *record = NULL, *kernel = NULL;

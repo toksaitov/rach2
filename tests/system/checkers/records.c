@@ -43,7 +43,7 @@ static int counter(const char *s, uint64_t *v)
     return 0;
 }
 
-/* Copy one line, advancing the input; NULL at its end or on allocation failure. */
+/* Copy a line and advance; NULL at end of input or on allocation failure. */
 static char *line_next(const char **text)
 {
     size_t n;
@@ -198,7 +198,8 @@ int check_usb_records(const char *text, int random, unsigned keys)
         char *start = strstr(line, "usb: latency:"), *v[64];
         long long value[8] = {0};
         if (start) {
-            bad |= !usb_fields(v, words(start, v, 64), value);
+            int count = words(start, v, 64);
+            bad |= !usb_fields(v, count, value);
             bad |= !usb_counts(value, random);
             interrupts += value[0] == 1;
             records++;

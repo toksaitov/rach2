@@ -1,4 +1,4 @@
-/* Native identity, privilege and PowerShell substitutes for prerequisite rows. */
+/* Native identity, privilege and PowerShell prerequisite substitutes. */
 #include "build_support.h"
 
 static int log_line(const char *prefix, int argc, char **argv)

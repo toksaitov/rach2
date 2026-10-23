@@ -167,11 +167,8 @@ static double now(void)
 
 #ifdef _WIN32
     FILETIME time;
-    ULARGE_INTEGER value;
     GetSystemTimePreciseAsFileTime(&time);
-    value.LowPart = time.dwLowDateTime;
-    value.HighPart = time.dwHighDateTime;
-    return (double)value.QuadPart / 1e7;
+    return ((double)time.dwHighDateTime * 4294967296.0 + time.dwLowDateTime) / 1e7;
 #else
     gettimeofday(&tv, NULL);
     return tv.tv_sec + tv.tv_usec / 1e6;

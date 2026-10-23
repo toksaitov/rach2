@@ -1,4 +1,4 @@
-/* Native host-suite scheduling, sanitizer, reporting and cleanup regressions. */
+/* Host-suite scheduling, sanitizer, reporting and cleanup regressions. */
 #include "build_support.h"
 #include "sha256.h"
 

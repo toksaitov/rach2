@@ -8,7 +8,10 @@
  * host-deps: tools/etude/ledger.c tools/etude/posix/process.c
  * host-deps: tests/cases/host/fixture.c tests/host/compat/status_proc_host.c
  * host-tools: python3
- * host-inputs: tools/ci/run.sh tools/ci/bisect.sh tools/flow/test_status.py tests/registry
+ * host-inputs: tools/ci/run.sh
+ * host-inputs: tools/ci/bisect.sh
+ * host-inputs: tools/flow/test_status.py
+ * host-inputs: tests/registry
  * host-cflags: -I tools/etude/include -I tools/etude -Wall -Wextra -Werror
  *
  * Each row writes a run's history through the history store and runs this
@@ -907,7 +910,7 @@ static void holder_lock(int ready, const char *name)
     /* The lock descriptor remains open until this process exits. */
 }
 
-/** Start an owned process, optionally holding a file lock until input closes. */
+/** Start a process, optionally holding a file lock until input closes. */
 static pid_t start_holder(int *write_end, const char *lock)
 {
     int p[2], ready[2];
@@ -1176,7 +1179,7 @@ static void check_status(void)
     etude_ledger_close(l);
 }
 
-/** The compiled tests/run, make and git models used by the actual CI products. */
+/** Compiled tests/run, make and git models for the actual CI products. */
 static int fixture_role(int argc, char **argv)
 {
     if (argc > 1 && !strcmp(argv[1], "core")) {

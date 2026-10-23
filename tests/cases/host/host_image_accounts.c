@@ -1,4 +1,4 @@
-/* host_image_accounts.c: the installer's actual account functions on fixtures. */
+/* host_image_accounts.c: run installer account functions on fixtures. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +59,7 @@ static int account_files(struct image_check *t, const char *directory, const str
     return 1;
 }
 
-/** Run only the extracted product operation; the controller judges its files. */
+/** Run the product operation; the controller judges its files. */
 static int keep(struct image_check *t)
 {
     char functions[1024], image_path[1024], dest[1024];

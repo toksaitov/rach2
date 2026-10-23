@@ -308,7 +308,7 @@ def prepare(args):
                 path = Path(value['path'])
                 if path.suffix != '.c':
                     continue
-                # The Windows file adapter's legacy shell lookup is not called by native checks.
+                # Native checks do not call the adapter's shell lookup.
                 if routing.windows_host() and path == Path('tools/etude/win/files.c'):
                     continue
                 text = path.read_text(errors='replace')

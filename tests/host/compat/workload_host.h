@@ -1,4 +1,4 @@
-/* Read a prepared executable for protocol fixtures without running a compiler. */
+/* Read a prepared protocol fixture without running a compiler. */
 #ifndef ETUDE_WORKLOAD_HOST_H
 #define ETUDE_WORKLOAD_HOST_H
 

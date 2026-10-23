@@ -31,7 +31,7 @@ static int process_stat(const char *root, pid_t pid)
     return n >= 0 && n < (int)sizeof(destination) && fx_copy(source, destination);
 }
 
-/** Record the kernel's conflicting lock identity, including device and inode. */
+/** Record the conflicting lock's kernel identity, device and inode. */
 static int lock_stat(const char *root, const char *path)
 {
     struct flock lock;

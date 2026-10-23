@@ -1,4 +1,4 @@
-/* Execute GNU checks in a private tree; prepared source inputs stay immutable. */
+/* Run GNU checks in a private tree; prepared inputs stay immutable. */
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
@@ -18,7 +18,7 @@ static int valid_group(const char *group)
            !strcmp(group, "fuzz");
 }
 
-/** Become the ordinary account before copying or executing a writable fixture. */
+/** Become the ordinary account before copying or running a fixture. */
 static int ordinary(void)
 {
     struct passwd *account = getpwnam("test");

@@ -37,7 +37,7 @@ static int send_bytes(host_socket socket, const void *data, size_t size)
     return 0;
 }
 
-/* Use the production codec and serial frame bound, including acknowledgments. */
+/* Use the production codec and frame bound, including acknowledgments. */
 static int event(struct actor *a, const char *type, int count, const char *const *fields)
 {
     char line[ETUDE_FRAME_SERIAL_MAX + 1];

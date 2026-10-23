@@ -1,4 +1,4 @@
-/* An older checkout's host gate and port block protocol, independent of etude. */
+/* An older checkout's host admission and port block protocol. */
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>

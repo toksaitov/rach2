@@ -2,7 +2,9 @@
 
 `host_checks_scenario.c` runs the five C groups of `host.host.json` over the inventory and executor in `host.c`. It executes native platform checks on the collection host and POSIX fixtures in one declared x86-64 GNU Rach2 helper per case. The separate scripts scenario controls the `host.list` checks. Every check uses prepared binaries, private scratch and complete output. The desktop requires no compiler, interpreter, tar, mtools, e2fsprogs or Linux tooling machine.
 
-## Preparation
+## Use
+
+### Preparation
 
 `etude prepare collection host` builds the native driver and the inventories under `build/tests/host-suite/`. The `tests` and `boots` inventories are separate for i686 and x86-64; the other four cases run once in a collection. The build-only tool `prepare.py` compiles host tests, checker selftests and fuzz replay programs. It reads the existing `host-deps:`, `host-cflags:`, `host-first:`, `host-alone:` and `host-arch:` metadata. Alone checks follow shared checks.
 
@@ -22,7 +24,7 @@ The QEMU and watchdog fixtures execute on the desktop that runs the collection. 
 
 The installed Windows GCC has no sanitizer runtimes. Its native platform and boot fixtures therefore record an empty instrumentation list. GNU helper checks and the POSIX controller fixtures record `address` and `undefined`; their sanitizer failures remain fatal. Windows behavioral checks still execute locally, including process, output, socket, path, job and real QEMU assertions.
 
-## Execution
+### Execution
 
 The driver verifies the manifest, group and architecture before any check starts. It checks each binary and input before and after execution, rejects scripts even on POSIX, and rejects newly added corpus inputs. The manifest, prepared inventory and live source or script list must agree. Every declared check stays visible, including unsupported checks. Missing checks fail their own assertions; extra checks fail `listed` and are not executed.
 
@@ -34,7 +36,7 @@ The interpreter check ignores C comments and verifies suspect included sources a
 
 A completed check writes one assertion and one `progress checks N` record. The case has no clock limit. Etude's case and progress bounds apply. A passing case removes its workspace; a failing case prints the path it keeps.
 
-## Fixture placement
+### Fixture placement
 
 The seven extracted kernel fixtures (`chown`, `krffs_open`, `krffs_root_lock`, `krffs_stat`, `pagecache`, `kstack` and `endothers`) are compiled during preparation, then run as native binaries with their original assertions. Their extraction inputs and generated includes enter the fingerprint. The two threaded fixtures use pthreads on POSIX and SRW locks, condition variables and native threads on Windows. Kernel include directories apply only to quoted includes, so pthreads reads the system scheduler header. `build/tests/host-suite/vfs_unmount` prepares the same unmount fixture for the USB disk case.
 
@@ -42,7 +44,7 @@ The GNU helper supplies the POSIX environment of filesystem, compiler, build, de
 
 Native executor, platform and QEMU checks run on the collection host. Preparation rejects an undeclared interpreter or missing adapter; execution reports a missing check as a failure. `host.sh` remains as the legacy build-command interface. The prepared collection does not call it. `etude_hostdriver_hosttest.c` and the compiled host-suite controller check scheduling, interruption and immutable inputs.
 
-## Source-check evidence
+### Source-check evidence
 
 `style.c` reads source-check evidence made by `prepare_style.py` during artifact preparation. The preparation host runs the existing checks, requires every assertion to pass, and requires the recorded compiler and formatter versions, the Clang user-pointer contract and a judged complexity result. The evidence records the command, architecture, judge versions, assertions, branches, preparation time and source digest. The pinned pmccabe and mandoc receipts and the actual Clang executable digest enter that record; a changed judge requires new evidence. [Native source judges](../../../tools/setup/source-tools.md) describes the portable tools and the user-pointer contract. The native case reports that these checks ran during preparation.
 
@@ -50,7 +52,7 @@ The source digest includes sorted paths and file contents, so adding or removing
 
 `krffscheck.c` runs the offline KRFFS tools directly through the native executor. It constructs corrupt images and each prefix of the update protocol in C, then checks repair, retained data and wrong write orders. `native.c` keeps its images under `build/tests`, records complete child output and removes successful scratch after process cleanup is confirmed.
 
-## Product and driver regressions
+### Product and driver regressions
 
 `host-build-check` is a prepared C controller for the compiler, build and runner assertions of `host.list`. The controller creates fixtures, launches product programs, reads results and checks them through `fixture.c`. Command substitutes are native C entries of the same executable. The products retain their own command language: a commit hook runs by its executable entry, a port recipe runs in its normal shell, and make runs its own recipes. No old test shell driver runs.
 
@@ -60,7 +62,7 @@ The compiler checks retain the assembler instruction and byte comparisons, the l
 
 The products directory defaults to `/host-products`, or `HOST_PRODUCTS` for a native fixture run. It provides `etude`, `host`, `host-suite-probe`, `doom_libc-i686`, `doom_libc-x86_64`, `tcc/i386-tcc` and `tcc/x86_64-tcc`. The fallback `ROOT/prepared` supports a staged native fixture. The GNU helper must provide working sanitizer runtimes before it can run the sanitizer probes; a missing runtime is a failed preparation or execution, never a skipped check.
 
-## Product-family checks
+### Product-family checks
 
 `family_scenario` runs the grow host cases through the declared GNU products helper. The prepared `host-family-check` C controller creates the counter records, file systems, plans, disk faults and measured-output fixtures, invokes the actual checker and grow programs, and compares their results. It copies only the product functions under test from `machine_grow.sh`; the former shell test driver does not run. The controller reports the original case and assertion identities in etude report records, which the native scenario accepts only after a whole report and confirmed process cleanup.
 
@@ -72,7 +74,7 @@ The disk-policy host case transfers its declared ordinary and read-only kernel a
 
 The metal family keeps its two host assertions. Its C transport controller runs every one of the 17 fault cases with both root-key and su transport, including the approved disk serial, refusal of similarly prefixed disk names, failed transfers and hashes, and FAT unmount, remount and independent host-read checks. Native command substitutes model remote replies; the actual deployment acceptance script makes its own decisions. The password controller runs all nine prompt, echo, split-output, repeated-prompt and pre-session connection cases against the prepared PTY fixture and real `ptydrive`. It audits the helper transcripts before cleanup and requires the original status, prompt and answer counts, retry count and returned bytes. The deployment scripts themselves are unchanged.
 
-## GNU host inventories
+### GNU host inventories
 
 `make ARCH=x86_64 gnu-host-checks` compiles the GNU helper's host checks with the separately prepared ASan and UBSan runtimes. It never runs a check. The cached output is `GNU_OUT/host-checks/`: `driver` enters its prepared `tree/`, becomes the ordinary `test` account, and starts `/host-products/host --one GROUP ASSERTION ARCH`. Both target-ABI inventories are present. The tree contains the binaries, their source fingerprints, corpus files, independent filesystem inputs and native GNU tools. The image stages this output at `/host-products/host-checks`.
 

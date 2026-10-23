@@ -1,4 +1,4 @@
-/* flow_version.c: version publication, private shells and interrupted builds. */
+/* flow_version.c: version publication, private shells, interrupted builds. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include "sha256.h"
@@ -713,7 +713,7 @@ static int version_revision(struct version *value)
     char source[4096];
     char first[5000];
     char *saved;
-    /* A selected revision must use committed source even after the tree changes. */
+    /* The selected revision uses committed source after the tree changes. */
     if (!state(&v))
         return 0;
     {

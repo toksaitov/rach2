@@ -1,4 +1,4 @@
-/* flow_snapshot.c: compare file identity, modes, times and complete contents. */
+/* flow_snapshot.c: compare file identity, modes, times and contents. */
 #define _DARWIN_C_SOURCE 1
 #define _DEFAULT_SOURCE  1
 #define _POSIX_C_SOURCE  200809L

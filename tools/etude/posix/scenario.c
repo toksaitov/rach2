@@ -2884,6 +2884,7 @@ static void command_vectors(struct command_text *t, const char *const argv[],
                                            "TERM=vt100", NULL};
     size_t i;
     const char *eq;
+    const char *const *assignments = env != NULL ? env : defaults;
     char key[256];
 
     command_add(t, ",\"arguments\":[");
@@ -2893,18 +2894,16 @@ static void command_vectors(struct command_text *t, const char *const argv[],
         command_string(t, argv[i]);
     }
     command_add(t, "],\"environment\":{");
-    if (env == NULL)
-        env = defaults;
-    for (i = 0; env[i] != NULL; i++) {
-        eq = strchr(env[i], '=');
-        if (eq == NULL || eq == env[i] || (size_t)(eq - env[i]) >= sizeof(key)) {
+    for (i = 0; assignments[i] != NULL; i++) {
+        eq = strchr(assignments[i], '=');
+        if (eq == NULL || eq == assignments[i] || (size_t)(eq - assignments[i]) >= sizeof(key)) {
             t->failed = 1;
             return;
         }
         if (i > 0)
             command_add(t, ",");
-        memcpy(key, env[i], (size_t)(eq - env[i]));
-        key[eq - env[i]] = '\0';
+        memcpy(key, assignments[i], (size_t)(eq - assignments[i]));
+        key[eq - assignments[i]] = '\0';
         command_string(t, key);
         command_add(t, ":");
         command_string(t, eq + 1);
@@ -2957,7 +2956,7 @@ static enum etude_status start_command(struct etude_case_machine *m, const char 
                                        int installed_input)
 {
     struct command_text t;
-    char sha[65], token[17], identity[384], input_sha[65];
+    char sha[65], token[17], identity[384], input_sha[65] = "";
     uint64_t size = 0;
     enum etude_status st;
 
@@ -3278,7 +3277,7 @@ struct image_invocation {
 };
 
 /** Translate the file operand in a debugfs request. */
-static enum etude_status image_request(char *const argv[], int request_at, size_t prefix,
+static enum etude_status image_request(const char *const argv[], int request_at, size_t prefix,
                                        struct image_invocation *v)
 {
     char *words[8];
@@ -3314,7 +3313,7 @@ static enum etude_status image_request(char *const argv[], int request_at, size_
     return ETUDE_OK;
 }
 
-static enum etude_status image_copy_arguments(char *const argv[], size_t count, size_t prefix,
+static enum etude_status image_copy_arguments(const char *const argv[], size_t count, size_t prefix,
                                               struct image_invocation *v)
 {
     size_t i;
@@ -3334,7 +3333,7 @@ static enum etude_status image_copy_arguments(char *const argv[], size_t count, 
     return ETUDE_OK;
 }
 
-static size_t image_disk_argument(char *const argv[], size_t count, int mt, int copy,
+static size_t image_disk_argument(const char *const argv[], size_t count, int mt, int copy,
                                   struct image_invocation *v)
 {
     size_t i, disk_at = 0;
@@ -3381,7 +3380,7 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
         v->args[1] = "-c";
         v->args[2] = argv[0];
     }
-    disk_at = image_disk_argument(argv, count, mt, copy, v);
+    disk_at = image_disk_argument((const char *const *)argv, count, mt, copy, v);
     if (!disk_at)
         return ETUDE_REFUSED;
     for (i = 1; i < count; i++) {
@@ -3396,9 +3395,9 @@ static enum etude_status image_arguments(struct etude_case *c, char *const argv[
         }
     }
     v->args[prefix + count - 1] = NULL;
-    if (copy && image_copy_arguments(argv, count, prefix, v) != ETUDE_OK)
+    if (copy && image_copy_arguments((const char *const *)argv, count, prefix, v) != ETUDE_OK)
         return ETUDE_REFUSED;
-    return image_request(argv, request_at, prefix, v);
+    return image_request((const char *const *)argv, request_at, prefix, v);
 }
 
 /** Stage a directory as a native archive for mke2fs's -d operand. */

@@ -5,7 +5,7 @@
 
 # The sources of etude, the one command, for each platform. ETUDE_SRC is
 # that of Linux and macOS, which has every verb; ETUDE_WIN_SRC that of
-# Windows, ETUDE_RACH2_SRC that of Rach2, with `check` and local native runs, and
+# Windows, ETUDE_RACH2_SRC for Rach2, with check and local native runs, and
 # ETUDE_LOCK_SRC that of the build of `lock` alone, with ETUDE_LOCK_ONLY
 # defined, which the first process of tests/run makes for itself. etude.c
 # chooses the verbs by the same platform.
