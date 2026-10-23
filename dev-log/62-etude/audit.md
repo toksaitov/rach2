@@ -1,8 +1,8 @@
-# The audit of the tasks on master
+# The audit of the phase
 
-This is the part of T96 of [the plan](plan.md) that does not wait for the runs, made under #957 on `master` at 02661fb8a on 23 October 2026: each task's done condition read against the evidence on `master`, the coverage inventory read against the cases, and the phase's other issues read against their closing commits. T96 itself, #685, adds the evidence of the runs.
+This is the source audit for T96 of [the plan](plan.md). Its first pass, under #957 at 02661fb8a on 23 October 2026, read each task's done condition against the code, cases and closing commits on master. The recovery pass at 39dd88850 on 24 October updates the changed obligations below. T96 itself, #685, remains open until the complete runs, site selection, routine entry checks and final acceptance record are present.
 
-A line gives the task, its issue, the commit that closed it, the code, case or record that shows its done condition on `master` now, and the result: met, met with a note, or the gap and its issue. A test named in a line is selected: every `tests/host/*_hosttest.c` is an assertion of the case `host.host.tests` or, for etude's own, `host.host.etude`, and every script named is a line of `tests/cases/host/host.list` or a step of `tests/cases/host/style.sh`.
+A line gives the task, its issue, its original closing commit and the implementation or evidence. An original task's closure does not accept its replacement in the recovered native collection. [Recovery](recovery.md) requires that collection to pass on every comparison platform. Every retained host test is selected by `host.host.tests` or `host.host.etude`; the native host inventory and prepared executable records identify what actually runs.
 
 On 23 October the owner set aside the proof of a new test by a deliberate fault (aaf6dbc1c). 9dc209d2b removed etude's proof driver and the fault modes of the tests, and 92421ca2a the catalogues of `tests/proofs/` and the fault scripts. A done condition below that asks for a deliberate fault is read without that part, and its line says so.
 
@@ -13,34 +13,34 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T03, #592, c13ffe37e: `tools/setup/prereqs` and `prereq.sh`, which print the commands that need rights the account lacks; `tests/system/prereq_test.sh`. Met.
 * T04, #593, e1d2efa47: [the native inventory](native.md) and [its guest programs](native-guest.md). Met.
 * T05, #594, 5b2f27552: the headers of `tools/etude/include/etude/` and the schemas, with examples of a host program, guest programs that also run natively, a native invocation of `errnoprobe` and a scenario; the machine example is `tests/cases/machine.shutdown.json` since e0a8cd2f8. Met.
-* T06, #595, 230d88557: casecheck and its fixtures; the `sleep`, `bound` and `skip` rules of `tools/verify/suitecheck.sh` in the style case. Met for the validator; the findings it still exempts through `tests/system/unconverted` are #961.
+* T06, #595, 230d88557: casecheck and its fixtures; the `sleep`, `bound` and `skip` rules of `tools/verify/suitecheck.sh` in the style case. The #961 repair removed every exemption from `tests/system/unconverted`; only its explanatory comments remain. Integrated style acceptance is pending.
 * T07, #596, 9e4ca92d7: `tools/etude/history.c`, `history_check.c` and `history_collect.c`; `tests/host/etude_history_hosttest.c`. Met.
 * T08, #597, 6548c7fc0: `tools/etude/posix/exec.c`, `keeper.c` and `process.c`; `tests/host/etude_exec_hosttest.c`. Met.
 * T09, #598, be2fe24de: `tools/etude/win/`; `tools/etude/wincheck.sh` checks that the programs import no MSYS or Cygwin runtime and runs the Windows fixtures; `tests/host/etude_winfmt_hosttest.c`. Met.
 * T10, #599, fbc21bff6: `tools/etude/posix/qemu.c` and `qemu_profile.c`; `tests/host/etude_qemu_hosttest.c`. Met.
-* T11, #600, 3666b12e8: `tools/etude/guest/`; the case family `machine.etudeguest`, and `tests/host/etude_guest_hosttest.c` and `etude_serial_hosttest.c`. Met.
+* T11, #600, 3666b12e8: `tools/etude/guest/`, `tests/host/etude_guest_hosttest.c` and `etude_serial_hosttest.c`. The redundant `machine.etudeguest.serial` case was removed under #924. The retained tests run the actual helper over stdio and serial, including outcomes, transfers, hashes, cancellation and framing errors; retained machine cases exercise that helper on Rach2. [The case audit](924-audit.md) records the equivalence.
 * T12, #601, 245b949c9: the Rach2 build of etude by TinyCC and the family `machine.etudeexec`, which runs the executor's test on Rach2 under QEMU. Met.
 * T13, #602, 22e2ee9da: `tools/etude/bootstrap.sh`, `version.sh` and `version.mk`; `tests/system/etude_version_test.sh`. Met.
 * T14, #603, 58d24fa76: `tools/etude/compare.c`, `baseline.c` and `history_compare`; `tests/host/etude_compare_hosttest.c`. Met.
 * T15, #604, aac4fd270: `tools/etude/watchdog.c` and `supervise.c`; `tests/host/etude_watchdog_hosttest.c`. Met; since the owner's decision of 23 October (#898) a case is stopped only for a lack of progress, as `AGENTS.md` says.
 * T16, #605, 7d58df32e: `tools/etude/ledger.c`; `tests/host/etude_ledger_hosttest.c` and `etude_ledgercmd_hosttest.c`. Met.
 * T17, #606, 52093f678: `tools/etude/posix/remote.c`, `serve.c` and `etude_remote.c`; `tests/host/etude_remote_hosttest.c`. Met.
-* T18, #607, 3479bec8b: `tools/etude/sched.c` and `cost.c`, and admission in the ledger; `tests/host/etude_sched_hosttest.c`. Met for the schedule; `tests/run` gives it one architecture a run, which is #962.
+* T18, #607, 3479bec8b: `tools/etude/sched.c` and `cost.c`, and admission in the ledger; `tests/host/etude_sched_hosttest.c`. The #962 repair gives the public native entry both architectures in one allocation and schedule. Its full integrated run remains pending.
 * T19, #608, 8fbeeb797: `tools/etude/posix/store.c` and `prepare.c`; `tests/host/etude_artifact_hosttest.c`. Met.
 * T20, #609, 689d56533: libetude-case, `tools/etude/posix/scenario.c` and `case_main.c`; `tests/host/etude_scenario_hosttest.c`. Met.
 * T21, #610, 5194fd845: the services and machines of `scenario.c`; `tests/host/etude_scenario_hosttest.c`. Met.
 * T22, #611, b3d1a88e5: `tools/etude/deploy.sh`; `tests/system/etude_deploy_test.sh`. Met.
-* T23, #612, 4e0039eea: `tools/etude/posix/etude_host.c` and the family `host.host`, every sanitizer report fatal; `tests/system/host_suite_test.sh`. Met; two rows that pass after skipping a check for a missing program are #950 and #951 (group #956).
-* T24, #613, a060faffa: `tools/etude/repeat.c`, `posix/repeat.c` and `posix/load.c`; `tests/host/etude_repeat_hosttest.c`. Met.
+* T23, #612, 4e0039eea: `tools/etude/posix/etude_host.c` and the family `host.host`, every sanitizer report fatal. The recovered native host inventories require every selected check and executable, with no missing-tool skip. The complete native host runs are pending; the old tooling-machine execution is superseded by [recovery](recovery.md).
+* T24, #613, a060faffa: `tools/etude/repeat.c`, `posix/repeat.c` and `posix/load.c`; `tests/host/etude_repeat_hosttest.c`. The original library has fixture evidence, but the recovered public collection did not call it or expose shuffle and controlled load. #990 supplies that integration; actual focused repeated and loaded runs remain required.
 * T25, #614, a88d8f766: the proof driver met its condition when it landed; 9dc209d2b removed it under the owner's decision. Nothing is left.
 * T26, #615, f4b5b5b90: the process and protocol catalogues met their condition when they landed; 92421ca2a removed them under the owner's decision. Nothing is left.
 * T27, #616, e265c0956: the storage and image catalogues, likewise removed by 92421ca2a. Nothing is left.
 * T28, #617, 85b92e53f: `tests/musl/pselectmusl.c`, `preadv` and `pwritev` in `tests/musl/preadmusl.c` (661fad06f), and `tests/host/krandom_hosttest.c` for the generator. Met, without the deliberate faults.
 * T29, #618, 7e7daae25: `tests/host/ps2mouse_hosttest.c` runs the whole bring-up against the existing 8042 model. Met.
 * T30, #619, d07c2d7e7: `tests/fuzz/elf64_fuzz.c` and its corpus, which the case `host.host.fuzz` replays under the sanitizers. Met, without the deliberate fault.
-* T31, #620, 2d8c219bc: the guest copies are gone; `host.list` keeps the board, limited, release_resume, tidy and worker_park checks, and `machine.agents.procfd` the Rach2 integration. Met.
-* T32, #621, cda41cfb7: `tests/host/pwauth_hosttest.c` counts retries. Met; its two sleeps left in `tests/system/unconverted` are #961.
-* T33, #622, 697c56444: the probes named wait for events; 54 sleeps in 39 files remain in `tests/system/unconverted`. Gap: #961.
+* T31, #620, 2d8c219bc: the guest copies are gone; the host inventory keeps the board, limited, release_resume, tidy and worker_park checks. The removed `machine.agents.procfd` assertion now runs as `guest.default.proclinkmusl`'s `fd-directory`, with stat and S_ISDIR before descriptor-link checks. [The case audit](924-audit.md) records that transfer; its integrated run is pending.
+* T32, #621, cda41cfb7: `tests/host/pwauth_hosttest.c` counts retries. The #961 repair removed its sleep exemptions.
+* T33, #622, 697c56444: the probes wait for events. The #961 repair removed the remaining undeclared waits and the exemption list is empty. Integrated acceptance is pending.
 * T34, #623, 025afa67d: the resize stopped at a witnessed write under e2fsprogs' test I/O manager, now in the families `machine.grow` and `machine.installer-repair`. Met.
 * T35, #624, fccc4fa8b: SSH tries start at init's record of the server's start in `machine.metal` and `machine.diskdiag`; Doom's frames in `machine.doom` (4377f51d8); uefi by events (T81). Met.
 * T36, #625, 3c2b1ba06: the hold and answer controls of `rach2/sys/block/lag.c`; `tests/host/request_hosttest.c`. Met.
@@ -52,10 +52,10 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T42, #631, 98d0f3899: `tests/system/checkers/wavcheck.c` and the family `machine.audio`, with no accelerator forced. Met.
 * T43, #632, 9c0d2d214: the debug-entry rows of `tests/musl/ptracemusl.c` on both architectures. Met, without the deliberate fault.
 * T44, #633, 4bfc09300: `tests/native/` and `tests/native/machine`, which `tools/verify/nativecheck.sh` in the style case checks against every built program. Met.
-* T45, #634, 2cb42861a: the tooling machine, `tools/etude/tooling.c`, and `tests/system/etude_tooling_test.sh`. Met; the rows that skip instead of using it are #950 and #951 (group #956).
+* T45, #634, 2cb42861a: the original tooling-machine contract is superseded by [recovery](recovery.md). Source production may use its declared build tools. Execution uses prepared native controllers and declared Rach2 helpers, with their resources and costs recorded. Missing or unsupported checks fail inventory validation.
 * T46, #635, 2a495869e: the lazy boundary profile (ee9769ac9) and the site's permission (afdce9108); `tests/host/etude_scenario_hosttest.c`; [the memory record](memory.md). Met.
 * T47, #636, 6b36893f5: `tests/host/etude_runtime_hosttest.c`. Met.
-* T48, #637, ffa6b51c9: [the Mac's acceptance](mac.md) and [its artifacts](mac-artifacts.md). Met.
+* T48, #637, ffa6b51c9: [the Mac's acceptance](mac.md) and [its artifacts](mac-artifacts.md) record the original implementation. The recovered native entry and artifact import require the complete T91 run; these earlier records do not accept that replacement.
 * T49, #638, 003c9e59b: `tools/etude/win/winrunfix.c` and the 40 fixtures of `wincheck.sh` on Windows. Met.
 * T50, #639, 96e01a721: `tests/native/tccbuild.sh` and the native transport adapter passed the four TinyCC modes over actual SSH on the Lenovo. [Acceptance record](t50-ssh.md), #963. Met; T93 remains separate.
 * T51, #640, 8fb0e87b6: `tools/etude/posix/bridge.c` and `etude-bridge`; `tests/host/etude_bridge_hosttest.c`. Met.
@@ -64,8 +64,8 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T54, #643, 00935f221: `tools/etude/posix/status.c` and `tools/flow/test_status.py`; `tests/host/etude_lines_hosttest.c` and `tests/system/test_status_check.sh`. Met.
 * T55, #644, 625efc989: `tools/ci/bisect.sh` and `bisect.yml` through `etude-bridge`; `tests/system/ci_test.sh`. Met.
 * T56, #645, 3bb17f632: [the Ubuntu enrollment](ubuntu.md) and the installed policy `/etc/rach2/etude-site`. Met.
-* T57, #646, b237b85d4: `tests/run` runs through `etude-legacy set`; `tests/host/etude_legacyset_hosttest.c` and `tests/system/case_select_test.py`. Met.
-* T58, #647, 69b46641c: `tools/etude/budget.c` and `history_budget`; `tests/host/etude_budget_hosttest.c`. Met; no ci or release step runs `history_budget` yet, since the site policy it reads comes with the machine that T94 selects and T95 installs.
+* T57, #646, b237b85d4: the public `etude run` selects and schedules the recovered collection in C, including both architectures. The allocator export identifies every selected item. The retained legacy fixture tests the preparation contract; the complete public-entry runs remain pending.
+* T58, #647, 69b46641c: `tools/etude/budget.c`, `budget_prepare.c` and the budget fixtures. Native routine preparation now reads the selected site's reference history and forecasts its selection; native CI requires the structured budget verdict. T94 must supply actual reference samples and T95 must activate and exercise those entries. No forecast from an unmeasured reference is accepted.
 * T59, #648, 618cdd9bf: `tools/ci/run.sh` judges a run by casecheck's verdict on its history; `tests/system/ci_run_test.sh`. Met.
 * T60, #649, 49d52128b: `tools/ci/report.sh` and `history_failures`; `tests/system/ci_test.sh` and `tests/host/etude_failures_hosttest.c`. Met.
 * T61, #650, 44db2e196: `tools/ci/bisect.sh` leaves a range unresolved for a runner's fault; `tests/system/ci_test.sh`. Met.
@@ -97,7 +97,7 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 * T87, #676, 5a6f57c3b: `host.imagerace`. Met.
 * T88, #677, 2470763f8: no suite is a make target, and `tests/run` runs only cases. Met.
 * T89, #678, 4b82fa153: the old harness, runtests, runutil and their tests, with the `runner` and `drive` suites, removed (9da97a088, #875). Met.
-* T90, #679: waits for the runs; [the Ubuntu runs](ubuntu-run.md) are recorded.
+* T90, #679: the earlier [Ubuntu runs](ubuntu-run.md) are historical adapter results. A complete passing recovered collection remains required on Ubuntu before comparison.
 * T91, #680: waits for the runs.
 * T92, #681: waits for the runs.
 * T93, #682: waits for the runs.
@@ -107,9 +107,9 @@ On 23 October the owner set aside the proof of a new test by a deliberate fault 
 
 ## The coverage inventory
 
-The 101 suites of [the inventory](inventory-suites.md) are 88 of the 90 case families under `tests/cases/` and 13 recorded removals; the other two families, `machine.etudeguest` and `machine.etudeexec`, this phase added. `runner` and `drive` went with the old runner (9da97a088, #875). The twins `dgram-e1000`, `dhcp-e1000`, `netif-e1000`, `packet-e1000`, `ping-e1000`, `raw-e1000` and `ssh-e1000`, and `disk`, `disk-ahci`, `disks` and `persist-ahci`, were deleted on 23 October under #921, #922 and #923, each commit naming the case that covers its behavior.
+The source at 39dd88850 has 89 manifest families and 548 cases. The public both-architecture allocation contains 1024 items. The 101 original suites of [the inventory](inventory-suites.md) became 88 retained families and 13 recorded removals; the additional retained family is `machine.etudeexec`. This phase's additional `machine.etudeguest` family was later removed under #924 with its assertions covered as T11 describes. `runner` and `drive` went with the old runner (9da97a088, #875). The twins `dgram-e1000`, `dhcp-e1000`, `netif-e1000`, `packet-e1000`, `ping-e1000`, `raw-e1000` and `ssh-e1000`, and `disk`, `disk-ahci`, `disks` and `persist-ahci`, were deleted on 23 October under #921, #922 and #923, each commit naming the case that covers its behavior.
 
-Every row of `gnu_rows.sh` in the inventory, 68, is a case of `machine.gnu`; the agents rows are cases of `machine.agents` but the five guest copies T31 removed; `stackoverrun_row.sh` is in `machine.memory` and `gpt_write_refusal.sh` in `machine.parts`.
+The 67 retained GNU rows are cases of `machine.gnu`; [the case audit](924-audit.md) records the removed GNU and agent rows and their retained assertions. `stackoverrun_row.sh` is in `machine.memory` and `gpt_write_refusal.sh` in `machine.parts`.
 
 Of the scripts, the kept ones that are gone moved into cases: `ata_rate_test.sh` into `machine.diskrate`, `krffscheck.sh` into `host.krffscheck`, `imagerace.sh` into `host.imagerace`, `clockload.py` into `machine.clock`, `init_refusal.sh` into the console families, the grow scripts into `machine.grow`, `installed_test.sh` and `ssh_flood_test.sh` into `machine.ssh` and `machine.metal`, and `usb_latency.sh` into `machine.usb`. `probe_roots.sh` lost its callers and went with the harness; the ext2 family runs the probes on an ext2 root, and the selfbuild families each probe of the list. [The conversion of the old programs](old-programs.md) records these moves.
 
@@ -119,7 +119,7 @@ The host tests, the checkers' self-tests, the fuzz harnesses and the style check
 
 ## The other issues of the phase
 
-The phase has 322 issues: 100 sub-issues of #589 and the others whose body says `Part of #589`. 305 are closed, the tasks T01 to T90 among them. A commit on `master` with `Closes #N` closed 283 of them; each of the other 22 has a comment that gives the reason:
+The original audit at 02661fb8a counted 322 phase issues: 100 sub-issues of #589 and the others whose body says `Part of #589`. Of these, 305 were closed, the tasks T01 to T90 among them. A commit on master with `Closes #N` had closed 283; each of the other 22 had a comment that gave the reason:
 
 * A duplicate of another closed issue: #743 (#739), #805 (#803), #837 (#836), #880 (#879) and #944 (#942, which is open).
 * Fixed by a commit without a `Closes` line: #825 (1f9697efb).
@@ -128,10 +128,13 @@ The phase has 322 issues: 100 sub-issues of #589 and the others whose body says 
 * Nothing that a user, a test or the build can see: #721 and #794.
 * A run whose result the issue records: #888, the Lenovo's candidate.
 
-## The gaps
+## Remaining acceptance
 
-The former T50 gap, #963, is resolved by the [Lenovo SSH acceptance](t50-ssh.md). T93 still requires its separate full eligible collection.
+The former T50 gap, #963, is resolved by the [Lenovo SSH acceptance](t50-ssh.md). The source repairs for #961, #962, #950 and #951 are implemented as the task entries describe. Their existence does not establish a full native collection pass.
 
-* #961: `tests/system/unconverted` still exempts 54 sleeps and 6 skips in 41 files, which the conversions were to declare or remove (T06, T32, T33).
-* #962: `tests/run` runs one architecture a run, so the two architectures never share one schedule (T18).
-* #950 and #951, in group #956, open before this audit: host rows that pass after skipping a check for a missing program (T23, T45).
+* T90 to T92 require the complete recovered desktop collection on Ubuntu, macOS and Windows, on the same candidate with both architectures together, complete costs and confirmed cleanup. The large-memory profiles and strengthened #924 assertions remain included.
+* T93 requires every eligible native case on the Lenovo's exact candidate and restoration of its accepted system. #989 repairs missing native history and fixed deadlines before that run. The four T50 SSH outcomes do not replace this collection.
+* T24 requires public shuffle, repetition and controlled load through #990, followed by focused acceptance of the converted families under those conditions.
+* T94 requires five independent complete passing runs for each ranked configuration, with known cache and load conditions. The historical Ubuntu and Mac adapter records cannot supply these samples. The Lenovo's smaller selection is excluded from the ranking.
+* T95 requires actual reference history, budget forecasts and public push, CI and release entry checks on the selected site. #991 supplies bounded history retention that preserves accepted baselines and evidence of open issues. Activation waits for T94 and for old jobs to finish.
+* T96 requires the final coverage and acceptance records, followed by the reviewer loop and the release. Component builds, fixtures and these source findings close none of those run obligations.
