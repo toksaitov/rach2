@@ -78,9 +78,8 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `dgram` (core tier; needs qemu; 128 MiB): a connected datagram socket and the permission to broadcast, which is how a DHCP client renews a lease and how it asks for one.
 * `diskdiag` (full tier; needs qemu, ssh; 128 MiB): a disk read without being mounted and without being written.
 * `e1000` (core tier; needs qemu; 128 MiB): the network path on the other emulated card, and the probe order that decides which card a machine with more than one of them gets, the cases of tests/cases/machine.e1000.json, each a boot of its own.
-* `disk-ahci` (core tier; needs qemu; 128 MiB): the page-cache integrity check of blockprobe with the disk on an AHCI controller.
 * `grub` (core tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine replacing its own boot loader.
-* `disk-q35` (full tier; needs qemu; 128 MiB): the same disk proof on the q35 machine, whose AHCI controller is built in at 0:31.2, function 2 of the multi-function device 31.
+* `disk-q35` (full tier; needs qemu; 128 MiB): blockprobe's page-cache integrity check on the q35 machine, whose AHCI controller is built in at 0:31.2, function 2 of the multi-function device 31.
 * `doom` (full tier; needs qemu; 128 MiB): the Doom port on a disk root, refused without its WAD, drawing with a zone sized from the machine's free memory, playing a demo to its end and recording one through fopen.
 * `diskpolicy` (full tier; needs qemu; 128 MiB): the read-only kernel does not write the disk, shown on the bytes rather than on a return value.
 * `console` (core tier; needs qemu; 128 MiB): the two probes that read from the console, which the shared probe boot cannot run because they block until something is typed.

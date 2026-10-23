@@ -1382,16 +1382,13 @@ harness-kernel: $(HARNESS_KERNEL)
 # AHCI backend.
 AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
               --qemu-arg=-device --qemu-arg=ide-hd,drive=drv0,bus=ahci0.0
-# `tests/run disk-ahci`: the page-cache integrity check of blockprobe with the
-# disk on an AHCI controller. It is the case of
-# tests/cases/guest.disk-ahci.json, which etude runs, and has no target here.
-# `tests/run disk-q35`: the same disk proof on the q35 machine, whose AHCI
-# controller is built in at 0:31.2, function 2 of the multi-function device 31.
-# That is the Lenovo's topology, and no other test exercises it: every other
-# AHCI test attaches a separate controller that lands at function 0, so a scan
-# that never walked past function 0 would pass all of them and fail on the
-# real machine. It is the case of tests/cases/guest.disk-q35.json, which etude
-# runs, and has no target here.
+# `tests/run disk-q35`: blockprobe's page-cache integrity check on the q35
+# machine, whose AHCI controller is built in at 0:31.2, function 2 of the
+# multi-function device 31. That is the Lenovo's topology, and no other test
+# exercises it: every other AHCI test attaches a separate controller that lands
+# at function 0, so a scan that never walked past function 0 would pass all of
+# them and fail on the real machine. It is the case of
+# tests/cases/guest.disk-q35.json, which etude runs, and has no target here.
 # `tests/run disks`: two disks of different sizes on one AHCI controller,
 # both in /proc/disk with their ports and sizes, both with nodes, a
 # partition of each mounted and written, and the second disk's file found
