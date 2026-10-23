@@ -40,7 +40,7 @@
  * have a suite of their own, since each needs something this shared boot
  * does not set up. `tests/run console` types at the console for stdintest
  * and ttyprobe, which block until something is typed. `tests/run fault`
- * runs vmfault, vmro and winprobe, which are killed on purpose and so have
+ * runs vmfault and winprobe, which are killed on purpose and so have
  * no status to report. `tests/run socket` starts a host echo server for
  * udptest and tcptest, and `tests/run ping` answers pingtest.
  */

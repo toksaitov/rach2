@@ -226,13 +226,13 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # ptys and sockets (see tests/poolprobe.c). They are the guest cases of
 # tests/cases/guest.pools.json, which etude runs, each in a boot of its own,
 # and have no target here.
-# `tests/run fault`: the three probes whose whole claim is that the kernel
-# killed them. vmfault writes through a pointer in no mapping, vmro writes a
-# page it mapped read-only, and winprobe reads the page-cache window, which
-# belongs to the kernel. They are the cases of tests/cases/guest.fault.json,
-# which etude runs, each in a boot of its own, and have no target here: each
-# must end on signal 11 with the kernel's record of the kill on the console
-# and no panic.
+# `tests/run fault`: the two probes whose whole claim is that the kernel killed
+# them. vmfault writes through a pointer in no mapping, and winprobe reads the
+# page-cache window, which belongs to the kernel; the default suite's forkro has
+# a write to a read-only page killed the same way. They are the cases of
+# tests/cases/guest.fault.json, which etude runs, each in a boot of its own, and
+# have no target here: each must end on signal 11 with the kernel's record of
+# the kill on the console and no panic.
 # `tests/run console`: the two probes that read from the console, which the
 # shared probe boot cannot run because they block until something is typed.
 # They are the cases of tests/cases/machine.console.json, which etude runs,

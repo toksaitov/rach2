@@ -163,7 +163,6 @@ case vfsprobe.ext2 root:ext2 -- vfsprobe
 case vfsprobe.krffs root:krffs -- vfsprobe
 case vmfault end:signal:11 -- vmfault
 case vmprobe -- vmprobe
-case vmro end:signal:11 -- vmro
 case waitprobe stage:native/hello.txt -- waitprobe
 case winprobe end:signal:11 -- winprobe
 case xsaveprobe -- xsaveprobe core=xsaveprobe.d

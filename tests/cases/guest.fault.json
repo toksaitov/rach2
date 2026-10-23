@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "guest.fault",
-  "summary": "Programs that touch memory they may not are killed by SIGSEGV, and the kernel runs on; the programs are tests/vmfault.c, tests/vmro.c and tests/winprobe.c",
+  "summary": "Programs that touch memory they may not are killed by SIGSEGV, and the kernel runs on; the programs are tests/vmfault.c and tests/winprobe.c",
   "cases": [
     {
       "case_id": "guest.fault.vmfault",
@@ -22,31 +22,6 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "vmfault", "node": "tests/vmfault", "per_architecture": true},
-        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
-        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
-      ],
-      "timing": [],
-      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}, {"fixture": "log"}]}
-    },
-    {
-      "case_id": "guest.fault.vmro",
-      "behavior": "a store to a page the program mapped with PROT_READ alone kills it with signal 11 and leaves the kernel running",
-      "units": ["fault", "vmro"],
-      "domain": "guest",
-      "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"]}},
-      "execution": {"program": "vmro", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "none", "cleanup": "nothing; the program is killed before it makes anything"},
-      "assertions": [
-        {"assertion_id": "killed", "checks": "the kernel says it killed the program for a write it may not make", "source": "executor", "record": ": bad write at 0x"}
-      ],
-      "branches": [],
-      "termination": {"end": "signaled", "value": 11},
-      "progress": [],
-      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}}},
-      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
-      "prepare": [
-        {"name": "vmro", "node": "tests/vmro", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
       ],
