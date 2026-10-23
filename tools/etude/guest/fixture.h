@@ -17,7 +17,7 @@
 
 /* A volume: an image of the invocation attached to a loop device. */
 struct fix_volume {
-    char type[8];     /* krffs, ext2, vfat or exfat */
+    char type[16];    /* krffs, ext2, vfat, exfat, or ext2-dir for a root */
     char image[160];  /* the file of the invocation */
     int mounted;      /* on volN of the workspace, or attached alone */
     int loop;         /* the device's number, or -1 */
