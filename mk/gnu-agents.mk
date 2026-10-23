@@ -46,3 +46,11 @@ $(GNU_OUT)/agents/%.stamp: vendor/gnu/agents/packages/%.sh $(GNU_AGENTS_SOURCES)
 	@rm -f $@
 	@$(STEP) -r $(GNU_OUT) -n gnu-agents-$* -t $@ $(STEP_INPUTS) -o agents/$* \
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" ./vendor/gnu/agents/fetch_agents.sh $*'
+
+# The agent rows compare the running binary with the verified package bytes.
+# Reading the archive needs no target executable or GNU image on the host.
+build/tests/cases/machine/codex.sha256: vendor/gnu/agents/packages/codex.sh \
+    $(GNU_AGENTS_SOURCES) tests/cases/machine/prepare_codex_digest.py | $(SHA256TOOL)
+	@set -e; . vendor/gnu/agents/packages/codex.sh; \
+	    archive=$$(RACH2_ARCH=x86_64 sh vendor/gnu/agents/fetch_agents.sh -f codex "$$PACKAGE"); \
+	    python3 -B tests/cases/machine/prepare_codex_digest.py "$$archive" "$@"
