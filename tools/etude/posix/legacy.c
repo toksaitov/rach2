@@ -1088,9 +1088,9 @@ static int clean_inhouse(struct prep *p)
 static int import_artifacts(struct prep *p, const char *config)
 {
     char *request = format("%s/import.goals", p->work);
-    char *record = p->o->record ? artifact_path(p->tree, p->o->record) : NULL;
+    char *record = p->o->record ? etude_record_artifact_path(p->tree, p->o->record) : NULL;
     char *provenance = record ? format("%s.import.json", record) : NULL;
-    char *config_path = artifact_path(p->tree, config);
+    char *config_path = etude_record_artifact_path(p->tree, config);
     char *args[] = {"python3", "tools/etude/preparation_import.py", "prepare",
                     "--tree", p->tree, "--config", (char *)config,
                     "--request", request, "--work", p->work, "--provenance", provenance, "--commit",
