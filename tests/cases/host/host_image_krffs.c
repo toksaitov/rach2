@@ -84,7 +84,7 @@ static int native(struct image_check *t, const char *tool, char *const args[], s
     program = etude_artifact(t->u.c, artifact);
     if (program == NULL)
         return 0;
-    argv[0] = (char *)program;
+    argv[0] = artifact;
     for (n = 0; args[n] != NULL && n + 2 < sizeof(argv) / sizeof(argv[0]); n++)
         argv[n + 1] = args[n];
     argv[n + 1] = NULL;
@@ -310,7 +310,7 @@ int image_krffs(struct image_check *t)
 {
     char file[4096], manifest[4096];
     char *empty[] = {NULL, NULL, NULL, NULL};
-    const char *checker = etude_artifact(t->u.c, "host-krffs-fsck");
+    const char *checker = etude_program(t->u.c, "host-krffs-fsck");
     const char *old_env = getenv("KRFFS_FSCK");
     char *old = old_env != NULL ? strdup(old_env) : NULL;
     if (!path(t, "image", file) || !path(t, "manifest", manifest) || checker == NULL ||

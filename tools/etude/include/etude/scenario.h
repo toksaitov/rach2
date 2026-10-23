@@ -89,6 +89,10 @@ enum etude_status etude_step(struct etude_case *c, const char *step);
  */
 const char *etude_artifact(struct etude_case *c, const char *name);
 
+/** Give a declared host tool or a checked executable artifact copy. The
+ * caller may pass this path to a child program that executes a helper. */
+const char *etude_program(struct etude_case *c, const char *name);
+
 /**
  * Give the path of a private writable copy of artifact `name`, made for this
  * attempt and removed in its cleanup unless the attempt failed. For the name
