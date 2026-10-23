@@ -9,6 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'etude'))
 from preparation_paths import filesystem_path
+from retention_access import reading
 
 
 def file_hash(path):
@@ -92,7 +93,11 @@ def main():
     parser.add_argument('source', type=filesystem_path)
     parser.add_argument('output', type=filesystem_path)
     args = parser.parse_args()
-    (stage if args.action == 'stage' else restore)(args.source, args.output)
+    if args.action == 'stage':
+        with reading([args.source], bundle=True):
+            stage(args.source, args.output)
+    else:
+        restore(args.source, args.output)
 
 
 if __name__ == '__main__':

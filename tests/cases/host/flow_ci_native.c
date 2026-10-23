@@ -145,13 +145,15 @@ static int setup(struct fixture *f)
     fx_env("RACH2_QEMU_ACCEL", "tcg");
     fx_env("ARCH", "i686 x86_64");
     fx_env("SUITES", "");
-    return 1;
+    return flow_ci_retention_setup(f);
 }
 
 static int row(struct fixture *f, const char *mode, unsigned number)
 {
     char out[8192], name[120], file[16384];
-    snprintf(out, sizeof(out), "%s/native.%u", f->work, number);
+    (void)number;
+    if (!flow_ci_retained_out(f, out, sizeof out))
+        return 0;
     fx_env("CI_NATIVE_OUT", out);
     fx_env("CI_NATIVE_MODE", mode);
     const char *argv[] = {"/bin/sh", "tools/ci/run.sh", "core", out, NULL};
@@ -177,7 +179,9 @@ static int row(struct fixture *f, const char *mode, unsigned number)
 
 static int push_row(struct fixture *f)
 {
-    const char *out = flow_path(f, "native.push");
+    char out[8192];
+    if (!flow_ci_retained_out(f, out, sizeof out))
+        return 0;
     fx_env("CI_NATIVE_OUT", out);
     fx_env("CI_NATIVE_MODE", "push");
     fx_env("RACH2_CASES", "host.fixture.host,machine.fixture.default");
@@ -198,6 +202,7 @@ int flow_ci_native(struct fixture *f)
     for (unsigned i = 0; i < sizeof(modes) / sizeof(*modes); i++)
         ok = row(f, modes[i], i) && ok;
     ok = push_row(f) && ok;
+    fx_env("ETUDE_RETENTION", NULL);
     fx_env("ETUDE", "");
     fx_env("ETUDE_SITE", "");
     fx_env("CI_NATIVE_OUT", "");

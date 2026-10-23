@@ -9,6 +9,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'etude'))
 from preparation_paths import filesystem_path, native_path
+from retention_access import reading
 
 
 def checked(ref):
@@ -52,8 +53,9 @@ def forecast(args):
     command = [native_path(args.etude), 'estimate', '-s',
                native_path(args.tree / 'tools/etude/schemas'), 'forecast', native_path(policy),
                'release', *map(native_path, manifests), '--', *map(native_path, histories)]
-    with args.output.open('x') as log:
-        status = subprocess.call(command, stdout=log, stderr=subprocess.STDOUT)
+    with reading([policy, *histories]):
+        with args.output.open('x') as log:
+            status = subprocess.call(command, stdout=log, stderr=subprocess.STDOUT)
     with args.output.with_suffix('.receipt.json').open('x') as stream:
         json.dump(dict(format='etude-reference-check', schema_version=1,
                        reference=descriptor, command=command, status=status,

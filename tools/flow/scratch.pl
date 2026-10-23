@@ -58,7 +58,10 @@ sub fresh {
     my $young = 0;
     find({ no_chdir => 1, wanted => sub {
         my @s = lstat $_;
-        if (!@s || $now - $s[9] < $age) {
+        if (-d $_ && -f "$_/.etude-retention-root.json") {
+            $young = 1;
+            $File::Find::prune = 1;
+        } elsif (!@s || $now - $s[9] < $age) {
             $young = 1;
             $File::Find::prune = 1;
         }

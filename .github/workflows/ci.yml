@@ -85,26 +85,30 @@ jobs:
       - name: Take the environment of a core run
         run: grep -E '^[A-Z_][A-Z0-9_]*=' tools/ci/core.env >> "$GITHUB_ENV"
 
+      - name: Allocate retained native evidence
+        id: retention
+        run: python3 tools/ci/retention.py --policy "$ETUDE_RETENTION" --site "$ETUDE_SITE" allocate --reference "$ETUDE_REFERENCE" --github-env "$GITHUB_ENV"
+
       - name: Prepare and run style, host and core
-        run: sh tools/ci/run.sh core "$RUNNER_TEMP/results"
+        run: sh tools/ci/run.sh core "$ETUDE_RESULTS"
 
       - name: Record the result for the report
         id: verdict
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         run: |
           for arch in i686 x86_64; do
-              out=$RUNNER_TEMP/results/core-$arch
+              out=$ETUDE_RESULTS/core-$arch
               if [ -f "$out/done" ] && [ -f "$out/failed" ]; then
                   echo "$arch=done $(tr '\n' ' ' < "$out/failed")" >> "$GITHUB_OUTPUT"
               fi
           done
 
       - name: Stage the shared native evidence
-        if: always()
-        run: python3 tools/ci/native_evidence.py stage "$RUNNER_TEMP/results" "$RUNNER_TEMP/native-evidence"
+        if: ${{ always() && steps.retention.outcome == 'success' }}
+        run: python3 tools/ci/native_evidence.py stage "$ETUDE_RESULTS" "$RUNNER_TEMP/native-evidence"
 
       - name: Upload the shared native evidence
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: core-native-evidence
@@ -112,19 +116,19 @@ jobs:
           retention-days: 14
 
       - name: Upload the i686 logs
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: core-i686
-          path: ${{ runner.temp }}/results/core-i686
+          path: ${{ env.ETUDE_RESULTS }}/core-i686
           retention-days: 14
 
       - name: Upload the x86_64 logs
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: core-x86_64
-          path: ${{ runner.temp }}/results/core-x86_64
+          path: ${{ env.ETUDE_RESULTS }}/core-x86_64
           retention-days: 14
 
   report:

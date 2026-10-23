@@ -100,18 +100,22 @@ jobs:
           clean: false
           fetch-depth: 0
 
+      - name: Allocate retained native evidence
+        id: retention
+        run: python3 tools/ci/retention.py --policy "$ETUDE_RETENTION" --site "$ETUDE_SITE" allocate --reference "$ETUDE_REFERENCE" --github-env "$GITHUB_ENV"
+
       - name: Build and test both architectures
         env:
           ARCH: i686 x86_64
           SUITES: ${{ inputs.suites }}
-        run: sh tools/ci/run.sh full "$RUNNER_TEMP/results"
+        run: sh tools/ci/run.sh full "$ETUDE_RESULTS"
 
       - name: Stage the shared native evidence
-        if: always()
-        run: python3 tools/ci/native_evidence.py stage "$RUNNER_TEMP/results" "$RUNNER_TEMP/native-evidence"
+        if: ${{ always() && steps.retention.outcome == 'success' }}
+        run: python3 tools/ci/native_evidence.py stage "$ETUDE_RESULTS" "$RUNNER_TEMP/native-evidence"
 
       - name: Upload the shared native evidence
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: full-native-evidence
@@ -119,19 +123,19 @@ jobs:
           retention-days: 14
 
       - name: Upload the i686 logs
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: full-i686
-          path: ${{ runner.temp }}/results/full-i686
+          path: ${{ env.ETUDE_RESULTS }}/full-i686
           retention-days: 14
 
       - name: Upload the x86_64 logs
-        if: always()
+        if: ${{ always() && steps.retention.outcome == 'success' }}
         uses: actions/upload-artifact@v7
         with:
           name: full-x86_64
-          path: ${{ runner.temp }}/results/full-x86_64
+          path: ${{ env.ETUDE_RESULTS }}/full-x86_64
           retention-days: 14
 
       - name: Set the commit's status and file failures as issues
@@ -140,4 +144,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ inputs.sha }}
           SUITES: ${{ inputs.suites }}
-        run: sh tools/ci/report.sh full "$SHA" "$RUNNER_TEMP/results"
+        run: sh tools/ci/report.sh full "$SHA" "${ETUDE_RESULTS:-$RUNNER_TEMP/unallocated-results}"

@@ -6,10 +6,9 @@ out=$2
 shift 2
 case $kind in core|full|push) ;; *) exit 2 ;; esac
 tree=$(pwd -P)
-mkdir -p "$out"
+[ -d "$out" ] || { echo 'ci: refused: allocate persistent OUT with retention.py first' >&2; exit 2; }
 out=$(cd "$out" && pwd -P)
 [ ! -e "$out/start" ] || { echo "ci: refused: result directory was already used: $out" >&2; exit 2; }
-(set -C; : > "$out/start")
 sha=$(git rev-parse HEAD)
 if ! git diff --quiet || ! git diff --cached --quiet; then
     echo 'ci: refused: routine collection requires a clean committed tree' >&2; exit 2;
@@ -47,6 +46,11 @@ for filter in "${RACH2_CASES:-}" "${RACH2_AGENTS_ROWS:-}" "${RACH2_ACCEPT_AGENTS
     [ "$kind" = push ] || [ -z "$filter" ] || { echo 'ci: refused: routine selection cannot inherit case filters' >&2; exit 2; }
 done
 run="routine-$purpose-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
+[ -n "${ETUDE_RETENTION:-}" ] || { echo 'ci: refused: selected-site retention policy is absent' >&2; exit 2; }
+retention_script=$tree/tools/ci/retention.py
+case $(uname -s) in MINGW*|MSYS*|UCRT*|CLANG*|CYGWIN*) retention_script=$(cygpath -au "$retention_script") ;; esac
+python3 "$retention_script" --policy "$ETUDE_RETENTION" --site "$site" begin "$out" "$run"
+(set -C; : > "$out/start")
 accel=${RACH2_QEMU_ACCEL:-}
 [ -n "$accel" ] || accel=$(sh "$tree/tools/ci/site.sh" "$tree/tools/ci/site" | sed -n 's/^accelerator=//p')
 "$etude" run -t "$tree" inventory > "$out/suites.inventory"
@@ -153,4 +157,5 @@ for arch in $selected; do
     cp "$result/verdict" "$result/err"
     : > "$result/done"
 done
+python3 "$retention_script" --policy "$ETUDE_RETENTION" --site "$site" seal "$out"
 exit "$result_status"
