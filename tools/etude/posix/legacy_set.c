@@ -1075,6 +1075,46 @@ static int runner_document(struct set *x, struct cmp_text *t, struct cmp_text *d
     return part(x, t, "runner", d);
 }
 
+static int plan_environment(struct set *x, struct cmp_text *t, struct cmp_text *d)
+{
+    const struct etude_legacy_set_opts *o = x->o;
+    int rc = 0;
+    cmp_printf(t, "],\"environment\":{\"machine_id\":");
+    string(t, x->machine_id);
+    cmp_printf(t, ",\"boot_id\":");
+    string(t, x->boot_id);
+    cmp_printf(t, ",\"os\":\"%s\",\"os_version\":", x->os);
+    string(t, x->os_version);
+    cmp_printf(t, ",\"accelerator\":");
+    string(t, o->accel);
+    cmp_printf(d, "{\"schema_version\":1,\"ledger\":");
+    string(d, o->ledger);
+    cmp_printf(d, ",\"locks\":");
+    if (o->locks != NULL)
+        string(d, o->locks);
+    else
+        cmp_printf(d, "null");
+    cmp_printf(d, ",\"account\":");
+    string(d, o->account);
+    cmp_printf(d, "}\n");
+    rc |= context_part(x, t, "site_profile", d);
+    cmp_printf(d, "{\"schema_version\":1,\"accelerator\":");
+    string(d, o->accel);
+    cmp_printf(d, ",\"processors\":%u}\n", o->cpus);
+    rc |= context_part(x, t, "tools", d);
+    cmp_printf(d, "{\"schema_version\":1,");
+    capacity(x, d);
+    cmp_printf(d, "}\n");
+    rc |= part(x, t, "capacity", d);
+    cmp_printf(d, "{\"schema_version\":1,\"state\":\"the driver does not measure caches\"}\n");
+    rc |= context_part(x, t, "cache_state", d);
+    cmp_printf(d, "{\"schema_version\":1,\"method\":\"native-load-v1\","
+                   "\"stage\":\"planned\"}\n");
+    rc |= part(x, t, "load", d);
+    cmp_printf(t, "}");
+    return rc;
+}
+
 /** Write the plan record. */
 static int write_plan(struct set *x)
 {
@@ -1133,39 +1173,7 @@ static int write_plan(struct set *x)
             rc |= keep(x, bytes, count, &t);
         free(bytes);
     }
-    cmp_printf(&t, "],\"environment\":{\"machine_id\":");
-    string(&t, x->machine_id);
-    cmp_printf(&t, ",\"boot_id\":");
-    string(&t, x->boot_id);
-    cmp_printf(&t, ",\"os\":\"%s\",\"os_version\":", x->os);
-    string(&t, x->os_version);
-    cmp_printf(&t, ",\"accelerator\":");
-    string(&t, o->accel);
-    cmp_printf(&d, "{\"schema_version\":1,\"ledger\":");
-    string(&d, o->ledger);
-    cmp_printf(&d, ",\"locks\":");
-    if (o->locks != NULL)
-        string(&d, o->locks);
-    else
-        cmp_printf(&d, "null");
-    cmp_printf(&d, ",\"account\":");
-    string(&d, o->account);
-    cmp_printf(&d, "}\n");
-    rc |= context_part(x, &t, "site_profile", &d);
-    cmp_printf(&d, "{\"schema_version\":1,\"accelerator\":");
-    string(&d, o->accel);
-    cmp_printf(&d, ",\"processors\":%u}\n", o->cpus);
-    rc |= context_part(x, &t, "tools", &d);
-    cmp_printf(&d, "{\"schema_version\":1,");
-    capacity(x, &d);
-    cmp_printf(&d, "}\n");
-    rc |= part(x, &t, "capacity", &d);
-    cmp_printf(&d, "{\"schema_version\":1,\"state\":\"the driver does not measure caches\"}\n");
-    rc |= context_part(x, &t, "cache_state", &d);
-    cmp_printf(&d, "{\"schema_version\":1,\"method\":\"native-load-v1\","
-                   "\"stage\":\"planned\"}\n");
-    rc |= part(x, &t, "load", &d);
-    cmp_printf(&t, "}");
+    rc |= plan_environment(x, &t, &d);
     cmp_printf(&d, "{\"schema_version\":1,\"width\":%u,\"serial\":", o->width);
     names(x, &d, is_serial);
     cmp_printf(&d, ",\"exclusive\":");
@@ -2141,6 +2149,38 @@ static void disruption(struct cmp_text *t, const struct command *c, size_t *n)
     string(t, text);
 }
 
+static int run_budget(struct set *x, struct cmp_text *t, int open)
+{
+    const struct etude_reading *from = charged_start(x), *end = &x->end;
+    int rc = 0;
+    cmp_printf(t, ",\"budget\":{\"policy\":%s,\"charged_us\":", x->policy);
+    if (open)
+        cmp_printf(t, "{\"value\":null,\"reason\":\"the run has not ended\"}");
+    else if (x->o->prepared && !etude_context_preparation(x->o->context))
+        cmp_printf(t,
+                   "{\"value\":null,\"reason\":\"ordinary preparation has no same-run receipt\"}");
+    else
+        rc |= elapsed(t, from, end);
+    cmp_printf(t, ",\"outside_queue_us\":{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":"
+                   "\"exact\",\"interval_us\":null,\"error_bound\":0},\"one_time_setup_us\":"
+                   "{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":\"exact\","
+                   "\"interval_us\":null,\"error_bound\":0},");
+    struct etude_measurement charge = etude_history_elapsed(from, end);
+    int known =
+        !open && !charge.reason && (!x->o->prepared || etude_context_preparation(x->o->context));
+    const char *verdict = !strcmp(purpose(x), "\"phase_first_run\"")            ? "exempt"
+                          : !known                                              ? "unknown"
+                          : charge.value <= x->ceiling_us && !x->budget_expired ? "pass"
+                                                                                : "failure";
+    x->budget_failed = !strcmp(verdict, "failure");
+    cmp_printf(t,
+               "\"goal_us\":%llu,\"growth_us\":%llu,\"ceiling_us\":%llu,"
+               "\"cleanup_reserve_us\":%llu,\"verdict\":\"%s\"}",
+               (unsigned long long)x->goal_us, (unsigned long long)x->growth_us,
+               (unsigned long long)x->ceiling_us, (unsigned long long)x->reserve_us, verdict);
+    return rc;
+}
+
 /** Write the run record, with each item's attempt and the worst outcome;
  * give the worst outcome in `*worst`. */
 static int write_run(struct set *x, enum outcome *worst)
@@ -2188,31 +2228,7 @@ static int write_run(struct set *x, enum outcome *worst)
     rc |= run_resources(x, &t);
     rc |= totals(x, &t);
     rc |= observed(x, &t);
-    cmp_printf(&t, ",\"budget\":{\"policy\":%s,\"charged_us\":", x->policy);
-    if (open)
-        cmp_printf(&t, "{\"value\":null,\"reason\":\"the run has not ended\"}");
-    else if (x->o->prepared && !etude_context_preparation(x->o->context))
-        cmp_printf(&t,
-                   "{\"value\":null,\"reason\":\"ordinary preparation has no same-run receipt\"}");
-    else
-        rc |= elapsed(&t, from, end);
-    cmp_printf(&t, ",\"outside_queue_us\":{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":"
-                   "\"exact\",\"interval_us\":null,\"error_bound\":0},\"one_time_setup_us\":"
-                   "{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":\"exact\","
-                   "\"interval_us\":null,\"error_bound\":0},");
-    struct etude_measurement charge = etude_history_elapsed(from, end);
-    int known =
-        !open && !charge.reason && (!x->o->prepared || etude_context_preparation(x->o->context));
-    const char *verdict = !strcmp(purpose(x), "\"phase_first_run\"")            ? "exempt"
-                          : !known                                              ? "unknown"
-                          : charge.value <= x->ceiling_us && !x->budget_expired ? "pass"
-                                                                                : "failure";
-    x->budget_failed = !strcmp(verdict, "failure");
-    cmp_printf(&t,
-               "\"goal_us\":%llu,\"growth_us\":%llu,\"ceiling_us\":%llu,"
-               "\"cleanup_reserve_us\":%llu,\"verdict\":\"%s\"}",
-               (unsigned long long)x->goal_us, (unsigned long long)x->growth_us,
-               (unsigned long long)x->ceiling_us, (unsigned long long)x->reserve_us, verdict);
+    rc |= run_budget(x, &t, open);
     cmp_printf(&t, ",\"result\":{\"outcome\":\"%s\",\"reason\":", outcome_names[*worst]);
     run_reason(x, reason, sizeof(reason));
     if (*worst == PASS)
@@ -3752,6 +3768,18 @@ static int collection_locks(struct set *x)
     return 0;
 }
 
+static int start_observer(struct set *x)
+{
+    struct etude_pid self;
+    if (fit(x->observation_path, sizeof x->observation_path, "%s/%s.load.jsonl", x->output,
+            x->run_id) ||
+        etude_process_state((long)getpid(), &self) != 1 ||
+        !(x->observer = etude_observe_start(x->observation_path, &self, x->run_id)) ||
+        etude_history_now(&x->start))
+        return refuse(x, "the native load observer could not start");
+    return 0;
+}
+
 /** Make the run's identity, directories, history, ledger and members; 0,
  * or 2 after a refusal or an error. */
 static int set_up(struct set *x)
@@ -3768,13 +3796,7 @@ static int set_up(struct set *x)
         say(x, "etude run: result: error: %s: %s", path, strerror(errno));
         return 2;
     }
-    struct etude_pid self;
-    if (fit(x->observation_path, sizeof x->observation_path, "%s/%s.load.jsonl", x->output,
-            x->run_id) ||
-        etude_process_state((long)getpid(), &self) != 1 ||
-        !(x->observer = etude_observe_start(x->observation_path, &self, x->run_id)) ||
-        etude_history_now(&x->start))
-        return refuse(x, "the native load observer could not start");
+    if (start_observer(x)) return 2;
     budget_limits(x);
     if ((x->l = etude_ledger_open(o->ledger)) == NULL) {
         say(x, "etude run: result: error: %s: %s", o->ledger, strerror(errno));

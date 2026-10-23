@@ -90,15 +90,20 @@ static void pause_sample(void)
 #endif
 }
 
-static int keep_trace(const char *store, const char *path, const char *run, uint64_t start,
-                      uint64_t end, const char *summary, struct cmp_text *out, int *available)
+struct trace_span {
+    uint64_t start, end;
+};
+
+static int keep_trace(const struct etude_observation_run *r, const char *path,
+                      const struct trace_span *span, const char *summary,
+                      struct cmp_text *out, int *available)
 {
     char *bytes = NULL, *verified = NULL, location[8192], hash[65];
     size_t length = 0;
     int rc = -1;
     if (!cmp_read_file(path, ETUDE_OBSERVE_BYTES, &bytes, &length))
-        verified = etude_observe_read(bytes, length, run, start, end);
-    if (verified && !cmp_store(store, bytes, length, location, sizeof location, hash)) {
+        verified = etude_observe_read(bytes, length, r->run_id, span->start, span->end);
+    if (verified && !cmp_store(r->store, bytes, length, location, sizeof location, hash)) {
         struct eh_json *proof = eh_json_parse(verified);
         const struct eh_json *value = eh_json_get(proof, "comparison_available");
         *available = value && value->type == 't';
@@ -127,14 +132,54 @@ static int keep_trace(const char *store, const char *path, const char *run, uint
     return rc;
 }
 
+static int finish_runtime(const struct etude_observation_run *r, struct cmp_text *piece,
+                          int *available)
+{
+    uint64_t start = etude_observe_utc(r->start.utc);
+    uint64_t runtime_start = etude_observe_utc(r->runtime_start.utc);
+    uint64_t end = etude_observe_utc(r->end.utc);
+    struct trace_span span = {runtime_start, end};
+    int rc = 0;
+    int stopped = r->runtime ? etude_observe_stop(r->runtime) : -1;
+    char *summary = r->runtime ? etude_observe_summary(r->runtime, &r->owned_cpu) : NULL;
+    if (stopped || !summary || !start || !runtime_start || !end ||
+        keep_trace(r, r->path, &span, summary, piece, available)) {
+        if (!piece->length)
+            cmp_printf(piece, "null");
+        rc = -1;
+    }
+    free(summary);
+    return rc;
+}
+
+static int finish_outer(const struct etude_observation_run *r, struct json **v,
+                        struct cmp_text *pieces, int *available)
+{
+    struct trace_span span = {etude_observe_utc(r->start.utc), etude_observe_utc(r->end.utc)};
+    int rc = 0;
+    for (size_t i = 0; i < 2; i++) {
+        const char *path = json_text(v[i], "trace");
+        if ((!v[i] || v[i]->type == JSON_NULL))
+            cmp_printf(&pieces[i + 1], "null");
+        else {
+            for (unsigned wait = 0; path && !ended(path) && wait < 100; wait++)
+                pause_sample();
+            if (!path || keep_trace(r, path, &span, NULL, &pieces[i + 1], &available[i + 1])) {
+                if (!pieces[i + 1].length)
+                    cmp_printf(&pieces[i + 1], "null");
+                rc = -1;
+            }
+        }
+    }
+    return rc;
+}
+
 int etude_observation_finish(const struct etude_observation_run *r, char **json)
 {
     struct cmp_text pieces[3] = {{0}, {0}, {0}}, out = {0};
     const char *keys[] = {"outer_observation", "physical_observation"};
     struct json *v[2] = {descriptor(r->context, keys[0]), descriptor(r->context, keys[1])};
-    uint64_t start = etude_observe_utc(r->start.utc);
     uint64_t runtime_start = etude_observe_utc(r->runtime_start.utc);
-    uint64_t end = etude_observe_utc(r->end.utc);
     int rc = 0, supplied[2] = {0, 0}, available[3] = {0, 0, 0};
     *json = NULL;
     for (size_t i = 0; i < 2; i++) {
@@ -142,31 +187,8 @@ int etude_observation_finish(const struct etude_observation_run *r, char **json)
         if (supplied[i] && request(v[i], r->run_id))
             rc = -1;
     }
-    int stopped = r->runtime ? etude_observe_stop(r->runtime) : -1;
-    char *summary = r->runtime ? etude_observe_summary(r->runtime, &r->owned_cpu) : NULL;
-    if (stopped || !summary || !start || !runtime_start || !end ||
-        keep_trace(r->store, r->path, r->run_id, runtime_start, end, summary, &pieces[0],
-                   &available[0])) {
-        if (!pieces[0].length)
-            cmp_printf(&pieces[0], "null");
-        rc = -1;
-    }
-    free(summary);
-    for (size_t i = 0; i < 2; i++) {
-        const char *path = json_text(v[i], "trace");
-        if (!supplied[i])
-            cmp_printf(&pieces[i + 1], "null");
-        else {
-            for (unsigned wait = 0; path && !ended(path) && wait < 100; wait++)
-                pause_sample();
-            if (!path || keep_trace(r->store, path, r->run_id, start, end, NULL,
-                                    &pieces[i + 1], &available[i + 1])) {
-                if (!pieces[i + 1].length)
-                    cmp_printf(&pieces[i + 1], "null");
-                rc = -1;
-            }
-        }
-    }
+    rc |= finish_runtime(r, &pieces[0], &available[0]);
+    rc |= finish_outer(r, v, pieces, available);
     for (size_t i = 0; i < 3; i++) {
         if (pieces[i].failed || !pieces[i].data) {
             for (size_t j = 0; j < 3; j++)
