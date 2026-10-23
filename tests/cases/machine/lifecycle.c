@@ -661,6 +661,9 @@ static const struct eh_json *ask(struct lc *l, struct etude_case_machine *m, con
  * halted with its interrupts off, and they are `cpus` when that is not 0;
  * the reason when not is put in `why`. Each processor has one line of
  * flags, `EFL=` or `RFL=` in hexadecimal, that ends with `HLT=0` or `HLT=1`.
+ *
+ * @return 1 when they have; -1 when a processor has not halted yet; and 0
+ *         when they will not.
  */
 static int all_halted(const char *regs, int cpus, char *why, size_t size)
 {
@@ -680,7 +683,7 @@ static int all_halted(const char *regs, int cpus, char *why, size_t size)
         }
         if (hlt[4] != '1') {
             snprintf(why, size, "processor %d has not halted", n);
-            return 0;
+            return -1;
         }
         if (flags & 0x200) {
             snprintf(why, size, "processor %d has halted with its interrupts on", n);
@@ -716,12 +719,15 @@ void lc_halted(struct lc *l, struct etude_case_machine *m, int cpus, const char 
     else if (r != NULL)
         held = 1;
     eh_json_free(doc);
-    if (held) {
-        r = ask(l, m, "human-monitor-command", "{\"command-line\": \"info registers -a\"}", &doc,
-                why);
-        held = r != NULL && r->type == 's' && all_halted(r->string, cpus, why, sizeof(why));
-        eh_json_free(doc);
-    }
+    if (held)
+        do {
+            r = ask(l, m, "human-monitor-command", "{\"command-line\": \"info registers -a\"}",
+                    &doc, why);
+            if (r != NULL && r->type != 's')
+                snprintf(why, sizeof(why), "the monitor gave no registers");
+            held = r != NULL && r->type == 's' ? all_halted(r->string, cpus, why, sizeof(why)) : 0;
+            eh_json_free(doc);
+        } while (held < 0);
     if (!l->stopped)
         lc_assert(l, id, held, why);
 }

@@ -220,6 +220,10 @@ int lc_quit(struct lc *l, struct etude_case_machine *m, const char *id);
  * Report assertion `id` from a look at the machine through QMP: QEMU says
  * that it runs, and every processor has halted with its interrupts off;
  * `cpus`, when not 0, is how many processors there must be.
+ *
+ * The kernel prints that it halts before a processor runs its `hlt`, so the
+ * registers are read again while a processor has not halted; the step's
+ * bound ends the wait on a machine that never halts.
  */
 void lc_halted(struct lc *l, struct etude_case_machine *m, int cpus, const char *id);
 
