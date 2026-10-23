@@ -82,6 +82,9 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * At 12:46 on the 23rd the Codex loop found that `tests/run` cannot start on native Windows (#939), filed it and went on with #926, as the rule for a problem found along the way allowed. The coordinating session then queued it behind #926 as the first step of #681, so a task that blocks #681 had nobody working on it. A helper took it at 12:55, after the owner asked why it waited.
 * From 12:01 to 12:45 on the 23rd worker a ran three sessions on #875 that changed nothing, since the three tasks it waits on were open. At 12:45 it got #935, one of them.
 * These lapses, like the board and the late task before them, were recorded only after the owner asked, though `AGENTS.md` asks for a record whenever a failure repeats.
+* At about 13:00 on the 23rd two helpers stopped, the one fixing the Lenovo's failures for #682 and the one fixing #939, when messages from the owner cut off the coordinating session's turn; a subagent stops with the turn of the session that started it. The Lenovo helper's five fixes were committed and kept; the other had none. The coordinating session told the owner that the owner had pressed stop, which was wrong, and then asked whether to start them again instead of doing it. At 13:09 both were started again as headless sessions in tmux, which an interrupted turn does not stop.
+* The Codex loop's session on #681 read the comment that gave #939 to the stopped helper and handed #681 back at 13:10. #939 went to the Codex loop with #681 parked behind it.
+* The manager loop writes each day's report after 02:00 UTC. With the loop stopped, the coordinating session's checks wrote none for the 22nd until 13:20 on the 23rd (#943).
 
 ## GitHub
 
@@ -114,3 +117,4 @@ The host test of `etude-guest` closed its pipes before killing it. The helper co
 * `AGENTS.md`, The manager: each check corrects a card whose Status or assignee differs from the loop or helper that has its issue. The coordinating session's checks also report each task's start, its sessions and whether it is late.
 * `AGENTS.md`, Work: a problem that stops work of the phase is fixed at once, by the session that found it when it is in that session's way, and otherwise by a free worker or helper that the manager names in its next check.
 * `AGENTS.md`, The manager: a session that acts as the manager makes each check by every step of `tools/flow/manager.txt`, and records each lapse of the process in the milestone's incidents in the check that finds it. A worker whose task waits on a queued task gets that task or other work.
+* `CLAUDE.md`: a helper runs as a headless session in tmux, not as a subagent of the coordinating session.
