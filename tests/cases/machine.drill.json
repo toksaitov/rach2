@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"root_mib": 16, "recovery_mib": 8, "boot_mib": 16}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "gzip"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "drill_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["drill-disk"]}],
@@ -120,7 +120,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "make"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {
         "program": "drill_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["drill-disk"]}],
@@ -129,7 +129,7 @@
       },
       "steps": [
         {"step_id": "artifact", "stage": "execute",
-         "does": "run the tree's tools/inspect/check_recovery.sh on the everyday kernel, asking for the recovery authority"},
+         "does": "run the tree's tools/inspect/check_recovery on the everyday kernel, asking for the recovery authority"},
         {"step_id": "publish", "stage": "boot", "machine": "ramboot",
          "does": "boot the recovery kernel and image directly with rach2.root=ram and the disk on IDE, test for /dev/disk0 at recovery's shell, and end it with QMP's quit"}
       ],
@@ -140,7 +140,7 @@
          "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "artifact-refused", "checks": "check_recovery.sh exits 1 on the everyday kernel asked for the recovery authority, and says the kernel does not carry the recovery banner", "source": "scenario"},
+        {"assertion_id": "artifact-refused", "checks": "check_recovery exits 1 on the everyday kernel asked for the recovery authority, and says the kernel does not carry the recovery banner", "source": "scenario"},
         {"assertion_id": "disk-node", "checks": "the recovery kernel has /dev/disk0 as a block device, with no rach2.diskdiag on its command line", "source": "scenario"}
       ],
       "branches": [],
@@ -159,6 +159,7 @@
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728,
                     "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
+        {"name": "check_recovery", "node": "tools/inspect/check_recovery", "per_architecture": false},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "recovery-kernel", "node": "rach2-recovery/kernel", "per_architecture": true},
         {"name": "recovery-image", "node": "images/etude-recovery.krffs", "per_architecture": true},

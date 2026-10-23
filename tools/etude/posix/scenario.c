@@ -886,6 +886,11 @@ const char *etude_case_id(const struct etude_case *c)
     return c->case_id;
 }
 
+const char *etude_case_architecture(const struct etude_case *c)
+{
+    return c->arch;
+}
+
 /** Find the declared assertion `id` of the scenario's, or NULL. */
 static struct assertion *find_assertion(struct etude_case *c, const char *id)
 {
@@ -3488,7 +3493,7 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     struct etude_exec_spec spec;
     struct etude_proc *p, *running;
     const struct etude_exec_result *r;
-    const char *program;
+    const char *program, *evidence;
     enum etude_status st;
     char attempt[300], err_name[160], out_path[4096], err_path[4096];
     char **args;
@@ -3500,11 +3505,11 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
         return ETUDE_STOPPED;
     if (argv != NULL && image_tool(argv[0]) && etude_has_machine(c, "image-helper"))
         return image_host(c, argv, output, end);
-    program = program_path(c, argv[0]);
+    program = argv != NULL ? program_path(c, argv[0]) : NULL;
     if (c->cur < 0 || program == NULL || !file_name(output) ||
         (size_t)snprintf(err_name, sizeof(err_name), "%s.err", output) >= sizeof(err_name)) {
         diag("%s is no tool or artifact of the case, or no step runs",
-             argv[0] != NULL ? argv[0] : "(null)");
+             argv != NULL && argv[0] != NULL ? argv[0] : "(null)");
         c->faults++;
         return ETUDE_REFUSED;
     }
@@ -3519,8 +3524,15 @@ enum etude_status etude_host(struct etude_case *c, char *const argv[], const cha
     spec.cwd = c->scratch;
     spec.output_max = (size_t)c->output_max;
     spec.grace_us = c->grace_us;
-    snprintf(out_path, sizeof(out_path), "%s", etude_evidence(c, output));
-    snprintf(err_path, sizeof(err_path), "%s", etude_evidence(c, err_name));
+    evidence = etude_evidence(c, output);
+    if (evidence != NULL)
+        snprintf(out_path, sizeof(out_path), "%s", evidence);
+    if (evidence == NULL || (evidence = etude_evidence(c, err_name)) == NULL) {
+        free(args);
+        c->faults++;
+        return ETUDE_FAILED;
+    }
+    snprintf(err_path, sizeof(err_path), "%s", evidence);
     spec.stdout_path = out_path;
     spec.stderr_path = err_path;
     made(c, out_path, 0);

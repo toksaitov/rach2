@@ -148,7 +148,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the test stick", "root": "installer-root.ext2 on the stick", "mbr": "installer-test-mbr.disk", "zeroed": "the boot partition's first 64 sectors"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "dd", "rm", "mkdir"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {"program": "installer_repair_convert_stopped", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "mbr"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
       "steps": [
         {"step_id": "plant", "stage": "execute", "does": "keep the boot partition's files and first sector on the recovery partition, marked whole, and zero the boot partition's first sectors, with installer_repair_disk.sh keep"},
@@ -191,7 +191,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the test stick, its volume made again with the keyed root", "disk": "installer-test.disk", "root": "installer-root.ext2 with keys in /srv/alice and /srv/empty, as key-root.ext2", "password": "the demo password", "key": "root's demo key", "accounts": "worker, Alice and alice, each with a new ed25519 key", "stops": "exit 99 before the new archive's directory, exit 98 after the root is checked"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "dd", "rm", "mkdir", "grep"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "installer_repair_resume", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "disk", "root"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory, with the keys it made, unless an assertion failed"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client", "does": "boot the declared Rach2 OpenSSH client and open its framed command channel"},

@@ -6,18 +6,20 @@ PRODUCT_CFLAGS = -O2 -std=c11 -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L \
     -D_FILE_OFFSET_BITS=64 -Iutils -Itools/etude -Itools/etude/include -Itools/etude/posix
 PRODUCT_KRFFS = krffs/krffs_file_system.c krffs/krffs_node.c \
     krffs/krffs_platform.c krffs/krffs_utilities.c
-PRODUCT_FLOW = $(wildcard tests/cases/host/flow_*.c) tests/cases/host/fixture.c utils/sha256.c
+PRODUCT_FLOW = $(wildcard tests/cases/host/flow_*.c) tests/cases/host/fixture.c utils/sha256.c \
+    tools/etude/volume/volume.c
 PRODUCT_BUILD = $(wildcard tests/cases/host/build_*.c) tests/cases/host/fixture.c utils/sha256.c
 PRODUCT_PROGRAMS = host-flow-check host-build-check drive stageimage.krffs mkfs.krffs \
     setidcheck sha256 etude etude-volume host host-suite-probe doom_libc-i686 doom_libc-x86_64 \
-    growset growboot growroot growroot-memory reflash diskctl bootctl mkfatfixture
+    growset growboot growroot growroot-memory reflash diskctl bootctl mkfatfixture \
+    readfile.krffs binfind pty-secret
 
 .PHONY: all
 all: $(addprefix $(PREFIX)/,$(PRODUCT_PROGRAMS))
 
 $(PREFIX)/host-flow-check: $(PRODUCT_FLOW)
 	@mkdir -p $(@D)
-	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+	$(CC) $(PRODUCT_CFLAGS) -Itools/etude/volume -o $@ $^
 $(PREFIX)/host-build-check: $(PRODUCT_BUILD)
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
@@ -28,6 +30,15 @@ $(PREFIX)/stageimage.krffs: $(PRODUCT_KRFFS) krffs/krffs_allocator.c krffs/stage
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/mkfs.krffs: $(PRODUCT_KRFFS) krffs/mkfs.krffs.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/readfile.krffs: $(PRODUCT_KRFFS) krffs/readfile.krffs.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/binfind: tools/inspect/binfind.c
+	@mkdir -p $(@D)
+	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
+$(PREFIX)/pty-secret: tests/system/fixtures/pty_secret.c
 	@mkdir -p $(@D)
 	$(CC) $(PRODUCT_CFLAGS) -o $@ $^
 $(PREFIX)/setidcheck: tools/inspect/setidcheck.c

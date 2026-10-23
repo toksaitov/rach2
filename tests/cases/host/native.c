@@ -47,14 +47,22 @@ static int remove_tree(const char *path)
     return bad ? -1 : rmdir(path);
 }
 
-static void cleanup(void)
+static int clean(void)
 {
     if (active && active->work[0]) {
         if (active->uncertain || (active->failures && !interrupted))
             fprintf(stderr, "host case: evidence: %s\n", active->work);
-        else if (remove_tree(active->work))
+        else if (remove_tree(active->work)) {
             fprintf(stderr, "host case: cannot remove %s\n", active->work);
+            return -1;
+        }
     }
+    return 0;
+}
+
+static void cleanup(void)
+{
+    (void)clean();
 }
 
 static void stop(int sig)
@@ -111,9 +119,10 @@ void native_assert(struct native_case *c, const char *id, int pass, const char *
 
 int native_end(struct native_case *c)
 {
-    int rc = interrupted ? 128 + interrupted : c->failures != 0;
+    int rc = interrupted ? 128 + interrupted : c->failures != 0 || c->uncertain;
     printf("@etude 1 end %u\n", c->records);
-    cleanup();
+    if (clean())
+        rc = 1;
     active = NULL;
     return rc;
 }

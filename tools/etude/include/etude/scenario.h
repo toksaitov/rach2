@@ -58,6 +58,8 @@ int etude_scenario(struct etude_case *c);
  * @return the identity, owned by the library.
  */
 const char *etude_case_id(const struct etude_case *c);
+/** The selected target architecture, or "none" for a host-only case. */
+const char *etude_case_architecture(const struct etude_case *c);
 
 /** Report assertion `id`: held when `held` is nonzero, else failed with
  * `detail`. */

@@ -20,33 +20,7 @@
 #
 
 set -eu
-
-KERNEL="${1:-}"
-AUTH="${2:-}"
-
-case "$AUTH" in
-    recovery) OTHER="ordinary" ;;
-    ordinary) OTHER="recovery" ;;
-    *)
-        echo "usage: check_recovery.sh <kernel> recovery|ordinary" >&2
-        exit 2
-        ;;
-esac
-[ -s "$KERNEL" ] || {
-    echo "check-recovery: $KERNEL is missing or empty, so this check proved nothing" >&2
-    exit 1
-}
-
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-BINFIND="$REPO/build/tools/inspect/binfind"
-make -s -C "$REPO" build/tools/inspect/binfind || exit 2
-
-"$BINFIND" "rach2: disk authority: $AUTH" "$KERNEL" || {
-    echo "check-recovery: $KERNEL does not carry the $AUTH banner" >&2
-    exit 1
-}
-if "$BINFIND" "rach2: disk authority: $OTHER" "$KERNEL"; then
-    echo "check-recovery: $KERNEL carries both authority banners" >&2
-    exit 1
-fi
-echo "check-recovery: ok: $KERNEL has $AUTH authority"
+CHECK="$REPO/build/tools/inspect/check_recovery"
+[ -x "$CHECK" ] || make -s -C "$REPO" build/tools/inspect/check_recovery
+exec "$CHECK" "$@"

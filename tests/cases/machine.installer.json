@@ -48,7 +48,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"stick": "the product's install stick", "sealed": "the sealed disk, whose copy the boots write", "root": "the root image the update writes"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "posix", "tools": ["sh", "cp", "chmod", "rm"], "features": {}},
+      "requirements": {"host_api": "posix", "tools": [], "features": {}},
       "execution": {"program": "installer_stick_update", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "sealed"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies of the stick and the sealed disk, which it keeps after a failure; the scenario removes the files it read off the volume"},
       "steps": [
         {"step_id": "volume", "stage": "execute", "does": "read the stick's volume on the host: the root image, the manifest, and the sealed disk's two partitions"},

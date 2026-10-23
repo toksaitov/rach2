@@ -84,4 +84,9 @@ int etude_volume_close(struct etude_volume *v);
  */
 int etude_volume_read(const char *img, const char *const *map, char *why, size_t whylen);
 
+/** Read one regular file, exactly once, from an archive. Check all headers
+ * and names, but do not extract its other entries. */
+int etude_volume_file(const char *img, const char *name, const char *path,
+                      char *why, size_t whylen);
+
 #endif

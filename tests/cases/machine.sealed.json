@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"boots": 25}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "dd", "gzip"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "sealed_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["sealed"]}, {"fixture": "disk", "names": ["image-disk"]}], "children": "reaped", "cleanup": "libetude-case ends the machine and removes the copy of the disk, which it keeps after a failure; the scenario removes its copy of the demo key and the marked kernel after a pass"},
       "steps": [
         {"step_id": "channel-client", "stage": "boot", "machine": "channel-client",

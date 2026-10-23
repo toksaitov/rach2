@@ -786,7 +786,19 @@ static int take(struct reader *r, const char *const *map, unsigned char *used, c
     return skip(r, size);
 }
 
-int etude_volume_read(const char *img, const char *const *map, char *why, size_t whylen)
+static int selected(struct reader *r, const char *const *map, unsigned char *used,
+                     const char *name, int dir, uint64_t size)
+{
+    if (strcmp(map[0], name) != 0)
+        return skip(r, size);
+    if (dir || used[0])
+        return failure(r->why, r->whylen, "%s is a directory or repeated entry", name);
+    used[0] = 1;
+    return extract(r, name, map[1], size);
+}
+
+static int read_archive(const char *img, const char *const *map, int single,
+                         char *why, size_t whylen)
 {
     static const unsigned char zero[BLOCK];
     struct reader r;
@@ -857,7 +869,8 @@ int etude_volume_read(const char *img, const char *const *map, char *why, size_t
             size = pax_size;
         if ((rc = entry_name(&r, h, long_name, name, sizeof(name))) != 0)
             break;
-        rc = take(&r, map, used, name, h[156] == '5', size);
+        rc = single ? selected(&r, map, used, name, h[156] == '5', size)
+                    : take(&r, map, used, name, h[156] == '5', size);
         free(long_name);
         long_name = NULL;
         sized = 0;
@@ -869,4 +882,16 @@ int etude_volume_read(const char *img, const char *const *map, char *why, size_t
     free(used);
     fclose(r.f);
     return rc;
+}
+
+int etude_volume_read(const char *img, const char *const *map, char *why, size_t whylen)
+{
+    return read_archive(img, map, 0, why, whylen);
+}
+
+int etude_volume_file(const char *img, const char *name, const char *path,
+                      char *why, size_t whylen)
+{
+    const char *map[] = {name, path, NULL};
+    return read_archive(img, map, 1, why, whylen);
 }

@@ -2548,7 +2548,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"row": "ntpd"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["python3"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "gnu_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and the SNTP server and removes the overlay and the copies of the keys, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"},

@@ -10,7 +10,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk_sectors": 33554432, "entry_start": 2048, "entry_sectors": 2097152, "group_blocks": 32768, "memory_mib": 32, "stop": "TEST_IO_BLOCK at the first block of the first added group's inode table, with TEST_IO_WRITE_ABORT=1"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["qemu-img", "awk"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_measured", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes the two overlays, and the scenario removes the volume's head, the console's copy and the descriptor's sectors; both keep them after a failure"},
       "steps": [
         {"step_id": "set", "stage": "execute", "does": "check the recovery image for growroot's measures, copy the volume's first group out of the base disk and compute the grow set with growset"},
@@ -100,7 +100,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_machine_mbr", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay and the files read from the store; both keep them after a failure"},
       "steps": [
         {"step_id": "save", "stage": "execute", "machine": "recovery", "does": "boot the stick, mount the store, unpack the plan, run save, then grow before the host has checked the backup"},
@@ -143,7 +143,6 @@
         {"name": "store", "node": "images/cases/grow-machine-mbr.store", "per_architecture": true},
         {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
-        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
         {"name": "grow_machine_mbr", "node": "tests/cases/machine/grow_machine_mbr", "per_architecture": false}
       ],
       "timing": [],
@@ -156,7 +155,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "gpt", "disk_sectors": 397345, "disk_id": "1acef00d-0f1e-4d2c-8b3a-c0ffee000001", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_machine_gpt", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay and the files read from the store; both keep them after a failure"},
       "steps": [
         {"step_id": "save", "stage": "execute", "machine": "recovery", "does": "boot the stick, mount the store, unpack the plan, run save, then grow before the host has checked the backup"},
@@ -199,7 +198,6 @@
         {"name": "store", "node": "images/cases/grow-machine-gpt.store", "per_architecture": true},
         {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
-        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
         {"name": "grow_machine_gpt", "node": "tests/cases/machine/grow_machine_gpt", "per_architecture": false}
       ],
       "timing": [],
@@ -212,7 +210,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072, "cuts": "save grow restore repair"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_interrupted", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the copies of the overlay and the store it keeps between steps and the files read from the store at its end; both keep them after a failure"},
       "steps": [
         {"step_id": "rejected", "stage": "execute", "machine": "recovery", "does": "boot the stick, run save on the plan with its last range of the grow moved and then through corrupt-boot.sh, compare the target with the disk, and put the store's copy back as it was"},
@@ -275,7 +273,6 @@
         {"name": "store", "node": "images/cases/grow-machine-mbr.store", "per_architecture": true},
         {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
-        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
         {"name": "grow_interrupted", "node": "tests/cases/machine/grow_interrupted", "per_architecture": false}
       ],
       "timing": [],
@@ -288,7 +285,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "gpt", "disk_sectors": 397345, "disk_id": "1acef00d-0f1e-4d2c-8b3a-c0ffee000001", "root_start": 266240, "seed_sectors": 16384, "root_sectors": 131072, "cuts": "save grow restore repair"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_interrupted", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the copies of the overlay and the store it keeps between steps and the files read from the store at its end; both keep them after a failure"},
       "steps": [
         {"step_id": "rejected", "stage": "execute", "machine": "recovery", "does": "boot the stick, run save on the plan with its last range of the grow moved and then through corrupt-boot.sh, compare the target with the disk, and put the store's copy back as it was"},
@@ -351,7 +348,6 @@
         {"name": "store", "node": "images/cases/grow-machine-gpt.store", "per_architecture": true},
         {"name": "growset", "node": "tools/inspect/growset", "per_architecture": false},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
-        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
         {"name": "grow_interrupted", "node": "tests/cases/machine/grow_interrupted", "per_architecture": false}
       ],
       "timing": [],
@@ -364,7 +360,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "ram_root_kib": 5120, "rounds": "fixed full-log"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh", "qemu-img", "tar"], "features": {}},
+      "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_ram_full", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the empty overlay's copy and the files read from the store at its end; both keep them after a failure"},
       "steps": [
         {"step_id": "fixed", "stage": "execute", "machine": "recovery", "does": "put back the empty overlay and the store as it was made, boot the stick, fill the RAM root, run save, read the backup off the store and check it, write the host's checksums, run grow and restore, and compare the RAM root's use with its use before the save"},
@@ -408,7 +404,6 @@
         {"name": "disk", "node": "images/cases/grow-machine-mbr.disk", "per_architecture": true},
         {"name": "store", "node": "images/cases/grow-machine-mbr.store", "per_architecture": true},
         {"name": "mkexfatfixture", "node": "tests/host/mkexfatfixture", "per_architecture": false},
-        {"name": "grow_read", "node": "tests/cases/machine/grow_read", "per_architecture": false},
         {"name": "grow_ram_full", "node": "tests/cases/machine/grow_ram_full", "per_architecture": false}
       ],
       "timing": [],

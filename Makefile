@@ -134,6 +134,7 @@ OS_REAL_GRUB_DISK = $(IMAGES_DIR)/os-real-grub$(RECOVERY_KEY_TAG).disk
 ETUDE_DISK      = $(IMAGES_DIR)/etude-disk.disk
 MKIMAGE         = krffs/mkimage.sh
 BINFIND         = build/tools/inspect/binfind
+CHECKRECOVERY   = build/tools/inspect/check_recovery
 ELFCHECK        = build/tools/inspect/elfcheck
 SETIDCHECK      = build/tools/inspect/setidcheck
 CFGCHECK        = build/tools/inspect/cfgcheck
@@ -457,6 +458,10 @@ $(filter $(ARCH_BUILD)/tools/etude/guest/%,$(MANIFEST_INPUTS)): tools/etude/gues
 
 # The byte searcher (tools/inspect/binfind.c) the TinyCC policy check runs.
 $(BINFIND): tools/inspect/binfind.c
+	@mkdir -p $(dir $@)
+	$(HOST_LINK)
+
+$(CHECKRECOVERY): tools/inspect/check_recovery.c
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
 
@@ -1203,7 +1208,7 @@ $(RECOVERY_KERNEL): ask-the-sub-make
 # as well would be a second invocation with no edge to the first, and a
 # parallel build could run both: they write the same object files, so one
 # could link while the other rewrote an object under it.
-rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND)
+rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND) $(CHECKRECOVERY)
 	sh tools/inspect/check_recovery.sh $(RECOVERY_KERNEL) recovery
 	sh tools/inspect/check_recovery.sh $(KERNEL) ordinary
 	sh tools/inspect/check_diskpolicy.sh $(RECOVERY_KERNEL) read-write
@@ -1587,7 +1592,7 @@ endif
 # compilation database generator reads by a dry run of their rules; named
 # after the includes that define them. The KRFFS programs and the host tests
 # have rules of their own, and the generator collects them separately.
-HOST_TOOLS = $(BINFIND) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) $(SIZECHECK) \
+HOST_TOOLS = $(BINFIND) $(CHECKRECOVERY) $(ELFCHECK) $(SETIDCHECK) $(CFGCHECK) $(PROSECHECK) $(GUESTCHECK) $(SIZECHECK) \
              $(ETUDE) $(SHA256TOOL) $(MANCHECK) $(MKMBR) $(FATCHAINS) $(GRUBEMBED) $(STICKCHECK) \
              $(MKEXFATFIXTURE) $(PCAPCHECK) $(MKFIXTURE) $(MKFATFIXTURE) \
              $(HOSTPEER) $(WAVCHECK) $(PTYDRIVE) \

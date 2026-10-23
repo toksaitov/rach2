@@ -658,34 +658,19 @@ static int drill_repair(struct etude_case *c)
     return net_end(&s.u);
 }
 
-/** Give in `buf` of `size` bytes the absolute path of `path`, a file of the
- * tree that ETUDE_TREE names, or of the working directory without it, and
- * say whether it is there. */
-static int in_tree(const char *path, char *buf, size_t size)
-{
-    char dir[4096];
-    const char *tree = getenv("ETUDE_TREE");
-
-    if (tree == NULL || tree[0] != '/')
-        tree = getcwd(dir, sizeof(dir));
-    return tree != NULL && (size_t)snprintf(buf, size, "%s/%s", tree, path) < size &&
-           access(buf, R_OK) == 0;
-}
-
 /** The case machine.drill.publish. */
 static int drill_publish(struct etude_case *c)
 {
-    char script[4096] = "", line[200];
+    char line[200];
     const char *kernel = etude_artifact(c, "kernel");
-    char *argv[] = {"sh", script, (char *)kernel, "recovery", NULL};
+    char *argv[] = {"check_recovery", (char *)kernel, "recovery", NULL};
     struct net_case u;
     struct net_boot b;
     struct net_run r;
 
     net_case(&u, c);
-    if (!in_tree("tools/inspect/check_recovery.sh", script, sizeof(script)) || kernel == NULL)
-        net_fail(&u, "tools/inspect/check_recovery.sh is not in the tree: set ETUDE_TREE to its "
-                     "root");
+    if (kernel == NULL)
+        net_fail(&u, "the everyday kernel is not a prepared artifact");
     net_step(&u, "artifact");
     net_host(&u, argv, "check-recovery", &r);
     net_assert(&u, "artifact-refused",

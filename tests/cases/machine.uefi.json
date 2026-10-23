@@ -340,7 +340,7 @@
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {"disk": "the GPT disk of machine.uefi.installed, built with its core in tail A", "core": "vendor/grub/gpt-core.img, checked against the GRUB manifest"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["uefi-disk"]}],
@@ -427,7 +427,7 @@
       "domain": "machine",
       "architectures": ["x86_64"],
       "workload": {"arguments": [], "inputs": {"disk_bytes": 4398046511104, "stick": "install-test-stick.img", "answers": "the NVMe disk, root's password twice, the account owner and its password twice, the demonstration key as its authorized key, no recovery key, the grow, and the disk again"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],
@@ -510,7 +510,7 @@
       "domain": "machine",
       "architectures": ["i686"],
       "workload": {"arguments": [], "inputs": {"disk_bytes": 4398046511104, "stick": "install-test-stick.img", "answers": "the NVMe disk, root's password twice, the account owner and its password twice, the demonstration key as its authorized key, no recovery key, the grow, and the disk again"}, "repetitions": 1, "seed": null},
-      "requirements": {"host_api": "c", "tools": ["sh"], "features": {}},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "uefi_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
         "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}],

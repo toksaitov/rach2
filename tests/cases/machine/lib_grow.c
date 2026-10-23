@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "lib_grow.h"
+#include "volume/volume.h"
 
 /* The end of the installed machine's boot partition, which starts at
  * GROW_BOOT_FIRST. */
@@ -563,26 +564,21 @@ int grow_sums_hold(struct etude_case *c, const char *sums, const char *prefix, c
 int grow_read_saved(struct etude_case *c, const char *store, const char *prefix,
                     const char *const names[])
 {
-    char *argv[16], path[1024], ev[96], out[96], files[8][32];
-    size_t i, n = 0;
+    char ev[96], file[96];
+    size_t i;
 
     if (names == NULL)
         names = saved_files;
-    if (grow_evidence(c, prefix, path, sizeof(path)) == NULL)
-        return -1;
-    argv[n++] = "grow_read";
-    argv[n++] = (char *)etude_artifact(c, "mkexfatfixture");
-    argv[n++] = (char *)store;
-    argv[n++] = path;
     for (i = 0; names[i] != NULL && i < 8; i++) {
-        snprintf(files[i], sizeof(files[i]), "saved/%s", names[i]);
-        argv[n++] = files[i];
+        char *argv[] = {"mkexfatfixture", "--check", (char *)store,
+                        "2048", "--read", file, NULL};
+        snprintf(file, sizeof(file), "saved/%s", names[i]);
         snprintf(ev, sizeof(ev), "%s%s", prefix, names[i]);
         grow_made(etude_evidence(c, ev));
+        if (drive_host(c, argv, ev) != 0)
+            return -1;
     }
-    argv[n] = NULL;
-    snprintf(out, sizeof(out), "%sread.out", prefix);
-    return argv[1] != NULL && drive_host(c, argv, out) == 0 ? 0 : -1;
+    return names[i] == NULL ? 0 : -1;
 }
 
 long grow_env_sector(const char *status)
@@ -614,26 +610,25 @@ long grow_env_sector(const char *status)
 
 int grow_read_plan(struct etude_case *c, char *seed, size_t size)
 {
-    char plan[1024], tools[1024];
+    char tools[1024], ranges[1024], why[256];
 
     if (grow_evidence(c, "plan-seed.ext2", seed, size) == NULL ||
-        grow_evidence(c, "plan-", plan, sizeof(plan)) == NULL ||
+        grow_evidence(c, "plan-ranges.txt", ranges, sizeof(ranges)) == NULL ||
         grow_evidence(c, "plan-grow-tools.tar", tools, sizeof(tools)) == NULL)
         return -1;
     grow_made(seed);
     grow_made(tools);
     {
-        char *const plan_argv[] = {"grow_read",
-                                   (char *)etude_artifact(c, "mkexfatfixture"),
+        char *const seed_argv[] = {"mkexfatfixture", "--check",
                                    (char *)etude_artifact(c, "store"),
-                                   plan,
-                                   "seed.ext2",
-                                   "grow-tools.tar",
-                                   NULL};
-        char *const ranges_argv[] = {"tar", "-xOf", tools, "ranges.txt", NULL};
-
-        return drive_host(c, plan_argv, "plan-read.out") == 0 &&
-                       drive_host(c, ranges_argv, "plan-ranges.txt") == 0
+                                   "2048", "--read", "seed.ext2", NULL};
+        char *const tools_argv[] = {"mkexfatfixture", "--check",
+                                    (char *)etude_artifact(c, "store"),
+                                    "2048", "--read", "grow-tools.tar", NULL};
+        grow_made(ranges);
+        return drive_host(c, seed_argv, "plan-seed.ext2") == 0 &&
+                       drive_host(c, tools_argv, "plan-grow-tools.tar") == 0 &&
+                       etude_volume_file(tools, "ranges.txt", ranges, why, sizeof(why)) == 0
                    ? 0
                    : -1;
     }
