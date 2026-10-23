@@ -176,7 +176,7 @@ Beside the authority is the writer reservation, `writer_held` in `struct disk`: 
 `tests/run NAME` runs a system suite under QEMU, `RACH2_WORKERS=4 tests/run A B C` several, and `ARCH=x86_64` the other architecture; [tests/system/suites.md](../../../tests/system/suites.md) gives each suite's tier and needs. Those that cover this layer:
 
 * ATA: `persist`, `crash` and `mount` (core); `stress`, `bus` and `load` (full), `load` with `rach2.atapio`.
-* AHCI: `disks` and `queue` (core); `disk-q35`, `stress-ahci` and `bootorder` (full). `queue` covers the interrupt path and the fault path beside raw reads of the same port; `request_hosttest.c` and `ahci_hosttest.c` cover the deadlines and the completion of independent requests.
+* AHCI: `parts` and `queue` (core); `disk-q35`, `stress-ahci` and `bootorder` (full). `queue` covers the interrupt path and the fault path beside raw reads of the same port; `request_hosttest.c` and `ahci_hosttest.c` cover the deadlines and the completion of independent requests.
 * NVMe: `uefi` (full), which installs onto a 4 TiB NVMe disk and boots it.
 * Partition tables and identities: `parts` (core).
 * The request pool and the lag device: `mount`, `fatwrite` and `exfat` (core), `krffsmount` (full).

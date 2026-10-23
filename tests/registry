@@ -116,7 +116,6 @@ socket|qemu|core
 bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 reset|qemu|core
 netconsole-e1000|qemu|full
-disks|qemu,mformat,mtype|core
 audio|qemu|core
 netconsole|qemu|core
 crash|qemu|core

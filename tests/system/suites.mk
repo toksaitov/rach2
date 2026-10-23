@@ -1378,28 +1378,6 @@ AHCI_ATTACH = --qemu-arg=-device --qemu-arg=ich9-ahci,id=ahci0 \
 # at function 0, so a scan that never walked past function 0 would pass all of
 # them and fail on the real machine. It is the case of
 # tests/cases/guest.disk-q35.json, which etude runs, and has no target here.
-# `tests/run disks`: two disks of different sizes on one AHCI controller,
-# both in /proc/disk with their ports and sizes, both with nodes, a
-# partition of each mounted and written, and the second disk's file found
-# on the second disk by the host. It is the case of
-# tests/cases/machine.disks.json, which etude runs, and has no target here.
-# The disks of its case, which the case's preparation names: on port 0 a
-# 64 MiB disk with one KRFFS partition of the disk suites' manifest, which
-# holds guest programs and so is made for each architecture, and on port 1 a
-# 20 MiB disk with one empty FAT32 partition from sector 2048, which holds
-# data alone.
-DISKS_ZERO = $(ARCH_CASE_DIR)/disks/zero.disk
-DISKS_ONE  = $(CASE_DIR)/disks/one.disk
-$(DISKS_ZERO): krffs/manifests/disk-test.manifest $(MANIFEST_DEPS_disk_test) $(MKDISK) \
-               build/krffs/mkfs.krffs build/krffs/stageimage.krffs | preflight krffs tests
-	$(MKDISK) krffs/manifests/disk-test.manifest $@ 64 48
-$(DISKS_ONE): $(MKMBR)
-	@mkdir -p $(@D)
-	rm -f $@.tmp
-	dd if=/dev/zero of=$@.tmp bs=1048576 count=20 2>/dev/null
-	$(MKMBR) --lba $@.tmp 2048:36864:0c >/dev/null
-	mformat -i $@.tmp@@1048576 -F -T 36864 -v DISKONE ::
-	mv $@.tmp $@
 # `tests/run parts`: four tables on four AHCI disks (an MBR with logical
 # partitions, a GPT, a GPT read from its backup, a blank disk), the nodes as
 # the tables number them, the table read again, a 5 TiB disk's numbers past

@@ -37,7 +37,7 @@ PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe 
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe placeprobe ext2probe krffsprobe loopdevprobe bootlogprobe \
-        idreport fdfull diskfull oomprobe limitprobe loadprobe conloadprobe disksprobe partsprobe busprobe ahciprobe bigfileprobe
+        idreport fdfull diskfull oomprobe limitprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe
 
 # The probes of an interface only i386 has, built for i686 alone: tlsprobe
 # tests set_thread_area and the %gs thread pointer, where x86-64 keeps the

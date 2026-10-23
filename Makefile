@@ -731,7 +731,6 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/console_scenario \
                       build/tests/cases/machine/crash_scenario \
                       build/tests/cases/machine/default_scenario \
-                      build/tests/cases/machine/disks_scenario \
                       build/tests/cases/machine/doom_scenario \
                       build/tests/cases/machine/etudeexec_scenario \
                       build/tests/cases/machine/exitline_scenario \
