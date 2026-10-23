@@ -27,7 +27,7 @@ The T11 and T31 entries of the earlier [task audit](audit.md) describe the colle
 * `machine.agents.claude-screen`: The retained `claude-print` requires the exact read, command, edit and commit exchange. `machine.agentsaccept.claude` handles theme, key, security notes, trust and permission questions, then checks interactive work, cancellation, resize, reconnect and resume.
 * `machine.agents.codex-screen`: The retained `codex-exec` requires the WebSocket exchange, its refusal and HTTPS fallback, edit and commit. `machine.agentsaccept.codex` checks trust and model questions, interactive work, cancellation, resize, reconnect and resume.
 * `machine.agents.muse-tmux`: The retained `muse` requires the exact read, command, edit and commit exchange. `machine.agentsaccept.muse` checks the real interactive work and terminal lifecycle. The deleted row repeated the exchange in tmux without a different product check.
-* `machine.agents.procfd`: This only searched the test process directory for cmdline and stat. Retained default `procprobe` and `proclinkmusl` exercise process-directory contents, descriptor links and their actual operations; no process-filesystem behavior depended on this smoke row.
+* `machine.agents.procfd`: This only required `test -d /proc/self/fd` to succeed. That exact directory-type check is transferred to the retained `guest.default.proclinkmusl` assertion `fd-directory`, using stat and S_ISDIR before descriptor-link operations.
 
 ## Every reviewed case
 
@@ -54,7 +54,7 @@ The original addition is `1f6743a7c5`. The reviewed assertions are in `tests/cas
 * `machine.agents.gh`: keep. The real Go client rejects an untrusted CA and an invalid token, accepts the trusted local service, reports unsigned authentication and preserves the packaged version, path and license.
 * `machine.agents.muse-tmux`: removed. The retained `muse` requires the exact read, command, edit and commit exchange. `machine.agentsaccept.muse` checks the real interactive work and terminal lifecycle. The deleted row repeated the exchange in tmux without a different product check.
 * `machine.agents.muse`: keep. The unsigned trust and settings path and the headless Responses API tool exchange remain, including exact file and committed-tree checks.
-* `machine.agents.procfd`: removed. This only searched the test process directory for cmdline and stat. Retained default `procprobe` and `proclinkmusl` exercise process-directory contents, descriptor links and their actual operations; no process-filesystem behavior depended on this smoke row.
+* `machine.agents.procfd`: removed. This only required `test -d /proc/self/fd` to succeed. That exact directory-type check is transferred to the retained `guest.default.proclinkmusl` assertion `fd-directory`, using stat and S_ISDIR before descriptor-link operations.
 * `machine.agents.worker-session`: keep. The real worker loop completes two tasks against a fixture board and origin repository, with the expected result records and Git history.
 
 ### agentsaccept

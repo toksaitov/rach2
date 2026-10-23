@@ -5524,6 +5524,7 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
       "execution": {"program": "proclinkmusl", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
       "assertions": [
+        {"assertion_id": "fd-directory", "checks": "stat of /proc/self/fd succeeds and reports a directory, as the worker scratch scanner requires", "source": "program"},
         {"assertion_id": "lookup", "checks": "In a tmpfs mounted on /tmp/proclinkmusl, a lookup through /proc/self/fd/N and /dev/fd/N of an open directory finds a name in it.", "source": "program"},
         {"assertion_id": "dots", "checks": "`.` and `..` after the link are the directory and its parent.", "source": "program"},
         {"assertion_id": "create", "checks": "A create through the link makes a file in the directory.", "source": "program"},

@@ -27,7 +27,8 @@
  *
  * etude's report (probe_report.h), for the case ETUDE_CASE names, has an
  * assertion for each row in order, a setup step joined to the row after it:
- * `lookup`, `dots`, `create`, `mkdir`, `rename`, `unlink`, `renamed-lookup`,
+ * `fd-directory`, `lookup`, `dots`, `create`, `mkdir`, `rename`, `unlink`,
+ * `renamed-lookup`,
  * `renamed-mkdir`, `renamed-chdir`, `renamed-file-link`, `removed-lookup`,
  * `removed-links`, `removed-create`, `removed-cwd`, `file-notdir`,
  * `pipe-notdir`, `closed-enoent`, `dev-through`, `cwd-root-other`,
@@ -521,7 +522,8 @@ static int other_process(void)
  * checked. */
 static void plan(void)
 {
-    static const char *const ids[] = {"lookup",          "dots",
+    static const char *const ids[] = {"fd-directory",    "lookup",
+                                      "dots",
                                       "create",          "mkdir",
                                       "rename",          "unlink",
                                       "renamed-lookup",  "renamed-mkdir",
@@ -549,6 +551,10 @@ int main(int argc, char **argv)
 
     probe_args(argc, argv);
     plan();
+    if (!is_dir("/proc/self/fd")) {
+        return fail("/proc/self/fd is not a directory");
+    }
+    report_pass("fd-directory");
 
     mkdir(TOP, 0755);
     if (mount("none", TOP, "tmpfs", 0, NULL) != 0 || chmod(TOP, 0755) != 0 ||
