@@ -470,6 +470,44 @@ static DWORD sequence_run(struct sequence *s)
     return status;
 }
 
+static int sequence_close(struct sequence *s, DWORD status)
+{
+    if (s->error || s->cancelled)
+        stop_all(s);
+    struct phase *phases[] = {&s->observer_phase, &s->preparation, &s->collection};
+    for (size_t i = 0; i < sizeof(phases) / sizeof(*phases); i++)
+        if (phases[i]->child) {
+            /* release stops and waits even when the main poll failed. */
+            DWORD error = etude_win_release(phases[i]->child, 30000);
+            fprintf(record, "phase-cleanup %s %s %s\n", s->run, phases[i]->name,
+                    error ? "unconfirmed" : "confirmed");
+            if (!error)
+                phases[i]->child = NULL;
+        }
+    DWORD cleanup_error = s->supervisor.port ? etude_win_sup_close(&s->supervisor, 30000) : 0;
+    if (cleanup_error && !s->error)
+        s->error = cleanup_error;
+    int result = cleanup_error  ? 125
+                 : s->cancelled ? 130
+                 : s->error     ? 125
+                 : status > 255 ? 126
+                                : (int)status;
+    fprintf(record, "error %lu\ncancelled %d\nstatus %d\nactive %s\ncleanup %s\n",
+            (unsigned long)s->error, s->cancelled, result, cleanup_error ? "unknown" : "0",
+            cleanup_error ? "unconfirmed" : "confirmed");
+    int receipt_failed = fclose(record) != 0;
+    free(known);
+    free(s->prep_argv);
+    free(s->collection_argv);
+    SetConsoleCtrlHandler(on_console, FALSE);
+    if (s->parent)
+        CloseHandle(s->parent);
+    CloseHandle(input_gone);
+    if (s->observer_input)
+        CloseHandle(s->observer_input);
+    return receipt_failed ? 125 : result;
+}
+
 int etude_observe_sequence_main(int argc, char **argv)
 {
     struct sequence s = {0};
@@ -505,40 +543,7 @@ int etude_observe_sequence_main(int argc, char **argv)
     if (!s.error)
         s.error = etude_win_sup_open(&s.supervisor);
     DWORD status = s.error ? 125 : sequence_run(&s);
-    if (s.error || s.cancelled)
-        stop_all(&s);
-    struct phase *phases[] = {&s.observer_phase, &s.preparation, &s.collection};
-    for (size_t i = 0; i < sizeof(phases) / sizeof(*phases); i++)
-        if (phases[i]->child) {
-            /* release stops and waits even when the main poll failed. */
-            DWORD error = etude_win_release(phases[i]->child, 30000);
-            fprintf(record, "phase-cleanup %s %s %s\n", s.run, phases[i]->name,
-                    error ? "unconfirmed" : "confirmed");
-            if (!error)
-                phases[i]->child = NULL;
-        }
-    DWORD cleanup_error = s.supervisor.port ? etude_win_sup_close(&s.supervisor, 30000) : 0;
-    if (cleanup_error && !s.error)
-        s.error = cleanup_error;
-    int result = cleanup_error  ? 125
-                 : s.cancelled  ? 130
-                 : s.error      ? 125
-                 : status > 255 ? 126
-                                : (int)status;
-    fprintf(record, "error %lu\ncancelled %d\nstatus %d\nactive %s\ncleanup %s\n",
-            (unsigned long)s.error, s.cancelled, result, cleanup_error ? "unknown" : "0",
-            cleanup_error ? "unconfirmed" : "confirmed");
-    int receipt_failed = fclose(record) != 0;
-    free(known);
-    free(s.prep_argv);
-    free(s.collection_argv);
-    SetConsoleCtrlHandler(on_console, FALSE);
-    if (s.parent)
-        CloseHandle(s.parent);
-    CloseHandle(input_gone);
-    if (s.observer_input)
-        CloseHandle(s.observer_input);
-    return receipt_failed ? 125 : result;
+    return sequence_close(&s, status);
 }
 
 #else
