@@ -179,9 +179,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "halt") == 0 || strcmp(name, "bare-halt") == 0) {
         lc_begin(&l, c, halts);
         halt(&l, name[0] == 'h' ? "halt -n -f\r" : "halt\r");
-    } else if (strcmp(name, "usr2") == 0 || strcmp(name, "bare-poweroff") == 0) {
+    } else if (strcmp(name, "bare-poweroff") == 0) {
         lc_begin(&l, c, stops);
-        stop(&l, "stop", name[0] == 'u' ? "kill -USR2 $PPID\r" : "poweroff\r", 0);
+        stop(&l, "stop", "poweroff\r", 0);
     } else if (strcmp(name, "bare-reboot") == 0) {
         lc_begin(&l, c, resets);
         stop(&l, "stop", "reboot\r", 1);
