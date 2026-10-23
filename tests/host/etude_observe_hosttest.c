@@ -1,6 +1,7 @@
 /* Native load observations retain sampling limits and creation identities.
  * host-deps: tools/etude/observe.c tools/etude/observe_import.c
  * host-deps: tools/etude/observe_scope.c tools/etude/observe_system.c
+ * host-deps: tools/etude/observe_sequence.c
  * host-deps: tools/etude/measurement_context.c tools/etude/history.c
  * host-deps: tools/etude/history_json.c tools/etude/history_collect.c
  * host-deps: tools/etude/json.c utils/sha256.c
@@ -114,11 +115,13 @@ static void imports(void)
     trace(text, sizeof text, 6000000, 0);
     CHECK(etude_observe_import(text, strlen(text), "fixture", 100, 12000100) == NULL);
     v = etude_observe_read(text, strlen(text), "fixture", 100, 12000100);
-    CHECK(v && strstr(v, "\"comparison_available\":false")); free(v);
+    CHECK(v && strstr(v, "\"comparison_available\":false"));
+    free(v);
     trace(text, sizeof text, 1000000, 1);
     CHECK(etude_observe_import(text, strlen(text), "fixture", 100, 2000100) == NULL);
     v = etude_observe_read(text, strlen(text), "fixture", 100, 2000100);
-    CHECK(v && strstr(v, "\"comparison_available\":false")); free(v);
+    CHECK(v && strstr(v, "\"comparison_available\":false"));
+    free(v);
     CHECK(etude_observe_utc("1970-01-01T00:00:01.000001Z") == 1000001);
     CHECK(etude_observe_utc("invalid") == 0);
 }
@@ -156,8 +159,19 @@ static void native(void)
     }
 }
 
-int main(void)
+#include "compat/observe_sequence_fixture.c"
+
+int main(int argc, char **argv)
 {
+#ifdef _WIN32
+    int role = sequence_fixture_role(argc, argv);
+    if (role >= 0)
+        return role;
+    sequence_fixture();
+#else
+    (void)argc;
+    (void)argv;
+#endif
     accounting();
     imports();
     native();
