@@ -338,17 +338,11 @@ static int emit(struct peer *p, const char *name, struct value *data)
     destroy(data);
     return ok;
 }
-static int reply_anthropic(const struct value *s, struct peer *p)
+static struct value *anthropic_message(const struct value *s, const struct value *content,
+                                       const char *stop_reason)
 {
-    const struct value *content = get(s, "reply"), *block;
-    struct value *message, *usage, *data;
-    const char *stop_reason = "end_turn";
+    struct value *message, *usage;
     struct buffer id = {0};
-    size_t index = 0;
-    int ok = 1;
-    for (block = content->child; block; block = block->next)
-        if (!strcmp(field(block, "type"), "tool_use"))
-            stop_reason = "tool_use";
     putsb(&id, "msg_");
     putsb(&id, *field(content->child, "id") ? field(content->child, "id") : "done");
     message = typed("message");
@@ -363,6 +357,19 @@ static int reply_anthropic(const struct value *s, struct peer *p)
     add(usage, "input_tokens", integer(128));
     add(usage, "output_tokens", integer(32));
     add(message, "usage", usage);
+    return message;
+}
+static int reply_anthropic(const struct value *s, struct peer *p)
+{
+    const struct value *content = get(s, "reply"), *block;
+    struct value *message, *data;
+    const char *stop_reason = "end_turn";
+    size_t index = 0;
+    int ok = 1;
+    for (block = content->child; block; block = block->next)
+        if (!strcmp(field(block, "type"), "tool_use"))
+            stop_reason = "tool_use";
+    message = anthropic_message(s, content, stop_reason);
     if (!flag(s, "stream", 1)) {
         ok = json_response(p, 200, message);
         destroy(message);
