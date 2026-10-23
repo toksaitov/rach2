@@ -725,8 +725,6 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/audio_scenario \
                       build/tests/cases/machine/smp_scenario
 DISK_SCENARIOS = build/tests/cases/machine/diskpolicy_scenario \
                  build/tests/cases/machine/diskrate_scenario
-# The etudeguest case's scenario also reads and writes etude-guest's frames
-# with the codec of tools/etude/guest/wire.c, which libetude-case has.
 MACHINE_SCENARIOS = $(LIFECYCLE_SCENARIOS) $(DISK_SCENARIOS)
 # A file of tests/native that the native run of a case stages, which the
 # case's prepare names as tests/native/NAME.

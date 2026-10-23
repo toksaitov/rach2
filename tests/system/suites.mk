@@ -418,8 +418,9 @@ endif
 # tests/cases/machine.sealed.json, which etude runs on a copy of the disk, and
 # has no target here: an untouched boot with no fallback or recovery, then the
 # whole life of the machine over SSH (a kernel sent down the connection,
-# installed, tried and committed; a destroyed candidate caught by the fallback and repaired; a
-# missing, a damaged and an unclean root each landing in recovery and repaired;
+# installed, tried and committed; a destroyed candidate caught by the
+# fallback and repaired; a missing, a damaged and an unclean root each landing
+# in recovery and repaired;
 # a menu staged and then torn; the boot loader replaced through /dev/grubcore;
 # the root destroyed and rewritten from recovery).
 # The artifact of the sealed cases beyond the kernel, the sealed disk and the
