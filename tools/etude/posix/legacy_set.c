@@ -646,6 +646,19 @@ static int keep_bytes(const struct set *x, const char *bytes, size_t n, char *re
     return rc;
 }
 
+/* Serialize one bound document in a buffer owned only by this call. */
+static int repeated_doc(const struct set *x, const struct jbuf *declared,
+                        const struct cmp_text *binding, char *ref, size_t size)
+{
+    struct cmp_text d = {0};
+    if (binding->failed)
+        return -1;
+    cmp_printf(&d, "{\"declared\":%s,\"repetition\":%s}\n", declared->data, binding->data);
+    int rc = d.failed ? -1 : keep_bytes(x, d.data, d.length, ref, size);
+    free(d.data);
+    return rc;
+}
+
 /** Keep the canonical documents of the case of member `m` as its item's
  * blobs, and give its inventory digest. */
 static int item_docs(const struct set *x, struct member *m)
@@ -657,7 +670,7 @@ static int item_docs(const struct set *x, struct member *m)
     if (x->repeat_selection) {
         char order[65];
         digest_of(x->repeat_selection, strlen(x->repeat_selection), order);
-        struct cmp_text binding = {0}, d = {0};
+        struct cmp_text binding = {0};
         cmp_printf(&binding, "{\"policy\":\"%s\",\"seed\":%llu,\"order_sha256\":\"%s\",\"load\":",
                    ETUDE_REPEAT_POLICY, (unsigned long long)x->o->repeat->seed, order);
         if (m->load) {
@@ -669,13 +682,8 @@ static int item_docs(const struct set *x, struct member *m)
         } else
             cmp_printf(&binding, "null");
         cmp_printf(&binding, "}");
-        cmp_printf(&d, "{\"declared\":%s,\"repetition\":%s}\n", k->workload.data, binding.data);
-        rc = keep_bytes(x, d.data, d.length, m->workload, sizeof(m->workload));
-        free(d.data);
-        memset(&d, 0, sizeof(d));
-        cmp_printf(&d, "{\"declared\":%s,\"repetition\":%s}\n", k->profile.data, binding.data);
-        rc |= keep_bytes(x, d.data, d.length, m->profile, sizeof(m->profile));
-        free(d.data);
+        rc = repeated_doc(x, &k->workload, &binding, m->workload, sizeof(m->workload));
+        rc |= repeated_doc(x, &k->profile, &binding, m->profile, sizeof(m->profile));
         free(binding.data);
     } else {
         rc = keep_bytes(x, k->workload.data, k->workload.len, m->workload, sizeof(m->workload));
@@ -1170,10 +1178,10 @@ static int has_node(const char *const *nodes, size_t count, const char *name)
 static int preparation_nodes(struct set *x, struct cmp_text *t)
 {
     struct cmp_text d = {0};
-    size_t capacity = 0, count = 0;
+    size_t slots = 0, count = 0;
     for (size_t i = 0; i < x->n; i++)
-        capacity += x->mem[i].k->ngoals;
-    const char **nodes = calloc(capacity + 1, sizeof(*nodes));
+        slots += x->mem[i].k->ngoals;
+    const char **nodes = calloc(slots + 1, sizeof(*nodes));
     if (!nodes)
         return -1;
     cmp_printf(&d,

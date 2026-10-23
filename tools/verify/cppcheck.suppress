@@ -243,6 +243,11 @@ unusedStructMember:*tools/etude/serial.h
 # are read in repeat.c, posix/repeat.c, posix/load.c and their host test.
 unusedStructMember:*tools/etude/include/etude/repeat.h
 
+# These collection headers are also checked alone. Their fields are read by
+# collection_load.c, collection_repeat.c, collection.c and posix/legacy_set.c.
+unusedStructMember:*tools/etude/collection_load.h
+unusedStructMember:*tools/etude/collection_repeat.h
+
 # The options of the preparation adapter and the set driver: cppcheck checks
 # legacy.h alone, and its members are read in posix/legacy.c,
 # posix/legacy_set.c, posix/run_suites.c and their host tests.
