@@ -28,16 +28,35 @@ static int argument(int argc, char **argv, const char *wanted)
     return 0;
 }
 
+static int counted_vectors(int argc, char **argv)
+{
+    int position = 10;
+    for (unsigned phase = 0; phase < 2; phase++) {
+        if (position + 2 > argc)
+            return 0;
+        const char *program = argv[position++];
+        char *end;
+        const char *text = argv[position++];
+        unsigned long count = strtoul(text, &end, 10);
+        if (*text < '1' || *text > '9' || *end || count < 2 ||
+            count > (unsigned long)(argc - position))
+            return 0;
+        if (strcmp(program, argv[position]) || strcmp(argv[position + 1], phase ? "run" : "admit"))
+            return 0;
+        position += (int)count;
+    }
+    return position == argc;
+}
+
 static int sequence(int argc, char **argv)
 {
-    if (!argument(argc, argv, "admit") || !argument(argc, argv, "run") ||
-        !argument(argc, argv, "-I") || !argument(argc, argv, "-g"))
+    if (!counted_vectors(argc, argv) || !argument(argc, argv, "admit") ||
+        !argument(argc, argv, "run") || !argument(argc, argv, "-I") || !argument(argc, argv, "-g"))
         return 2;
     if (fx_exists(path("sequence.calls")) || !fx_text(path("sequence.calls"), "one sequence\n") ||
         !fx_text(path("selection.list"),
                  "style none host.fixture.style\nhost none host.fixture.host\n"
-                 "default i686 machine.fixture.default\ndefault x86_64 machine.fixture.default\n"
-                 ""))
+                 "default i686 machine.fixture.default\ndefault x86_64 machine.fixture.default\n"))
         return 2;
     if (!strcmp(env("CI_NATIVE_MODE"), "cancel"))
         return 130;
