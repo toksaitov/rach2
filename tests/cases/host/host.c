@@ -25,7 +25,7 @@ extern char **environ;
 struct check {
     const struct json *entry;
     const char *id, *label;
-    char program[PATH_SIZE], scratch[PATH_SIZE], log[PATH_SIZE];
+    char program[PATH_SIZE], scratch[PATH_SIZE], log[PATH_SIZE], why[PATH_SIZE];
     char **argv, **env;
     struct etude_proc *proc;
     int alone, selected, reported, interrupted;
@@ -255,10 +255,15 @@ static const char *prepared(const struct host *h, struct check *c)
     const struct json *inputs = json_member(c->entry, "inputs");
     if (!inputs || inputs->type != JSON_ARRAY)
         return "the prepared input inventory is missing";
-    for (size_t i = 0; i < inputs->count; i++)
-        if (!input_matches(h, json_text(inputs->item[i], "path"),
-                           json_text(inputs->item[i], "sha256")))
-            return "a source or corpus input changed after preparation";
+    for (size_t i = 0; i < inputs->count; i++) {
+        const char *path = json_text(inputs->item[i], "path");
+        if (!input_matches(h, path, json_text(inputs->item[i], "sha256"))) {
+            snprintf(c->why, sizeof(c->why),
+                     "a source or corpus input changed after preparation: %s",
+                     path ? path : "(invalid path)");
+            return c->why;
+        }
+    }
     const char *corpus = json_text(c->entry, "corpus");
     if (corpus && !corpus_matches(h, json_member(c->entry, "arguments"), corpus))
         return "the corpus contains files that were not prepared";
@@ -342,7 +347,11 @@ static void print_log(const char *path, int failed)
 static void finished(struct host *h, struct check *c, const char *error)
 {
     int ok = error == NULL;
-    printf("  %s: %s%s%s\n", ok ? "PASS" : "FAIL", c->label, error ? ": " : "", error ? error : "");
+    printf("  %s: %s%s%s\n",
+           c->interrupted ? "STOPPED"
+           : ok           ? "PASS"
+                          : "FAIL",
+           c->label, error ? ": " : "", error ? error : "");
     if (c->log[0])
         print_log(c->log, !ok);
     if (c->scratch[0]) {
@@ -351,9 +360,10 @@ static void finished(struct host *h, struct check *c, const char *error)
         else
             printf("    scratch kept: %s\n", c->scratch);
     }
-    if (!c->interrupted)
+    if (!c->interrupted) {
         assertion(h, c->id, ok, error);
-    progress(h);
+        progress(h);
+    }
     c->reported = 1;
 }
 
@@ -492,7 +502,10 @@ static int check_inventory(struct host *h, const char *group)
         }
         if (j == h->nchecks) {
             listed = 0;
-            assertion(h, id, 0, "the prepared inventory has no check for this assertion");
+            struct check absent = {0};
+            absent.id = id;
+            absent.label = id;
+            finished(h, &absent, "the prepared inventory has no check for this assertion");
         }
     }
     int sources = live_sources(h, group), scripts = live_scripts(h, group);
@@ -676,6 +689,9 @@ int main(int argc, char **argv)
     if (!stopped)
         printf("@etude 1 end %lu\nhost: result: %s: %s\n", (unsigned long)h.records,
                rc ? "failed" : "passed", h.case_id);
+    else
+        printf("host: result: stopped by signal %d: %lu of %lu checks finished\n", (int)stopped,
+               (unsigned long)h.reported, (unsigned long)h.nchecks);
 done:
     if (h.executor)
         etude_exec_free(h.executor);
