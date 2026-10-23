@@ -73,10 +73,30 @@ static int refused(const char *why)
     return 2;
 }
 
+static int copy_path(char *out, const char *path)
+{
+    size_t size = strlen(path);
+    if (size >= PATH_SIZE)
+        return -1;
+    memmove(out, path, size + 1);
+    return 0;
+}
+
 static int path_of(char *out, const char *root, const char *path)
 {
-    int n = snprintf(out, PATH_SIZE, "%s/%s", root, path);
-    return n < 0 || n >= PATH_SIZE ? -1 : 0;
+    size_t base = strlen(root), tail = strlen(path);
+    if (base > PATH_SIZE - 2 || tail > PATH_SIZE - base - 2)
+        return -1;
+    memmove(out, root, base);
+    out[base++] = '/';
+    memmove(out + base, path, tail + 1);
+    return 0;
+}
+
+static int requested_path(char *out, const char *tree, const char *given, const char *fallback)
+{
+    const char *path = given ? given : fallback;
+    return legacy_absolute(path) ? copy_path(out, path) : path_of(out, tree, path);
 }
 
 static int mkdirs(const char *path)
@@ -310,9 +330,15 @@ static int manifests(struct collection *c)
 static int selection_document(struct collection *c, struct suite_entry *s, const struct json *cases,
                               struct json **picked, size_t count)
 {
-    char path[PATH_SIZE];
+    char path[PATH_SIZE], filename[PATH_SIZE];
     FILE *f;
-    size_t j, w;
+    size_t j, w, length = strlen(s->name);
+    if (length > sizeof(filename) - sizeof(".json"))
+        return refused("case selection name is too long");
+    memcpy(filename, s->name, length);
+    memcpy(filename + length, ".json", sizeof(".json"));
+    if (path_of(path, c->work, filename) != 0)
+        return refused("case selection path is too long");
     struct json object = *s->doc, array = *cases;
     struct jbuf data = {0};
     object.item = calloc(object.count, sizeof(*object.item));
@@ -326,7 +352,6 @@ static int selection_document(struct collection *c, struct suite_entry *s, const
         if (object.item[j] == cases)
             object.item[j] = &array;
     json_canonical(&object, &data);
-    snprintf(path, sizeof(path), "%s/%s.json", c->work, s->name);
     f = fopen(path, "wb");
     int bad = f == NULL;
     if (f) {
@@ -913,8 +938,7 @@ static int selection_workspace(struct collection *c)
     if (!tmp)
         tmp = "/tmp";
 #endif
-    snprintf(c->work, sizeof(c->work), "%s/rach2-collection.XXXXXX", tmp);
-    if (!mkdtemp(c->work)) {
+    if (path_of(c->work, tmp, "rach2-collection.XXXXXX") != 0 || !mkdtemp(c->work)) {
         c->work[0] = 0;
         refused("cannot make selection workspace");
         return 2;
@@ -924,29 +948,14 @@ static int selection_workspace(struct collection *c)
 
 static int collection_paths(struct collection *c, const struct request *r)
 {
-    if (r->results) {
-        if (legacy_absolute(r->results))
-            snprintf(c->results, sizeof(c->results), "%s", r->results);
-        else
-            path_of(c->results, c->tree, r->results);
-    } else
-        path_of(c->results, c->tree, "build/tests/results");
-    if (r->evidence) {
-        if (legacy_absolute(r->evidence))
-            snprintf(c->evidence, sizeof(c->evidence), "%s", r->evidence);
-        else
-            path_of(c->evidence, c->tree, r->evidence);
-    } else
-        path_of(c->evidence, c->tree, "build/tests/failed");
-    if (r->record) {
-        if (legacy_absolute(r->record))
-            snprintf(c->record, sizeof(c->record), "%s", r->record);
-        else
-            path_of(c->record, c->tree, r->record);
-    } else
-        path_of(c->record, c->tree, "build/tests/prepare.record");
-    path_of(c->ledger, c->results, "ledger");
-    snprintf(c->status, sizeof(c->status), "%s/build/.run.status.%ld", c->tree, (long)getpid());
+    char status[64];
+    int size = snprintf(status, sizeof(status), "build/.run.status.%ld", (long)getpid());
+    if (requested_path(c->results, c->tree, r->results, "build/tests/results") ||
+        requested_path(c->evidence, c->tree, r->evidence, "build/tests/failed") ||
+        requested_path(c->record, c->tree, r->record, "build/tests/prepare.record") ||
+        path_of(c->ledger, c->results, "ledger") || size < 0 || size >= (int)sizeof(status) ||
+        path_of(c->status, c->tree, status))
+        return refused("result, evidence, artifact record or status path is too long");
 #ifdef _WIN32
     DWORD n = sizeof(c->account);
     if (!GetUserNameA(c->account, &n))
@@ -1068,7 +1077,10 @@ static int collection_main(int argc, char **argv, int production)
     }
     if (collection_options(c, &r, argc, argv) != 0)
         goto done;
-    path_of(c->schemas, c->tree, "tools/etude/schemas");
+    if (path_of(c->schemas, c->tree, "tools/etude/schemas") != 0) {
+        refused("schema path is too long");
+        goto done;
+    }
     if (registry(c) != 0 || select_suites(c, argc - optind, argv + optind) != 0)
         goto done;
     if (c->list) {
