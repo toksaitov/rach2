@@ -95,7 +95,7 @@ enum etude_legacy_resource { ETUDE_LEGACY_CPU, ETUDE_LEGACY_MEMORY, ETUDE_LEGACY
 struct etude_measurement_context;
 struct etude_legacy_set_opts {
     const struct etude_measurement_context *context; /* verified measurement inputs */
-    const char *run_id; /* preallocated identity, or NULL for a correctness run */
+    const char *run_id;  /* preallocated identity, or NULL for a correctness run */
     const char *tree;    /* the root of the tree, which the caller holds */
     const char *arch;    /* i686, x86_64, or both as i686,x86_64 */
     const char *kernel;  /* as for a preparation, or NULL */

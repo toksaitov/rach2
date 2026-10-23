@@ -17,8 +17,10 @@ static int stop_input(void)
 #ifdef _WIN32
     HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
     DWORD bytes = 0;
-    if (!PeekNamedPipe(h, NULL, 0, NULL, &bytes, NULL)) return 1;
-    if (bytes) return 1;
+    if (!PeekNamedPipe(h, NULL, 0, NULL, &bytes, NULL))
+        return 1;
+    if (bytes)
+        return 1;
     Sleep(100);
     return 0;
 #else
@@ -31,12 +33,14 @@ static int stop_request(const char *path, const char *run)
 {
     char text[257];
     FILE *f = fopen(path, "rb");
-    if (!f) return errno == ENOENT ? 0 : -1;
+    if (!f)
+        return errno == ENOENT ? 0 : -1;
     size_t n = fread(text, 1, sizeof text, f);
     int error = ferror(f);
     fclose(f);
     size_t size = strlen(run);
-    if (!error && n < size + 1 && !memcmp(text, run, n)) return 0;
+    if (!error && n < size + 1 && !memcmp(text, run, n))
+        return 0;
     return !error && n == size + 1 && !memcmp(text, run, size) && text[size] == '\n' ? 1 : -1;
 }
 
@@ -49,41 +53,62 @@ int etude_observe_main(int argc, char **argv)
     optind = 1;
     while ((opt = getopt(argc, argv, "o:p:c:r:s:")) != -1) {
         errno = 0;
-        if (opt == 'o') path = optarg;
-        else if (opt == 'r') run = optarg;
-        else if (opt == 's') stop = optarg;
+        if (opt == 'o')
+            path = optarg;
+        else if (opt == 'r')
+            run = optarg;
+        else if (opt == 's')
+            stop = optarg;
         else if (opt == 'p') {
             root.pid = strtol(optarg, &end, 10);
-            if (errno || *end || root.pid <= 0) return 2;
+            if (errno || *end || root.pid <= 0)
+                return 2;
         } else if (opt == 'c') {
             root.start = strtoull(optarg, &end, 10);
-            if (errno || *end || !root.start) return 2;
+            if (errno || *end || !root.start)
+                return 2;
             root.start_known = 1;
-        } else return 2;
+        } else
+            return 2;
     }
     if (!path || !run || !root.pid || !root.start_known || optind != argc) {
-        fputs("usage: etude observe -o TRACE -p OWNER_PID -c OWNER_CREATION -r RUN_ID [-s STOP_REQUEST]\n", stderr);
+        fputs("usage: etude observe -o TRACE -p OWNER_PID -c OWNER_CREATION -r RUN_ID [-s "
+              "STOP_REQUEST]\n",
+              stderr);
         return 2;
     }
-    if (stop && stop_request(stop, run) != 0) return 2;
+    if (stop && stop_request(stop, run) != 0)
+        return 2;
     struct etude_observer *o = etude_observe_start(path, &root, run);
-    if (!o) { perror("etude observe"); return 2; }
+    if (!o) {
+        perror("etude observe");
+        return 2;
+    }
     fputs("etude observe: ready\n", stdout);
     fflush(stdout);
     int requested = 0;
     while (!etude_observe_done(o)) {
         requested = stop ? stop_request(stop, run) : stop_input();
-        if (requested) break;
-        if (stop && stop_input()) { requested = -1; break; }
+        if (requested)
+            break;
+        if (stop && stop_input()) {
+            requested = -1;
+            break;
+        }
 #ifdef _WIN32
-        if (stop) Sleep(100);
+        if (stop)
+            Sleep(100);
 #else
-        if (stop) poll(NULL, 0, 100);
+        if (stop)
+            poll(NULL, 0, 100);
 #endif
     }
     int rc = (requested < 0 ? etude_observe_cancel(o) : etude_observe_stop(o)) != 0;
     char *summary = etude_observe_summary(o, NULL);
-    if (summary) { fputs(summary, stdout); free(summary); }
+    if (summary) {
+        fputs(summary, stdout);
+        free(summary);
+    }
     etude_observe_free(o);
     return rc == 0 ? 0 : 1;
 }

@@ -257,8 +257,10 @@ static void write_run(struct etude_history *h, const struct spec *r, const char 
     resources(res, sizeof(res), end / 2);
     result(ok, sizeof(ok), r->outcome, r->disrupted);
     blob(b, sizeof(b), "fixed");
-    if (load_fixture(load, sizeof load, directory, r->run, time)) exit(1);
-    if (r->unknown_load) strcpy(load, b);
+    if (load_fixture(load, sizeof load, directory, r->run, time))
+        exit(1);
+    if (r->unknown_load)
+        strcpy(load, b);
     snprintf(m, sizeof(m),
              "{\"value\":%llu,\"method\":\"monotonic-v1\",\"quality\":\"exact\","
              "\"interval_us\":null,\"error_bound\":1}",
@@ -312,18 +314,23 @@ static const char *git_program(void)
 {
     static char resolved[4096];
     const char *env = getenv("PATH");
-    if (*resolved) return resolved;
-    if (!env) return NULL;
+    if (*resolved)
+        return resolved;
+    if (!env)
+        return NULL;
     char *paths = strdup(env), *part, *next = paths;
-    if (!paths) return NULL;
+    if (!paths)
+        return NULL;
     while (next) {
         part = next;
         next = strchr(part, ':');
-        if (next) *next++ = 0;
+        if (next)
+            *next++ = 0;
         char candidate[4096];
         int n = snprintf(candidate, sizeof candidate, "%s/git", *part ? part : ".");
         if (n > 0 && n < (int)sizeof candidate && access(candidate, X_OK) == 0 &&
-            realpath(candidate, resolved)) break;
+            realpath(candidate, resolved))
+            break;
     }
     free(paths);
     return *resolved ? resolved : NULL;
@@ -339,10 +346,14 @@ static void git(char *const argv[], char *out, size_t size)
     int ok = 0;
 
     size_t count = 0;
-    while (argv[count]) count++;
+    while (argv[count])
+        count++;
     char **arguments = calloc(count + 1, sizeof *arguments);
     const char *program = git_program();
-    if (!arguments || !program) { perror("etude_compare_hosttest: Git"); exit(1); }
+    if (!arguments || !program) {
+        perror("etude_compare_hosttest: Git");
+        exit(1);
+    }
     memcpy(arguments, argv, count * sizeof *arguments);
     arguments[0] = (char *)program;
     memset(&spec, 0, sizeof spec);
@@ -363,7 +374,8 @@ static void git(char *const argv[], char *out, size_t size)
         if (!ok)
             fprintf(stderr, "etude_compare_hosttest: Git failed: %s\n", r->err.data);
     }
-    if (!p) perror("etude_compare_hosttest: start Git");
+    if (!p)
+        perror("etude_compare_hosttest: start Git");
     if (ex != NULL)
         etude_exec_free(ex);
     free(arguments);
@@ -642,14 +654,18 @@ static void check_load_evidence(char *out, size_t size)
 {
     struct spec r;
     memset(&r, 0, sizeof r);
-    r.run = "unknown-load"; r.hour = 30; r.boot_us = 91 * SECOND;
-    r.execute_us = 10 * SECOND; r.unknown_load = 1;
+    r.run = "unknown-load";
+    r.hour = 30;
+    r.boot_us = 91 * SECOND;
+    r.execute_us = 10 * SECOND;
+    r.unknown_load = 1;
     write_spec(&r);
     CHECK(compare(out, size, "unknown-load " HISTORY " @unknown-load") == 0,
           "unknown load is reported without failing the comparison command");
     has(out, "verdict: not_comparable", "a run with unknown load is excluded");
     has(out, "no verified continuous load observation", "the missing observation is named");
-    r.run = "changed-trace"; r.unknown_load = 0;
+    r.run = "changed-trace";
+    r.unknown_load = 0;
     write_spec(&r);
     /* Read the newly published run and change its trace after publication. */
     struct cmp_history h;
@@ -667,8 +683,10 @@ static void check_load_evidence(char *out, size_t size)
         const struct eh_json *locations = eh_json_get(ref, "locations");
         FILE *f = locations ? fopen(locations->child->string, "ab") : NULL;
         CHECK(f != NULL && fputs(" ", f) >= 0, "change published trace bytes");
-        if (f) CHECK(fclose(f) == 0, "close changed trace");
-        eh_json_free(load); free(bytes);
+        if (f)
+            CHECK(fclose(f) == 0, "close changed trace");
+        eh_json_free(load);
+        free(bytes);
     }
     cmp_free(&h);
     CHECK(compare(out, size, "changed-trace " HISTORY " @changed-trace") == 0,

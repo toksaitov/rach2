@@ -17,6 +17,5 @@ struct etude_observation_run {
  * The returned JSON is allocated even for incomplete observation evidence. */
 int etude_observation_finish(const struct etude_observation_run *run, char **json);
 /* Request an outer observer's end on an early refusal as well. */
-void etude_observation_cancel(const struct etude_measurement_context *context,
-                              const char *run_id);
+void etude_observation_cancel(const struct etude_measurement_context *context, const char *run_id);
 #endif

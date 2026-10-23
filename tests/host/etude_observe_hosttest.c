@@ -20,16 +20,23 @@
 #include "observe_scope.h"
 
 static int failures;
-#define CHECK(test) do { if (!(test)) { \
-    fprintf(stderr, "etude_observe_hosttest:%d: %s\n", __LINE__, #test); failures++; \
-} } while (0)
+#define CHECK(test)                                                              \
+    do {                                                                         \
+        if (!(test)) {                                                           \
+            fprintf(stderr, "etude_observe_hosttest:%d: %s\n", __LINE__, #test); \
+            failures++;                                                          \
+        }                                                                        \
+    } while (0)
 
 static struct load_process process(long pid, uint64_t creation, long parent, uint64_t cpu)
 {
     struct load_process p;
     memset(&p, 0, sizeof p);
-    p.id.pid = pid; p.id.start = creation; p.id.start_known = 1;
-    p.parent = parent; p.cpu_us = cpu;
+    p.id.pid = pid;
+    p.id.start = creation;
+    p.id.start_known = 1;
+    p.parent = parent;
+    p.cpu_us = cpu;
     return p;
 }
 
@@ -39,7 +46,9 @@ static void accounting(void)
     struct load_process previous[4], p[4];
     struct load_account a = {0};
     struct load_snapshot s = {0};
-    a.root.pid = 20; a.root.start = 20; a.root.start_known = 1;
+    a.root.pid = 20;
+    a.root.start = 20;
+    a.root.start_known = 1;
     a.previous = previous;
     p[0] = process(10, 10, 1, 100);
     p[1] = process(20, 20, 10, 200);
@@ -64,22 +73,26 @@ static void accounting(void)
 
 static void trace(char *out, size_t size, unsigned gap, int reset)
 {
-    int n = snprintf(out, size,
-        "{\"kind\":\"start\",\"schema_version\":1,\"method\":\"native-load-v1\","
-        "\"platform\":\"linux-proc-counters-v1\",\"machine_id\":\"m\",\"boot_id\":\"b\","
-        "\"run_id\":\"fixture\",\"root_pid\":1,\"root_creation\":\"1\","
-        "\"observer_pid\":2,\"observer_creation\":\"2\",\"requested_interval_us\":1000000,"
-        "\"process_limit\":4096}\n");
+    int n =
+        snprintf(out, size,
+                 "{\"kind\":\"start\",\"schema_version\":1,\"method\":\"native-load-v1\","
+                 "\"platform\":\"linux-proc-counters-v1\",\"machine_id\":\"m\",\"boot_id\":\"b\","
+                 "\"run_id\":\"fixture\",\"root_pid\":1,\"root_creation\":\"1\","
+                 "\"observer_pid\":2,\"observer_creation\":\"2\",\"requested_interval_us\":1000000,"
+                 "\"process_limit\":4096}\n");
     for (unsigned i = 0; i < 3; i++)
-        n += snprintf(out + n, size - (size_t)n,
+        n += snprintf(
+            out + n, size - (size_t)n,
             "{\"kind\":\"sample\",\"monotonic_us\":%u,\"utc_us\":%u,\"system_busy_cpu_us\":%u,"
             "\"outside_cpu_lower_us\":0,\"shared_virtualizer_cpu_lower_us\":0,"
             "\"processes\":2,\"denied\":1,\"lost\":1,\"unclassified\":1,\"overflow\":false,"
-            "\"identities_sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}\n",
+            "\"identities_sha256\":"
+            "\"0000000000000000000000000000000000000000000000000000000000000000\"}\n",
             i * gap, 100 + i * gap, reset && i == 1 ? 0 : 100 + i);
     snprintf(out + n, size - (size_t)n,
-        "{\"kind\":\"end\",\"utc_us\":%u,\"monotonic_us\":%u,\"samples\":3,"
-        "\"complete\":true,\"owner_lost\":false}\n", 100 + 2 * gap, 2 * gap);
+             "{\"kind\":\"end\",\"utc_us\":%u,\"monotonic_us\":%u,\"samples\":3,"
+             "\"complete\":true,\"owner_lost\":false}\n",
+             100 + 2 * gap, 2 * gap);
 }
 
 static void imports(void)
@@ -91,7 +104,8 @@ static void imports(void)
     char *bounded = malloc(size);
     memcpy(bounded, text, size);
     char *v = etude_observe_import(bounded, size, "fixture", 100, 2000100);
-    CHECK(v != NULL); free(v);
+    CHECK(v != NULL);
+    free(v);
     CHECK(etude_observe_import(bounded, size - 1, "fixture", 100, 2000100) == NULL);
     CHECK(etude_observe_import(bounded, size, "other", 100, 2000100) == NULL);
     CHECK(etude_observe_import(bounded, size, "fixture", 99, 2000100) == NULL);
@@ -119,7 +133,8 @@ static void native(void)
     CHECK(etude_observe_start(fix_path("wrong"), &wrong, "fixture") == NULL);
     struct etude_observer *o = etude_observe_start(fix_path("native"), &self, "fixture");
     CHECK(o != NULL);
-    if (!o) return;
+    if (!o)
+        return;
     CHECK(etude_observe_stop(o) == 0 && etude_observe_done(o));
     char *summary = etude_observe_summary(o, NULL);
     CHECK(summary && strstr(summary, "\"comparison_available\":true") &&
@@ -139,7 +154,12 @@ static void native(void)
 
 int main(void)
 {
-    accounting(); imports(); native();
-    if (!failures) { fix_passed(); puts("etude_observe_hosttest: pass"); }
+    accounting();
+    imports();
+    native();
+    if (!failures) {
+        fix_passed();
+        puts("etude_observe_hosttest: pass");
+    }
     return failures != 0;
 }

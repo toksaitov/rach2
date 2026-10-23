@@ -622,8 +622,10 @@ static int write_summary(struct writer *w, const char *plan_id, char ids[][300],
     fix_format(boot, sizeof(boot), "%s-boot", r->id);
     interval(time, sizeof(time), r->utc, boot, r->start, r->end);
     budget_of(r, budget, sizeof(budget));
-    if (r->end >= 0 && load_fixture(load, sizeof load, fix_dir(), r->id, time)) return -1;
-    if (r->end < 0) strcpy(load, "null");
+    if (r->end >= 0 && load_fixture(load, sizeof load, fix_dir(), r->id, time))
+        return -1;
+    if (r->end < 0)
+        strcpy(load, "null");
     blob_of(b, sizeof(b), "3333333333333333333333333333333333333333333333333333333333333333");
     fix_format(w->data, sizeof(w->data),
                "{\"plan_id\":\"%s\",\"items\":[%s],\"preparation_steps\":[%s],\"time\":%s,"

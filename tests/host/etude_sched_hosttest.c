@@ -304,7 +304,8 @@ static int write_run(const char *path, const struct run_spec *r)
     if (append(h, "attempt", data, attempt_id) != 0)
         goto out;
     char load[1800];
-    if (load_fixture(load, sizeof load, fix_dir(), r->run, time)) goto out;
+    if (load_fixture(load, sizeof load, fix_dir(), r->run, time))
+        goto out;
     snprintf(data, sizeof(data),
              "{\"plan_id\":\"%s\",\"items\":[{\"item_id\":\"%s-i\",\"attempt_records\":[\"%s\"],"
              "\"outcome\":\"%s\"}],\"preparation_steps\":[],\"time\":%s,\"resources\":%s,"
@@ -316,8 +317,8 @@ static int write_run(const char *path, const struct run_spec *r)
              "0,\"method\":\"monotonic-v1\",\"quality\":\"exact\",\"interval_us\":null,"
              "\"error_bound\":1},\"goal_us\":3600000000,\"growth_us\":0,\"ceiling_us\":"
              "3600000000,\"cleanup_reserve_us\":1000000,\"verdict\":\"pass\"},\"result\":%s}",
-             plan_id, r->run, attempt_id, r->outcome ? r->outcome : "pass", time, res, b, b, b, load,
-             b, (unsigned long long)r->elapsed_us, ok);
+             plan_id, r->run, attempt_id, r->outcome ? r->outcome : "pass", time, res, b, b, b,
+             load, b, (unsigned long long)r->elapsed_us, ok);
     if (append(h, "run", data, run_id) != 0)
         goto out;
     rc = 0;

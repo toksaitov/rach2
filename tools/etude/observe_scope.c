@@ -40,14 +40,16 @@ static void scopes(struct load_account *a, const struct load_snapshot *s, struct
     for (unsigned depth = 0; depth < 128; depth++) {
         int changed = 0;
         for (size_t i = 0; i < s->count; i++) {
-            if (p[i].scope) continue;
+            if (p[i].scope)
+                continue;
             struct load_process *parent = find(p, s->count, p[i].parent);
             if (parent && parent->scope && parent->id.start <= p[i].id.start) {
                 p[i].scope = parent->scope;
                 changed = 1;
             }
         }
-        if (!changed) break;
+        if (!changed)
+            break;
     }
 }
 
@@ -57,20 +59,29 @@ void etude_load_account(struct load_account *a, struct load_snapshot *s, struct 
     scopes(a, s, p);
     for (size_t i = 0; i < s->count; i++) {
         struct load_process *old = find(a->previous, a->count, p[i].id.pid);
-        if (!p[i].scope) a->unclassified++;
-        if (!old || !same(&old->id, &p[i].id)) continue;
-        if (p[i].cpu_us < old->cpu_us) { a->resets++; continue; }
+        if (!p[i].scope)
+            a->unclassified++;
+        if (!old || !same(&old->id, &p[i].id))
+            continue;
+        if (p[i].cpu_us < old->cpu_us) {
+            a->resets++;
+            continue;
+        }
         uint64_t delta = p[i].cpu_us - old->cpu_us;
-        uint64_t *total = p[i].scope == old->scope && p[i].scope == 2 ? &a->outside_us :
-            p[i].scope == old->scope && p[i].scope == 3 ? &a->virtualizer_us : NULL;
+        uint64_t *total = p[i].scope == old->scope && p[i].scope == 2   ? &a->outside_us
+                          : p[i].scope == old->scope && p[i].scope == 3 ? &a->virtualizer_us
+                                                                        : NULL;
         if (total) {
-            if (delta > (uint64_t)JSON_INTEGER_MAX - *total) s->overflow = 1;
-            else *total += delta;
+            if (delta > (uint64_t)JSON_INTEGER_MAX - *total)
+                s->overflow = 1;
+            else
+                *total += delta;
         }
     }
     for (size_t i = 0; i < a->count; i++) {
         struct load_process *now = find(p, s->count, a->previous[i].id.pid);
-        if (!now || !same(&now->id, &a->previous[i].id)) a->lost++;
+        if (!now || !same(&now->id, &a->previous[i].id))
+            a->lost++;
     }
     memcpy(a->previous, p, s->count * sizeof *p);
     a->count = s->count;

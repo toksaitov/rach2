@@ -671,7 +671,8 @@ static int context_part(const struct set *x, struct cmp_text *t, const char *key
                         struct cmp_text *fallback)
 {
     const char *text = etude_context_text(x->o->context, key);
-    if (!text) return part(x, t, key, fallback);
+    if (!text)
+        return part(x, t, key, fallback);
     free(fallback->data);
     memset(fallback, 0, sizeof(*fallback));
     cmp_printf(t, ",\"%s\":", key);
@@ -708,16 +709,19 @@ static void budget_limits(struct set *x)
 
 static int exemption_lists(const struct eh_json *array, const char *text)
 {
-    if (!array || array->type != 'a') return 0;
+    if (!array || array->type != 'a')
+        return 0;
     for (const struct eh_json *v = array->child; v; v = v->next)
-        if (v->type == 's' && !strcmp(v->string, text)) return 1;
+        if (v->type == 's' && !strcmp(v->string, text))
+            return 1;
     return 0;
 }
 
 /* Bind the first-run exception to this exact selection and its allocations. */
 static int exemption_matches(const struct set *x, const struct cmp_text *selection_doc)
 {
-    if (strcmp(purpose(x), "\"phase_first_run\"")) return 1;
+    if (strcmp(purpose(x), "\"phase_first_run\""))
+        return 1;
     const char *text = etude_context_text(x->o->context, "exemption");
     struct eh_json *ex = text ? eh_json_parse(text) : NULL;
     char hash[65];
@@ -726,15 +730,15 @@ static int exemption_matches(const struct set *x, const struct cmp_text *selecti
     const struct eh_json *manifest = eh_json_get(ex, "manifest");
     const struct eh_json *size = eh_json_get(manifest, "size_bytes");
     int ok = digest && !strcmp(hash, digest) && size && size->type == 'n' &&
-        size->number == (int64_t)selection_doc->length &&
-        exemption_lists(eh_json_get(ex, "run_ids"), x->run_id);
+             size->number == (int64_t)selection_doc->length &&
+             exemption_lists(eh_json_get(ex, "run_ids"), x->run_id);
     const struct eh_json *runs = eh_json_get(ex, "run_ids");
     const struct eh_json *attempts = eh_json_get(ex, "attempt_ids");
     size_t count = 0;
     for (const struct eh_json *id = attempts ? attempts->child : NULL; id; id = id->next)
         count++;
-    ok = ok && runs && runs->type == 'a' && runs->child && !runs->child->next &&
-         attempts && attempts->type == 'a' && count == x->n;
+    ok = ok && runs && runs->type == 'a' && runs->child && !runs->child->next && attempts &&
+         attempts->type == 'a' && count == x->n;
     for (size_t i = 0; ok && i < x->n; i++)
         ok = exemption_lists(attempts, x->mem[i].c.id);
     eh_json_free(ex);
@@ -891,12 +895,13 @@ static void selection(const struct set *x, struct cmp_text *d)
         const struct legacy_manifest *man = &x->manifests[i];
         cmp_printf(d, "%s{\"suite\":", n++ ? "," : "");
         string(d, m->suite);
-        cmp_printf(d, ",\"architecture\":\"%s\",\"serial\":%s,\"stops\":%s,\"cases\":[",
-                   m->arch, m->serial ? "true" : "false", m->stops ? "true" : "false");
+        cmp_printf(d, ",\"architecture\":\"%s\",\"serial\":%s,\"stops\":%s,\"cases\":[", m->arch,
+                   m->serial ? "true" : "false", m->stops ? "true" : "false");
         size_t count = 0;
         for (c = 0; c < man->ncases; c++) {
             const struct legacy_case *k = &man->cases[c];
-            if (!runs_case(x, i, k)) continue;
+            if (!runs_case(x, i, k))
+                continue;
             cmp_printf(d, "%s{\"case_id\":", count++ ? "," : "");
             string(d, k->case_id);
             cmp_printf(d, ",\"architecture\":\"%s\",\"repetitions\":%lld}", k->arch, k->reps);
@@ -1083,7 +1088,10 @@ static int write_plan(struct set *x)
     cmp_printf(&t, "{\"purpose\":%s", purpose(x));
     selection(x, &d);
     if (!exemption_matches(x, &d)) {
-        free(t.data); free(d.data); errno = EINVAL; return -1;
+        free(t.data);
+        free(d.data);
+        errno = EINVAL;
+        return -1;
     }
     rc |= part(x, &t, "selection", &d);
     cmp_printf(&t, ",\"items\":[");
@@ -1119,8 +1127,10 @@ static int write_plan(struct set *x)
     if (x->o->context) {
         char *bytes = NULL;
         size_t count = 0;
-        if (cmp_read_file(x->record, EVIDENCE_BYTES, &bytes, &count)) rc = -1;
-        else rc |= keep(x, bytes, count, &t);
+        if (cmp_read_file(x->record, EVIDENCE_BYTES, &bytes, &count))
+            rc = -1;
+        else
+            rc |= keep(x, bytes, count, &t);
         free(bytes);
     }
     cmp_printf(&t, "],\"environment\":{\"machine_id\":");
@@ -1163,8 +1173,7 @@ static int write_plan(struct set *x)
     cmp_printf(&d, "}\n");
     rc |= part(x, &t, "concurrency", &d);
     const char *exemption = etude_context_text(o->context, "exemption");
-    cmp_printf(&t, ",\"policies\":%s,\"exemption\":%s", x->policy,
-               exemption ? exemption : "null");
+    cmp_printf(&t, ",\"policies\":%s,\"exemption\":%s", x->policy, exemption ? exemption : "null");
     reproduce(x, &d);
     rc |= part(x, &t, "reproduce", &d);
     cmp_printf(&t, "}");
@@ -2045,8 +2054,10 @@ static int observed(const struct set *x, struct cmp_text *t)
                "%llu,\"peak\":%u,\"elapsed_us\":%llu}\n",
                (unsigned long long)x->busy_us, x->peak,
                (unsigned long long)(x->granted ? now - x->first.monotonic_us : 0));
-    cmp_printf(&l, "%s", x->load ? x->load :
-        "{\"schema_version\":1,\"method\":\"native-load-v1\",\"comparison_available\":false}");
+    cmp_printf(&l, "%s",
+               x->load ? x->load
+                       : "{\"schema_version\":1,\"method\":\"native-load-v1\",\"comparison_"
+                         "available\":false}");
     rc = part(x, t, "useful_concurrency", &u);
     rc |= part(x, t, "load", &l);
     return rc;
@@ -2104,7 +2115,8 @@ static void run_reason(const struct set *x, char *out, size_t size)
         return;
     }
     if (x->failed) {
-        snprintf(out, size, "the run has incomplete history, input verification or observation evidence");
+        snprintf(out, size,
+                 "the run has incomplete history, input verification or observation evidence");
         return;
     }
     if (x->prep.outcome != PASS) {
@@ -2138,7 +2150,7 @@ static int write_run(struct set *x, enum outcome *worst)
     const struct etude_reading *from = charged_start(x);
     char reason[1024];
     int rc = 0, open = x->cleanup_failed || x->uncertain ||
-        (x->prep.ran && x->prep.cleanup != ETUDE_CLEANUP_CONFIRMED);
+                       (x->prep.ran && x->prep.cleanup != ETUDE_CLEANUP_CONFIRMED);
     size_t i, n = 0;
 
     running_changed(x, 0);
@@ -2180,7 +2192,8 @@ static int write_run(struct set *x, enum outcome *worst)
     if (open)
         cmp_printf(&t, "{\"value\":null,\"reason\":\"the run has not ended\"}");
     else if (x->o->prepared && !etude_context_preparation(x->o->context))
-        cmp_printf(&t, "{\"value\":null,\"reason\":\"ordinary preparation has no same-run receipt\"}");
+        cmp_printf(&t,
+                   "{\"value\":null,\"reason\":\"ordinary preparation has no same-run receipt\"}");
     else
         rc |= elapsed(&t, from, end);
     cmp_printf(&t, ",\"outside_queue_us\":{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":"
@@ -2188,15 +2201,18 @@ static int write_run(struct set *x, enum outcome *worst)
                    "{\"value\":0,\"method\":\"set-driver-v1\",\"quality\":\"exact\","
                    "\"interval_us\":null,\"error_bound\":0},");
     struct etude_measurement charge = etude_history_elapsed(from, end);
-    int known = !open && !charge.reason &&
-        (!x->o->prepared || etude_context_preparation(x->o->context));
-    const char *verdict = !strcmp(purpose(x), "\"phase_first_run\"") ? "exempt" :
-        !known ? "unknown" : charge.value <= x->ceiling_us && !x->budget_expired ? "pass" : "failure";
+    int known =
+        !open && !charge.reason && (!x->o->prepared || etude_context_preparation(x->o->context));
+    const char *verdict = !strcmp(purpose(x), "\"phase_first_run\"")            ? "exempt"
+                          : !known                                              ? "unknown"
+                          : charge.value <= x->ceiling_us && !x->budget_expired ? "pass"
+                                                                                : "failure";
     x->budget_failed = !strcmp(verdict, "failure");
-    cmp_printf(&t, "\"goal_us\":%llu,\"growth_us\":%llu,\"ceiling_us\":%llu,"
-        "\"cleanup_reserve_us\":%llu,\"verdict\":\"%s\"}",
-        (unsigned long long)x->goal_us, (unsigned long long)x->growth_us,
-        (unsigned long long)x->ceiling_us, (unsigned long long)x->reserve_us, verdict);
+    cmp_printf(&t,
+               "\"goal_us\":%llu,\"growth_us\":%llu,\"ceiling_us\":%llu,"
+               "\"cleanup_reserve_us\":%llu,\"verdict\":\"%s\"}",
+               (unsigned long long)x->goal_us, (unsigned long long)x->growth_us,
+               (unsigned long long)x->ceiling_us, (unsigned long long)x->reserve_us, verdict);
     cmp_printf(&t, ",\"result\":{\"outcome\":\"%s\",\"reason\":", outcome_names[*worst]);
     run_reason(x, reason, sizeof(reason));
     if (*worst == PASS)
@@ -2250,7 +2266,8 @@ static int prepared(struct set *x)
     asked(c);
     c->admitted = c->queued;
     const struct etude_preparation_receipt *receipt = etude_context_preparation(x->o->context);
-    if (receipt) c->queued = c->admitted = receipt->start;
+    if (receipt)
+        c->queued = c->admitted = receipt->start;
     c->was_admitted = 1;
     c->cleanup = ETUDE_CLEANUP_CONFIRMED;
     if (etude_legacy_check_tree(x->record, x->tree, 1, x->out) != 0)
@@ -3513,7 +3530,8 @@ static int identify(struct set *x)
     const char *allocated = etude_context_run_id(o->context);
     if (allocated && o->run_id && strcmp(allocated, o->run_id))
         return refuse(x, "the allocated run identity differs from its context");
-    if (!allocated) allocated = o->run_id;
+    if (!allocated)
+        allocated = o->run_id;
     if (allocated) {
         if (!eh_identity(allocated) || strlen(allocated) >= sizeof x->run_id)
             return refuse(x, "the allocated run identity is invalid or too long");
@@ -3741,8 +3759,9 @@ static int set_up(struct set *x)
         return 2;
     }
     struct etude_pid self;
-    if (fit(x->observation_path, sizeof x->observation_path, "%s/%s.load.jsonl",
-            x->output, x->run_id) || etude_process_state((long)getpid(), &self) != 1 ||
+    if (fit(x->observation_path, sizeof x->observation_path, "%s/%s.load.jsonl", x->output,
+            x->run_id) ||
+        etude_process_state((long)getpid(), &self) != 1 ||
         !(x->observer = etude_observe_start(x->observation_path, &self, x->run_id)) ||
         etude_history_now(&x->start))
         return refuse(x, "the native load observer could not start");
@@ -3824,9 +3843,13 @@ static unsigned suites_passed(const struct set *x)
 /* Finish every owned execution and holder before declaring the run ended. */
 static void cleanup_owned(struct set *x)
 {
-    if (x->owned_cleaned) return;
+    if (x->owned_cleaned)
+        return;
     x->owned_cleaned = 1;
-    if (x->sup) { etude_supervisor_free(x->sup); x->sup = NULL; }
+    if (x->sup) {
+        etude_supervisor_free(x->sup);
+        x->sup = NULL;
+    }
     for (size_t i = 0; x->mem && i < x->n; i++) {
         legacy_guest_free(x->mem[i].g);
         x->mem[i].g = NULL;
@@ -3842,8 +3865,8 @@ static void cleanup_owned(struct set *x)
         }
     }
     if (x->l && x->collection_claim[0]) {
-        enum etude_cleanup cleanup = x->uncertain ? ETUDE_CLEANUP_UNCONFIRMED :
-                                                    ETUDE_CLEANUP_CONFIRMED;
+        enum etude_cleanup cleanup =
+            x->uncertain ? ETUDE_CLEANUP_UNCONFIRMED : ETUDE_CLEANUP_CONFIRMED;
         if (etude_ledger_finish(x->l, x->collection_claim, cleanup)) {
             if (etude_ledger_withdraw(x->l, x->collection_claim))
                 x->uncertain = 1;
@@ -3852,21 +3875,30 @@ static void cleanup_owned(struct set *x)
         x->collection_claim[0] = 0;
     }
     if (x->collection_bridge) {
-        if (x->uncertain) etude_bridge_detach(x->collection_bridge);
-        else etude_bridge_join(x->collection_bridge);
+        if (x->uncertain)
+            etude_bridge_detach(x->collection_bridge);
+        else
+            etude_bridge_join(x->collection_bridge);
         x->collection_bridge = NULL;
     }
-    if (x->l) { etude_ledger_close(x->l); x->l = NULL; }
+    if (x->l) {
+        etude_ledger_close(x->l);
+        x->l = NULL;
+    }
     if (x->o->status && remove(x->o->status) && errno != ENOENT)
         x->cleanup_failed = 1;
-    if (x->cleanup_failed || x->uncertain) x->failed = 1;
+    if (x->cleanup_failed || x->uncertain)
+        x->failed = 1;
 }
 
 static void finish_observation(struct set *x)
 {
     struct etude_observation_run r;
     memset(&r, 0, sizeof r);
-    if (etude_history_now(&x->end)) { x->failed = 1; return; }
+    if (etude_history_now(&x->end)) {
+        x->failed = 1;
+        return;
+    }
     r.context = x->o->context;
     r.runtime = x->observer;
     r.path = x->observation_path;
@@ -3876,18 +3908,22 @@ static void finish_observation(struct set *x)
     r.runtime_start = x->start;
     r.end = x->end;
     r.cleanup_confirmed = !x->uncertain && !x->cleanup_failed && x->context_valid &&
-        (!x->o->prepared || etude_context_preparation(x->o->context));
+                          (!x->o->prepared || etude_context_preparation(x->o->context));
 #ifdef __linux__
     r.physical_required = strstr(x->os_version, "microsoft") ||
-                          strstr(x->os_version, "Microsoft") ||
-                          strstr(x->os_version, "WSL");
+                          strstr(x->os_version, "Microsoft") || strstr(x->os_version, "WSL");
 #endif
     struct etude_measurement *cpu = calloc(x->n + 1, sizeof(*cpu));
-    if (!cpu) { x->failed = 1; return; }
+    if (!cpu) {
+        x->failed = 1;
+        return;
+    }
     size_t count = 0;
-    if (x->prep.ran) cpu[count++] = as_history(&x->prep.cpu_us);
+    if (x->prep.ran)
+        cpu[count++] = as_history(&x->prep.cpu_us);
     for (size_t i = 0; i < x->n; i++)
-        if (x->mem[i].c.ran) cpu[count++] = as_history(&x->mem[i].c.cpu_us);
+        if (x->mem[i].c.ran)
+            cpu[count++] = as_history(&x->mem[i].c.cpu_us);
     r.owned_cpu = etude_history_cpu_sum(cpu, count);
     if (etude_observation_finish(&r, &x->load)) {
         say(x, "etude run: the native load trace is incomplete");
@@ -3921,7 +3957,8 @@ static void tear_down(struct set *x)
     free(x->prep.envp);
     free(x->mem);
     free(x->jobs);
-    if (x->h && etude_history_close(x->h)) x->failed = 1;
+    if (x->h && etude_history_close(x->h))
+        x->failed = 1;
 }
 
 int etude_legacy_set(const struct etude_legacy_set_opts *o)
@@ -3992,9 +4029,12 @@ static void selection_string(struct cmp_text *d, const char *bytes)
 {
     cmp_printf(d, "\"");
     for (const unsigned char *p = (const unsigned char *)bytes; *p; p++) {
-        if (*p == '\\' || *p == '\"') cmp_printf(d, "\\%c", *p);
-        else if (*p < 32) cmp_printf(d, "\\u%04x", *p);
-        else cmp_printf(d, "%c", *p);
+        if (*p == '\\' || *p == '\"')
+            cmp_printf(d, "\\%c", *p);
+        else if (*p < 32)
+            cmp_printf(d, "\\u%04x", *p);
+        else
+            cmp_printf(d, "%c", *p);
     }
     cmp_printf(d, "\"");
 }
@@ -4008,18 +4048,24 @@ int etude_legacy_selection_export(const struct etude_legacy_set_opts *o, const c
     memset(&x, 0, sizeof x);
     x.o = o;
     x.out = stderr;
-    if (check(&x) != 0) goto done;
+    if (check(&x) != 0)
+        goto done;
     x.mem = calloc(x.n ? x.n : 1, sizeof *x.mem);
-    if (!x.mem) goto done;
+    if (!x.mem)
+        goto done;
     size_t count = 0;
-    for (size_t i = 0; i < x.nmembers; i++) count = take_members(&x, i, count);
-    if (count != x.n) goto done;
+    for (size_t i = 0; i < x.nmembers; i++)
+        count = take_members(&x, i, count);
+    if (count != x.n)
+        goto done;
     selection(&x, &selected);
-    if (selected.failed) goto done;
+    if (selected.failed)
+        goto done;
     digest_of(selected.data, selected.length, hex);
-    cmp_printf(&d, "{\"schema_version\":1,\"selection_sha256\":\"%s\","
-               "\"selection_size_bytes\":%lu,\"selection_bytes\":", hex,
-               (unsigned long)selected.length);
+    cmp_printf(&d,
+               "{\"schema_version\":1,\"selection_sha256\":\"%s\","
+               "\"selection_size_bytes\":%lu,\"selection_bytes\":",
+               hex, (unsigned long)selected.length);
     selection_string(&d, selected.data);
     cmp_printf(&d, ",\"items\":[");
     for (size_t i = 0; i < x.n; i++) {
@@ -4034,13 +4080,20 @@ int etude_legacy_selection_export(const struct etude_legacy_set_opts *o, const c
         if (f) {
             int failed = fwrite(d.data, 1, d.length, f) != d.length;
             failed |= fclose(f) != 0;
-            if (failed) remove(path);
-            else rc = 0;
+            if (failed)
+                remove(path);
+            else
+                rc = 0;
         }
     }
 done:
-    for (size_t i = 0; x.manifests && i < x.nmembers; i++) legacy_manifest_free(&x.manifests[i]);
-    free(x.manifests); free(x.members); free(x.again); free(x.mem);
-    free(selected.data); free(d.data);
+    for (size_t i = 0; x.manifests && i < x.nmembers; i++)
+        legacy_manifest_free(&x.manifests[i]);
+    free(x.manifests);
+    free(x.members);
+    free(x.again);
+    free(x.mem);
+    free(selected.data);
+    free(d.data);
     return rc;
 }

@@ -26,7 +26,7 @@ struct cmp_record {
     size_t length, order; /* the line's bytes, and its place in the input */
     struct eh_json *json;
     const struct eh_json *data;
-    int load_eligible; /* verified once before attempts are indexed */
+    int load_eligible;         /* verified once before attempts are indexed */
     struct cmp_sample *sample; /* an attempt's sample, or NULL */
 };
 

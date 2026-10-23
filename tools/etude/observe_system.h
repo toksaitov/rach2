@@ -4,8 +4,16 @@
 
 #include "etude/observe.h"
 
-enum load_field { LOAD_CPU, LOAD_MEMORY, LOAD_SWAP_IN, LOAD_SWAP_OUT,
-                  LOAD_DISK_READ, LOAD_DISK_WRITE, LOAD_PRESSURE, LOAD_FIELDS };
+enum load_field {
+    LOAD_CPU,
+    LOAD_MEMORY,
+    LOAD_SWAP_IN,
+    LOAD_SWAP_OUT,
+    LOAD_DISK_READ,
+    LOAD_DISK_WRITE,
+    LOAD_PRESSURE,
+    LOAD_FIELDS
+};
 
 struct load_process {
     struct etude_pid id;

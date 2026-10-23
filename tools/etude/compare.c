@@ -567,7 +567,8 @@ static void check_run(const struct cmp_history *h, struct cmp_sample *s)
         exclude(s, "its run record is of another plan, %s", cmp_text(s->run->data, "plan_id"));
     check_result(s, eh_json_get(s->run->data, "result"), "its run");
     if (!s->run->load_eligible)
-        exclude(s, "its run has no verified continuous load observation or controlled measurement context");
+        exclude(s, "its run has no verified continuous load observation or controlled measurement "
+                   "context");
     item = member_with(eh_json_get(s->run->data, "items"), "item_id",
                        cmp_text(s->attempt->data, "item_id"));
     if (!item || !listed(eh_json_get(item, "attempt_records"), s->attempt->id))
