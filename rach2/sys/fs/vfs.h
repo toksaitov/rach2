@@ -811,10 +811,10 @@ struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *
 int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name);
 
 /**
- * The path of directory `node` of `mnt` from the root of the mount table,
+ * The path of `node` of `mnt` from the root of the mount table,
  * into `out` of `cap` bytes: on the KRFFS root, the path of its node; on
  * another type, the path of the directory the mount covers followed by the
- * directory's path inside the mount, which the type rebuilds from the
+ * node's path inside the mount, which the type rebuilds from the
  * volume and so gives after a rename too. On a bind, the path below the
  * bind's place. Returns 0, -ENAMETOOLONG, the type's error, or -ENOENT on a
  * type without a `path` operation, the synthetic types and mqueue, on the

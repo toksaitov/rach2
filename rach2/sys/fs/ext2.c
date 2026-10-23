@@ -1299,12 +1299,103 @@ static void ext2_unmount(struct vfs_mount *mnt)
     kfree(em);
 }
 
+/* One directory of the bounded walk for a regular file's current name. */
+struct ext2_path_level {
+    uint32_t ino, cursor, length;
+};
+
+/** Find one live name of `wanted` below the root. Directories have no hard
+ * links except . and .., which are not descended. The stack is on the heap,
+ * bounded by the path capacity, and no recursive kernel stack is used. */
+static int ext2_file_path(struct ext2_mount *em, uint32_t wanted, char *buf, uint32_t cap)
+{
+    struct ext2_path_level *levels;
+    struct ext2_node dir, child;
+    struct ext2_scan sc;
+    uint32_t depth = 0, limit = cap / 2;
+    int rc = -ENOENT, clipped = 0;
+
+    if (limit == 0) {
+        return -ENAMETOOLONG;
+    }
+    if (limit > PATH_DEPTH) {
+        limit = PATH_DEPTH;
+    }
+    levels = kmalloc(limit * sizeof(*levels));
+    if (!levels) {
+        return -ENOMEM;
+    }
+    k_memset(levels, 0, limit * sizeof(*levels));
+    levels[0].ino = EXT2_ROOT_INO;
+    buf[0] = '\0';
+    for (;;) {
+        struct ext2_path_level *at = &levels[depth];
+        uint32_t length = at->length;
+        int got;
+
+        rc = inode_load(em, at->ino, &dir);
+        if (rc != 0) {
+            break;
+        }
+        got = dir_scan(em, &dir, &at->cursor, &sc);
+        if (got < 0) {
+            rc = got;
+            break;
+        }
+        if (got == 0) {
+            if (depth == 0) {
+                rc = clipped ? -ENAMETOOLONG : -ENOENT;
+                break;
+            }
+            depth--;
+            continue;
+        }
+        if (sc.ino == 0 || names_equal(sc.name, ".") || names_equal(sc.name, "..")) {
+            continue;
+        }
+        if (sc.ino == wanted) {
+            if (length + sc.name_len + 1 >= cap) {
+                rc = -ENAMETOOLONG;
+                break;
+            }
+            buf[length] = '/';
+            k_memcpy(buf + length + 1, sc.name, sc.name_len);
+            buf[length + sc.name_len + 1] = '\0';
+            rc = 0;
+            break;
+        }
+        if ((em->incompat & EXT2_INCOMPAT_FILETYPE) && sc.type != EXT2_FT_DIR) {
+            continue;
+        }
+        rc = inode_load(em, sc.ino, &child);
+        if (rc != 0) {
+            break;
+        }
+        if ((child.mode & S_IFMT_) != S_IFDIR_) {
+            continue;
+        }
+        if (length + sc.name_len + 1 >= cap || depth + 1 == limit) {
+            clipped = 1;
+            continue;
+        }
+        buf[length] = '/';
+        k_memcpy(buf + length + 1, sc.name, sc.name_len);
+        buf[length + sc.name_len + 1] = '\0';
+        depth++;
+        levels[depth].ino = sc.ino;
+        levels[depth].cursor = 0;
+        levels[depth].length = length + sc.name_len + 1;
+    }
+    kfree(levels);
+    return rc;
+}
+
 /**
- * The `path` of `vfs_ops`: the path of directory `node`, the parent by its
- * `..` entry and the name by the parent's entry that names the child's
- * inode, up to the root. 0; -ENAMETOOLONG past `cap` or past PATH_DEPTH
- * levels; -ENOTDIR; -ENOENT for a directory without `..` or not named in its
- * parent; or -EIO.
+ * The `path` of `vfs_ops`: a regular file uses the bounded directory walk
+ * above. A directory finds the parent by its `..` entry and the name by the
+ * parent's entry that names the child's inode, up to the root. 0;
+ * -ENAMETOOLONG past `cap` or PATH_DEPTH levels; -ENOENT without a live name;
+ * -ENOMEM for the walk's stack; or the directory reader's error.
  */
 static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
@@ -1315,7 +1406,7 @@ static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
     int depth;
 
     if ((n->mode & S_IFMT_) != S_IFDIR_) {
-        return -ENOTDIR;
+        return n->nlink ? ext2_file_path(em, n->ino, buf, cap) : -ENOENT;
     }
     buf[0] = '\0';
     cur = *n;

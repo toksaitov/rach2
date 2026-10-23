@@ -695,6 +695,88 @@ static char *exe_present_path(krffs_node_t *node)
     return path;
 }
 
+/** A path from the mount table becomes relative to the reader's root.
+ * A path outside that root remains absolute, as the saved exec path did. */
+static void exe_relative(char *path)
+{
+    struct vfs_ref root;
+    char *prefix;
+    uint32_t n;
+    int rc;
+
+    if (!current_proc || !current_proc->fs || !current_proc->fs->root_mnt) {
+        return;
+    }
+    prefix = kmalloc(VFS_PATH_MAX);
+    if (!prefix) {
+        return;
+    }
+    root.mnt = current_proc->fs->root_mnt;
+    root.node = current_proc->fs->root_node;
+    if (vfs_enter(root.mnt) != 0) {
+        kfree(prefix);
+        return;
+    }
+    vfs_ref_hold(&root);
+    vfs_ns_lock(root.mnt);
+    rc = vfs_node_path(root.mnt, root.node, prefix, VFS_PATH_MAX);
+    vfs_ns_unlock(root.mnt);
+    vfs_ref_release(&root);
+    if (rc == 0) {
+        n = 0;
+        while (prefix[n] && path[n] == prefix[n]) {
+            n++;
+        }
+        if (n > 1 && !prefix[n] && (path[n] == '/' || path[n] == '\0')) {
+            k_memmove(path, path + n, k_strlen(path + n) + 1);
+            if (!path[0]) {
+                path[0] = '/';
+                path[1] = '\0';
+            }
+        }
+    }
+    kfree(prefix);
+}
+
+/** Reconstruct the executable's present path under its mount's lock. The
+ * description stays held across a sleeping path read and is released before
+ * the reader's root is read, so two mount locks are never held together. */
+static char *exe_file_path(struct open_file *file, int *deleted)
+{
+    krffs_node_t *node;
+    struct vfs_stat st;
+    char *path = NULL;
+
+    *deleted = 0;
+    if (!file || !file->vmnt) {
+        return NULL;
+    }
+    fd_ofd_ref(file);
+    vfs_ns_lock(file->vmnt);
+    node = exe_root_node(file);
+    if (node) {
+        *deleted = node->name[0] == '\0';
+        if (!*deleted) {
+            path = exe_present_path(node);
+        }
+    } else {
+        if (vfs_getattr(file->vmnt, file->vnode, &st) == 0) {
+            *deleted = st.nlink == 0;
+        }
+        if (!*deleted && (path = kmalloc(VFS_PATH_MAX)) != NULL &&
+            vfs_node_path(file->vmnt, file->vnode, path, VFS_PATH_MAX) != 0) {
+            kfree(path);
+            path = NULL;
+        }
+    }
+    vfs_ns_unlock(file->vmnt);
+    fd_ofd_unref(file);
+    if (path) {
+        exe_relative(path);
+    }
+    return path;
+}
+
 /** Copy the string `s` into `buf` from `n` on, as far as `cap` allows; the
  * length after. */
 static int exe_put(char *buf, int cap, int n, const char *s)
@@ -715,7 +797,6 @@ static int exe_put(char *buf, int cap, int n, const char *s)
 static int exe_text(int pid, char *buf, int cap, int mark)
 {
     process_t *p = procfs_proc(pid);
-    krffs_node_t *node;
     struct mm *mm;
     char *now = NULL;
     int deleted;
@@ -729,10 +810,9 @@ static int exe_text(int pid, char *buf, int cap, int mark)
     }
     mm = p->mm;
     mm_hold(mm);
-    node = exe_root_node(mm->exe_file);
-    deleted = node && node->name[0] == '\0';
-    if (node && !deleted && cap > 0) {
-        now = exe_present_path(node);
+    deleted = 0;
+    if (cap > 0) {
+        now = exe_file_path(mm->exe_file, &deleted);
     }
     n = exe_put(buf, cap, 0, now ? now : mm->exe ? mm->exe : "");
     if (deleted && mark) {

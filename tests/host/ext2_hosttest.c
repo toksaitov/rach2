@@ -4252,6 +4252,47 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
     return m;
 }
 
+/** A held regular file's path follows both file and parent renames. */
+static void executable_path_row(void)
+{
+    void *file, *dir;
+    char path[100];
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (mount_rw() != 0) {
+        check(0, "the executable path fixture mounts");
+        return;
+    }
+    file = make_file(mnt.root, "program", &rc);
+    dir = walk("/dir", &rc);
+    check(file && dir, "the executable and destination directory are held");
+    if (file && dir) {
+        check(OPS->path(&mnt, file, path, sizeof(path)) == 0 && streq(path, "/program"),
+              "a regular file has a current path");
+        check(OPS->rename(&mnt, mnt.root, "program", dir, "renamed") == 0 &&
+                  OPS->path(&mnt, file, path, sizeof(path)) == 0 && streq(path, "/dir/renamed"),
+              "the held file's path follows a move to another directory");
+        check(OPS->rename(&mnt, mnt.root, "dir", mnt.root, "moved-parent") == 0 &&
+                  OPS->path(&mnt, file, path, sizeof(path)) == 0 &&
+                  streq(path, "/moved-parent/renamed"),
+              "the held file's path follows its parent's rename");
+        check(OPS->path(&mnt, file, path, 4) == -ENAMETOOLONG,
+              "a regular file's path respects the output capacity");
+        check(OPS->unlink(&mnt, dir, "renamed") == 0 &&
+                  OPS->path(&mnt, file, path, sizeof(path)) == -ENOENT,
+              "the last unlink removes the held file's current path");
+    }
+    if (file) {
+        OPS->put(&mnt, file);
+    }
+    if (dir) {
+        OPS->put(&mnt, dir);
+    }
+    check(unmount_rw() == 0, "the executable path fixture unmounts");
+}
+
 /**
  * Make the native fixture tree using the prepared independent tools,
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
@@ -4281,6 +4322,7 @@ int main(int argc, char **argv)
     bytes = build_image(fix_path("d.ext2"), 1024, 128, PROFILE, 96, "levels");
     levels_rows(fix_path("d.ext2"), bytes);
     refusal_rows();
+    executable_path_row();
     write_rows();
     time_row();
     order_row();

@@ -389,6 +389,9 @@ static krffs_file_system_t root_fs;
 static krffs_node_t root_dir, program;
 static struct open_file exe_ofd;
 static const char *program_path;
+static const char *mounted_path;
+static const char *reader_root;
+static int file_holds, mount_locks;
 static char exec_path[] = "/tmp/a";
 static char interp_path[] = "/lib/ld-linux.so.2";
 
@@ -405,18 +408,66 @@ const char *proc_cwd(const struct process *p)
     return "/";
 }
 
-/** The path of a node of another mount, "/" for every node, or
- *  -ENAMETOOLONG when `cap` does not hold it. */
+/** Model path reconstruction on a mounted file system and the reader's root. */
 int vfs_node_path(struct vfs_mount *mnt, void *node, char *out, uint32_t cap)
+{
+    const char *path = node == &program ? mounted_path : reader_root;
+    uint32_t n;
+    (void)mnt;
+    if (!path) {
+        return -ENOENT;
+    }
+    n = (uint32_t)k_strlen(path);
+    if (n + 1 > cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(out, path, n + 1);
+    return 0;
+}
+/** The model executable has a link exactly while its current path exists. */
+int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     (void)mnt;
     (void)node;
-    if (cap < 2) {
-        return -ENAMETOOLONG;
-    }
-    out[0] = '/';
-    out[1] = '\0';
+    k_memset(st, 0, sizeof(*st));
+    st->nlink = mounted_path != NULL;
     return 0;
+}
+void fd_ofd_ref(struct open_file *file)
+{
+    (void)file;
+    file_holds++;
+}
+void fd_ofd_unref(struct open_file *file)
+{
+    (void)file;
+    file_holds--;
+}
+void vfs_ns_lock(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    mount_locks++;
+    if (mount_locks != 1) {
+        __builtin_trap();
+    }
+}
+void vfs_ns_unlock(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    mount_locks--;
+}
+int vfs_enter(struct vfs_mount *mnt)
+{
+    (void)mnt;
+    return 0;
+}
+void vfs_ref_hold(const struct vfs_ref *ref)
+{
+    (void)ref;
+}
+void vfs_ref_release(struct vfs_ref *ref)
+{
+    (void)ref;
 }
 
 /** The path the root gives `node`: `program_path` for the program. Returns
@@ -661,9 +712,9 @@ static void mem_descriptor(void)
  * /proc/PID/exe of a process whose address space keeps its program's file:
  * on the KRFFS root the link reads the file's present path, and once its name
  * is gone the path the exec found it at with " (deleted)", which the name an
- * exec of the link gives leaves off; on another type it reads the path the
- * exec found it at; a short buffer takes the first bytes; and the resolver
- * goes on from the file itself.
+ * exec of the link gives leaves off; a mounted file gives its current path
+ * too; a short buffer takes the first bytes; and the resolver goes on from
+ * the file itself.
  */
 static void exe_links(void)
 {
@@ -698,12 +749,48 @@ static void exe_links(void)
     check(procfs_exe_name(7, buf, (int)sizeof(buf)) == 6 && __builtin_memcmp(buf, "/tmp/a", 6) == 0,
           "the name an exec of the link gives has no mark");
     exe_ofd.vmnt = &other_mount;
-    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 6 &&
-              __builtin_memcmp(buf, "/tmp/a", 6) == 0,
-          "a program on another type reads as its exec's path");
-    check(space.holds == 1, "each read lets go of the record it held");
+    mounted_path = "/private/root/tmp/moved";
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 23 &&
+              __builtin_memcmp(buf, "/private/root/tmp/moved", 23) == 0,
+          "a mounted file reads its present path");
+    check(space.holds == 1 && file_holds == 0 && mount_locks == 0,
+          "each path read releases its address space, description and mount lock");
+    mounted_path = NULL;
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 16 &&
+              __builtin_memcmp(buf, "/tmp/a (deleted)", 16) == 0,
+          "an unlinked mounted file keeps its saved name and deleted mark");
     process.mm = NULL;
     krffs_fs = NULL;
+}
+
+/** A reader's private root is removed only at a complete path component. */
+static void exe_chroot(void)
+{
+    struct fs_struct fs;
+    process_t *saved = current_proc;
+    char buf[64];
+
+    k_memset(&fs, 0, sizeof(fs));
+    fs.root_mnt = &other_mount;
+    fs.root_node = &root_dir;
+    process.fs = &fs;
+    process.mm = &space;
+    current_proc = &process;
+    space.exe_file = &exe_ofd;
+    exe_ofd.vmnt = &other_mount;
+    mounted_path = "/private/root/tmp/moved";
+    reader_root = "/private/root";
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 10 &&
+              __builtin_memcmp(buf, "/tmp/moved", 10) == 0,
+          "the renamed executable is relative to the reader's private root");
+    reader_root = "/private/roo";
+    check(procfs_readlink_exe(7, buf, (int)sizeof(buf)) == 23 &&
+              __builtin_memcmp(buf, "/private/root/tmp/moved", 23) == 0,
+          "a matching name prefix is not a root path component");
+    check(file_holds == 0 && mount_locks == 0, "no description or mount lock remains");
+    process.fs = NULL;
+    process.mm = NULL;
+    current_proc = saved;
 }
 
 /** The paths /proc/PID/maps gives the segments the exec loaded: the
@@ -923,6 +1010,7 @@ int main(void)
     task_ids();
     mem_descriptor();
     exe_links();
+    exe_chroot();
     image_paths();
     reaped_during_read();
     oom_values();

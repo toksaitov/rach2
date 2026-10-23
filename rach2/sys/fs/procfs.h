@@ -79,13 +79,12 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap);
 /**
  * The target of /proc/<pid>/exe, the path of the program `pid` runs, into
  * `buf` of `cap` bytes with no terminator: the present path of the program's
- * file on the KRFFS root, which follows a rename or a relocation of it; the
- * path its exec found it at, followed by " (deleted)" as Linux names one, for
- * a file there that has lost its name; and the path its exec found it at on
- * any other type, whose node has no path of its own to give. Its length,
- * -ENOENT for no such process or no program, or -EACCES for a caller that may
- * not read the process's memory, as Linux asks a ptrace read check of the
- * reader.
+ * file on a type with a path operation, relative to the reader's root; the
+ * path its exec found it at, followed by " (deleted)", for a file that has
+ * lost its last name; and the saved path when no present path can be read.
+ * Its length, -ENOENT for no such process or no program, or -EACCES for a
+ * caller that may not read the process's memory, as Linux asks a ptrace
+ * read check of the reader.
  */
 int procfs_readlink_exe(int pid, char *buf, int cap);
 
